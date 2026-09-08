@@ -65,6 +65,7 @@ import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
@@ -488,6 +489,59 @@ class RecordAccumulatorTest {
         accum.awaitFlushCompletion();
         assertThat(accum.hasUnDrained()).isFalse();
         assertThat(accum.hasIncomplete()).isFalse();
+    }
+
+    @Test
+    void testAbortAllBatchesHandlesConcurrentCompletion() throws Exception {
+        IndexedRow row = indexedRow(DATA1_ROW_TYPE, new Object[] {1, "a"});
+        RecordAccumulator accum = createTestRecordAccumulator(1024, 10L * 1024);
+        CompletableFuture<Exception> completedFuture = new CompletableFuture<>();
+        CompletableFuture<Exception> abortedFuture = new CompletableFuture<>();
+
+        try {
+            cluster = updateCluster(Arrays.asList(bucket1, bucket2));
+            accum.append(
+                    createRecord(row),
+                    (bucket, offset, exception) -> completedFuture.complete(exception),
+                    cluster,
+                    tb1.getBucket(),
+                    false);
+            accum.append(
+                    createRecord(row),
+                    (bucket, offset, exception) -> abortedFuture.complete(exception),
+                    cluster,
+                    tb2.getBucket(),
+                    false);
+
+            List<ReadyWriteBatch> batches =
+                    accum.drain(cluster, Collections.singleton(node1.id()), Integer.MAX_VALUE)
+                            .get(node1.id());
+            ReadyWriteBatch completedBatch =
+                    batches.stream()
+                            .filter(batch -> batch.tableBucket().equals(tb1))
+                            .findFirst()
+                            .get();
+            ReadyWriteBatch abortedBatch =
+                    batches.stream()
+                            .filter(batch -> batch.tableBucket().equals(tb2))
+                            .findFirst()
+                            .get();
+
+            assertThat(completedBatch.writeBatch().complete()).isTrue();
+            RuntimeException abortReason = new RuntimeException("fatal write failure");
+            accum.abortAllBatches(abortReason);
+
+            // A late response may still try to deallocate the batch after fatal cleanup.
+            accum.deallocate(completedBatch.writeBatch());
+            assertThat(accum.reEnqueue(abortedBatch)).isFalse();
+
+            assertThat(completedFuture.get()).isNull();
+            assertThat(abortedFuture.get()).isSameAs(abortReason);
+            assertThat(accum.hasUnDrained()).isFalse();
+            assertThat(accum.hasIncomplete()).isFalse();
+        } finally {
+            accum.destroyResources();
+        }
     }
 
     @Test

@@ -167,11 +167,20 @@ public abstract class WriteBatch {
 
     /** Abort the batch and complete the future and callbacks. */
     public void abort(Exception exception) {
-        if (!finalState.compareAndSet(null, FinalState.ABORTED)) {
+        if (!trySetAborted()) {
             throw new IllegalStateException(
                     "Batch has already been completed in final stata " + finalState.get());
         }
 
+        completeAbort(exception);
+    }
+
+    boolean trySetAborted() {
+        return finalState.compareAndSet(null, FinalState.ABORTED);
+    }
+
+    /** Complete the abort after the caller has atomically changed the final state. */
+    void completeAbort(Exception exception) {
         LOG.trace(
                 "Abort batch for table path {} with bucket_id {}",
                 physicalTablePath,

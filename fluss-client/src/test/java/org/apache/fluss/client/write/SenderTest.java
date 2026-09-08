@@ -75,6 +75,11 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.apache.fluss.record.LogRecordBatchFormat.NO_WRITER_ID;
 import static org.apache.fluss.record.TestData.DATA1_ROW_TYPE;
@@ -396,6 +401,48 @@ final class SenderTest {
                                         (tb, leo, e) -> {}))
                 .isInstanceOf(FlussRuntimeException.class)
                 .hasMessage("Writer closed while send in progress");
+    }
+
+    @Test
+    void testAsynchronousGatewayErrorIsCleanedUpBySenderThread() throws Exception {
+        TableBucket kvBucket = new TableBucket(DATA1_TABLE_ID_PK, 0);
+        CompletableFuture<Exception> resultFuture = new CompletableFuture<>();
+        AtomicReference<Thread> callbackThread = new AtomicReference<>();
+        AtomicReference<Thread> senderThread = new AtomicReference<>();
+        appendKvToAccumulator(
+                kvBucket,
+                compactedRow(DATA1_ROW_TYPE, new Object[] {1, "a"}),
+                (tb, leo, e) -> {
+                    callbackThread.set(Thread.currentThread());
+                    resultFuture.complete(e);
+                });
+
+        ExecutorService executor = Executors.newSingleThreadExecutor();
+        Future<?> senderTask =
+                executor.submit(
+                        () -> {
+                            senderThread.set(Thread.currentThread());
+                            sender.run();
+                        });
+        try {
+            retry(
+                    Duration.ofSeconds(20),
+                    () -> assertThat(pendingRequestSize(kvBucket)).isEqualTo(1));
+
+            OutOfMemoryError error = new OutOfMemoryError("Direct buffer memory");
+            failRequest(kvBucket, 0, error);
+            senderTask.get(20, TimeUnit.SECONDS);
+
+            assertThat(resultFuture.get()).hasCause(error);
+            assertThat(callbackThread.get()).isSameAs(senderThread.get());
+            assertThat(sender.isRunning()).isFalse();
+            assertThat(sender.numOfInFlightBatches(kvBucket)).isZero();
+            assertThat(accumulator.hasIncomplete()).isFalse();
+        } finally {
+            sender.forceClose();
+            executor.shutdownNow();
+            assertThat(executor.awaitTermination(20, TimeUnit.SECONDS)).isTrue();
+        }
     }
 
     @Test

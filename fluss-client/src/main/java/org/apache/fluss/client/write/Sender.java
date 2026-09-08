@@ -49,13 +49,13 @@ import javax.annotation.Nullable;
 import javax.annotation.concurrent.GuardedBy;
 
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.apache.fluss.client.utils.ClientRpcMessageUtils.makeProduceLogRequest;
 import static org.apache.fluss.client.utils.ClientRpcMessageUtils.makePutKvRequest;
@@ -95,6 +95,9 @@ public class Sender implements Runnable {
 
     /** true when the caller wants to ignore all unsent/inflight messages and force close. */
     private volatile boolean forceClose;
+
+    /** The first fatal error that requires the sender thread to abort all incomplete batches. */
+    private final AtomicReference<Throwable> fatalError = new AtomicReference<>();
 
     private final Object wakeupLock = new Object();
     private boolean wakeup;
@@ -176,11 +179,17 @@ public class Sender implements Runnable {
                 }
             }
         } catch (Throwable t) {
-            LOG.error("Fatal error in Fluss write sender thread: ", t);
-            handleFatalError(t, Collections.emptyList());
+            recordFatalError(t);
             ExceptionUtils.rethrow(t);
         } finally {
-            destroyResources();
+            try {
+                Throwable t = fatalError.get();
+                if (t != null) {
+                    maybeAbortBatches(t);
+                }
+            } finally {
+                destroyResources();
+            }
         }
 
         // TODO if force close failed, add logic to abort incomplete batches.
@@ -328,11 +337,15 @@ public class Sender implements Runnable {
     }
 
     private void reEnqueueBatch(ReadyWriteBatch readyWriteBatch) {
-        accumulator.reEnqueue(readyWriteBatch);
+        boolean reEnqueued = accumulator.reEnqueue(readyWriteBatch);
         maybeRemoveFromInflightBatches(readyWriteBatch);
 
-        // metrics for retry record count.
-        writerMetricGroup.recordsRetryTotal().inc(readyWriteBatch.writeBatch().getRecordCount());
+        if (reEnqueued) {
+            // metrics for retry record count.
+            writerMetricGroup
+                    .recordsRetryTotal()
+                    .inc(readyWriteBatch.writeBatch().getRecordCount());
+        }
     }
 
     /**
@@ -429,13 +442,6 @@ public class Sender implements Runnable {
                 (tableId, writeBatches) -> {
                     try {
                         sendWriteRequestsForTable(gateway, tableId, acks, writeBatches);
-                    } catch (Error error) {
-                        // A gateway may throw before returning a future, for example when RPC
-                        // encoding runs out of direct memory. No callback is registered in that
-                        // case. Fail the affected batches with the client-side cause before
-                        // propagating the fatal error to stop the sender.
-                        handleFatalError(error, writeBatches);
-                        throw error;
                     } catch (Exception e) {
                         handleWriteRequestException(e, writeBatches);
                     }
@@ -645,7 +651,7 @@ public class Sender implements Runnable {
     private void handleWriteRequestException(Throwable t, List<ReadyWriteBatch> writeBatches) {
         Throwable cause = Errors.maybeUnwrapException(t);
         if (cause instanceof Error) {
-            handleFatalError(cause, writeBatches);
+            recordFatalError(cause);
             return;
         }
 
@@ -662,22 +668,16 @@ public class Sender implements Runnable {
         metadataUpdater.invalidPhysicalTableBucketMeta(invalidMetadataTablesSet);
     }
 
-    private void handleFatalError(Throwable t, List<ReadyWriteBatch> writeBatches) {
+    private void recordFatalError(Throwable t) {
+        // Request callbacks may run on a network thread. Only publish the fatal state here; the
+        // sender thread aborts incomplete batches in run() before destroying accumulator resources.
         accumulator.close();
+        if (fatalError.compareAndSet(null, t)) {
+            LOG.error("Fatal error in Fluss write sender:", t);
+        }
         running = false;
         forceClose = true;
-        if (!writeBatches.isEmpty()) {
-            failWriteBatches(t, writeBatches);
-        }
-        maybeAbortBatches(t);
         wakeup();
-    }
-
-    private void failWriteBatches(Throwable t, List<ReadyWriteBatch> writeBatches) {
-        Exception exception = ExceptionUtils.toException(t);
-        for (ReadyWriteBatch batch : writeBatches) {
-            failBatch(batch, exception, false);
-        }
     }
 
     /** Handle the exception and return a set of tables for which the metadata is invalid. */
