@@ -2201,7 +2201,8 @@ public class ZooKeeperClient implements AutoCloseable {
         return result;
     }
 
-    private static <K, V> Map<K, V> processGetDataResponsesOrThrow(
+    @VisibleForTesting
+    static <K, V> Map<K, V> processGetDataResponsesOrThrow(
             List<ZkGetDataResponse> responses,
             Function<ZkGetDataResponse, K> keyExtractor,
             Function<byte[], V> decoder)
