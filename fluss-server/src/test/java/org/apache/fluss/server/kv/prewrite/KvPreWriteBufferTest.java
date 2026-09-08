@@ -470,9 +470,10 @@ class KvPreWriteBufferTest {
         flushBuffer(buffer, 3);
 
         // the buffered chain is cut at the flushed boundary: v3 no longer references
-        // the flushed v2, while the reference to the still-buffered v3 is kept for rollback
+        // the flushed v2, while the references to the still-buffered v3 are kept for rollback
         assertThat(v3.getPreviousEntry()).isNull();
         assertThat(v4.getPreviousEntry()).isSameAs(v3);
+        assertThat(v3.getNextEntry()).isSameAs(v4);
 
         // read semantics are unchanged and only v3/v4 stay in the byte accounting
         assertThat(getValue(buffer, "k")).isEqualTo("v4");
@@ -515,6 +516,8 @@ class KvPreWriteBufferTest {
         buffer.insert(key, "v6".getBytes(), 6);
         buffer.truncateTo(6, TruncateReason.ERROR);
         assertThat(getValue(buffer, "k")).isEqualTo("v5");
+        // the retained predecessor no longer links forward to the truncated entry
+        assertThat(buffer.getKvEntryMap().get(key).getNextEntry()).isNull();
     }
 
     private static String getValue(KvPreWriteBuffer preWriteBuffer, String keyStr) {
