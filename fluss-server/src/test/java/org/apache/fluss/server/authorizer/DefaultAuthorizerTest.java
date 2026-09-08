@@ -614,7 +614,7 @@ public class DefaultAuthorizerTest {
         }
 
         runInConcurrent(concurrentTasks);
-        // Make sure all acl notifacations are arrived.
+        // Make sure all acl notifications are arrived.
         retry(
                 Duration.ofMinutes(1),
                 () -> assertThat(listAcls(authorizer, commonResource)).isEqualTo(expectedAcls));
