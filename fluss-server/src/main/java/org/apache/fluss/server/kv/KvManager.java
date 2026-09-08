@@ -29,7 +29,6 @@ import org.apache.fluss.exception.KvStorageException;
 import org.apache.fluss.fs.FileSystem;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.memory.LazyMemorySegmentPool;
-import org.apache.fluss.memory.MemorySegmentPool;
 import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.SchemaGetter;
@@ -137,7 +136,7 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
     private final BufferAllocator arrowBufferAllocator;
 
     /** The memory segment pool to allocate memorySegment. */
-    private final MemorySegmentPool memorySegmentPool;
+    private final LazyMemorySegmentPool memorySegmentPool;
 
     private final FsPath remoteKvDir;
 
@@ -206,6 +205,7 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
             this.sharedWriteBufferManager = createdWriteBufferManager;
             tabletServerMetricGroup.setSharedWriteBufferMetrics(
                     this::getSharedWriteBufferUsage, sharedWriteBufferCapacity);
+            tabletServerMetricGroup.setWalMemoryPoolMetrics(memorySegmentPool);
         } catch (RuntimeException | Error e) {
             IOUtils.closeQuietly(createdWriteBufferManager);
             IOUtils.closeQuietly(createdWriteBufferAccountingCache);

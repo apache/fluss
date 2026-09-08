@@ -242,6 +242,11 @@ public class LazyMemorySegmentPool implements MemorySegmentPool, Closeable {
         return inLock(lock, () -> this.maxPages - this.pageUsage);
     }
 
+    /** Returns the number of pages currently allocated to callers. */
+    public int usedPages() {
+        return inLock(lock, () -> pageUsage);
+    }
+
     @Override
     public long availableMemory() {
         return ((long) freePages()) * pageSize;
@@ -264,6 +269,7 @@ public class LazyMemorySegmentPool implements MemorySegmentPool, Closeable {
         }
     }
 
+    /** Returns the number of threads currently blocked waiting for pages. */
     public int queued() {
         return inLock(lock, waiters::size);
     }
