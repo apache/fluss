@@ -590,6 +590,17 @@ public class MetadataManager {
                                     + "Non-partitioned table rescale is not yet supported.",
                             tablePath));
         }
+        // A rescaled table routes late writes of retired partitions through the historical
+        // partition, whose own fixed layout can diverge from post-rescale partitions; supporting
+        // the combination is left to future work.
+        if (tableInfo.getTableConfig().isHistoricalPartitionEnabled()) {
+            throw new InvalidAlterTableException(
+                    String.format(
+                            "Cannot alter 'bucket.num' on table %s with historical partition "
+                                    + "enabled. Altering 'bucket.num' on such tables is not "
+                                    + "supported yet.",
+                            tablePath));
+        }
         if (newBucketNum < 1) {
             throw new InvalidAlterTableException(
                     String.format(
@@ -815,6 +826,24 @@ public class MetadataManager {
                 // Lake-First propagation is a no-op while the table is not yet lake-enabled, so
                 // enabling datalake here must create the lake table with the new bucket count.
                 newDescriptor = newDescriptor.withBucketCount(newBucketNum);
+            }
+
+            // Enabling the historical partition on a rescaled table is unsupported: the
+            // historical partition would be created with the new table-level count while retired
+            // lake data still uses the pre-rescale layout. bucketCountEpoch never decreases, so
+            // this also rejects a table that was rescaled while the feature was temporarily
+            // disabled. Checked before validateTableDescriptor so the rescale rejection is not
+            // masked by unrelated option-dependency errors.
+            if (!tableInfo.getTableConfig().isHistoricalPartitionEnabled()
+                    && Configuration.fromMap(newDescriptor.getProperties())
+                            .get(ConfigOptions.TABLE_DATALAKE_HISTORICAL_PARTITION_ENABLED)
+                    && tableInfo.getBucketCountEpoch() > 0) {
+                throw new InvalidAlterTableException(
+                        String.format(
+                                "Cannot enable historical partition on table %s after "
+                                        + "'bucket.num' has been altered. Enabling it on a "
+                                        + "rescaled table is not supported yet.",
+                                tablePath));
             }
 
             // reuse the same validate logic with the createTable() method

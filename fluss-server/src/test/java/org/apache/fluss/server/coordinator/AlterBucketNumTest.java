@@ -19,6 +19,7 @@ package org.apache.fluss.server.coordinator;
 
 import org.apache.fluss.cluster.Endpoint;
 import org.apache.fluss.cluster.TabletServerInfo;
+import org.apache.fluss.config.AutoPartitionTimeUnit;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.FlussRuntimeException;
@@ -61,8 +62,10 @@ import org.junit.jupiter.params.provider.EnumSource;
 import org.junit.jupiter.params.provider.MethodSource;
 
 import java.lang.reflect.Field;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -255,7 +258,16 @@ class AlterBucketNumTest {
      */
     private static void createSeededLakePartitionedTable(
             MetadataManager mm, TablePath tablePath, int originalBucketCount) throws Exception {
-        TableDescriptor lakeTable =
+        createSeededLakePartitionedTable(mm, tablePath, originalBucketCount, false);
+    }
+
+    private static void createSeededLakePartitionedTable(
+            MetadataManager mm,
+            TablePath tablePath,
+            int originalBucketCount,
+            boolean historicalPartitionEnabled)
+            throws Exception {
+        TableDescriptor.Builder builder =
                 TableDescriptor.builder()
                         .schema(
                                 Schema.newBuilder()
@@ -266,8 +278,17 @@ class AlterBucketNumTest {
                         .partitionedBy("b")
                         .property(ConfigOptions.TABLE_DATALAKE_ENABLED.key(), "true")
                         .property(ConfigOptions.TABLE_DATALAKE_FORMAT.key(), "paimon")
-                        .build()
-                        .withReplicationFactor(3);
+                        // the historical partition requires auto-partitioning
+                        .property(ConfigOptions.TABLE_AUTO_PARTITION_ENABLED.key(), "true")
+                        .property(ConfigOptions.TABLE_AUTO_PARTITION_KEY.key(), "b")
+                        .property(
+                                ConfigOptions.TABLE_AUTO_PARTITION_TIME_UNIT.key(),
+                                AutoPartitionTimeUnit.DAY.toString());
+        if (historicalPartitionEnabled) {
+            builder.property(
+                    ConfigOptions.TABLE_DATALAKE_HISTORICAL_PARTITION_ENABLED.key(), "true");
+        }
+        TableDescriptor lakeTable = builder.build().withReplicationFactor(3);
         TableAssignment tableAssignment =
                 generateAssignment(originalBucketCount, 3, getTabletServers());
         mm.createTable(tablePath, remoteDataDir, lakeTable, tableAssignment, false);
@@ -363,6 +384,88 @@ class AlterBucketNumTest {
         TableInfo afterTableInfo = metadataManager.getTable(tablePath);
         assertThat(afterTableInfo.getNumBuckets()).isEqualTo(originalBucketCount);
         assertThat(afterTableInfo.getBucketCountEpoch()).isEqualTo(originalEpoch);
+    }
+
+    @Test
+    void testAlterBucketNumRejectedOnHistoricalPartitionTable() throws Exception {
+        TablePath tablePath = TablePath.of(DEFAULT_DB, "test_reject_rescale_on_historical");
+        int originalBucketCount = 4;
+        createSeededLakePartitionedTable(metadataManager, tablePath, originalBucketCount, true);
+
+        // The rejection happens during validation, before the lake propagation, so the default
+        // manager without a lake catalog never reaches the propagation failure.
+        assertThatThrownBy(() -> alterBucketNum(metadataManager, tablePath, "8"))
+                .isInstanceOf(InvalidAlterTableException.class)
+                .hasMessageContaining("with historical partition enabled")
+                .hasMessageContaining("not supported yet");
+
+        // The bucket layout is untouched: neither the count nor the epoch moved.
+        TableInfo afterTableInfo = metadataManager.getTable(tablePath);
+        assertThat(afterTableInfo.getNumBuckets()).isEqualTo(originalBucketCount);
+        assertThat(afterTableInfo.getBucketCountEpoch()).isEqualTo(0L);
+        Optional<PartitionRegistration> partition =
+                zookeeperClient.getPartition(tablePath, "2024-01");
+        assertThat(partition).isPresent();
+        assertThat(partition.get().getBucketCount()).isEqualTo(originalBucketCount);
+    }
+
+    @Test
+    void testEnableHistoricalPartitionRejectedAfterRescale() throws Exception {
+        MetadataManager mm = buildMetadataManagerWithLakeCatalog(new CountingLakeCatalog(false));
+        TablePath tablePath = TablePath.of(DEFAULT_DB, "test_reject_historical_after_rescale");
+        int originalBucketCount = 4;
+        createSeededLakePartitionedTable(mm, tablePath, originalBucketCount, false);
+
+        // Rescale the table first, which advances the bucketCountEpoch.
+        alterBucketNum(mm, tablePath, "8");
+        assertThat(mm.getTable(tablePath).getBucketCountEpoch()).isEqualTo(1L);
+
+        // Enabling the historical partition on the rescaled table must be rejected.
+        assertThatThrownBy(() -> alterHistoricalPartition(mm, tablePath, true))
+                .isInstanceOf(InvalidAlterTableException.class)
+                .hasMessageContaining("Cannot enable historical partition")
+                .hasMessageContaining("not supported yet");
+
+        // The rejection left no side effects: no historical partition was created and the
+        // bucket layout stays at the rescaled state.
+        assertThat(zookeeperClient.getPartition(tablePath, "__historical__")).isEmpty();
+        assertThat(mm.getTable(tablePath).getNumBuckets()).isEqualTo(8);
+        assertThat(mm.getTable(tablePath).getBucketCountEpoch()).isEqualTo(1L);
+    }
+
+    @Test
+    void testEnableHistoricalPartitionRejectedAfterRescaleWhileDisabled() throws Exception {
+        MetadataManager mm = buildMetadataManagerWithLakeCatalog(new CountingLakeCatalog(false));
+        TablePath tablePath =
+                TablePath.of(DEFAULT_DB, "test_reject_historical_after_disable_rescale");
+        int originalBucketCount = 4;
+        createSeededLakePartitionedTable(mm, tablePath, originalBucketCount, true);
+
+        // Disable the historical partition, then rescale: both steps succeed apart.
+        alterHistoricalPartition(mm, tablePath, false);
+        alterBucketNum(mm, tablePath, "8");
+        assertThat(mm.getTable(tablePath).getBucketCountEpoch()).isEqualTo(1L);
+
+        // Re-enabling must still be rejected: the epoch never decreases, and the historical
+        // partition would be created with the new count while retired lake data keeps the
+        // pre-rescale layout.
+        assertThatThrownBy(() -> alterHistoricalPartition(mm, tablePath, true))
+                .isInstanceOf(InvalidAlterTableException.class)
+                .hasMessageContaining("Cannot enable historical partition")
+                .hasMessageContaining("not supported yet");
+        assertThat(mm.getTable(tablePath).getBucketCountEpoch()).isEqualTo(1L);
+    }
+
+    @Test
+    void testEnableHistoricalPartitionOnNeverRescaledTableSucceeds() throws Exception {
+        MetadataManager mm = buildMetadataManagerWithLakeCatalog(new CountingLakeCatalog(false));
+        TablePath tablePath = TablePath.of(DEFAULT_DB, "test_enable_historical_on_fresh_table");
+        int originalBucketCount = 4;
+        createSeededLakePartitionedTable(mm, tablePath, originalBucketCount, false);
+
+        // A never-rescaled table (epoch 0) can still enable the historical partition.
+        alterHistoricalPartition(mm, tablePath, true);
+        assertThat(mm.getTable(tablePath).getTableConfig().isHistoricalPartitionEnabled()).isTrue();
     }
 
     // ========================== Success Tests ==========================
@@ -884,6 +987,29 @@ class AlterBucketNumTest {
         manager.alterTableProperties(
                 tablePath,
                 Collections.singletonList(TableChange.reset("bucket.num")),
+                builder.build(),
+                false,
+                null,
+                (currentTable, updatedTable) -> {},
+                (currentTable, updatedTable) -> {},
+                ZkVersion.MATCH_ANY_VERSION.getVersion());
+    }
+
+    private static void alterHistoricalPartition(
+            MetadataManager manager, TablePath tablePath, boolean enable) {
+        String key = ConfigOptions.TABLE_DATALAKE_HISTORICAL_PARTITION_ENABLED.key();
+        TablePropertyChanges.Builder builder = TablePropertyChanges.builder();
+        List<TableChange> changes = new ArrayList<>();
+        if (enable) {
+            builder.setTableProperty(key, "true");
+            changes.add(TableChange.set(key, "true"));
+        } else {
+            builder.resetTableProperty(key);
+            changes.add(TableChange.reset(key));
+        }
+        manager.alterTableProperties(
+                tablePath,
+                changes,
                 builder.build(),
                 false,
                 null,
