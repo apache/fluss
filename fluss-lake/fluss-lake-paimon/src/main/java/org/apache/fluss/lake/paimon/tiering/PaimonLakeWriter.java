@@ -32,7 +32,6 @@ import org.apache.fluss.types.RowType;
 import org.apache.paimon.CoreOptions;
 import org.apache.paimon.catalog.Catalog;
 import org.apache.paimon.table.FileStoreTable;
-import org.apache.paimon.table.sink.CommitMessage;
 
 import java.io.IOException;
 import java.util.Collections;
@@ -40,6 +39,7 @@ import java.util.List;
 import java.util.Map;
 
 import static org.apache.fluss.lake.paimon.utils.PaimonConversions.toPaimon;
+import static org.apache.fluss.utils.PartitionUtils.HISTORICAL_PARTITION_VALUE;
 
 /** Implementation of {@link LakeWriter} for Paimon. */
 public class PaimonLakeWriter implements LakeWriter<PaimonWriteResult>, SupportsRecordBatchWrite {
@@ -59,6 +59,8 @@ public class PaimonLakeWriter implements LakeWriter<PaimonWriteResult>, Supports
 
         List<String> partitionKeys = fileStoreTable.partitionKeys();
         RowType flussRowType = writerInitContext.tableInfo().getRowType();
+        boolean historicalPartition =
+                HISTORICAL_PARTITION_VALUE.equals(writerInitContext.partition());
 
         // FIP-27: detect whether the target Paimon table is a clean table (only user columns) or a
         // legacy table (carrying the three Fluss system columns). Writers emit system columns only
@@ -73,7 +75,8 @@ public class PaimonLakeWriter implements LakeWriter<PaimonWriteResult>, Supports
                                 writerInitContext.partition(),
                                 partitionKeys,
                                 flussRowType,
-                                paimonIncludingSystemColumns)
+                                paimonIncludingSystemColumns,
+                                historicalPartition)
                         : new MergeTreeWriter(
                                 fileStoreTable,
                                 writerInitContext.tableBucket(),
@@ -81,7 +84,8 @@ public class PaimonLakeWriter implements LakeWriter<PaimonWriteResult>, Supports
                                 partitionKeys,
                                 flussRowType,
                                 writerInitContext.ioTmpDirs(),
-                                paimonIncludingSystemColumns);
+                                paimonIncludingSystemColumns,
+                                historicalPartition);
     }
 
     @Override
@@ -114,13 +118,11 @@ public class PaimonLakeWriter implements LakeWriter<PaimonWriteResult>, Supports
 
     @Override
     public PaimonWriteResult complete() throws IOException {
-        CommitMessage commitMessage;
         try {
-            commitMessage = recordWriter.complete();
+            return new PaimonWriteResult(recordWriter.complete());
         } catch (Exception e) {
             throw new IOException("Failed to complete Paimon write.", e);
         }
-        return new PaimonWriteResult(commitMessage);
     }
 
     @Override

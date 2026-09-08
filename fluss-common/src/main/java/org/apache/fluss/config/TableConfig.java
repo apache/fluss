@@ -129,7 +129,7 @@ public class TableConfig {
         return config.get(ConfigOptions.TABLE_DATALAKE_ENABLED);
     }
 
-    /** Whether historical partition lookup is enabled. */
+    /** Whether historical partition access is enabled. */
     public boolean isHistoricalPartitionEnabled() {
         return config.get(ConfigOptions.TABLE_DATALAKE_HISTORICAL_PARTITION_ENABLED);
     }

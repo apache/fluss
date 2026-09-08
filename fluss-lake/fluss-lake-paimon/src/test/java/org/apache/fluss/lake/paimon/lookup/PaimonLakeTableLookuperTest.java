@@ -232,6 +232,53 @@ class PaimonLakeTableLookuperTest {
     }
 
     @Test
+    void testRefreshesFilesWhenLakeSnapshotChanges() throws Exception {
+        TablePath tablePath = TablePath.of(DB, "refresh_registered_files");
+        Schema schema = pkSchema();
+        FileStoreTable table = createPaimonTable(tablePath, partitionedPkDescriptor(schema));
+        writeAndCommitData(
+                table,
+                Collections.singletonMap(
+                        0,
+                        Arrays.asList(
+                                paimonRow(1, "20240101", "Alice"),
+                                paimonRow(2, "20240102", "Bob"))));
+
+        try (LakeTableLookuper lookuper =
+                new PaimonLakeTableLookuper(
+                        paimonConfig,
+                        tablePath,
+                        tempWarehouseDir.getAbsolutePath(),
+                        tableConfig(KvFormat.COMPACTED),
+                        LOOKUP_CACHE_MAX_DISK_BYTES,
+                        NO_OP_DISK_WRITE_GUARD)) {
+            LakeTableLookuper.LookupContext firstPartition =
+                    lookupContext(schema, "20240101", 0, SCHEMA_ID);
+            LakeTableLookuper.LookupContext secondPartition =
+                    lookupContext(schema, "20240102", 0, SCHEMA_ID);
+            // Register two partition-buckets and populate their local lookup files.
+            assertThat(lookuper.lookup(paimonKey(schema, 1, "20240101"), firstPartition))
+                    .isNotNull();
+            assertThat(lookuper.lookup(paimonKey(schema, 2, "20240102"), secondPartition))
+                    .isNotNull();
+
+            writeAndCommitData(
+                    table,
+                    Collections.singletonMap(
+                            0, Collections.singletonList(paimonRow(3, "20240101", "Carol"))));
+            // The newly committed file is not registered before the explicit refresh.
+            assertThat(lookuper.lookup(paimonKey(schema, 3, "20240101"), firstPartition)).isNull();
+
+            lookuper.requestRefresh();
+
+            // Only the new data file needs a local lookup-file download after the bulk refresh.
+            assertLookupAndFileDownload(lookuper, schema, 3, "20240101", "Carol", true);
+            assertLookupAndFileDownload(lookuper, schema, 1, "20240101", "Alice", false);
+            assertLookupAndFileDownload(lookuper, schema, 2, "20240102", "Bob", false);
+        }
+    }
+
+    @Test
     void testDiskWriteLockBlocksOnlyLookupFileDownloads() throws Exception {
         TablePath tablePath = TablePath.of(DB, "disk_write_lock");
         Schema schema = pkSchema();
@@ -874,6 +921,32 @@ class PaimonLakeTableLookuperTest {
             byte[] value, short schemaId, Schema schema, KvFormat kvFormat) {
         return new ValueDecoder(new TestingSchemaGetter(schemaId, schema), kvFormat)
                 .decodeValue(value);
+    }
+
+    private static void assertLookupAndFileDownload(
+            LakeTableLookuper lookuper,
+            Schema schema,
+            int id,
+            String partitionName,
+            String name,
+            boolean expectedFileDownload)
+            throws Exception {
+        List<Boolean> fileDownloads = new ArrayList<>();
+        BinaryValue value =
+                decodeValue(
+                        lookuper.lookup(
+                                paimonKey(schema, id, partitionName),
+                                lookupContext(
+                                        schema,
+                                        partitionName,
+                                        0,
+                                        SCHEMA_ID,
+                                        (lookupTimeNanos, lookupFileDownloaded) ->
+                                                fileDownloads.add(lookupFileDownloaded))),
+                        SCHEMA_ID,
+                        schema);
+        assertRow(value.row, id, partitionName, name);
+        assertThat(fileDownloads).containsExactly(expectedFileDownload);
     }
 
     private static void assertRow(InternalRow row, int id, String dt, String name) {

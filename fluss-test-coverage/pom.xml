@@ -490,6 +490,9 @@
                                         <exclude>org.apache.fluss.lake.source.*</exclude>
                                         <exclude>org.apache.fluss.lake.lakestorage.LakeStorage</exclude>
                                         <exclude>
+                                            org.apache.fluss.lake.lakestorage.LakeTableLookuper
+                                        </exclude>
+                                        <exclude>
                                             org.apache.fluss.lake.lakestorage.LakeStorage.LookuperContext
                                         </exclude>
                                         <exclude>

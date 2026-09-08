@@ -23,6 +23,7 @@ import org.apache.fluss.record.ArrowBatchData;
 import org.apache.fluss.record.LogRecord;
 import org.apache.fluss.types.RowType;
 
+import org.apache.paimon.data.BinaryRow;
 import org.apache.paimon.data.InternalRow;
 import org.apache.paimon.table.BucketMode;
 import org.apache.paimon.table.FileStoreTable;
@@ -54,7 +55,8 @@ public class AppendOnlyWriter extends RecordWriter<InternalRow> {
             @Nullable String partition,
             List<String> partitionKeys,
             RowType flussRowType,
-            boolean paimonIncludingSystemColumns) {
+            boolean paimonIncludingSystemColumns,
+            boolean historicalPartition) {
         //noinspection unchecked
         super(
                 (TableWriteImpl<InternalRow>)
@@ -65,14 +67,15 @@ public class AppendOnlyWriter extends RecordWriter<InternalRow> {
                 partition,
                 partitionKeys,
                 flussRowType,
-                paimonIncludingSystemColumns);
+                paimonIncludingSystemColumns,
+                historicalPartition);
         this.fileStoreTable = fileStoreTable;
         this.paimonIncludingSystemColumns = paimonIncludingSystemColumns;
     }
 
     @Override
     public void write(LogRecord record) throws Exception {
-        flussRecordAsPaimonRow.setFlussRecord(record);
+        BinaryRow targetPartition = prepareRecordAndGetPartition(record);
 
         // hacky, call internal method tableWrite.getWrite() to support
         // to write to given partition, otherwise, it'll always extract a partition from Paimon row
@@ -82,7 +85,7 @@ public class AppendOnlyWriter extends RecordWriter<InternalRow> {
         if (fileStoreTable.store().bucketMode() == BucketMode.BUCKET_UNAWARE) {
             writtenBucket = 0;
         }
-        tableWrite.getWrite().write(partition, writtenBucket, flussRecordAsPaimonRow);
+        tableWrite.getWrite().write(targetPartition, writtenBucket, flussRecordAsPaimonRow);
     }
 
     /**
@@ -104,7 +107,7 @@ public class AppendOnlyWriter extends RecordWriter<InternalRow> {
         } else {
             helper = (AppendOnlyArrowBatchHelper) arrowBatchHelper;
         }
-        helper.writeArrowBatch(arrowBatchData, partition);
+        helper.writeArrowBatch(arrowBatchData, fixedPartition, historicalPartition);
     }
 
     @Override

@@ -98,7 +98,7 @@ public final class HistoricalPartitionManager implements AutoCloseable {
         lakeLookupManager.startup(scheduler);
     }
 
-    /** Looks up historical keys from the local overlay and then lake storage. */
+    /** Looks up historical keys from local KV state and then lake storage. */
     public CompletableFuture<LookupResultForBucket> lookup(
             Replica replica,
             LookupDataForBucket lookupData,
@@ -119,7 +119,8 @@ public final class HistoricalPartitionManager implements AutoCloseable {
                                                             + tableBucket
                                                             + " (original partition "
                                                             + lookupData.originalPartitionName()
-                                                            + ")."))));
+                                                            + ") because the historical request "
+                                                            + "queue is full."))));
         } catch (RuntimeException e) {
             return CompletableFuture.completedFuture(
                     new LookupResultForBucket(
@@ -129,7 +130,7 @@ public final class HistoricalPartitionManager implements AutoCloseable {
         }
     }
 
-    /** Writes records to the local overlay of a historical partition. */
+    /** Writes records to the local KV state of a historical partition. */
     public CompletableFuture<PutKvResultForBucket> putKv(
             Replica replica,
             PutKvDataForBucket putData,
@@ -163,17 +164,7 @@ public final class HistoricalPartitionManager implements AutoCloseable {
                                     originalPartitionName);
                         }
                     },
-                    () ->
-                            PutKvResultForBucket.historicalFailure(
-                                    putData.tableBucket(),
-                                    ApiError.fromThrowable(
-                                            new HistoricalPartitionThrottledException(
-                                                    "Historical write is throttled for "
-                                                            + putData.tableBucket()
-                                                            + " (original partition "
-                                                            + originalPartitionName
-                                                            + ").")),
-                                    originalPartitionName));
+                    () -> requestLimitThrottledResult(putData, originalPartitionName));
         } catch (RuntimeException e) {
             return CompletableFuture.completedFuture(
                     PutKvResultForBucket.historicalFailure(
@@ -193,7 +184,7 @@ public final class HistoricalPartitionManager implements AutoCloseable {
         lakeLookupManager.invalidateTableLookuper(tableId);
     }
 
-    /** Requires future fallback lookups to reload after the given lake snapshot notification. */
+    /** Requires future fallback lookups to refresh after the given lake snapshot notification. */
     public void requireLakeSnapshot(long tableId, long lakeSnapshotId) {
         lakeLookupManager.requireLakeSnapshot(tableId, lakeSnapshotId);
     }
@@ -276,6 +267,8 @@ public final class HistoricalPartitionManager implements AutoCloseable {
                     return result.value();
                 };
 
+        // TODO: Tag historical values and tombstones with WAL offsets for incremental cleanup; see
+        //  https://github.com/apache/fluss/issues/4159.
         return replica.putHistoricalRecordsToLeader(
                 putData.records(),
                 targetColumns,
@@ -284,6 +277,20 @@ public final class HistoricalPartitionManager implements AutoCloseable {
                 memoizedLakeLookup,
                 expectedLeaderEpoch,
                 requiredAcks);
+    }
+
+    private static PutKvResultForBucket requestLimitThrottledResult(
+            PutKvDataForBucket putData, String originalPartitionName) {
+        return PutKvResultForBucket.historicalFailure(
+                putData.tableBucket(),
+                ApiError.fromThrowable(
+                        new HistoricalPartitionThrottledException(
+                                "Historical write is throttled for "
+                                        + putData.tableBucket()
+                                        + " (original partition "
+                                        + originalPartitionName
+                                        + ") because the historical request queue is full.")),
+                originalPartitionName);
     }
 
     @Override

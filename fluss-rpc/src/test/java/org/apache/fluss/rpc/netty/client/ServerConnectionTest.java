@@ -23,6 +23,7 @@ import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.DisconnectException;
 import org.apache.fluss.exception.InvalidServerTypeException;
+import org.apache.fluss.exception.UnsupportedVersionException;
 import org.apache.fluss.metrics.Gauge;
 import org.apache.fluss.metrics.Metric;
 import org.apache.fluss.metrics.MetricType;
@@ -33,11 +34,18 @@ import org.apache.fluss.metrics.util.NOPMetricsGroup;
 import org.apache.fluss.rpc.TestingGatewayService;
 import org.apache.fluss.rpc.TestingTabletGatewayService;
 import org.apache.fluss.rpc.messages.ApiMessage;
+import org.apache.fluss.rpc.messages.ApiVersionsRequest;
+import org.apache.fluss.rpc.messages.ApiVersionsResponse;
 import org.apache.fluss.rpc.messages.GetTableSchemaRequest;
 import org.apache.fluss.rpc.messages.ListDatabasesRequest;
 import org.apache.fluss.rpc.messages.LookupRequest;
+import org.apache.fluss.rpc.messages.PbApiVersion;
 import org.apache.fluss.rpc.messages.PbLookupReqForBucket;
 import org.apache.fluss.rpc.messages.PbTablePath;
+import org.apache.fluss.rpc.messages.ProduceLogRequest;
+import org.apache.fluss.rpc.messages.ProduceLogResponse;
+import org.apache.fluss.rpc.messages.PutKvRequest;
+import org.apache.fluss.rpc.messages.PutKvResponse;
 import org.apache.fluss.rpc.metrics.ClientMetricGroup;
 import org.apache.fluss.rpc.metrics.TestingClientMetricGroup;
 import org.apache.fluss.rpc.netty.client.ServerConnection.ConnectionState;
@@ -239,7 +247,75 @@ public class ServerConnectionTest {
                 .isInstanceOf(DisconnectException.class);
     }
 
+    @Test
+    void testRejectHistoricalWritesForOldServer() throws Exception {
+        nettyServer.close();
+        buildNettyServer(new OldWriteGatewayService());
+
+        ServerConnection connection =
+                new ServerConnection(
+                        bootstrap,
+                        serverNode,
+                        TestingClientMetricGroup.newInstance(),
+                        clientAuthenticator,
+                        (con, ignore) -> {});
+        try {
+            assertThat(connection.send(ApiKeys.PUT_KV, putKvRequest(null)).get())
+                    .isInstanceOf(PutKvResponse.class);
+
+            assertThatThrownBy(
+                            () ->
+                                    connection
+                                            .send(ApiKeys.PUT_KV, putKvRequest("dt=20260823"))
+                                            .get())
+                    .rootCause()
+                    .isInstanceOf(UnsupportedVersionException.class)
+                    .hasMessageContaining("require PUT_KV version 3 or newer")
+                    .hasMessageContaining("negotiated version 2");
+
+            assertThat(connection.send(ApiKeys.PRODUCE_LOG, produceLogRequest(null)).get())
+                    .isInstanceOf(ProduceLogResponse.class);
+
+            assertThatThrownBy(
+                            () ->
+                                    connection
+                                            .send(
+                                                    ApiKeys.PRODUCE_LOG,
+                                                    produceLogRequest("dt=20260823"))
+                                            .get())
+                    .rootCause()
+                    .isInstanceOf(UnsupportedVersionException.class)
+                    .hasMessageContaining("require PRODUCE_LOG version 1 or newer")
+                    .hasMessageContaining("negotiated version 0");
+        } finally {
+            connection.close().get();
+        }
+    }
+
+    private static PutKvRequest putKvRequest(String originalPartitionName) {
+        PutKvRequest request = new PutKvRequest().setTableId(1L).setAcks(1).setTimeoutMs(10_000);
+        request.addBucketsReq().setBucketId(0).setRecords(new byte[0]);
+        if (originalPartitionName != null) {
+            request.getBucketsReqAt(0).setOriginalPartitionName(originalPartitionName);
+        }
+        return request;
+    }
+
+    private static ProduceLogRequest produceLogRequest(String originalPartitionName) {
+        ProduceLogRequest request =
+                new ProduceLogRequest().setTableId(1L).setAcks(1).setTimeoutMs(10_000);
+        request.addBucketsReq().setBucketId(0).setRecords(new byte[0]);
+        if (originalPartitionName != null) {
+            request.getBucketsReqAt(0).setOriginalPartitionName(originalPartitionName);
+        }
+        return request;
+    }
+
     private void buildNettyServer() throws Exception {
+        buildNettyServer(new TestingTabletGatewayService());
+    }
+
+    private void buildNettyServer(TestingGatewayService gatewayService) throws Exception {
         try (NetUtils.Port availablePort = getAvailablePort();
                 NetUtils.Port availablePort2 = getAvailablePort()) {
             serverNode =
@@ -248,7 +324,7 @@ public class ServerConnectionTest {
             serverNode2 =
                     new ServerNode(
                             2, "localhost", availablePort2.getPort(), ServerType.TABLET_SERVER);
-            service = new TestingTabletGatewayService();
+            service = gatewayService;
             MetricGroup metricGroup = NOPMetricsGroup.newInstance();
             nettyServer =
                     new NettyServer(
@@ -260,6 +336,34 @@ public class ServerConnectionTest {
                             metricGroup,
                             RequestsMetrics.createCoordinatorServerRequestMetrics(metricGroup));
             nettyServer.start();
+        }
+    }
+
+    private static class OldWriteGatewayService extends TestingTabletGatewayService {
+        @Override
+        public CompletableFuture<ApiVersionsResponse> apiVersions(ApiVersionsRequest request) {
+            return super.apiVersions(request)
+                    .thenApply(
+                            response -> {
+                                for (PbApiVersion apiVersion : response.getApiVersionsList()) {
+                                    if (apiVersion.getApiKey() == ApiKeys.PUT_KV.id) {
+                                        apiVersion.setMaxVersion(2);
+                                    } else if (apiVersion.getApiKey() == ApiKeys.PRODUCE_LOG.id) {
+                                        apiVersion.setMaxVersion(0);
+                                    }
+                                }
+                                return response;
+                            });
+        }
+
+        @Override
+        public CompletableFuture<PutKvResponse> putKv(PutKvRequest request) {
+            return CompletableFuture.completedFuture(new PutKvResponse());
+        }
+
+        @Override
+        public CompletableFuture<ProduceLogResponse> produceLog(ProduceLogRequest request) {
+            return CompletableFuture.completedFuture(new ProduceLogResponse());
         }
     }
 

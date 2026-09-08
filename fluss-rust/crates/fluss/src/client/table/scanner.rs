@@ -2998,6 +2998,7 @@ mod tests {
                     remote_log_fetch_info: None,
                     records: None,
                     filtered_end_offset,
+                    min_retain_offset: None,
                 }],
             }],
         }
@@ -3052,6 +3053,7 @@ mod tests {
                     remote_log_fetch_info: None,
                     records: None,
                     filtered_end_offset: None,
+                    min_retain_offset: None,
                 }],
             }],
         };
@@ -3111,6 +3113,7 @@ mod tests {
                     remote_log_fetch_info: None,
                     records: None,
                     filtered_end_offset: None,
+                    min_retain_offset: None,
                 }],
             }],
         };
@@ -3460,6 +3463,7 @@ mod tests {
                             remote_log_fetch_info: None,
                             records: None,
                             filtered_end_offset: None,
+                            min_retain_offset: None,
                         }],
                     }],
                 };

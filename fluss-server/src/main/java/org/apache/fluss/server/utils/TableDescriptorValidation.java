@@ -216,10 +216,6 @@ public class TableDescriptorValidation {
                             DataLakeFormat.PAIMON,
                             dataLakeFormat.get()));
         }
-        if (!tableDescriptor.hasPrimaryKey()) {
-            unmetRequirements.add("the table must define a primary key");
-        }
-
         int partitionKeyCount = tableDescriptor.getPartitionKeys().size();
         if (partitionKeyCount != 1) {
             unmetRequirements.add(

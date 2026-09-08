@@ -51,7 +51,11 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.apache.fluss.record.TestData.DATA1;
@@ -122,6 +126,63 @@ final class LogTabletTest extends LogTestBase {
         // A new non-empty range can become readable after the empty state.
         logTablet.updateRemoteLogEndOffset(5L);
         assertThat(logTablet.canFetchFromRemoteLog(0L)).isTrue();
+    }
+
+    @Test
+    void testMinRetainOffsetIsMonotonicWithConcurrentUpdates() throws Exception {
+        File kvLogDir =
+                LogTestUtils.makeRandomLogTabletDir(
+                        tempDir,
+                        DATA1_TABLE_PATH.getDatabaseName(),
+                        DATA1_TABLE_ID,
+                        DATA1_TABLE_PATH.getTableName());
+        LogTablet kvLogTablet =
+                LogTablet.create(
+                        tempDir,
+                        PhysicalTablePath.of(DATA1_TABLE_PATH),
+                        kvLogDir,
+                        conf,
+                        new AtomicBoolean(false),
+                        TestingMetricGroups.TABLET_SERVER_METRICS,
+                        0,
+                        scheduler,
+                        LogFormat.ARROW,
+                        1,
+                        true,
+                        SystemClock.getInstance(),
+                        true);
+        int updateThreadCount = 32;
+        ExecutorService executor = Executors.newFixedThreadPool(updateThreadCount);
+        CountDownLatch ready = new CountDownLatch(updateThreadCount);
+        CountDownLatch start = new CountDownLatch(1);
+        try {
+            for (int i = 1; i <= updateThreadCount; i++) {
+                final long minRetainOffset = i;
+                executor.execute(
+                        () -> {
+                            ready.countDown();
+                            try {
+                                start.await();
+                            } catch (InterruptedException e) {
+                                Thread.currentThread().interrupt();
+                                return;
+                            }
+                            kvLogTablet.updateMinRetainOffset(minRetainOffset);
+                        });
+            }
+
+            assertThat(ready.await(10, TimeUnit.SECONDS)).isTrue();
+            start.countDown();
+            executor.shutdown();
+            assertThat(executor.awaitTermination(10, TimeUnit.SECONDS)).isTrue();
+
+            assertThat(kvLogTablet.getMinRetainOffset()).isEqualTo(updateThreadCount);
+            kvLogTablet.updateMinRetainOffset(1L);
+            assertThat(kvLogTablet.getMinRetainOffset()).isEqualTo(updateThreadCount);
+        } finally {
+            executor.shutdownNow();
+            kvLogTablet.close();
+        }
     }
 
     @Test

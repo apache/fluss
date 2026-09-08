@@ -42,7 +42,8 @@ public enum ApiKeys {
     GET_TABLE_SCHEMA(1011, 0, 0, PUBLIC),
     GET_METADATA(1012, 0, 0, PUBLIC),
     UPDATE_METADATA(1013, 0, 0, PRIVATE),
-    PRODUCE_LOG(1014, 0, 0, PUBLIC),
+    // Version 1: Supports original_partition_name in requests and responses for historical writes.
+    PRODUCE_LOG(1014, 0, 1, PUBLIC),
     FETCH_LOG(1015, 0, 0, PUBLIC),
 
     // Version 0: Uses lake's encoder for primary key encoding (legacy behavior).

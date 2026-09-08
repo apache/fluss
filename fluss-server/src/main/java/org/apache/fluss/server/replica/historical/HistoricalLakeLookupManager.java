@@ -80,7 +80,7 @@ import static org.apache.fluss.utils.Preconditions.checkState;
  * than table path to prevent a deleted and recreated table from reusing the old table's lookuper. A
  * cached lookuper is replaced when its schema ID or lake configuration version no longer matches
  * the current request. Active lookups can finish on the old lookuper, which is closed after its
- * last lookup releases it.
+ * last lookup releases it. A new required lake snapshot refreshes the cached lookuper in place.
  *
  * <p>Up to ten table lookupers are cached. Each lookuper receives one tenth of the server-level
  * disk budget, and Caffeine evicts lookupers when the table limit is exceeded.
@@ -272,7 +272,7 @@ class HistoricalLakeLookupManager implements AutoCloseable {
         lakeTableLookupers.invalidate(tableId);
     }
 
-    /** Records the required opaque lake snapshot ID, which is compared only by equality. */
+    /** Records the required opaque lake snapshot ID for the next in-place file refresh. */
     void requireLakeSnapshot(long tableId, long snapshotId) {
         requiredLakeSnapshotIds.put(tableId, snapshotId);
     }
@@ -481,12 +481,16 @@ class HistoricalLakeLookupManager implements AutoCloseable {
         long currentLakeConfigVersion = lakeConfigVersion;
         Configuration currentConf = conf;
         long cacheSizeBytes = lookupCacheMaxDiskBytesPerTable;
-        Long requiredLakeSnapshotId = requiredLakeSnapshotIds.get(context.tableId);
         return lakeTableLookupers
                 .asMap()
                 .compute(
                         context.tableId,
                         (ignored, currentLookuper) -> {
+                            // Read inside the per-table atomic update to avoid refreshing back to a
+                            // snapshot captured while waiting for another lookup to finish updating
+                            // this lookuper.
+                            Long requiredLakeSnapshotId =
+                                    requiredLakeSnapshotIds.get(context.tableId);
                             CachedLakeTableLookuper selectedLookuper = currentLookuper;
                             // Create the lookuper lazily, and recreate it after schema,
                             // lake configuration, or server cache size changes so it
@@ -496,10 +500,7 @@ class HistoricalLakeLookupManager implements AutoCloseable {
                                     || selectedLookuper.schemaId != context.schemaId
                                     || selectedLookuper.lakeConfigVersion
                                             != currentLakeConfigVersion
-                                    || selectedLookuper.cacheSizeBytes != cacheSizeBytes
-                                    || !Objects.equals(
-                                            selectedLookuper.lakeSnapshotId,
-                                            requiredLakeSnapshotId)) {
+                                    || selectedLookuper.cacheSizeBytes != cacheSizeBytes) {
                                 File tableLookupDir =
                                         FlussPaths.historicalLookupTableDir(
                                                 historicalLookupCacheRootDir,
@@ -526,7 +527,7 @@ class HistoricalLakeLookupManager implements AutoCloseable {
                             // Pin the lookuper before leaving the atomic cache update.
                             // Eviction or invalidation can then defer closing it until
                             // this lookup releases it.
-                            selectedLookuper.acquire();
+                            selectedLookuper.acquire(requiredLakeSnapshotId);
                             return selectedLookuper;
                         });
     }
@@ -555,8 +556,8 @@ class HistoricalLakeLookupManager implements AutoCloseable {
         private final int schemaId;
         private final long lakeConfigVersion;
         private final long cacheSizeBytes;
-        /** The required opaque lake snapshot ID when this lookuper was created, or null if none. */
-        private final @Nullable Long lakeSnapshotId;
+        /** The opaque lake snapshot ID covered by the last file refresh, or null if none. */
+        private @Nullable Long lakeSnapshotId;
 
         private final File tableLookupDir;
         private final LakeTableLookuper lookuper;
@@ -583,9 +584,13 @@ class HistoricalLakeLookupManager implements AutoCloseable {
             this.lookuper = lookuper;
         }
 
-        private synchronized void acquire() {
+        private synchronized void acquire(@Nullable Long requiredLakeSnapshotId) {
             if (invalidated) {
                 throw new IllegalStateException("Lake table lookuper has been invalidated.");
+            }
+            if (!Objects.equals(lakeSnapshotId, requiredLakeSnapshotId)) {
+                lookuper.requestRefresh();
+                lakeSnapshotId = requiredLakeSnapshotId;
             }
             activeLookups++;
         }

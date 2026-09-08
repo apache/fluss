@@ -18,19 +18,31 @@
 package org.apache.fluss.server.utils;
 
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.record.KvRecordBatch;
+import org.apache.fluss.record.MemoryLogRecords;
 import org.apache.fluss.row.encode.KvValueLayout;
+import org.apache.fluss.rpc.entity.FetchLogResultForBucket;
 import org.apache.fluss.rpc.entity.LookupResultForBucket;
+import org.apache.fluss.rpc.entity.ProduceLogResultForBucket;
 import org.apache.fluss.rpc.entity.PutKvResultForBucket;
+import org.apache.fluss.rpc.messages.FetchLogResponse;
 import org.apache.fluss.rpc.messages.LookupResponse;
 import org.apache.fluss.rpc.messages.PbBucketMetadata;
+import org.apache.fluss.rpc.messages.PbFetchLogRespForBucket;
 import org.apache.fluss.rpc.messages.PbPartitionMetadata;
+import org.apache.fluss.rpc.messages.PbProduceLogReqForBucket;
+import org.apache.fluss.rpc.messages.PbProduceLogRespForBucket;
 import org.apache.fluss.rpc.messages.PbPutKvReqForBucket;
 import org.apache.fluss.rpc.messages.PbPutKvRespForBucket;
 import org.apache.fluss.rpc.messages.PbTableMetadata;
+import org.apache.fluss.rpc.messages.ProduceLogRequest;
+import org.apache.fluss.rpc.messages.ProduceLogResponse;
 import org.apache.fluss.rpc.messages.PutKvRequest;
 import org.apache.fluss.rpc.messages.PutKvResponse;
 import org.apache.fluss.rpc.messages.UpdateMetadataRequest;
+import org.apache.fluss.rpc.util.CommonRpcMessageUtils;
+import org.apache.fluss.server.entity.ProduceLogDataForBucket;
 import org.apache.fluss.server.entity.PutKvDataForBucket;
 import org.apache.fluss.server.metadata.BucketMetadata;
 import org.apache.fluss.server.metadata.ClusterMetadata;
@@ -57,6 +69,49 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class ServerRpcMessageUtilsTest {
 
     @Test
+    void testFetchLogResponseContainsMinRetainOffset() {
+        TableBucket tableBucket = new TableBucket(1L, 0);
+        FetchLogResultForBucket result =
+                FetchLogResultForBucket.records(tableBucket, MemoryLogRecords.EMPTY, 10L, -1L, 8L);
+
+        FetchLogResponse response =
+                ServerRpcMessageUtils.makeFetchLogResponse(
+                        Collections.singletonMap(tableBucket, result));
+
+        PbFetchLogRespForBucket bucketResponse =
+                response.getTablesRespsList().get(0).getBucketsRespsList().get(0);
+        assertThat(bucketResponse.hasMinRetainOffset()).isTrue();
+        assertThat(bucketResponse.getMinRetainOffset()).isEqualTo(8L);
+
+        FetchLogResultForBucket decodedResult =
+                CommonRpcMessageUtils.getFetchLogResultForBucket(
+                        tableBucket, TablePath.of("db", "table"), bucketResponse);
+        assertThat(decodedResult.hasMinRetainOffset()).isTrue();
+        assertThat(decodedResult.getMinRetainOffset()).isEqualTo(8L);
+
+        FetchLogResponse responseWithoutMinRetainOffset =
+                ServerRpcMessageUtils.makeFetchLogResponse(
+                        Collections.singletonMap(
+                                tableBucket,
+                                FetchLogResultForBucket.records(
+                                        tableBucket, MemoryLogRecords.EMPTY, 10L, -1L, -1L)));
+        PbFetchLogRespForBucket bucketResponseWithoutMinRetainOffset =
+                responseWithoutMinRetainOffset
+                        .getTablesRespsList()
+                        .get(0)
+                        .getBucketsRespsList()
+                        .get(0);
+        assertThat(bucketResponseWithoutMinRetainOffset.hasMinRetainOffset()).isFalse();
+        assertThat(
+                        CommonRpcMessageUtils.getFetchLogResultForBucket(
+                                        tableBucket,
+                                        TablePath.of("db", "table"),
+                                        bucketResponseWithoutMinRetainOffset)
+                                .hasMinRetainOffset())
+                .isFalse();
+    }
+
+    @Test
     void testLookupResponseSupportsMixedValueLayouts() {
         byte[] plainValue = new byte[] {1, 0, 11, 12};
         byte[] taggedValue = new byte[] {0, 0, 0, 0, 0, 0, 0, 7, 1, 0, 21, 22};
@@ -74,6 +129,52 @@ class ServerRpcMessageUtilsTest {
         assertThat(response.getBucketsRespAt(0).getValuesList())
                 .extracting(value -> value.getValues())
                 .containsExactly(new byte[] {1, 0, 11, 12}, new byte[] {1, 0, 21, 22});
+    }
+
+    @Test
+    void testHistoricalProduceLogRequestAndResponsePreserveOriginalPartitions() {
+        long tableId = 1L;
+        long partitionId = 2L;
+        PbProduceLogReqForBucket firstBucketRequest =
+                new PbProduceLogReqForBucket()
+                        .setPartitionId(partitionId)
+                        .setBucketId(0)
+                        .setRecords(new byte[0])
+                        .setOriginalPartitionName("dt=2025-01-01");
+        ProduceLogRequest request =
+                new ProduceLogRequest().setTableId(tableId).setAcks(1).setTimeoutMs(10_000);
+        request.addAllBucketsReqs(
+                Arrays.asList(
+                        firstBucketRequest,
+                        new PbProduceLogReqForBucket()
+                                .copyFrom(firstBucketRequest)
+                                .setOriginalPartitionName("dt=2025-01-02")));
+
+        TableBucket tableBucket = new TableBucket(tableId, partitionId, 0);
+        List<ProduceLogDataForBucket> decoded =
+                ServerRpcMessageUtils.toProduceLogDataForBuckets(request);
+        assertThat(decoded)
+                .extracting(ProduceLogDataForBucket::tableBucket)
+                .containsOnly(tableBucket);
+        assertThat(decoded)
+                .extracting(ProduceLogDataForBucket::originalPartitionName)
+                .containsExactly("dt=2025-01-01", "dt=2025-01-02");
+
+        ProduceLogResponse response =
+                ServerRpcMessageUtils.makeProduceLogResponse(
+                        Arrays.asList(
+                                ProduceLogResultForBucket.historicalSuccess(
+                                        tableBucket, 0L, 1L, "dt=2025-01-01"),
+                                ProduceLogResultForBucket.historicalSuccess(
+                                        tableBucket, 1L, 2L, "dt=2025-01-02")));
+        assertThat(response.getBucketsRespsList())
+                .extracting(PbProduceLogRespForBucket::getOriginalPartitionName)
+                .containsExactly("dt=2025-01-01", "dt=2025-01-02");
+
+        request.addAllBucketsReqs(Collections.singletonList(firstBucketRequest));
+        assertThatThrownBy(() -> ServerRpcMessageUtils.toProduceLogDataForBuckets(request))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("duplicate table bucket");
     }
 
     @Test

@@ -26,6 +26,7 @@ import org.apache.fluss.cluster.rebalance.ServerTag;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.MemorySize;
+import org.apache.fluss.exception.AuthorizationException;
 import org.apache.fluss.exception.NoRebalanceInProgressException;
 import org.apache.fluss.exception.SecurityDisabledException;
 import org.apache.fluss.metadata.DataLakeFormat;
@@ -866,7 +867,7 @@ public abstract class FlinkProcedureITCase {
             assertThat(results).hasSize(1);
             assertThat(results.stream().map(Row::toString).collect(Collectors.toList()))
                     .containsExactly(
-                            "+I[security.sasl.plain.credentials, root:******,guest:******,bob:******, DYNAMIC_SERVER_CONFIG]");
+                            "+I[security.sasl.plain.credentials, root:******,super:******,bob:******, DYNAMIC_SERVER_CONFIG]");
         }
 
         // Verify "bob" can authenticate by creating a catalog with bob's credentials.
@@ -894,8 +895,93 @@ public abstract class FlinkProcedureITCase {
             List<Row> results = CollectionUtil.iteratorToList(resultIterator);
             assertThat(results.stream().map(Row::toString).collect(Collectors.toList()))
                     .containsExactly(
-                            "+I[security.sasl.plain.credentials, root:******,guest:******,bob:******, DYNAMIC_SERVER_CONFIG]");
+                            "+I[security.sasl.plain.credentials, root:******,super:******,bob:******, DYNAMIC_SERVER_CONFIG]");
         }
+
+        String credentialsKey = ConfigOptions.SERVER_SASL_CREDENTIALS.key();
+        String credentialsWithAlice = "root:password,super:passwords,bob:bob_pass,alice:alice_pass";
+        String credentialsWithChangedSuperUser =
+                "root:password,super:new-password,bob:bob_pass,alice:alice_pass";
+
+        // Security-related cluster configs require ALL rather than ALTER.
+        tEnv.executeSql(
+                        String.format(
+                                "Call %s.sys.add_acl('CLUSTER', 'ALLOW', 'User:bob', 'ALTER', '*')",
+                                CATALOG_NAME))
+                .await();
+        assertThatThrownBy(
+                        () ->
+                                tEnv.executeSql(
+                                                String.format(
+                                                        "Call %s.sys.set_cluster_configs('%s', '5min', '%s', '%s')",
+                                                        bobCatalog,
+                                                        ConfigOptions.KV_SNAPSHOT_INTERVAL.key(),
+                                                        credentialsKey,
+                                                        credentialsWithAlice))
+                                        .await())
+                .rootCause()
+                .isInstanceOf(AuthorizationException.class)
+                .hasMessageContaining("operate ALL");
+
+        // ALL allows Bob to alter ordinary credentials, but not super-user credentials.
+        // The super users of this cluster are "root" and "super" (see initConfig()), so even
+        // though Bob is granted CLUSTER ALL, he may only add/remove/change ordinary users like
+        // "alice"; changing or removing the "super" account is rejected.
+        tEnv.executeSql(
+                        String.format(
+                                "Call %s.sys.add_acl('CLUSTER', 'ALLOW', 'User:bob', 'ALL', '*')",
+                                CATALOG_NAME))
+                .await();
+        tEnv.executeSql(
+                        String.format(
+                                "Call %s.sys.append_cluster_configs('%s', 'alice:alice_pass')",
+                                bobCatalog, credentialsKey))
+                .await();
+        // Bob (CLUSTER ALL, but not a super user) cannot change the super user's password.
+        assertThatThrownBy(
+                        () ->
+                                tEnv.executeSql(
+                                                String.format(
+                                                        "Call %s.sys.set_cluster_configs('%s', '%s')",
+                                                        bobCatalog,
+                                                        credentialsKey,
+                                                        credentialsWithChangedSuperUser))
+                                        .await())
+                .rootCause()
+                .isInstanceOf(AuthorizationException.class)
+                .hasMessageContaining(
+                        "cannot modify credentials belonging to users in 'super.users'");
+        // Nor can he remove the super user account.
+        assertThatThrownBy(
+                        () ->
+                                tEnv.executeSql(
+                                                String.format(
+                                                        "Call %s.sys.subtract_cluster_configs('%s', 'super:passwords')",
+                                                        bobCatalog, credentialsKey))
+                                        .await())
+                .rootCause()
+                .isInstanceOf(AuthorizationException.class)
+                .hasMessageContaining(
+                        "cannot modify credentials belonging to users in 'super.users'");
+
+        // A super user may alter another configured super user's credentials: "root" is a super
+        // user, so it can change the password of the "super" account and restore it afterwards.
+        tEnv.executeSql(
+                        String.format(
+                                "Call %s.sys.set_cluster_configs('%s', '%s')",
+                                CATALOG_NAME, credentialsKey, credentialsWithChangedSuperUser))
+                .await();
+        tEnv.executeSql(
+                        String.format(
+                                "Call %s.sys.set_cluster_configs('%s', '%s')",
+                                CATALOG_NAME, credentialsKey, credentialsWithAlice))
+                .await();
+        tEnv.executeSql(
+                        String.format(
+                                "Call %s.sys.subtract_cluster_configs('%s', 'alice:alice_pass')",
+                                bobCatalog, credentialsKey))
+                .await();
+
         tEnv.executeSql("drop catalog " + bobCatalog);
 
         // Step 2: Delete user "bob" via subtract_cluster_configs
@@ -916,7 +1002,7 @@ public abstract class FlinkProcedureITCase {
             // After subtracting the only dynamically-added entry, the config may be empty
             assertThat(results.stream().map(Row::toString).collect(Collectors.toList()))
                     .containsExactly(
-                            "+I[security.sasl.plain.credentials, root:******,guest:******, DYNAMIC_SERVER_CONFIG]");
+                            "+I[security.sasl.plain.credentials, root:******,super:******, DYNAMIC_SERVER_CONFIG]");
         }
 
         // Verify "bob" can no longer authenticate.
@@ -930,6 +1016,16 @@ public abstract class FlinkProcedureITCase {
         tEnv.executeSql(
                         String.format(
                                 "Call %s.sys.drop_acl('CLUSTER', 'ALLOW', 'User:bob', 'DESCRIBE', '*')",
+                                CATALOG_NAME))
+                .await();
+        tEnv.executeSql(
+                        String.format(
+                                "Call %s.sys.drop_acl('CLUSTER', 'ALLOW', 'User:bob', 'ALTER', '*')",
+                                CATALOG_NAME))
+                .await();
+        tEnv.executeSql(
+                        String.format(
+                                "Call %s.sys.drop_acl('CLUSTER', 'ALLOW', 'User:bob', 'ALL', '*')",
                                 CATALOG_NAME))
                 .await();
         // Try to append a map entry with the same key as the existing "root" entry
@@ -1073,9 +1169,13 @@ public abstract class FlinkProcedureITCase {
         // set security information.
         conf.setString(ConfigOptions.SERVER_SECURITY_PROTOCOL_MAP.key(), "CLIENT:sasl");
         conf.setString("security.sasl.enabled.mechanisms", "plain");
+        // Two users are configured statically, and both of them are super users:
+        // "root" is the user the tests' default catalog connects with, and "super" is a second
+        // super user which is only used to verify that even a CLUSTER ALL grant does not allow
+        // altering the credentials of a super user account.
         conf.setString(
-                ConfigOptions.SERVER_SASL_CREDENTIALS.key(), "root:password,guest:passwords");
-        conf.set(ConfigOptions.SUPER_USERS, "User:root");
+                ConfigOptions.SERVER_SASL_CREDENTIALS.key(), "root:password,super:passwords");
+        conf.set(ConfigOptions.SUPER_USERS, "User:root;User:super");
         conf.set(ConfigOptions.AUTHORIZER_ENABLED, true);
         return conf;
     }

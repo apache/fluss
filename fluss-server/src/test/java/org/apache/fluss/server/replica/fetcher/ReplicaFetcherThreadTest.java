@@ -24,6 +24,7 @@ import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.record.MemoryLogRecords;
 import org.apache.fluss.rpc.RpcClient;
 import org.apache.fluss.rpc.entity.ProduceLogResultForBucket;
 import org.apache.fluss.rpc.metrics.TestingClientMetricGroup;
@@ -76,9 +77,13 @@ import java.util.function.Consumer;
 
 import static org.apache.fluss.record.TestData.DATA1;
 import static org.apache.fluss.record.TestData.DATA1_SCHEMA;
+import static org.apache.fluss.record.TestData.DATA1_SCHEMA_PK;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_DESCRIPTOR;
+import static org.apache.fluss.record.TestData.DATA1_TABLE_DESCRIPTOR_PK;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_ID;
+import static org.apache.fluss.record.TestData.DATA1_TABLE_ID_PK;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_PATH;
+import static org.apache.fluss.record.TestData.DATA1_TABLE_PATH_PK;
 import static org.apache.fluss.record.TestData.DEFAULT_REMOTE_DATA_DIR;
 import static org.apache.fluss.server.coordinator.CoordinatorContext.INITIAL_COORDINATOR_EPOCH;
 import static org.apache.fluss.server.metrics.group.TestingMetricGroups.USER_METRICS;
@@ -105,9 +110,12 @@ public class ReplicaFetcherThreadTest {
     private ServerNode leader;
     private ReplicaManager followerRM;
     private ReplicaFetcherThread followerFetcher;
+    private TestingLeaderEndpoint leaderEndpoint;
     private ExecutorService ioExecutor;
     private LocalDiskManager leaderLocalDiskManager;
     private LocalDiskManager followerLocalDiskManager;
+    private KvManager leaderKvManager;
+    private KvManager followerKvManager;
 
     @BeforeAll
     static void baseBeforeAll() {
@@ -122,6 +130,7 @@ public class ReplicaFetcherThreadTest {
         ZOO_KEEPER_EXTENSION_WRAPPER.getCustomExtension().cleanupRoot();
         manualClock = new ManualClock(System.currentTimeMillis());
         Configuration conf = new Configuration();
+        conf.set(ConfigOptions.LOG_REPLICA_FETCH_WAIT_MAX_TIME, Duration.ofSeconds(5));
         tb = new TableBucket(DATA1_TABLE_ID, 0);
         ioExecutor = Executors.newSingleThreadExecutor();
         leaderLocalDiskManager = createLocalDiskManager(leaderServerId);
@@ -135,12 +144,9 @@ public class ReplicaFetcherThreadTest {
         ServerNode follower =
                 new ServerNode(
                         followerServerId, "localhost", 10001, ServerType.TABLET_SERVER, "rack2");
+        leaderEndpoint = new TestingLeaderEndpoint(conf, leaderRM, follower);
         followerFetcher =
-                new ReplicaFetcherThread(
-                        "test-fetcher-thread",
-                        followerRM,
-                        new TestingLeaderEndpoint(conf, leaderRM, follower),
-                        1000);
+                new ReplicaFetcherThread("test-fetcher-thread", followerRM, leaderEndpoint, 1000);
 
         registerTableInZkClient();
         // make the tb(table, 0) to be leader in leaderRM and to be follower in followerRM.
@@ -149,6 +155,21 @@ public class ReplicaFetcherThreadTest {
 
     @AfterEach
     public void tearDown() throws Exception {
+        if (followerFetcher != null && followerFetcher.isAlive()) {
+            followerFetcher.shutdown();
+        }
+        if (leaderRM != null) {
+            leaderRM.getDelayedFetchLogManager().shutdown();
+        }
+        if (followerRM != null) {
+            followerRM.getDelayedFetchLogManager().shutdown();
+        }
+        if (leaderKvManager != null) {
+            leaderKvManager.shutdown();
+        }
+        if (followerKvManager != null) {
+            followerKvManager.shutdown();
+        }
         if (leaderLocalDiskManager != null) {
             leaderLocalDiskManager.close();
         }
@@ -200,6 +221,59 @@ public class ReplicaFetcherThreadTest {
                 () ->
                         assertThat(followerRM.getReplicaOrException(tb).getLocalLogEndOffset())
                                 .isEqualTo(20L));
+    }
+
+    @Test
+    void testRestoreKvMinRetainOffsetFromDelayedEmptyFetchResponse() throws Exception {
+        leaderEndpoint.enableLongPolling();
+        TableBucket pkTableBucket = new TableBucket(DATA1_TABLE_ID_PK, 0);
+        zkClient.registerTable(
+                DATA1_TABLE_PATH_PK,
+                TableRegistration.newTable(
+                        DATA1_TABLE_ID_PK, DEFAULT_REMOTE_DATA_DIR, DATA1_TABLE_DESCRIPTOR_PK));
+        zkClient.registerFirstSchema(DATA1_TABLE_PATH_PK, DATA1_SCHEMA_PK);
+        makeLeaderAndFollower(PhysicalTablePath.of(DATA1_TABLE_PATH_PK), pkTableBucket);
+
+        Replica leaderReplica = leaderRM.getReplicaOrException(pkTableBucket);
+        Replica followerReplica = followerRM.getReplicaOrException(pkTableBucket);
+        for (int i = 0; i < 3; i++) {
+            MemoryLogRecords records = genMemoryLogRecordsWithWriterId(DATA1, 100L + i, 0, i * 10L);
+            leaderReplica.appendRecordsToFollower(records);
+            followerReplica.appendRecordsToFollower(records);
+            if (i < 2) {
+                leaderReplica.getLogTablet().roll(Optional.empty());
+                followerReplica.getLogTablet().roll(Optional.empty());
+            }
+        }
+        leaderReplica.getLogTablet().updateHighWatermark(30L);
+        followerReplica.getLogTablet().updateHighWatermark(30L);
+        leaderReplica.getLogTablet().updateMinRetainOffset(30L);
+        followerReplica.getLogTablet().updateHighestCopiedEndOffset(30L);
+
+        assertThat(leaderReplica.getLocalLogEndOffset()).isEqualTo(30L);
+        assertThat(followerReplica.getLocalLogEndOffset()).isEqualTo(30L);
+        assertThat(followerReplica.getLogTablet().getMinRetainOffset()).isZero();
+        assertThat(followerReplica.getLogTablet().getSegments()).hasSize(3);
+
+        followerFetcher.addBuckets(
+                Collections.singletonMap(
+                        pkTableBucket,
+                        new InitialFetchStatus(
+                                DATA1_TABLE_ID_PK, DATA1_TABLE_PATH_PK, leader.id(), 30L)));
+        followerFetcher.start();
+
+        retry(
+                Duration.ofSeconds(20),
+                () -> assertThat(leaderRM.getDelayedFetchLogManager().numDelayed()).isPositive());
+        assertThat(followerReplica.getLogTablet().getMinRetainOffset()).isZero();
+        assertThat(followerReplica.getLogTablet().getSegments()).hasSize(3);
+
+        retry(
+                Duration.ofSeconds(20),
+                () -> {
+                    assertThat(followerReplica.getLogTablet().getMinRetainOffset()).isEqualTo(30L);
+                    assertThat(followerReplica.getLogTablet().getSegments()).hasSize(2);
+                });
     }
 
     @Test
@@ -478,12 +552,17 @@ public class ReplicaFetcherThreadTest {
     }
 
     private void makeLeaderAndFollower() {
+        makeLeaderAndFollower(PhysicalTablePath.of(DATA1_TABLE_PATH), tb);
+    }
+
+    private void makeLeaderAndFollower(
+            PhysicalTablePath physicalTablePath, TableBucket tableBucket) {
         leaderRM.becomeLeaderOrFollower(
                 INITIAL_COORDINATOR_EPOCH,
                 Collections.singletonList(
                         new NotifyLeaderAndIsrData(
-                                PhysicalTablePath.of(DATA1_TABLE_PATH),
-                                tb,
+                                physicalTablePath,
+                                tableBucket,
                                 Arrays.asList(leaderServerId, followerServerId),
                                 new LeaderAndIsr(
                                         leaderServerId,
@@ -497,8 +576,8 @@ public class ReplicaFetcherThreadTest {
                 INITIAL_COORDINATOR_EPOCH,
                 Collections.singletonList(
                         new NotifyLeaderAndIsrData(
-                                PhysicalTablePath.of(DATA1_TABLE_PATH),
-                                tb,
+                                physicalTablePath,
+                                tableBucket,
                                 Arrays.asList(leaderServerId, followerServerId),
                                 new LeaderAndIsr(
                                         leaderServerId,
@@ -535,12 +614,27 @@ public class ReplicaFetcherThreadTest {
                         TestingMetricGroups.TABLET_SERVER_METRICS,
                         localDiskManager);
         logManager.startup();
+        KvManager kvManager =
+                KvManager.create(
+                        conf,
+                        zkClient,
+                        logManager,
+                        TestingMetricGroups.TABLET_SERVER_METRICS,
+                        localDiskManager,
+                        null,
+                        manualClock);
+        kvManager.startup();
+        if (serverId == leaderServerId) {
+            leaderKvManager = kvManager;
+        } else {
+            followerKvManager = kvManager;
+        }
         ReplicaManager replicaManager =
                 new TestingReplicaManager(
                         conf,
                         scheduler,
                         logManager,
-                        null,
+                        kvManager,
                         zkClient,
                         serverId,
                         new TabletServerMetadataCache(

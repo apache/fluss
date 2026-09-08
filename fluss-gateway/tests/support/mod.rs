@@ -151,17 +151,27 @@ pub async fn start_gateway() -> RunningGateway {
 
 /// Starts an in-process gateway with the Prometheus listener bound to an ephemeral port.
 pub async fn start_gateway_with_metrics() -> RunningGateway {
-    start(true).await
+    let mut config = gateway_config(true);
+    config.server.gateway_id = Some("gateway-production".to_string());
+    config.server.instance_id = Some("gateway-1".to_string());
+    config.server.host = Some("192.0.2.10".to_string());
+    fluss_gateway::lifecycle::start(config)
+        .await
+        .expect("gateway starts")
 }
 
 async fn start(metrics: bool) -> RunningGateway {
+    fluss_gateway::lifecycle::start(gateway_config(metrics))
+        .await
+        .expect("gateway starts")
+}
+
+fn gateway_config(metrics: bool) -> GatewayConfig {
     let mut config = GatewayConfig::default();
     config.server.rest.bind_address = "127.0.0.1:0".parse().expect("valid");
     config.server.metrics.enabled = metrics;
     config.server.metrics.bind_address = "127.0.0.1:0".parse().expect("valid");
-    fluss_gateway::lifecycle::start(config)
-        .await
-        .expect("gateway starts")
+    config
 }
 
 /// A command that runs the compiled gateway executable, so the suites exercise CLI parsing, configuration

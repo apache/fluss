@@ -21,6 +21,7 @@ Currently, the supported dynamically updatable server configurations include:
 - `datalake.format`: Specify the lakehouse format, e.g., `paimon`, `iceberg`. When enabling lakehouse storage explicitly, use it together with `datalake.enabled = true`.
 - Options with prefix `datalake.${datalake.format}`
 - `kv.rocksdb.shared-rate-limiter.bytes-per-sec`: Control RocksDB flush and compaction write rate shared across all RocksDB instances on the TabletServer. The rate limiter is always enabled. Set to a lower value (e.g., 100MB) to limit the rate, or a very high value to effectively disable rate limiting.
+- `security.sasl.plain.credentials`: Add, change, or remove the users that can authenticate with SASL/PLAIN, see [Authentication](security/authentication.md#managing-multiple-users).
 
 
 You can update the configuration of a cluster with [Java client](#using-java-client) or [Flink SQL](#using-flink-sql).

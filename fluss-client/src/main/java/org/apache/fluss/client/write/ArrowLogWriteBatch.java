@@ -58,9 +58,17 @@ public class ArrowLogWriteBatch extends WriteBatch {
             int schemaId,
             ArrowWriter arrowWriter,
             AbstractPagedOutputView outputView,
+            boolean isHistoricalPartition,
             long createdMs,
             @Nullable LogRecordBatchStatisticsCollector statisticsCollector) {
-        super(tableId, bucketId, physicalTablePath, schemaId, WriteFormat.ARROW_LOG, createdMs);
+        super(
+                tableId,
+                bucketId,
+                physicalTablePath,
+                schemaId,
+                WriteFormat.ARROW_LOG,
+                isHistoricalPartition,
+                createdMs);
         this.outputView = outputView;
         this.recordsBuilder =
                 MemoryLogRecordsArrowBuilder.builder(

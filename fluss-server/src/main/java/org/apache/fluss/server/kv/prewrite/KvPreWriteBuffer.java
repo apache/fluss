@@ -155,6 +155,11 @@ public class KvPreWriteBuffer {
                                 v == null
                                         ? KvEntry.of(changeType, key, value, lsn)
                                         : KvEntry.of(changeType, key, value, lsn, v));
+        // link the previous version forward to the new entry, so each version knows its
+        // successor and completeFlush can detach it in constant time
+        if (kvEntry.previousEntry != null) {
+            kvEntry.previousEntry.nextEntry = kvEntry;
+        }
         // append the entry to the tail of the list for all kv entries
         allKvEntries.addLast(kvEntry);
         // update the max lsn
@@ -206,6 +211,11 @@ public class KvPreWriteBuffer {
             }
             pendingFlushBytes -= entryBytes(entry.getKey(), entry.getValue());
             boolean removed = kvEntryMap.remove(entry.getKey(), entry);
+            // the removed entry is no longer the successor of its previous version; clear the
+            // forward link so the truncated entry does not stay reachable through it
+            if (entry.previousEntry != null) {
+                entry.previousEntry.nextEntry = null;
+            }
             // if the latest entry is removed, we need to rollback the previous entry to the map
             if (removed) {
                 KvEntry previousEntry = previousEntryInBuffer(entry.previousEntry);
@@ -261,6 +271,12 @@ public class KvPreWriteBuffer {
             entry.state = EntryState.FLUSHED;
             pendingFlushBytes -= entryBytes(entry.getKey(), entry.getValue());
             kvEntryMap.remove(entry.getKey(), entry);
+            // the immediate successor is the only live referencer of a flushed entry; clearing
+            // its reference makes the flushed entry (and, transitively, its older versions)
+            // unreachable instead of being retained while no longer counted by pendingFlushBytes
+            if (entry.nextEntry != null) {
+                entry.nextEntry.previousEntry = null;
+            }
         }
         if (allKvEntries.isEmpty()) {
             maxLogSequenceNumber = -1;
@@ -348,8 +364,13 @@ public class KvPreWriteBuffer {
         private final Value value;
         private final long logSequenceNumber;
 
-        // the previous mapped value in the buffer before this key-value put
-        @Nullable private final KvEntry previousEntry;
+        // the previous mapped value in the buffer before this key-value put; null once the
+        // referenced entry has been flushed (see completeFlush)
+        @Nullable private KvEntry previousEntry;
+
+        // the newer version of the same key that references this entry as its previous version;
+        // null once that version has been truncated (see truncateTo)
+        @Nullable private KvEntry nextEntry;
 
         private EntryState state = EntryState.ACTIVE;
 
@@ -393,6 +414,18 @@ public class KvPreWriteBuffer {
 
         long getLogSequenceNumber() {
             return logSequenceNumber;
+        }
+
+        @VisibleForTesting
+        @Nullable
+        KvEntry getPreviousEntry() {
+            return previousEntry;
+        }
+
+        @VisibleForTesting
+        @Nullable
+        KvEntry getNextEntry() {
+            return nextEntry;
         }
 
         @Override

@@ -20,7 +20,10 @@ package org.apache.fluss.security.acl;
 import org.apache.fluss.annotation.PublicEvolving;
 
 import java.security.Principal;
+import java.util.Arrays;
 import java.util.Objects;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 /**
  * Represents a security principal in Fluss, defined by a {@code name} and {@code type}.
@@ -54,6 +57,17 @@ public class FlussPrincipal implements Principal {
     public FlussPrincipal(String name, String type) {
         this.name = name;
         this.type = type;
+    }
+
+    /**
+     * Parses principals from a semicolon separated list of {@code <type>:<name>} pairs, e.g. {@code
+     * User:root;Group:admins}.
+     */
+    public static Set<FlussPrincipal> parsePrincipals(String principals) {
+        return Arrays.stream(principals.split(";"))
+                .map(principal -> principal.trim().split(":"))
+                .map(principal -> new FlussPrincipal(principal[1], principal[0]))
+                .collect(Collectors.toSet());
     }
 
     @Override

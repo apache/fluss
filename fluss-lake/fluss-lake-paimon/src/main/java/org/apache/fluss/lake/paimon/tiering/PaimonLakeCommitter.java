@@ -35,6 +35,7 @@ import org.apache.paimon.manifest.ManifestCommittable;
 import org.apache.paimon.table.FileStoreTable;
 import org.apache.paimon.table.TableSnapshot;
 import org.apache.paimon.table.sink.CommitCallback;
+import org.apache.paimon.table.sink.CommitMessage;
 import org.apache.paimon.table.sink.TableCommitImpl;
 import org.apache.paimon.utils.SnapshotManager;
 import org.slf4j.Logger;
@@ -93,7 +94,9 @@ public class PaimonLakeCommitter implements LakeCommitter<PaimonWriteResult, Pai
             throws IOException {
         ManifestCommittable committable = new ManifestCommittable(COMMIT_IDENTIFIER);
         for (PaimonWriteResult paimonWriteResult : paimonWriteResults) {
-            committable.addFileCommittable(paimonWriteResult.commitMessage());
+            for (CommitMessage commitMessage : paimonWriteResult.commitMessages()) {
+                committable.addFileCommittable(commitMessage);
+            }
         }
         return new PaimonCommittable(committable);
     }
