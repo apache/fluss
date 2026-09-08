@@ -17,6 +17,7 @@
 
 package org.apache.fluss.kafka;
 
+import org.apache.fluss.rpc.TestingTabletGatewayService;
 import org.apache.fluss.shaded.netty4.io.netty.buffer.ByteBuf;
 import org.apache.fluss.shaded.netty4.io.netty.buffer.ByteBufAllocator;
 import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelHandlerContext;
@@ -113,6 +114,7 @@ public class KafkaRequestHandlerTest {
         assertThat(response.data().apiKeys())
                 .extracting(ApiVersion::apiKey, ApiVersion::minVersion, ApiVersion::maxVersion)
                 .containsExactly(
+                        tuple(ApiKeys.METADATA.id, ApiKeys.METADATA.oldestVersion(), (short) 11),
                         tuple(
                                 ApiKeys.API_VERSIONS.id,
                                 ApiKeys.API_VERSIONS.oldestVersion(),
@@ -208,6 +210,7 @@ public class KafkaRequestHandlerTest {
     }
 
     private static KafkaRequestHandler createKafkaRequestHandler() {
-        return new KafkaRequestHandler();
+        TestingTabletGatewayService service = new TestingTabletGatewayService();
+        return new KafkaRequestHandler(service, service, "kafka");
     }
 }
