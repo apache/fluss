@@ -19,6 +19,7 @@ package org.apache.fluss.client.lookup;
 
 import org.apache.fluss.client.metadata.TestingMetadataUpdater;
 import org.apache.fluss.cluster.BucketLocation;
+import org.apache.fluss.cluster.Cluster;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.HistoricalPartitionThrottledException;
@@ -58,6 +59,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.apache.fluss.record.TestData.DATA1_TABLE_ID_PK;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_INFO_PK;
@@ -93,11 +95,14 @@ public class LookupSenderTest {
         metadataUpdater =
                 TestingMetadataUpdater.builder(tableInfos)
                         .withTabletServerGateway(1, gateway)
+                        .withTabletServerGateway(2, gateway)
+                        .withTabletServerGateway(3, gateway)
                         .build();
 
         Configuration conf = new Configuration();
         conf.set(ConfigOptions.CLIENT_LOOKUP_QUEUE_SIZE, 5);
         conf.set(ConfigOptions.CLIENT_LOOKUP_MAX_BATCH_SIZE, 10);
+        conf.set(ConfigOptions.CLIENT_LOOKUP_MAX_INFLIGHT_REQUESTS_PER_BUCKET, 1);
         lookupQueue = new LookupQueue(conf);
 
         lookupSender =
@@ -149,6 +154,9 @@ public class LookupSenderTest {
                         false,
                         "dt=20200103");
 
+        assertThat(LookupQueueKey.fromLookup(sameBucketQuery1))
+                .isEqualTo(LookupQueueKey.fromLookup(sameBucketQuery2));
+
         lookupSender.sendLookups(
                 1,
                 LookupType.LOOKUP,
@@ -188,10 +196,13 @@ public class LookupSenderTest {
         LookupQuery historicalQuery =
                 new LookupQuery(
                         DATA1_TABLE_PATH_PK,
-                        new TableBucket(DATA1_TABLE_ID_PK, 1),
+                        TABLE_BUCKET,
                         bytes("historical-key"),
                         false,
                         "dt=20200101");
+
+        assertThat(LookupQueueKey.fromLookup(normalQuery))
+                .isNotEqualTo(LookupQueueKey.fromLookup(historicalQuery));
 
         lookupSender.sendLookups(1, LookupType.LOOKUP, Arrays.asList(normalQuery, historicalQuery));
 
@@ -208,7 +219,7 @@ public class LookupSenderTest {
 
         LookupRequest historicalRequest = receivedRequests.get(1);
         assertThat(historicalRequest.getBucketsReqsCount()).isEqualTo(1);
-        assertThat(historicalRequest.getBucketsReqAt(0).getBucketId()).isEqualTo(1);
+        assertThat(historicalRequest.getBucketsReqAt(0).getBucketId()).isEqualTo(0);
         assertThat(historicalRequest.getBucketsReqAt(0).getOriginalPartitionName())
                 .isEqualTo("dt=20200101");
     }
@@ -234,6 +245,252 @@ public class LookupSenderTest {
         assertThat(request.getBucketsReqsCount()).isEqualTo(1);
         assertThat(request.getBucketsReqAt(0).getKeysCount()).isEqualTo(2);
         assertThat(request.getBucketsReqAt(0).hasOriginalPartitionName()).isFalse();
+    }
+
+    @Test
+    void testInFlightLimitDoesNotBlockOtherLookupQueueKeys() throws Exception {
+        TableBucket bucketA = TABLE_BUCKET;
+        TableBucket bucketB = new TableBucket(DATA1_TABLE_ID_PK, 1);
+        AtomicInteger bucketARequestCount = new AtomicInteger();
+        AtomicInteger bucketBRequestCount = new AtomicInteger();
+        AtomicReference<LookupRequest> firstBucketARequest = new AtomicReference<>();
+        CompletableFuture<LookupResponse> firstBucketAResponse = new CompletableFuture<>();
+        gateway.setLookupHandler(
+                request -> {
+                    int bucketId = request.getBucketsReqAt(0).getBucketId();
+                    if (bucketId == bucketA.getBucket()) {
+                        if (bucketARequestCount.incrementAndGet() == 1) {
+                            firstBucketARequest.set(request);
+                            return firstBucketAResponse;
+                        }
+                    } else if (bucketId == bucketB.getBucket()) {
+                        bucketBRequestCount.incrementAndGet();
+                    }
+                    return createPartitionNameEchoResponse(request);
+                });
+
+        LookupQuery bucketAQuery1 =
+                new LookupQuery(DATA1_TABLE_PATH_PK, bucketA, bytes("bucket-a-1"));
+        lookupQueue.appendLookup(bucketAQuery1);
+        waitUntil(
+                () -> bucketARequestCount.get() == 1,
+                Duration.ofSeconds(5),
+                "the first bucket A request to be sent");
+
+        LookupQuery bucketAQuery2 =
+                new LookupQuery(DATA1_TABLE_PATH_PK, bucketA, bytes("bucket-a-2"));
+        LookupQuery bucketBQuery = new LookupQuery(DATA1_TABLE_PATH_PK, bucketB, bytes("bucket-b"));
+        lookupQueue.appendLookup(bucketAQuery2);
+        lookupQueue.appendLookup(bucketBQuery);
+
+        assertThat(bucketBQuery.future().get(1, TimeUnit.SECONDS))
+                .isEqualTo(responseValue("", "bucket-b"));
+        assertThat(bucketARequestCount.get()).isEqualTo(1);
+        assertThat(bucketBRequestCount.get()).isEqualTo(1);
+        assertThat(bucketAQuery2.future()).isNotDone();
+
+        firstBucketAResponse.complete(
+                createPartitionNameEchoResponse(firstBucketARequest.get()).join());
+
+        assertThat(bucketAQuery1.future().get(5, TimeUnit.SECONDS))
+                .isEqualTo(responseValue("", "bucket-a-1"));
+        assertThat(bucketAQuery2.future().get(5, TimeUnit.SECONDS))
+                .isEqualTo(responseValue("", "bucket-a-2"));
+        assertThat(bucketARequestCount.get()).isEqualTo(2);
+    }
+
+    @Test
+    void testRpcCompletionReleasesAllLookupQueueKeys() throws Exception {
+        TableBucket bucketA = TABLE_BUCKET;
+        TableBucket bucketB = new TableBucket(DATA1_TABLE_ID_PK, 1);
+        Cluster cluster = metadataUpdater.getCluster();
+        PhysicalTablePath physicalTablePath = PhysicalTablePath.of(DATA1_TABLE_PATH_PK);
+        Map<PhysicalTablePath, List<BucketLocation>> bucketLocationsByPath =
+                new HashMap<>(cluster.getBucketLocationsByPath());
+        List<BucketLocation> bucketLocations =
+                new ArrayList<>(bucketLocationsByPath.get(physicalTablePath));
+        bucketLocations.set(
+                1, new BucketLocation(physicalTablePath, bucketB, 1, new int[] {1, 2, 3}));
+        bucketLocationsByPath.put(physicalTablePath, bucketLocations);
+        metadataUpdater.updateCluster(
+                new Cluster(
+                        new HashMap<>(cluster.getAliveTabletServers()),
+                        cluster.getCoordinatorServer(),
+                        bucketLocationsByPath,
+                        new HashMap<>(cluster.getTableIdByPath()),
+                        new HashMap<>(cluster.getPartitionIdByPath())));
+
+        AtomicReference<LookupRequest> sentRequest = new AtomicReference<>();
+        CompletableFuture<LookupResponse> response = new CompletableFuture<>();
+        gateway.setLookupHandler(
+                request -> {
+                    sentRequest.set(request);
+                    return response;
+                });
+
+        Configuration conf = new Configuration();
+        conf.set(ConfigOptions.CLIENT_LOOKUP_QUEUE_SIZE, 10);
+        conf.set(ConfigOptions.CLIENT_LOOKUP_MAX_BATCH_SIZE, 2);
+        conf.set(ConfigOptions.CLIENT_LOOKUP_MAX_INFLIGHT_REQUESTS_PER_BUCKET, 1);
+        conf.set(ConfigOptions.CLIENT_LOOKUP_BATCH_TIMEOUT, Duration.ofSeconds(1));
+        LookupQueue localQueue = new LookupQueue(conf);
+        LookupSender localSender =
+                new LookupSender(
+                        metadataUpdater,
+                        localQueue,
+                        MAX_INFLIGHT_REQUESTS,
+                        MAX_RETRIES,
+                        (short) -1,
+                        1000);
+
+        LookupQuery queryA = new LookupQuery(DATA1_TABLE_PATH_PK, bucketA, bytes("key-a"));
+        LookupQuery queryB = new LookupQuery(DATA1_TABLE_PATH_PK, bucketB, bytes("key-b"));
+        LookupQueueKey keyA = LookupQueueKey.fromLookup(queryA);
+        LookupQueueKey keyB = LookupQueueKey.fromLookup(queryB);
+        localQueue.appendLookup(queryA);
+        localQueue.appendLookup(queryB);
+
+        Thread localSenderThread = new Thread(localSender);
+        localSenderThread.start();
+        try {
+            waitUntil(
+                    () -> sentRequest.get() != null,
+                    Duration.ofSeconds(5),
+                    "one RPC containing both lookup queue keys to be sent");
+            assertThat(sentRequest.get().getBucketsReqsCount()).isEqualTo(2);
+            assertThat(localQueue.inFlightRequestCount(keyA)).isEqualTo(1);
+            assertThat(localQueue.inFlightRequestCount(keyB)).isEqualTo(1);
+
+            response.complete(createPartitionNameEchoResponse(sentRequest.get()).join());
+            assertThat(queryA.future().get(5, TimeUnit.SECONDS))
+                    .isEqualTo(responseValue("", "key-a"));
+            assertThat(queryB.future().get(5, TimeUnit.SECONDS))
+                    .isEqualTo(responseValue("", "key-b"));
+            waitUntil(
+                    () ->
+                            localQueue.inFlightRequestCount(keyA) == 0
+                                    && localQueue.inFlightRequestCount(keyB) == 0,
+                    Duration.ofSeconds(5),
+                    "all lookup queue keys in the RPC to be released");
+        } finally {
+            localSender.forceClose();
+            localSenderThread.join(5000);
+        }
+    }
+
+    @Test
+    void testSplitRequestsReleaseLookupQueueKeysIndependently() throws Exception {
+        AtomicReference<LookupRequest> normalRequest = new AtomicReference<>();
+        AtomicReference<LookupRequest> historicalRequest = new AtomicReference<>();
+        CompletableFuture<LookupResponse> normalResponse = new CompletableFuture<>();
+        CompletableFuture<LookupResponse> historicalResponse = new CompletableFuture<>();
+        AtomicInteger normalRequestCount = new AtomicInteger();
+        AtomicInteger historicalRequestCount = new AtomicInteger();
+        gateway.setLookupHandler(
+                request -> {
+                    PbLookupReqForBucket bucketRequest = request.getBucketsReqAt(0);
+                    String key = new String(bucketRequest.getKeyAt(0), StandardCharsets.UTF_8);
+                    if (bucketRequest.hasOriginalPartitionName()) {
+                        historicalRequestCount.incrementAndGet();
+                        if (key.equals("historical-key")) {
+                            historicalRequest.set(request);
+                            return historicalResponse;
+                        }
+                    } else {
+                        normalRequestCount.incrementAndGet();
+                        if (key.equals("normal-key")) {
+                            normalRequest.set(request);
+                            return normalResponse;
+                        }
+                    }
+                    return createPartitionNameEchoResponse(request);
+                });
+
+        Configuration conf = new Configuration();
+        conf.set(ConfigOptions.CLIENT_LOOKUP_QUEUE_SIZE, 10);
+        conf.set(ConfigOptions.CLIENT_LOOKUP_MAX_BATCH_SIZE, 2);
+        conf.set(ConfigOptions.CLIENT_LOOKUP_MAX_INFLIGHT_REQUESTS_PER_BUCKET, 1);
+        conf.set(ConfigOptions.CLIENT_LOOKUP_BATCH_TIMEOUT, Duration.ofMillis(10));
+        LookupQueue localQueue = new LookupQueue(conf);
+        LookupSender localSender =
+                new LookupSender(
+                        metadataUpdater,
+                        localQueue,
+                        MAX_INFLIGHT_REQUESTS,
+                        MAX_RETRIES,
+                        (short) -1,
+                        1000);
+
+        LookupQuery normalQuery =
+                new LookupQuery(DATA1_TABLE_PATH_PK, TABLE_BUCKET, bytes("normal-key"));
+        LookupQuery historicalQuery =
+                new LookupQuery(
+                        DATA1_TABLE_PATH_PK,
+                        TABLE_BUCKET,
+                        bytes("historical-key"),
+                        false,
+                        "dt=20200101");
+        LookupQueueKey normalKey = LookupQueueKey.fromLookup(normalQuery);
+        LookupQueueKey historicalKey = LookupQueueKey.fromLookup(historicalQuery);
+        localQueue.appendLookup(normalQuery);
+        localQueue.appendLookup(historicalQuery);
+
+        Thread localSenderThread = new Thread(localSender);
+        localSenderThread.start();
+        try {
+            waitUntil(
+                    () -> normalRequest.get() != null && historicalRequest.get() != null,
+                    Duration.ofSeconds(5),
+                    "normal and historical requests from the first drain to be sent");
+            assertThat(normalRequestCount.get()).isEqualTo(1);
+            assertThat(historicalRequestCount.get()).isEqualTo(1);
+            assertThat(localQueue.inFlightRequestCount(normalKey)).isEqualTo(1);
+            assertThat(localQueue.inFlightRequestCount(historicalKey)).isEqualTo(1);
+
+            LookupQuery nextNormalQuery =
+                    new LookupQuery(DATA1_TABLE_PATH_PK, TABLE_BUCKET, bytes("next-normal-key"));
+            LookupQuery nextHistoricalQuery =
+                    new LookupQuery(
+                            DATA1_TABLE_PATH_PK,
+                            TABLE_BUCKET,
+                            bytes("next-historical-key"),
+                            false,
+                            "dt=20200102");
+            localQueue.appendLookup(nextNormalQuery);
+            localQueue.appendLookup(nextHistoricalQuery);
+
+            normalResponse.complete(createPartitionNameEchoResponse(normalRequest.get()).join());
+            assertThat(normalQuery.future().get(5, TimeUnit.SECONDS))
+                    .isEqualTo(responseValue("", "normal-key"));
+            assertThat(nextNormalQuery.future().get(5, TimeUnit.SECONDS))
+                    .isEqualTo(responseValue("", "next-normal-key"));
+
+            waitUntil(
+                    () -> localQueue.inFlightRequestCount(normalKey) == 0,
+                    Duration.ofSeconds(5),
+                    "the normal lookup queue key to be released");
+            assertThat(historicalQuery.future()).isNotDone();
+            assertThat(nextHistoricalQuery.future()).isNotDone();
+            assertThat(normalRequestCount.get()).isEqualTo(2);
+            assertThat(historicalRequestCount.get()).isEqualTo(1);
+            assertThat(localQueue.queuedSize()).isEqualTo(1);
+            assertThat(localQueue.inFlightRequestCount(historicalKey)).isEqualTo(1);
+
+            historicalResponse.complete(
+                    createPartitionNameEchoResponse(historicalRequest.get()).join());
+            assertThat(historicalQuery.future().get(5, TimeUnit.SECONDS))
+                    .isEqualTo(responseValue("dt=20200101", "historical-key"));
+            assertThat(nextHistoricalQuery.future().get(5, TimeUnit.SECONDS))
+                    .isEqualTo(responseValue("dt=20200102", "next-historical-key"));
+            waitUntil(
+                    () -> localQueue.inFlightRequestCount(historicalKey) == 0,
+                    Duration.ofSeconds(5),
+                    "the historical lookup queue key to be released");
+            assertThat(historicalRequestCount.get()).isEqualTo(2);
+        } finally {
+            localSender.forceClose();
+            localSenderThread.join(5000);
+        }
     }
 
     @Test
