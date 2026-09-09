@@ -18,6 +18,8 @@
 package org.apache.fluss.cluster;
 
 import org.apache.fluss.metadata.PhysicalTablePath;
+import org.apache.fluss.metadata.TableInfo;
+import org.apache.fluss.metadata.TableOrPartition;
 import org.apache.fluss.metadata.TablePath;
 
 import org.junit.jupiter.api.BeforeEach;
@@ -33,10 +35,13 @@ import java.util.Set;
 
 import static org.apache.fluss.record.TestData.DATA1_PHYSICAL_TABLE_PATH;
 import static org.apache.fluss.record.TestData.DATA1_PHYSICAL_TABLE_PATH_PA_2024;
+import static org.apache.fluss.record.TestData.DATA1_TABLE_DESCRIPTOR;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_ID;
+import static org.apache.fluss.record.TestData.DATA1_TABLE_INFO;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_PATH;
 import static org.apache.fluss.record.TestData.DATA2_TABLE_ID;
 import static org.apache.fluss.record.TestData.DATA2_TABLE_PATH;
+import static org.apache.fluss.record.TestData.DEFAULT_REMOTE_DATA_DIR;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -97,6 +102,7 @@ class ClusterTest {
                             COORDINATOR_SERVER,
                             new HashMap<>(cluster.getBucketLocationsByPath()),
                             new HashMap<>(cluster.getTableIdByPath()),
+                            Collections.emptyMap(),
                             Collections.emptyMap());
         }
 
@@ -125,7 +131,8 @@ class ClusterTest {
                         COORDINATOR_SERVER,
                         new HashMap<>(initialCluster.getBucketLocationsByPath()),
                         new HashMap<>(initialCluster.getTableIdByPath()),
-                        Collections.singletonMap(DATA1_PHYSICAL_TABLE_PATH_PA_2024, partitionId));
+                        Collections.singletonMap(DATA1_PHYSICAL_TABLE_PATH_PA_2024, partitionId),
+                        Collections.emptyMap());
 
         assertThat(cluster.getPartitionId(DATA1_PHYSICAL_TABLE_PATH_PA_2024)).hasValue(partitionId);
         assertThat(cluster.getPartitionName(partitionId)).hasValue("2024");
@@ -144,6 +151,53 @@ class ClusterTest {
 
         assertThat(cluster.getPartitionId(DATA1_PHYSICAL_TABLE_PATH_PA_2024)).isNotPresent();
         assertThat(cluster.getPartitionName(partitionId)).isNotPresent();
+    }
+
+    @Test
+    void testGetBucketCountOrFallback() {
+        long partitionId = 42L;
+        Map<TableOrPartition, Integer> bucketCounts = new HashMap<>();
+        bucketCounts.put(TableOrPartition.ofTable(DATA1_TABLE_ID), 5);
+        bucketCounts.put(TableOrPartition.ofPartition(partitionId), 7);
+        Cluster cluster =
+                new Cluster(
+                        aliveTabletServersById,
+                        COORDINATOR_SERVER,
+                        Collections.emptyMap(),
+                        Collections.singletonMap(DATA1_TABLE_PATH, DATA1_TABLE_ID),
+                        Collections.emptyMap(),
+                        bucketCounts);
+
+        assertThat(cluster.getBucketCountOrFallback(DATA1_TABLE_INFO, null)).isEqualTo(5);
+        assertThat(cluster.getBucketCountOrFallback(DATA1_TABLE_INFO, partitionId)).isEqualTo(7);
+
+        Cluster clusterWithoutBucketCount =
+                new Cluster(
+                        aliveTabletServersById,
+                        COORDINATOR_SERVER,
+                        Collections.emptyMap(),
+                        Collections.singletonMap(DATA1_TABLE_PATH, DATA1_TABLE_ID),
+                        Collections.emptyMap(),
+                        Collections.emptyMap());
+        assertThat(clusterWithoutBucketCount.getBucketCountOrFallback(DATA1_TABLE_INFO, null))
+                .isEqualTo(DATA1_TABLE_INFO.getNumBuckets());
+
+        TableInfo rescaledTableInfo =
+                TableInfo.of(
+                        DATA1_TABLE_PATH,
+                        DATA1_TABLE_ID,
+                        1,
+                        DATA1_TABLE_DESCRIPTOR,
+                        DEFAULT_REMOTE_DATA_DIR,
+                        1L,
+                        1L,
+                        1L);
+        assertThatThrownBy(
+                        () ->
+                                clusterWithoutBucketCount.getBucketCountOrFallback(
+                                        rescaledTableInfo, partitionId))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("bucketCountEpoch 1");
     }
 
     @Test
@@ -209,6 +263,7 @@ class ClusterTest {
                 COORDINATOR_SERVER,
                 tablePathToBucketLocations,
                 tablePathToTableId,
+                Collections.emptyMap(),
                 Collections.emptyMap());
     }
 }

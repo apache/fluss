@@ -22,6 +22,7 @@ import org.apache.fluss.cluster.BucketLocation;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.HistoricalPartitionThrottledException;
+import org.apache.fluss.exception.InvalidBucketRoutingException;
 import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.exception.NotLeaderOrFollowerException;
 import org.apache.fluss.exception.TableNotExistException;
@@ -460,6 +461,27 @@ public class LookupSenderTest {
                 .isInstanceOf(ExecutionException.class)
                 .hasRootCauseInstanceOf(TableNotExistException.class);
         assertThat(query.retries()).isEqualTo(0); // no retries
+    }
+
+    @Test
+    void testInvalidBucketRoutingFailsWithoutRetryAndInvalidatesMetadata() {
+        AtomicInteger attemptCount = new AtomicInteger();
+        gateway.setLookupHandler(
+                request -> {
+                    attemptCount.incrementAndGet();
+                    return createFailedResponse(
+                            request, new InvalidBucketRoutingException("invalid bucket routing"));
+                });
+
+        LookupQuery query = new LookupQuery(DATA1_TABLE_PATH_PK, TABLE_BUCKET, new byte[0]);
+        lookupQueue.appendLookup(query);
+
+        assertThatThrownBy(() -> query.future().get(5, TimeUnit.SECONDS))
+                .isInstanceOf(ExecutionException.class)
+                .hasRootCauseInstanceOf(InvalidBucketRoutingException.class);
+        assertThat(attemptCount).hasValue(1);
+        assertThat(query.retries()).isZero();
+        assertThat(metadataUpdater.getBucketLocation(TABLE_BUCKET)).isEmpty();
     }
 
     @Test

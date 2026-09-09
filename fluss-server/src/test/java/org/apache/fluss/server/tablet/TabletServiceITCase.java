@@ -19,8 +19,9 @@ package org.apache.fluss.server.tablet;
 
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.exception.FlussRuntimeException;
+import org.apache.fluss.exception.InvalidBucketRoutingException;
 import org.apache.fluss.exception.InvalidRequiredAcksException;
-import org.apache.fluss.exception.StaleMetadataException;
+import org.apache.fluss.exception.UnknownTableOrBucketException;
 import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.PhysicalTablePath;
@@ -801,7 +802,7 @@ public class TabletServiceITCase {
                                                         999))
                                         .get())
                 .cause()
-                .isInstanceOf(StaleMetadataException.class);
+                .isInstanceOf(InvalidBucketRoutingException.class);
 
         // the very same count coming from a follower is not validated: a follower's bucket ids come
         // from NotifyLeaderAndIsr, so replication must not depend on the leader's metadata cache.
@@ -815,18 +816,22 @@ public class TabletServiceITCase {
                 Errors.NONE.code(),
                 null);
 
-        // a client request for a table this server doesn't host a replica for is not validated
-        // here: it keeps the existing per-bucket unknown-object error of the replica lookup,
-        // which triggers the client's metadata refresh.
-        assertListOffsetsResponse(
-                leaderGateWay
-                        .listOffsets(
-                                newListOffsetsRequestWithRoutingBucketCount(
-                                        -1, ListOffsetsParam.LATEST_OFFSET_TYPE, 10005L, 0, 3))
-                        .get(),
-                null,
-                Errors.UNKNOWN_TABLE_OR_BUCKET_EXCEPTION.code(),
-                "Unknown table or bucket");
+        // Request-scoped validation resolves the target immediately, so an unknown table/bucket
+        // fails the whole RPC with the standard replica lookup exception.
+        assertThatThrownBy(
+                        () ->
+                                leaderGateWay
+                                        .listOffsets(
+                                                newListOffsetsRequestWithRoutingBucketCount(
+                                                        -1,
+                                                        ListOffsetsParam.LATEST_OFFSET_TYPE,
+                                                        10005L,
+                                                        0,
+                                                        3))
+                                        .get())
+                .cause()
+                .isInstanceOf(UnknownTableOrBucketException.class)
+                .hasMessageContaining("Unknown table or bucket");
     }
 
     private static ListOffsetsRequest newListOffsetsRequestWithRoutingBucketCount(
@@ -840,7 +845,7 @@ public class TabletServiceITCase {
     }
 
     @Test
-    void testStaleRoutingBucketCountOnlyFailsTheOffendingBucket() throws Exception {
+    void testInvalidRoutingBucketCountOnlyFailsTheOffendingBucket() throws Exception {
         // 9 buckets over 3 tablet servers, so at least one server necessarily leads two of them
         // and a single request can carry two buckets hosted by the same leader.
         int bucketCount = 9;
@@ -894,9 +899,9 @@ public class TabletServiceITCase {
 
         // the co-batched bucket whose routing is still valid is served as usual
         assertThat(respByBucket.get(healthyBucket).hasErrorCode()).isFalse();
-        // only the bucket routed by a stale count is rejected, and it stays retriable
+        // Only the bucket routed by an invalid count is rejected without retrying the fixed route.
         assertThat(respByBucket.get(staleBucket).getErrorCode())
-                .isEqualTo(Errors.STALE_METADATA.code());
+                .isEqualTo(Errors.INVALID_BUCKET_ROUTING.code());
     }
 
     @Test

@@ -66,7 +66,6 @@ public class PaimonLakeCatalog implements LakeCatalog {
     private static final Logger LOG = LoggerFactory.getLogger(PaimonLakeCatalog.class);
     private static final String PAIMON_PATH_KEY = "paimon.path";
 
-    /** The Fluss table property carrying a bucket count rescale, see {@link #alterTable}. */
     private static final String BUCKET_NUM_PROPERTY = "bucket.num";
 
     public static final LinkedHashMap<String, DataType> LEGACY_SYSTEM_COLUMNS =
@@ -130,18 +129,11 @@ public class PaimonLakeCatalog implements LakeCatalog {
         Integer newBucketCount = null;
         List<TableChange> remainingChanges = new ArrayList<>(tableChanges.size());
         for (TableChange tableChange : tableChanges) {
-            if (tableChange instanceof TableChange.SetOption
-                    && BUCKET_NUM_PROPERTY.equals(((TableChange.SetOption) tableChange).getKey())) {
-                String value = ((TableChange.SetOption) tableChange).getValue();
-                try {
-                    newBucketCount = Integer.parseInt(value);
-                } catch (NumberFormatException e) {
-                    throw new InvalidAlterTableException(
-                            "Invalid value for '" + BUCKET_NUM_PROPERTY + "': " + value, e);
-                }
+            if (tableChange instanceof TableChange.ModifyBucketCount) {
+                newBucketCount = ((TableChange.ModifyBucketCount) tableChange).getNewBucketCount();
                 if (newBucketCount <= 0) {
                     throw new InvalidAlterTableException(
-                            "Invalid value for '" + BUCKET_NUM_PROPERTY + "': " + value);
+                            "Invalid value for '" + BUCKET_NUM_PROPERTY + "': " + newBucketCount);
                 }
             } else {
                 remainingChanges.add(tableChange);

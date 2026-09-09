@@ -199,11 +199,12 @@ public class TableRegistration {
     }
 
     /**
-     * Replaces the table-level bucket count and increments {@code bucketCountEpoch} atomically. For
-     * a partitioned table, the new count applies to partitions created after this ALTER; existing
-     * partitions retain their actual bucket counts in their partition registrations.
+     * Returns a new registration with the given table-level bucket count and an incremented {@code
+     * bucketCountEpoch}. For a partitioned table, the new count applies to partitions created after
+     * this ALTER; existing partitions retain their actual bucket counts in their partition
+     * registrations.
      */
-    public TableRegistration withBucketCount(int newBucketCount) {
+    public TableRegistration newBucketCount(int newBucketCount) {
         final long currentMillis = System.currentTimeMillis();
         return new TableRegistration(
                 tableId,

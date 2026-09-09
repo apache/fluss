@@ -23,6 +23,7 @@ import org.apache.fluss.client.metadata.MetadataUpdater;
 import org.apache.fluss.exception.ApiException;
 import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.exception.HistoricalPartitionThrottledException;
+import org.apache.fluss.exception.InvalidBucketRoutingException;
 import org.apache.fluss.exception.InvalidMetadataException;
 import org.apache.fluss.exception.LeaderNotAvailableException;
 import org.apache.fluss.exception.PartitionNotExistException;
@@ -39,7 +40,6 @@ import org.apache.fluss.rpc.messages.PbValueList;
 import org.apache.fluss.rpc.messages.PrefixLookupRequest;
 import org.apache.fluss.rpc.messages.PrefixLookupResponse;
 import org.apache.fluss.rpc.protocol.ApiError;
-import org.apache.fluss.rpc.protocol.Errors;
 import org.apache.fluss.utils.ExponentialBackoff;
 import org.apache.fluss.utils.types.Tuple2;
 
@@ -547,9 +547,11 @@ class LookupSender implements Runnable {
                 destination,
                 tableBucket,
                 exception);
-        if (exception instanceof InvalidMetadataException) {
+        if (exception instanceof InvalidMetadataException
+                || exception instanceof InvalidBucketRoutingException) {
             LOG.warn(
-                    "Invalid metadata error in {} request. Going to request metadata update.",
+                    "Metadata or bucket routing error in {} request. Going to request metadata "
+                            + "update.",
                     lookupType,
                     exception);
             long tableId = tableBucket.getTableId();
@@ -564,13 +566,6 @@ class LookupSender implements Runnable {
                                         new TablePartition(tableId, tableBucket.getPartitionId())));
             }
             invalidTableOrPartitions(tableOrPartitions);
-        }
-
-        if (error.error() == Errors.STALE_METADATA) {
-            for (AbstractLookupQuery<?> lookup : lookups) {
-                lookup.future().completeExceptionally(exception);
-            }
-            return;
         }
 
         for (AbstractLookupQuery<?> lookup : lookups) {

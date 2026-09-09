@@ -518,14 +518,21 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
         } else {
             partitionRegistrations = metadataManager.listPartitions(tablePath);
         }
-        // TODO: Return the actual lake partitions instead of the internal historical partition.
-        partitionRegistrations.remove(HISTORICAL_PARTITION_VALUE);
-        return CompletableFuture.completedFuture(
+        boolean includeSystemPartitions =
+                request.hasIncludeSystemPartitions() && request.isIncludeSystemPartitions();
+        if (!includeSystemPartitions) {
+            partitionRegistrations.remove(HISTORICAL_PARTITION_VALUE);
+        }
+        ListPartitionInfosResponse response =
                 toListPartitionInfosResponse(
                         partitionKeys,
                         partitionRegistrations,
                         tableInfo.getNumBuckets(),
-                        tableInfo.getBucketCountEpoch()));
+                        tableInfo.getBucketCountEpoch());
+        if (includeSystemPartitions) {
+            response.setSystemPartitionsIncluded(true);
+        }
+        return CompletableFuture.completedFuture(response);
     }
 
     @Override

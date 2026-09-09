@@ -36,6 +36,7 @@ impl ListPartitionInfosRequest {
             inner_request: proto::ListPartitionInfosRequest {
                 table_path: to_table_path(table_path),
                 partial_partition_spec: partial_partition_spec.map(|s| s.to_pb()),
+                include_system_partitions: None,
             },
         }
     }

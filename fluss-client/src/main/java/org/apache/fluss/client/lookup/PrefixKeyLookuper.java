@@ -21,12 +21,10 @@ import org.apache.fluss.bucketing.BucketingFunction;
 import org.apache.fluss.client.metadata.MetadataUpdater;
 import org.apache.fluss.client.table.getter.PartitionGetter;
 import org.apache.fluss.exception.PartitionNotExistException;
-import org.apache.fluss.exception.StaleMetadataException;
 import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.SchemaGetter;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
-import org.apache.fluss.metadata.TablePartition;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.encode.KeyEncoder;
 import org.apache.fluss.types.RowType;
@@ -40,8 +38,6 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
-
-import static org.apache.fluss.client.utils.ClientUtils.getPartitionId;
 
 /**
  * An implementation of {@link Lookuper} that lookups by prefix key. A prefix key is a prefix subset
@@ -172,21 +168,13 @@ class PrefixKeyLookuper extends AbstractLookuper implements Lookuper {
         int bucketCount = numBuckets;
         if (partitionGetter != null) {
             try {
-                partitionId =
-                        getPartitionId(
-                                prefixKey,
-                                partitionGetter,
-                                tableInfo.getTablePath(),
-                                metadataUpdater);
-                bucketCount =
-                        resolvePartitionBucketCount(
-                                new TablePartition(tableInfo.getTableId(), partitionId));
+                PartitionRoutingInfo routing =
+                        resolvePartitionRouting(partitionGetter.getPartition(prefixKey));
+                partitionId = routing.getPartitionId();
+                bucketCount = routing.getBucketCount();
             } catch (PartitionNotExistException e) {
                 return CompletableFuture.completedFuture(new LookupResult(Collections.emptyList()));
-            } catch (StaleMetadataException e) {
-                // The partition was rescaled but its per-partition bucket count is unavailable.
-                // Report it as a failed future (retriable) rather than throwing synchronously from
-                // this async method.
+            } catch (IllegalStateException e) {
                 CompletableFuture<LookupResult> failed = new CompletableFuture<>();
                 failed.completeExceptionally(e);
                 return failed;

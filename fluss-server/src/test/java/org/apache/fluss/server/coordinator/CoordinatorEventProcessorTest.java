@@ -1710,17 +1710,8 @@ class CoordinatorEventProcessorTest extends CoordinatorEventProcessorTestBase {
                 originalBucketCount);
 
         // ALTER bucket.num advances the bucket count epoch (persisted in ZK TableRegistration)
-        TablePropertyChanges.Builder propertyBuilder = TablePropertyChanges.builder();
-        propertyBuilder.setCustomProperty("bucket.num", "8");
-        metadataManager.alterTableProperties(
-                t1,
-                Collections.singletonList(TableChange.set("bucket.num", "8")),
-                propertyBuilder.build(),
-                false,
-                null,
-                (currentTable, updatedTable) -> {},
-                (currentTable, updatedTable) -> {},
-                ZkVersion.MATCH_ANY_VERSION.getVersion());
+        metadataManager.alterBucketCount(
+                t1, 8, false, null, ZkVersion.MATCH_ANY_VERSION.getVersion());
 
         long epochAfterAlter = metadataManager.getTable(t1).getBucketCountEpoch();
         assertThat(epochAfterAlter).isGreaterThan(0L);

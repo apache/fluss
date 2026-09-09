@@ -24,6 +24,7 @@ import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.rpc.messages.NotifyLeaderAndIsrRequest;
 import org.apache.fluss.rpc.messages.NotifyLeaderAndIsrResponse;
+import org.apache.fluss.rpc.messages.PbNotifyLeaderAndIsrReqForBucket;
 import org.apache.fluss.server.coordinator.event.AccessContextEvent;
 import org.apache.fluss.server.coordinator.event.EventManager;
 import org.apache.fluss.server.zk.ZkEpoch;
@@ -34,6 +35,7 @@ import org.junit.jupiter.api.Test;
 
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BiConsumer;
 
 import static org.apache.fluss.record.TestData.DATA1_TABLE_DESCRIPTOR;
@@ -137,10 +139,58 @@ class CoordinatorRequestBatchTest {
                 .containsExactly(otherLeaderTb);
     }
 
-    /**
-     * Registers the table metadata that {@code addNotifyLeaderRequestForTabletServers} needs to
-     * resolve the bucket layout epoch; without it the bucket is skipped before the send path.
-     */
+    @Test
+    void testNotifyLeaderAndIsrAllowsMissingRoutingState() {
+        long tableId = 300L;
+        TableBucket tb = new TableBucket(tableId, 0);
+        TablePath tablePath = TablePath.of("db1", "t3");
+        coordinatorContext.putTablePath(tableId, tablePath);
+        coordinatorContext.setLiveTabletServers(
+                CoordinatorTestUtils.createServers(Collections.singletonList(0)));
+        LeaderAndIsr leaderAndIsr =
+                new LeaderAndIsr(0, 0, Collections.singletonList(0), Collections.emptyList(), 0, 0);
+        coordinatorContext.putBucketLeaderAndIsr(tb, leaderAndIsr);
+
+        AtomicReference<NotifyLeaderAndIsrRequest> sentRequest = new AtomicReference<>();
+        TestCoordinatorChannelManager channelManager =
+                new TestCoordinatorChannelManager() {
+                    @Override
+                    public void sendBucketLeaderAndIsrRequest(
+                            int receiveServerId,
+                            NotifyLeaderAndIsrRequest request,
+                            BiConsumer<NotifyLeaderAndIsrResponse, ? super Throwable>
+                                    responseConsumer) {
+                        sentRequest.set(request);
+                        responseConsumer.accept(
+                                null, new NetworkException("simulated send failure for test"));
+                    }
+                };
+        CoordinatorRequestBatch batch =
+                new CoordinatorRequestBatch(
+                        channelManager,
+                        newSynchronousAccessContextEventManager(),
+                        coordinatorContext);
+
+        batch.addNotifyLeaderRequestForTabletServers(
+                Collections.singleton(0),
+                PhysicalTablePath.of(tablePath),
+                tb,
+                Collections.singletonList(0),
+                leaderAndIsr);
+
+        assertThat(coordinatorContext.getPendingLeaderActivationBuckets()).isEmpty();
+        batch.sendRequestToTabletServers(0);
+
+        assertThat(sentRequest.get()).isNotNull();
+        assertThat(sentRequest.get().getNotifyBucketsLeaderReqsList()).hasSize(1);
+        PbNotifyLeaderAndIsrReqForBucket bucketRequest =
+                sentRequest.get().getNotifyBucketsLeaderReqsList().get(0);
+        assertThat(bucketRequest.hasBucketCount()).isFalse();
+        assertThat(bucketRequest.hasBucketCountEpoch()).isFalse();
+        assertThat(coordinatorContext.getPendingLeaderActivationBuckets()).isEmpty();
+    }
+
+    /** Registers table metadata so normal notifications carry the bucket layout epoch. */
     private void putTableInfo(long tableId, TablePath tablePath) {
         coordinatorContext.putTableInfo(
                 TableInfo.of(

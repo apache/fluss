@@ -223,11 +223,11 @@ public class RecoveryOffsetManager {
                 producerId);
 
         RecoveryStateKind stateKind = classifyRecoveredState(recoveredState);
-        Map<Long, String> partitionNames = getPartitionNameMap();
+        Map<Long, PartitionInfo> partitionInfos = getPartitionInfoMap();
         Map<TableBucket, Long> recoveryOffsets =
                 stateKind == RecoveryStateKind.NO_FLINK_STATE
                         ? getProducerOffsets()
-                        : mergeCheckpointState(recoveredState, partitionNames);
+                        : mergeCheckpointState(recoveredState, partitionInfos);
 
         LOG.info(
                 "Recovery offsets for subtask {} (source={}): {}",
@@ -236,7 +236,7 @@ public class RecoveryOffsetManager {
                 recoveryOffsets);
 
         Set<TableBucket> allBuckets = getAllBuckets();
-        Set<TableBucket> filteredBuckets = filterBucketsBySharding(allBuckets, partitionNames);
+        Set<TableBucket> filteredBuckets = filterBucketsBySharding(allBuckets, partitionInfos);
 
         LOG.info(
                 "Subtask {}: filteredBuckets={}, recoveryOffsets={}",
@@ -245,7 +245,7 @@ public class RecoveryOffsetManager {
                 recoveryOffsets);
 
         Map<TableBucket, Long> currentOffsets =
-                fetchCurrentOffsets(filteredBuckets, partitionNames);
+                fetchCurrentOffsets(filteredBuckets, partitionInfos);
 
         LOG.info("Subtask {}: currentOffsets={}", subtaskIndex, currentOffsets);
 
@@ -361,7 +361,7 @@ public class RecoveryOffsetManager {
     }
 
     private Map<TableBucket, Long> mergeCheckpointState(
-            Collection<WriterState> states, Map<Long, String> partitionNames) {
+            Collection<WriterState> states, Map<Long, PartitionInfo> partitionInfos) {
         Map<TableBucket, Long> merged = new HashMap<>();
         for (WriterState state : states) {
             if (state.getStateFormat() == WriterState.StateFormat.V2_COMPLETE
@@ -375,7 +375,7 @@ public class RecoveryOffsetManager {
                 TableBucket bucket = entry.getKey();
                 validateTableId(bucket);
                 validateBaselineOffset(bucket, entry.getValue());
-                if (!isLiveStateBucket(bucket, partitionNames)) {
+                if (!isLiveStateBucket(bucket, partitionInfos)) {
                     continue;
                 }
                 putMergedOffset(merged, bucket, entry.getValue());
@@ -404,14 +404,14 @@ public class RecoveryOffsetManager {
         }
     }
 
-    private boolean isLiveStateBucket(TableBucket bucket, Map<Long, String> partitionNames) {
+    private boolean isLiveStateBucket(TableBucket bucket, Map<Long, PartitionInfo> partitionInfos) {
         Long partitionId = bucket.getPartitionId();
         if (isPartitioned) {
             if (partitionId == null) {
                 throw new IllegalStateException(
                         "State bucket " + bucket + " has no partition ID for a partitioned table.");
             }
-            return partitionNames.containsKey(partitionId);
+            return partitionInfos.containsKey(partitionId);
         }
         if (partitionId != null) {
             throw new IllegalStateException(
@@ -505,10 +505,10 @@ public class RecoveryOffsetManager {
     // ==================== Step 3: Filter by Sharding ====================
 
     private Set<TableBucket> filterBucketsBySharding(
-            Set<TableBucket> buckets, Map<Long, String> partitionNames) {
+            Set<TableBucket> buckets, Map<Long, PartitionInfo> partitionInfos) {
         Set<TableBucket> filtered = new HashSet<>();
         for (TableBucket bucket : buckets) {
-            if (isAssignedToSubtask(bucket, partitionNames)) {
+            if (isAssignedToSubtask(bucket, partitionInfos)) {
                 filtered.add(bucket);
             }
         }
@@ -519,24 +519,28 @@ public class RecoveryOffsetManager {
      * Determines if a bucket is assigned to the current subtask.
      *
      * <p>Uses {@link ChannelComputer#shouldCombinePartitionInSharding} and {@link
-     * ChannelComputer#select} to ensure consistent sharding logic with {@link
-     * org.apache.fluss.flink.sink.FlinkRowDataChannelComputer}.
+     * ChannelComputer#select} to keep the sharding logic aligned with {@link
+     * org.apache.fluss.flink.sink.FlinkRowDataChannelComputer}. A partition that kept its own
+     * bucket layout across an ALTER bucket.num is sharded by that partition's actual bucket count,
+     * not by the table-level one.
      *
-     * <p>For partitioned tables, if the partition has been deleted (partitionName not found in
-     * partitionNames map), the bucket is considered not assigned to any subtask and will be
+     * <p>For partitioned tables, if the partition has been deleted (partition not found in
+     * partitionInfos map), the bucket is considered not assigned to any subtask and will be
      * skipped.
      *
      * @param bucket the bucket to check
-     * @param partitionNames map of partition ID to partition name
+     * @param partitionInfos map of partition ID to partition info
      * @return true if the bucket is assigned to this subtask, false if not assigned or partition
      *     deleted
      */
-    private boolean isAssignedToSubtask(TableBucket bucket, Map<Long, String> partitionNames) {
-        // For partitioned table bucket, get partition name first
+    private boolean isAssignedToSubtask(
+            TableBucket bucket, Map<Long, PartitionInfo> partitionInfos) {
+        // For partitioned table bucket, get partition name and its own bucket count first
         String partitionName = null;
+        int shardingBucketCount = numBuckets;
         if (bucket.getPartitionId() != null) {
-            partitionName = partitionNames.get(bucket.getPartitionId());
-            if (partitionName == null) {
+            PartitionInfo partitionInfo = partitionInfos.get(bucket.getPartitionId());
+            if (partitionInfo == null) {
                 // Partition has been deleted, skip this bucket
                 LOG.debug(
                         "Partition {} not found (deleted?), skipping bucket {}",
@@ -544,12 +548,14 @@ public class RecoveryOffsetManager {
                         bucket);
                 return false;
             }
+            partitionName = partitionInfo.getPartitionName();
+            shardingBucketCount = partitionInfo.getBucketCount();
         }
 
         // Use shared logic to determine sharding strategy and compute channel
         int channel;
         if (ChannelComputer.shouldCombinePartitionInSharding(
-                isPartitioned, numBuckets, parallelism)) {
+                isPartitioned, shardingBucketCount, parallelism)) {
             // When shouldCombinePartitionInSharding is true, partitionName is guaranteed non-null
             // because: 1) isPartitioned=true means bucket has partitionId
             //          2) deleted partitions already returned false above
@@ -563,7 +569,7 @@ public class RecoveryOffsetManager {
     // ==================== Step 4: Fetch Current Offsets ====================
 
     private Map<TableBucket, Long> fetchCurrentOffsets(
-            Set<TableBucket> buckets, Map<Long, String> partitionNames) throws Exception {
+            Set<TableBucket> buckets, Map<Long, PartitionInfo> partitionInfos) throws Exception {
         Map<TableBucket, Long> offsets = new HashMap<>();
 
         // Group buckets by partition
@@ -587,12 +593,12 @@ public class RecoveryOffsetManager {
         // Fetch partitioned buckets
         for (Map.Entry<Long, List<TableBucket>> entry : byPartition.entrySet()) {
             Long partitionId = entry.getKey();
-            String partitionName = partitionNames.get(partitionId);
-            if (partitionName == null) {
+            PartitionInfo partitionInfo = partitionInfos.get(partitionId);
+            if (partitionInfo == null) {
                 throw new IllegalStateException(
                         "Partition " + partitionId + " not found in partition info cache");
             }
-            fetchBucketOffsets(partitionName, entry.getValue(), offsets);
+            fetchBucketOffsets(partitionInfo.getPartitionName(), entry.getValue(), offsets);
         }
 
         return offsets;
@@ -608,15 +614,15 @@ public class RecoveryOffsetManager {
         return cachedPartitionInfos;
     }
 
-    private Map<Long, String> getPartitionNameMap() throws Exception {
+    private Map<Long, PartitionInfo> getPartitionInfoMap() throws Exception {
         if (!isPartitioned) {
             return new HashMap<>();
         }
-        Map<Long, String> nameMap = new HashMap<>();
+        Map<Long, PartitionInfo> infoMap = new HashMap<>();
         for (PartitionInfo partition : getPartitionInfos()) {
-            nameMap.put(partition.getPartitionId(), partition.getPartitionName());
+            infoMap.put(partition.getPartitionId(), partition);
         }
-        return nameMap;
+        return infoMap;
     }
 
     // ==================== Offset Fetching Helpers ====================

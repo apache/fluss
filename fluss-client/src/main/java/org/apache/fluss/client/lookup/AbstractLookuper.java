@@ -18,13 +18,13 @@
 package org.apache.fluss.client.lookup;
 
 import org.apache.fluss.client.metadata.MetadataUpdater;
-import org.apache.fluss.client.utils.ClientRpcMessageUtils;
+import org.apache.fluss.cluster.Cluster;
 import org.apache.fluss.memory.MemorySegment;
+import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.SchemaGetter;
 import org.apache.fluss.metadata.SchemaInfo;
 import org.apache.fluss.metadata.TableInfo;
-import org.apache.fluss.metadata.TablePartition;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.decode.FixedSchemaDecoder;
 import org.apache.fluss.row.encode.KvValueLayout;
@@ -78,19 +78,15 @@ abstract class AbstractLookuper implements Lookuper {
                         tableInfo.getTableConfig().getKvFormat(), tableInfo.getSchema()));
     }
 
-    /**
-     * Resolves the effective bucket count for the target partition: the per-partition bucket count
-     * when the cluster metadata has it, otherwise the shared fallback policy (safe table-level
-     * count only when the table was never rescaled; fail loud otherwise).
-     */
-    protected int resolvePartitionBucketCount(TablePartition tablePartition) {
-        return metadataUpdater
-                .getCluster()
-                .getBucketCount(tablePartition)
-                .orElseGet(
-                        () ->
-                                ClientRpcMessageUtils.fallbackBucketCountOrFail(
-                                        tableInfo, tablePartition));
+    protected PartitionRoutingInfo resolvePartitionRouting(String partitionName) {
+        PhysicalTablePath partitionPath =
+                PhysicalTablePath.of(tableInfo.getTablePath(), partitionName);
+        metadataUpdater.checkAndUpdatePartitionMetadata(partitionPath);
+
+        Cluster cluster = metadataUpdater.getCluster();
+        long partitionId = cluster.getPartitionIdOrElseThrow(partitionPath);
+        int bucketCount = cluster.getBucketCountOrFallback(tableInfo, partitionId);
+        return new PartitionRoutingInfo(partitionId, bucketCount);
     }
 
     protected void handleLookupResponse(
@@ -194,5 +190,23 @@ abstract class AbstractLookuper implements Lookuper {
             rowList.add(row);
         }
         return new LookupResult(rowList);
+    }
+
+    static final class PartitionRoutingInfo {
+        private final long partitionId;
+        private final int bucketCount;
+
+        private PartitionRoutingInfo(long partitionId, int bucketCount) {
+            this.partitionId = partitionId;
+            this.bucketCount = bucketCount;
+        }
+
+        long getPartitionId() {
+            return partitionId;
+        }
+
+        int getBucketCount() {
+            return bucketCount;
+        }
     }
 }

@@ -241,6 +241,8 @@ class FlinkUnionReadRescaleBucketITCase extends FlinkUnionReadTestBase {
         try {
             long tableId = admin.getTableInfo(tablePath).get().getTableId();
             waitUntilPartitionBucketsSynced(tablePath, tableId);
+            assertThat(totalBucketsOfPartition(tablePath, "old")).containsExactly(OLD_BUCKET_NUM);
+            assertThat(totalBucketsOfPartition(tablePath, "new")).containsExactly(NEW_BUCKET_NUM);
 
             // streaming union read: read lake snapshot then keep streaming the fluss log tail
             CloseableIterator<Row> iterator =
@@ -419,8 +421,7 @@ class FlinkUnionReadRescaleBucketITCase extends FlinkUnionReadTestBase {
     private void alterBucketNum(TablePath tablePath) throws Exception {
         admin.alterTable(
                         tablePath,
-                        Collections.singletonList(
-                                TableChange.set("bucket.num", String.valueOf(NEW_BUCKET_NUM))),
+                        Collections.singletonList(TableChange.modifyBucketCount(NEW_BUCKET_NUM)),
                         false)
                 .get();
     }

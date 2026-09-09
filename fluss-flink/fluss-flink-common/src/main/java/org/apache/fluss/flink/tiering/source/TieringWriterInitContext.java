@@ -42,40 +42,6 @@ public class TieringWriterInitContext implements WriterInitContext {
             TablePath tablePath,
             TableBucket tableBucket,
             @Nullable String partition,
-            TableInfo tableInfo) {
-        this(
-                tablePath,
-                tableBucket,
-                partition,
-                tableInfo,
-                UNKNOWN_SPLIT_INDEX,
-                UNKNOWN_TIERING_ROUND_TIMESTAMP,
-                null,
-                null);
-    }
-
-    public TieringWriterInitContext(
-            TablePath tablePath,
-            TableBucket tableBucket,
-            @Nullable String partition,
-            TableInfo tableInfo,
-            int splitIndex,
-            long tieringRoundTimestamp) {
-        this(
-                tablePath,
-                tableBucket,
-                partition,
-                tableInfo,
-                splitIndex,
-                tieringRoundTimestamp,
-                null,
-                null);
-    }
-
-    public TieringWriterInitContext(
-            TablePath tablePath,
-            TableBucket tableBucket,
-            @Nullable String partition,
             TableInfo tableInfo,
             int splitIndex,
             long tieringRoundTimestamp,

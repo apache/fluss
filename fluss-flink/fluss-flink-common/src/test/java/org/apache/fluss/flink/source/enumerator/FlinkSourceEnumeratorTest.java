@@ -17,10 +17,8 @@
 
 package org.apache.fluss.flink.source.enumerator;
 
-import org.apache.fluss.client.FlussConnection;
 import org.apache.fluss.client.admin.OffsetSpec;
 import org.apache.fluss.client.initializer.OffsetsInitializer;
-import org.apache.fluss.client.metadata.MetadataUpdater;
 import org.apache.fluss.client.table.Table;
 import org.apache.fluss.client.table.writer.UpsertWriter;
 import org.apache.fluss.client.write.HashBucketAssigner;
@@ -2080,8 +2078,7 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
         writeRows(conn, tablePath, genRows(10, "old"), true);
         admin.alterTable(
                         tablePath,
-                        Collections.singletonList(
-                                TableChange.set("bucket.num", String.valueOf(NEW_BUCKET_NUM))),
+                        Collections.singletonList(TableChange.modifyBucketCount(NEW_BUCKET_NUM)),
                         false)
                 .get();
         admin.createPartition(tablePath, newSpec, false).get();
@@ -2181,8 +2178,7 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
         TableInfo tableInfo = (TableInfo) ctx[1];
         long oldPartitionId = (long) ctx[2];
         long newPartitionId = (long) ctx[3];
-        List<TieringSplit> splits =
-                new TieringSplitGenerator(admin, metadataUpdater()).generateTableSplits(tableInfo);
+        List<TieringSplit> splits = new TieringSplitGenerator(admin).generateTableSplits(tableInfo);
         assertThat(
                         splits.stream()
                                 .filter(s -> s.getTableBucket().getPartitionId() == oldPartitionId)
@@ -2195,10 +2191,5 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
                                 .map(s -> s.getTableBucket().getBucket())
                                 .collect(Collectors.toList()))
                 .containsExactlyInAnyOrder(0, 1, 2, 3);
-    }
-
-    /** The split generator resolves the internal historical partition through this updater. */
-    private static MetadataUpdater metadataUpdater() {
-        return ((FlussConnection) conn).getMetadataUpdater();
     }
 }

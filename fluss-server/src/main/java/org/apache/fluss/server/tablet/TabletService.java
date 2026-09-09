@@ -18,6 +18,7 @@
 package org.apache.fluss.server.tablet;
 
 import org.apache.fluss.cluster.ServerType;
+import org.apache.fluss.exception.ApiException;
 import org.apache.fluss.exception.AuthorizationException;
 import org.apache.fluss.exception.InvalidScanRequestException;
 import org.apache.fluss.exception.InvalidTableException;
@@ -226,7 +227,7 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
         authorizeTable(WRITE, request.getTableId());
         long tableId = request.getTableId();
         Map<TableBucket, ProduceLogResultForBucket> routingErrors = new HashMap<>();
-        collectStaleRoutingErrors(
+        collectRoutingErrors(
                 request.getBucketsReqsList(),
                 pbBucket ->
                         new TableBucket(
@@ -276,8 +277,8 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
     }
 
     /**
-     * Validates the routing bucket count of a client request against the replica-local routing
-     * state (see {@link ReplicaManager#validateRoutingBucketCount}).
+     * Validates one request-scoped bucket and propagates any standard replica or routing {@link
+     * ApiException} to fail the single-bucket request immediately.
      */
     private void validateRoutingBucketCountOrThrow(
             TableBucket tableBucket, int routingBucketCount) {
@@ -302,7 +303,7 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
         if (isFromClient(request.getFollowerServerId())) {
             for (PbFetchLogReqForTable pbTable : request.getTablesReqsList()) {
                 long tableId = pbTable.getTableId();
-                collectStaleRoutingErrors(
+                collectRoutingErrors(
                         pbTable.getBucketsReqsList(),
                         pbBucket ->
                                 new TableBucket(
@@ -380,7 +381,7 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
         authorizeTable(WRITE, request.getTableId());
         long tableId = request.getTableId();
         Map<TableBucket, PutKvResultForBucket> routingErrors = new HashMap<>();
-        collectStaleRoutingErrors(
+        collectRoutingErrors(
                 request.getBucketsReqsList(),
                 pbBucket ->
                         new TableBucket(
@@ -438,7 +439,7 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
     public CompletableFuture<LookupResponse> lookup(LookupRequest request) {
         long tableId = request.getTableId();
         Map<TableBucket, LookupResultForBucket> errorResponseMap = new HashMap<>();
-        collectStaleRoutingErrors(
+        collectRoutingErrors(
                 request.getBucketsReqsList(),
                 pbBucket ->
                         new TableBucket(
@@ -511,7 +512,7 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
         long tableId = request.getTableId();
         Map<TableBucket, List<byte[]>> prefixLookupData = toPrefixLookupData(request);
         Map<TableBucket, PrefixLookupResultForBucket> errorResponseMap = new HashMap<>();
-        collectStaleRoutingErrors(
+        collectRoutingErrors(
                 request.getBucketsReqsList(),
                 pbBucket ->
                         new TableBucket(
@@ -563,7 +564,7 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
         authorizeTable(READ, request.getTableId());
         long tableId = request.getTableId();
         Map<TableBucket, TableStatsResultForBucket> routingErrors = new HashMap<>();
-        collectStaleRoutingErrors(
+        collectRoutingErrors(
                 request.getBucketsReqsList(),
                 pbBucket ->
                         new TableBucket(
@@ -801,20 +802,17 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
 
             if (request.hasBucketScanReq()) {
                 PbScanReqForBucket bucketReq = request.getBucketScanReq();
-                validateRoutingBucketCountOrThrow(
-                        new TableBucket(
-                                bucketReq.getTableId(),
-                                bucketReq.hasPartitionId() ? bucketReq.getPartitionId() : null,
-                                bucketReq.getBucketId()),
-                        bucketReq.hasRoutingBucketCount() ? bucketReq.getRoutingBucketCount() : 0);
                 long tableId = bucketReq.getTableId();
-                authorizeTable(READ, tableId);
-
                 TableBucket tableBucket =
                         new TableBucket(
                                 tableId,
                                 bucketReq.hasPartitionId() ? bucketReq.getPartitionId() : null,
                                 bucketReq.getBucketId());
+                validateRoutingBucketCountOrThrow(
+                        tableBucket,
+                        bucketReq.hasRoutingBucketCount() ? bucketReq.getRoutingBucketCount() : 0);
+                authorizeTable(READ, tableId);
+
                 Long limit = bucketReq.hasLimit() ? bucketReq.getLimit() : null;
 
                 Replica replica = replicaManager.getReplicaOrException(tableBucket);
@@ -1086,18 +1084,16 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
     }
 
     /**
-     * Records a per-bucket error for every request bucket whose bucket id was routed by a stale
-     * bucket count, accumulating into {@code errorsOut}.
+     * Records a per-bucket error for every request bucket whose routing validation fails. This
+     * includes stale bucket counts and the standard unknown, non-local, or offline replica errors
+     * raised while resolving the target bucket.
      *
-     * <p>A rescale only changes newly created partitions, so a stale route on one partition leaves
-     * the co-batched buckets of the other partitions correctly routed. Reporting the offending
-     * buckets individually, rather than failing the whole request, mirrors how authorization
-     * failures are reported by {@link #authorizeRequestData}.
-     *
-     * <p>Only requests that carry a per-bucket routing count need this. A request whose count is
-     * request-scoped (see {@link #listOffsets}) fails or succeeds as a whole by construction.
+     * <p>A failure on one bucket does not invalidate other buckets in the same batched request, so
+     * each {@link ApiException} is converted into the corresponding bucket result. Request-scoped
+     * validation (for example {@link #listOffsets}) instead propagates the exception and fails the
+     * whole request.
      */
-    private <P, K extends ResultForBucket> void collectStaleRoutingErrors(
+    private <P, K extends ResultForBucket> void collectRoutingErrors(
             List<P> bucketReqs,
             Function<P, TableBucket> toTableBucket,
             ToIntFunction<P> routingBucketCountOf,
@@ -1108,7 +1104,7 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
             try {
                 replicaManager.validateRoutingBucketCount(
                         tableBucket, routingBucketCountOf.applyAsInt(bucketReq));
-            } catch (StaleMetadataException e) {
+            } catch (ApiException e) {
                 errorsOut.put(
                         tableBucket, resultCreator.apply(tableBucket, ApiError.fromThrowable(e)));
             }
@@ -1116,9 +1112,9 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
     }
 
     /**
-     * Appends the stale-routing errors to the results produced for the accepted buckets, so that
-     * the response covers every bucket the client asked about. Returns {@code results} untouched
-     * when no bucket was routed by a stale count.
+     * Appends routing errors to the results produced for the accepted buckets, so that the response
+     * covers every bucket the client asked about. Returns {@code results} untouched when every
+     * bucket has valid routing information.
      */
     private static <K extends ResultForBucket> List<K> withRoutingErrors(
             List<K> results, Map<TableBucket, K> routingErrors) {

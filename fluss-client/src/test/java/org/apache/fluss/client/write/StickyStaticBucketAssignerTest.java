@@ -215,6 +215,7 @@ class StickyStaticBucketAssignerTest {
                 new ServerNode(0, "localhost", 89, ServerType.COORDINATOR),
                 bucketsByPath,
                 tableIdByPath,
+                Collections.emptyMap(),
                 Collections.emptyMap());
     }
 }

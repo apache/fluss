@@ -41,6 +41,7 @@ public final class IndexedLogWriteBatch extends AbstractRowLogWriteBatch<Indexed
     public IndexedLogWriteBatch(
             long tableId,
             int bucketId,
+            int bucketCount,
             PhysicalTablePath physicalTablePath,
             int schemaId,
             int writeLimit,
@@ -50,6 +51,7 @@ public final class IndexedLogWriteBatch extends AbstractRowLogWriteBatch<Indexed
         super(
                 tableId,
                 bucketId,
+                bucketCount,
                 physicalTablePath,
                 schemaId,
                 WriteFormat.INDEXED_LOG,

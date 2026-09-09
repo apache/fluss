@@ -25,7 +25,7 @@ import org.apache.fluss.exception.LeaderNotAvailableException;
 import org.apache.fluss.metadata.SchemaGetter;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
-import org.apache.fluss.metadata.TablePartition;
+import org.apache.fluss.metadata.TableOrPartition;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.record.DefaultValueRecordBatch;
 import org.apache.fluss.record.ValueRecord;
@@ -186,12 +186,9 @@ public final class KvBatchScanner implements BatchScanner {
                         .setBucketId(bucket.getBucket());
         if (bucket.getPartitionId() != null) {
             bucketReq.setPartitionId(bucket.getPartitionId());
-            cluster.getBucketCount(new TablePartition(bucket.getTableId(), bucket.getPartitionId()))
-                    .ifPresent(bucketReq::setRoutingBucketCount);
-        } else {
-            cluster.getBucketCountForTable(bucket.getTableId())
-                    .ifPresent(bucketReq::setRoutingBucketCount);
         }
+        cluster.getBucketCount(TableOrPartition.of(bucket.getTableId(), bucket.getPartitionId()))
+                .ifPresent(bucketReq::setRoutingBucketCount);
 
         ScanKvRequest request =
                 new ScanKvRequest()

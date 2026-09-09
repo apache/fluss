@@ -48,6 +48,7 @@ public class LookupQuery extends AbstractLookupQuery<byte[]> {
         this.insertIfNotExists = insertIfNotExists;
     }
 
+    @VisibleForTesting
     LookupQuery(
             TablePath tablePath,
             TableBucket tableBucket,

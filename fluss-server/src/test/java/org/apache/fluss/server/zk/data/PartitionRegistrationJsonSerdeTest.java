@@ -38,8 +38,9 @@ class PartitionRegistrationJsonSerdeTest extends JsonSerdeTestBase<PartitionRegi
     protected PartitionRegistration[] createObjects() {
         PartitionRegistration[] partitionRegistrations = new PartitionRegistration[3];
 
-        partitionRegistrations[0] = new PartitionRegistration(1234L, 5678L, "file://local/remote");
-        partitionRegistrations[1] = new PartitionRegistration(246L, 135L, null);
+        partitionRegistrations[0] =
+                new PartitionRegistration(1234L, 5678L, "file://local/remote", null);
+        partitionRegistrations[1] = new PartitionRegistration(246L, 135L, null, null);
         // a partition with a per-partition bucket count
         partitionRegistrations[2] =
                 new PartitionRegistration(1234L, 5678L, "file://local/remote", 8);
@@ -66,7 +67,7 @@ class PartitionRegistrationJsonSerdeTest extends JsonSerdeTestBase<PartitionRegi
                         tablePartitionJson.getBytes(StandardCharsets.UTF_8),
                         PartitionRegistrationJsonSerde.INSTANCE);
 
-        PartitionRegistration expected = new PartitionRegistration(1234L, 5678L, null);
+        PartitionRegistration expected = new PartitionRegistration(1234L, 5678L, null, null);
         assertThat(actual).isEqualTo(expected);
     }
 
@@ -84,6 +85,6 @@ class PartitionRegistrationJsonSerdeTest extends JsonSerdeTestBase<PartitionRegi
 
         assertThat(actual.getBucketCount()).isNull();
         assertThat(actual)
-                .isEqualTo(new PartitionRegistration(1234L, 5678L, "file://local/remote"));
+                .isEqualTo(new PartitionRegistration(1234L, 5678L, "file://local/remote", null));
     }
 }

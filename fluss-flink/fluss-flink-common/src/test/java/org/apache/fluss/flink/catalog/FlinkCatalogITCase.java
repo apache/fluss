@@ -283,6 +283,14 @@ abstract class FlinkCatalogITCase {
                 .hasMessageContaining("Cannot alter 'bucket.num' on non-partitioned table")
                 .hasMessageContaining("not yet supported");
 
+        assertThatThrownBy(
+                        () ->
+                                tEnv.executeSql(
+                                        "alter table test_alter_table_append_only reset ('bucket.num')"))
+                .rootCause()
+                .isInstanceOf(CatalogException.class)
+                .hasMessage("The option 'bucket.num' is not supported to alter yet.");
+
         String unSupportedDml3 =
                 "alter table test_alter_table_append_only set ('bucket.key' = 'a')";
         assertThatThrownBy(() -> tEnv.executeSql(unSupportedDml3))

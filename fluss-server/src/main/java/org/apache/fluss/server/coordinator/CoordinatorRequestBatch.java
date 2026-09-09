@@ -212,26 +212,8 @@ public class CoordinatorRequestBatch {
             TableBucket tableBucket,
             List<Integer> bucketReplicas,
             LeaderAndIsr leaderAndIsr) {
-        // Leader activation requires the routing bucket count; skip the bucket when the
-        // coordinator context has no assignment for it (e.g. raced by a drop) instead of
-        // sending a notification without the count, which the TabletServer would reject.
         Integer bucketCount = getBucketCount(tableBucket);
-        if (bucketCount == null) {
-            coordinatorContext.addPendingLeaderActivation(tableBucket);
-            LOG.error(
-                    "Skip notifying leader and isr for {}: no bucket assignment in coordinator "
-                            + "context.",
-                    tableBucket);
-            return;
-        }
         Long bucketCountEpoch = getBucketCountEpoch(tableBucket.getTableId());
-        if (bucketCountEpoch == null) {
-            coordinatorContext.addPendingLeaderActivation(tableBucket);
-            LOG.error(
-                    "Skip notifying leader and isr for {}: no table info in coordinator context.",
-                    tableBucket);
-            return;
-        }
 
         tabletServers.stream()
                 .filter(s -> s >= 0 && !coordinatorContext.shuttingDownTabletServers().contains(s))
@@ -255,11 +237,14 @@ public class CoordinatorRequestBatch {
 
         // TODO for these cases, we can send NotifyLeaderAndIsrRequest instead of another
         // updateMetadata request, trace by: https://github.com/apache/fluss/issues/983
-        addUpdateMetadataRequestForTabletServers(
-                coordinatorContext.getLiveTabletServers().keySet(),
-                null,
-                null,
-                Collections.singleton(tableBucket));
+        // A missing bucket count means the assignment required to build BucketMetadata is absent.
+        if (bucketCount != null) {
+            addUpdateMetadataRequestForTabletServers(
+                    coordinatorContext.getLiveTabletServers().keySet(),
+                    null,
+                    null,
+                    Collections.singleton(tableBucket));
+        }
     }
 
     /**

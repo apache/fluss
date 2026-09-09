@@ -25,6 +25,8 @@ import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.PartitionInfo;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.TableChange;
+import org.apache.fluss.rpc.messages.AlterTableRequest;
 import org.apache.fluss.rpc.messages.ListPartitionInfosResponse;
 import org.apache.fluss.rpc.messages.PbKeyValue;
 import org.apache.fluss.rpc.messages.PbPartitionInfo;
@@ -134,6 +136,19 @@ class ClientRpcMessageUtilsTest {
     }
 
     @Test
+    void testMakeAlterTableRequestWithBucketCountChange() {
+        AlterTableRequest request =
+                ClientRpcMessageUtils.makeAlterTableRequest(
+                        DATA1_TABLE_PATH_PK,
+                        Collections.singletonList(TableChange.modifyBucketCount(8)),
+                        false);
+
+        assertThat(request.hasModifyBucketCount()).isTrue();
+        assertThat(request.getModifyBucketCount().getNewBucketCount()).isEqualTo(8);
+        assertThat(request.getConfigChangesList()).isEmpty();
+    }
+
+    @Test
     void testToPartitionInfosParsesBucketCount() {
         // one partition with bucket_count set, one without (simulating an old cluster / old
         // partition that did not persist per-partition bucket count)
@@ -190,6 +205,7 @@ class ClientRpcMessageUtilsTest {
         return new KvWriteBatch(
                 DATA1_TABLE_ID_PK,
                 bucketId,
+                DATA1_TABLE_INFO_PK.getNumBuckets(),
                 PhysicalTablePath.of(DATA1_TABLE_PATH_PK),
                 DATA1_TABLE_INFO_PK.getSchemaId(),
                 KvFormat.COMPACTED,

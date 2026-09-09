@@ -43,18 +43,6 @@ public abstract class AbstractLookupQuery<T> {
     private int retries;
     private long nextRetryTimeMs;
 
-    public AbstractLookupQuery(TablePath tablePath, TableBucket tableBucket, byte[] key) {
-        this(tablePath, tableBucket, key, null, 0);
-    }
-
-    public AbstractLookupQuery(
-            TablePath tablePath,
-            TableBucket tableBucket,
-            byte[] key,
-            @Nullable String originalPartitionName) {
-        this(tablePath, tableBucket, key, originalPartitionName, 0);
-    }
-
     public AbstractLookupQuery(
             TablePath tablePath,
             TableBucket tableBucket,

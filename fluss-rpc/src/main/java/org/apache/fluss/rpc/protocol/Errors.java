@@ -35,6 +35,7 @@ import org.apache.fluss.exception.HistoricalPartitionThrottledException;
 import org.apache.fluss.exception.IneligibleReplicaException;
 import org.apache.fluss.exception.InsufficientKvLeaderReplicaCapacityException;
 import org.apache.fluss.exception.InvalidAlterTableException;
+import org.apache.fluss.exception.InvalidBucketRoutingException;
 import org.apache.fluss.exception.InvalidColumnProjectionException;
 import org.apache.fluss.exception.InvalidConfigException;
 import org.apache.fluss.exception.InvalidCoordinatorException;
@@ -289,9 +290,13 @@ public enum Errors {
             HistoricalPartitionThrottledException::new),
     STALE_METADATA(
             74,
-            "The bucket count in the request does not match the server's actual bucket count. The "
-                    + "client should refresh metadata and retry.",
-            StaleMetadataException::new);
+            "The metadata is stale. The client should refresh metadata and retry.",
+            StaleMetadataException::new),
+    INVALID_BUCKET_ROUTING(
+            75,
+            "The request's bucket routing information is missing or invalid. The client should "
+                    + "refresh partition metadata and rebuild the request.",
+            InvalidBucketRoutingException::new);
 
     private static final Logger LOG = LoggerFactory.getLogger(Errors.class);
 

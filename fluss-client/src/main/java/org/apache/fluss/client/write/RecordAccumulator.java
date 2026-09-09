@@ -32,6 +32,7 @@ import org.apache.fluss.memory.PreAllocatedPagedOutputView;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
+import org.apache.fluss.metadata.TableOrPartition;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.metrics.MetricNames;
 import org.apache.fluss.record.LogRecordBatchStatisticsCollector;
@@ -203,16 +204,6 @@ public final class RecordAccumulator {
             WriteCallback callback,
             Cluster cluster,
             int bucketId,
-            boolean abortIfBatchFull)
-            throws Exception {
-        return append(writeRecord, callback, cluster, bucketId, 0, abortIfBatchFull);
-    }
-
-    public RecordAppendResult append(
-            WriteRecord writeRecord,
-            WriteCallback callback,
-            Cluster cluster,
-            int bucketId,
             int bucketCount,
             boolean abortIfBatchFull)
             throws Exception {
@@ -240,7 +231,7 @@ public final class RecordAccumulator {
                     bucketAndWriteBatches.batches.computeIfAbsent(
                             bucketId, k -> new ArrayDeque<>());
             synchronized (dq) {
-                RecordAppendResult appendResult = tryAppend(writeRecord, callback, dq);
+                RecordAppendResult appendResult = tryAppend(writeRecord, callback, bucketCount, dq);
                 if (appendResult != null) {
                     return appendResult;
                 }
@@ -298,6 +289,7 @@ public final class RecordAccumulator {
         Set<Integer> readyNodes = new HashSet<>();
         long nextReadyCheckDelayMs = batchTimeoutMs;
         Set<PhysicalTablePath> unknownLeaderTables = new HashSet<>();
+        Set<PhysicalTablePath> invalidBucketRoutingTables = new HashSet<>();
         // Go table by table so that we can get queue sizes for buckets in a table and calculate
         // cumulative frequency table (used in bucket assigner).
 
@@ -307,13 +299,15 @@ public final class RecordAccumulator {
                             bucketAndWriteBatches,
                             readyNodes,
                             unknownLeaderTables,
+                            invalidBucketRoutingTables,
                             cluster,
                             nextReadyCheckDelayMs);
         }
 
         // TODO and the earliest time at which any non-send-able bucket will be ready;
 
-        return new ReadyCheckResult(readyNodes, nextReadyCheckDelayMs, unknownLeaderTables);
+        return new ReadyCheckResult(
+                readyNodes, nextReadyCheckDelayMs, unknownLeaderTables, invalidBucketRoutingTables);
     }
 
     /**
@@ -457,7 +451,13 @@ public final class RecordAccumulator {
         return Boolean.TRUE.equals(historicalPartitionEnabledByTable.get(tablePath));
     }
 
-    /** Reroutes queued batches for {@code originalPath} to the historical target. */
+    /**
+     * Reroutes queued batches for {@code originalPath} to the historical target.
+     *
+     * @return {@code true} if the batches were rerouted successfully or were already targeting the
+     *     historical partition; {@code false} if any queued batch was routed with a bucket count
+     *     that differs from the historical partition's bucket count
+     */
     boolean rerouteQueuedWritesToHistorical(
             PhysicalTablePath originalPath,
             PhysicalTablePath historicalPath,
@@ -695,6 +695,7 @@ public final class RecordAccumulator {
             BucketAndWriteBatches bucketAndWriteBatches,
             Set<Integer> readyNodes,
             Set<PhysicalTablePath> unknownLeaderTables,
+            Set<PhysicalTablePath> invalidBucketRoutingTables,
             Cluster cluster,
             long nextReadyCheckDelayMs) {
         // first check this table has partitionId.
@@ -713,6 +714,13 @@ public final class RecordAccumulator {
             }
         }
 
+        Integer actualBucketCount =
+                bucketAndWriteBatches.isPartitionedTable
+                        ? cluster.getBucketCount(
+                                        TableOrPartition.ofPartition(
+                                                bucketAndWriteBatches.partitionId))
+                                .orElse(null)
+                        : null;
         Map<Integer, Deque<WriteBatch>> batches = bucketAndWriteBatches.batches;
         // Collect the queue sizes for available buckets to be used in adaptive bucket allocate.
 
@@ -720,6 +728,7 @@ public final class RecordAccumulator {
         for (Map.Entry<Integer, Deque<WriteBatch>> entry : batches.entrySet()) {
             Deque<WriteBatch> deque = entry.getValue();
 
+            final WriteBatch batch;
             final long waitedTimeMs;
             final int dequeSize;
             final boolean full;
@@ -731,7 +740,7 @@ public final class RecordAccumulator {
             synchronized (deque) {
                 // Deque are often empty in this path, esp with large bucket counts,
                 // so we exit early if we can.
-                WriteBatch batch = deque.peekFirst();
+                batch = deque.peekFirst();
                 if (batch == null) {
                     continue;
                 }
@@ -739,6 +748,11 @@ public final class RecordAccumulator {
                 waitedTimeMs = batch.waitedTimeMs(clock.milliseconds());
                 dequeSize = deque.size();
                 full = dequeSize > 1 || batch.isClosed();
+            }
+
+            if (actualBucketCount != null && batch.getBucketCount() != actualBucketCount) {
+                invalidBucketRoutingTables.add(targetPath);
+                return nextReadyCheckDelayMs;
             }
 
             int bucketId = entry.getKey();
@@ -843,7 +857,7 @@ public final class RecordAccumulator {
                         ? bucketAndWriteBatches
                         : deque;
         synchronized (routeLock) {
-            RecordAppendResult appendResult = tryAppend(writeRecord, callback, deque);
+            RecordAppendResult appendResult = tryAppend(writeRecord, callback, bucketCount, deque);
             if (appendResult != null) {
                 // Somebody else found us a batch, return the one we waited for! Hopefully this
                 // doesn't happen often...
@@ -858,6 +872,7 @@ public final class RecordAccumulator {
                     createWriteBatch(
                             writeRecord,
                             bucketId,
+                            bucketCount,
                             tableInfo,
                             writeFormat,
                             physicalTablePath,
@@ -865,7 +880,6 @@ public final class RecordAccumulator {
                             schemaId,
                             isHistoricalPartition);
 
-            batch.setBucketCount(bucketCount);
             batch.tryAppend(writeRecord, callback);
             deque.addLast(batch);
             incomplete.add(batch);
@@ -876,6 +890,7 @@ public final class RecordAccumulator {
     private WriteBatch createWriteBatch(
             WriteRecord writeRecord,
             int bucketId,
+            int bucketCount,
             TableInfo tableInfo,
             WriteFormat writeFormat,
             PhysicalTablePath physicalTablePath,
@@ -889,6 +904,7 @@ public final class RecordAccumulator {
                 return new KvWriteBatch(
                         tableInfo.getTableId(),
                         bucketId,
+                        bucketCount,
                         physicalTablePath,
                         tableInfo.getSchemaId(),
                         writeFormat.toKvFormat(),
@@ -916,6 +932,7 @@ public final class RecordAccumulator {
                 return new ArrowLogWriteBatch(
                         tableInfo.getTableId(),
                         bucketId,
+                        bucketCount,
                         physicalTablePath,
                         tableInfo.getSchemaId(),
                         arrowWriter,
@@ -928,6 +945,7 @@ public final class RecordAccumulator {
                 return new CompactedLogWriteBatch(
                         tableInfo.getTableId(),
                         bucketId,
+                        bucketCount,
                         physicalTablePath,
                         schemaId,
                         outputView.getPreAllocatedSize(),
@@ -939,6 +957,7 @@ public final class RecordAccumulator {
                 return new IndexedLogWriteBatch(
                         tableInfo.getTableId(),
                         bucketId,
+                        bucketCount,
                         physicalTablePath,
                         tableInfo.getSchemaId(),
                         outputView.getPreAllocatedSize(),
@@ -952,18 +971,22 @@ public final class RecordAccumulator {
     }
 
     private RecordAppendResult tryAppend(
-            WriteRecord writeRecord, WriteCallback callback, Deque<WriteBatch> deque)
+            WriteRecord writeRecord,
+            WriteCallback callback,
+            int bucketCount,
+            Deque<WriteBatch> deque)
             throws Exception {
         if (closed) {
             throw new FlussRuntimeException("Writer closed while send in progress");
         }
         WriteBatch last = deque.peekLast();
         if (last != null) {
-            boolean success = last.tryAppend(writeRecord, callback);
+            boolean success =
+                    last.getBucketCount() == bucketCount && last.tryAppend(writeRecord, callback);
             if (!success) {
-                // The last batch is either full/closed or belongs to a different table/write
-                // format/schema. Close it so the incoming record rolls over to a compatible new
-                // batch.
+                // The last batch is either full/closed or belongs to a different table, write
+                // format, schema, or bucket layout. Close it so the incoming record rolls over to
+                // a compatible new batch.
                 // TODO For ArrowLogWriteBatch, close here is a heavy operation (including build
                 // logic), we need to avoid do that in an lock which locked dq. However, why we not
                 // remove build logic out of close for ArrowLogWriteBatch is that we want to release
@@ -1388,14 +1411,17 @@ public final class RecordAccumulator {
         public final Set<Integer> readyNodes;
         public final long nextReadyCheckDelayMs;
         public final Set<PhysicalTablePath> unknownLeaderTables;
+        public final Set<PhysicalTablePath> invalidBucketRoutingTables;
 
         public ReadyCheckResult(
                 Set<Integer> readyNodes,
                 long nextReadyCheckDelayMs,
-                Set<PhysicalTablePath> unknownLeaderTables) {
+                Set<PhysicalTablePath> unknownLeaderTables,
+                Set<PhysicalTablePath> invalidBucketRoutingTables) {
             this.readyNodes = readyNodes;
             this.nextReadyCheckDelayMs = nextReadyCheckDelayMs;
             this.unknownLeaderTables = unknownLeaderTables;
+            this.invalidBucketRoutingTables = invalidBucketRoutingTables;
         }
     }
 

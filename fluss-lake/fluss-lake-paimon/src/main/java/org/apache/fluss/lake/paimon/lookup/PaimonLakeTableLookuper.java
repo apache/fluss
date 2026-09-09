@@ -411,33 +411,40 @@ public class PaimonLakeTableLookuper implements LakeTableLookuper {
      * cannot be routed reliably.
      */
     private @Nullable Integer resolveTotalBuckets(org.apache.paimon.data.BinaryRow partition) {
-        return totalBucketsByPartition.computeIfAbsent(
-                partition.copy(),
-                p -> {
-                    Set<Integer> totalBuckets = new HashSet<>();
-                    InnerTableScan tableScan =
-                            fileStoreTable
-                                    .newScan()
-                                    .withPartitionFilter(Collections.singletonList(p));
-                    for (Split split : tableScan.plan().splits()) {
-                        if (split instanceof DataSplit) {
-                            totalBuckets.add(((DataSplit) split).totalBuckets());
-                        }
-                    }
-                    if (totalBuckets.isEmpty()) {
-                        return null;
-                    }
-                    if (totalBuckets.size() > 1) {
-                        throw new KvStorageException(
-                                "Cannot look up historical data of table "
-                                        + tablePath
-                                        + " because its lake data reports multiple bucket counts "
-                                        + totalBuckets
-                                        + " for one partition, so the bucket a key was written to "
-                                        + "cannot be determined.");
-                    }
-                    return totalBuckets.iterator().next();
-                });
+        org.apache.paimon.data.BinaryRow partitionKey = partition.copy();
+        Integer cachedTotalBuckets = totalBucketsByPartition.get(partitionKey);
+        if (cachedTotalBuckets != null) {
+            return cachedTotalBuckets;
+        }
+
+        // Keep metadata I/O outside ConcurrentHashMap's bin lock.
+        Set<Integer> totalBuckets = new HashSet<>();
+        InnerTableScan tableScan =
+                fileStoreTable
+                        .newScan()
+                        .withPartitionFilter(Collections.singletonList(partitionKey));
+        for (Split split : tableScan.plan().splits()) {
+            if (split instanceof DataSplit) {
+                totalBuckets.add(((DataSplit) split).totalBuckets());
+            }
+        }
+        if (totalBuckets.isEmpty()) {
+            return null;
+        }
+        if (totalBuckets.size() > 1) {
+            throw new KvStorageException(
+                    "Cannot look up historical data of table "
+                            + tablePath
+                            + " because its lake data reports multiple bucket counts "
+                            + totalBuckets
+                            + " for one partition, so the bucket a key was written to "
+                            + "cannot be determined.");
+        }
+
+        Integer resolvedTotalBuckets = totalBuckets.iterator().next();
+        Integer previousTotalBuckets =
+                totalBucketsByPartition.putIfAbsent(partitionKey, resolvedTotalBuckets);
+        return previousTotalBuckets == null ? resolvedTotalBuckets : previousTotalBuckets;
     }
 
     /**

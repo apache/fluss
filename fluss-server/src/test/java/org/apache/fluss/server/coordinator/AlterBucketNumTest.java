@@ -140,7 +140,7 @@ class AlterBucketNumTest {
         // the lake side BEFORE the Fluss ZK commit. This unit-test harness has no real lake
         // catalog wired in, so the propagation step fails with a FlussRuntimeException whose
         // message clearly points at the propagation stage.
-        assertThatThrownBy(() -> alterBucketNum(metadataManager, tablePath, "8"))
+        assertThatThrownBy(() -> alterBucketNum(metadataManager, tablePath, 8))
                 .isInstanceOf(FlussRuntimeException.class)
                 .hasMessageContaining("propagate ALTER bucket.num to the lake side");
 
@@ -164,7 +164,7 @@ class AlterBucketNumTest {
         // A lake failure fails loud: the ALTER aborts BEFORE the Fluss ZK commit with a clear
         // error telling the operator nothing was changed on the Fluss side and to re-run the
         // ALTER once the lake is reachable.
-        assertThatThrownBy(() -> alterBucketNum(mm, tablePath, "8"))
+        assertThatThrownBy(() -> alterBucketNum(mm, tablePath, 8))
                 .isInstanceOf(FlussRuntimeException.class)
                 .hasMessageContaining("to the lake schema failed")
                 .hasMessageContaining("The Fluss side was NOT changed")
@@ -189,7 +189,7 @@ class AlterBucketNumTest {
         int newBucketCount = 8;
         createSeededLakePartitionedTable(mm, tablePath, 4);
 
-        alterBucketNum(mm, tablePath, String.valueOf(newBucketCount));
+        alterBucketNum(mm, tablePath, newBucketCount);
 
         // Propagation succeeded on the first attempt.
         assertThat(stub.attempts.get()).isEqualTo(1);
@@ -227,7 +227,7 @@ class AlterBucketNumTest {
                 generateAssignment(originalBucketCount, 3, getTabletServers()),
                 false);
 
-        alterBucketNum(mm, tablePath, String.valueOf(newBucketCount));
+        alterBucketNum(mm, tablePath, newBucketCount);
 
         // no call ever reached the lake catalog, and the Fluss side still rescaled
         assertThat(stub.attempts.get()).isEqualTo(0);
@@ -305,8 +305,7 @@ class AlterBucketNumTest {
     }
 
     /**
-     * A stub lake catalog that counts bucket-count propagations (a "bucket.num" SetOption through
-     * alterTable) and can simulate transient faults.
+     * A stub lake catalog that counts bucket-count propagations and can simulate transient faults.
      */
     private static final class CountingLakeCatalog implements LakeCatalog {
         private final AtomicInteger attempts = new AtomicInteger();
@@ -327,13 +326,12 @@ class AlterBucketNumTest {
         public void alterTable(
                 TablePath tablePath, java.util.List<TableChange> tableChanges, Context context) {
             for (TableChange change : tableChanges) {
-                if (change instanceof TableChange.SetOption
-                        && "bucket.num".equals(((TableChange.SetOption) change).getKey())) {
+                if (change instanceof TableChange.ModifyBucketCount) {
                     attempts.incrementAndGet();
                     if (failing) {
                         throw new RuntimeException("simulated transient lake failure");
                     }
-                    lastBucketCount = Integer.parseInt(((TableChange.SetOption) change).getValue());
+                    lastBucketCount = ((TableChange.ModifyBucketCount) change).getNewBucketCount();
                 }
             }
         }
@@ -357,33 +355,9 @@ class AlterBucketNumTest {
         metadataManager.createTable(tablePath, remoteDataDir, logTable, tableAssignment, false);
 
         // ALTER bucket.num on non-partitioned table should be rejected
-        assertThatThrownBy(() -> alterBucketNum(metadataManager, tablePath, "8"))
+        assertThatThrownBy(() -> alterBucketNum(metadataManager, tablePath, 8))
                 .isInstanceOf(InvalidAlterTableException.class)
                 .hasMessageContaining("Cannot alter 'bucket.num' on non-partitioned table");
-    }
-
-    @Test
-    void testResetBucketNumRejected() throws Exception {
-        TablePath tablePath = TablePath.of(DEFAULT_DB, "test_reset_bucket_num_reject");
-        int originalBucketCount = 4;
-        metadataManager.createTable(
-                tablePath,
-                remoteDataDir,
-                partitionedLogTable(originalBucketCount),
-                generateAssignment(originalBucketCount, 3, getTabletServers()),
-                false);
-        long originalEpoch = metadataManager.getTable(tablePath).getBucketCountEpoch();
-
-        // RESET carries no target count, so it must be rejected instead of silently succeeding.
-        assertThatThrownBy(() -> resetBucketNum(metadataManager, tablePath))
-                .isInstanceOf(InvalidAlterTableException.class)
-                .hasMessageContaining("Cannot reset 'bucket.num'")
-                .hasMessageContaining("SET ('bucket.num' = '<bucket count>')");
-
-        // The bucket layout is untouched: neither the count nor the epoch moved.
-        TableInfo afterTableInfo = metadataManager.getTable(tablePath);
-        assertThat(afterTableInfo.getNumBuckets()).isEqualTo(originalBucketCount);
-        assertThat(afterTableInfo.getBucketCountEpoch()).isEqualTo(originalEpoch);
     }
 
     @Test
@@ -394,7 +368,7 @@ class AlterBucketNumTest {
 
         // The rejection happens during validation, before the lake propagation, so the default
         // manager without a lake catalog never reaches the propagation failure.
-        assertThatThrownBy(() -> alterBucketNum(metadataManager, tablePath, "8"))
+        assertThatThrownBy(() -> alterBucketNum(metadataManager, tablePath, 8))
                 .isInstanceOf(InvalidAlterTableException.class)
                 .hasMessageContaining("with historical partition enabled")
                 .hasMessageContaining("not supported yet");
@@ -417,7 +391,7 @@ class AlterBucketNumTest {
         createSeededLakePartitionedTable(mm, tablePath, originalBucketCount, false);
 
         // Rescale the table first, which advances the bucketCountEpoch.
-        alterBucketNum(mm, tablePath, "8");
+        alterBucketNum(mm, tablePath, 8);
         assertThat(mm.getTable(tablePath).getBucketCountEpoch()).isEqualTo(1L);
 
         // Enabling the historical partition on the rescaled table must be rejected.
@@ -443,7 +417,7 @@ class AlterBucketNumTest {
 
         // Disable the historical partition, then rescale: both steps succeed apart.
         alterHistoricalPartition(mm, tablePath, false);
-        alterBucketNum(mm, tablePath, "8");
+        alterBucketNum(mm, tablePath, 8);
         assertThat(mm.getTable(tablePath).getBucketCountEpoch()).isEqualTo(1L);
 
         // Re-enabling must still be rejected: the epoch never decreases, and the historical
@@ -518,7 +492,8 @@ class AlterBucketNumTest {
                 new PartitionRegistration(
                         legacyReg.get().getTableId(),
                         legacyReg.get().getPartitionId(),
-                        legacyReg.get().getRemoteDataDir());
+                        legacyReg.get().getRemoteDataDir(),
+                        null);
         zookeeperClient.updatePartitionRegistration(tablePath, "legacy", nullBucketCountReg);
 
         // Verify: "legacy" has null bucketCount, "new" has originalBucketCount
@@ -532,12 +507,12 @@ class AlterBucketNumTest {
         assertThat(beforeNew.get().getBucketCount()).isEqualTo(originalBucketCount);
 
         // ALTER bucket.num in both directions (scale-up 3->6 and scale-down 6->3)
-        alterBucketNum(metadataManager, tablePath, String.valueOf(newBucketCount));
+        alterBucketNum(metadataManager, tablePath, newBucketCount);
 
         // Verify: table-level bucket count was updated and persisted in ZK
         assertThat(metadataManager.getTable(tablePath).getNumBuckets()).isEqualTo(newBucketCount);
 
-        // Verify: "legacy" was backfilled with actual bucket count (from assignment size)
+        // Verify: "legacy" was backfilled with actual bucket count (from old table bucket count)
         Optional<PartitionRegistration> afterLegacy =
                 zookeeperClient.getPartition(tablePath, "legacy");
         assertThat(afterLegacy).isPresent();
@@ -596,7 +571,7 @@ class AlterBucketNumTest {
                                                 false,
                                                 originalBucketCount)));
 
-        alterBucketNum(alterManager, tablePath, "8");
+        alterBucketNum(alterManager, tablePath, 8);
 
         // The ALTER committed the new table-level count.
         assertThat(metadataManager.getTable(tablePath).getNumBuckets()).isEqualTo(8);
@@ -686,7 +661,7 @@ class AlterBucketNumTest {
                         () ->
                                 zookeeperClient.updateTableWithPartitionBucketCountBackfill(
                                         tablePath,
-                                        table.data().withBucketCount(8),
+                                        table.data().newBucketCount(8),
                                         tableVersion,
                                         backfills,
                                         staleEpochVersion))
@@ -707,7 +682,7 @@ class AlterBucketNumTest {
         }
         zookeeperClient.updateTableWithPartitionBucketCountBackfill(
                 tablePath,
-                freshTable.data().withBucketCount(8),
+                freshTable.data().newBucketCount(8),
                 freshTable.zkVersion(),
                 freshBackfills,
                 zookeeperClient.getCurrentEpoch().getCoordinatorEpochZkVersion());
@@ -717,7 +692,7 @@ class AlterBucketNumTest {
     @ParameterizedTest(name = "newBucketNum={0}")
     @MethodSource("outOfRangeBucketNums")
     void testAlterBucketNumRejectedOutOfRange(
-            String newBucketNum, Class<? extends Throwable> expectedException, String message)
+            int newBucketNum, Class<? extends Throwable> expectedException, String message)
             throws Exception {
         TablePath tablePath =
                 TablePath.of(DEFAULT_DB, "test_alter_bucket_num_out_of_range_" + newBucketNum);
@@ -739,9 +714,9 @@ class AlterBucketNumTest {
 
     private static Stream<Arguments> outOfRangeBucketNums() {
         return Stream.of(
-                Arguments.of("0", InvalidAlterTableException.class, "at least 1"),
+                Arguments.of(0, InvalidAlterTableException.class, "at least 1"),
                 Arguments.of(
-                        String.valueOf(ConfigOptions.MAX_BUCKET_NUM.defaultValue() + 1),
+                        ConfigOptions.MAX_BUCKET_NUM.defaultValue() + 1,
                         TooManyBucketsException.class,
                         "exceeding the maximum"));
     }
@@ -764,7 +739,7 @@ class AlterBucketNumTest {
         MetadataManager retryMetadataManager =
                 metadataManagerOver(zkClientFailingCommits(1, commitCalls));
 
-        alterBucketNum(retryMetadataManager, tablePath, "8");
+        alterBucketNum(retryMetadataManager, tablePath, 8);
 
         // The retry loop must have re-invoked the commit exactly once after the injected failure.
         assertThat(commitCalls.get()).isEqualTo(2);
@@ -789,7 +764,7 @@ class AlterBucketNumTest {
         MetadataManager exhaustRetryManager =
                 metadataManagerOver(zkClientFailingCommits(Integer.MAX_VALUE, commitCalls));
 
-        assertThatThrownBy(() -> alterBucketNum(exhaustRetryManager, tablePath, "8"))
+        assertThatThrownBy(() -> alterBucketNum(exhaustRetryManager, tablePath, 8))
                 .isInstanceOf(FlussRuntimeException.class)
                 .hasMessageContaining("after 3 retries")
                 .hasCauseInstanceOf(KeeperException.BadVersionException.class);
@@ -801,65 +776,56 @@ class AlterBucketNumTest {
     }
 
     @Test
-    void testAlterBackfillRejectsPartitionMissingRegistration() throws Exception {
-        TablePath tablePath = TablePath.of(DEFAULT_DB, "test_alter_bucket_num_missing_reg");
+    void testAlterBackfillUsesOldTableCountWithoutAssignmentLookup() throws Exception {
+        TablePath tablePath = TablePath.of(DEFAULT_DB, "test_alter_bucket_num_no_assign_lookup");
         int originalBucketCount = 4;
-        String victimPartition = "2024-01";
-        createTableWithLegacyPartition(tablePath, victimPartition);
+        String legacyPartition = "2024-02";
+        createTableWithLegacyPartition(tablePath, legacyPartition);
 
-        // Wrap the ZK client so getPartitionWithVersion returns empty for the victim, simulating a
-        // race where getPartitions() listed the partition but the individual znode has vanished.
+        AtomicInteger assignmentReads = new AtomicInteger();
         Configuration wrapperConfig = new Configuration();
         wrapperConfig.set(ConfigOptions.REMOTE_DATA_DIR, remoteDataDir);
-        ZooKeeperClient missingRegClient =
+        ZooKeeperClient noAssignmentReadClient =
                 new ZooKeeperClient(sharedZkWrapper(), wrapperConfig) {
                     @Override
-                    public Optional<ZooKeeperClient.VersionedData<PartitionRegistration>>
-                            getPartitionWithVersion(TablePath tp, String partitionName)
-                                    throws Exception {
-                        if (victimPartition.equals(partitionName)) {
-                            return Optional.empty();
-                        }
-                        return super.getPartitionWithVersion(tp, partitionName);
+                    public Optional<PartitionAssignment> getPartitionAssignment(long partitionId) {
+                        assignmentReads.incrementAndGet();
+                        return Optional.empty();
                     }
                 };
-        MetadataManager missingRegManager = metadataManagerOver(missingRegClient);
+        MetadataManager manager = metadataManagerOver(noAssignmentReadClient);
 
-        assertThatThrownBy(() -> alterBucketNum(missingRegManager, tablePath, "8"))
-                .isInstanceOf(InvalidAlterTableException.class)
-                .hasMessageContaining("is listed but its registration is missing");
-        // Table-level bucket count MUST remain unchanged: partial commit is unacceptable.
-        assertThat(metadataManager.getTable(tablePath).getNumBuckets())
-                .isEqualTo(originalBucketCount);
+        alterBucketNum(manager, tablePath, 8);
+
+        assertThat(assignmentReads).hasValue(0);
+        assertThat(metadataManager.getTable(tablePath).getNumBuckets()).isEqualTo(8);
+        assertPartitionCountMatchesAssignment(tablePath, legacyPartition, originalBucketCount);
     }
 
     @Test
-    void testAlterBackfillRejectsPartitionMissingAssignment() throws Exception {
-        TablePath tablePath = TablePath.of(DEFAULT_DB, "test_alter_bucket_num_missing_assign");
-        int originalBucketCount = 4;
-        String victimPartition = "2024-02";
-        long victimPartitionId = createTableWithLegacyPartition(tablePath, victimPartition);
+    void testAlterRejectsMissingPartitionCountAfterEpochAdvanced() throws Exception {
+        TablePath tablePath = TablePath.of(DEFAULT_DB, "test_missing_count_after_rescale");
+        String partitionName = "2024-03";
+        createTableWithLegacyPartition(tablePath, partitionName);
 
-        Configuration wrapperConfig = new Configuration();
-        wrapperConfig.set(ConfigOptions.REMOTE_DATA_DIR, remoteDataDir);
-        ZooKeeperClient missingAssignClient =
-                new ZooKeeperClient(sharedZkWrapper(), wrapperConfig) {
-                    @Override
-                    public Optional<PartitionAssignment> getPartitionAssignment(long partitionId)
-                            throws Exception {
-                        if (partitionId == victimPartitionId) {
-                            return Optional.empty();
-                        }
-                        return super.getPartitionAssignment(partitionId);
-                    }
-                };
-        MetadataManager missingAssignManager = metadataManagerOver(missingAssignClient);
+        alterBucketNum(metadataManager, tablePath, 8);
+        assertThat(metadataManager.getTable(tablePath).getBucketCountEpoch()).isEqualTo(1L);
 
-        assertThatThrownBy(() -> alterBucketNum(missingAssignManager, tablePath, "8"))
+        PartitionRegistration registration =
+                zookeeperClient.getPartition(tablePath, partitionName).get();
+        zookeeperClient.updatePartitionRegistration(
+                tablePath,
+                partitionName,
+                new PartitionRegistration(
+                        registration.getTableId(),
+                        registration.getPartitionId(),
+                        registration.getRemoteDataDir(),
+                        null));
+
+        assertThatThrownBy(() -> alterBucketNum(metadataManager, tablePath, 16))
                 .isInstanceOf(InvalidAlterTableException.class)
-                .hasMessageContaining("has no readable bucket assignment");
-        assertThat(metadataManager.getTable(tablePath).getNumBuckets())
-                .isEqualTo(originalBucketCount);
+                .hasMessageContaining("has no persisted bucket count after bucket count epoch 1");
+        assertThat(metadataManager.getTable(tablePath).getNumBuckets()).isEqualTo(8);
     }
 
     @Test
@@ -907,7 +873,7 @@ class AlterBucketNumTest {
                                     }
                                 }));
 
-        alterBucketNum(noNodeManager, tablePath, "8");
+        alterBucketNum(noNodeManager, tablePath, 8);
 
         // The retry re-enumerated without the deleted partition and committed successfully.
         assertThat(metadataManager.getTable(tablePath).getNumBuckets()).isEqualTo(8);
@@ -938,7 +904,7 @@ class AlterBucketNumTest {
                                     }
                                 }));
 
-        assertThatThrownBy(() -> alterBucketNum(tableGoneManager, tablePath, "8"))
+        assertThatThrownBy(() -> alterBucketNum(tableGoneManager, tablePath, 8))
                 .isInstanceOf(TableNotExistException.class);
     }
 
@@ -967,32 +933,9 @@ class AlterBucketNumTest {
     }
 
     private static void alterBucketNum(
-            MetadataManager manager, TablePath tablePath, String newBucketNum) {
-        TablePropertyChanges.Builder builder = TablePropertyChanges.builder();
-        builder.setCustomProperty("bucket.num", newBucketNum);
-        manager.alterTableProperties(
-                tablePath,
-                Collections.singletonList(TableChange.set("bucket.num", newBucketNum)),
-                builder.build(),
-                false,
-                null,
-                (currentTable, updatedTable) -> {},
-                (currentTable, updatedTable) -> {},
-                ZkVersion.MATCH_ANY_VERSION.getVersion());
-    }
-
-    private static void resetBucketNum(MetadataManager manager, TablePath tablePath) {
-        TablePropertyChanges.Builder builder = TablePropertyChanges.builder();
-        builder.resetCustomProperty("bucket.num");
-        manager.alterTableProperties(
-                tablePath,
-                Collections.singletonList(TableChange.reset("bucket.num")),
-                builder.build(),
-                false,
-                null,
-                (currentTable, updatedTable) -> {},
-                (currentTable, updatedTable) -> {},
-                ZkVersion.MATCH_ANY_VERSION.getVersion());
+            MetadataManager manager, TablePath tablePath, int newBucketCount) {
+        manager.alterBucketCount(
+                tablePath, newBucketCount, false, null, ZkVersion.MATCH_ANY_VERSION.getVersion());
     }
 
     private static void alterHistoricalPartition(

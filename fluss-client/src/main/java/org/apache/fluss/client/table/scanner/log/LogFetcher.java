@@ -26,6 +26,7 @@ import org.apache.fluss.cluster.BucketLocation;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.ApiException;
+import org.apache.fluss.exception.InvalidBucketRoutingException;
 import org.apache.fluss.exception.InvalidMetadataException;
 import org.apache.fluss.exception.LeaderNotAvailableException;
 import org.apache.fluss.exception.PartitionNotExistException;
@@ -34,6 +35,7 @@ import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.SchemaGetter;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
+import org.apache.fluss.metadata.TableOrPartition;
 import org.apache.fluss.metadata.TablePartition;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.predicate.Predicate;
@@ -507,9 +509,10 @@ public class LogFetcher implements Closeable {
     private void handleFetchLogExceptionForBucket(TableBucket tb, int destination, ApiError error) {
         ApiException exception = error.error().exception();
         LOG.error("Failed to fetch log from node {} for bucket {}", destination, tb, exception);
-        if (exception instanceof InvalidMetadataException) {
+        if (exception instanceof InvalidMetadataException
+                || exception instanceof InvalidBucketRoutingException) {
             LOG.warn(
-                    "Invalid metadata error in fetch log request. "
+                    "Metadata or bucket routing error in fetch log request. "
                             + "Going to request metadata update.",
                     exception);
             long tableId = tb.getTableId();
@@ -598,17 +601,11 @@ public class LogFetcher implements Closeable {
                                 .setMaxFetchBytes(maxBucketFetchBytes);
                 if (tb.getPartitionId() != null) {
                     fetchLogReqForBucket.setPartitionId(tb.getPartitionId());
-                    metadataUpdater
-                            .getCluster()
-                            .getBucketCount(
-                                    new TablePartition(tb.getTableId(), tb.getPartitionId()))
-                            .ifPresent(fetchLogReqForBucket::setRoutingBucketCount);
-                } else {
-                    metadataUpdater
-                            .getCluster()
-                            .getBucketCountForTable(tb.getTableId())
-                            .ifPresent(fetchLogReqForBucket::setRoutingBucketCount);
                 }
+                metadataUpdater
+                        .getCluster()
+                        .getBucketCount(TableOrPartition.of(tb.getTableId(), tb.getPartitionId()))
+                        .ifPresent(fetchLogReqForBucket::setRoutingBucketCount);
                 fetchReqsByLeaderAndTable
                         .computeIfAbsent(leader, k -> new HashMap<>())
                         .computeIfAbsent(tb.getTableId(), k -> new ArrayList<>())

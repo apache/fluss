@@ -52,9 +52,9 @@ public abstract class WriteBatch {
     private final WriteFormat writeFormat;
     private final int bucketId;
 
-    // The bucket count used to calculate this batch's bucketId; carried into the request
-    // so the TabletServer can validate it against the actual count (STALE_METADATA on mismatch).
-    private int bucketCount;
+    // The bucket count used to calculate this batch's bucketId; carried into the request so the
+    // TabletServer can validate it against the actual count (INVALID_BUCKET_ROUTING on mismatch).
+    private final int bucketCount;
 
     protected final List<WriteCallback> callbacks = new ArrayList<>();
     private final AtomicReference<FinalState> finalState = new AtomicReference<>(null);
@@ -74,6 +74,7 @@ public abstract class WriteBatch {
     public WriteBatch(
             long tableId,
             int bucketId,
+            int bucketCount,
             PhysicalTablePath physicalTablePath,
             int schemaId,
             WriteFormat writeFormat,
@@ -86,6 +87,7 @@ public abstract class WriteBatch {
         this.writeFormat = checkNotNull(writeFormat, "write format must be not null");
         this.isHistoricalPartition = isHistoricalPartition;
         this.bucketId = bucketId;
+        this.bucketCount = bucketCount;
         this.requestFuture = new RequestFuture();
         this.recordCount = 0;
     }
@@ -211,10 +213,6 @@ public abstract class WriteBatch {
 
     public int getBucketCount() {
         return bucketCount;
-    }
-
-    public void setBucketCount(int bucketCount) {
-        this.bucketCount = bucketCount;
     }
 
     public long tableId() {

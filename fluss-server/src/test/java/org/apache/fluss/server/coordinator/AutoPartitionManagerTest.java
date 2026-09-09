@@ -738,14 +738,12 @@ class AutoPartitionManagerTest {
     }
 
     /**
-     * Verifies that after {@code ALTER TABLE ... SET ('bucket.num' = ...)} refreshes the cached
-     * {@link TableInfo} (via {@link AutoPartitionManager#updateAutoPartitionTables}), auto-created
-     * new partitions use the new bucket count while already-existing partitions keep their original
-     * bucket count. This guards the {@code CoordinatorEventProcessor.postAlterTableProperties}
-     * refresh path for bucket.num-only changes.
+     * Verifies that the cached {@link TableInfo} update is the eventual-consistency boundary for
+     * auto-created partition bucket counts: partitions created before the refresh keep the old
+     * count, while later partitions use the new count.
      */
     @Test
-    void testAutoCreatedPartitionUsesUpdatedBucketCount() throws Exception {
+    void testAutoCreatedPartitionUsesCachedBucketCount() throws Exception {
         ZonedDateTime startTime =
                 LocalDateTime.parse("2024-09-10T00:00:00").atZone(ZoneId.systemDefault());
         long startMs = startTime.toInstant().toEpochMilli();
@@ -779,26 +777,27 @@ class AutoPartitionManagerTest {
             assertThat(reg.getBucketCount()).isEqualTo(4);
         }
 
-        // simulate ALTER bucket.num 4 -> 8: a real ALTER first persists the new table-level bucket
-        // count to ZK (the authoritative source auto-partition reads), then the coordinator
-        // refreshes the cached TableInfo.
+        // Simulate the first half of ALTER bucket.num 4 -> 8: ZK is updated, but the coordinator
+        // event has not refreshed AutoPartitionManager's cached TableInfo yet.
         TableRegistration reg = zookeeperClient.getTable(tablePath).get();
-        zookeeperClient.updateTable(tablePath, reg.withBucketCount(8));
-        TableInfo updatedTable = createUpdatedBucketCountTableInfo(table, 8);
-        autoPartitionManager.updateAutoPartitionTables(updatedTable);
-        // drain the immediate task scheduled by updateAutoPartitionTables (no new partition yet,
-        // current partition 20240910 and its 4 pre-created partitions already exist)
-        periodicExecutor.triggerNonPeriodicScheduledTask();
-
-        // advance one day to trigger creation of a new partition under the new bucket count
+        zookeeperClient.updateTable(tablePath, reg.newBucketCount(8));
         clock.advanceTime(Duration.ofDays(1).plusHours(23));
         periodicExecutor.triggerPeriodicScheduledTasks();
 
         partitions = zookeeperClient.getPartitionRegistrations(tablePath);
-        assertThat(partitions.keySet()).contains("20240914");
-        // old partition keeps its original bucket count, new partition uses the updated one
+        assertThat(partitions.get("20240914").getBucketCount()).isEqualTo(4);
+
+        // Complete event propagation and create the next partition from the refreshed cache.
+        TableInfo updatedTable = createUpdatedBucketCountTableInfo(table, 8);
+        autoPartitionManager.updateAutoPartitionTables(updatedTable);
+        periodicExecutor.triggerNonPeriodicScheduledTask();
+        clock.advanceTime(Duration.ofDays(1));
+        periodicExecutor.triggerPeriodicScheduledTasks();
+
+        partitions = zookeeperClient.getPartitionRegistrations(tablePath);
         assertThat(partitions.get("20240910").getBucketCount()).isEqualTo(4);
-        assertThat(partitions.get("20240914").getBucketCount()).isEqualTo(8);
+        assertThat(partitions.get("20240914").getBucketCount()).isEqualTo(4);
+        assertThat(partitions.get("20240915").getBucketCount()).isEqualTo(8);
     }
 
     @Test

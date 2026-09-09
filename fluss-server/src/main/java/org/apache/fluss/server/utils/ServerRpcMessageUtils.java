@@ -323,6 +323,15 @@ public class ServerRpcMessageUtils {
                 .collect(Collectors.toList());
     }
 
+    public static List<TableChange.DistributionChange> toAlterTableDistributionChanges(
+            AlterTableRequest request) {
+        if (!request.hasModifyBucketCount()) {
+            return Collections.emptyList();
+        }
+        return Collections.singletonList(
+                TableChange.modifyBucketCount(request.getModifyBucketCount().getNewBucketCount()));
+    }
+
     private static DatabaseChange toDatabaseChange(PbAlterConfig pbAlterConfig) {
         AlterConfigOpType opType = AlterConfigOpType.from(pbAlterConfig.getOpType());
         String configKey = pbAlterConfig.getConfigKey();

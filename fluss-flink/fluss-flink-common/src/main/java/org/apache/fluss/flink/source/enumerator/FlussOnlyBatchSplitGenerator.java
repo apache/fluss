@@ -86,7 +86,7 @@ final class FlussOnlyBatchSplitGenerator {
         } else {
             return hasPrimaryKey
                     ? getBatchSnapshotAndLogSplits(kvSnapshotsRetriever.get(null), null)
-                    : getLogSplits(null, null);
+                    : getNonPartitionedLogSplits();
         }
     }
 
@@ -167,9 +167,8 @@ final class FlussOnlyBatchSplitGenerator {
         return splits;
     }
 
-    private List<SourceSplitBase> getLogSplits(
-            @Nullable Long partitionId, @Nullable String partitionName) {
-        return getLogSplits(partitionId, partitionName, tableInfo.getNumBuckets());
+    private List<SourceSplitBase> getNonPartitionedLogSplits() {
+        return getLogSplits(null, null, tableInfo.getNumBuckets());
     }
 
     private List<SourceSplitBase> getLogSplits(

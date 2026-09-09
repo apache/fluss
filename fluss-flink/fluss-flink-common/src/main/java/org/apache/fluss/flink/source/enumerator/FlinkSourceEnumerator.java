@@ -837,7 +837,7 @@ public class FlinkSourceEnumerator
         if (hasPrimaryKey && startingOffsetsInitializer instanceof SnapshotOffsetsInitializer) {
             return getSnapshotAndLogSplits(getLatestKvSnapshotsAndRegister(null), null);
         } else {
-            return getLogSplit(null, null);
+            return getNonPartitionedLogSplit();
         }
     }
 
@@ -1215,10 +1215,8 @@ public class FlinkSourceEnumerator
         return splits;
     }
 
-    private List<SourceSplitBase> getLogSplit(
-            @Nullable Long partitionId, @Nullable String partitionName) {
-        return getLogSplit(
-                partitionId, partitionName, startingOffsetsInitializer, tableInfo.getNumBuckets());
+    private List<SourceSplitBase> getNonPartitionedLogSplit() {
+        return getLogSplit(null, null, startingOffsetsInitializer, tableInfo.getNumBuckets());
     }
 
     private List<SourceSplitBase> getLogSplit(

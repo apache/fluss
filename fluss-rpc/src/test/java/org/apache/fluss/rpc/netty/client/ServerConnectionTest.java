@@ -33,6 +33,7 @@ import org.apache.fluss.metrics.registry.NOPMetricRegistry;
 import org.apache.fluss.metrics.util.NOPMetricsGroup;
 import org.apache.fluss.rpc.TestingGatewayService;
 import org.apache.fluss.rpc.TestingTabletGatewayService;
+import org.apache.fluss.rpc.messages.AlterTableRequest;
 import org.apache.fluss.rpc.messages.ApiMessage;
 import org.apache.fluss.rpc.messages.ApiVersionsRequest;
 import org.apache.fluss.rpc.messages.ApiVersionsResponse;
@@ -293,6 +294,33 @@ public class ServerConnectionTest {
                                         .get())
                 .rootCause()
                 .isInstanceOf(DisconnectException.class);
+    }
+
+    @Test
+    void testRejectBucketCountChangeForOldServer() throws Exception {
+        ServerConnection connection =
+                new ServerConnection(
+                        bootstrap,
+                        serverNode,
+                        TestingClientMetricGroup.newInstance(),
+                        clientAuthenticator,
+                        (con, ignore) -> {});
+        try {
+            connection.validateVersionCompatibility(
+                    ApiKeys.ALTER_TABLE, (short) 0, new AlterTableRequest());
+
+            AlterTableRequest bucketCountRequest = new AlterTableRequest();
+            bucketCountRequest.setModifyBucketCount().setNewBucketCount(8);
+            assertThatThrownBy(
+                            () ->
+                                    connection.validateVersionCompatibility(
+                                            ApiKeys.ALTER_TABLE, (short) 0, bucketCountRequest))
+                    .isInstanceOf(UnsupportedVersionException.class)
+                    .hasMessageContaining("requires ALTER_TABLE version 1 or newer")
+                    .hasMessageContaining("negotiated version 0");
+        } finally {
+            connection.close().get();
+        }
     }
 
     @Test

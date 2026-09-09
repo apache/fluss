@@ -34,7 +34,6 @@ import org.apache.fluss.exception.NonPrimaryKeyTableException;
 import org.apache.fluss.exception.NotEnoughReplicasException;
 import org.apache.fluss.exception.NotLeaderOrFollowerException;
 import org.apache.fluss.exception.TooManyScannersException;
-import org.apache.fluss.exception.UnsupportedVersionException;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.ChangelogImage;
 import org.apache.fluss.metadata.LogFormat;
@@ -469,24 +468,6 @@ public final class Replica {
         }
     }
 
-    /**
-     * Fails leader activation when the notification carries no routing state, which means the
-     * coordinator is older than this server (upgrade contract: coordinator first).
-     */
-    private void requireRoutingState(NotifyLeaderAndIsrData data) {
-        if (data.getBucketCount() == null) {
-            throw new UnsupportedVersionException(
-                    "Leader activation for bucket "
-                            + tableBucket
-                            + " requires the routing bucket count, but the notification from "
-                            + "coordinator epoch "
-                            + data.getCoordinatorEpoch()
-                            + " carries none. The CoordinatorServer is older than this "
-                            + "TabletServer; upgrade the CoordinatorServer first (upgrade "
-                            + "contract: coordinator before tablet servers).");
-        }
-    }
-
     /** The actual bucket count of the owning table/partition, or null if not yet notified. */
     public @Nullable Integer getRoutingBucketCount() {
         return routingBucketCount;
@@ -504,9 +485,6 @@ public final class Replica {
                         () -> {
                             int requestBucketEpoch = data.getBucketEpoch();
                             validateBucketEpoch(requestBucketEpoch);
-
-                            // Leader activation requires the routing state
-                            requireRoutingState(data);
 
                             coordinatorEpoch = data.getCoordinatorEpoch();
                             updateRoutingState(data);

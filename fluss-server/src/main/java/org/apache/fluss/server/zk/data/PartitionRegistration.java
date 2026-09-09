@@ -53,10 +53,6 @@ public class PartitionRegistration {
      */
     private final @Nullable Integer bucketCount;
 
-    public PartitionRegistration(long tableId, long partitionId, @Nullable String remoteDataDir) {
-        this(tableId, partitionId, remoteDataDir, null);
-    }
-
     public PartitionRegistration(
             long tableId,
             long partitionId,

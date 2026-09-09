@@ -256,14 +256,13 @@ public class AutoPartitionManager implements AutoCloseable {
                                     partitionsByTable.get(tableId),
                                     "Auto partition state does not exist for table " + tableId);
                     if (!currentPartitions.containsKey(HISTORICAL_PARTITION_VALUE)) {
-                        TablePath tablePath = tableInfo.getTablePath();
                         createPartition(
                                 tableInfo,
                                 new ResolvedPartitionSpec(
                                         tableInfo.getPartitionKeys(),
                                         Collections.singletonList(HISTORICAL_PARTITION_VALUE)),
                                 currentPartitions,
-                                metadataManager.getTableRegistration(tablePath).bucketCount);
+                                tableInfo.getNumBuckets());
                     }
                 });
     }
@@ -483,22 +482,8 @@ public class AutoPartitionManager implements AutoCloseable {
             return;
         }
 
-        TablePath tablePath = tableInfo.getTablePath();
-
-        // Read the table-level bucket count fresh from ZK, not from the possibly-stale TableInfo
-        int bucketCount;
-        try {
-            bucketCount = metadataManager.getTableRegistration(tablePath).bucketCount;
-        } catch (Exception e) {
-            LOG.warn(
-                    "Skipping auto partitioning for table [{}] as failed to read the "
-                            + "table-level bucket count.",
-                    tablePath,
-                    e);
-            return;
-        }
         for (ResolvedPartitionSpec partition : partitionsToPreCreate) {
-            createPartition(tableInfo, partition, currentPartitions, bucketCount);
+            createPartition(tableInfo, partition, currentPartitions, tableInfo.getNumBuckets());
         }
     }
 

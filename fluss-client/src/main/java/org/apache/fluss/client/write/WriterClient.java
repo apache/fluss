@@ -22,7 +22,6 @@ import org.apache.fluss.bucketing.BucketingFunction;
 import org.apache.fluss.client.admin.Admin;
 import org.apache.fluss.client.metadata.MetadataUpdater;
 import org.apache.fluss.client.metrics.WriterMetricGroup;
-import org.apache.fluss.client.utils.ClientRpcMessageUtils;
 import org.apache.fluss.client.write.RecordAccumulator.RecordAppendResult;
 import org.apache.fluss.cluster.Cluster;
 import org.apache.fluss.config.ConfigOptions;
@@ -33,7 +32,7 @@ import org.apache.fluss.exception.PartitionNotExistException;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
-import org.apache.fluss.metadata.TablePartition;
+import org.apache.fluss.metadata.TableOrPartition;
 import org.apache.fluss.rpc.gateway.TabletServerGateway;
 import org.apache.fluss.rpc.metrics.ClientMetricGroup;
 import org.apache.fluss.utils.AutoPartitionStrategy;
@@ -99,11 +98,7 @@ public class WriterClient {
     private final Sender sender;
     private final ExecutorService ioThreadPool;
     private final MetadataUpdater metadataUpdater;
-    // BucketAssigner cache keyed by TablePartition (partitioned tables) or tableId (non-
-    // partitioned tables).
-    private final Map<TablePartition, BucketAssigner> partitionBucketAssigners =
-            new CopyOnWriteMap<>();
-    private final Map<Long, BucketAssigner> tableBucketAssigners = new CopyOnWriteMap<>();
+    private final Map<TableOrPartition, BucketAssigner> bucketAssigners = new CopyOnWriteMap<>();
     private final IdempotenceManager idempotenceManager;
     private final WriterMetricGroup writerMetricGroup;
     private final DynamicPartitionCreator dynamicPartitionCreator;
@@ -147,7 +142,6 @@ public class WriterClient {
                             metadataUpdater,
                             admin,
                             conf.get(ConfigOptions.CLIENT_WRITER_DYNAMIC_CREATE_PARTITION_ENABLED),
-                            conf.get(ConfigOptions.CLIENT_REQUEST_TIMEOUT),
                             this::maybeAbortBatches);
         } catch (Throwable t) {
             LOG.error("Failed to construct writer.", t);
@@ -207,7 +201,6 @@ public class WriterClient {
 
             TableInfo tableInfo = record.getTableInfo();
             PhysicalTablePath physicalTablePath = record.getPhysicalTablePath();
-            Cluster cluster;
             // The path the record is physically written to. A retired partition's records land in
             // the historical partition, whose own bucket count must drive the assignment.
             PhysicalTablePath routingPath = physicalTablePath;
@@ -218,55 +211,29 @@ public class WriterClient {
                         && mayBeExpiredHistoricalPartition(
                                 physicalTablePath, tableInfo, Instant.now())) {
                     routingPath = resolveHistoricalWriteTarget(physicalTablePath);
-                    cluster = metadataUpdater.getCluster();
                 } else {
-                    cluster =
-                            dynamicPartitionCreator.checkAndCreatePartition(
-                                    physicalTablePath, tableInfo);
+                    dynamicPartitionCreator.checkAndCreatePartitionAsync(
+                            physicalTablePath, tableInfo);
                 }
-            } else {
-                cluster = metadataUpdater.getCluster();
             }
 
-            // maybe create bucket assigner.
+            Cluster cluster = metadataUpdater.getCluster();
             long tableId = tableInfo.getTableId();
-            BucketAssigner bucketAssigner;
-            int bucketCount;
-            if (tableInfo.isPartitioned()) {
-                PhysicalTablePath assignerPath = routingPath;
-                TablePartition tablePartition =
-                        cluster.getTablePartition(routingPath)
-                                .orElseThrow(
-                                        () ->
-                                                new FlussRuntimeException(
-                                                        "Partition metadata not available for "
-                                                                + assignerPath));
-                bucketCount =
-                        cluster.getBucketCount(tablePartition)
-                                .orElseGet(
-                                        () ->
-                                                ClientRpcMessageUtils.fallbackBucketCountOrFail(
-                                                        tableInfo, assignerPath));
-                bucketAssigner =
-                        partitionBucketAssigners.computeIfAbsent(
-                                tablePartition,
-                                k ->
-                                        createBucketAssigner(
-                                                tableInfo, assignerPath, bucketCount, conf));
-            } else {
-                bucketCount =
-                        cluster.getBucketCountForTable(tableId)
-                                .orElseGet(
-                                        () ->
-                                                ClientRpcMessageUtils.fallbackBucketCountOrFail(
-                                                        tableInfo, physicalTablePath));
-                bucketAssigner =
-                        tableBucketAssigners.computeIfAbsent(
-                                tableId,
-                                k ->
-                                        createBucketAssigner(
-                                                tableInfo, physicalTablePath, bucketCount, conf));
-            }
+            Long partitionId =
+                    tableInfo.isPartitioned()
+                            ? cluster.getPartitionId(routingPath).orElse(null)
+                            : null;
+            int bucketCount =
+                    partitionId == null
+                            ? tableInfo.getNumBuckets()
+                            : cluster.getBucketCountOrFallback(tableInfo, partitionId);
+            final PhysicalTablePath finalRoutingPath = routingPath;
+            BucketAssigner bucketAssigner =
+                    bucketAssigners.computeIfAbsent(
+                            TableOrPartition.of(tableId, partitionId),
+                            k ->
+                                    createBucketAssigner(
+                                            tableInfo, finalRoutingPath, bucketCount, conf));
 
             // Append the record to the accumulator.
             int bucketId = bucketAssigner.assignBucket(record.getBucketKey(), cluster);
@@ -520,16 +487,13 @@ public class WriterClient {
 
     /**
      * Removes the {@link BucketAssigner} associated with the given table bucket. Called by {@link
-     * Sender} when a write batch receives STALE_METADATA so the next {@code send} creates a new
-     * assigner with the refreshed bucket count.
+     * Sender} when a write batch is rejected for invalid bucket routing, so the next {@code send}
+     * creates a new assigner with the refreshed bucket count.
      */
     private void invalidateBucketAssigner(TableBucket tableBucket) {
-        Long partitionId = tableBucket.getPartitionId();
-        if (partitionId != null) {
-            partitionBucketAssigners.remove(
-                    new TablePartition(tableBucket.getTableId(), partitionId));
-        } else {
-            tableBucketAssigners.remove(tableBucket.getTableId());
+        bucketAssigners.remove(TableOrPartition.ofTable(tableBucket.getTableId()));
+        if (tableBucket.getPartitionId() != null) {
+            bucketAssigners.remove(TableOrPartition.ofPartition(tableBucket.getPartitionId()));
         }
     }
 

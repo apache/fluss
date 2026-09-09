@@ -37,7 +37,7 @@ public class PartitionRegistrationJsonSerde
     private static final String TABLE_ID_KEY = "table_id";
     private static final String PARTITION_ID_KEY = "partition_id";
     private static final String REMOTE_DATA_DIR_KEY = "remote_data_dir";
-    private static final String BUCKET_COUNT_ACTUAL_KEY = "bucket_count";
+    private static final String BUCKET_COUNT_KEY = "bucket_count";
     private static final int VERSION = 2;
 
     @Override
@@ -51,7 +51,7 @@ public class PartitionRegistrationJsonSerde
             generator.writeStringField(REMOTE_DATA_DIR_KEY, registration.getRemoteDataDir());
         }
         if (registration.getBucketCount() != null) {
-            generator.writeNumberField(BUCKET_COUNT_ACTUAL_KEY, registration.getBucketCount());
+            generator.writeNumberField(BUCKET_COUNT_KEY, registration.getBucketCount());
         }
         generator.writeEndObject();
     }
@@ -69,8 +69,8 @@ public class PartitionRegistrationJsonSerde
         // When deserialize from an old version (v1), bucket_count may not exist.
         // Callers should fall back to table-level bucket count when this is null.
         Integer bucketCount = null;
-        if (node.has(BUCKET_COUNT_ACTUAL_KEY)) {
-            bucketCount = node.get(BUCKET_COUNT_ACTUAL_KEY).asInt();
+        if (node.has(BUCKET_COUNT_KEY)) {
+            bucketCount = node.get(BUCKET_COUNT_KEY).asInt();
         }
         return new PartitionRegistration(tableId, partitionId, remoteDataDir, bucketCount);
     }

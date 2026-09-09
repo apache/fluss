@@ -502,8 +502,11 @@ public class FlinkConversions {
         }
     }
 
-    private static TableChange.SetOption convertSetOption(
+    private static TableChange convertSetOption(
             org.apache.flink.table.catalog.TableChange.SetOption flinkSetOption) {
+        if (BUCKET_NUMBER.key().equals(flinkSetOption.getKey())) {
+            return TableChange.modifyBucketCount(Integer.parseInt(flinkSetOption.getValue()));
+        }
         return TableChange.set(flinkSetOption.getKey(), flinkSetOption.getValue());
     }
 

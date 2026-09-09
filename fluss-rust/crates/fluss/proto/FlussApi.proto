@@ -138,6 +138,11 @@ message AlterTableRequest {
   repeated PbDropColumn drop_columns = 5;
   repeated PbRenameColumn rename_columns = 6;
   repeated PbModifyColumn modify_columns = 7;
+  optional PbModifyBucketCount modify_bucket_count = 8;
+}
+
+message PbModifyBucketCount {
+  required int32 new_bucket_count = 1;
 }
 
 message AlterTableResponse {
@@ -511,10 +516,12 @@ message InitWriterResponse {
 message ListPartitionInfosRequest {
   required PbTablePath table_path = 1;
   optional PbPartitionSpec partial_partition_spec = 2;
+  optional bool include_system_partitions = 3;
 }
 
 message ListPartitionInfosResponse {
   repeated PbPartitionInfo partitions_info = 1;
+  optional bool system_partitions_included = 2;
 }
 
 // list remote log manifest entries (one per bucket of a table or partition)

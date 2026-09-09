@@ -24,7 +24,7 @@ import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.SchemaGetter;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
-import org.apache.fluss.metadata.TablePartition;
+import org.apache.fluss.metadata.TableOrPartition;
 import org.apache.fluss.record.DefaultValueRecordBatch;
 import org.apache.fluss.record.LogRecord;
 import org.apache.fluss.record.LogRecordBatch;
@@ -99,24 +99,20 @@ public class LimitBatchScanner implements BatchScanner {
             this.fieldGetters[i] = InternalRow.createDeepFieldGetter(rowType.getTypeAt(i), i);
         }
 
-        Cluster cluster = metadataUpdater.getCluster();
         LimitScanRequest limitScanRequest =
                 new LimitScanRequest()
                         .setTableId(tableBucket.getTableId())
                         .setBucketId(tableBucket.getBucket())
                         .setLimit(limit);
 
+        metadataUpdater.checkAndUpdateMetadata(tableInfo.getTablePath(), tableBucket);
+        Cluster cluster = metadataUpdater.getCluster();
         if (tableBucket.getPartitionId() != null) {
             limitScanRequest.setPartitionId(tableBucket.getPartitionId());
-            cluster.getBucketCount(
-                            new TablePartition(
-                                    tableBucket.getTableId(), tableBucket.getPartitionId()))
-                    .ifPresent(limitScanRequest::setRoutingBucketCount);
-            metadataUpdater.checkAndUpdateMetadata(tableInfo.getTablePath(), tableBucket);
-        } else {
-            cluster.getBucketCountForTable(tableBucket.getTableId())
-                    .ifPresent(limitScanRequest::setRoutingBucketCount);
         }
+        cluster.getBucketCount(
+                        TableOrPartition.of(tableBucket.getTableId(), tableBucket.getPartitionId()))
+                .ifPresent(limitScanRequest::setRoutingBucketCount);
 
         // because that rocksdb is not suitable to projection, thus do it in client.
         int leader = metadataUpdater.leaderFor(tableInfo.getTablePath(), tableBucket);

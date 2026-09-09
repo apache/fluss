@@ -230,6 +230,7 @@ import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeCreateAcls
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeDropAclsResponse;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeListRemoteLogManifestsResponse;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toAlterTableConfigChanges;
+import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toAlterTableDistributionChanges;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toAlterTableSchemaChanges;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toDatabaseChanges;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toTableBucketOffsets;
@@ -252,7 +253,7 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
     private final boolean kvTableAllowCreation;
     private final Supplier<EventManager> eventManagerSupplier;
     private final Supplier<Integer> coordinatorEpochSupplier;
-    private final Supplier<Integer> coordinatorEpochZkVersionSupplier;
+    private final Supplier<Integer> coordinatorZkVersionSupplier;
     private final CoordinatorMetadataCache metadataCache;
 
     private final Supplier<CompletedSnapshotStoreManager> snapshotStoreManagerSupplier;
@@ -298,7 +299,7 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                 () -> coordinatorEventProcessorSupplier.get().getCoordinatorEventManager();
         this.coordinatorEpochSupplier =
                 () -> coordinatorEventProcessorSupplier.get().getCoordinatorEpoch();
-        this.coordinatorEpochZkVersionSupplier =
+        this.coordinatorZkVersionSupplier =
                 () -> coordinatorEventProcessorSupplier.get().getCoordinatorZkVersion();
         this.snapshotStoreManagerSupplier =
                 () -> coordinatorEventProcessorSupplier.get().completedSnapshotStoreManager();
@@ -589,15 +590,20 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                 toAlterTableConfigChanges(request.getConfigChangesList());
         TablePropertyChanges tablePropertyChanges = toTablePropertyChanges(alterTableConfigChanges);
         List<TableChange> alterSchemaChanges = toAlterTableSchemaChanges(request);
+        List<TableChange.DistributionChange> alterDistributionChanges =
+                toAlterTableDistributionChanges(request);
 
-        if (!alterSchemaChanges.isEmpty() && !alterTableConfigChanges.isEmpty()) {
-            // Only support one of alterTableConfigChanges and alterSchemaChanges for atomic change.
+        boolean hasConfigChanges = !alterTableConfigChanges.isEmpty();
+        boolean hasSchemaChanges = !alterSchemaChanges.isEmpty();
+        boolean hasDistributionChanges = !alterDistributionChanges.isEmpty();
+        if ((hasConfigChanges && (hasSchemaChanges || hasDistributionChanges))
+                || (hasSchemaChanges && hasDistributionChanges)) {
             throw new InvalidAlterTableException(
                     "Table alteration can only be applied to one of the following: "
-                            + "table properties or table schema.");
+                            + "table properties, table schema, or table distribution.");
         }
 
-        if (!alterSchemaChanges.isEmpty()) {
+        if (hasSchemaChanges) {
             metadataManager.alterTableSchema(
                     tablePath,
                     alterSchemaChanges,
@@ -605,7 +611,7 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                     currentSession().getPrincipal());
         }
 
-        if (!alterTableConfigChanges.isEmpty()) {
+        if (hasConfigChanges) {
             metadataManager.alterTableProperties(
                     tablePath,
                     alterTableConfigChanges,
@@ -614,7 +620,18 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                     currentSession().getPrincipal(),
                     this::beforeTablePropertiesUpdate,
                     this::afterTablePropertiesUpdate,
-                    coordinatorEpochZkVersionSupplier.get());
+                    coordinatorZkVersionSupplier.get());
+        }
+
+        if (hasDistributionChanges) {
+            TableChange.ModifyBucketCount modifyBucketCount =
+                    (TableChange.ModifyBucketCount) alterDistributionChanges.get(0);
+            metadataManager.alterBucketCount(
+                    tablePath,
+                    modifyBucketCount.getNewBucketCount(),
+                    request.isIgnoreIfNotExists(),
+                    currentSession().getPrincipal(),
+                    coordinatorZkVersionSupplier.get());
         }
 
         return CompletableFuture.completedFuture(new AlterTableResponse());

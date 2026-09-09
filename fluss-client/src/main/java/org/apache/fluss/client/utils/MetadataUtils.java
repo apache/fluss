@@ -24,7 +24,7 @@ import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.exception.StaleMetadataException;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
-import org.apache.fluss.metadata.TablePartition;
+import org.apache.fluss.metadata.TableOrPartition;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.rpc.GatewayClientProxy;
 import org.apache.fluss.rpc.RpcClient;
@@ -122,8 +122,7 @@ public class MetadataUtils {
                             Map<TablePath, Long> newTablePathToTableId;
                             Map<PhysicalTablePath, List<BucketLocation>> newBucketLocations;
                             Map<PhysicalTablePath, Long> newPartitionIdByPath;
-                            Map<TablePartition, Integer> newBucketCountByPartition;
-                            Map<Long, Integer> newBucketCountByTable;
+                            Map<TableOrPartition, Integer> newBucketCountByTableOrPartition;
 
                             NewTableMetadata newTableMetadata =
                                     getTableMetadataToUpdate(originCluster, response);
@@ -137,17 +136,15 @@ public class MetadataUtils {
                                         new HashMap<>(originCluster.getBucketLocationsByPath());
                                 newPartitionIdByPath =
                                         new HashMap<>(originCluster.getPartitionIdByPath());
-                                newBucketCountByPartition =
-                                        new HashMap<>(originCluster.getBucketCountByPartition());
-                                newBucketCountByTable =
-                                        new HashMap<>(originCluster.getBucketCountByTable());
+                                newBucketCountByTableOrPartition =
+                                        new HashMap<>(
+                                                originCluster.getBucketCountByTableOrPartition());
 
                                 newTablePathToTableId.putAll(newTableMetadata.tablePathToTableId);
                                 newBucketLocations.putAll(newTableMetadata.bucketLocations);
                                 newPartitionIdByPath.putAll(newTableMetadata.partitionIdByPath);
-                                newBucketCountByPartition.putAll(
-                                        newTableMetadata.bucketCountByPartition);
-                                newBucketCountByTable.putAll(newTableMetadata.bucketCountByTable);
+                                newBucketCountByTableOrPartition.putAll(
+                                        newTableMetadata.bucketCountByTableOrPartition);
 
                             } else {
                                 // If full update, we will clear all tables info out ot the origin
@@ -155,8 +152,8 @@ public class MetadataUtils {
                                 newTablePathToTableId = newTableMetadata.tablePathToTableId;
                                 newBucketLocations = newTableMetadata.bucketLocations;
                                 newPartitionIdByPath = newTableMetadata.partitionIdByPath;
-                                newBucketCountByPartition = newTableMetadata.bucketCountByPartition;
-                                newBucketCountByTable = newTableMetadata.bucketCountByTable;
+                                newBucketCountByTableOrPartition =
+                                        newTableMetadata.bucketCountByTableOrPartition;
                             }
 
                             return new Cluster(
@@ -165,8 +162,7 @@ public class MetadataUtils {
                                     newBucketLocations,
                                     newTablePathToTableId,
                                     newPartitionIdByPath,
-                                    newBucketCountByPartition,
-                                    newBucketCountByTable);
+                                    newBucketCountByTableOrPartition);
                         })
                 .get(30, TimeUnit.SECONDS); // TODO currently, we don't have timeout logic in
         // RpcClient, it will let the get() block forever. So we
@@ -176,10 +172,10 @@ public class MetadataUtils {
     private static NewTableMetadata getTableMetadataToUpdate(
             Cluster cluster, MetadataResponse metadataResponse) {
         Map<TablePath, Long> newTablePathToTableId = new HashMap<>();
+        Map<Long, TablePath> newTablePathByTableId = new HashMap<>();
         Map<PhysicalTablePath, List<BucketLocation>> newBucketLocations = new HashMap<>();
         Map<PhysicalTablePath, Long> newPartitionIdByPath = new HashMap<>();
-        Map<TablePartition, Integer> newBucketCountByPartition = new HashMap<>();
-        Map<Long, Integer> newBucketCountByTable = new HashMap<>();
+        Map<TableOrPartition, Integer> newBucketCountByTableOrPartition = new HashMap<>();
 
         // iterate all table metadata
         List<PbTableMetadata> pbTableMetadataList = metadataResponse.getTableMetadatasList();
@@ -193,6 +189,7 @@ public class MetadataUtils {
                                     protoTablePath.getDatabaseName(),
                                     protoTablePath.getTableName());
                     newTablePathToTableId.put(tablePath, tableId);
+                    newTablePathByTableId.put(tableId, tablePath);
 
                     // Get all buckets for the table.
                     List<PbBucketMetadata> pbBucketMetadataList =
@@ -204,7 +201,8 @@ public class MetadataUtils {
                     // An empty bucket list means the assignment is not generated yet; keeping the
                     // entry out lets callers fall back to the table-level count instead of 0.
                     if (!pbBucketMetadataList.isEmpty()) {
-                        newBucketCountByTable.put(tableId, pbBucketMetadataList.size());
+                        newBucketCountByTableOrPartition.put(
+                                TableOrPartition.ofTable(tableId), pbBucketMetadataList.size());
                     }
                 });
 
@@ -215,8 +213,10 @@ public class MetadataUtils {
         pbPartitionMetadataList.forEach(
                 pbPartitionMetadata -> {
                     long tableId = pbPartitionMetadata.getTableId();
-                    // the table path should be initialized at begin
-                    TablePath tablePath = cluster.getTablePathOrElseThrow(tableId);
+                    TablePath tablePath = newTablePathByTableId.get(tableId);
+                    if (tablePath == null) {
+                        tablePath = cluster.getTablePathOrElseThrow(tableId);
+                    }
                     PhysicalTablePath physicalTablePath =
                             PhysicalTablePath.of(tablePath, pbPartitionMetadata.getPartitionName());
                     newPartitionIdByPath.put(
@@ -229,14 +229,18 @@ public class MetadataUtils {
                                     pbPartitionMetadata.getPartitionId(),
                                     pbPartitionMetadata.getPartitionName(),
                                     pbPartitionMetadata.getBucketMetadatasList()));
-                    // a non-positive count is not a valid bucket layout (an old server omits the
-                    // field, a new one may still report 0 before the assignment exists), so keep
-                    // the entry out and let callers fall back to the table-level count
-                    if (pbPartitionMetadata.hasBucketCount()
-                            && pbPartitionMetadata.getBucketCount() > 0) {
-                        newBucketCountByPartition.put(
-                                new TablePartition(tableId, pbPartitionMetadata.getPartitionId()),
-                                pbPartitionMetadata.getBucketCount());
+                    // Old servers do not send the explicit count but still send the complete
+                    // assignment, so normalize both protocol versions into the same Cluster map.
+                    // An empty assignment means the layout is not available yet, not zero buckets.
+                    int bucketCount =
+                            pbPartitionMetadata.hasBucketCount()
+                                            && pbPartitionMetadata.getBucketCount() > 0
+                                    ? pbPartitionMetadata.getBucketCount()
+                                    : pbPartitionMetadata.getBucketMetadatasList().size();
+                    if (bucketCount > 0) {
+                        newBucketCountByTableOrPartition.put(
+                                TableOrPartition.ofPartition(pbPartitionMetadata.getPartitionId()),
+                                bucketCount);
                     }
                 });
 
@@ -244,28 +248,24 @@ public class MetadataUtils {
                 newTablePathToTableId,
                 newBucketLocations,
                 newPartitionIdByPath,
-                newBucketCountByPartition,
-                newBucketCountByTable);
+                newBucketCountByTableOrPartition);
     }
 
     private static final class NewTableMetadata {
         private final Map<TablePath, Long> tablePathToTableId;
         private final Map<PhysicalTablePath, List<BucketLocation>> bucketLocations;
         private final Map<PhysicalTablePath, Long> partitionIdByPath;
-        private final Map<TablePartition, Integer> bucketCountByPartition;
-        private final Map<Long, Integer> bucketCountByTable;
+        private final Map<TableOrPartition, Integer> bucketCountByTableOrPartition;
 
         public NewTableMetadata(
                 Map<TablePath, Long> tablePathToTableId,
                 Map<PhysicalTablePath, List<BucketLocation>> bucketLocations,
                 Map<PhysicalTablePath, Long> partitionIdByPath,
-                Map<TablePartition, Integer> bucketCountByPartition,
-                Map<Long, Integer> bucketCountByTable) {
+                Map<TableOrPartition, Integer> bucketCountByTableOrPartition) {
             this.tablePathToTableId = tablePathToTableId;
             this.bucketLocations = bucketLocations;
             this.partitionIdByPath = partitionIdByPath;
-            this.bucketCountByPartition = bucketCountByPartition;
-            this.bucketCountByTable = bucketCountByTable;
+            this.bucketCountByTableOrPartition = bucketCountByTableOrPartition;
         }
     }
 

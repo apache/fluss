@@ -81,6 +81,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.anyCollection;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.spy;
+import static org.mockito.Mockito.verify;
 
 /** Test for {@link ZooKeeperClient}. */
 class ZooKeeperClientTest {
@@ -761,8 +762,30 @@ class ZooKeeperClientTest {
         assertThat(zookeeperClient.getPartitionsForTables(Arrays.asList(tablePath)))
                 .containsValues(new ArrayList<>(partitions));
 
-        // test delete partition
-        zookeeperClient.deletePartition(tablePath, "p1");
+        // A batch read returns every registration and preserves the version needed by CAS updates.
+        PartitionRegistration p1Registration = zookeeperClient.getPartition(tablePath, "p1").get();
+        zookeeperClient.updatePartitionRegistration(tablePath, "p1", p1Registration);
+        ZooKeeperClient batchReadClient = spy(zookeeperClient);
+        Map<String, ZooKeeperClient.VersionedData<PartitionRegistration>> registrations =
+                batchReadClient.getPartitionRegistrationsWithVersion(tablePath);
+        verify(batchReadClient).getDataInBackground(anyCollection());
+        assertThat(registrations).containsOnlyKeys("p1", "p2");
+        assertThat(registrations.get("p1").data().getPartitionId()).isEqualTo(1L);
+        assertThat(registrations.get("p1").zkVersion()).isEqualTo(1);
+        assertThat(registrations.get("p2").data().getPartitionId()).isEqualTo(2L);
+        assertThat(registrations.get("p2").zkVersion()).isZero();
+
+        // A partition dropped after the children listing is omitted from the batch result.
+        ZooKeeperClient raceTestingClient = spy(zookeeperClient);
+        doAnswer(
+                        invocation -> {
+                            zookeeperClient.deletePartition(tablePath, "p1");
+                            return invocation.callRealMethod();
+                        })
+                .when(raceTestingClient)
+                .getDataInBackground(anyCollection());
+        assertThat(raceTestingClient.getPartitionRegistrationsWithVersion(tablePath))
+                .containsOnlyKeys("p2");
         partitions = zookeeperClient.getPartitions(tablePath);
         assertThat(partitions).containsExactly("p2");
     }

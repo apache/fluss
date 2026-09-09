@@ -156,8 +156,7 @@ public class IcebergLakeCatalog implements LakeCatalog {
     public void alterTable(TablePath tablePath, List<TableChange> tableChanges, Context context)
             throws TableNotExistException {
         for (TableChange change : tableChanges) {
-            if (change instanceof TableChange.SetOption
-                    && "bucket.num".equals(((TableChange.SetOption) change).getKey())) {
+            if (change instanceof TableChange.ModifyBucketCount) {
                 throw new UnsupportedOperationException(
                         "Bucket count rescale is not supported by the Iceberg lake catalog yet.");
             }

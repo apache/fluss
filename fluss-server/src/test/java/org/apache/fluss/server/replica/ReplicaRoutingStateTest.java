@@ -17,11 +17,12 @@
 
 package org.apache.fluss.server.replica;
 
-import org.apache.fluss.exception.StaleMetadataException;
+import org.apache.fluss.exception.InvalidBucketRoutingException;
+import org.apache.fluss.exception.RetriableException;
+import org.apache.fluss.exception.UnknownTableOrBucketException;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
-import org.apache.fluss.rpc.protocol.Errors;
 import org.apache.fluss.server.entity.NotifyLeaderAndIsrData;
 import org.apache.fluss.server.entity.NotifyLeaderAndIsrResultForBucket;
 import org.apache.fluss.server.metadata.ClusterMetadata;
@@ -58,29 +59,29 @@ final class ReplicaRoutingStateTest extends ReplicaTestBase {
     private static final int TEST_BUCKET = 5;
 
     @Test
-    void testLeaderActivationRequiresRoutingState() throws Exception {
+    void testLeaderActivationAllowsMissingRoutingState() throws Exception {
         TableBucket tb = new TableBucket(DATA1_TABLE_ID, TEST_BUCKET);
 
-        // A legacy coordinator's notification (no routing fields) fails leader activation loudly:
-        // the upgrade contract requires the CoordinatorServer to be upgraded first.
+        // A legacy coordinator's notification carries no routing fields, but leader activation must
+        // still succeed because server upgrade order is not guaranteed.
         CompletableFuture<List<NotifyLeaderAndIsrResultForBucket>> legacyFuture =
                 new CompletableFuture<>();
         replicaManager.becomeLeaderOrFollower(
                 INITIAL_COORDINATOR_EPOCH,
                 Collections.singletonList(notifyDataWithRoutingState(tb, null, null)),
                 legacyFuture::complete);
-        assertThat(legacyFuture.get().get(0).getError().error())
-                .isEqualTo(Errors.UNSUPPORTED_VERSION);
-        assertThat(legacyFuture.get().get(0).getError().messageWithFallback())
-                .contains("upgrade the CoordinatorServer first");
-        assertThat(replicaManager.getReplicaOrException(tb).isLeader()).isFalse();
+        assertThat(legacyFuture.get()).containsOnly(new NotifyLeaderAndIsrResultForBucket(tb));
+        assertThat(replicaManager.getReplicaOrException(tb).isLeader()).isTrue();
+        assertThat(replicaManager.getReplicaOrException(tb).getRoutingBucketCount()).isNull();
+        assertThat(replicaManager.getReplicaOrException(tb).getBucketCountEpoch()).isNull();
 
-        // A new coordinator's notification activates the leader and arms the routing state.
+        // A later notification with routing state updates the already active leader.
         makeLeaderWithRoutingState(tb, 3, 0L);
         assertThat(replicaManager.getReplicaOrException(tb).isLeader()).isTrue();
         replicaManager.validateRoutingBucketCount(tb, 3);
         assertThatThrownBy(() -> replicaManager.validateRoutingBucketCount(tb, 4))
-                .isInstanceOf(StaleMetadataException.class);
+                .isInstanceOf(InvalidBucketRoutingException.class)
+                .isNotInstanceOf(RetriableException.class);
 
         // A legacy client (no count) passes on a non-rescaled table...
         replicaManager.validateRoutingBucketCount(tb, 0);
@@ -106,10 +107,14 @@ final class ReplicaRoutingStateTest extends ReplicaTestBase {
                         Collections.emptyList()));
         assertThat(replicaManager.getReplicaOrException(tb).getBucketCountEpoch()).isEqualTo(0L);
         assertThatThrownBy(() -> replicaManager.validateRoutingBucketCount(tb, 0))
-                .isInstanceOf(StaleMetadataException.class);
+                .isInstanceOf(InvalidBucketRoutingException.class);
 
-        // An unknown bucket keeps the downstream per-bucket error semantics: validation passes.
-        replicaManager.validateRoutingBucketCount(new TableBucket(DATA1_TABLE_ID, 99), 3);
+        // Unknown or out-of-range buckets are rejected during routing validation instead of being
+        // silently deferred to the downstream replica lookup.
+        TableBucket unknownBucket = new TableBucket(DATA1_TABLE_ID, 99);
+        assertThatThrownBy(() -> replicaManager.validateRoutingBucketCount(unknownBucket, 3))
+                .isInstanceOf(UnknownTableOrBucketException.class)
+                .hasMessageContaining(unknownBucket.toString());
     }
 
     private void makeLeaderWithRoutingState(

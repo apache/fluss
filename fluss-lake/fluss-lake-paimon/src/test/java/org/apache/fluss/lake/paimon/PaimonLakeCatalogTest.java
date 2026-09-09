@@ -582,9 +582,8 @@ class PaimonLakeCatalogTest {
 
     @Test
     void testUserFacingAlterTableStillRejectsBucketChange() throws Exception {
-        // The "bucket.num" SetOption is Fluss's trusted bucket-count propagation and is applied,
-        // while any attempt to set Paimon's own bucket option directly through property change
-        // keeps being rejected.
+        // Fluss's typed bucket-count change is applied, while any attempt to set Paimon's own
+        // bucket option directly through a property change keeps being rejected.
         String database = "test_user_bucket_reject_db";
         String tableName = "test_user_bucket_reject_table";
         TablePath tablePath = TablePath.of(database, tableName);
@@ -607,7 +606,7 @@ class PaimonLakeCatalogTest {
 
         flussPaimonCatalog.alterTable(
                 tablePath,
-                Collections.singletonList(TableChange.set("bucket.num", "8")),
+                Collections.singletonList(TableChange.modifyBucketCount(8)),
                 matchingContext);
         Identifier identifier = Identifier.create(database, tableName);
         Table after = flussPaimonCatalog.getPaimonCatalog().getTable(identifier);

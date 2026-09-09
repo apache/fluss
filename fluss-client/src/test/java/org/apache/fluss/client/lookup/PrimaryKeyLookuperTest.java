@@ -24,7 +24,6 @@ import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.PartitionNotExistException;
-import org.apache.fluss.exception.StaleMetadataException;
 import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.Schema;
@@ -141,12 +140,9 @@ class PrimaryKeyLookuperTest {
     }
 
     @Test
-    void testRescaledPartitionMissingBucketCountFailsFutureInsteadOfThrowing() throws Exception {
-        // The table was rescaled (bucketCountEpoch > 0) but the per-partition bucket count is
-        // absent from metadata (e.g. an old server that never sends it). The lookup must not
-        // silently route with the table-level count (wrong bucket, empty result); it must fail
-        // loud — and because lookup() is async, via a failed future rather than a synchronous
-        // throw, consistent with the historical-lookup path.
+    void testRescaledPartitionMissingBucketCountFailsWithIllegalStateException() throws Exception {
+        // A rescaled table cannot safely route a partition whose actual bucket count is missing.
+        // Preserve the async API while exposing a diagnostic IllegalStateException as the cause.
         TableInfo rescaledTableInfo = createTableInfo(1L);
         ControllableLookupGateway gateway = new ControllableLookupGateway();
         TestingMetadataUpdater metadataUpdater =
@@ -173,10 +169,11 @@ class PrimaryKeyLookuperTest {
 
             CompletableFuture<LookupResult> resultFuture = lookuper.lookup(lookupKey);
 
-            // Delivered as a failed future, not thrown synchronously from lookup().
             assertThat(resultFuture).isCompletedExceptionally();
             assertThatThrownBy(() -> resultFuture.get(5, TimeUnit.SECONDS))
-                    .hasCauseInstanceOf(StaleMetadataException.class);
+                    .hasCauseInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("Routing bucket count is unavailable")
+                    .hasMessageContaining("bucketCountEpoch 1");
         } finally {
             lookupClient.close(Duration.ofSeconds(5));
         }
@@ -234,7 +231,8 @@ class PrimaryKeyLookuperTest {
                 COORDINATOR,
                 bucketLocationsByPath,
                 Collections.singletonMap(TABLE_PATH, TABLE_ID),
-                partitionIdsByPath);
+                partitionIdsByPath,
+                Collections.emptyMap());
     }
 
     private static BucketLocation createBucketLocation(

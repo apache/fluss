@@ -26,6 +26,7 @@ import org.apache.fluss.exception.InvalidServerTypeException;
 import org.apache.fluss.exception.NetworkException;
 import org.apache.fluss.exception.RetriableAuthenticationException;
 import org.apache.fluss.exception.UnsupportedVersionException;
+import org.apache.fluss.rpc.messages.AlterTableRequest;
 import org.apache.fluss.rpc.messages.ApiMessage;
 import org.apache.fluss.rpc.messages.ApiVersionsRequest;
 import org.apache.fluss.rpc.messages.ApiVersionsResponse;
@@ -75,6 +76,7 @@ final class ServerConnection {
     private static final Logger LOG = LoggerFactory.getLogger(ServerConnection.class);
     private static final short HISTORICAL_PRODUCE_LOG_MIN_VERSION = 1;
     private static final short HISTORICAL_PUT_KV_MIN_VERSION = 3;
+    private static final short ALTER_BUCKET_COUNT_MIN_VERSION = 1;
 
     private final ServerNode node;
 
@@ -381,8 +383,8 @@ final class ServerConnection {
         }
     }
 
-    private void validateVersionCompatibility(
-            ApiKeys apiKey, short version, ApiMessage rawRequest) {
+    @VisibleForTesting
+    void validateVersionCompatibility(ApiKeys apiKey, short version, ApiMessage rawRequest) {
         if (apiKey == ApiKeys.PRODUCE_LOG && version < HISTORICAL_PRODUCE_LOG_MIN_VERSION) {
             ProduceLogRequest produceLogRequest = (ProduceLogRequest) rawRequest;
             if (hasHistoricalProduce(produceLogRequest)) {
@@ -403,6 +405,20 @@ final class ServerConnection {
                 throw new UnsupportedVersionException(
                         "Historical partition writes require PUT_KV version "
                                 + HISTORICAL_PUT_KV_MIN_VERSION
+                                + " or newer, but server "
+                                + node
+                                + " negotiated version "
+                                + version
+                                + '.');
+            }
+        }
+
+        if (apiKey == ApiKeys.ALTER_TABLE && version < ALTER_BUCKET_COUNT_MIN_VERSION) {
+            AlterTableRequest alterTableRequest = (AlterTableRequest) rawRequest;
+            if (alterTableRequest.hasModifyBucketCount()) {
+                throw new UnsupportedVersionException(
+                        "Modifying the bucket count requires ALTER_TABLE version "
+                                + ALTER_BUCKET_COUNT_MIN_VERSION
                                 + " or newer, but server "
                                 + node
                                 + " negotiated version "

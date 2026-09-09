@@ -39,7 +39,6 @@ import org.apache.fluss.cluster.rebalance.RebalanceStatus;
 import org.apache.fluss.config.cluster.AlterConfigOpType;
 import org.apache.fluss.config.cluster.ColumnPositionType;
 import org.apache.fluss.config.cluster.ConfigEntry;
-import org.apache.fluss.exception.StaleMetadataException;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.fs.FsPathAndFileName;
 import org.apache.fluss.fs.token.ObtainedSecurityToken;
@@ -51,8 +50,7 @@ import org.apache.fluss.metadata.PartitionSpec;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableChange;
-import org.apache.fluss.metadata.TableInfo;
-import org.apache.fluss.metadata.TablePartition;
+import org.apache.fluss.metadata.TableOrPartition;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.rpc.messages.AcquireKvSnapshotLeaseRequest;
 import org.apache.fluss.rpc.messages.AcquireKvSnapshotLeaseResponse;
@@ -87,6 +85,7 @@ import org.apache.fluss.rpc.messages.PbKvSnapshotLeaseForBucket;
 import org.apache.fluss.rpc.messages.PbKvSnapshotLeaseForTable;
 import org.apache.fluss.rpc.messages.PbLakeSnapshotForBucket;
 import org.apache.fluss.rpc.messages.PbLookupReqForBucket;
+import org.apache.fluss.rpc.messages.PbModifyBucketCount;
 import org.apache.fluss.rpc.messages.PbModifyColumn;
 import org.apache.fluss.rpc.messages.PbPartitionSpec;
 import org.apache.fluss.rpc.messages.PbPrefixLookupReqForBucket;
@@ -382,12 +381,9 @@ public class ClientRpcMessageUtils {
                 .setBucketIds(bucketIdList.stream().mapToInt(Integer::intValue).toArray());
         if (partitionId != null) {
             listOffsetsRequest.setPartitionId(partitionId);
-            cluster.getBucketCount(new TablePartition(tableId, partitionId))
-                    .ifPresent(listOffsetsRequest::setRoutingBucketCount);
-        } else {
-            cluster.getBucketCountForTable(tableId)
-                    .ifPresent(listOffsetsRequest::setRoutingBucketCount);
         }
+        cluster.getBucketCount(TableOrPartition.of(tableId, partitionId))
+                .ifPresent(listOffsetsRequest::setRoutingBucketCount);
 
         if (offsetSpec instanceof OffsetSpec.EarliestSpec) {
             listOffsetsRequest.setOffsetType(OffsetSpec.LIST_EARLIEST_OFFSET);
@@ -442,6 +438,7 @@ public class ClientRpcMessageUtils {
         List<PbRenameColumn> renameColumns = new ArrayList<>();
         List<PbModifyColumn> modifyColumns = new ArrayList<>();
         List<PbAlterConfig> alterConfigs = new ArrayList<>();
+        PbModifyBucketCount modifyBucketCount = null;
         for (TableChange tableChange : tableChanges) {
             if (tableChange instanceof TableChange.AddColumn) {
                 addColumns.add(toPbAddColumn((TableChange.AddColumn) tableChange));
@@ -451,6 +448,16 @@ public class ClientRpcMessageUtils {
                 renameColumns.add(toPbRenameColumn((TableChange.RenameColumn) tableChange));
             } else if (tableChange instanceof TableChange.ModifyColumn) {
                 modifyColumns.add(toPbModifyColumn((TableChange.ModifyColumn) tableChange));
+            } else if (tableChange instanceof TableChange.ModifyBucketCount) {
+                if (modifyBucketCount != null) {
+                    throw new IllegalArgumentException(
+                            "Only one bucket count change is supported per ALTER TABLE request.");
+                }
+                modifyBucketCount =
+                        new PbModifyBucketCount()
+                                .setNewBucketCount(
+                                        ((TableChange.ModifyBucketCount) tableChange)
+                                                .getNewBucketCount());
             } else if (tableChange instanceof TableChange.SetOption
                     || tableChange instanceof TableChange.ResetOption) {
                 alterConfigs.add(toPbAlterConfigs(tableChange));
@@ -464,6 +471,9 @@ public class ClientRpcMessageUtils {
                 .addAllDropColumns(dropColumns)
                 .addAllRenameColumns(renameColumns)
                 .addAllModifyColumns(modifyColumns);
+        if (modifyBucketCount != null) {
+            request.setModifyBucketCount(modifyBucketCount);
+        }
         return request;
     }
 
@@ -684,27 +694,6 @@ public class ClientRpcMessageUtils {
                                                 ? pbPartitionInfo.getBucketCount()
                                                 : defaultBucketCount))
                 .collect(Collectors.toList());
-    }
-
-    /**
-     * Resolves the routing bucket count when a per-partition (or per-table) bucket count is
-     * unavailable in the metadata. Falling back to the table-level count is safe only when {@code
-     * bucketCountEpoch == 0}, which proves the table was never rescaled; otherwise the table-level
-     * count may route to the wrong bucket, so this fails loud instead of silently returning a wrong
-     * answer. Shared by the write path (bucket assignment), the lookup path (bucket routing), and
-     * the admin path (partition info resolution) so the policy lives in one place.
-     */
-    public static int fallbackBucketCountOrFail(TableInfo tableInfo, Object target) {
-        long epoch = tableInfo.getBucketCountEpoch();
-        if (epoch > 0) {
-            throw new StaleMetadataException(
-                    "Routing bucket count is unavailable for "
-                            + target
-                            + " at bucketCountEpoch "
-                            + epoch
-                            + "; refusing to fall back to the table-level count.");
-        }
-        return tableInfo.getNumBuckets();
     }
 
     public static Map<String, String> toKeyValueMap(List<PbKeyValue> pbKeyValues) {
@@ -933,15 +922,12 @@ public class ClientRpcMessageUtils {
                                                     .setBucketId(bucket.getBucket());
                                     if (bucket.getPartitionId() != null) {
                                         pbBucket.setPartitionId(bucket.getPartitionId());
-                                        cluster.getBucketCount(
-                                                        new TablePartition(
-                                                                bucket.getTableId(),
-                                                                bucket.getPartitionId()))
-                                                .ifPresent(pbBucket::setRoutingBucketCount);
-                                    } else {
-                                        cluster.getBucketCountForTable(bucket.getTableId())
-                                                .ifPresent(pbBucket::setRoutingBucketCount);
                                     }
+                                    cluster.getBucketCount(
+                                                    TableOrPartition.of(
+                                                            bucket.getTableId(),
+                                                            bucket.getPartitionId()))
+                                            .ifPresent(pbBucket::setRoutingBucketCount);
                                     return pbBucket;
                                 })
                         .collect(Collectors.toList());

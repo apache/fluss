@@ -21,13 +21,11 @@ import org.apache.fluss.bucketing.BucketingFunction;
 import org.apache.fluss.client.metadata.MetadataUpdater;
 import org.apache.fluss.client.table.getter.PartitionGetter;
 import org.apache.fluss.exception.PartitionNotExistException;
-import org.apache.fluss.exception.StaleMetadataException;
 import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.SchemaGetter;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
-import org.apache.fluss.metadata.TablePartition;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.encode.KeyEncoder;
 import org.apache.fluss.types.RowType;
@@ -41,7 +39,6 @@ import java.util.HashSet;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 
-import static org.apache.fluss.client.utils.ClientUtils.getPartitionId;
 import static org.apache.fluss.utils.PartitionUtils.HISTORICAL_PARTITION_VALUE;
 import static org.apache.fluss.utils.PartitionUtils.isPastAutoPartition;
 import static org.apache.fluss.utils.Preconditions.checkArgument;
@@ -126,7 +123,6 @@ class PrimaryKeyLookuper extends AbstractLookuper implements Lookuper {
                 bucketKeyEncoder == primaryKeyEncoder
                         ? pkBytes
                         : bucketKeyEncoder.encodeKey(lookupKey);
-        int bucketId = bucketingFunction.bucketing(bkBytes, numBuckets);
         Long partitionId = null;
         String originalPartitionName = null;
         int bucketCount = numBuckets;
@@ -136,31 +132,17 @@ class PrimaryKeyLookuper extends AbstractLookuper implements Lookuper {
                 return historicalLookup(bkBytes, pkBytes, originalPartitionName);
             }
             try {
-                partitionId =
-                        getPartitionId(
-                                lookupKey,
-                                partitionGetter,
-                                tableInfo.getTablePath(),
-                                metadataUpdater);
-                bucketCount =
-                        resolvePartitionBucketCount(
-                                new TablePartition(tableInfo.getTableId(), partitionId));
+                PartitionRoutingInfo routing = resolvePartitionRouting(originalPartitionName);
+                partitionId = routing.getPartitionId();
+                bucketCount = routing.getBucketCount();
             } catch (PartitionNotExistException e) {
                 return mayFallbackToHistoricalLookup(bkBytes, pkBytes, originalPartitionName);
-            } catch (StaleMetadataException e) {
-                // The partition was rescaled but its per-partition bucket count is unavailable.
-                // Report it as a failed future (retriable), consistent with historicalLookup,
-                // rather than throwing synchronously from this async method.
+            } catch (IllegalStateException e) {
                 return completedExceptionally(e);
             }
         }
 
-        // A partition created before ALTER bucket.num keeps its own layout, so re-route by the
-        // partition's actual count. The historical lookups above are routed by the historical
-        // partition's own count on their own path.
-        if (bucketCount != numBuckets) {
-            bucketId = bucketingFunction.bucketing(bkBytes, bucketCount);
-        }
+        int bucketId = bucketingFunction.bucketing(bkBytes, bucketCount);
         TableBucket tableBucket = new TableBucket(tableInfo.getTableId(), partitionId, bucketId);
         return lookupBucket(
                 tableBucket,
@@ -205,24 +187,15 @@ class PrimaryKeyLookuper extends AbstractLookuper implements Lookuper {
                     new UnsupportedOperationException(
                             "Lookup with insertIfNotExists is not supported for historical partition lookup."));
         }
-        PhysicalTablePath historicalPartitionPath =
-                PhysicalTablePath.of(tableInfo.getTablePath(), HISTORICAL_PARTITION_VALUE);
         try {
-            if (!metadataUpdater.checkAndUpdatePartitionMetadata(historicalPartitionPath)) {
-                throw new PartitionNotExistException(
-                        "Historical partition " + historicalPartitionPath + " does not exist.");
-            }
-            Long historicalPartitionId =
-                    metadataUpdater.getPartitionIdOrElseThrow(historicalPartitionPath);
+            PartitionRoutingInfo routing = resolvePartitionRouting(HISTORICAL_PARTITION_VALUE);
             // Route by the historical partition's own count, which an ALTER bucket.num does not
             // change. The bucket the lake data lives in is resolved on the server.
-            int historicalBucketCount =
-                    resolvePartitionBucketCount(
-                            new TablePartition(tableInfo.getTableId(), historicalPartitionId));
             int routingBucketId =
-                    bucketingFunction.bucketing(bucketKeyBytes, historicalBucketCount);
+                    bucketingFunction.bucketing(bucketKeyBytes, routing.getBucketCount());
             TableBucket tableBucket =
-                    new TableBucket(tableInfo.getTableId(), historicalPartitionId, routingBucketId);
+                    new TableBucket(
+                            tableInfo.getTableId(), routing.getPartitionId(), routingBucketId);
             return lookupBucket(
                     tableBucket,
                     bucketKeyBytes,
@@ -230,7 +203,7 @@ class PrimaryKeyLookuper extends AbstractLookuper implements Lookuper {
                     false,
                     true,
                     originalPartitionName,
-                    historicalBucketCount);
+                    routing.getBucketCount());
         } catch (Throwable t) {
             return completedExceptionally(t);
         }

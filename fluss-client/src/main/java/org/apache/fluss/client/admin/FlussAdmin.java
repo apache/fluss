@@ -25,6 +25,7 @@ import org.apache.fluss.client.metadata.LakeSnapshot;
 import org.apache.fluss.client.metadata.MetadataUpdater;
 import org.apache.fluss.client.metadata.RemoteLogManifestInfo;
 import org.apache.fluss.client.utils.ClientRpcMessageUtils;
+import org.apache.fluss.client.utils.ClientUtils;
 import org.apache.fluss.cluster.Cluster;
 import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.cluster.rebalance.GoalType;
@@ -34,6 +35,7 @@ import org.apache.fluss.config.cluster.AlterConfig;
 import org.apache.fluss.config.cluster.ConfigEntry;
 import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.exception.LeaderNotAvailableException;
+import org.apache.fluss.exception.PartitionNotExistException;
 import org.apache.fluss.metadata.DatabaseChange;
 import org.apache.fluss.metadata.DatabaseDescriptor;
 import org.apache.fluss.metadata.DatabaseInfo;
@@ -41,6 +43,7 @@ import org.apache.fluss.metadata.DatabaseSummary;
 import org.apache.fluss.metadata.PartitionInfo;
 import org.apache.fluss.metadata.PartitionSpec;
 import org.apache.fluss.metadata.PhysicalTablePath;
+import org.apache.fluss.metadata.ResolvedPartitionSpec;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.SchemaInfo;
 import org.apache.fluss.metadata.TableBucket;
@@ -87,6 +90,7 @@ import org.apache.fluss.rpc.messages.ListKvSnapshotsRequest;
 import org.apache.fluss.rpc.messages.ListOffsetsRequest;
 import org.apache.fluss.rpc.messages.ListOffsetsResponse;
 import org.apache.fluss.rpc.messages.ListPartitionInfosRequest;
+import org.apache.fluss.rpc.messages.ListPartitionInfosResponse;
 import org.apache.fluss.rpc.messages.ListRebalanceProgressRequest;
 import org.apache.fluss.rpc.messages.ListRemoteLogManifestsRequest;
 import org.apache.fluss.rpc.messages.ListTablesRequest;
@@ -94,7 +98,6 @@ import org.apache.fluss.rpc.messages.ListTablesResponse;
 import org.apache.fluss.rpc.messages.PbAlterConfig;
 import org.apache.fluss.rpc.messages.PbListOffsetsRespForBucket;
 import org.apache.fluss.rpc.messages.PbPartitionInfo;
-import org.apache.fluss.rpc.messages.PbPartitionSpec;
 import org.apache.fluss.rpc.messages.PbTablePath;
 import org.apache.fluss.rpc.messages.PbTableStatsRespForBucket;
 import org.apache.fluss.rpc.messages.RebalanceRequest;
@@ -105,6 +108,7 @@ import org.apache.fluss.rpc.messages.TableExistsResponse;
 import org.apache.fluss.rpc.protocol.ApiError;
 import org.apache.fluss.security.acl.AclBinding;
 import org.apache.fluss.security.acl.AclBindingFilter;
+import org.apache.fluss.utils.ExceptionUtils;
 import org.apache.fluss.utils.concurrent.ExecutorThreadFactory;
 import org.apache.fluss.utils.concurrent.FutureUtils;
 
@@ -136,6 +140,7 @@ import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.toAclBindings;
 import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.toPbAclBindingFilters;
 import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.toPbAclFilter;
 import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.toPbAclInfos;
+import static org.apache.fluss.utils.PartitionUtils.HISTORICAL_PARTITION_VALUE;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
 /**
@@ -377,59 +382,124 @@ public class FlussAdmin implements Admin {
 
     @Override
     public CompletableFuture<List<PartitionInfo>> listPartitionInfos(TablePath tablePath) {
-        return listPartitionInfos(tablePath, null);
+        return listPartitionInfos(tablePath, null, false);
+    }
+
+    @Override
+    public CompletableFuture<List<PartitionInfo>> listPartitionInfos(
+            TablePath tablePath, boolean includeSystemPartitions) {
+        return listPartitionInfos(tablePath, null, includeSystemPartitions);
     }
 
     @Override
     public CompletableFuture<List<PartitionInfo>> listPartitionInfos(
             TablePath tablePath, PartitionSpec partitionSpec) {
+        return listPartitionInfos(tablePath, partitionSpec, false);
+    }
+
+    private CompletableFuture<List<PartitionInfo>> listPartitionInfos(
+            TablePath tablePath,
+            @Nullable PartitionSpec partitionSpec,
+            boolean includeSystemPartitions) {
         ListPartitionInfosRequest request = new ListPartitionInfosRequest();
         request.setTablePath(
                 new PbTablePath()
                         .setDatabaseName(tablePath.getDatabaseName())
                         .setTableName(tablePath.getTableName()));
-
         if (partitionSpec != null) {
-            PbPartitionSpec pbPartitionSpec = makePbPartitionSpec(partitionSpec);
-            request.setPartialPartitionSpec(pbPartitionSpec);
+            request.setPartialPartitionSpec(makePbPartitionSpec(partitionSpec));
         }
+        if (includeSystemPartitions) {
+            request.setIncludeSystemPartitions(true);
+        }
+
         return readOnlyGateway
                 .listPartitionInfos(request)
                 .thenCompose(
-                        response -> {
-                            boolean allHaveBucketCount =
-                                    response.getPartitionsInfosList().stream()
-                                            .allMatch(PbPartitionInfo::hasBucketCount);
-                            if (allHaveBucketCount) {
-                                // Every partition already carries its own bucket count, so skip
-                                // the extra getTableInfo RPC (the -1 default is never used).
-                                return CompletableFuture.completedFuture(
-                                        ClientRpcMessageUtils.toPartitionInfos(response, -1));
+                        response ->
+                                handleListPartitionInfosResponse(
+                                        tablePath, includeSystemPartitions, response));
+    }
+
+    @VisibleForTesting
+    CompletableFuture<List<PartitionInfo>> handleListPartitionInfosResponse(
+            TablePath tablePath,
+            boolean includeSystemPartitions,
+            ListPartitionInfosResponse response) {
+        boolean allHaveBucketCount =
+                response.getPartitionsInfosList().stream()
+                        .allMatch(PbPartitionInfo::hasBucketCount);
+        boolean systemPartitionsIncluded =
+                response.hasSystemPartitionsIncluded() && response.isSystemPartitionsIncluded();
+        if (allHaveBucketCount && (!includeSystemPartitions || systemPartitionsIncluded)) {
+            return CompletableFuture.completedFuture(
+                    ClientRpcMessageUtils.toPartitionInfos(response, -1));
+        }
+        return getTableInfo(tablePath)
+                .thenCompose(
+                        tableInfo -> {
+                            int defaultBucketCount =
+                                    allHaveBucketCount
+                                            ? -1
+                                            : ClientUtils.fallbackBucketCountOrFail(
+                                                    tableInfo, tablePath);
+                            List<PartitionInfo> partitionInfos =
+                                    ClientRpcMessageUtils.toPartitionInfos(
+                                            response, defaultBucketCount);
+                            if (includeSystemPartitions && !systemPartitionsIncluded) {
+                                return appendLegacyHistoricalPartition(tableInfo, partitionInfos);
                             }
-                            // Upgrade contract for the per-partition bucket count fallback:
-                            //   1) upgrade clients first;
-                            //   2) upgrade the CoordinatorServer before (or together with) the
-                            //      TabletServers; a TabletServer newer than its Coordinator
-                            //      fails leader activation with UnsupportedVersionException;
-                            //   3) prohibit ALTER bucket.num during the server rolling upgrade;
-                            //   4) a fully old cluster omits the partition count, while the
-                            //      table-level count is still safe (bucketCountEpoch == 0);
-                            //   5) after every server is upgraded, ListPartitionInfosResponse
-                            //      must return an explicit partitionId and bucketCount;
-                            //   6) if a new server still returns a missing count, fail loud
-                            //      instead of calling getTableInfo to guess it.
-                            // TODO: a future FIP should enforce server-side rejection of
-                            //   bucket-layout ALTERs during a rolling upgrade so clients never
-                            //   observe a half-upgraded cluster.
-                            return getTableInfo(tablePath)
-                                    .thenApply(
-                                            tableInfo ->
-                                                    ClientRpcMessageUtils.toPartitionInfos(
-                                                            response,
-                                                            ClientRpcMessageUtils
-                                                                    .fallbackBucketCountOrFail(
-                                                                            tableInfo, tablePath)));
+                            return CompletableFuture.completedFuture(partitionInfos);
                         });
+    }
+
+    private CompletableFuture<List<PartitionInfo>> appendLegacyHistoricalPartition(
+            TableInfo tableInfo, List<PartitionInfo> partitionInfos) {
+        if (!tableInfo.getTableConfig().isHistoricalPartitionEnabled()
+                || partitionInfos.stream()
+                        .anyMatch(
+                                partitionInfo ->
+                                        HISTORICAL_PARTITION_VALUE.equals(
+                                                partitionInfo.getPartitionName()))) {
+            return CompletableFuture.completedFuture(partitionInfos);
+        }
+
+        return CompletableFuture.supplyAsync(
+                () -> {
+                    TablePath tablePath = tableInfo.getTablePath();
+                    PhysicalTablePath historicalPartitionPath =
+                            PhysicalTablePath.of(tablePath, HISTORICAL_PARTITION_VALUE);
+                    try {
+                        Cluster refreshedCluster =
+                                sendMetadataRequestAndRebuildCluster(
+                                        readOnlyGateway,
+                                        true,
+                                        metadataUpdater.getCluster(),
+                                        Collections.singleton(tablePath),
+                                        Collections.singleton(historicalPartitionPath),
+                                        null);
+                        Optional<Long> historicalPartitionId =
+                                refreshedCluster.getPartitionId(historicalPartitionPath);
+                        if (historicalPartitionId.isPresent()) {
+                            partitionInfos.add(
+                                    new PartitionInfo(
+                                            historicalPartitionId.get(),
+                                            ResolvedPartitionSpec.fromPartitionName(
+                                                    tableInfo.getPartitionKeys(),
+                                                    HISTORICAL_PARTITION_VALUE),
+                                            null,
+                                            tableInfo.getNumBuckets()));
+                        }
+                        return partitionInfos;
+                    } catch (Exception e) {
+                        Throwable cause = ExceptionUtils.stripExecutionException(e);
+                        if (cause instanceof PartitionNotExistException) {
+                            return partitionInfos;
+                        }
+                        throw new FlussRuntimeException(
+                                "Failed to resolve historical partition for " + tablePath, cause);
+                    }
+                });
     }
 
     /**
@@ -592,23 +662,19 @@ public class FlussAdmin implements Admin {
             } else {
                 partitionInfos = Collections.singletonList(null);
             }
-            List<TableBucket> tableBuckets = new ArrayList<>();
+
+            long tableId = tableInfo.getTableId();
+            Map<TableBucket, CompletableFuture<Long>> bucketToRowCountMap = new HashMap<>();
             for (PartitionInfo partitionInfo : partitionInfos) {
                 int bucketCount =
                         PartitionInfo.bucketCountOrDefault(partitionInfo, tableBucketCount);
+                Long partitionId = partitionInfo == null ? null : partitionInfo.getPartitionId();
                 for (int bucket = 0; bucket < bucketCount; bucket++) {
-                    tableBuckets.add(
-                            new TableBucket(
-                                    tableInfo.getTableId(),
-                                    partitionInfo == null ? null : partitionInfo.getPartitionId(),
-                                    bucket));
+                    TableBucket tableBucket = new TableBucket(tableId, partitionId, bucket);
+                    bucketToRowCountMap.put(tableBucket, new CompletableFuture<>());
                 }
             }
-            long tableId = tableInfo.getTableId();
-            Map<TableBucket, CompletableFuture<Long>> bucketToRowCountMap = new HashMap<>();
-            for (TableBucket tb : tableBuckets) {
-                bucketToRowCountMap.put(tb, new CompletableFuture<>());
-            }
+
             Map<Integer, GetTableStatsRequest> requestMap =
                     prepareTableStatsRequests(
                             metadataUpdater, bucketToRowCountMap.keySet(), tablePath);

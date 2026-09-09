@@ -1078,6 +1078,49 @@ public class ZooKeeperClient implements AutoCloseable {
     }
 
     /**
+     * Gets all partition registrations of a table together with their ZK versions. The partition
+     * znodes are fetched concurrently to avoid one synchronous ZooKeeper round trip per partition.
+     * A partition dropped after the children listing is omitted from the result.
+     */
+    public Map<String, VersionedData<PartitionRegistration>> getPartitionRegistrationsWithVersion(
+            TablePath tablePath) throws Exception {
+        Set<String> partitionNames = getPartitions(tablePath);
+        if (partitionNames.isEmpty()) {
+            return Collections.emptyMap();
+        }
+
+        Map<String, String> pathToPartitionName =
+                partitionNames.stream()
+                        .collect(toMap(name -> PartitionZNode.path(tablePath, name), name -> name));
+        List<ZkGetDataResponse> responses = getDataInBackground(pathToPartitionName.keySet());
+        Map<String, VersionedData<PartitionRegistration>> registrations = new HashMap<>();
+        for (ZkGetDataResponse response : responses) {
+            if (response.getResultCode() == KeeperException.Code.NONODE) {
+                continue;
+            }
+            response.maybeThrow();
+            byte[] data =
+                    checkNotNull(
+                            response.getData(),
+                            "Partition registration data must not be null for %s",
+                            response.getPath());
+            Stat stat =
+                    checkNotNull(
+                            response.getStat(),
+                            "Partition registration stat must not be null for %s",
+                            response.getPath());
+            PartitionRegistration registration = PartitionZNode.decode(data);
+            if (registration.getRemoteDataDir() == null) {
+                registration = registration.newRemoteDataDir(defaultRemoteDataDir);
+            }
+            registrations.put(
+                    pathToPartitionName.get(response.getPath()),
+                    new VersionedData<>(registration, stat.getVersion()));
+        }
+        return registrations;
+    }
+
+    /**
      * Overwrites a partition's registration znode without a version check. NOT used in production
      * (the ALTER bucket.num backfill goes through {@link
      * #updateTableWithPartitionBucketCountBackfill}); this is a test-only backdoor for constructing

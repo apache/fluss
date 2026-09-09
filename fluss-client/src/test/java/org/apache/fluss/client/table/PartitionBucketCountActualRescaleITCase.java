@@ -25,8 +25,11 @@ import org.apache.fluss.client.table.scanner.batch.BatchScanner;
 import org.apache.fluss.client.table.scanner.log.LogScanner;
 import org.apache.fluss.client.table.scanner.log.ScanRecords;
 import org.apache.fluss.client.table.writer.AppendWriter;
+import org.apache.fluss.client.table.writer.UpsertResult;
 import org.apache.fluss.client.table.writer.UpsertWriter;
 import org.apache.fluss.config.ConfigOptions;
+import org.apache.fluss.exception.InvalidAlterTableException;
+import org.apache.fluss.exception.InvalidBucketRoutingException;
 import org.apache.fluss.metadata.PartitionInfo;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;
@@ -48,10 +51,13 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
 
 import static org.apache.fluss.testutils.DataTestUtils.row;
 import static org.apache.fluss.testutils.InternalRowAssert.assertThatRow;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * End-to-end IT case verifying that reads and writes route by the per-partition bucket count after
@@ -212,6 +218,27 @@ class PartitionBucketCountRescaleITCase extends ClientToServerITCaseBase {
     }
 
     @Test
+    void testBucketCountChangeCannotBeMixedWithPropertyChange() throws Exception {
+        TablePath tablePath = TablePath.of("test_db_1", "test_mixed_bucket_and_property_alter");
+        createPartitionedTable(tablePath, logSchema());
+
+        assertThatThrownBy(
+                        () ->
+                                admin.alterTable(
+                                                tablePath,
+                                                Arrays.asList(
+                                                        TableChange.modifyBucketCount(
+                                                                NEW_BUCKET_NUM),
+                                                        TableChange.set("custom-key", "value")),
+                                                false)
+                                        .get())
+                .cause()
+                .isInstanceOf(InvalidAlterTableException.class)
+                .hasMessageContaining("table properties, table schema, or table distribution");
+        assertThat(admin.getTableInfo(tablePath).get().getNumBuckets()).isEqualTo(OLD_BUCKET_NUM);
+    }
+
+    @Test
     void testDynamicallyCreatedPartitionUsesPostAlterBucketCount() throws Exception {
         // A partition created dynamically by the WRITER after an ALTER must use the new bucket
         // count and be readable through that range.
@@ -271,18 +298,45 @@ class PartitionBucketCountRescaleITCase extends ClientToServerITCaseBase {
         UpsertWriter upsertWriter = staleTable.newUpsert().createWriter();
         alterBucketNum(tablePath, NEW_BUCKET_NUM);
 
-        // write through the stale handle into a partition that does not exist yet
+        // The stale handle initially routes by the old table-level count. Dynamic creation stays
+        // asynchronous; once the new partition metadata arrives, affected batches fail instead of
+        // being sent with a bucket id computed from the wrong count.
+        List<InternalRow> rows = new ArrayList<>();
+        List<CompletableFuture<UpsertResult>> initialFutures = new ArrayList<>();
         for (int j = 0; j < RECORDS_PER_PARTITION; j++) {
-            upsertWriter.upsert(row(j, "v" + j, "auto"));
+            InternalRow record = row(j, "v" + j, "auto");
+            rows.add(record);
+            initialFutures.add(upsertWriter.upsert(record));
         }
         upsertWriter.flush();
+
+        List<InternalRow> failedRows = new ArrayList<>();
+        for (int i = 0; i < initialFutures.size(); i++) {
+            try {
+                initialFutures.get(i).get();
+            } catch (ExecutionException e) {
+                assertThat(e.getCause()).isInstanceOf(InvalidBucketRoutingException.class);
+                failedRows.add(rows.get(i));
+            }
+        }
+        assertThat(failedRows).isNotEmpty();
+
+        // Retry only failed records. The first rejection invalidated stale routing metadata and the
+        // assigner, so the same stale table handle now resolves the partition's actual count.
+        List<CompletableFuture<UpsertResult>> retryFutures = new ArrayList<>();
+        for (InternalRow failedRow : failedRows) {
+            retryFutures.add(upsertWriter.upsert(failedRow));
+        }
+        upsertWriter.flush();
+        for (CompletableFuture<UpsertResult> retryFuture : retryFutures) {
+            retryFuture.get();
+        }
 
         // the dynamically created partition carries the post-ALTER bucket count
         List<PartitionInfo> partitionInfos = admin.listPartitionInfos(tablePath).get();
         assertThat(bucketCountByName(partitionInfos)).containsEntry("auto", NEW_BUCKET_NUM);
 
-        // every key must be found: write routing and lookup routing must agree on the
-        // partition's actual bucket count
+        // every key must be found after retrying the batches rejected during the rescale window
         Lookuper lookuper = staleTable.newLookup().createLookuper();
         for (int j = 0; j < RECORDS_PER_PARTITION; j++) {
             InternalRow expected = row(j, "v" + j, "auto");
@@ -390,8 +444,7 @@ class PartitionBucketCountRescaleITCase extends ClientToServerITCaseBase {
     private void alterBucketNum(TablePath tablePath, int newBucketNum) throws Exception {
         admin.alterTable(
                         tablePath,
-                        Collections.singletonList(
-                                TableChange.set("bucket.num", String.valueOf(newBucketNum))),
+                        Collections.singletonList(TableChange.modifyBucketCount(newBucketNum)),
                         false)
                 .get();
     }

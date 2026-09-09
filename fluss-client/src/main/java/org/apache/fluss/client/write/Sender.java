@@ -22,6 +22,7 @@ import org.apache.fluss.client.metadata.MetadataUpdater;
 import org.apache.fluss.client.metrics.WriterMetricGroup;
 import org.apache.fluss.client.write.RecordAccumulator.ReadyCheckResult;
 import org.apache.fluss.cluster.Cluster;
+import org.apache.fluss.exception.InvalidBucketRoutingException;
 import org.apache.fluss.exception.InvalidMetadataException;
 import org.apache.fluss.exception.LeaderNotAvailableException;
 import org.apache.fluss.exception.OutOfOrderSequenceException;
@@ -31,6 +32,7 @@ import org.apache.fluss.exception.StorageBackpressureException;
 import org.apache.fluss.exception.UnknownTableOrBucketException;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.TableOrPartition;
 import org.apache.fluss.metadata.TablePartition;
 import org.apache.fluss.rpc.gateway.TabletServerGateway;
 import org.apache.fluss.rpc.messages.PbProduceLogRespForBucket;
@@ -121,9 +123,9 @@ public class Sender implements Runnable {
     private final WriterMetricGroup writerMetricGroup;
 
     /**
-     * Called when a write batch receives STALE_METADATA so the owning {@link WriterClient} can
-     * remove the stale {@link BucketAssigner}. The next {@code send} will refresh metadata and
-     * create a new assigner with the updated bucket count.
+     * Called when a write batch is rejected for invalid bucket routing so the owning {@link
+     * WriterClient} can remove the stale {@link BucketAssigner}. The next {@code send} will refresh
+     * metadata and create a new assigner with the updated bucket count.
      */
     private final Consumer<TableBucket> bucketAssignerInvalidator;
 
@@ -252,6 +254,26 @@ public class Sender implements Runnable {
 
         // get the list of buckets with data ready to send.
         ReadyCheckResult readyCheckResult = accumulator.ready(clusterSnapshot);
+
+        if (!readyCheckResult.invalidBucketRoutingTables.isEmpty()) {
+            for (PhysicalTablePath physicalTablePath :
+                    readyCheckResult.invalidBucketRoutingTables) {
+                accumulator.abortBatches(
+                        physicalTablePath,
+                        new InvalidBucketRoutingException(
+                                "The bucket count changed before queued records for "
+                                        + physicalTablePath
+                                        + " could be sent. Retry the failed records."));
+                Long tableId =
+                        clusterSnapshot.getTableId(physicalTablePath.getTablePath()).orElse(null);
+                Long partitionId = clusterSnapshot.getPartitionId(physicalTablePath).orElse(null);
+                if (tableId != null) {
+                    bucketAssignerInvalidator.accept(new TableBucket(tableId, partitionId, 0));
+                }
+            }
+            metadataUpdater.invalidPhysicalTableBucketAndPartitionMeta(
+                    readyCheckResult.invalidBucketRoutingTables);
+        }
 
         // if there are any buckets whose leaders are not known yet, force metadata update
         if (!readyCheckResult.unknownLeaderTables.isEmpty()) {
@@ -705,9 +727,9 @@ public class Sender implements Runnable {
             // re-enqueues the batch.
             accumulator.updateThrottle(readyWriteBatch.tableBucket(), 1.0f);
         }
-        if (error.error() == Errors.STALE_METADATA) {
-            // The bucketId in this batch was computed with a stale bucket count, and the server
-            // rejected it during pre-append routing validation, so it was provably never written.
+        if (error.error() == Errors.INVALID_BUCKET_ROUTING) {
+            // The bucketId in this batch was computed with invalid routing information, and the
+            // server rejected it during pre-append validation, so it was provably never written.
             // Reclaim its batch sequence (adjustBatchSequences=true): otherwise a permanent hole is
             // left at this sequence, and the next batch that reaches the server on this bucket
             // (created after the metadata refresh, carrying a valid routing count) would send the
@@ -716,8 +738,9 @@ public class Sender implements Runnable {
             // Do not re-enqueue (the bucketId is fixed); invalidate metadata and drop the
             // BucketAssigner so the next send re-routes with the updated count.
             LOG.warn(
-                    "Received STALE_METADATA error in write request on table bucket {}. "
-                            + "Failing batch and invalidating BucketAssigner.",
+                    "Received {} in write request on table bucket {}. Failing batch and "
+                            + "invalidating BucketAssigner.",
+                    error.error(),
                     readyWriteBatch.tableBucket());
             failBatch(readyWriteBatch, error.exception(), true);
             invalidMetadataTables.add(writeBatch.physicalTablePath());
@@ -890,7 +913,9 @@ public class Sender implements Runnable {
                 Integer historicalBucketCount =
                         metadataUpdater
                                 .getCluster()
-                                .getBucketCount(historicalPartition)
+                                .getBucketCount(
+                                        TableOrPartition.ofPartition(
+                                                historicalPartition.getPartitionId()))
                                 .orElse(null);
                 boolean rerouted =
                         accumulator.rerouteQueuedWritesToHistorical(

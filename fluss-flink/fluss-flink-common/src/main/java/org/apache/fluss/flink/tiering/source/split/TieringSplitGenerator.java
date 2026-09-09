@@ -22,13 +22,10 @@ import org.apache.fluss.client.initializer.BucketOffsetsRetrieverImpl;
 import org.apache.fluss.client.initializer.OffsetsInitializer.BucketOffsetsRetriever;
 import org.apache.fluss.client.metadata.KvSnapshots;
 import org.apache.fluss.client.metadata.LakeSnapshot;
-import org.apache.fluss.client.metadata.MetadataUpdater;
 import org.apache.fluss.exception.LakeTableSnapshotNotExistException;
 import org.apache.fluss.metadata.PartitionInfo;
-import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
-import org.apache.fluss.metadata.TablePartition;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.utils.ExceptionUtils;
 
@@ -56,11 +53,9 @@ public class TieringSplitGenerator {
     private static final Logger LOG = LoggerFactory.getLogger(TieringSplitGenerator.class);
 
     private final Admin flussAdmin;
-    private final MetadataUpdater metadataUpdater;
 
-    public TieringSplitGenerator(Admin flussAdmin, MetadataUpdater metadataUpdater) {
+    public TieringSplitGenerator(Admin flussAdmin) {
         this.flussAdmin = flussAdmin;
-        this.metadataUpdater = metadataUpdater;
     }
 
     public List<TieringSplit> generateTableSplits(TableInfo tableInfo) throws Exception {
@@ -92,7 +87,7 @@ public class TieringSplitGenerator {
         // partitioned table
         if (tableInfo.isPartitioned()) {
             List<PartitionInfo> partitionInfos =
-                    flussAdmin.listPartitionInfos(tableInfo.getTablePath()).get();
+                    flussAdmin.listPartitionInfos(tableInfo.getTablePath(), true).get();
             Map<Long, String> partitionNameById =
                     partitionInfos.stream()
                             .collect(
@@ -105,35 +100,6 @@ public class TieringSplitGenerator {
                                     Collectors.toMap(
                                             PartitionInfo::getPartitionId,
                                             PartitionInfo::getBucketCount));
-            if (tableInfo.getTableConfig().isHistoricalPartitionEnabled()) {
-                // The internal historical partition is intentionally omitted from
-                // listPartitionInfos(), but tiering must consume it to synchronize historical
-                // writes to the lake table. Resolve it explicitly and include it in the splits.
-                PhysicalTablePath historicalPath =
-                        PhysicalTablePath.of(tablePath, HISTORICAL_PARTITION_VALUE);
-                // Partition metadata is decoded using the tableId-to-path mapping already present
-                // in the Cluster, so initialize the table metadata before requesting the internal
-                // partition directly.
-                metadataUpdater.checkAndUpdateTableMetadata(Collections.singleton(tablePath));
-                metadataUpdater.checkAndUpdatePartitionMetadata(historicalPath);
-                long historicalPartitionId =
-                        metadataUpdater.getPartitionIdOrElseThrow(historicalPath);
-                partitionNameById.put(historicalPartitionId, HISTORICAL_PARTITION_VALUE);
-                // The historical partition keeps the bucket count it was created with, so its
-                // buckets must be enumerated by that count rather than the table-level one.
-                bucketCountById.put(
-                        historicalPartitionId,
-                        metadataUpdater
-                                .getCluster()
-                                .getBucketCount(
-                                        new TablePartition(
-                                                tableInfo.getTableId(), historicalPartitionId))
-                                .orElseThrow(
-                                        () ->
-                                                new FlinkRuntimeException(
-                                                        "Actual bucket count not available for "
-                                                                + historicalPath)));
-            }
 
             return generatePartitionTableSplit(
                     tableInfo,

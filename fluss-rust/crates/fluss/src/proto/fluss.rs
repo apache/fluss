@@ -162,6 +162,13 @@ pub struct AlterTableRequest {
     pub rename_columns: ::prost::alloc::vec::Vec<PbRenameColumn>,
     #[prost(message, repeated, tag = "7")]
     pub modify_columns: ::prost::alloc::vec::Vec<PbModifyColumn>,
+    #[prost(message, optional, tag = "8")]
+    pub modify_bucket_count: ::core::option::Option<PbModifyBucketCount>,
+}
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct PbModifyBucketCount {
+    #[prost(int32, required, tag = "1")]
+    pub new_bucket_count: i32,
 }
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct AlterTableResponse {}
@@ -669,11 +676,15 @@ pub struct ListPartitionInfosRequest {
     pub table_path: PbTablePath,
     #[prost(message, optional, tag = "2")]
     pub partial_partition_spec: ::core::option::Option<PbPartitionSpec>,
+    #[prost(bool, optional, tag = "3")]
+    pub include_system_partitions: ::core::option::Option<bool>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ListPartitionInfosResponse {
     #[prost(message, repeated, tag = "1")]
     pub partitions_info: ::prost::alloc::vec::Vec<PbPartitionInfo>,
+    #[prost(bool, optional, tag = "2")]
+    pub system_partitions_included: ::core::option::Option<bool>,
 }
 /// list remote log manifest entries (one per bucket of a table or partition)
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]

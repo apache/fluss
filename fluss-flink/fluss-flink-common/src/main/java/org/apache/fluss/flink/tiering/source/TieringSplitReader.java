@@ -19,9 +19,7 @@ package org.apache.fluss.flink.tiering.source;
 
 import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.client.Connection;
-import org.apache.fluss.client.FlussConnection;
 import org.apache.fluss.client.admin.Admin;
-import org.apache.fluss.client.metadata.MetadataUpdater;
 import org.apache.fluss.client.table.Table;
 import org.apache.fluss.client.table.scanner.ScanRecord;
 import org.apache.fluss.client.table.scanner.log.ArrowScanRecords;
@@ -42,10 +40,8 @@ import org.apache.fluss.lake.writer.SupportsRecordBatchWrite;
 import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.PartitionInfo;
-import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
-import org.apache.fluss.metadata.TablePartition;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.record.ArrowBatchData;
 import org.apache.fluss.utils.CloseableIterator;
@@ -75,7 +71,6 @@ import java.util.Queue;
 import java.util.Set;
 import java.util.function.Function;
 
-import static org.apache.fluss.utils.PartitionUtils.HISTORICAL_PARTITION_VALUE;
 import static org.apache.fluss.utils.Preconditions.checkArgument;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 import static org.apache.fluss.utils.Preconditions.checkState;
@@ -351,15 +346,10 @@ public class TieringSplitReader<WriteResult>
                 try {
                     // the admin is a shared per-connection instance, so it must not be closed here
                     Admin admin = connection.getAdmin();
-                    for (PartitionInfo partitionInfo : admin.listPartitionInfos(tablePath).get()) {
+                    for (PartitionInfo partitionInfo :
+                            admin.listPartitionInfos(tablePath, true).get()) {
                         currentTablePartitionBucketCounts.put(
                                 partitionInfo.getPartitionId(), partitionInfo.getBucketCount());
-                    }
-                    if (currentTableInfo.getTableConfig().isHistoricalPartitionEnabled()) {
-                        // listPartitionInfos omits the internal historical partition, but its
-                        // records still go through a lake writer whose bucket layout must match
-                        // the partition's own count; resolve it like the split generator does.
-                        putHistoricalPartitionBucketCount(tablePath, currentTableInfo.getTableId());
                     }
                 } catch (Exception e) {
                     throw new FlussRuntimeException(
@@ -369,29 +359,6 @@ public class TieringSplitReader<WriteResult>
             LOG.info("Start to tier table {} with table id {}.", currentTablePath, currentTableId);
         }
         return currentTable;
-    }
-
-    /**
-     * Resolves the historical partition's own bucket count into {@link
-     * #currentTablePartitionBucketCounts}.
-     */
-    private void putHistoricalPartitionBucketCount(TablePath tablePath, long tableId) {
-        PhysicalTablePath historicalPath =
-                PhysicalTablePath.of(tablePath, HISTORICAL_PARTITION_VALUE);
-        MetadataUpdater metadataUpdater = ((FlussConnection) connection).getMetadataUpdater();
-        metadataUpdater.checkAndUpdateTableMetadata(Collections.singleton(tablePath));
-        metadataUpdater.checkAndUpdatePartitionMetadata(historicalPath);
-        long historicalPartitionId = metadataUpdater.getPartitionIdOrElseThrow(historicalPath);
-        currentTablePartitionBucketCounts.put(
-                historicalPartitionId,
-                metadataUpdater
-                        .getCluster()
-                        .getBucketCount(new TablePartition(tableId, historicalPartitionId))
-                        .orElseThrow(
-                                () ->
-                                        new FlussRuntimeException(
-                                                "Actual bucket count not available for "
-                                                        + historicalPath)));
     }
 
     private void mayCreateLogScanner() {
