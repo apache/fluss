@@ -34,7 +34,9 @@ import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableChange;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.rpc.gateway.CoordinatorGateway;
 import org.apache.fluss.rpc.messages.CommitLakeTableSnapshotRequest;
+import org.apache.fluss.rpc.messages.LakeTieringHeartbeatResponse;
 import org.apache.fluss.rpc.messages.PbLakeTableOffsetForBucket;
 import org.apache.fluss.rpc.messages.PbLakeTableSnapshotInfo;
 
@@ -49,12 +51,14 @@ import org.junit.jupiter.api.Test;
 import javax.annotation.Nullable;
 
 import java.io.IOException;
+import java.lang.reflect.Proxy;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
@@ -936,5 +940,118 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
                                     split.getTableBucket().getTableId() == tableId
                                             && !split.shouldSkipCurrentRound());
         }
+    }
+
+    @Test
+    void testHeartbeatFailureMetricIncremented() throws Exception {
+        try (FlussMockSplitEnumeratorContext<TieringSplit> context =
+                new FlussMockSplitEnumeratorContext<>(1)) {
+            TieringSourceEnumerator enumerator = createTieringSourceEnumerator(flussConf, context);
+            enumerator.start();
+
+            // Register a reader so that the "request new table" path is taken
+            registerSingleReaderAndHandleSplitRequests(context, enumerator, 0, 0);
+
+            long heartbeatFailuresBefore =
+                    enumerator.getTieringMetrics().getHeartbeatFailureCount();
+
+            // Swap to a failing gateway that throws on lakeTieringHeartbeat
+            CoordinatorGateway failingGateway = createFailingHeartbeatGateway();
+            enumerator.setCoordinatorGateway(failingGateway);
+
+            // Call requestTieringTableSplitsViaHeartBeat; it should throw FlinkRuntimeException
+            assertThatThrownBy(enumerator::requestTieringTableSplitsViaHeartBeat)
+                    .isInstanceOf(FlinkRuntimeException.class);
+
+            // Verify heartbeat failure counter was incremented
+            assertThat(enumerator.getTieringMetrics().getHeartbeatFailureCount())
+                    .isGreaterThan(heartbeatFailuresBefore);
+        }
+    }
+
+    @Test
+    void testRequestTableEmptyMetricIncremented() throws Exception {
+        try (FlussMockSplitEnumeratorContext<TieringSplit> context =
+                new FlussMockSplitEnumeratorContext<>(1)) {
+            TieringSourceEnumerator enumerator = createTieringSourceEnumerator(flussConf, context);
+            enumerator.start();
+
+            // Register a reader so that the "request new table" path is taken
+            registerSingleReaderAndHandleSplitRequests(context, enumerator, 0, 0);
+
+            long emptyBefore = enumerator.getTieringMetrics().getRequestTableEmptyCount();
+
+            // Swap to a gateway that returns empty heartbeat response (no tiering table)
+            CoordinatorGateway emptyResponseGateway = createEmptyHeartbeatResponseGateway();
+            enumerator.setCoordinatorGateway(emptyResponseGateway);
+
+            // Call requestTieringTableSplitsViaHeartBeat; it should succeed but find no table
+            enumerator.requestTieringTableSplitsViaHeartBeat();
+
+            // Verify request-table.empty counter was incremented
+            assertThat(enumerator.getTieringMetrics().getRequestTableEmptyCount())
+                    .isGreaterThan(emptyBefore);
+        }
+    }
+
+    @Test
+    void testRequestTableFailureMetricIncrementedOnGenerateAndAssignSplits() throws Exception {
+        try (FlussMockSplitEnumeratorContext<TieringSplit> context =
+                new FlussMockSplitEnumeratorContext<>(1)) {
+            TieringSourceEnumerator enumerator = createTieringSourceEnumerator(flussConf, context);
+            enumerator.start();
+
+            long failuresBefore = enumerator.getTieringMetrics().getRequestTableFailureCount();
+
+            // generateAndAssignSplits with a non-null throwable should increment the counter
+            FlinkRuntimeException testException =
+                    new FlinkRuntimeException("test request-table failure");
+            assertThatThrownBy(() -> enumerator.generateAndAssignSplits(null, testException))
+                    .isSameAs(testException);
+
+            assertThat(enumerator.getTieringMetrics().getRequestTableFailureCount())
+                    .isEqualTo(failuresBefore + 1);
+        }
+    }
+
+    /**
+     * Creates a {@link CoordinatorGateway} proxy that always returns a failed future for {@code
+     * lakeTieringHeartbeat}.
+     */
+    private CoordinatorGateway createFailingHeartbeatGateway() {
+        return (CoordinatorGateway)
+                Proxy.newProxyInstance(
+                        CoordinatorGateway.class.getClassLoader(),
+                        new Class<?>[] {CoordinatorGateway.class},
+                        (proxy, method, args) -> {
+                            if (method.getName().equals("lakeTieringHeartbeat")) {
+                                CompletableFuture<LakeTieringHeartbeatResponse> failed =
+                                        new CompletableFuture<>();
+                                failed.completeExceptionally(
+                                        new RuntimeException("simulated heartbeat failure"));
+                                return failed;
+                            }
+                            throw new UnsupportedOperationException(
+                                    "Unexpected call: " + method.getName());
+                        });
+    }
+
+    /**
+     * Creates a {@link CoordinatorGateway} proxy that returns an empty {@link
+     * LakeTieringHeartbeatResponse} (no tiering table) for {@code lakeTieringHeartbeat}.
+     */
+    private CoordinatorGateway createEmptyHeartbeatResponseGateway() {
+        return (CoordinatorGateway)
+                Proxy.newProxyInstance(
+                        CoordinatorGateway.class.getClassLoader(),
+                        new Class<?>[] {CoordinatorGateway.class},
+                        (proxy, method, args) -> {
+                            if (method.getName().equals("lakeTieringHeartbeat")) {
+                                return CompletableFuture.completedFuture(
+                                        new LakeTieringHeartbeatResponse());
+                            }
+                            throw new UnsupportedOperationException(
+                                    "Unexpected call: " + method.getName());
+                        });
     }
 }

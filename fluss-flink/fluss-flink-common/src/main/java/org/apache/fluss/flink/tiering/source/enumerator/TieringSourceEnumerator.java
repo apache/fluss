@@ -27,6 +27,7 @@ import org.apache.fluss.flink.metrics.FlinkMetricRegistry;
 import org.apache.fluss.flink.tiering.event.FailedTieringEvent;
 import org.apache.fluss.flink.tiering.event.FinishedTieringEvent;
 import org.apache.fluss.flink.tiering.event.TieringReachMaxDurationEvent;
+import org.apache.fluss.flink.tiering.source.metrics.TieringEnumeratorMetrics;
 import org.apache.fluss.flink.tiering.source.split.TieringSplit;
 import org.apache.fluss.flink.tiering.source.split.TieringSplitGenerator;
 import org.apache.fluss.flink.tiering.source.state.TieringSourceEnumeratorState;
@@ -78,7 +79,6 @@ import static org.apache.fluss.flink.tiering.source.enumerator.TieringSourceEnum
 import static org.apache.fluss.flink.tiering.source.enumerator.TieringSourceEnumerator.HeartBeatHelper.failedTableHeartBeat;
 import static org.apache.fluss.flink.tiering.source.enumerator.TieringSourceEnumerator.HeartBeatHelper.heartBeatWithRequestNewTieringTable;
 import static org.apache.fluss.flink.tiering.source.enumerator.TieringSourceEnumerator.HeartBeatHelper.tieringTableHeartBeat;
-import static org.apache.fluss.flink.tiering.source.enumerator.TieringSourceEnumerator.HeartBeatHelper.waitHeartbeatResponse;
 
 /**
  * An implementation of {@link SplitEnumerator} used to request {@link TieringSplit} from Fluss
@@ -121,6 +121,8 @@ public class TieringSourceEnumerator
     private TieringSplitGenerator splitGenerator;
     private int flussCoordinatorEpoch;
 
+    private TieringEnumeratorMetrics tieringMetrics;
+
     private volatile boolean isFailOvering = false;
 
     private volatile boolean closed = false;
@@ -144,6 +146,17 @@ public class TieringSourceEnumerator
         this.finishedTables = new ConcurrentHashMap<>();
         this.failedTableEpochs = new ConcurrentHashMap<>();
         this.tieringReachMaxDurationsTables = Collections.synchronizedSet(new TreeSet<>());
+        this.tieringMetrics = new TieringEnumeratorMetrics(enumeratorMetricGroup);
+    }
+
+    @VisibleForTesting
+    TieringEnumeratorMetrics getTieringMetrics() {
+        return tieringMetrics;
+    }
+
+    @VisibleForTesting
+    void setCoordinatorGateway(CoordinatorGateway gateway) {
+        this.coordinatorGateway = gateway;
     }
 
     @Override
@@ -171,6 +184,7 @@ public class TieringSourceEnumerator
                     flussCoordinatorEpoch);
 
         } catch (Exception e) {
+            tieringMetrics.incHeartbeatFailure();
             LOG.error("Register Tiering Service failed due to ", e);
             throw new FlinkRuntimeException("Register Tiering Service failed due to ", e);
         }
@@ -362,6 +376,7 @@ public class TieringSourceEnumerator
     void generateAndAssignSplits(
             @Nullable Tuple3<Long, Long, TablePath> tieringTable, Throwable throwable) {
         if (throwable != null) {
+            tieringMetrics.incRequestTableFailure();
             ExceptionUtils.rethrow(throwable);
         }
         if (tieringTable != null) {
@@ -392,7 +407,9 @@ public class TieringSourceEnumerator
         }
     }
 
-    private @Nullable Tuple3<Long, Long, TablePath> requestTieringTableSplitsViaHeartBeat() {
+    @VisibleForTesting
+    @Nullable
+    Tuple3<Long, Long, TablePath> requestTieringTableSplitsViaHeartBeat() {
         if (closed) {
             return null;
         }
@@ -431,6 +448,7 @@ public class TieringSourceEnumerator
                 tieringTableEpochs.put(lakeTieringInfo.f0, lakeTieringInfo.f1);
                 LOG.info("Tiering table {} has been requested.", lakeTieringInfo);
             } else {
+                tieringMetrics.incRequestTableEmpty();
                 LOG.info("No available Tiering table found, will poll later.");
             }
         } else {
@@ -570,6 +588,7 @@ public class TieringSourceEnumerator
             LOG.info("Report failed table to Fluss Coordinator success");
 
         } catch (Exception e) {
+            tieringMetrics.incHeartbeatFailure();
             LOG.error("Errors happens when report failed table to Fluss cluster.", e);
             throw new FlinkRuntimeException(
                     "Errors happens when report failed table to Fluss cluster.", e);
@@ -662,15 +681,20 @@ public class TieringSourceEnumerator
             }
             return lakeTieringHeartbeatRequest;
         }
+    }
 
-        static LakeTieringHeartbeatResponse waitHeartbeatResponse(
-                CompletableFuture<LakeTieringHeartbeatResponse> responseCompletableFuture) {
-            try {
-                return responseCompletableFuture.get(3, TimeUnit.MINUTES);
-            } catch (Exception e) {
-                LOG.error("Failed to wait heartbeat response due to ", e);
-                throw new FlinkRuntimeException("Failed to wait heartbeat response due to ", e);
-            }
+    /**
+     * Waits for the heartbeat response from the Fluss coordinator. Increments the heartbeat failure
+     * counter if the wait fails.
+     */
+    private LakeTieringHeartbeatResponse waitHeartbeatResponse(
+            CompletableFuture<LakeTieringHeartbeatResponse> responseCompletableFuture) {
+        try {
+            return responseCompletableFuture.get(3, TimeUnit.MINUTES);
+        } catch (Exception e) {
+            tieringMetrics.incHeartbeatFailure();
+            LOG.error("Failed to wait heartbeat response due to ", e);
+            throw new FlinkRuntimeException("Failed to wait heartbeat response due to ", e);
         }
     }
 
