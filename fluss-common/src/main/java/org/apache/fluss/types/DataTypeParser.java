@@ -279,6 +279,7 @@ public final class DataTypeParser {
         ARRAY,
         MAP,
         ROW,
+        VECTOR,
         NOT,
         NULL,
     }
@@ -514,6 +515,8 @@ public final class DataTypeParser {
                     return parseMapType();
                 case ROW:
                     return parseRowType();
+                case VECTOR:
+                    return parseVectorType();
                 default:
                     throw parsingError("Unsupported type: " + token().value);
             }
@@ -618,6 +621,14 @@ public final class DataTypeParser {
                 nextToken(TokenType.END_PARAMETER);
             }
             return precision;
+        }
+
+        private DataType parseVectorType() {
+            nextToken(TokenType.BEGIN_PARAMETER);
+            nextToken(TokenType.LITERAL_INT);
+            final int dimension = tokenAsInt();
+            nextToken(TokenType.END_PARAMETER);
+            return new VectorType(dimension);
         }
 
         private DataType parseArrayType() {

@@ -38,6 +38,7 @@ import org.apache.fluss.types.StringType;
 import org.apache.fluss.types.TimeType;
 import org.apache.fluss.types.TimestampType;
 import org.apache.fluss.types.TinyIntType;
+import org.apache.fluss.types.VectorType;
 
 import org.apache.iceberg.types.Type;
 import org.apache.iceberg.types.Types;
@@ -207,5 +208,11 @@ public class FlussDataTypeToIcebergDataType implements DataTypeVisitor<Type> {
         }
 
         return Types.StructType.of(fields);
+    }
+
+    @Override
+    public Type visit(VectorType vectorType) {
+        throw new UnsupportedOperationException(
+                "VECTOR type is not supported for Iceberg lake format tiering.");
     }
 }

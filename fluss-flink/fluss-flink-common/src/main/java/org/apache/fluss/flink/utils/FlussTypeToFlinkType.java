@@ -38,6 +38,7 @@ import org.apache.fluss.types.StringType;
 import org.apache.fluss.types.TimeType;
 import org.apache.fluss.types.TimestampType;
 import org.apache.fluss.types.TinyIntType;
+import org.apache.fluss.types.VectorType;
 
 import org.apache.flink.table.api.DataTypes;
 import org.apache.flink.table.types.DataType;
@@ -166,6 +167,14 @@ class FlussTypeToFlinkType implements DataTypeVisitor<DataType> {
             dataFields.add(dataTypeField);
         }
         return withNullability(DataTypes.ROW(dataFields), rowType.isNullable());
+    }
+
+    @Override
+    public DataType visit(VectorType vectorType) {
+        // VECTOR is surfaced to Flink as ARRAY<FLOAT NOT NULL> for query compatibility.
+        // The original VECTOR(n) descriptor is preserved in the Fluss schema store.
+        return withNullability(
+                DataTypes.ARRAY(DataTypes.FLOAT().notNull()), vectorType.isNullable());
     }
 
     private DataType withNullability(DataType flinkType, boolean nullable) {

@@ -90,6 +90,7 @@ public abstract class BinaryArray extends BinarySection
             case ARRAY:
             case MAP:
             case ROW:
+            case VECTOR:
                 // long and double are 8 bytes;
                 // otherwise it stores the length and offset of the variable-length part for types
                 // such as is string, map, etc.

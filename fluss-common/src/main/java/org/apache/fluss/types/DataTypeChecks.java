@@ -33,6 +33,8 @@ public final class DataTypeChecks {
 
     private static final FieldTypesExtractor FIELD_TYPES_EXTRACTOR = new FieldTypesExtractor();
 
+    private static final DimensionExtractor DIMENSION_EXTRACTOR = new DimensionExtractor();
+
     public static int getLength(DataType dataType) {
         return dataType.accept(LENGTH_EXTRACTOR);
     }
@@ -55,6 +57,14 @@ public final class DataTypeChecks {
     /** Returns the field types of row and structured types. */
     public static List<DataType> getFieldTypes(DataType dataType) {
         return dataType.accept(FIELD_TYPES_EXTRACTOR);
+    }
+
+    /**
+     * Returns the dimension (number of elements) of a {@link VectorType}. Throws {@link
+     * IllegalArgumentException} if called on any other type.
+     */
+    public static int getDimension(DataType dataType) {
+        return dataType.accept(DIMENSION_EXTRACTOR);
     }
 
     /** Checks whether two data types are equal including field ids for row types. */
@@ -217,6 +227,13 @@ public final class DataTypeChecks {
         @Override
         protected Boolean defaultMethod(DataType that) {
             return original.equals(that);
+        }
+    }
+
+    private static class DimensionExtractor extends Extractor<Integer> {
+        @Override
+        public Integer visit(VectorType vectorType) {
+            return vectorType.getDimension();
         }
     }
 }

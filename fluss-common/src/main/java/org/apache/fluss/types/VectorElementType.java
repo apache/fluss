@@ -17,45 +17,34 @@
 
 package org.apache.fluss.types;
 
-import org.apache.fluss.annotation.PublicStable;
+import org.apache.fluss.annotation.PublicEvolving;
 
 /**
- * An enumeration of data type families for clustering {@link DataTypeRoot}s into categories.
+ * Enum representing the element precision of a {@link VectorType} column.
  *
- * @since 0.1
+ * <p>FLOAT32 is the baseline default. FLOAT16 and INT8 are reserved in the type descriptor for
+ * future scalar-quantization support and must not be used in writer/reader code until explicitly
+ * implemented.
+ *
+ * @since 0.7
  */
-@PublicStable
-public enum DataTypeFamily {
-    PREDEFINED,
+@PublicEvolving
+public enum VectorElementType {
 
-    CONSTRUCTED,
+    /** 32-bit IEEE 754 floating point. Fully supported. */
+    FLOAT32,
 
-    USER_DEFINED,
+    /**
+     * 16-bit half-precision floating point.
+     *
+     * <p>TODO: reserved for future scalar quantization — NOT YET IMPLEMENTED.
+     */
+    FLOAT16,
 
-    CHARACTER_STRING,
-
-    BINARY_STRING,
-
-    NUMERIC,
-
-    INTEGER_NUMERIC,
-
-    EXACT_NUMERIC,
-
-    APPROXIMATE_NUMERIC,
-
-    DATETIME,
-
-    TIME,
-
-    TIMESTAMP,
-
-    INTERVAL,
-
-    COLLECTION,
-
-    /** Types that represent a fixed-size sequence of numeric values. */
-    VECTOR,
-
-    EXTENSION
+    /**
+     * 8-bit signed integer (scalar quantized).
+     *
+     * <p>TODO: reserved for future scalar quantization — NOT YET IMPLEMENTED.
+     */
+    INT8
 }

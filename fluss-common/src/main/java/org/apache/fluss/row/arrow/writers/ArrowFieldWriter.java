@@ -60,6 +60,14 @@ public abstract class ArrowFieldWriter {
         }
     }
 
+    /**
+     * Finishes writing the field vector for the given number of rows. Can be overridden by
+     * composite writers (e.g. {@link ArrowVectorWriter}) to finalize child vector state.
+     */
+    public void finish(int recordsCount) {
+        // default no-op
+    }
+
     /** Resets the state of the writer to write the next batch of fields. */
     public void reset() {
         fieldVector.reset();

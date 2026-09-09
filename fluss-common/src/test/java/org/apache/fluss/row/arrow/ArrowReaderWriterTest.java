@@ -95,7 +95,8 @@ class ArrowReaderWriterTest {
                     DataTypes.ROW(
                             DataTypes.FIELD("i", DataTypes.INT()),
                             DataTypes.FIELD("r", NESTED_DATA_TYPE),
-                            DataTypes.FIELD("s", DataTypes.STRING())));
+                            DataTypes.FIELD("s", DataTypes.STRING())),
+                    DataTypes.VECTOR(3));
 
     private static final List<InternalRow> TEST_DATA =
             Arrays.asList(
@@ -137,7 +138,9 @@ class ArrowReaderWriterTest {
                             GenericRow.of(
                                     12,
                                     GenericRow.of(34, fromString("56"), 78L),
-                                    fromString("910"))),
+                                    fromString("910")),
+                            // VECTOR(3) — row 0
+                            new GenericArray(new Float[] {0.1f, 0.2f, 0.3f})),
                     GenericRow.of(
                             false,
                             (byte) 1,
@@ -178,7 +181,9 @@ class ArrowReaderWriterTest {
                             GenericRow.of(
                                     12,
                                     GenericRow.of(34, fromString("56"), 78L),
-                                    fromString("910"))));
+                                    fromString("910")),
+                            // VECTOR(3) — row 1 (null)
+                            null));
 
     @Test
     void testReaderWriter() throws IOException {
@@ -404,6 +409,68 @@ class ArrowReaderWriterTest {
                     assertThat(row.getMap(1).keyArray().getInt(j)).isEqualTo(key);
                     assertThat(row.getMap(1).valueArray().getInt(j)).isEqualTo(key * 2);
                 }
+            }
+        }
+    }
+
+    /**
+     * Tests that VECTOR(3) columns write and read correctly via the full Arrow batch
+     * serialization/deserialization path. Verifies 100 rows where each row has a float vector with
+     * values derived from the row index.
+     */
+    @Test
+    void testVectorReadWrite() throws IOException {
+        RowType rowType =
+                DataTypes.ROW(
+                        DataTypes.FIELD("id", DataTypes.BIGINT()),
+                        DataTypes.FIELD("embedding", DataTypes.VECTOR(3)));
+
+        int numRows = 100;
+        InternalRow[] rows = new InternalRow[numRows];
+        for (int i = 0; i < numRows; i++) {
+            rows[i] =
+                    GenericRow.of(
+                            (long) i,
+                            new GenericArray(
+                                    new Float[] {(float) i, (float) i + 0.5f, (float) -i}));
+        }
+
+        try (BufferAllocator allocator = new RootAllocator(Long.MAX_VALUE);
+                VectorSchemaRoot root =
+                        VectorSchemaRoot.create(ArrowUtils.toArrowSchema(rowType), allocator);
+                ArrowWriterPool pool = new ArrowWriterPool(allocator);
+                ArrowWriter writer =
+                        pool.getOrCreateWriter(1L, 1, Integer.MAX_VALUE, rowType, NO_COMPRESSION)) {
+
+            for (InternalRow row : rows) {
+                writer.writeRow(row);
+            }
+
+            AbstractPagedOutputView outputView =
+                    new ManagedPagedOutputView(new TestingMemorySegmentPool(64 * 1024));
+            int size =
+                    writer.serializeToOutputView(
+                            outputView, recordBatchHeaderSize(CURRENT_LOG_MAGIC_VALUE));
+            assertThat(size).isGreaterThan(0);
+
+            int heapSize = Math.max(size, writer.estimatedSizeInBytes());
+            MemorySegment segment = MemorySegment.allocateHeapMemory(heapSize);
+            outputView
+                    .getCurrentSegment()
+                    .copyTo(recordBatchHeaderSize(CURRENT_LOG_MAGIC_VALUE), segment, 0, size);
+
+            ArrowReader reader =
+                    ArrowUtils.createArrowReader(segment, 0, size, root, allocator, rowType);
+            assertThat(reader.getRowCount()).isEqualTo(numRows);
+
+            for (int i = 0; i < numRows; i++) {
+                ColumnarRow row = reader.read(i);
+                row.setRowId(i);
+                assertThat(row.getLong(0)).isEqualTo((long) i);
+                assertThat(row.getArray(1).size()).isEqualTo(3);
+                assertThat(row.getArray(1).getFloat(0)).isEqualTo((float) i);
+                assertThat(row.getArray(1).getFloat(1)).isEqualTo((float) i + 0.5f);
+                assertThat(row.getArray(1).getFloat(2)).isEqualTo((float) -i);
             }
         }
     }

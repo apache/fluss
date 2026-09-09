@@ -37,8 +37,10 @@ import org.apache.fluss.row.TimestampNtz;
 import org.apache.fluss.types.ArrayType;
 import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.DataTypeRoot;
+import org.apache.fluss.types.FloatType;
 import org.apache.fluss.types.MapType;
 import org.apache.fluss.types.RowType;
+import org.apache.fluss.types.VectorType;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -80,6 +82,10 @@ public class InternalRowUtils {
                 case DOUBLE:
                     return new GenericArray(from.toDoubleArray());
             }
+        }
+        // VECTOR is always stored as float elements (FLOAT32, non-nullable elements)
+        if (eleType.getTypeRoot() == DataTypeRoot.VECTOR) {
+            return copyArray(from, new FloatType(false));
         }
 
         InternalArray.ElementGetter elementGetter = InternalArray.createElementGetter(eleType);
@@ -123,6 +129,10 @@ public class InternalRowUtils {
         } else if (o instanceof InternalRow) {
             return copyRow((InternalRow) o, (RowType) type);
         } else if (o instanceof InternalArray) {
+            if (type instanceof VectorType) {
+                // VECTOR values are InternalArray of FLOAT32 elements; copy as float array
+                return copyArray((InternalArray) o, new FloatType(false));
+            }
             return copyArray((InternalArray) o, ((ArrayType) type).getElementType());
         } else if (o instanceof InternalMap) {
             return copyMap(
