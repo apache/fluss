@@ -329,6 +329,7 @@ public class Sender implements Runnable {
         WriteBatch batch = readyWriteBatch.writeBatch();
         return batch.attempts() < retries
                 && !batch.isDone()
+                && batch.waitedTimeMs(System.currentTimeMillis()) < maxRequestTimeoutMs
                 && ((error.exception() instanceof RetriableException)
                         || (idempotenceManager.idempotenceEnabled()
                                 && idempotenceManager.canRetry(
