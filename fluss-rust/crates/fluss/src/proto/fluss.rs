@@ -1066,6 +1066,13 @@ pub struct GetClusterHealthResponse {
     #[prost(int32, required, tag = "5")]
     pub status: i32,
 }
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GetClusterVersionRequest {}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GetClusterVersionResponse {
+    #[prost(string, required, tag = "1")]
+    pub version: ::prost::alloc::string::String,
+}
 /// --------------- Inner classes ----------------
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct PbApiVersion {
