@@ -19,6 +19,8 @@ scaled behind a load balancer.
 For an end-to-end walkthrough — ingesting events via the Gateway and querying
  them through a Paimon lakehouse — see 
 [Ingest HTTP Events into a Real-Time Lakehouse](../quickstart/gateway-lakehouse.md).
+To run the Gateway as a binary distribution or container, see
+[Deploying Fluss Gateway](../install-deploy/deploying-gateway.md).
 
 ## Capabilities and limitations
 
@@ -71,6 +73,9 @@ required permissions and keep its credentials out of images and source control.
 accepts requests; it does not check Fluss connectivity. If Fluss is unavailable,
 `/ready` can return HTTP 200 while a metadata, DDL, or write request returns HTTP
 503 with `Retry-After`.
+
+See [Health checks and graceful shutdown](../install-deploy/deploying-gateway.md#health-checks-and-graceful-shutdown)
+for probe and drain behavior in supervised deployments.
 
 ## Create tables and write records
 

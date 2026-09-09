@@ -80,6 +80,20 @@ We have listed them in the table below the figure.
             </td>
         </tr>
         <tr>
+            <td>Gateway (optional, preview)</td>
+            <td>
+                <p>
+                Fluss Gateway is a stateless REST service in front of one or more Fluss
+                clusters for metadata, DDL, and schema-aware batch writes over plain HTTP.
+                </p>
+            </td>
+            <td>
+                <ul>
+                    <li>[Deploying Fluss Gateway](install-deploy/deploying-gateway.md)</li>
+                </ul>
+            </td>
+        </tr>
+        <tr>
             <td colspan="3" style={{ textAlign: "center" }}>
                 <b>External Components</b>
             </td>
@@ -146,6 +160,9 @@ Fluss can be deployed in three different ways:
 - [Local Cluster](install-deploy/deploying-local-cluster.md)
 - [Distributed Cluster](install-deploy/deploying-distributed-cluster.md)
 - [Docker run / Docker Compose](install-deploy/deploying-with-docker.md)
+
+Optionally, deploy the stateless [Fluss Gateway](install-deploy/deploying-gateway.md) in
+front of the cluster to serve metadata, DDL, and batch writes over REST.
 
 **NOTE**:
 - Local Cluster is for testing purpose only.
