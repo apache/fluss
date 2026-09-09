@@ -28,6 +28,7 @@ import org.apache.flink.configuration.RestartStrategyOptions;
 import org.apache.flink.core.execution.JobClient;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 
+import java.time.Duration;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.ServiceLoader;
@@ -35,6 +36,7 @@ import java.util.ServiceLoader;
 import static org.apache.flink.configuration.RestartStrategyOptions.RestartStrategyType.EXPONENTIAL_DELAY;
 import static org.apache.flink.runtime.executiongraph.failover.FailoverStrategyFactoryLoader.FULL_RESTART_STRATEGY_NAME;
 import static org.apache.fluss.flink.tiering.source.TieringSourceOptions.DATA_LAKE_CONFIG_PREFIX;
+import static org.apache.fluss.flink.tiering.source.TieringSourceOptions.TIERING_FORCE_COMPLETE_FINISH_TIMEOUT;
 import static org.apache.fluss.utils.PropertiesUtils.extractAndRemovePrefix;
 import static org.apache.fluss.utils.PropertiesUtils.extractPrefix;
 
@@ -119,6 +121,10 @@ public class FlussLakeTiering {
     protected void run() throws Exception {
         // Load and apply all available decorator plugins
         loadAndApplyDecoratorPlugins();
+
+        if (!flussConfig.contains(TIERING_FORCE_COMPLETE_FINISH_TIMEOUT)) {
+            flussConfig.set(TIERING_FORCE_COMPLETE_FINISH_TIMEOUT, Duration.ofMinutes(5));
+        }
 
         // build and run lake tiering job
         JobClient jobClient =
