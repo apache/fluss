@@ -147,15 +147,12 @@ coordinator:
     rpcTimeoutMs: 5000
     # Standard Kubernetes probe parameters.
     #
-    # The total time Kubernetes will wait before flipping the pod to NotReady is
-    #     initialDelaySeconds + failureThreshold * periodSeconds
-    #   = 15 + 360 * 5 = 1815s (~30 minutes) by default.
-    # IMPORTANT: this window MUST be larger than healthCheckTimeoutSeconds
-    # below, otherwise Kubernetes will mark the pod NotReady BEFORE the
-    # in-script fallback has a chance to latch the TCP fast path. If you tune
-    # healthCheckTimeoutSeconds upward, raise failureThreshold accordingly so
-    # the inequality (failureThreshold * periodSeconds > healthCheckTimeoutSeconds)
-    # always holds.
+    # A pod that has never been Ready stays NotReady until the probe succeeds,
+    # however many times it fails, and the kubelet keeps probing. The first-boot
+    # gate is therefore bounded by healthCheckTimeoutSeconds below, not by
+    # failureThreshold. failureThreshold only governs how many consecutive
+    # failures flip an already-Ready pod back to NotReady once the probe has
+    # latched its TCP-only fast path (360 * 5s = 30 minutes by default).
     failureThreshold: 360
     timeoutSeconds: 10
     initialDelaySeconds: 15

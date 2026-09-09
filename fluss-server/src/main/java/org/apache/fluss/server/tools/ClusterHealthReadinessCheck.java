@@ -348,9 +348,6 @@ public final class ClusterHealthReadinessCheck {
                         + leaderElected
                         + " status="
                         + resp.getStatus());
-        if (isLeader) {
-            return EXIT_READY;
-        }
         if (leaderElected) {
             return EXIT_READY;
         }

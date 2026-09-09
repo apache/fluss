@@ -77,6 +77,7 @@ public class CoordinatorLeaderElection implements AutoCloseable {
     private static final long DEFAULT_CLOSE_TIMEOUT_MS = 10000L;
 
     private final String serverId;
+    private final ZooKeeperClient zkClient;
     private final LeaderLatch leaderLatch;
     // Single-threaded executor to run leader init/cleanup callbacks outside Curator's EventThread.
     // Curator's LeaderLatchListener callbacks run on its internal EventThread; performing
@@ -100,6 +101,7 @@ public class CoordinatorLeaderElection implements AutoCloseable {
     CoordinatorLeaderElection(ZooKeeperClient zkClient, String serverId, long closeTimeoutMs) {
         checkArgument(closeTimeoutMs > 0, "Close timeout must be positive.");
         this.serverId = serverId;
+        this.zkClient = zkClient;
         this.closeTimeoutMs = closeTimeoutMs;
         this.leaderLatch =
                 new LeaderLatch(
@@ -195,14 +197,21 @@ public class CoordinatorLeaderElection implements AutoCloseable {
      * other participant. Returns {@code false} when the state cannot be determined (e.g. ZooKeeper
      * unreachable), because an unknown leader must not be reported as present to a readiness probe.
      *
-     * <p>On a standby this performs a synchronous ZooKeeper read, so it is intended for
-     * probe-frequency callers only (the Kubernetes readiness probe calls it at most every few
-     * seconds), not for hot paths.
+     * <p>"Elected" means the leader has registered its address in ZooKeeper, which happens during
+     * leader initialization after fencing. The node is ephemeral, so a leader whose session expired
+     * or whose initialization failed and was cleaned up no longer counts. This is deliberately not
+     * the {@link LeaderLatch} view: the latch marks a participant as leader before initialization
+     * has run, and keeps doing so when initialization fails.
      *
-     * <p>TODO: when leader initialization fails, {@code becomeLeader} transitions this server back
-     * to STANDBY but the {@link LeaderLatch} keeps the ZK leadership, so this method can report an
-     * elected leader while no functional leader exists until the latch is released or the session
-     * expires. Pre-existing election behavior; revisit together with latch relinquishing.
+     * <p>On a standby this performs a synchronous ZooKeeper read on the calling RPC worker thread,
+     * so it is intended for probe-frequency callers only (the Kubernetes readiness probe calls it
+     * at most every few seconds), not for hot paths. Worst case: while ZooKeeper is unreachable
+     * each call blocks its worker thread for the Curator retry budget ({@code
+     * zookeeper.client.max-retry-attempts} x {@code zookeeper.client.retry-wait}, 3 x 5 s by
+     * default) even though the probe gives up after its own 5 s timeout, so at a 5 s probe period
+     * about three of the {@code netty.server.num-worker-threads} (8 by default) stay blocked on a
+     * standby until ZooKeeper is back. A standby serves no other traffic, so that is accepted; move
+     * the read off the worker thread if that ever changes.
      */
     public boolean isLeaderElected() {
         if (closing.get()) {
@@ -212,7 +221,10 @@ public class CoordinatorLeaderElection implements AutoCloseable {
             return true;
         }
         try {
-            return leaderLatch.getLeader().isLeader();
+            return zkClient.getCoordinatorLeaderAddress().isPresent();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return false;
         } catch (Exception e) {
             LOG.debug("Failed to read leader election state for server {}", serverId, e);
             return false;
