@@ -26,7 +26,9 @@ VERSIONS.map((version) => {
 });
 
 function getDocsVersionName(pathname) {
-    const parts = pathname.split('/');
+    // split on both POSIX ('/') and Windows ('\\') separators so the version
+    // is detected regardless of the OS the docs are built on
+    const parts = pathname.split(/[/\\]/);
     const websiteIndex = parts.lastIndexOf('website');
 
     if (websiteIndex === -1 || websiteIndex + 1 >= parts.length) return '';
