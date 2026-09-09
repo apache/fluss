@@ -1,27 +1,38 @@
 ---
-title: Real-Time Lakehouse via the HTTP Gateway
+title: Ingesting HTTP Events into a Real-Time Lakehouse
 sidebar_position: 4
 ---
 
-This guide walks through the same real-time lakehouse pattern as the
-[Streaming Lakehouse](lakehouse.md) quickstart, but creates the table and
-writes records entirely over the [Fluss Gateway](/docs/gateway/index.md)
-REST API instead of Flink SQL. You'll create a datalake-enabled table with
-`curl`, ingest JSON records with `curl`, then use Flink SQL only to run the
-Lakehouse Tiering Service and query the unified real-time + historical data
-(Union Read).
+This guide will help you ingest JSON records through Fluss Gateway, query them
+immediately from Fluss, and continuously tier the same table into Apache Paimon
+for historical analysis.
+
+The example tracks orders flowing through a simple order management system.
+The application writes one HTTP request per batch, no Kafka producer, no
+Flink ingestion job, no separate Paimon writer. Fluss provides immediate
+query visibility in the hot tier, and the reusable Lakehouse Tiering Service
+handles writing to Paimon continuously in the background.
+
+In this quickstart, you will:
+
+- start a local Fluss cluster, Fluss Gateway, Flink, Paimon, and RustFS;
+- create a lake-enabled Fluss table through the Gateway REST API;
+- send JSON order records over HTTP;
+- query newly written rows immediately through Flink SQL and Union Read;
+- verify that records are continuously tiered to Paimon.
 
 :::caution Developer Preview - Fluss 1.0 (unreleased)
-Fluss Gateway is a developer preview introduced in Fluss 1.0, which has not
-yet been released. No pre-built Docker Hub image is available yet, this guide
-requires you to **build the Gateway image from the Fluss source repository**
-(see [Build the Gateway image](#build-the-gateway-image) below). 
-If you are not comfortable building from source, check back once Fluss 1.0
-ships with a published 'apache/fluss-gateway' image.
+Fluss Gateway is a preview feature in Fluss 1.0, which has not yet been
+released. This quickstart uses its unauthenticated `trust` mode and is
+intended only for local development. See
+[Fluss Gateway security](/docs/gateway/index.md#security) before planning
+a production deployment.
 
-The Gateway API and configuration may change before the final release. 
-The Gateway does not yet support reading records - this guide reads data 
-back through Flink SQL.
+No pre-built Docker Hub image is available yet – this guide requires
+building the Gateway image from source (see
+[Build the Gateway image](#build-the-gateway-image) below). The Gateway
+does not yet support reading records; this guide reads data back through
+Flink SQL.
 :::
 
 ## Environment Setup
@@ -39,11 +50,11 @@ We encourage you to use a recent version of Docker and [Compose v2](https://docs
 
 ### Build the Gateway image
 
-:::note fluss v1.0 developer preview 
-This guide covers a feature shipping in the upcoming fluss 1.0 release.
+:::note Fluss v1.0 developer preview 
+This guide covers a feature shipping in the upcoming Fluss 1.0 release.
 A pre-built Docker Hub image will be available at GA - until then,
 building it locally takes one extra step: run the script below from the
-root of your [Fluss source repository] (https://github.com/apache/fluss)
+root of your [Fluss source repository](https://github.com/apache/fluss)
 :::
 Run this from the root of your Fluss source checkout:
 ```shell
@@ -69,7 +80,8 @@ cd fluss-quickstart-gateway-lakehouse
 
 ```shell
 mkdir lib
-curl -fL -o "lib/paimon-s3-$PAIMON_VERSION$.jar" "https://repo.maven.apache.org/maven2/org/apache/paimon/paimon-s3/$PAIMON_VERSION$/paimon-s3-$PAIMON_VERSION$.jar"
+curl -fL -o "lib/paimon-s3-$PAIMON_VERSION$.jar" \
+  "https://repo.maven.apache.org/maven2/org/apache/paimon/paimon-s3/$PAIMON_VERSION$/paimon-s3-$PAIMON_VERSION$.jar"
 ```
 
 :::info
@@ -78,9 +90,7 @@ dependencies used by this guide. Only the Fluss server-side `paimon-s3`
 plugin still needs to be downloaded and mounted into the Fluss containers.
 :::
 
-3. Create a `docker-compose.yml` file with the following content. This
-   reuses the same Paimon-backed Fluss + Flink + RustFS stack as the
-   [Streaming Lakehouse](lakehouse.md) guide, with a `gateway` service added:
+3. Create a `docker-compose.yml` file with the following content:
 
 ```yaml
 services:
@@ -240,34 +250,31 @@ configure this to use cloud file system. See [here](/maintenance/tiered-storage/
 for information on how to setup cloud file systems.
 :::
 
-4. To start all containers, run:
+4. Start all containers.
 
 ```shell
 docker compose up -d
-```
-
-Run
-
-```shell
 docker compose ps
 ```
 
-to check whether all containers are running properly, including `gateway`.
-Check that the Gateway process is up and ready to accept requests:
+:::note
+The `sql-client` service may exit after `docker compose up -d` because no
+interactive terminal is attached. This is expected. You will start a new SQL
+client container with `docker compose run --rm sql-client` later in this guide.
+:::
+
+5. Wait until the Gateway can reach Fluss:
 
 ```shell
-curl -sS --fail-with-body http://localhost:8080/health
-curl -sS --fail-with-body http://localhost:8080/ready
+until curl -fsS \
+  http://localhost:8080/v1/clusters/default/databases >/dev/null; do
+  sleep 2
+done
 ```
 
 :::note
-`/health` only reports process liveness; `/ready` reports whether the
-Gateway accepts requests but does not check Fluss connectivity itself. The
-`gateway` service starts as soon as the `coordinator-server` container
-starts, not once it's actually accepting connections, so the first
-`/ready` call (or the first database-creation call below) can briefly
-return an error or HTTP 503 right after `docker compose up`. Retry after a
-few seconds if that happens.
+All the following commands involving `docker compose` should be executed in the
+working directory that contains the `docker-compose.yml` file.
 :::
 
 Congratulations, you are all set!
@@ -356,41 +363,13 @@ A successful response looks like:
 }
 ```
 
-## Start the Lakehouse Tiering Service
+## Query Immediately
 
-To integrate with [Apache Paimon](https://paimon.apache.org/), start the
-`Lakehouse Tiering Service`. Open a new terminal, navigate to the
-`fluss-quickstart-gateway-lakehouse` directory, and run:
+Open the Flink SQL client:
 
 ```shell
-docker compose exec jobmanager \
-    /opt/flink/bin/flink run \
-    /opt/flink/opt/fluss-flink-tiering-$FLUSS_VERSION$.jar \
-    --fluss.bootstrap.servers coordinator-server:9123 \
-    --datalake.format paimon \
-    --datalake.paimon.metastore filesystem \
-    --datalake.paimon.warehouse s3://fluss/paimon \
-    --datalake.paimon.s3.endpoint http://rustfs:9000 \
-    --datalake.paimon.s3.access.key rustfsadmin \
-    --datalake.paimon.s3.secret.key rustfsadmin \
-    --datalake.paimon.s3.path.style.access true
+docker compose run --rm sql-client
 ```
-
-You should see a Flink Job tiering data from Fluss to Paimon running in the
-[Flink Web UI](http://localhost:8083/).
-
-## Query with Union Read
-
-The Gateway's 1.0 preview doesn't support record reads, so this guide uses
-Flink SQL to query the table you created over REST — Fluss tables are
-identical regardless of which API created them.
-
-Enter the Flink SQL CLI container:
-
-```shell
-docker compose run sql-client
-```
-
 Create the Fluss catalog and switch to it:
 
 ```sql title="Flink SQL"
@@ -404,45 +383,70 @@ CREATE CATALOG fluss_catalog WITH (
 
 ```sql title="Flink SQL"
 USE CATALOG fluss_catalog;
-```
-
-```sql title="Flink SQL"
 USE gateway_demo;
-```
-
-Switch to batch mode and query only the Paimon-tiered snapshot with the
-`$lake` suffix:
-
-```sql title="Flink SQL"
 SET 'sql-client.execution.result-mode' = 'tableau';
-```
-
-```sql title="Flink SQL"
 SET 'execution.runtime-mode' = 'batch';
 ```
-
-```sql title="Flink SQL"
--- wait for the ~30s datalake.freshness window before running this
-SELECT snapshot_id, total_record_count FROM orders$lake$snapshots;
-```
-
-```sql title="Flink SQL"
-SELECT order_id, customer, amount_cents, status FROM orders$lake;
-```
-
-Now query the table directly, which performs a Union Read. For a
-primary-key table, `orders` isn't a raw concatenation of two
-stores — it gives you the **current unified view** of the table's state,
-combining whatever's still in Fluss with what's already tiered to Paimon.
-`orders$lake`, by contrast, is the **lake-only view**: high
-performance, but reflecting only what's been tiered so far.
+Query the table immediately after writing – no need to wait for tiering:
 
 ```sql title="Flink SQL"
 SELECT order_id, customer, amount_cents, status FROM orders;
 ```
 
-To see this difference, write one more record through the Gateway from
-another terminal:
+The result includes all three orders even though Paimon has not committed
+its first snapshot yet. Union Read gets the newest rows directly from Fluss
+and combines them with any data already tiered:
+
+```text
++----------+----------+---------------+---------+
+| order_id | customer | amount_cents  | status  |
++----------+----------+---------------+---------+
+|        1 |    Alice |          4599 | placed  |
+|        2 |      Bob |         12000 | placed  |
+|        3 |    Carol |           750 | placed  |
++----------+----------+---------------+---------+
+```
+
+## Start the Lakehouse Tiering Service
+
+Submit the Lakehouse Tiering Service as a detached Flink job:
+
+```shell
+docker compose exec jobmanager \
+    /opt/flink/bin/flink run -d \
+    /opt/flink/opt/fluss-flink-tiering-$FLUSS_VERSION$.jar \
+    --fluss.bootstrap.servers coordinator-server:9123 \
+    --datalake.format paimon \
+    --datalake.paimon.metastore filesystem \
+    --datalake.paimon.warehouse s3://fluss/paimon \
+    --datalake.paimon.s3.endpoint http://rustfs:9000 \
+    --datalake.paimon.s3.access.key rustfsadmin \
+    --datalake.paimon.s3.secret.key rustfsadmin \
+    --datalake.paimon.s3.path.style.access true
+```
+
+The [Flink Web UI](http://localhost:8083/) should show one running tiering job.
+
+## Verify Data in Paimon
+
+After approximately 30 seconds, inspect the Paimon snapshots:
+
+```sql title="Flink SQL"
+SELECT snapshot_id, total_record_count
+FROM orders$lake$snapshots
+ORDER BY snapshot_id;
+```
+
+Then check the lake row count:
+
+```sql title="Flink SQL"
+SELECT COUNT(*) AS lake_rows FROM orders$lake;
+```
+
+The count becomes `3` after the tiering cycle commits the rows.
+
+To see the difference between the two query forms, write one more record
+through the Gateway from another terminal:
 
 ```bash
 curl -sS --fail-with-body -X POST \
@@ -451,18 +455,35 @@ curl -sS --fail-with-body -X POST \
   -d '{"entries": [{"id": "order-4", "upsert": {"order_id": 4, "customer": "Dave", "amount_cents": 2200, "status": "placed"}}]}'
 ```
 
-Re-run the query on `orders` in the SQL client — `order_id 4`
-appears immediately in the unified view. The lake-only view,
-`orders$lake`, will reflect it once the tiering service has
-processed it, subject to the configured `table.datalake.freshness`.
+Re-run `SELECT ... FROM orders` in the SQL client – `order_id 4` appears
+immediately in the unified view. The lake-only view, `orders$lake`, will
+reflect it once the tiering service has processed it.
 
-### Quitting SQL Client
+The two query forms serve different purposes:
+
+| Query | Data read | Expected freshness |
+|---|---|---|
+| `SELECT ... FROM orders` | Fluss hot data + latest Paimon snapshot | Sub-second |
+| `SELECT ... FROM orders$lake` | Paimon only | ~30s tiering window |
+
+### Quitting the SQL Client
 
 ```sql title="Flink SQL"
 exit;
 ```
-After finishing the tutorial, run `exit` to exit the Flink SQL CLI
-container.
+
+## What This Quickstart Demonstrates
+
+For this use case, the application does not need to create or operate:
+
+- a Kafka topic and producer;
+- a Flink ingestion job;
+- a Paimon writer;
+- separate schemas for the streaming and lake tables.
+
+The reusable Lakehouse Tiering Service still runs as a Flink job, but it is
+a shared infrastructure for all lake-enabled Fluss tables rather than
+application-specific ingestion code. The application only speaks HTTP.
 
 ## Preview limitations
 
