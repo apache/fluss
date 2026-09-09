@@ -1065,6 +1065,14 @@ pub struct GetClusterHealthResponse {
     /// PbClusterHealthStatus: GREEN=0, YELLOW=1, RED=2, UNKNOWN=3
     #[prost(int32, required, tag = "5")]
     pub status: i32,
+    /// Whether the answering coordinator is the current leader. A standby coordinator
+    /// answers with is_leader=false, status=UNKNOWN and zeroed replica counts.
+    #[prost(bool, optional, tag = "6")]
+    pub is_leader: ::core::option::Option<bool>,
+    /// Whether the coordinator group currently has an elected leader (possibly another
+    /// server). Lets a standby's readiness probe certify a functioning group.
+    #[prost(bool, optional, tag = "7")]
+    pub leader_elected: ::core::option::Option<bool>,
 }
 /// --------------- Inner classes ----------------
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]

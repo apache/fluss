@@ -814,6 +814,12 @@ message GetClusterHealthResponse {
   required int32 num_leader_replicas = 3;
   required int32 active_leader_replicas = 4;
   required int32 status = 5; // PbClusterHealthStatus: GREEN=0, YELLOW=1, RED=2, UNKNOWN=3
+  // Whether the answering coordinator is the current leader. A standby coordinator
+  // answers with is_leader=false, status=UNKNOWN and zeroed replica counts.
+  optional bool is_leader = 6;
+  // Whether the coordinator group currently has an elected leader (possibly another
+  // server). Lets a standby's readiness probe certify a functioning group.
+  optional bool leader_elected = 7;
 }
 
 
