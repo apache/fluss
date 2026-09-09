@@ -17,9 +17,11 @@
 
 package org.apache.fluss.server.coordinator;
 
+import org.apache.fluss.cluster.Endpoint;
 import org.apache.fluss.server.zk.NOPErrorHandler;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.ZooKeeperExtension;
+import org.apache.fluss.server.zk.data.CoordinatorAddress;
 import org.apache.fluss.server.zk.data.ZkData;
 import org.apache.fluss.testutils.common.AllCallbackWrapper;
 
@@ -28,6 +30,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 
 import java.time.Duration;
+import java.util.Collections;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -133,7 +136,14 @@ class CoordinatorLeaderElectionTest {
             // before the election starts there is nothing to report
             assertThat(leaderElection.isLeaderElected()).isFalse();
 
-            leaderElection.startElectLeaderAsync(() -> {}, ignored -> {});
+            // the leader registers its address during initialization, as CoordinatorServer does
+            CoordinatorAddress leaderAddress =
+                    new CoordinatorAddress(
+                            "coordinator-elected-leader",
+                            Collections.singletonList(new Endpoint("localhost", 9124, "CLIENT")));
+            leaderElection.startElectLeaderAsync(
+                    () -> registerLeader(leaderAddress),
+                    ignored -> unregisterLeader(leaderAddress));
             waitUntil(
                     leaderElection::isLeader,
                     Duration.ofSeconds(30),
@@ -182,6 +192,8 @@ class CoordinatorLeaderElectionTest {
             assertThat(cleanupFinished.await(30, TimeUnit.SECONDS)).isTrue();
             assertThat(cleanupCause.get()).isSameAs(initializationFailure);
             assertThat(failedElection.isLeader()).isFalse();
+            // the latch is still held, but no leader is registered: not an elected leader
+            assertThat(failedElection.isLeaderElected()).isFalse();
             assertThat(getElectionNodeCount()).isEqualTo(initialElectionNodes + 1);
 
             followerElection.startElectLeaderAsync(followerBecameLeader::countDown, ignored -> {});
@@ -242,6 +254,22 @@ class CoordinatorLeaderElectionTest {
 
     private static int getElectionNodeCount() throws Exception {
         return zooKeeperClient.getChildren(ZkData.CoordinatorElectionZNode.path()).size();
+    }
+
+    private static void registerLeader(CoordinatorAddress address) {
+        try {
+            zooKeeperClient.registerCoordinatorLeader(address);
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    private static void unregisterLeader(CoordinatorAddress address) {
+        try {
+            zooKeeperClient.unregisterCoordinatorLeader(address);
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
     }
 
     private static void waitUntilReleased(CountDownLatch latch) {
