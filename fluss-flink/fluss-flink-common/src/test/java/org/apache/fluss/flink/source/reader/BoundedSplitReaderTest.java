@@ -18,6 +18,10 @@
 package org.apache.fluss.flink.source.reader;
 
 import org.apache.fluss.client.table.scanner.batch.BatchScanner;
+import org.apache.fluss.flink.lake.reader.IndexedLakeSplitRecordIterator;
+import org.apache.fluss.record.ChangeType;
+import org.apache.fluss.record.GenericRecord;
+import org.apache.fluss.record.LogRecord;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.ProjectedRow;
 import org.apache.fluss.row.indexed.IndexedRow;
@@ -78,6 +82,54 @@ class BoundedSplitReaderTest {
                 .isInstanceOf(RuntimeException.class)
                 .hasMessage(
                         "Skip more than the number of total records, has skipped 10 record(s), but remain 1 record(s) to skip.");
+    }
+
+    @Test
+    void testReadPositionAcrossIndexedBatches() throws IOException {
+        List<List<InternalRow>> rowsBySplit = new ArrayList<>();
+        rowsBySplit.add(mockRows(2));
+        rowsBySplit.add(mockRows(2));
+        BoundedSplitReader reader =
+                new BoundedSplitReader(new TestingIndexedBatchScanner(rowsBySplit, 0), 0);
+
+        List<RecordAndPos> records = collectRecords(reader);
+
+        assertThat(records)
+                .extracting(RecordAndPos::getCurrentSplitIndex)
+                .containsExactly(0, 0, 1, 1);
+        assertThat(records)
+                .extracting(RecordAndPos::readRecordsCount)
+                .containsExactly(1L, 2L, 1L, 2L);
+    }
+
+    @Test
+    void testRestoreLegacyPositionAcrossIndexedBatches() throws IOException {
+        List<List<InternalRow>> rowsBySplit = new ArrayList<>();
+        rowsBySplit.add(mockRows(2));
+        rowsBySplit.add(mockRows(2));
+
+        // Existing checkpoints start at split 0 and store a global records-to-skip count.
+        BoundedSplitReader reader =
+                new BoundedSplitReader(new TestingIndexedBatchScanner(rowsBySplit, 0), 3);
+        List<RecordAndPos> records = collectRecords(reader);
+
+        assertThat(records).hasSize(1);
+        assertThat(records.get(0).getCurrentSplitIndex()).isEqualTo(1);
+        assertThat(records.get(0).readRecordsCount()).isEqualTo(2);
+    }
+
+    @Test
+    void testRestoreSplitLocalPosition() throws IOException {
+        List<List<InternalRow>> rowsBySplit = new ArrayList<>();
+        rowsBySplit.add(mockRows(2));
+
+        BoundedSplitReader reader =
+                new BoundedSplitReader(new TestingIndexedBatchScanner(rowsBySplit, 1), 1);
+        List<RecordAndPos> records = collectRecords(reader);
+
+        assertThat(records).hasSize(1);
+        assertThat(records.get(0).getCurrentSplitIndex()).isEqualTo(1);
+        assertThat(records.get(0).readRecordsCount()).isEqualTo(2);
     }
 
     @Test
@@ -164,6 +216,40 @@ class BoundedSplitReaderTest {
         }
     }
 
+    /** A testing scanner that returns one indexed batch for each inner lake split. */
+    private static class TestingIndexedBatchScanner implements BatchScanner {
+
+        private final List<List<InternalRow>> rowsBySplit;
+        private final int firstSplitIndex;
+        private int nextBatchIndex;
+
+        private TestingIndexedBatchScanner(
+                List<List<InternalRow>> rowsBySplit, int firstSplitIndex) {
+            this.rowsBySplit = rowsBySplit;
+            this.firstSplitIndex = firstSplitIndex;
+        }
+
+        @Override
+        @Nullable
+        public CloseableIterator<InternalRow> pollBatch(Duration timeout) {
+            if (nextBatchIndex >= rowsBySplit.size()) {
+                return null;
+            }
+
+            List<LogRecord> records = new ArrayList<>();
+            for (InternalRow row : rowsBySplit.get(nextBatchIndex)) {
+                records.add(new GenericRecord(0, 0, ChangeType.INSERT, row));
+            }
+            return new IndexedLakeSplitRecordIterator(
+                    CloseableIterator.wrap(records.iterator()), firstSplitIndex + nextBatchIndex++);
+        }
+
+        @Override
+        public void close() throws IOException {
+            // do nothing
+        }
+    }
+
     private List<InternalRow> mockRows(int numRows) {
         List<InternalRow> rows = new ArrayList<>(numRows);
         for (int i = 0; i < numRows; i++) {
@@ -206,7 +292,10 @@ class BoundedSplitReaderTest {
             while (recordIter.hasNext()) {
                 RecordAndPos recordAndPos = recordIter.next();
                 records.add(
-                        new RecordAndPos(recordAndPos.scanRecord, recordAndPos.readRecordsCount));
+                        new RecordAndPos(
+                                recordAndPos.scanRecord,
+                                recordAndPos.readRecordsCount,
+                                recordAndPos.getCurrentSplitIndex()));
             }
             recordIter.close();
         }
