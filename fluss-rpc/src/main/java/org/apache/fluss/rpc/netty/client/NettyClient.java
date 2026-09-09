@@ -41,6 +41,7 @@ import org.slf4j.LoggerFactory;
 import javax.annotation.concurrent.ThreadSafe;
 
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
@@ -66,10 +67,10 @@ public final class NettyClient implements RpcClient {
     private final EventLoopGroup eventGroup;
 
     /**
-     * Managed connections to Netty servers. The key is the server uid (e.g., "cs-2", "ts-3"), the
-     * value is the connection.
+     * Managed connections to Netty servers. Connections are identified by server uid, host and
+     * port.
      */
-    private final Map<String, ServerConnection> connections;
+    private final Map<ConnectionKey, ServerConnection> connections;
 
     /** Metric groups for client. */
     private final ClientMetricGroup clientMetricGroup;
@@ -130,11 +131,21 @@ public final class NettyClient implements RpcClient {
     public CompletableFuture<Void> disconnect(String serverUid) {
         LOG.debug("Disconnecting from server {}.", serverUid);
         checkArgument(!isClosed, "Netty client is closed.");
-        ServerConnection connection = connections.remove(serverUid);
-        if (connection != null) {
-            return connection.close();
+
+        List<CompletableFuture<Void>> shutdownFutures = new ArrayList<>();
+
+        for (Map.Entry<ConnectionKey, ServerConnection> entry : connections.entrySet()) {
+            if (entry.getKey().belongsTo(serverUid)
+                    && connections.remove(entry.getKey(), entry.getValue())) {
+                shutdownFutures.add(entry.getValue().close());
+            }
         }
-        return FutureUtils.completedVoidFuture();
+
+        if (shutdownFutures.isEmpty()) {
+            return FutureUtils.completedVoidFuture();
+        }
+
+        return CompletableFuture.allOf(shutdownFutures.toArray(new CompletableFuture<?>[0]));
     }
 
     /**
@@ -146,11 +157,14 @@ public final class NettyClient implements RpcClient {
     @Override
     public boolean isReady(String serverUid) {
         checkArgument(!isClosed, "Netty client is closed.");
-        ServerConnection connection = connections.get(serverUid);
-        if (connection == null) {
-            return false;
+
+        for (Map.Entry<ConnectionKey, ServerConnection> entry : connections.entrySet()) {
+            if (entry.getKey().belongsTo(serverUid) && entry.getValue().isReady()) {
+                return true;
+            }
         }
-        return connection.isReady();
+
+        return false;
     }
 
     /** Send an RPC request to the given server and return a future for the response. */
@@ -166,7 +180,7 @@ public final class NettyClient implements RpcClient {
         try {
             isClosed = true;
             final List<CompletableFuture<Void>> shutdownFutures = new ArrayList<>();
-            for (Map.Entry<String, ServerConnection> conn : connections.entrySet()) {
+            for (Map.Entry<ConnectionKey, ServerConnection> conn : connections.entrySet()) {
                 if (connections.remove(conn.getKey(), conn.getValue())) {
                     shutdownFutures.add(conn.getValue().close());
                 }
@@ -181,9 +195,9 @@ public final class NettyClient implements RpcClient {
     }
 
     private ServerConnection getOrCreateConnection(ServerNode node) {
-        String serverId = node.uid();
+        ConnectionKey connectionKey = ConnectionKey.from(node);
         return connections.computeIfAbsent(
-                serverId,
+                connectionKey,
                 ignored -> {
                     LOG.debug("Creating connection to server {}.", node);
                     return new ServerConnection(
@@ -191,12 +205,53 @@ public final class NettyClient implements RpcClient {
                             node,
                             clientMetricGroup,
                             authenticatorSupplier.get(),
-                            (con, ignore) -> connections.remove(serverId, con));
+                            (con, ignore) -> connections.remove(connectionKey, con));
                 });
     }
 
     @VisibleForTesting
-    Map<String, ServerConnection> connections() {
-        return connections;
+    Collection<ServerConnection> connections() {
+        return connections.values();
+    }
+
+    private static final class ConnectionKey {
+
+        private final String serverUid;
+        private final String host;
+        private final int port;
+
+        private ConnectionKey(String serverUid, String host, int port) {
+            this.serverUid = serverUid;
+            this.host = host;
+            this.port = port;
+        }
+
+        private static ConnectionKey from(ServerNode node) {
+            return new ConnectionKey(node.uid(), node.host(), node.port());
+        }
+
+        private boolean belongsTo(String serverUid) {
+            return this.serverUid.equals(serverUid);
+        }
+
+        @Override
+        public boolean equals(Object o) {
+            if (this == o) {
+                return true;
+            }
+            if (!(o instanceof ConnectionKey)) {
+                return false;
+            }
+            ConnectionKey that = (ConnectionKey) o;
+            return port == that.port && serverUid.equals(that.serverUid) && host.equals(that.host);
+        }
+
+        @Override
+        public int hashCode() {
+            int result = serverUid.hashCode();
+            result = 31 * result + host.hashCode();
+            result = 31 * result + port;
+            return result;
+        }
     }
 }

@@ -25,6 +25,7 @@ import org.apache.fluss.config.Configuration;
 import org.apache.fluss.metrics.groups.MetricGroup;
 import org.apache.fluss.metrics.util.NOPMetricsGroup;
 import org.apache.fluss.rpc.TestingGatewayService;
+import org.apache.fluss.rpc.TestingTabletGatewayService;
 import org.apache.fluss.rpc.messages.ApiMessage;
 import org.apache.fluss.rpc.messages.ApiVersionsRequest;
 import org.apache.fluss.rpc.messages.GetTableInfoRequest;
@@ -147,8 +148,9 @@ final class NettyClientTest {
                         .setClientSoftwareVersion("1.0");
         nettyClient.sendRequest(serverNode, ApiKeys.API_VERSIONS, request).get();
         assertThat(nettyClient.connections().size()).isEqualTo(1);
-        assertThat(nettyClient.connections().get(serverNode.uid()).getServerNode())
-                .isEqualTo(serverNode);
+        assertThat(nettyClient.connections())
+                .extracting(ServerConnection::getServerNode)
+                .containsExactly(serverNode);
 
         // close the netty server.
         nettyServer.close();
@@ -166,8 +168,134 @@ final class NettyClientTest {
         buildNettyServer(1);
         nettyClient.sendRequest(serverNode, ApiKeys.API_VERSIONS, request).get();
         assertThat(nettyClient.connections().size()).isEqualTo(1);
-        assertThat(nettyClient.connections().get(serverNode.uid()).getServerNode())
-                .isEqualTo(serverNode);
+        assertThat(nettyClient.connections())
+                .extracting(ServerConnection::getServerNode)
+                .containsExactly(serverNode);
+    }
+
+    @Test
+    void testSameServerUidWithChangedEndpointUsesNewEndpoint() throws Exception {
+        try (NetUtils.Port firstPort = getAvailablePort();
+                NetUtils.Port secondPort = getAvailablePort()) {
+
+            TestingTabletGatewayService firstService = new TestingTabletGatewayService();
+            TestingTabletGatewayService secondService = new TestingTabletGatewayService();
+
+            MetricGroup firstMetricGroup = NOPMetricsGroup.newInstance();
+            MetricGroup secondMetricGroup = NOPMetricsGroup.newInstance();
+
+            ServerNode firstNode =
+                    new ServerNode(1, "localhost", firstPort.getPort(), ServerType.TABLET_SERVER);
+
+            ServerNode secondNode =
+                    new ServerNode(1, "localhost", secondPort.getPort(), ServerType.TABLET_SERVER);
+
+            try (NettyServer firstServer =
+                            new NettyServer(
+                                    conf,
+                                    Collections.singleton(
+                                            new Endpoint(
+                                                    firstNode.host(),
+                                                    firstNode.port(),
+                                                    "INTERNAL")),
+                                    firstService,
+                                    firstMetricGroup,
+                                    RequestsMetrics.createTabletServerRequestMetrics(
+                                            firstMetricGroup));
+                    NettyServer secondServer =
+                            new NettyServer(
+                                    conf,
+                                    Collections.singleton(
+                                            new Endpoint(
+                                                    secondNode.host(),
+                                                    secondNode.port(),
+                                                    "INTERNAL")),
+                                    secondService,
+                                    secondMetricGroup,
+                                    RequestsMetrics.createTabletServerRequestMetrics(
+                                            secondMetricGroup))) {
+
+                firstServer.start();
+                secondServer.start();
+
+                ApiVersionsRequest request =
+                        new ApiVersionsRequest()
+                                .setClientSoftwareName("testing_client")
+                                .setClientSoftwareVersion("1.0");
+
+                nettyClient.sendRequest(firstNode, ApiKeys.API_VERSIONS, request).get();
+
+                assertThat(firstService.getProcessorThreadNames()).hasSize(2);
+                assertThat(secondService.getProcessorThreadNames()).isEmpty();
+
+                nettyClient.sendRequest(secondNode, ApiKeys.API_VERSIONS, request).get();
+
+                assertThat(secondService.getProcessorThreadNames()).hasSize(2);
+                assertThat(firstService.getProcessorThreadNames()).hasSize(2);
+            }
+        }
+    }
+
+    @Test
+    void testDisconnectClosesAllConnectionsForSameServerUid() throws Exception {
+        try (NetUtils.Port firstPort = getAvailablePort();
+                NetUtils.Port secondPort = getAvailablePort()) {
+
+            TestingTabletGatewayService firstService = new TestingTabletGatewayService();
+            TestingTabletGatewayService secondService = new TestingTabletGatewayService();
+
+            MetricGroup firstMetricGroup = NOPMetricsGroup.newInstance();
+            MetricGroup secondMetricGroup = NOPMetricsGroup.newInstance();
+
+            ServerNode firstNode =
+                    new ServerNode(1, "localhost", firstPort.getPort(), ServerType.TABLET_SERVER);
+
+            ServerNode secondNode =
+                    new ServerNode(1, "localhost", secondPort.getPort(), ServerType.TABLET_SERVER);
+
+            try (NettyServer firstServer =
+                            new NettyServer(
+                                    conf,
+                                    Collections.singleton(
+                                            new Endpoint(
+                                                    firstNode.host(),
+                                                    firstNode.port(),
+                                                    "INTERNAL")),
+                                    firstService,
+                                    firstMetricGroup,
+                                    RequestsMetrics.createTabletServerRequestMetrics(
+                                            firstMetricGroup));
+                    NettyServer secondServer =
+                            new NettyServer(
+                                    conf,
+                                    Collections.singleton(
+                                            new Endpoint(
+                                                    secondNode.host(),
+                                                    secondNode.port(),
+                                                    "INTERNAL")),
+                                    secondService,
+                                    secondMetricGroup,
+                                    RequestsMetrics.createTabletServerRequestMetrics(
+                                            secondMetricGroup))) {
+
+                firstServer.start();
+                secondServer.start();
+
+                ApiVersionsRequest request =
+                        new ApiVersionsRequest()
+                                .setClientSoftwareName("testing_client")
+                                .setClientSoftwareVersion("1.0");
+
+                nettyClient.sendRequest(firstNode, ApiKeys.API_VERSIONS, request).get();
+                nettyClient.sendRequest(secondNode, ApiKeys.API_VERSIONS, request).get();
+
+                assertThat(nettyClient.connections()).hasSize(2);
+
+                nettyClient.disconnect(firstNode.uid()).get();
+
+                assertThat(nettyClient.connections()).isEmpty();
+            }
+        }
     }
 
     @Test
