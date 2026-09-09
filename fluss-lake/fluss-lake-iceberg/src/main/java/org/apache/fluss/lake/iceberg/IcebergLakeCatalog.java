@@ -27,6 +27,7 @@ import org.apache.fluss.lake.iceberg.utils.IcebergCatalogUtils;
 import org.apache.fluss.lake.iceberg.utils.IcebergPartitionSpecUtils;
 import org.apache.fluss.lake.iceberg.utils.IcebergUtils;
 import org.apache.fluss.lake.lakestorage.LakeCatalog;
+import org.apache.fluss.metadata.LakeTableUtil;
 import org.apache.fluss.metadata.TableChange;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePath;
@@ -60,6 +61,7 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 
 import static org.apache.fluss.lake.iceberg.IcebergSchemaUtils.LEGACY_SYSTEM_COLUMNS;
@@ -100,6 +102,7 @@ public class IcebergLakeCatalog implements LakeCatalog {
                 keys.size() <= 1,
                 "Iceberg format supports at most one bucket key, but got: %s",
                 keys);
+        validateLakeTablePath(tablePath, context);
 
         // convert Fluss table path to iceberg table
         boolean isPkTable = tableDescriptor.hasPrimaryKey();
@@ -164,6 +167,7 @@ public class IcebergLakeCatalog implements LakeCatalog {
                 if (change instanceof TableChange.SchemaChange) {
                     schemaChanges.add(change);
                 } else {
+                    rejectLakeTablePathChange(change);
                     propertyChanges.add(change);
                 }
             }
@@ -306,6 +310,45 @@ public class IcebergLakeCatalog implements LakeCatalog {
 
     private TableIdentifier toIcebergTableIdentifier(TablePath tablePath) {
         return TableIdentifier.of(tablePath.getDatabaseName(), tablePath.getTableName());
+    }
+
+    private static void rejectLakeTablePathChange(TableChange tableChange) {
+        Optional<String> optionKey = LakeTableUtil.getLakeTablePathOptionKey(tableChange);
+        if (!optionKey.isPresent()) {
+            return;
+        }
+        throw new InvalidAlterTableException(
+                String.format(
+                        "Cannot alter lake table path option '%s' after the Iceberg table has been "
+                                + "created.",
+                        optionKey.get()));
+    }
+
+    /**
+     * Prevents an existing Iceberg table from being rebound to a different physical path.
+     *
+     * <p>For a disabled Fluss table, the current path may only be a candidate resolved from its
+     * options. When the requested path differs, the current Iceberg table must exist before the
+     * mapping is treated as immutable. This still allows a custom path to be configured when lake
+     * storage is enabled for the first time.
+     */
+    private void validateLakeTablePath(TablePath targetLakeTablePath, Context context) {
+        TablePath currentLakeTablePath = context.getCurrentLakeTablePath();
+        if (context.isCreatingFlussTable() || currentLakeTablePath == null) {
+            return;
+        }
+        if (currentLakeTablePath.equals(targetLakeTablePath)) {
+            // Re-enable the existing mapping without querying Iceberg.
+            return;
+        }
+        if (icebergCatalog.tableExists(toIcebergTableIdentifier(currentLakeTablePath))) {
+            // An existing table at the current path proves that the mapping has already been used.
+            throw new InvalidAlterTableException(
+                    String.format(
+                            "The Iceberg table path can only be altered before the Iceberg table "
+                                    + "is created. Current path: %s, target path: %s.",
+                            currentLakeTablePath, targetLakeTablePath));
+        }
     }
 
     private void createTable(
