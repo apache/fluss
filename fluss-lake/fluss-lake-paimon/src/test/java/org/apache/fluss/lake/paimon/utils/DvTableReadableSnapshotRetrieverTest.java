@@ -24,6 +24,7 @@ import org.apache.fluss.client.admin.Admin;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.FlussRuntimeException;
+import org.apache.fluss.exception.LakeTableSnapshotNotExistException;
 import org.apache.fluss.flink.tiering.committer.FlussTableLakeSnapshotCommitter;
 import org.apache.fluss.lake.committer.LakeCommitResult;
 import org.apache.fluss.metadata.PartitionInfo;
@@ -41,6 +42,7 @@ import org.apache.paimon.catalog.Identifier;
 import org.apache.paimon.data.BinaryRow;
 import org.apache.paimon.data.BinaryString;
 import org.apache.paimon.data.GenericRow;
+import org.apache.paimon.options.ExpireConfig;
 import org.apache.paimon.options.Options;
 import org.apache.paimon.table.FileStoreTable;
 import org.junit.jupiter.api.AfterEach;
@@ -65,6 +67,7 @@ import static org.apache.fluss.lake.paimon.utils.PaimonTestUtils.CompactHelper;
 import static org.apache.fluss.lake.paimon.utils.PaimonTestUtils.writeAndCommitData;
 import static org.apache.fluss.server.utils.LakeStorageUtils.extractLakeProperties;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Unit test for {@link DvTableReadableSnapshotRetriever} using real Paimon tables. */
 class DvTableReadableSnapshotRetrieverTest {
@@ -432,6 +435,61 @@ class DvTableReadableSnapshotRetrieverTest {
     }
 
     @Test
+    void testRetentionAdvancesWhenColdBucketAnchorsExpire() throws Exception {
+        int bucket0 = 0;
+        int bucket1 = 1;
+        TablePath tablePath = TablePath.of(DEFAULT_DB, "test_dv_expired_anchor_retention");
+        tableId = createDvTable(tablePath, 2);
+        FileStoreTable fileStoreTable = getPaimonTable(tablePath);
+        CompactHelper compactHelper = new CompactHelper(fileStoreTable, compactionTempDir);
+
+        TableBucket tb0 = new TableBucket(tableId, bucket0);
+        TableBucket tb1 = new TableBucket(tableId, bucket1);
+        Map<TableBucket, Long> tieredOffsets = new HashMap<>();
+        tieredOffsets.put(tb0, 3L);
+        tieredOffsets.put(tb1, 3L);
+
+        // Bucket0 is flushed first, so its anchor will expire before bucket1's anchor.
+        Map<Integer, List<GenericRow>> initialRows = new HashMap<>();
+        initialRows.put(bucket0, generateRows(bucket0, 0, 3));
+        initialRows.put(bucket1, generateRows(bucket1, 0, 3));
+        long snapshot1 = writeAndCommitData(fileStoreTable, initialRows);
+        commitSnapshot(tableId, tablePath, snapshot1, tieredOffsets, null);
+        compactHelper.compactBucket(bucket0).commit();
+        long snapshot2 = latestSnapshot(fileStoreTable);
+
+        long snapshot3 =
+                writeAndCommitData(
+                        fileStoreTable,
+                        Collections.singletonMap(bucket1, generateRows(bucket1, 3, 6)));
+        tieredOffsets.put(tb1, 6L);
+        commitSnapshot(tableId, tablePath, snapshot3, tieredOffsets, null);
+        compactHelper.compactBucket(bucket1).commit();
+        long snapshot4 = latestSnapshot(fileStoreTable);
+
+        fileStoreTable
+                .newExpireSnapshots()
+                .config(ExpireConfig.builder().snapshotRetainMax(3).build())
+                .expire();
+        assertThat(fileStoreTable.snapshotManager().earliestSnapshotId()).isEqualTo(snapshot2);
+
+        // Bucket0's flush is expired, while bucket1 still resolves to snapshot3. The unresolved
+        // bucket must not discard bucket1's retention bound.
+        long snapshot5 = writeAndCommitData(fileStoreTable, Collections.emptyMap());
+        DvTableReadableSnapshotRetriever.ReadableSnapshotResult result =
+                retrieveReadableSnapshotAndOffsets(tablePath, fileStoreTable, snapshot5);
+        assertThat(result).isNotNull();
+        assertThat(result.getReadableSnapshotId()).isEqualTo(snapshot4);
+        assertThat(result.getEarliestSnapshotIdToKeep()).isEqualTo(snapshot3);
+        commitSnapshot(tableId, tablePath, snapshot5, tieredOffsets, result);
+        assertThatThrownBy(() -> flussAdmin.getLakeSnapshot(tablePath, snapshot1).get())
+                .rootCause()
+                .isInstanceOf(LakeTableSnapshotNotExistException.class);
+        assertThat(flussAdmin.getLakeSnapshot(tablePath, snapshot3).get().getSnapshotId())
+                .isEqualTo(snapshot3);
+    }
+
+    @Test
     void testGetReadableSnapshotAndOffsetsForPartitionedTable() throws Exception {
         String partition0 = "p0";
         String partition1 = "p1";
@@ -732,9 +790,12 @@ class DvTableReadableSnapshotRetrieverTest {
         assertThat(readableSnapshotAndOffsets.getReadableOffsets())
                 .isEqualTo(expectedReadableOffsets);
 
-        // After compact 13, all buckets have no L0 in the compacted snapshot, we only need
-        // to keep the previous append snapshot 12
-        assertThat(readableSnapshotAndOffsets.getEarliestSnapshotIdToKeep()).isEqualTo(snapshot12);
+        // All buckets have no L0 in the compacted snapshot, but each bucket's base is anchored to
+        // the previous APPEND of its most recent flush: partition0/bucket0 -> snapshot6 (flushed at
+        // s7, never flushed since), partition1/bucket0 -> snapshot9, partition0/bucket1 ->
+        // snapshot12. The earliest snapshot we must keep is the minimum of these anchors
+        // (snapshot6), since a future recomputation for partition0/bucket0 would trace back to it.
+        assertThat(readableSnapshotAndOffsets.getEarliestSnapshotIdToKeep()).isEqualTo(snapshot6);
     }
 
     private long latestSnapshot(FileStoreTable fileStoreTable) {
