@@ -329,10 +329,6 @@ public final class RecordAccumulator {
     /** Re-enqueue a batch unless it was completed concurrently. */
     public boolean reEnqueue(ReadyWriteBatch readyWriteBatch) {
         WriteBatch batch = readyWriteBatch.writeBatch();
-        if (batch.isDone()) {
-            return false;
-        }
-        batch.reEnqueued();
         Deque<WriteBatch> deque =
                 getOrCreateDeque(readyWriteBatch.tableBucket(), batch.physicalTablePath());
         synchronized (deque) {

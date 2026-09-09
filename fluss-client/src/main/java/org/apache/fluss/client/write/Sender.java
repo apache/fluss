@@ -439,14 +439,8 @@ public class Sender implements Runnable {
                     batches);
         } else {
             writeBatchByTable.forEach(
-                (tableId, writeBatches) -> {
-                    try {
-                        sendWriteRequestsForTable(gateway, tableId, acks, writeBatches);
-                    } catch (Exception e) {
-                        handleWriteRequestException(e, writeBatches);
-                    }
-                }
-            );
+                    (tableId, writeBatches) ->
+                            sendWriteRequestsForTable(gateway, tableId, acks, writeBatches));
         }
     }
 
@@ -487,18 +481,23 @@ public class Sender implements Runnable {
         if (writeBatches.isEmpty()) {
             return;
         }
-        if (logBatches) {
-            sendProduceLogRequestAndHandleResponse(
-                    gateway,
-                    makeProduceLogRequest(tableId, acks, maxRequestTimeoutMs, writeBatches),
-                    tableId,
-                    writeBatches);
-        } else {
-            sendPutKvRequestAndHandleResponse(
-                    gateway,
-                    makePutKvRequest(tableId, acks, maxRequestTimeoutMs, writeBatches),
-                    tableId,
-                    writeBatches);
+        try {
+            if (logBatches) {
+                sendProduceLogRequestAndHandleResponse(
+                        gateway,
+                        makeProduceLogRequest(tableId, acks, maxRequestTimeoutMs, writeBatches),
+                        tableId,
+                        writeBatches);
+            } else {
+                sendPutKvRequestAndHandleResponse(
+                        gateway,
+                        makePutKvRequest(tableId, acks, maxRequestTimeoutMs, writeBatches),
+                        tableId,
+                        writeBatches);
+            }
+        } catch (Exception e) {
+            // A synchronous failure belongs only to the batches in this individual RPC.
+            handleWriteRequestException(e, writeBatches);
         }
     }
 
