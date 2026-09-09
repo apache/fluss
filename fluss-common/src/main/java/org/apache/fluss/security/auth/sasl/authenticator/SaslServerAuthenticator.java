@@ -27,6 +27,7 @@ import org.apache.fluss.security.auth.sasl.jaas.LoginManager;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import javax.annotation.Nullable;
 import javax.security.sasl.SaslException;
 import javax.security.sasl.SaslServer;
 
@@ -56,6 +57,12 @@ public class SaslServerAuthenticator implements ServerAuthenticator {
         }
         this.enabledMechanisms =
                 enabledMechanisms.stream().map(String::toUpperCase).collect(Collectors.toList());
+    }
+
+    /** Returns a property negotiated during the SASL exchange, or {@code null} if it is not set. */
+    @Nullable
+    protected Object negotiatedProperty(String propName) {
+        return saslServer.getNegotiatedProperty(propName);
     }
 
     @Override
