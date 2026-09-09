@@ -23,6 +23,7 @@
 
 <suppressions>
     <suppress files="DataTypes.java" checks="MethodNameCheck"/>
+    <suppress files="FlussAdminITCase.java" checks="FileLength"/>
 
     <!-- target directory is not relevant for checkstyle -->
     <suppress

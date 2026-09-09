@@ -33,6 +33,7 @@ import org.apache.fluss.cluster.rebalance.ServerTag;
 import org.apache.fluss.config.cluster.AlterConfig;
 import org.apache.fluss.config.cluster.ConfigEntry;
 import org.apache.fluss.exception.FlussRuntimeException;
+import org.apache.fluss.exception.InvalidServerTypeException;
 import org.apache.fluss.exception.LeaderNotAvailableException;
 import org.apache.fluss.exception.NotCoordinatorLeaderException;
 import org.apache.fluss.exception.RetriableException;
@@ -164,7 +165,8 @@ public class FlussAdmin implements Admin {
                         metadataUpdater::getCoordinatorServer, client, AdminGateway.class);
         // Refresh metadata for recoverable failures, but don't retry generic network errors because
         // a non-idempotent write may already have succeeded. NotCoordinatorLeaderException is safe
-        // to retry because the standby rejects the request before invoking the coordinator API.
+        // to retry because the standby rejects the request before invoking the coordinator API,
+        // and InvalidServerTypeException is raised during the handshake before sending the request.
         this.gateway =
                 RetryableGatewayClientProxy.createRetryableGatewayProxy(
                         rawGateway,
@@ -173,7 +175,9 @@ public class FlussAdmin implements Admin {
                         cause ->
                                 cause instanceof NotCoordinatorLeaderException
                                         || cause instanceof RetriableException,
-                        NotCoordinatorLeaderException.class::isInstance,
+                        cause ->
+                                cause instanceof NotCoordinatorLeaderException
+                                        || cause instanceof InvalidServerTypeException,
                         AdminGateway.class);
         AdminGateway rawReadOnlyGateway =
                 GatewayClientProxy.createGatewayProxy(
