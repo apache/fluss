@@ -73,6 +73,16 @@ tests:
           pattern: 'data\.dirs:'
         template: templates/configmap.yaml
 
+  - it: keeps a numeric-looking legacy storageClass a string
+    set:
+      tablet.storage.enabled: true
+      tablet.storage.storageClass: "1234"
+    asserts:
+      - equal:
+          path: spec.volumeClaimTemplates[0].spec.storageClassName
+          value: "1234"
+        template: templates/sts-tablet.yaml
+
   - it: renders one claim, one mount, and data.dirs per configured volume
     set:
       tablet.storage.enabled: true
@@ -228,6 +238,35 @@ tests:
           errorMessage: "VALUES VALIDATION:\ntablet.storage.volumes: every entry must set name"
         template: templates/NOTES.txt
 
+  - it: fails when a volume name is not a string
+    set:
+      tablet.storage.enabled: true
+      tablet.storage.volumes:
+        - name: 1
+          size: 100Gi
+    asserts:
+      - failedTemplate:
+          errorMessage: "VALUES VALIDATION:\ntablet.storage.volumes: volume name 1 must be a string (quote it)"
+        template: templates/NOTES.txt
+
+  - it: keeps a numeric-looking volume name a string
+    set:
+      tablet.storage.enabled: true
+      tablet.storage.volumes:
+        - name: "1"
+          size: 100Gi
+    asserts:
+      - equal:
+          path: spec.volumeClaimTemplates[0].metadata.name
+          value: "1"
+        template: templates/sts-tablet.yaml
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: "1"
+            mountPath: /tmp/fluss/1
+        template: templates/sts-tablet.yaml
+
   - it: fails on duplicate volume names
     set:
       tablet.storage.enabled: true
@@ -249,7 +288,18 @@ tests:
           size: 100Gi
     asserts:
       - failedTemplate:
-          errorMessage: "VALUES VALIDATION:\ntablet.storage.volumes: volume name \"bad_Name\" must be a lowercase DNS-1123 label (^[a-z0-9]([-a-z0-9]*[a-z0-9])?$)"
+          errorMessage: "VALUES VALIDATION:\ntablet.storage.volumes: volume name \"bad_Name\" must be a lowercase DNS-1123 label, at most 63 characters (^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$)"
+        template: templates/NOTES.txt
+
+  - it: fails on a volume name longer than 63 characters
+    set:
+      tablet.storage.enabled: true
+      tablet.storage.volumes:
+        - name: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+          size: 100Gi
+    asserts:
+      - failedTemplate:
+          errorMessage: "VALUES VALIDATION:\ntablet.storage.volumes: volume name \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\" must be a lowercase DNS-1123 label, at most 63 characters (^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$)"
         template: templates/NOTES.txt
 
   - it: fails on a chart-reserved volume name
@@ -260,7 +310,18 @@ tests:
           size: 100Gi
     asserts:
       - failedTemplate:
-          errorMessage: "VALUES VALIDATION:\ntablet.storage.volumes: volume name \"sasl-config\" collides with a chart-managed volume (fluss-conf, sasl-config, secret-*)"
+          errorMessage: "VALUES VALIDATION:\ntablet.storage.volumes: volume name \"sasl-config\" collides with a chart-managed volume (fluss-conf, sasl-template, sasl-config, secret-*)"
+        template: templates/NOTES.txt
+
+  - it: fails on the JAAS template volume name
+    set:
+      tablet.storage.enabled: true
+      tablet.storage.volumes:
+        - name: sasl-template
+          size: 100Gi
+    asserts:
+      - failedTemplate:
+          errorMessage: "VALUES VALIDATION:\ntablet.storage.volumes: volume name \"sasl-template\" collides with a chart-managed volume (fluss-conf, sasl-template, sasl-config, secret-*)"
         template: templates/NOTES.txt
 
   - it: fails when configurationOverrides also sets data.dirs
