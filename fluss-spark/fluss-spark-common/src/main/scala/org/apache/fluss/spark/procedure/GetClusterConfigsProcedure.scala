@@ -51,7 +51,12 @@ class GetClusterConfigsProcedure(tableCatalog: TableCatalog) extends BaseProcedu
   }
 
   override def call(args: InternalRow): Array[InternalRow] = {
-    val configKeys = if (args.numFields > 0 && !args.isNullAt(0)) {
+    val provided = args.numFields > 0 && !args.isNullAt(0)
+    checkRequiredArgument(GetClusterConfigsProcedure.PARAMETERS(0), provided)
+    if (provided) {
+      checkArgumentType(GetClusterConfigsProcedure.PARAMETERS(0), args.getArray(0))
+    }
+    val configKeys = if (provided) {
       val keysArray = args.getArray(0)
       (0 until keysArray.numElements())
         .map(i => keysArray.getUTF8String(i).toString)
