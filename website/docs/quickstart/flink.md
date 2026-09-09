@@ -417,4 +417,4 @@ docker compose down -v
 to stop all containers.
 
 ## Learn more
-Now that you're up and running with Fluss and Flink, check out the [Apache Flink Engine](engine-flink/getting-started.md) docs to learn more features with Flink or [this guide](/maintenance/observability/quickstart.md) to learn how to set up an observability stack for Fluss and Flink.
+Now that you're up and running with Fluss and Flink, check out the [Apache Flink Engine](engine-flink/getting-started.md) docs to learn more features with Flink, [Flink CDC Integration](engine-flink/flink-cdc-integration.md) to sync database changes into Fluss, or [this guide](/maintenance/observability/quickstart.md) to learn how to set up an observability stack for Fluss and Flink.
