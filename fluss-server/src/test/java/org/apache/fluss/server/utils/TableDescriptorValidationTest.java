@@ -154,6 +154,19 @@ class TableDescriptorValidationTest {
     }
 
     @Test
+    void testCustomLakePathRejectedForUnsupportedFormat() {
+        assertThatThrownBy(
+                        () ->
+                                validate(
+                                        tableDescriptorWithLakeName(
+                                                ConfigOptions.TABLE_DATALAKE_DATABASE_NAME,
+                                                "lance_db"),
+                                        DataLakeFormat.LANCE))
+                .isInstanceOf(InvalidConfigException.class)
+                .hasMessageContaining("only supported for Paimon and Iceberg");
+    }
+
+    @Test
     void testKvFormatVersionStillRejectsValuesAboveVersionTwo() {
         TableDescriptor descriptor =
                 pkTableWithProperty(
@@ -265,16 +278,15 @@ class TableDescriptorValidationTest {
         assertThatCode(() -> validate(tableDescriptor, DataLakeFormat.PAIMON))
                 .doesNotThrowAnyException();
 
-        // custom lake paths are not supported for Iceberg
-        assertThatThrownBy(
+        // custom lake paths are now supported for Iceberg
+        assertThatCode(
                         () ->
                                 validate(
                                         tableDescriptorWithLakeName(
                                                 ConfigOptions.TABLE_DATALAKE_TABLE_NAME,
                                                 "lake_table"),
                                         DataLakeFormat.ICEBERG))
-                .isInstanceOf(InvalidConfigException.class)
-                .hasMessageContaining("Custom lake table path is only supported for Paimon");
+                .doesNotThrowAnyException();
     }
 
     private static Stream<Arguments> supportedKvTTLTimeColumnTypes() {
