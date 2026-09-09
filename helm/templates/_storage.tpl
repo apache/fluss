@@ -29,8 +29,8 @@ Usage:
 {{- toYaml .Values.tablet.storage.volumes -}}
 {{- else -}}
 - name: data
-  size: {{ .Values.tablet.storage.size }}
-  storageClass: {{ .Values.tablet.storage.storageClass }}
+  size: {{ .Values.tablet.storage.size | toYaml }}
+  storageClass: {{ .Values.tablet.storage.storageClass | toYaml }}
 {{- end -}}
 {{- end -}}
 
@@ -59,15 +59,17 @@ Usage:
 {{- range .Values.tablet.storage.volumes -}}
   {{- if not .name -}}
     {{- $messages = append $messages "tablet.storage.volumes: every entry must set name" -}}
+  {{- else if not (kindIs "string" .name) -}}
+    {{- $messages = append $messages (printf "tablet.storage.volumes: volume name %v must be a string (quote it)" .name) -}}
   {{- else -}}
     {{- if has .name $names -}}
       {{- $messages = append $messages (printf "tablet.storage.volumes: duplicate volume name %q" .name) -}}
     {{- end -}}
-    {{- if or (eq .name "fluss-conf") (eq .name "sasl-config") (hasPrefix "secret-" .name) -}}
-      {{- $messages = append $messages (printf "tablet.storage.volumes: volume name %q collides with a chart-managed volume (fluss-conf, sasl-config, secret-*)" .name) -}}
+    {{- if or (has .name (list "fluss-conf" "sasl-template" "sasl-config")) (hasPrefix "secret-" .name) -}}
+      {{- $messages = append $messages (printf "tablet.storage.volumes: volume name %q collides with a chart-managed volume (fluss-conf, sasl-template, sasl-config, secret-*)" .name) -}}
     {{- end -}}
-    {{- if not (regexMatch "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$" .name) -}}
-      {{- $messages = append $messages (printf "tablet.storage.volumes: volume name %q must be a lowercase DNS-1123 label (^[a-z0-9]([-a-z0-9]*[a-z0-9])?$)" .name) -}}
+    {{- if not (regexMatch "^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$" .name) -}}
+      {{- $messages = append $messages (printf "tablet.storage.volumes: volume name %q must be a lowercase DNS-1123 label, at most 63 characters (^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$)" .name) -}}
     {{- end -}}
     {{- if not .size -}}
       {{- $messages = append $messages (printf "tablet.storage.volumes: entry %q must set size" .name) -}}

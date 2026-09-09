@@ -165,7 +165,7 @@ spec:
             - name: fluss-conf
               mountPath: /opt/conf
             {{- range (include "fluss.tablet.storage.volumes" . | fromYamlArray) }}
-            - name: {{ .name }}
+            - name: {{ .name | toYaml }}
               mountPath: /tmp/fluss/{{ .name }}
             {{- end }}
             {{- if (include "fluss.security.jaas.required" .) }}
@@ -185,7 +185,7 @@ spec:
             name: fluss-conf-file
         {{- if not .Values.tablet.storage.enabled }}
         {{- range (include "fluss.tablet.storage.volumes" . | fromYamlArray) }}
-        - name: {{ .name }}
+        - name: {{ .name | toYaml }}
           emptyDir: {}
         {{- end }}
         {{- end }}
@@ -202,7 +202,7 @@ spec:
   volumeClaimTemplates:
     {{- range (include "fluss.tablet.storage.volumes" . | fromYamlArray) }}
     - metadata:
-        name: {{ .name }}
+        name: {{ .name | toYaml }}
       spec:
         accessModes: [ "ReadWriteOnce" ]
         resources:
