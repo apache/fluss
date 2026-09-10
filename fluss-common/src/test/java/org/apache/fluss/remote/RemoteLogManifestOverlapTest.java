@@ -20,12 +20,14 @@ package org.apache.fluss.remote;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.shaded.guava32.com.google.common.collect.Collections2;
 
 import org.junit.jupiter.api.Test;
 
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.List;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -166,6 +168,19 @@ class RemoteLogManifestOverlapTest {
     }
 
     @Test
+    void testMergeLegacyManifestDoesNotLoseCoveredSuffix() {
+        RemoteLogSegment longer = segment(10L, 40L);
+        RemoteLogManifest result =
+                manifest(longer, segment(20L, 30L))
+                        .trimAndMerge(
+                                Collections.emptyList(),
+                                Collections.singletonList(segment(30L, 35L)));
+
+        assertThat(result.getRemoteLogEndOffset()).isEqualTo(40L);
+        assertThat(result.getRemoteLogSegmentList()).containsExactly(longer);
+    }
+
+    @Test
     void testAlreadyCoveredCandidateIsUnused() {
         RemoteLogSegment covered = segment(2L, 8L);
 
@@ -198,6 +213,119 @@ class RemoteLogManifestOverlapTest {
         assertThat(restored.getRemoteLogSegmentList()).isEmpty();
         assertThat(restored.getRemoteLogEndOffset()).isEqualTo(-1L);
         assertThat(restored.getHighestCopiedEndOffset()).isEqualTo(20L);
+    }
+
+    @Test
+    void testNormalizationPreservesCoverageForEveryEntryOrder() {
+        RemoteLogSegment first = segment(10L, 30L);
+        RemoteLogSegment extension = segment(25L, 40L);
+        RemoteLogSegment afterGap = segment(45L, 50L);
+        List<RemoteLogSegment> segments =
+                Arrays.asList(first, segment(10L, 20L), segment(20L, 25L), extension, afterGap);
+        for (List<RemoteLogSegment> permutation : Collections2.permutations(segments)) {
+            RemoteLogManifest original =
+                    new RemoteLogManifest(TABLE_PATH, TABLE_BUCKET, permutation);
+            RemoteLogManifest normalized = original.normalizeLogicalRanges();
+
+            assertThat(normalized.getRemoteLogSegmentList())
+                    .containsExactly(first.withLogicalRange(10L, 25L), extension, afterGap);
+            assertThat(normalized.normalizeLogicalRanges()).isEqualTo(normalized);
+            assertThat(original.getRemoteLogSegmentList()).containsExactlyElementsOf(permutation);
+            for (long offset = 9L; offset <= 50L; offset++) {
+                final long fetchOffset = offset;
+                boolean originallyCovered =
+                        segments.stream()
+                                .anyMatch(
+                                        segment ->
+                                                segment.logicalStartOffset() <= fetchOffset
+                                                        && fetchOffset
+                                                                < segment.logicalEndOffset());
+                long coveringSegments =
+                        normalized.getRemoteLogSegmentList().stream()
+                                .filter(
+                                        segment ->
+                                                segment.logicalStartOffset() <= fetchOffset
+                                                        && fetchOffset < segment.logicalEndOffset())
+                                .count();
+                assertThat(coveringSegments)
+                        .as("coverage at offset %s", offset)
+                        .isEqualTo(originallyCovered ? 1L : 0L);
+            }
+        }
+    }
+
+    @Test
+    void testNormalizationResolvesIdenticalRangesBySegmentId() {
+        RemoteLogSegment first = segment(10L, 30L);
+        RemoteLogSegment second = segment(10L, 30L);
+        RemoteLogSegment expected =
+                first.remoteLogSegmentId().compareTo(second.remoteLogSegmentId()) < 0
+                        ? first
+                        : second;
+
+        assertThat(manifest(first, second).normalizeLogicalRanges().getRemoteLogSegmentList())
+                .containsExactly(expected);
+        assertThat(manifest(second, first).normalizeLogicalRanges().getRemoteLogSegmentList())
+                .containsExactly(expected);
+    }
+
+    @Test
+    void testNormalizationPreservesClippedRangesAndCopyProgress() {
+        RemoteLogSegment first = segment(0L, 30L).withLogicalRange(10L, 20L);
+        RemoteLogSegment contained = segment(0L, 40L).withLogicalRange(12L, 18L);
+        RemoteLogSegment extension = segment(18L, 50L).withLogicalRange(18L, 25L);
+        RemoteLogManifest original =
+                new RemoteLogManifest(
+                        TABLE_PATH, TABLE_BUCKET, Arrays.asList(extension, contained, first), 90L);
+
+        RemoteLogManifest normalized = original.normalizeLogicalRanges();
+
+        assertThat(normalized.getRemoteLogSegmentList())
+                .containsExactly(first.withLogicalRange(10L, 18L), extension);
+        assertThat(normalized.getRemoteLogStartOffset()).isEqualTo(10L);
+        assertThat(normalized.getRemoteLogEndOffset()).isEqualTo(25L);
+        assertThat(normalized.getHighestCopiedEndOffset()).isEqualTo(90L);
+        RemoteLogManifest restored = RemoteLogManifest.fromJsonBytes(normalized.toJsonBytes());
+        assertThat(restored).isEqualTo(normalized);
+        assertThat(restored.normalizeLogicalRanges()).isEqualTo(normalized);
+
+        // Parsing still exposes every persisted reference, including the contained physical file.
+        assertThat(RemoteLogManifest.fromJsonBytes(original.toJsonBytes())).isEqualTo(original);
+    }
+
+    @Test
+    void testNormalizationKeepsEmptyManifestCopyProgress() {
+        RemoteLogManifest empty =
+                new RemoteLogManifest(TABLE_PATH, TABLE_BUCKET, Collections.emptyList(), 20L);
+
+        assertThat(empty.normalizeLogicalRanges()).isEqualTo(empty);
+        assertThat(empty.normalizeLogicalRanges().getHighestCopiedEndOffset()).isEqualTo(20L);
+    }
+
+    @Test
+    void testDeletingLegacySegmentDoesNotRestoreContainedRange() {
+        RemoteLogSegment visible = segment(10L, 40L);
+        RemoteLogManifest result =
+                manifest(visible, segment(20L, 30L))
+                        .trimAndMerge(Collections.singletonList(visible), Collections.emptyList());
+
+        assertThat(result.getRemoteLogSegmentList()).isEmpty();
+        assertThat(result.getHighestCopiedEndOffset()).isEqualTo(40L);
+    }
+
+    @Test
+    void testDeletingLegacyReplacementDoesNotRestoreHiddenSuffix() {
+        RemoteLogSegment first = segment(10L, 30L);
+        RemoteLogSegment replacement = segment(20L, 40L);
+        RemoteLogManifest result =
+                manifest(first, replacement)
+                        .trimAndMerge(
+                                Collections.singletonList(replacement), Collections.emptyList());
+
+        assertThat(result.getRemoteLogSegmentList())
+                .containsExactly(first.withLogicalRange(10L, 20L));
+        assertThat(result.getRemoteLogEndOffset()).isEqualTo(20L);
+        assertThat(result.getHighestCopiedEndOffset()).isEqualTo(40L);
     }
 
     private static RemoteLogManifest manifest(RemoteLogSegment... segments) {

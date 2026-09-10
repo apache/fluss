@@ -309,15 +309,17 @@ public class RemoteLogTablet {
         inWriteLock(
                 lock,
                 () -> {
+                    RemoteLogManifest normalizedManifest =
+                            manifestSnapshot.normalizeLogicalRanges();
                     reset();
-                    for (RemoteLogSegment segment : manifestSnapshot.getRemoteLogSegmentList()) {
+                    for (RemoteLogSegment segment : normalizedManifest.getRemoteLogSegmentList()) {
                         addSegment(segment);
                     }
-                    remoteSizeInBytes = manifestSnapshot.getRemoteLogSize();
-                    numRemoteLogSegments = manifestSnapshot.getRemoteLogSegmentList().size();
-                    remoteLogStartOffset = manifestSnapshot.getRemoteLogStartOffset();
-                    remoteLogEndOffset = manifestSnapshot.getRemoteLogEndOffset();
-                    currentManifest = manifestSnapshot;
+                    remoteSizeInBytes = normalizedManifest.getRemoteLogSize();
+                    numRemoteLogSegments = normalizedManifest.getRemoteLogSegmentList().size();
+                    remoteLogStartOffset = normalizedManifest.getRemoteLogStartOffset();
+                    remoteLogEndOffset = normalizedManifest.getRemoteLogEndOffset();
+                    currentManifest = normalizedManifest;
                 });
     }
 
