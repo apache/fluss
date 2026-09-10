@@ -19,6 +19,7 @@ package org.apache.fluss.server.replica;
 
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.exception.KvStorageException;
 import org.apache.fluss.exception.OutOfOrderSequenceException;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.LogFormat;
@@ -51,6 +52,7 @@ import org.apache.fluss.server.log.FetchParams;
 import org.apache.fluss.server.log.LogAppendInfo;
 import org.apache.fluss.server.log.LogReadInfo;
 import org.apache.fluss.server.testutils.KvTestUtils;
+import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
 import org.apache.fluss.testutils.DataTestUtils;
 import org.apache.fluss.testutils.common.ManuallyTriggeredScheduledExecutorService;
@@ -111,6 +113,8 @@ import static org.apache.fluss.testutils.LogRecordsAssert.assertThatLogRecords;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.spy;
 
 /** Test for {@link Replica}. */
 final class ReplicaTest extends ReplicaTestBase {
@@ -667,6 +671,146 @@ final class ReplicaTest extends ReplicaTestBase {
                                 Tuple2.of("k2", new Object[] {4, "bk21"}),
                                 Tuple2.of("k3", new Object[] {5, "k3"})));
         KvTestUtils.checkSnapshot(completedSnapshot2, expectedKeyValues, expectedLogOffset);
+    }
+
+    @Test
+    void testSnapshotLookupFailurePreventsEmptyRecovery(@TempDir File snapshotDir)
+            throws Exception {
+        TestSnapshotContext context =
+                new TestSnapshotContext(snapshotDir.getPath()) {
+                    @Override
+                    public FunctionWithException<TableBucket, CompletedSnapshot, Exception>
+                            getLatestCompletedSnapshotProvider() {
+                        return bucket -> {
+                            throw new IOException("Snapshot metadata unavailable");
+                        };
+                    }
+                };
+        Replica replica =
+                makeKvReplica(
+                        DATA1_PHYSICAL_TABLE_PATH_PK,
+                        new TableBucket(DATA1_TABLE_ID_PK, 1),
+                        context);
+        assertThatThrownBy(() -> makeKvReplicaAsLeader(replica, 0))
+                .isInstanceOf(KvStorageException.class)
+                .hasRootCauseMessage("Snapshot metadata unavailable");
+        assertThat(replica.getKvTablet()).isNull();
+        assertThat(replica.getLocalLogEndOffset()).isZero();
+    }
+
+    @Test
+    void testRecoveryMetadataFailurePreservesLiveKv(@TempDir File snapshotDir) throws Exception {
+        TableBucket bucket = new TableBucket(DATA1_TABLE_ID_PK, 1);
+        AtomicBoolean failLookup = new AtomicBoolean(false);
+        ZooKeeperClient failingRemoteMetadata = spy(zkClient);
+        doThrow(new IOException("Remote manifest metadata unavailable"))
+                .when(failingRemoteMetadata)
+                .getRemoteLogManifestHandle(bucket);
+        TestSnapshotContext context =
+                new TestSnapshotContext(snapshotDir.getPath()) {
+                    @Override
+                    public ZooKeeperClient getZooKeeperClient() {
+                        return failingRemoteMetadata;
+                    }
+
+                    @Override
+                    public FunctionWithException<TableBucket, CompletedSnapshot, Exception>
+                            getLatestCompletedSnapshotProvider() {
+                        FunctionWithException<TableBucket, CompletedSnapshot, Exception> provider =
+                                super.getLatestCompletedSnapshotProvider();
+                        return target -> {
+                            if (failLookup.get()) {
+                                throw new IOException("Snapshot metadata unavailable");
+                            }
+                            return provider.apply(target);
+                        };
+                    }
+                };
+        Replica replica = makeKvReplica(DATA1_PHYSICAL_TABLE_PATH_PK, bucket, context);
+        makeKvReplicaAsLeader(replica, 0);
+        putRecordsToLeader(replica, genKvRecordBatch(Tuple2.of("k1", new Object[] {1, "a"})));
+        context.scheduledExecutorService.triggerAllNonPeriodicTasks();
+        context.testKvSnapshotStore.waitUntilSnapshotComplete(bucket, 0);
+        KvTablet liveKv = replica.getKvTablet();
+        long logEndOffset = replica.getLocalLogEndOffset();
+        failLookup.set(true);
+        assertThatThrownBy(() -> makeKvReplicaAsLeader(replica, 1))
+                .isInstanceOf(KvStorageException.class);
+        assertThat(replica.getLeaderEpoch()).isZero();
+        assertThat(replica.isLeader()).isTrue();
+        assertThat(replica.getKvTablet()).isSameAs(liveKv);
+        assertThat(replica.getLocalLogEndOffset()).isEqualTo(logEndOffset);
+        verifyGetKeyValues(
+                replica.getKvTablet(),
+                getKeyValuePairs(genKvRecords(Tuple2.of("k1", new Object[] {1, "a"}))));
+        failLookup.set(false);
+        makeKvReplicaAsLeader(replica, 1);
+        assertThat(replica.getLeaderEpoch()).isEqualTo(1);
+        verifyGetKeyValues(
+                replica.getKvTablet(),
+                getKeyValuePairs(genKvRecords(Tuple2.of("k1", new Object[] {1, "a"}))));
+    }
+
+    @Test
+    void testSnapshotOnlyRecoveryInitializesLogAfterDownload(@TempDir File snapshotDir)
+            throws Exception {
+        TableBucket bucket = new TableBucket(DATA1_TABLE_ID_PK, 1);
+        TestSnapshotContext source = new TestSnapshotContext(snapshotDir.getPath());
+        Replica producer = makeKvReplica(DATA1_PHYSICAL_TABLE_PATH_PK, bucket, source);
+        makeKvReplicaAsLeader(producer);
+        putRecordsToLeader(producer, genKvRecordBatch(Tuple2.of("k1", new Object[] {1, "a"})));
+        source.scheduledExecutorService.triggerAllNonPeriodicTasks();
+        CompletedSnapshot snapshot =
+                source.testKvSnapshotStore.waitUntilSnapshotComplete(bucket, 0);
+        CompletedSnapshot external =
+                new CompletedSnapshot(
+                        bucket,
+                        snapshot.getSnapshotID(),
+                        snapshot.getSnapshotLocation(),
+                        snapshot.getKvSnapshotHandle(),
+                        10_017L,
+                        snapshot.getRowCount(),
+                        snapshot.getAutoIncIDRanges());
+        makeKvReplicaAsFollower(producer, 1);
+        producer.truncateFullyAndStartAt(0L);
+        AtomicBoolean failDownload = new AtomicBoolean(true);
+        TestSnapshotContext context =
+                new TestSnapshotContext(snapshotDir.getPath()) {
+                    @Override
+                    public FunctionWithException<TableBucket, CompletedSnapshot, Exception>
+                            getLatestCompletedSnapshotProvider() {
+                        return ignored -> external;
+                    }
+
+                    @Override
+                    public KvSnapshotDataDownloader getSnapshotDataDownloader() {
+                        return new KvSnapshotDataDownloader(executorService) {
+                            @Override
+                            public void transferAllDataToDirectory(
+                                    KvSnapshotDownloadSpec spec, CloseableRegistry registry)
+                                    throws Exception {
+                                if (failDownload.get()) {
+                                    throw new IOException("Snapshot download unavailable");
+                                }
+                                super.transferAllDataToDirectory(spec, registry);
+                            }
+                        };
+                    }
+                };
+        Replica replica = makeKvReplica(DATA1_PHYSICAL_TABLE_PATH_PK, bucket, context);
+        assertThatThrownBy(() -> makeKvReplicaAsLeader(replica, 2))
+                .isInstanceOf(KvStorageException.class);
+        assertThat(replica.isLeader()).isFalse();
+        assertThat(replica.getLocalLogEndOffset()).isZero();
+        assertThat(replica.getLogHighWatermark()).isZero();
+        failDownload.set(false);
+        makeKvReplicaAsLeader(replica, 3);
+        assertThat(replica.getLocalLogEndOffset()).isEqualTo(10_017L);
+        assertThat(replica.getLogHighWatermark()).isEqualTo(10_017L);
+        assertThat(replica.getLeaderEndOffsetSnapshot()).isEqualTo(10_017L);
+        verifyGetKeyValues(
+                replica.getKvTablet(),
+                getKeyValuePairs(genKvRecords(Tuple2.of("k1", new Object[] {1, "a"}))));
     }
 
     @Test

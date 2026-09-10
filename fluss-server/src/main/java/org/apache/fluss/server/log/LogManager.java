@@ -421,6 +421,22 @@ public final class LogManager extends TabletManagerBase implements ServerReconfi
         }
     }
 
+    /** Durably initializes an empty local log at the given snapshot offset. */
+    public void initializeEmptyLocalTail(TableBucket tableBucket, long endOffset) {
+        LogTablet logTablet = currentLogs.get(tableBucket);
+        if (logTablet == null) {
+            throw new LogStorageException("Log tablet does not exist for " + tableBucket + ".");
+        }
+        logTablet.initializeEmptyLocalTail(endOffset);
+        try {
+            logTablet.flush(true);
+        } catch (IOException e) {
+            throw new LogStorageException(
+                    "Failed to durably initialize the local tail for " + tableBucket + ".", e);
+        }
+        checkpointRecoveryOffsets(logTablet.getDataDir());
+    }
+
     private LogTablet loadLog(
             File dataDir,
             File tabletDir,

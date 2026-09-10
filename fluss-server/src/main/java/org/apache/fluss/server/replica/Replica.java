@@ -457,6 +457,12 @@ public final class Replica {
                             int requestBucketEpoch = data.getBucketEpoch();
                             validateBucketEpoch(requestBucketEpoch);
 
+                            // Resolve recovery metadata before changing role state or dropping KV.
+                            KvRecovery recovery =
+                                    data.getLeaderEpoch() > leaderEpoch && isKvTable()
+                                            ? prepareKvRecovery()
+                                            : null;
+
                             coordinatorEpoch = data.getCoordinatorEpoch();
 
                             long currentTimeMs = clock.milliseconds();
@@ -472,7 +478,7 @@ public final class Replica {
                             if (requestLeaderEpoch > leaderEpoch) {
                                 boolean isNewLeader = !isLeader();
                                 leaderEpoch = requestLeaderEpoch;
-                                onBecomeNewLeader();
+                                onBecomeNewLeader(recovery);
                                 leaderReplicaIdOpt.set(localTabletServerId);
                                 // onBecomeNewLeader may recover a KV snapshot, so start the ISR lag
                                 // grace period after it completes.
@@ -607,11 +613,9 @@ public final class Replica {
 
     // -------------------------------------------------------------------------------------------
 
-    private void onBecomeNewLeader() {
+    private void onBecomeNewLeader(@Nullable KvRecovery recovery) {
         // Clear standby flag — a leader is never a standby replica.
         isStandbyReplica = false;
-
-        updateLeaderEndOffsetSnapshot();
 
         if (isDataLakeEnabled()) {
             registerLakeTieringMetrics();
@@ -623,8 +627,10 @@ public final class Replica {
             // if exist. Otherwise, it'll use still the old kv tablet which will cause data loss
             dropKv();
             // now, we can create a new kv tablet
-            createKv();
+            createKv(checkNotNull(recovery));
         }
+
+        updateLeaderEndOffsetSnapshot();
     }
 
     private void registerLakeTieringMetrics() {
@@ -725,7 +731,7 @@ public final class Replica {
         }
     }
 
-    private void createKv() {
+    private void createKv(KvRecovery recovery) {
         try {
             // create a closeable registry for the closable related to kv
             closeableRegistryForKv = new CloseableRegistry();
@@ -743,11 +749,23 @@ public final class Replica {
         Exception lastError = null;
         for (int i = 1; i <= INIT_KV_TABLET_MAX_RETRY_TIMES; i++) {
             try {
-                snapshotUsed = initKvTablet();
+                if (i > 1) {
+                    recovery = prepareKvRecovery();
+                }
+                snapshotUsed = initKvTablet(recovery);
                 lastError = null;
                 break;
             } catch (Exception e) {
                 lastError = e;
+                if (kvTablet != null) {
+                    try {
+                        checkNotNull(kvManager).dropKv(tableBucket);
+                        kvTablet = null;
+                    } catch (Exception cleanupError) {
+                        e.addSuppressed(cleanupError);
+                        break;
+                    }
+                }
                 LOG.warn(
                         "Failed to init kv tablet for bucket {} on attempt {}/{}.",
                         tableBucket,
@@ -822,7 +840,7 @@ public final class Replica {
      *
      * @return the snapshot used to init kv tablet, empty if no any snapshot.
      */
-    private Optional<CompletedSnapshot> initKvTablet() {
+    private Optional<CompletedSnapshot> initKvTablet(KvRecovery recovery) {
         checkNotNull(kvManager);
         TableConfig tableConfig = getTableConfig();
         long startTime = clock.milliseconds();
@@ -846,8 +864,7 @@ public final class Replica {
         long restoreStartOffset = isHistoricalPartition() ? historicalRecoveryStartOffset() : 0;
         // Lake is the durable base for local historical KV state. Historical replicas therefore
         // never restore a normal KV snapshot, even if one exists from older code.
-        Optional<CompletedSnapshot> optCompletedSnapshot =
-                isHistoricalPartition() ? Optional.empty() : getLatestSnapshot(tableBucket);
+        Optional<CompletedSnapshot> optCompletedSnapshot = recovery.snapshot;
         try {
             Long rowCount;
             AutoIncIDRange autoIncIDRange;
@@ -870,6 +887,9 @@ public final class Replica {
 
                 checkNotNull(kvTablet, "kv tablet should not be null.");
                 restoreStartOffset = completedSnapshot.getLogOffset();
+                if (recovery.initializeLocalLog) {
+                    logManager.initializeEmptyLocalTail(tableBucket, restoreStartOffset);
+                }
                 rowCount =
                         supportsExactRowCount(tableConfig) ? completedSnapshot.getRowCount() : null;
                 // currently, we only support one auto-increment column.
@@ -982,18 +1002,51 @@ public final class Replica {
         return false;
     }
 
+    private KvRecovery prepareKvRecovery() {
+        Optional<CompletedSnapshot> snapshot =
+                isHistoricalPartition() ? Optional.empty() : getLatestSnapshot(tableBucket);
+        boolean initializeLocalLog = false;
+        if (snapshot.isPresent() && snapshot.get().getLogOffset() > logTablet.localLogEndOffset()) {
+            try {
+                if (!snapshotContext
+                        .getZooKeeperClient()
+                        .getRemoteLogManifestHandle(tableBucket)
+                        .isPresent()) {
+                    checkState(
+                            logTablet.localLogEndOffset() == 0L
+                                    && logTablet.getHighWatermark() == 0L,
+                            "Local log ends before snapshot offset %s for %s without remote logs.",
+                            snapshot.get().getLogOffset(),
+                            tableBucket);
+                    initializeLocalLog = true;
+                }
+            } catch (Exception e) {
+                throw new KvStorageException(
+                        "Failed to prepare snapshot recovery for " + tableBucket + '.', e);
+            }
+        }
+        return new KvRecovery(snapshot, initializeLocalLog);
+    }
+
+    /** Snapshot selection and log initialization required for one KV recovery attempt. */
+    private static final class KvRecovery {
+        private final Optional<CompletedSnapshot> snapshot;
+        private final boolean initializeLocalLog;
+
+        private KvRecovery(Optional<CompletedSnapshot> snapshot, boolean initializeLocalLog) {
+            this.snapshot = snapshot;
+            this.initializeLocalLog = initializeLocalLog;
+        }
+    }
+
     private Optional<CompletedSnapshot> getLatestSnapshot(TableBucket tableBucket) {
         try {
             return Optional.ofNullable(
                     snapshotContext.getLatestCompletedSnapshotProvider().apply(tableBucket));
         } catch (Exception e) {
-            LOG.warn(
-                    "Get latest completed snapshot for {} of table {} failed.",
-                    tableBucket,
-                    physicalPath,
-                    e);
+            throw new KvStorageException(
+                    "Failed to get the latest completed snapshot for " + tableBucket + '.', e);
         }
-        return Optional.empty();
     }
 
     private void recoverKvTablet(

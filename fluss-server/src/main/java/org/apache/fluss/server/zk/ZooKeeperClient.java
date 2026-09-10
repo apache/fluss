@@ -132,6 +132,7 @@ import java.util.stream.Collectors;
 import static java.util.stream.Collectors.toMap;
 import static org.apache.fluss.metadata.ResolvedPartitionSpec.fromPartitionName;
 import static org.apache.fluss.server.zk.ZooKeeperOp.multiRequest;
+import static org.apache.fluss.utils.Preconditions.checkArgument;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
 /**
@@ -1174,6 +1175,43 @@ public class ZooKeeperClient implements AutoCloseable {
         zkClient.create()
                 .creatingParentsIfNeeded()
                 .forPath(path, BucketSnapshotIdZNode.encode(snapshot));
+    }
+
+    /**
+     * Registers an externally produced snapshot under the active coordinator epoch. Retrying an
+     * identical registration is safe; a conflicting handle is never overwritten. An uncertain
+     * result leaves the metadata file intact so registration can be retried.
+     */
+    public void registerExternalTableBucketSnapshot(
+            TableBucket tableBucket, BucketSnapshot snapshot, int coordinatorZkVersion)
+            throws Exception {
+        checkArgument(coordinatorZkVersion >= 0, "A coordinator epoch version is required.");
+        String path = BucketSnapshotIdZNode.path(tableBucket, snapshot.getSnapshotId());
+        createRecursiveWithEpochCheck(
+                BucketSnapshotsZNode.path(tableBucket), null, coordinatorZkVersion, false);
+        try {
+            zkClient.transaction()
+                    .forOperations(
+                            wrapRequestWithEpochCheck(
+                                    zkOp.createOp(
+                                            path,
+                                            BucketSnapshotIdZNode.encode(snapshot),
+                                            CreateMode.PERSISTENT),
+                                    coordinatorZkVersion));
+        } catch (KeeperException.NodeExistsException e) {
+            Stat stat = new Stat();
+            BucketSnapshot existing =
+                    BucketSnapshotIdZNode.decode(
+                            zkClient.getData().storingStatIn(stat).forPath(path));
+            checkArgument(
+                    existing.equals(snapshot),
+                    "Conflicting snapshot registration for %s.",
+                    tableBucket);
+            zkClient.transaction()
+                    .forOperations(
+                            wrapRequestWithEpochCheck(
+                                    zkOp.checkOp(path, stat.getVersion()), coordinatorZkVersion));
+        }
     }
 
     public void deleteTableBucketSnapshot(TableBucket tableBucket, long snapshotId)

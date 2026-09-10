@@ -31,7 +31,9 @@ import org.apache.fluss.server.kv.snapshot.CompletedSnapshotStore.SnapshotInUseC
 import org.apache.fluss.server.kv.snapshot.SharedKvFileRegistry;
 import org.apache.fluss.server.kv.snapshot.ZooKeeperCompletedSnapshotHandleStore;
 import org.apache.fluss.server.metrics.group.CoordinatorMetricGroup;
+import org.apache.fluss.server.zk.ZkSequenceIDCounter;
 import org.apache.fluss.server.zk.ZooKeeperClient;
+import org.apache.fluss.server.zk.data.ZkData;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -163,6 +165,48 @@ public class CompletedSnapshotStoreManager {
                 });
     }
 
+    /**
+     * Registers an immutable, externally produced snapshot and adopts its files into retention.
+     *
+     * <p>The caller must keep the target replicas inactive until registration completes, use a
+     * snapshot ID reserved from the target bucket's snapshot counter, and produce files using the
+     * target table's schema IDs and KV encoding. Files must belong to the target and remain
+     * immutable; ownership transfers to snapshot retention after registration. This method does not
+     * copy files, migrate schemas or coordinate concurrent table writes.
+     *
+     * <p>Run this operation on an IO executor. A failed or uncertain registration can be retried
+     * with the same handle; callers must not delete its files on failure.
+     */
+    public void registerExternalSnapshot(
+            TablePath tablePath,
+            TableBucket tableBucket,
+            CompletedSnapshotHandle handle,
+            int coordinatorZkVersion)
+            throws Exception {
+        CompletedSnapshot snapshot = handle.retrieveCompleteSnapshot();
+        checkArgument(
+                tableBucket.equals(snapshot.getTableBucket()),
+                "Snapshot bucket does not match target.");
+        checkArgument(
+                handle.getSnapshotId() == snapshot.getSnapshotID()
+                        && handle.getLogOffset() == snapshot.getLogOffset()
+                        && handle.getMetadataFilePath().equals(snapshot.getMetadataFilePath()),
+                "Snapshot metadata does not match its handle.");
+        checkArgument(
+                snapshot.getSnapshotID() >= 0 && snapshot.getLogOffset() >= 0,
+                "Snapshot ID and log offset must be non-negative.");
+        long nextSnapshotId =
+                new ZkSequenceIDCounter(
+                                zooKeeperClient.getCuratorClient(),
+                                ZkData.BucketSnapshotSequenceIdZNode.path(tableBucket))
+                        .getCurrent();
+        checkArgument(
+                snapshot.getSnapshotID() < nextSnapshotId,
+                "External snapshot ID must be below the target bucket counter.");
+        getOrCreateCompletedSnapshotStore(tablePath, tableBucket)
+                .registerExternalSnapshot(snapshot, coordinatorZkVersion);
+    }
+
     public void removeCompletedSnapshotStoreByTableBuckets(Set<TableBucket> tableBuckets) {
         for (TableBucket tableBucket : tableBuckets) {
             bucketCompletedSnapshotStores.remove(tableBucket);
@@ -244,10 +288,11 @@ public class CompletedSnapshotStoreManager {
     }
 
     /**
-     * Returns active snapshot IDs per bucket for the given (tableId, partitionId) scope. For
-     * buckets with an in-memory {@link CompletedSnapshotStore}, the cached active set is returned
-     * (completed snapshots ∪ still-in-use snapshots, no retention truncation). For other buckets,
-     * snapshot IDs are read directly from ZK children (no per-snapshot payload fetch).
+     * Returns active snapshot IDs per bucket for the given (tableId, partitionId) scope. The result
+     * includes both cached snapshots and every persistent snapshot handle. A registered external
+     * snapshot must remain protected even if its registration response is lost before the in-memory
+     * store adopts it. Failure to read persistent handles fails the query so callers cannot mistake
+     * an uncertain result for an empty active set.
      */
     public Map<Integer, Set<Long>> getActiveSnapshotIdsByBucket(
             long tableId, @Nullable Long partitionId, int numBuckets) {
@@ -255,11 +300,9 @@ public class CompletedSnapshotStoreManager {
         for (int i = 0; i < numBuckets; i++) {
             TableBucket tb = new TableBucket(tableId, partitionId, i);
             CompletedSnapshotStore store = bucketCompletedSnapshotStores.get(tb);
-            Set<Long> ids;
+            Set<Long> ids = new HashSet<>(readActiveSnapshotIdsFromZk(tb));
             if (store != null) {
-                ids = store.getActiveSnapshotIds();
-            } else {
-                ids = readActiveSnapshotIdsFromZk(tb);
+                ids.addAll(store.getActiveSnapshotIds());
             }
             if (!ids.isEmpty()) {
                 result.put(i, ids);

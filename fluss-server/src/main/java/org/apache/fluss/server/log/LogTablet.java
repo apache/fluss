@@ -70,6 +70,7 @@ import java.util.concurrent.atomic.AtomicLong;
 
 import static org.apache.fluss.utils.Preconditions.checkArgument;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
+import static org.apache.fluss.utils.Preconditions.checkState;
 
 /* This file is based on source code of Apache Kafka Project (https://kafka.apache.org/), licensed by the Apache
  * Software Foundation (ASF) under the Apache License, Version 2.0. See the NOTICE file distributed with this work for
@@ -1191,6 +1192,25 @@ public final class LogTablet {
                                     getTableBucket(), targetOffset),
                             e);
                 }
+            }
+        }
+    }
+
+    /** Initializes an unused local log, or accepts a retry at the same empty boundary. */
+    void initializeEmptyLocalTail(long endOffset) {
+        synchronized (lock) {
+            checkArgument(endOffset >= 0L, "Invalid initial log offset %s.", endOffset);
+            long startOffset = localLogStartOffset();
+            long currentEndOffset = localLogEndOffset();
+            checkState(
+                    startOffset == currentEndOffset
+                            && getHighWatermark() == currentEndOffset
+                            && (currentEndOffset == 0L || currentEndOffset == endOffset),
+                    "Cannot initialize nonempty or conflicting local log for %s at offset %s.",
+                    getTableBucket(),
+                    endOffset);
+            if (currentEndOffset != endOffset) {
+                truncateFullyAndStartAt(endOffset);
             }
         }
     }

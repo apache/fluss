@@ -17,19 +17,25 @@
 
 package org.apache.fluss.server.coordinator;
 
+import org.apache.fluss.fs.FSDataOutputStream;
+import org.apache.fluss.fs.FileSystem;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshot;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshotHandle;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshotHandleStore;
+import org.apache.fluss.server.kv.snapshot.CompletedSnapshotJsonSerde;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshotStore;
 import org.apache.fluss.server.kv.snapshot.TestingCompletedSnapshotHandle;
 import org.apache.fluss.server.kv.snapshot.ZooKeeperCompletedSnapshotHandleStore;
 import org.apache.fluss.server.metrics.group.TestingMetricGroups;
 import org.apache.fluss.server.testutils.KvTestUtils;
 import org.apache.fluss.server.zk.NOPErrorHandler;
+import org.apache.fluss.server.zk.ZkSequenceIDCounter;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.ZooKeeperExtension;
+import org.apache.fluss.server.zk.data.ZkData;
+import org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.KeeperException;
 import org.apache.fluss.testutils.common.AllCallbackWrapper;
 
 import org.junit.jupiter.api.AfterAll;
@@ -60,6 +66,11 @@ import java.util.concurrent.Executors;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_PATH;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.doCallRealMethod;
+import static org.mockito.Mockito.spy;
 
 /** Test for {@link CompletedSnapshotStoreManager}. */
 class CompletedSnapshotStoreManagerTest {
@@ -276,6 +287,156 @@ class CompletedSnapshotStoreManagerTest {
         assertThat(completedSnapshotHandleStore.get(tableBucket, 2L)).isEmpty();
     }
 
+    @Test
+    void testExternalSnapshotRegistrationRetryAndRecovery() throws Exception {
+        TableBucket bucket = new TableBucket(99, 0);
+        int epoch =
+                zookeeperClient
+                        .fenceBecomeCoordinatorLeader("first")
+                        .getCoordinatorEpochZkVersion();
+        long id =
+                new ZkSequenceIDCounter(
+                                zookeeperClient.getCuratorClient(),
+                                ZkData.BucketSnapshotSequenceIdZNode.path(bucket))
+                        .getAndIncrement();
+        CompletedSnapshot snapshot = KvTestUtils.mockCompletedSnapshot(tempDir, bucket, id);
+        CompletedSnapshotHandle handle = writeExternalSnapshot(snapshot);
+        CompletedSnapshotStoreManager manager = createCompletedSnapshotStoreManager(1);
+        CompletedSnapshotStore store =
+                manager.getOrCreateCompletedSnapshotStore(DATA1_TABLE_PATH, bucket);
+        manager.registerExternalSnapshot(DATA1_TABLE_PATH, bucket, handle, epoch);
+        manager.registerExternalSnapshot(DATA1_TABLE_PATH, bucket, handle, epoch);
+        assertThat(store.getAllSnapshots()).containsExactly(snapshot);
+        assertThat(handle.retrieveCompleteSnapshot()).isEqualTo(snapshot);
+        assertThat(
+                        createCompletedSnapshotStoreManager(1)
+                                .getOrCreateCompletedSnapshotStore(DATA1_TABLE_PATH, bucket)
+                                .getAllSnapshots())
+                .containsExactly(snapshot);
+        zookeeperClient.fenceBecomeCoordinatorLeader("second");
+        assertThatThrownBy(
+                        () ->
+                                manager.registerExternalSnapshot(
+                                        DATA1_TABLE_PATH, bucket, handle, epoch))
+                .isInstanceOf(KeeperException.BadVersionException.class);
+        assertThat(handle.retrieveCompleteSnapshot()).isEqualTo(snapshot);
+    }
+
+    @Test
+    void testExternalSnapshotRejectsMismatchedAndConflictingIdentity() throws Exception {
+        TableBucket bucket = new TableBucket(99, 1);
+        int epoch =
+                zookeeperClient
+                        .fenceBecomeCoordinatorLeader("coordinator")
+                        .getCoordinatorEpochZkVersion();
+        CompletedSnapshot snapshot = KvTestUtils.mockCompletedSnapshot(tempDir, bucket, 0);
+        CompletedSnapshotHandle handle = writeExternalSnapshot(snapshot);
+        CompletedSnapshotStoreManager manager = createCompletedSnapshotStoreManager(1);
+        assertThatThrownBy(
+                        () ->
+                                manager.registerExternalSnapshot(
+                                        DATA1_TABLE_PATH, new TableBucket(99, 2), handle, epoch))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("bucket");
+        assertThatThrownBy(
+                        () ->
+                                manager.registerExternalSnapshot(
+                                        DATA1_TABLE_PATH, bucket, handle, epoch))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("below the target bucket counter");
+        new ZkSequenceIDCounter(
+                        zookeeperClient.getCuratorClient(),
+                        ZkData.BucketSnapshotSequenceIdZNode.path(bucket))
+                .getAndIncrement();
+        assertThatThrownBy(
+                        () ->
+                                manager.registerExternalSnapshot(
+                                        DATA1_TABLE_PATH,
+                                        bucket,
+                                        new CompletedSnapshotHandle(
+                                                0, handle.getMetadataFilePath(), 1),
+                                        epoch))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("handle");
+        assertThat(zookeeperClient.getTableBucketSnapshot(bucket, 0)).isEmpty();
+        manager.registerExternalSnapshot(DATA1_TABLE_PATH, bucket, handle, epoch);
+        CompletedSnapshot conflict =
+                KvTestUtils.mockCompletedSnapshot(tempDir.resolve("conflict"), bucket, 0);
+        CompletedSnapshotHandle conflictingHandle = writeExternalSnapshot(conflict);
+        assertThatThrownBy(
+                        () ->
+                                manager.registerExternalSnapshot(
+                                        DATA1_TABLE_PATH, bucket, conflictingHandle, epoch))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Conflicting");
+        assertThat(completedSnapshotHandleStore.get(bucket, 0).get().retrieveCompleteSnapshot())
+                .isEqualTo(snapshot);
+        assertThat(handle.retrieveCompleteSnapshot()).isEqualTo(snapshot);
+        assertThat(conflictingHandle.retrieveCompleteSnapshot()).isEqualTo(conflict);
+        assertThat(
+                        manager.getOrCreateCompletedSnapshotStore(DATA1_TABLE_PATH, bucket)
+                                .getAllSnapshots())
+                .containsExactly(snapshot);
+    }
+
+    @Test
+    void testExternalSnapshotRemainsActiveWhenRegistrationResponseIsLost() throws Exception {
+        TableBucket bucket = new TableBucket(99, 0);
+        int epoch =
+                zookeeperClient
+                        .fenceBecomeCoordinatorLeader("coordinator")
+                        .getCoordinatorEpochZkVersion();
+        long id =
+                new ZkSequenceIDCounter(
+                                zookeeperClient.getCuratorClient(),
+                                ZkData.BucketSnapshotSequenceIdZNode.path(bucket))
+                        .getAndIncrement();
+        CompletedSnapshot snapshot = KvTestUtils.mockCompletedSnapshot(tempDir, bucket, id);
+        CompletedSnapshotHandle handle = writeExternalSnapshot(snapshot);
+        ZooKeeperClient failingClient = spy(zookeeperClient);
+        CompletedSnapshotStoreManager manager =
+                new CompletedSnapshotStoreManager(
+                        1,
+                        ioExecutor,
+                        failingClient,
+                        TestingMetricGroups.COORDINATOR_METRICS,
+                        ignored -> false);
+        CompletedSnapshotStore store =
+                manager.getOrCreateCompletedSnapshotStore(DATA1_TABLE_PATH, bucket);
+        doAnswer(
+                        invocation -> {
+                            invocation.callRealMethod();
+                            assertThat(store.getNumSnapshots()).isZero();
+                            assertThat(manager.getActiveSnapshotIdsByBucket(99, null, 1).get(0))
+                                    .containsExactly(id);
+                            throw new KeeperException.ConnectionLossException();
+                        })
+                .when(failingClient)
+                .registerExternalTableBucketSnapshot(any(), any(), anyInt());
+        assertThatThrownBy(
+                        () ->
+                                manager.registerExternalSnapshot(
+                                        DATA1_TABLE_PATH, bucket, handle, epoch))
+                .isInstanceOf(KeeperException.ConnectionLossException.class);
+        assertThat(manager.getActiveSnapshotIdsByBucket(99, null, 1).get(0)).containsExactly(id);
+        assertThat(handle.retrieveCompleteSnapshot()).isEqualTo(snapshot);
+        doCallRealMethod()
+                .when(failingClient)
+                .registerExternalTableBucketSnapshot(any(), any(), anyInt());
+        manager.registerExternalSnapshot(DATA1_TABLE_PATH, bucket, handle, epoch);
+        assertThat(store.getAllSnapshots()).containsExactly(snapshot);
+    }
+
+    private static CompletedSnapshotHandle writeExternalSnapshot(CompletedSnapshot snapshot)
+            throws Exception {
+        FsPath path = snapshot.getMetadataFilePath();
+        try (FSDataOutputStream output =
+                path.getFileSystem().create(path, FileSystem.WriteMode.NO_OVERWRITE)) {
+            output.write(CompletedSnapshotJsonSerde.toJson(snapshot));
+        }
+        return new CompletedSnapshotHandle(snapshot.getSnapshotID(), path, snapshot.getLogOffset());
+    }
+
     private CompletedSnapshotStoreManager createCompletedSnapshotStoreManager(
             int maxNumberOfSnapshotsToRetain) {
         return new CompletedSnapshotStoreManager(
@@ -370,6 +531,15 @@ class CompletedSnapshotStoreManagerTest {
             snapshotHandleMap
                     .computeIfAbsent(tableBucket, k -> new HashMap<>())
                     .put(snapshotId, completedSnapshotHandle);
+        }
+
+        @Override
+        public void registerExternal(
+                TableBucket tableBucket,
+                CompletedSnapshotHandle snapshotHandle,
+                int coordinatorZkVersion) {
+            throw new UnsupportedOperationException(
+                    "External snapshot registration is not supported.");
         }
 
         @Override
