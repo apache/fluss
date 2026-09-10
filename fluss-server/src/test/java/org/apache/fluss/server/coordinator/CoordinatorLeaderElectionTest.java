@@ -134,7 +134,7 @@ class CoordinatorLeaderElectionTest {
                 new CoordinatorLeaderElection(zooKeeperClient, "coordinator-elected-standby");
         try {
             // before the election starts there is nothing to report
-            assertThat(leaderElection.isLeaderElected()).isFalse();
+            assertThat(leaderElection.isLeaderElected().join()).isFalse();
 
             // the leader registers its address during initialization, as CoordinatorServer does
             CoordinatorAddress leaderAddress =
@@ -148,12 +148,12 @@ class CoordinatorLeaderElectionTest {
                     leaderElection::isLeader,
                     Duration.ofSeconds(30),
                     "Coordinator did not become leader");
-            assertThat(leaderElection.isLeaderElected()).isTrue();
+            assertThat(leaderElection.isLeaderElected().join()).isTrue();
 
             // a standby participant sees the leader elected by another server
             standbyElection.startElectLeaderAsync(() -> {}, ignored -> {});
             waitUntil(
-                    standbyElection::isLeaderElected,
+                    () -> standbyElection.isLeaderElected().join(),
                     Duration.ofSeconds(30),
                     "Standby did not observe the elected leader");
             assertThat(standbyElection.isLeader()).isFalse();
@@ -163,8 +163,8 @@ class CoordinatorLeaderElectionTest {
         }
 
         // after close, no leader is reported regardless of group state
-        assertThat(standbyElection.isLeaderElected()).isFalse();
-        assertThat(leaderElection.isLeaderElected()).isFalse();
+        assertThat(standbyElection.isLeaderElected().join()).isFalse();
+        assertThat(leaderElection.isLeaderElected().join()).isFalse();
     }
 
     @Test
@@ -193,7 +193,7 @@ class CoordinatorLeaderElectionTest {
             assertThat(cleanupCause.get()).isSameAs(initializationFailure);
             assertThat(failedElection.isLeader()).isFalse();
             // the latch is still held, but no leader is registered: not an elected leader
-            assertThat(failedElection.isLeaderElected()).isFalse();
+            assertThat(failedElection.isLeaderElected().join()).isFalse();
             assertThat(getElectionNodeCount()).isEqualTo(initialElectionNodes + 1);
 
             followerElection.startElectLeaderAsync(followerBecameLeader::countDown, ignored -> {});
