@@ -17,10 +17,14 @@
 
 package org.apache.fluss.kafka.mapping;
 
+import org.apache.fluss.metadata.TablePath;
+
 import org.apache.kafka.common.Uuid;
+import org.apache.kafka.common.errors.InvalidTopicException;
 import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Tests for {@link KafkaTopicMapper}. */
 public class KafkaTopicMapperTest {
@@ -39,5 +43,20 @@ public class KafkaTopicMapperTest {
         assertThat(firstTableTopicId).isNotEqualTo(Uuid.ZERO_UUID);
         assertThat(mapper.isMappedTopicId(firstTableTopicId)).isTrue();
         assertThat(mapper.toTableId(firstTableTopicId)).isZero();
+    }
+
+    @Test
+    public void testOnlyValidTopicsInConfiguredDatabaseAreMapped() {
+        KafkaTopicMapper mapper = new KafkaTopicMapper("kafka");
+        assertThat(mapper.isMappedTable(TablePath.of("kafka", "events"))).isTrue();
+        assertThat(mapper.isMappedTable(TablePath.of("other", "events"))).isFalse();
+        assertThat(mapper.isMappedTable(TablePath.of("kafka", "invalid topic"))).isFalse();
+        assertThatThrownBy(() -> mapper.toTablePath("invalid topic"))
+                .isInstanceOf(InvalidTopicException.class);
+        assertThatThrownBy(() -> mapper.toTopicId(-1L))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThat(mapper.isMappedTopicId(Uuid.ZERO_UUID)).isFalse();
+        assertThatThrownBy(() -> mapper.toTableId(Uuid.ZERO_UUID))
+                .isInstanceOf(IllegalArgumentException.class);
     }
 }

@@ -21,6 +21,7 @@ import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.metadata.TablePath;
 
 import org.apache.kafka.common.Uuid;
+import org.apache.kafka.common.internals.Topic;
 
 import static org.apache.fluss.utils.Preconditions.checkArgument;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
@@ -41,7 +42,14 @@ public final class KafkaTopicMapper {
 
     /** Maps a Kafka topic name to its Fluss table path. */
     public TablePath toTablePath(String topicName) {
+        Topic.validate(topicName);
         return TablePath.of(databaseName, topicName);
+    }
+
+    /** Returns whether a table belongs to this database and has a valid Kafka topic name. */
+    public boolean isMappedTable(TablePath tablePath) {
+        return databaseName.equals(tablePath.getDatabaseName())
+                && Topic.isValid(tablePath.getTableName());
     }
 
     /** Maps a Fluss table ID to a stable Kafka topic ID. */

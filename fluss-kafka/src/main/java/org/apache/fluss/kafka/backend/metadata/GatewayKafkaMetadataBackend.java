@@ -24,6 +24,9 @@ import org.apache.fluss.kafka.backend.metadata.KafkaClusterMetadata.Topic;
 import org.apache.fluss.kafka.backend.metadata.KafkaClusterMetadata.TopicError;
 import org.apache.fluss.kafka.backend.metadata.KafkaMetadataQuery.TopicReference;
 import org.apache.fluss.kafka.mapping.KafkaTopicMapper;
+import org.apache.fluss.kafka.schema.KafkaTopicSchemaResolver;
+import org.apache.fluss.metadata.TableDescriptor;
+import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.rpc.RpcGatewayService;
 import org.apache.fluss.rpc.gateway.TabletServerGateway;
 import org.apache.fluss.rpc.messages.ListTablesRequest;
@@ -64,6 +67,7 @@ public final class GatewayKafkaMetadataBackend implements KafkaMetadataBackend {
     private final TabletServerGateway gateway;
     private final String databaseName;
     private final KafkaTopicMapper topicMapper;
+    private final KafkaTopicSchemaResolver schemaResolver = new KafkaTopicSchemaResolver();
 
     /** Creates a metadata backend backed by the local TabletServer gateway. */
     public GatewayKafkaMetadataBackend(
@@ -104,11 +108,16 @@ public final class GatewayKafkaMetadataBackend implements KafkaMetadataBackend {
             KafkaMetadataQuery query, Set<String> topicNames, boolean refreshAndRetry) {
         MetadataRequest request = new MetadataRequest();
         for (String topicName : topicNames) {
+            TablePath tablePath = TablePath.of(databaseName, topicName);
+            if (!topicMapper.isMappedTable(tablePath)) {
+                continue;
+            }
+            tablePath = topicMapper.toTablePath(topicName);
             request.addAllTablePaths(
                     Collections.singletonList(
                             new PbTablePath()
-                                    .setDatabaseName(databaseName)
-                                    .setTableName(topicName)));
+                                    .setDatabaseName(tablePath.getDatabaseName())
+                                    .setTableName(tablePath.getTableName())));
         }
         setCurrentSession(query);
         try {
@@ -176,7 +185,11 @@ public final class GatewayKafkaMetadataBackend implements KafkaMetadataBackend {
         Map<String, Topic> topicsByName = new HashMap<>();
         Map<Uuid, Topic> topicsById = new HashMap<>();
         for (PbTableMetadata table : response.getTableMetadatasList()) {
-            if (!databaseName.equals(table.getTablePath().getDatabaseName())) {
+            TablePath tablePath =
+                    TablePath.of(
+                            table.getTablePath().getDatabaseName(),
+                            table.getTablePath().getTableName());
+            if (!topicMapper.isMappedTable(tablePath)) {
                 continue;
             }
             Topic topic = toKafkaTopic(table, aliveBrokerIds);
@@ -186,7 +199,11 @@ public final class GatewayKafkaMetadataBackend implements KafkaMetadataBackend {
 
         List<Topic> topics = new ArrayList<>();
         if (query.allTopics()) {
-            topics.addAll(topicsByName.values());
+            for (Topic topic : topicsByName.values()) {
+                if (topic.error() == TopicError.NONE) {
+                    topics.add(topic);
+                }
+            }
             Collections.sort(topics, Comparator.comparing(Topic::name));
         } else {
             for (TopicReference reference : query.topics()) {
@@ -205,6 +222,19 @@ public final class GatewayKafkaMetadataBackend implements KafkaMetadataBackend {
     }
 
     private Topic toKafkaTopic(PbTableMetadata table, Set<Integer> aliveBrokerIds) {
+        try {
+            schemaResolver.resolve(TableDescriptor.fromJsonBytes(table.getTableJson()));
+        } catch (IllegalArgumentException e) {
+            LOG.debug(
+                    "Table {} does not define a supported Kafka mapping: {}",
+                    table.getTablePath().getTableName(),
+                    e.getMessage());
+            return new Topic(
+                    table.getTablePath().getTableName(),
+                    topicMapper.toTopicId(table.getTableId()),
+                    TopicError.INVALID_TOPIC,
+                    Collections.emptyList());
+        }
         List<Partition> partitions = new ArrayList<>();
         for (PbBucketMetadata bucket : table.getBucketMetadatasList()) {
             boolean leaderAvailable =

@@ -18,6 +18,10 @@
 package org.apache.fluss.kafka;
 
 import org.apache.fluss.exception.TableNotExistException;
+import org.apache.fluss.kafka.format.KafkaDataFormat;
+import org.apache.fluss.metadata.LogFormat;
+import org.apache.fluss.metadata.Schema;
+import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.rpc.TestingTabletGatewayService;
 import org.apache.fluss.rpc.messages.ListTablesRequest;
 import org.apache.fluss.rpc.messages.ListTablesResponse;
@@ -27,6 +31,7 @@ import org.apache.fluss.rpc.messages.PbTableMetadata;
 import org.apache.fluss.rpc.messages.PbTablePath;
 import org.apache.fluss.shaded.netty4.io.netty.buffer.ByteBuf;
 import org.apache.fluss.shaded.netty4.io.netty.buffer.ByteBufAllocator;
+import org.apache.fluss.types.DataTypes;
 
 import org.apache.kafka.common.Node;
 import org.apache.kafka.common.Uuid;
@@ -323,6 +328,100 @@ public class KafkaMetadataHandlerTest {
         assertThat(response.brokers()).isEmpty();
     }
 
+    @Test
+    public void testMetadataUsesDdlContractForEveryVersion() {
+        TestingMetadataGatewayService service = new TestingMetadataGatewayService();
+        service.putTable(
+                "no_mapping",
+                125L,
+                TableDescriptor.builder()
+                        .schema(Schema.newBuilder().column("body", DataTypes.BYTES()).build())
+                        .distributedBy(2)
+                        .build());
+        service.putTable(
+                "bad_format",
+                126L,
+                TableDescriptor.builder(defaultDescriptor())
+                        .customProperty(KafkaDataFormat.VALUE_FORMAT_CONFIG, "json")
+                        .build());
+        service.putTable(
+                "primary_key",
+                127L,
+                TableDescriptor.builder(defaultDescriptor())
+                        .schema(
+                                Schema.newBuilder()
+                                        .column("body", DataTypes.BYTES().copy(false))
+                                        .primaryKey("body")
+                                        .build())
+                        .build());
+        service.putTable(
+                "partitioned",
+                128L,
+                TableDescriptor.builder(defaultDescriptor()).partitionedBy("body").build());
+        service.putTable(
+                "indexed",
+                129L,
+                TableDescriptor.builder(defaultDescriptor()).logFormat(LogFormat.INDEXED).build());
+        service.putTable("invalid topic", 130L);
+        List<String> invalidMappings =
+                Arrays.asList("no_mapping", "bad_format", "primary_key", "partitioned", "indexed");
+        for (short version = 0; version <= 11; version++) {
+            MetadataResponse all = handle(service, allTopicsRequest(version), version);
+            assertThat(all.data().topics())
+                    .extracting(MetadataResponseTopic::name)
+                    .containsExactly("other", "topic");
+            List<String> requested = new ArrayList<>(invalidMappings);
+            requested.add("topic");
+            requested.add("missing");
+            MetadataResponse named =
+                    handle(
+                            service,
+                            new MetadataRequest(
+                                    new MetadataRequestData()
+                                            .setTopics(
+                                                    MetadataRequest.convertToMetadataRequestTopic(
+                                                            requested)),
+                                    version),
+                            version);
+            for (String name : invalidMappings) {
+                MetadataResponseTopic topic = named.data().topics().find(name);
+                assertThat(topic.errorCode()).isEqualTo(Errors.INVALID_TOPIC_EXCEPTION.code());
+                assertThat(topic.partitions()).isEmpty();
+            }
+            assertThat(named.data().topics().find("topic").errorCode())
+                    .isEqualTo(Errors.NONE.code());
+            assertThat(named.data().topics().find("missing").errorCode())
+                    .isEqualTo(Errors.UNKNOWN_TOPIC_OR_PARTITION.code());
+        }
+    }
+
+    @Test
+    public void testMetadataReflectsMappingChangesWithoutChangingTopicIdentity() {
+        TestingMetadataGatewayService service = new TestingMetadataGatewayService();
+        service.putTable(
+                "topic",
+                123L,
+                TableDescriptor.builder(defaultDescriptor())
+                        .customProperty(KafkaDataFormat.VALUE_FORMAT_CONFIG, "string")
+                        .build());
+        MetadataResponse invalid = handle(service, namedTopicRequest("topic"), (short) 11);
+        assertThat(invalid.data().topics().find("topic").errorCode())
+                .isEqualTo(Errors.INVALID_TOPIC_EXCEPTION.code());
+        service.putTable("topic", 123L);
+        MetadataResponse valid = handle(service, namedTopicRequest("topic"), (short) 11);
+        assertThat(valid.data().topics().find("topic").errorCode()).isEqualTo(Errors.NONE.code());
+        assertThat(valid.data().topics().find("topic").topicId()).isEqualTo(TOPIC_ID);
+    }
+
+    private static TableDescriptor defaultDescriptor() {
+        return TableDescriptor.builder()
+                .schema(Schema.newBuilder().column("body", DataTypes.BYTES()).build())
+                .distributedBy(2)
+                .logFormat(LogFormat.ARROW)
+                .customProperty(KafkaDataFormat.VALUE_FORMAT_CONFIG, "raw")
+                .build();
+    }
+
     private static MetadataRequest namedTopicRequest(String topicName) {
         return new MetadataRequest(
                 new MetadataRequestData()
@@ -374,6 +473,7 @@ public class KafkaMetadataHandlerTest {
     private static final class TestingMetadataGatewayService extends TestingTabletGatewayService {
 
         private final Map<String, Long> tables = new LinkedHashMap<>();
+        private final Map<String, TableDescriptor> descriptors = new LinkedHashMap<>();
         private String lastListenerName;
         private boolean topicLeaderAvailable = true;
         private int[] topicIsr = new int[] {1, 2};
@@ -382,8 +482,8 @@ public class KafkaMetadataHandlerTest {
         private boolean failNextMetadataAsMissing;
 
         private TestingMetadataGatewayService() {
-            tables.put("topic", 123L);
-            tables.put("other", 124L);
+            putTable("topic", 123L);
+            putTable("other", 124L);
         }
 
         @Override
@@ -413,16 +513,20 @@ public class KafkaMetadataHandlerTest {
                 if (tableId != null) {
                     topics.add(
                             tableMetadata(
-                                    tablePath.getTableName(),
-                                    tableId,
-                                    !"topic".equals(tablePath.getTableName())
-                                            || topicLeaderAvailable,
-                                    "topic".equals(tablePath.getTableName())
-                                            ? topicIsr
-                                            : new int[] {1, 2},
-                                    "topic".equals(tablePath.getTableName())
-                                            ? topicBucketEpoch
-                                            : Integer.valueOf(7)));
+                                            tablePath.getTableName(),
+                                            tableId,
+                                            !"topic".equals(tablePath.getTableName())
+                                                    || topicLeaderAvailable,
+                                            "topic".equals(tablePath.getTableName())
+                                                    ? topicIsr
+                                                    : new int[] {1, 2},
+                                            "topic".equals(tablePath.getTableName())
+                                                    ? topicBucketEpoch
+                                                    : Integer.valueOf(7))
+                                    .setTableJson(
+                                            descriptors
+                                                    .get(tablePath.getTableName())
+                                                    .toJsonBytes()));
                 }
             }
             return CompletableFuture.completedFuture(
@@ -442,11 +546,17 @@ public class KafkaMetadataHandlerTest {
         }
 
         private void putTable(String topic, long tableId) {
+            putTable(topic, tableId, defaultDescriptor());
+        }
+
+        private void putTable(String topic, long tableId, TableDescriptor descriptor) {
             tables.put(topic, tableId);
+            descriptors.put(topic, descriptor);
         }
 
         private void removeTable(String topic) {
             tables.remove(topic);
+            descriptors.remove(topic);
         }
 
         private static PbTableMetadata tableMetadata(
