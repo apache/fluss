@@ -17,19 +17,37 @@
 
 package org.apache.fluss.server.kv;
 
+import org.apache.fluss.cluster.Endpoint;
+import org.apache.fluss.cluster.ServerNode;
+import org.apache.fluss.cluster.ServerType;
+import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.exception.RemoteStorageException;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metrics.groups.MetricGroup;
+import org.apache.fluss.metrics.util.NOPMetricsGroup;
 import org.apache.fluss.record.LogRecordBatch;
 import org.apache.fluss.record.MemoryLogRecords;
 import org.apache.fluss.remote.RemoteLogManifest;
 import org.apache.fluss.remote.RemoteLogSegment;
+import org.apache.fluss.rpc.RpcServer;
+import org.apache.fluss.rpc.messages.FetchLogResponse;
+import org.apache.fluss.rpc.messages.PbFetchLogRespForBucket;
+import org.apache.fluss.rpc.messages.PbRemoteLogFetchInfo;
+import org.apache.fluss.rpc.messages.PbRemoteLogSegment;
+import org.apache.fluss.rpc.netty.server.RequestsMetrics;
+import org.apache.fluss.rpc.protocol.ApiKeys;
+import org.apache.fluss.server.DynamicConfigManager;
+import org.apache.fluss.server.coordinator.LakeCatalogDynamicLoader;
+import org.apache.fluss.server.coordinator.MetadataManager;
 import org.apache.fluss.server.log.LogSegment;
 import org.apache.fluss.server.log.LogTablet;
 import org.apache.fluss.server.log.remote.LogSegmentFiles;
 import org.apache.fluss.server.log.remote.RemoteLogTablet;
 import org.apache.fluss.server.log.remote.RemoteLogTestBase;
 import org.apache.fluss.server.replica.Replica;
+import org.apache.fluss.server.tablet.TabletService;
+import org.apache.fluss.utils.FlussPaths;
 import org.apache.fluss.utils.IOUtils;
 
 import org.junit.jupiter.api.Test;
@@ -52,12 +70,15 @@ import java.util.UUID;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.apache.fluss.record.TestData.DATA1;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_ID;
+import static org.apache.fluss.server.testutils.RpcMessageTestUtils.newFetchLogRequest;
 import static org.apache.fluss.testutils.DataTestUtils.genMemoryLogRecordsWithWriterId;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -145,6 +166,7 @@ class RemoteLogFetcherTest extends RemoteLogTestBase {
         LogTablet newLeaderLog = replicaManager.getReplicaOrException(sourceBucket).getLogTablet();
 
         List<Long> expectedChecksums = new ArrayList<>();
+        int expectedStartPosition = 0;
         // Both replicas contain the same record batches but roll at different offsets.
         for (int offset = 0; offset < 30; offset++) {
             MemoryLogRecords records =
@@ -156,6 +178,10 @@ class RemoteLogFetcherTest extends RemoteLogTestBase {
             oldLeaderLog.appendAsLeader(records);
             newLeaderLog.appendAsFollower(records);
             expectedChecksums.add(records.batchIterator().next().checksum());
+            // Derive the expected byte position independently of the remote offset index.
+            if (offset < 20 && (sameStart || offset >= 10)) {
+                expectedStartPosition += records.sizeInBytes();
+            }
             if ((!sameStart && offset == 9) || offset == 29) {
                 newLeaderLog.roll(Optional.empty());
             }
@@ -201,6 +227,23 @@ class RemoteLogFetcherTest extends RemoteLogTestBase {
         RemoteLogTablet tablet = remoteLogManager.remoteLogTablet(targetBucket);
         tablet.loadRemoteLogManifest(
                 remoteLogStorage.readRemoteLogManifestSnapshot(originalManifestPath));
+
+        // Remove the local copies so FetchLog must use the loaded manifest at the shorter
+        // segment's end offset, including when the longer segment was listed first.
+        oldLeaderLog.roll(Optional.empty());
+        updateTableConfig(
+                replicaManager.getReplicaOrException(targetBucket),
+                ConfigOptions.TABLE_TIERED_LOG_LOCAL_SEGMENTS,
+                "1");
+        oldLeaderLog.updateRemoteLogStartOffset(0L);
+        oldLeaderLog.updateRemoteLogEndOffset(30L);
+        assertThat(oldLeaderLog.localLogStartOffset()).isEqualTo(30L);
+        checkFetchLogRpcAtShorterSegmentEnd(
+                targetBucket,
+                newLeaderSegment,
+                expectedStartPosition,
+                expectedChecksums.subList(20, 30));
+
         RemoteLogManifest normalized = tablet.currentManifest();
         assertThat(normalized.getRemoteLogSegmentList())
                 .extracting(RemoteLogSegment::logicalStartOffset)
@@ -238,45 +281,112 @@ class RemoteLogFetcherTest extends RemoteLogTestBase {
             assertThat(batch.baseLogOffset()).isEqualTo(offset);
             assertThat(batch.nextLogOffset()).isEqualTo(offset + 1L);
         }
-        assertThat(fetchChecksumsUsingFetchV0(targetBucket, 0L, 30L))
-                .containsExactlyElementsOf(expectedChecksums);
-        assertThat(fetchChecksumsUsingFetchV0(targetBucket, 20L, 30L))
-                .containsExactlyElementsOf(expectedChecksums.subList(20, 30));
     }
 
-    private List<Long> fetchChecksumsUsingFetchV0(TableBucket bucket, long offset, long endOffset)
+    private void checkFetchLogRpcAtShorterSegmentEnd(
+            TableBucket bucket,
+            RemoteLogSegment expectedSegment,
+            int expectedStartPosition,
+            List<Long> expectedChecksums)
             throws Exception {
-        List<Long> checksums = new ArrayList<>();
-        while (offset < endOffset) {
-            List<RemoteLogSegment> segments =
-                    remoteLogManager.relevantRemoteLogSegmentsForFetchV0(bucket, offset);
-            assertThat(segments).isNotEmpty();
-            long previousOffset = offset;
-            for (int index = 0; index < segments.size(); index++) {
-                RemoteLogSegment segment = segments.get(index);
-                int position =
-                        index == 0 ? remoteLogManager.lookupPositionForOffset(segment, offset) : 0;
-                byte[] data = new byte[segment.segmentSizeInBytes()];
-                try (InputStream input = remoteLogStorage.fetchLogData(segment)) {
-                    IOUtils.readFully(input, data);
-                }
-                // FetchLog v0 exposes the physical suffix starting at the indexed position.
-                for (LogRecordBatch batch :
-                        MemoryLogRecords.pointToBytes(data, position, data.length - position)
-                                .batches()) {
-                    if (batch.nextLogOffset() <= offset) {
-                        continue;
-                    }
-                    assertThat(batch.baseLogOffset()).isEqualTo(offset);
-                    batch.ensureValid();
-                    checksums.add(batch.checksum());
-                    offset = batch.nextLogOffset();
-                }
+        ExecutorService executor = Executors.newSingleThreadExecutor();
+        DynamicConfigManager dynamicConfigManager = new DynamicConfigManager(zkClient, conf);
+        MetricGroup metricGroup = NOPMetricsGroup.newInstance();
+        TabletService service =
+                new TabletService(
+                        TABLET_SERVER_ID,
+                        new FsPath(conf.get(ConfigOptions.REMOTE_DATA_DIR)).getFileSystem(),
+                        zkClient,
+                        replicaManager,
+                        serverMetadataCache,
+                        new MetadataManager(
+                                zkClient, conf, new LakeCatalogDynamicLoader(conf, null, true)),
+                        null,
+                        dynamicConfigManager,
+                        executor,
+                        executor,
+                        scannerManager,
+                        testCoordinatorGateway,
+                        "CLIENT");
+        try (RpcServer server =
+                RpcServer.create(
+                        conf,
+                        Endpoint.fromListenersString("CLIENT://localhost:0"),
+                        service,
+                        metricGroup,
+                        RequestsMetrics.createTabletServerRequestMetrics(metricGroup))) {
+            server.start();
+            Endpoint endpoint = server.getBindEndpoints().get(0);
+            ServerNode node =
+                    new ServerNode(
+                            TABLET_SERVER_ID,
+                            endpoint.getHost(),
+                            endpoint.getPort(),
+                            ServerType.TABLET_SERVER);
+            FetchLogResponse response =
+                    (FetchLogResponse)
+                            rpcClient
+                                    .sendRequest(
+                                            node,
+                                            ApiKeys.FETCH_LOG,
+                                            newFetchLogRequest(
+                                                    -1,
+                                                    bucket.getTableId(),
+                                                    bucket.getBucket(),
+                                                    20L))
+                                    .get();
+            assertThat(response.getTablesRespsCount()).isEqualTo(1);
+            assertThat(response.getTablesRespsList().get(0).getTableId())
+                    .isEqualTo(bucket.getTableId());
+            assertThat(response.getTablesRespsList().get(0).getBucketsRespsCount()).isEqualTo(1);
+            PbFetchLogRespForBucket bucketResponse =
+                    response.getTablesRespsList().get(0).getBucketsRespsList().get(0);
+            assertThat(bucketResponse.getBucketId()).isEqualTo(bucket.getBucket());
+            assertThat(bucketResponse.hasErrorCode()).isFalse();
+            assertThat(bucketResponse.getHighWatermark()).isEqualTo(30L);
+            assertThat(bucketResponse.hasRecords()).isFalse();
+            assertThat(bucketResponse.hasRemoteLogFetchInfo()).isTrue();
+
+            PbRemoteLogFetchInfo fetchInfo = bucketResponse.getRemoteLogFetchInfo();
+            assertThat(fetchInfo.getRemoteLogSegmentsCount()).isEqualTo(1);
+            PbRemoteLogSegment segment = fetchInfo.getRemoteLogSegmentsList().get(0);
+            assertThat(segment.getRemoteLogSegmentId())
+                    .isEqualTo(expectedSegment.remoteLogSegmentId().toString());
+            assertThat(segment.getRemoteLogStartOffset())
+                    .isEqualTo(expectedSegment.remoteLogStartOffset());
+            assertThat(segment.getRemoteLogEndOffset()).isEqualTo(30L);
+            assertThat(segment.getSegmentSizeInBytes())
+                    .isEqualTo(expectedSegment.segmentSizeInBytes());
+            assertThat(fetchInfo.hasFirstStartPos()).isTrue();
+            assertThat(fetchInfo.getFirstStartPos()).isEqualTo(expectedStartPosition);
+
+            // Read only from the path and byte position returned by the RPC response.
+            FsPath segmentDir =
+                    new FsPath(fetchInfo.getRemoteLogTabletDir(), segment.getRemoteLogSegmentId());
+            FsPath logFile =
+                    FlussPaths.remoteLogSegmentFile(segmentDir, segment.getRemoteLogStartOffset());
+            byte[] data = new byte[segment.getSegmentSizeInBytes()];
+            try (InputStream input = logFile.getFileSystem().open(logFile)) {
+                IOUtils.readFully(input, data);
             }
-            assertThat(offset).isGreaterThan(previousOffset);
+            int position = fetchInfo.getFirstStartPos();
+            long offset = 20L;
+            List<Long> checksums = new ArrayList<>();
+            for (LogRecordBatch batch :
+                    MemoryLogRecords.pointToBytes(data, position, data.length - position)
+                            .batches()) {
+                assertThat(batch.baseLogOffset()).isEqualTo(offset);
+                assertThat(batch.nextLogOffset()).isEqualTo(offset + 1L);
+                batch.ensureValid();
+                checksums.add(batch.checksum());
+                offset = batch.nextLogOffset();
+            }
+            assertThat(offset).isEqualTo(30L);
+            assertThat(checksums).containsExactlyElementsOf(expectedChecksums);
+        } finally {
+            dynamicConfigManager.close();
+            executor.shutdownNow();
         }
-        assertThat(offset).isEqualTo(endOffset);
-        return checksums;
     }
 
     @Test
