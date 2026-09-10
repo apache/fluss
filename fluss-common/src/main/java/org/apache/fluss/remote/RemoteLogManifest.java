@@ -93,8 +93,14 @@ public class RemoteLogManifest {
      *
      * <p>This does not modify the persisted manifest or delete physical files. Deserialization
      * deliberately preserves all original references for consumers such as orphan file cleanup.
+     * Already ordered, non-overlapping logical views are returned after a linear scan without
+     * copying or sorting the segment list.
      */
     public RemoteLogManifest normalizeLogicalRanges() {
+        if (hasNormalizedLogicalRanges()) {
+            return this;
+        }
+
         List<RemoteLogSegment> sortedSegments = new ArrayList<>(remoteLogSegmentList);
         sortedSegments.sort(
                 Comparator.comparingLong(RemoteLogSegment::logicalStartOffset)
@@ -121,10 +127,8 @@ public class RemoteLogManifest {
             normalizedSegments.add(segment);
         }
 
-        return normalizedSegments.equals(remoteLogSegmentList)
-                ? this
-                : new RemoteLogManifest(
-                        physicalTablePath, tableBucket, normalizedSegments, highestCopiedEndOffset);
+        return new RemoteLogManifest(
+                physicalTablePath, tableBucket, normalizedSegments, highestCopiedEndOffset);
     }
 
     public RemoteLogManifest trimAndMerge(
@@ -280,6 +284,17 @@ public class RemoteLogManifest {
                 + ", highestCopiedEndOffset="
                 + highestCopiedEndOffset
                 + '}';
+    }
+
+    private boolean hasNormalizedLogicalRanges() {
+        long previousEndOffset = Long.MIN_VALUE;
+        for (RemoteLogSegment segment : remoteLogSegmentList) {
+            if (segment.logicalStartOffset() < previousEndOffset) {
+                return false;
+            }
+            previousEndOffset = segment.logicalEndOffset();
+        }
+        return true;
     }
 
     private static long maxPhysicalEndOffset(List<RemoteLogSegment> segments) {

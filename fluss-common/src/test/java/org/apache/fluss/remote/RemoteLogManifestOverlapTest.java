@@ -216,6 +216,37 @@ class RemoteLogManifestOverlapTest {
     }
 
     @Test
+    void testNormalizationReusesOrderedLogicalRanges() {
+        RemoteLogSegment first = segment(10L, 20L);
+        List<RemoteLogManifest> manifests =
+                Arrays.asList(
+                        manifest(),
+                        manifest(first),
+                        manifest(first, segment(20L, 30L)),
+                        manifest(first, segment(30L, 40L)),
+                        manifest(
+                                segment(0L, 30L).withLogicalRange(10L, 20L),
+                                segment(15L, 40L).withLogicalRange(20L, 35L)));
+
+        for (RemoteLogManifest original : manifests) {
+            assertThat(original.normalizeLogicalRanges()).isSameAs(original);
+        }
+    }
+
+    @Test
+    void testNormalizationOrdersDisjointRanges() {
+        RemoteLogSegment first = segment(10L, 20L);
+        RemoteLogSegment second = segment(30L, 40L);
+        RemoteLogManifest original = manifest(second, first);
+
+        RemoteLogManifest normalized = original.normalizeLogicalRanges();
+
+        assertThat(normalized.getRemoteLogSegmentList()).containsExactly(first, second);
+        assertThat(original.getRemoteLogSegmentList()).containsExactly(second, first);
+        assertThat(normalized.normalizeLogicalRanges()).isSameAs(normalized);
+    }
+
+    @Test
     void testNormalizationPreservesCoverageForEveryEntryOrder() {
         RemoteLogSegment first = segment(10L, 30L);
         RemoteLogSegment extension = segment(25L, 40L);
