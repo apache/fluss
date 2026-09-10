@@ -31,17 +31,20 @@ import org.apache.fluss.shaded.netty4.io.netty.handler.flow.FlowControlHandler;
 public class KafkaChannelInitializer extends NettyChannelInitializer {
 
     private final RequestChannel[] requestChannels;
+    private final String listenerName;
     private final int maxRequestSize;
     private final LengthFieldPrepender prepender = new LengthFieldPrepender(4);
     private final boolean preferHeap;
 
     public KafkaChannelInitializer(
             RequestChannel[] requestChannels,
+            String listenerName,
             long maxIdleTimeSeconds,
             int maxRequestSize,
             boolean preferHeap) {
         super(maxIdleTimeSeconds);
         this.requestChannels = requestChannels;
+        this.listenerName = listenerName;
         this.maxRequestSize = maxRequestSize;
         this.preferHeap = preferHeap;
     }
@@ -53,6 +56,6 @@ public class KafkaChannelInitializer extends NettyChannelInitializer {
         ch.pipeline().addLast(prepender);
         addFrameDecoder(ch, maxRequestSize, 4, preferHeap);
         ch.pipeline().addLast("flowController", new FlowControlHandler());
-        ch.pipeline().addLast(new KafkaCommandDecoder(requestChannels));
+        ch.pipeline().addLast(new KafkaCommandDecoder(requestChannels, listenerName));
     }
 }
