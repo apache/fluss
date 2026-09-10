@@ -32,6 +32,7 @@ import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
@@ -83,8 +84,7 @@ public class DelayedFetchLogTest extends ReplicaTestBase {
         assertThat(delayedFetchLogManager.numDelayed()).isEqualTo(1);
         assertThat(delayedFetchLogManager.watched()).isEqualTo(1);
 
-        // Produce data — appendRecordsToLog enqueues a checkAndComplete action,
-        // which is executed when tryCompleteActions() is called (normally by framework layer).
+        // Appending data enqueues completion, but does not run it under the append call.
         assertThat(delayedResponse.isDone()).isFalse();
         CompletableFuture<List<ProduceLogResultForBucket>> future = new CompletableFuture<>();
         replicaManager.appendRecordsToLog(
@@ -93,11 +93,10 @@ public class DelayedFetchLogTest extends ReplicaTestBase {
                 Collections.singletonMap(tb, genMemoryLogRecordsByObject(DATA1)),
                 null,
                 future::complete);
-        // Simulate framework layer trigger (FlussRequestHandler calls this after invoke).
-        replicaManager.tryCompleteActions();
         assertThat(future.get()).containsOnly(new ProduceLogResultForBucket(tb, 0, 10L));
+        assertThat(delayedResponse.isDone()).isFalse();
 
-        // The delayed fetch log should already be completed by tryCompleteActions above.
+        replicaManager.tryCompleteActions();
         assertThat(delayedResponse.isDone()).isTrue();
         assertThat(delayedFetchLogManager.numDelayed()).isEqualTo(0);
         assertThat(delayedFetchLogManager.watched()).isEqualTo(0);
@@ -110,55 +109,69 @@ public class DelayedFetchLogTest extends ReplicaTestBase {
     }
 
     @Test
-    void testProduceAutoCompletesDelayedFetchLog() throws Exception {
-        TableBucket tb = new TableBucket(DATA1_TABLE_ID, 1);
-        makeLogTableAsLeader(tb.getBucket());
-
-        // Set up a delayed fetch with follower-like params (LOG_END isolation, minBytes=1).
-        FetchLogResultForBucket preFetchResultForBucket =
-                new FetchLogResultForBucket(tb, MemoryLogRecords.EMPTY, 0L);
+    void testSuccessfulBucketCompletesWhenAnotherBucketAppendFails() throws Exception {
+        TableBucket successfulBucket = new TableBucket(DATA1_TABLE_ID, 1);
+        TableBucket failedBucket = new TableBucket(DATA1_TABLE_ID, 2);
+        makeLogTableAsLeader(successfulBucket.getBucket());
         CompletableFuture<Map<TableBucket, FetchLogResultForBucket>> delayedResponse =
-                new CompletableFuture<>();
-        DelayedFetchLog delayedFetchLog =
-                createDelayedFetchLogRequest(
-                        tb,
-                        1, // minFetchBytes = 1, like follower fetch
-                        Duration.ofMinutes(3).toMillis(),
-                        new FetchBucketStatus(
-                                new FetchReqInfo(150001L, 0L, Integer.MAX_VALUE),
-                                new LogOffsetMetadata(0L, 0L, 0),
-                                preFetchResultForBucket),
-                        delayedResponse::complete);
+                watchDelayedFetch(successfulBucket);
 
-        DelayedOperationManager<DelayedFetchLog> delayedFetchLogManager =
-                replicaManager.getDelayedFetchLogManager();
-        DelayedTableBucketKey delayedTableBucketKey = new DelayedTableBucketKey(tb);
-        delayedFetchLogManager.tryCompleteElseWatch(
-                delayedFetchLog, Collections.singletonList(delayedTableBucketKey));
-        assertThat(delayedFetchLogManager.numDelayed()).isEqualTo(1);
-        assertThat(delayedResponse.isDone()).isFalse();
-
-        // Produce with acks=1 — response returns immediately, action enqueued.
+        Map<TableBucket, MemoryLogRecords> entries = new HashMap<>();
+        entries.put(successfulBucket, genMemoryLogRecordsByObject(DATA1));
+        entries.put(failedBucket, genMemoryLogRecordsByObject(DATA1));
         CompletableFuture<List<ProduceLogResultForBucket>> produceResponse =
                 new CompletableFuture<>();
-        replicaManager.appendRecordsToLog(
-                20000,
-                1,
-                Collections.singletonMap(tb, genMemoryLogRecordsByObject(DATA1)),
-                null,
-                produceResponse::complete);
-        // Simulate framework layer trigger (FlussRequestHandler calls this after invoke).
+
+        replicaManager.appendRecordsToLog(20000, 1, entries, null, produceResponse::complete);
+
+        List<ProduceLogResultForBucket> produceResults = produceResponse.get();
+        assertThat(produceResults).hasSize(2);
+        assertThat(produceResults)
+                .filteredOn(result -> result.getTableBucket().equals(successfulBucket))
+                .hasSize(1)
+                .allSatisfy(result -> assertThat(result.succeeded()).isTrue());
+        assertThat(produceResults)
+                .filteredOn(result -> result.getTableBucket().equals(failedBucket))
+                .hasSize(1)
+                .allSatisfy(result -> assertThat(result.failed()).isTrue());
+        assertThat(delayedResponse).isNotDone();
+
         replicaManager.tryCompleteActions();
-        assertThat(produceResponse.get()).containsOnly(new ProduceLogResultForBucket(tb, 0, 10L));
 
-        // The delayed fetch should have been auto-completed by tryCompleteActions.
-        assertThat(delayedResponse.isDone()).isTrue();
-        assertThat(delayedFetchLogManager.numDelayed()).isEqualTo(0);
+        assertThat(delayedResponse).isDone();
+        assertThat(replicaManager.getDelayedFetchLogManager().numDelayed()).isZero();
+    }
 
-        Map<TableBucket, FetchLogResultForBucket> result = delayedResponse.get();
-        FetchLogResultForBucket resultForBucket = result.get(tb);
-        assertThat(resultForBucket).isNotNull();
-        assertLogRecordsEquals(DATA1_ROW_TYPE, resultForBucket.records(), DATA1);
+    @Test
+    void testDrainCompletesDelayedFetchesForMultipleBuckets() throws Exception {
+        TableBucket firstBucket = new TableBucket(DATA1_TABLE_ID, 1);
+        TableBucket secondBucket = new TableBucket(DATA1_TABLE_ID, 2);
+        makeLogTableAsLeader(firstBucket.getBucket());
+        makeLogTableAsLeader(secondBucket.getBucket());
+        CompletableFuture<Map<TableBucket, FetchLogResultForBucket>> firstResponse =
+                watchDelayedFetch(firstBucket);
+        CompletableFuture<Map<TableBucket, FetchLogResultForBucket>> secondResponse =
+                watchDelayedFetch(secondBucket);
+
+        Map<TableBucket, MemoryLogRecords> entries = new HashMap<>();
+        entries.put(firstBucket, genMemoryLogRecordsByObject(DATA1));
+        entries.put(secondBucket, genMemoryLogRecordsByObject(DATA1));
+        CompletableFuture<List<ProduceLogResultForBucket>> produceResponse =
+                new CompletableFuture<>();
+
+        replicaManager.appendRecordsToLog(20000, 1, entries, null, produceResponse::complete);
+
+        assertThat(produceResponse.get())
+                .hasSize(2)
+                .allSatisfy(result -> assertThat(result.succeeded()).isTrue());
+        assertThat(firstResponse).isNotDone();
+        assertThat(secondResponse).isNotDone();
+
+        replicaManager.tryCompleteActions();
+
+        assertThat(firstResponse).isDone();
+        assertThat(secondResponse).isDone();
+        assertThat(replicaManager.getDelayedFetchLogManager().numDelayed()).isZero();
     }
 
     @Test
@@ -218,5 +231,29 @@ public class DelayedFetchLogTest extends ReplicaTestBase {
                 responseCallback,
                 TestingMetricGroups.TABLET_SERVER_METRICS,
                 null);
+    }
+
+    private CompletableFuture<Map<TableBucket, FetchLogResultForBucket>> watchDelayedFetch(
+            TableBucket tableBucket) {
+        FetchLogResultForBucket previousResult =
+                new FetchLogResultForBucket(tableBucket, MemoryLogRecords.EMPTY, 0L);
+        CompletableFuture<Map<TableBucket, FetchLogResultForBucket>> response =
+                new CompletableFuture<>();
+        DelayedFetchLog delayedFetchLog =
+                createDelayedFetchLogRequest(
+                        tableBucket,
+                        1,
+                        Duration.ofMinutes(3).toMillis(),
+                        new FetchBucketStatus(
+                                new FetchReqInfo(150001L, 0L, Integer.MAX_VALUE),
+                                new LogOffsetMetadata(0L, 0L, 0),
+                                previousResult),
+                        response::complete);
+        replicaManager
+                .getDelayedFetchLogManager()
+                .tryCompleteElseWatch(
+                        delayedFetchLog,
+                        Collections.singletonList(new DelayedTableBucketKey(tableBucket)));
+        return response;
     }
 }

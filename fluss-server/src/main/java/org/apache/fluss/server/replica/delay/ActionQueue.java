@@ -20,20 +20,15 @@ package org.apache.fluss.server.replica.delay;
 import org.apache.fluss.annotation.Internal;
 
 /**
- * A queue for collecting actions which need to be executed later.
- *
- * <p>This is used to decouple the enqueuing of delayed operation completions from their execution.
- * For example, after appending records, we enqueue actions to complete delayed fetch operations,
- * then execute them after the write path is fully finished.
- *
- * @see DelayedActionQueue
+ * A queue for collecting actions that must run after the current request invocation releases its
+ * write-path locks.
  */
 @Internal
 public interface ActionQueue {
 
-    /** Adds an action to this queue. */
+    /** Adds an action to the queue. */
     void add(Runnable action);
 
-    /** Tries to complete all pending actions in the queue. */
+    /** Tries to execute pending actions without waiting for actions added concurrently. */
     void tryCompleteActions();
 }

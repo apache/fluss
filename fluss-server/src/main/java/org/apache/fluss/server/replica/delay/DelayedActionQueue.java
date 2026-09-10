@@ -25,11 +25,11 @@ import org.slf4j.LoggerFactory;
 import java.util.concurrent.ConcurrentLinkedQueue;
 
 /**
- * Default implementation of {@link ActionQueue} that collects actions into a concurrent queue and
- * executes them when {@link #tryCompleteActions()} is called.
+ * Thread-safe {@link ActionQueue} backed by a concurrent queue.
  *
- * <p>Uses {@link ConcurrentLinkedQueue} for lock-free enqueue. Actions are executed and removed
- * from the queue when {@link #tryCompleteActions()} is called.
+ * <p>Each drain bounds its work using the queue's weakly consistent size at the start. Actions
+ * added while draining may remain available for a later drain. A failing action is logged and does
+ * not prevent the remaining bounded set from running.
  */
 @Internal
 public class DelayedActionQueue implements ActionQueue {
@@ -44,19 +44,17 @@ public class DelayedActionQueue implements ActionQueue {
 
     @Override
     public void tryCompleteActions() {
-        int maxToComplete = queue.size();
-        int count = 0;
-        while (count < maxToComplete) {
+        int actionsToComplete = queue.size();
+        for (int completed = 0; completed < actionsToComplete; completed++) {
             Runnable action = queue.poll();
             if (action == null) {
-                break;
+                return;
             }
             try {
                 action.run();
-            } catch (Throwable t) {
-                LOG.error("Failed to complete delayed action.", t);
+            } catch (Exception e) {
+                LOG.error("Failed to complete delayed action.", e);
             }
-            count++;
         }
     }
 }

@@ -688,9 +688,9 @@ public class ReplicaManager implements ServerReconfigurable {
                 appendToLocalLog(entriesPerBucket, requiredAcks, userContext);
         LOG.debug("Append records to local log in {} ms", System.currentTimeMillis() - startTime);
 
-        // Enqueue delayed fetch completions — not executed here.
-        // Framework layer invokes tryCompleteActions() after this method returns.
-        addCompletePurgatoryAction(appendResult);
+        // Queue fetch completion before registering a delayed write. The request handler drains
+        // the actions only after both steps have returned.
+        enqueueDelayedFetchCompletions(appendResult);
 
         // maybe do delay write operation.
         maybeAddDelayedWrite(
@@ -2161,28 +2161,20 @@ public class ReplicaManager implements ServerReconfigurable {
                 || error == Errors.UNKNOWN_TABLE_OR_BUCKET_EXCEPTION;
     }
 
-    /**
-     * Adds actions to complete delayed fetch log operations for successfully written buckets.
-     *
-     * <p>Actions are added to the {@link ActionQueue} rather than executed immediately. The
-     * framework layer is responsible for invoking {@link #tryCompleteActions()} to execute the
-     * queued actions after the write path is fully finished.
-     */
-    private void addCompletePurgatoryAction(
-            Map<TableBucket, ? extends WriteResultForBucket> writeResults) {
-        actionQueue.add(
-                () -> {
-                    for (Map.Entry<TableBucket, ? extends WriteResultForBucket> entry :
-                            writeResults.entrySet()) {
-                        if (entry.getValue().succeeded()) {
-                            delayedFetchLogManager.checkAndComplete(
-                                    new DelayedTableBucketKey(entry.getKey()));
-                        }
+    private void enqueueDelayedFetchCompletions(
+            Map<TableBucket, ProduceLogResultForBucket> appendResults) {
+        appendResults.forEach(
+                (tableBucket, appendResult) -> {
+                    if (appendResult.succeeded()) {
+                        actionQueue.add(
+                                () ->
+                                        delayedFetchLogManager.checkAndComplete(
+                                                new DelayedTableBucketKey(tableBucket)));
                     }
                 });
     }
 
-    /** Tries to complete all pending delayed actions in the action queue. */
+    /** Tries to complete actions deferred by log appends. */
     public void tryCompleteActions() {
         actionQueue.tryCompleteActions();
     }

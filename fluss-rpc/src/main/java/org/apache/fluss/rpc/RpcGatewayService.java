@@ -87,8 +87,9 @@ public abstract class RpcGatewayService implements RpcGateway {
     public abstract void shutdown();
 
     /**
-     * Tries to complete all pending delayed actions. Default no-op for services without delayed
-     * action queue.
+     * Tries to complete actions that were deferred while handling the current request.
+     *
+     * <p>Services without deferred actions do not need to override this method.
      */
     public void tryCompleteActions() {}
 }
