@@ -121,11 +121,32 @@ public final class NettyClient implements RpcClient {
     }
 
     /**
-     * Disconnects the connection to the given server node, if there is one. Any inflight/pending
-     * requests for this connection will receive disconnections.
+     * Disconnects the connection to the given server endpoint, if there is one. Any
+     * inflight/pending requests for this connection will receive disconnections.
+     *
+     * @param node The server node to disconnect
+     * @return A future that completes when the connection is fully closed
+     */
+    @Override
+    public CompletableFuture<Void> disconnect(ServerNode node) {
+        LOG.debug("Disconnecting from server {}.", node);
+        checkArgument(!isClosed, "Netty client is closed.");
+
+        ServerConnection connection = connections.remove(ConnectionKey.from(node));
+
+        if (connection == null) {
+            return FutureUtils.completedVoidFuture();
+        }
+
+        return connection.close();
+    }
+
+    /**
+     * Disconnects all connections associated with the given logical server uid. Any
+     * inflight/pending requests for these connections will receive disconnections.
      *
      * @param serverUid The uid of the server node
-     * @return A future that completes when the connection is fully closed
+     * @return A future that completes when all associated connections are fully closed
      */
     @Override
     public CompletableFuture<Void> disconnect(String serverUid) {
@@ -149,22 +170,19 @@ public final class NettyClient implements RpcClient {
     }
 
     /**
-     * Check if we are currently ready to send another request to the given server but don't attempt
-     * to connect if we aren't.
+     * Check if we are currently ready to send another request to the given server endpoint but
+     * don't attempt to connect if we aren't.
      *
-     * @return true if the node is ready
+     * @param node The server node to check
+     * @return true if the connection to the node is ready
      */
     @Override
-    public boolean isReady(String serverUid) {
+    public boolean isReady(ServerNode node) {
         checkArgument(!isClosed, "Netty client is closed.");
 
-        for (Map.Entry<ConnectionKey, ServerConnection> entry : connections.entrySet()) {
-            if (entry.getKey().belongsTo(serverUid) && entry.getValue().isReady()) {
-                return true;
-            }
-        }
+        ServerConnection connection = connections.get(ConnectionKey.from(node));
 
-        return false;
+        return connection != null && connection.isReady();
     }
 
     /** Send an RPC request to the given server and return a future for the response. */
@@ -239,9 +257,11 @@ public final class NettyClient implements RpcClient {
             if (this == o) {
                 return true;
             }
+
             if (!(o instanceof ConnectionKey)) {
                 return false;
             }
+
             ConnectionKey that = (ConnectionKey) o;
             return port == that.port && serverUid.equals(that.serverUid) && host.equals(that.host);
         }

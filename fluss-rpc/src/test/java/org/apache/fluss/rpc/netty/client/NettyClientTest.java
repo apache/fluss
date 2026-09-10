@@ -124,17 +124,23 @@ final class NettyClientTest {
     void testRequestsProcessedInOrder() throws Exception {
         int numRequests = 100;
         List<CompletableFuture<ApiMessage>> futures = new ArrayList<>();
+
         for (int i = 0; i < numRequests; i++) {
             ApiVersionsRequest request =
                     new ApiVersionsRequest()
                             .setClientSoftwareName("testing_client" + i)
                             .setClientSoftwareVersion("1.0");
+
             futures.add(nettyClient.sendRequest(serverNode, ApiKeys.API_VERSIONS, request));
         }
+
         FutureUtils.waitForAll(futures).get();
+
         // we have one more api version request for rpc handshake.
         assertThat(service.getProcessorThreadNames()).hasSize(numRequests + 1);
+
         Set<String> deduplicatedThreadNames = new HashSet<>(service.getProcessorThreadNames());
+
         // there should only one thread to process the requests
         // since all requests are from the same client.
         assertThat(deduplicatedThreadNames).hasSize(1);
@@ -146,14 +152,17 @@ final class NettyClientTest {
                 new ApiVersionsRequest()
                         .setClientSoftwareName("testing_client_100")
                         .setClientSoftwareVersion("1.0");
+
         nettyClient.sendRequest(serverNode, ApiKeys.API_VERSIONS, request).get();
-        assertThat(nettyClient.connections().size()).isEqualTo(1);
+
+        assertThat(nettyClient.connections()).hasSize(1);
         assertThat(nettyClient.connections())
                 .extracting(ServerConnection::getServerNode)
                 .containsExactly(serverNode);
 
         // close the netty server.
         nettyServer.close();
+
         assertThatThrownBy(
                         () ->
                                 nettyClient
@@ -162,12 +171,15 @@ final class NettyClientTest {
                 .rootCause()
                 .isInstanceOf(ConnectException.class)
                 .hasMessageContaining("Connection refused");
-        assertThat(nettyClient.connections().size()).isEqualTo(0);
+
+        assertThat(nettyClient.connections()).isEmpty();
 
         // restart the netty server.
         buildNettyServer(1);
+
         nettyClient.sendRequest(serverNode, ApiKeys.API_VERSIONS, request).get();
-        assertThat(nettyClient.connections().size()).isEqualTo(1);
+
+        assertThat(nettyClient.connections()).hasSize(1);
         assertThat(nettyClient.connections())
                 .extracting(ServerConnection::getServerNode)
                 .containsExactly(serverNode);
@@ -223,15 +235,103 @@ final class NettyClientTest {
                                 .setClientSoftwareName("testing_client")
                                 .setClientSoftwareVersion("1.0");
 
+                // Establish only the first endpoint connection.
                 nettyClient.sendRequest(firstNode, ApiKeys.API_VERSIONS, request).get();
 
                 assertThat(firstService.getProcessorThreadNames()).hasSize(2);
                 assertThat(secondService.getProcessorThreadNames()).isEmpty();
 
+                // Readiness must be endpoint-specific. The second node has the same UID,
+                // but there is no connection to its host/port yet.
+                assertThat(nettyClient.isReady(firstNode)).isTrue();
+                assertThat(nettyClient.isReady(secondNode)).isFalse();
+
+                // Send to the changed endpoint.
                 nettyClient.sendRequest(secondNode, ApiKeys.API_VERSIONS, request).get();
 
                 assertThat(secondService.getProcessorThreadNames()).hasSize(2);
                 assertThat(firstService.getProcessorThreadNames()).hasSize(2);
+
+                // Both physical endpoint connections now coexist.
+                assertThat(nettyClient.isReady(firstNode)).isTrue();
+                assertThat(nettyClient.isReady(secondNode)).isTrue();
+                assertThat(nettyClient.connections()).hasSize(2);
+            }
+        }
+    }
+
+    @Test
+    void testDisconnectSpecificEndpoint() throws Exception {
+        try (NetUtils.Port firstPort = getAvailablePort();
+                NetUtils.Port secondPort = getAvailablePort()) {
+
+            TestingTabletGatewayService firstService = new TestingTabletGatewayService();
+            TestingTabletGatewayService secondService = new TestingTabletGatewayService();
+
+            MetricGroup firstMetricGroup = NOPMetricsGroup.newInstance();
+            MetricGroup secondMetricGroup = NOPMetricsGroup.newInstance();
+
+            ServerNode firstNode =
+                    new ServerNode(1, "localhost", firstPort.getPort(), ServerType.TABLET_SERVER);
+
+            ServerNode secondNode =
+                    new ServerNode(1, "localhost", secondPort.getPort(), ServerType.TABLET_SERVER);
+
+            try (NettyServer firstServer =
+                            new NettyServer(
+                                    conf,
+                                    Collections.singleton(
+                                            new Endpoint(
+                                                    firstNode.host(),
+                                                    firstNode.port(),
+                                                    "INTERNAL")),
+                                    firstService,
+                                    firstMetricGroup,
+                                    RequestsMetrics.createTabletServerRequestMetrics(
+                                            firstMetricGroup));
+                    NettyServer secondServer =
+                            new NettyServer(
+                                    conf,
+                                    Collections.singleton(
+                                            new Endpoint(
+                                                    secondNode.host(),
+                                                    secondNode.port(),
+                                                    "INTERNAL")),
+                                    secondService,
+                                    secondMetricGroup,
+                                    RequestsMetrics.createTabletServerRequestMetrics(
+                                            secondMetricGroup))) {
+
+                firstServer.start();
+                secondServer.start();
+
+                ApiVersionsRequest request =
+                        new ApiVersionsRequest()
+                                .setClientSoftwareName("testing_client")
+                                .setClientSoftwareVersion("1.0");
+
+                nettyClient.sendRequest(firstNode, ApiKeys.API_VERSIONS, request).get();
+                nettyClient.sendRequest(secondNode, ApiKeys.API_VERSIONS, request).get();
+
+                assertThat(nettyClient.connections()).hasSize(2);
+                assertThat(nettyClient.isReady(firstNode)).isTrue();
+                assertThat(nettyClient.isReady(secondNode)).isTrue();
+
+                // Disconnect only the first physical endpoint.
+                nettyClient.disconnect(firstNode).get();
+
+                assertThat(nettyClient.isReady(firstNode)).isFalse();
+                assertThat(nettyClient.isReady(secondNode)).isTrue();
+
+                assertThat(nettyClient.connections())
+                        .extracting(ServerConnection::getServerNode)
+                        .containsExactly(secondNode);
+
+                // Verify that the remaining endpoint is still usable.
+                nettyClient.sendRequest(secondNode, ApiKeys.API_VERSIONS, request).get();
+
+                // handshake + first application request + request above
+                assertThat(secondService.getProcessorThreadNames()).hasSize(3);
             }
         }
     }
@@ -290,10 +390,15 @@ final class NettyClientTest {
                 nettyClient.sendRequest(secondNode, ApiKeys.API_VERSIONS, request).get();
 
                 assertThat(nettyClient.connections()).hasSize(2);
+                assertThat(nettyClient.isReady(firstNode)).isTrue();
+                assertThat(nettyClient.isReady(secondNode)).isTrue();
 
+                // UID-level disconnect must close every physical endpoint for the logical server.
                 nettyClient.disconnect(firstNode.uid()).get();
 
                 assertThat(nettyClient.connections()).isEmpty();
+                assertThat(nettyClient.isReady(firstNode)).isFalse();
+                assertThat(nettyClient.isReady(secondNode)).isFalse();
             }
         }
     }
@@ -316,6 +421,7 @@ final class NettyClientTest {
     @Test
     void testMultipleEndpoint() throws Exception {
         MetricGroup metricGroup = NOPMetricsGroup.newInstance();
+
         try (NetUtils.Port availablePort1 = getAvailablePort();
                 NetUtils.Port availablePort2 = getAvailablePort();
                 NettyServer multipleEndpointsServer =
@@ -330,11 +436,14 @@ final class NettyClientTest {
                                 metricGroup,
                                 RequestsMetrics.createCoordinatorServerRequestMetrics(
                                         metricGroup))) {
+
             multipleEndpointsServer.start();
+
             ApiVersionsRequest request =
                     new ApiVersionsRequest()
                             .setClientSoftwareName("testing_client_100")
                             .setClientSoftwareVersion("1.0");
+
             nettyClient
                     .sendRequest(
                             new ServerNode(
@@ -345,9 +454,12 @@ final class NettyClientTest {
                             ApiKeys.API_VERSIONS,
                             request)
                     .get();
-            assertThat(nettyClient.connections().size()).isEqualTo(1);
+
+            assertThat(nettyClient.connections()).hasSize(1);
+
             try (NettyClient client =
                     new NettyClient(conf, TestingClientMetricGroup.newInstance())) {
+
                 client.sendRequest(
                                 new ServerNode(
                                         2,
@@ -357,7 +469,8 @@ final class NettyClientTest {
                                 ApiKeys.API_VERSIONS,
                                 request)
                         .get();
-                assertThat(client.connections().size()).isEqualTo(1);
+
+                assertThat(client.connections()).hasSize(1);
             }
         }
     }
@@ -368,6 +481,7 @@ final class NettyClientTest {
                 new ApiVersionsRequest()
                         .setClientSoftwareName("testing_client_100")
                         .setClientSoftwareVersion("1.0");
+
         // close the netty server.
         nettyServer.close();
 
@@ -378,6 +492,7 @@ final class NettyClientTest {
                                         .sendRequest(serverNode, ApiKeys.API_VERSIONS, request)
                                         .get())
                 .hasMessageContaining("Disconnected from node");
+
         assertThat(nettyClient.connections()).isEmpty();
     }
 
@@ -386,8 +501,11 @@ final class NettyClientTest {
             serverNode =
                     new ServerNode(
                             serverId, "localhost", availablePort.getPort(), ServerType.COORDINATOR);
+
             service = new TestingGatewayService();
+
             MetricGroup metricGroup = NOPMetricsGroup.newInstance();
+
             nettyServer =
                     new NettyServer(
                             conf,
@@ -396,6 +514,7 @@ final class NettyClientTest {
                             service,
                             metricGroup,
                             RequestsMetrics.createCoordinatorServerRequestMetrics(metricGroup));
+
             nettyServer.start();
         }
     }
