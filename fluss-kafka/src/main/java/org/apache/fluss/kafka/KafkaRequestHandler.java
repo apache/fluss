@@ -17,22 +17,35 @@
 
 package org.apache.fluss.kafka;
 
+import org.apache.fluss.kafka.api.metadata.MetadataHandler;
 import org.apache.fluss.kafka.api.versions.ApiVersionsHandler;
+import org.apache.fluss.kafka.backend.metadata.GatewayKafkaMetadataBackend;
 import org.apache.fluss.kafka.dispatcher.KafkaApiRegistry;
 import org.apache.fluss.kafka.dispatcher.KafkaRequestDispatcher;
 import org.apache.fluss.kafka.error.KafkaErrorMapper;
+import org.apache.fluss.rpc.RpcGatewayService;
+import org.apache.fluss.rpc.gateway.TabletServerGateway;
 import org.apache.fluss.rpc.netty.server.RequestHandler;
 import org.apache.fluss.rpc.protocol.RequestType;
+
+import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
 /** Entry point that dispatches Kafka protocol requests to registered API handlers. */
 public class KafkaRequestHandler implements RequestHandler<KafkaRequest> {
 
     private final KafkaRequestDispatcher dispatcher;
 
-    /** Creates a Kafka request handler with the implemented server capabilities. */
-    public KafkaRequestHandler() {
+    /** Creates a Kafka request handler with the capabilities provided by a TabletServer. */
+    public KafkaRequestHandler(
+            RpcGatewayService service, TabletServerGateway gateway, String kafkaDatabase) {
+        checkNotNull(service);
+        checkNotNull(gateway);
+        checkNotNull(kafkaDatabase);
         KafkaApiRegistry registry = new KafkaApiRegistry();
         registry.register(new ApiVersionsHandler(registry));
+        registry.register(
+                new MetadataHandler(
+                        new GatewayKafkaMetadataBackend(service, gateway, kafkaDatabase)));
         registry.freeze();
         this.dispatcher = new KafkaRequestDispatcher(registry, new KafkaErrorMapper());
     }

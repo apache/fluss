@@ -66,6 +66,7 @@ public class KafkaProtocolPlugin implements NetworkProtocolPlugin {
                     "Kafka protocol endpoints can only be enabled on TabletServers, but the service is "
                             + service.getClass().getSimpleName());
         }
-        return new KafkaRequestHandler();
+        TabletServerGateway gateway = (TabletServerGateway) service;
+        return new KafkaRequestHandler(service, gateway, conf.get(ConfigOptions.KAFKA_DATABASE));
     }
 }
