@@ -22,6 +22,8 @@ import org.apache.fluss.rpc.messages.DatabaseExistsRequest;
 import org.apache.fluss.rpc.messages.DatabaseExistsResponse;
 import org.apache.fluss.rpc.messages.DescribeClusterConfigsRequest;
 import org.apache.fluss.rpc.messages.DescribeClusterConfigsResponse;
+import org.apache.fluss.rpc.messages.DescribeTabletServersRequest;
+import org.apache.fluss.rpc.messages.DescribeTabletServersResponse;
 import org.apache.fluss.rpc.messages.GetClusterHealthRequest;
 import org.apache.fluss.rpc.messages.GetClusterHealthResponse;
 import org.apache.fluss.rpc.messages.GetDatabaseInfoRequest;
@@ -202,4 +204,13 @@ public interface AdminReadOnlyGateway extends RpcGateway {
      */
     @RPC(api = ApiKeys.GET_CLUSTER_HEALTH)
     CompletableFuture<GetClusterHealthResponse> getClusterHealth(GetClusterHealthRequest request);
+
+    /**
+     * Describe the replica load of each tablet server in the cluster.
+     *
+     * @return the describe tablet servers response.
+     */
+    @RPC(api = ApiKeys.DESCRIBE_TABLET_SERVERS)
+    CompletableFuture<DescribeTabletServersResponse> describeTabletServers(
+            DescribeTabletServersRequest request);
 }
