@@ -17,10 +17,13 @@
 
 package org.apache.fluss.server.utils;
 
+import org.apache.fluss.config.ConfigOption;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.exception.InvalidAlterTableException;
 import org.apache.fluss.exception.InvalidConfigException;
+import org.apache.fluss.exception.InvalidDatabaseException;
 import org.apache.fluss.exception.InvalidTableException;
+import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
@@ -41,6 +44,7 @@ import java.util.Map;
 import java.util.stream.Stream;
 
 import static org.apache.fluss.config.ConfigOptions.KV_FORMAT_VERSION_2;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Tests for {@link TableDescriptorValidation}. */
@@ -225,6 +229,54 @@ class TableDescriptorValidationTest {
                 .hasMessageContaining(ConfigOptions.TABLE_KV_VALUE_LAYOUT_VERSION.key());
     }
 
+    @Test
+    void testCustomLakePathValidation() {
+        // invalid database and table names
+        assertThatThrownBy(
+                        () ->
+                                validate(
+                                        tableDescriptorWithLakeName(
+                                                ConfigOptions.TABLE_DATALAKE_DATABASE_NAME,
+                                                "../lake_db"),
+                                        DataLakeFormat.PAIMON))
+                .isInstanceOf(InvalidDatabaseException.class)
+                .hasMessageContaining("../lake_db");
+
+        assertThatThrownBy(
+                        () ->
+                                validate(
+                                        tableDescriptorWithLakeName(
+                                                ConfigOptions.TABLE_DATALAKE_TABLE_NAME,
+                                                "/tmp/lake_table"),
+                                        DataLakeFormat.PAIMON))
+                .isInstanceOf(InvalidTableException.class)
+                .hasMessageContaining("/tmp/lake_table");
+
+        // valid database and table names
+        TableDescriptor tableDescriptor =
+                TableDescriptor.builder()
+                        .schema(Schema.newBuilder().column("id", DataTypes.INT()).build())
+                        .distributedBy(1)
+                        .property(ConfigOptions.TABLE_REPLICATION_FACTOR, 1)
+                        .property(ConfigOptions.TABLE_DATALAKE_DATABASE_NAME, "lake_db-1")
+                        .property(ConfigOptions.TABLE_DATALAKE_TABLE_NAME, "lake_table-1")
+                        .build();
+
+        assertThatCode(() -> validate(tableDescriptor, DataLakeFormat.PAIMON))
+                .doesNotThrowAnyException();
+
+        // custom lake paths are not supported for Iceberg
+        assertThatThrownBy(
+                        () ->
+                                validate(
+                                        tableDescriptorWithLakeName(
+                                                ConfigOptions.TABLE_DATALAKE_TABLE_NAME,
+                                                "lake_table"),
+                                        DataLakeFormat.ICEBERG))
+                .isInstanceOf(InvalidConfigException.class)
+                .hasMessageContaining("Custom lake table path is only supported for Paimon");
+    }
+
     private static Stream<Arguments> supportedKvTTLTimeColumnTypes() {
         return Stream.of(
                 Arguments.of(DataTypes.BIGINT()),
@@ -245,6 +297,20 @@ class TableDescriptorValidationTest {
                 Arguments.of(KvValueLayout.TAGGED.version(), true, true),
                 Arguments.of(KvValueLayout.TAGGED.version(), false, false),
                 Arguments.of(999, true, false));
+    }
+
+    private static void validate(TableDescriptor tableDescriptor, DataLakeFormat dataLakeFormat) {
+        TableDescriptorValidation.validateTableDescriptor(tableDescriptor, 100, dataLakeFormat);
+    }
+
+    private static TableDescriptor tableDescriptorWithLakeName(
+            ConfigOption<String> configOption, String lakeName) {
+        return TableDescriptor.builder()
+                .schema(Schema.newBuilder().column("id", DataTypes.INT()).build())
+                .distributedBy(1)
+                .property(ConfigOptions.TABLE_REPLICATION_FACTOR, 1)
+                .property(configOption, lakeName)
+                .build();
     }
 
     private TableDescriptor pkTableWithProperty(String key, String value) {

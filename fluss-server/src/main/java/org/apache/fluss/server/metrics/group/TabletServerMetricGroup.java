@@ -34,6 +34,9 @@ import org.apache.fluss.server.kv.rocksdb.RocksDBStatistics;
 
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.LongSupplier;
+
+import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
 /** The metric group for tablet server. */
 public class TabletServerMetricGroup extends AbstractMetricGroup {
@@ -74,6 +77,18 @@ public class TabletServerMetricGroup extends AbstractMetricGroup {
     private final Counter isrShrinks;
     private final Counter isrExpands;
     private final Counter failedIsrUpdates;
+
+    /** Suppliers for shared block cache usage, set by KvManager when shared cache is enabled. */
+    private volatile LongSupplier sharedBlockCacheUsageSupplier = () -> 0L;
+
+    private volatile LongSupplier sharedBlockCachePinnedUsageSupplier = () -> 0L;
+
+    private volatile long sharedBlockCacheCapacity;
+
+    /** Supplier for shared write buffer usage, set by KvManager. */
+    private volatile LongSupplier sharedWriteBufferUsageSupplier = () -> 0L;
+
+    private volatile long sharedWriteBufferCapacity;
 
     public TabletServerMetricGroup(
             MetricRegistry registry, String clusterId, String rack, String hostname, int serverId) {
@@ -144,13 +159,60 @@ public class TabletServerMetricGroup extends AbstractMetricGroup {
      */
     private void registerServerRocksDBMetrics() {
         // Total memory usage across all RocksDB instances in this server.
+        // When shared block cache is enabled, per-tablet stats exclude block cache,
+        // so we add the shared block cache usage once separately.
         gauge(
                 MetricNames.ROCKSDB_MEMORY_USAGE_TOTAL,
                 () ->
                         metricGroupByTable.values().stream()
-                                .flatMap(TableMetricGroup::allRocksDBStatistics)
-                                .mapToLong(RocksDBStatistics::getTotalMemoryUsage)
-                                .sum());
+                                        .flatMap(TableMetricGroup::allRocksDBStatistics)
+                                        .mapToLong(RocksDBStatistics::getTotalMemoryUsage)
+                                        .sum()
+                                + sharedBlockCacheUsageSupplier.getAsLong());
+        gauge(
+                MetricNames.ROCKSDB_SHARED_BLOCK_CACHE_USAGE,
+                () -> sharedBlockCacheUsageSupplier.getAsLong());
+        gauge(MetricNames.ROCKSDB_SHARED_BLOCK_CACHE_CAPACITY, () -> sharedBlockCacheCapacity);
+        gauge(
+                MetricNames.ROCKSDB_SHARED_BLOCK_CACHE_PINNED_USAGE,
+                () -> sharedBlockCachePinnedUsageSupplier.getAsLong());
+        gauge(
+                MetricNames.ROCKSDB_SHARED_WRITE_BUFFER_USAGE,
+                () -> sharedWriteBufferUsageSupplier.getAsLong());
+        gauge(MetricNames.ROCKSDB_SHARED_WRITE_BUFFER_CAPACITY, () -> sharedWriteBufferCapacity);
+    }
+
+    /**
+     * Sets the shared block cache metrics. Called by KvManager when shared block cache is enabled.
+     *
+     * @param usageSupplier supplier for current cache usage
+     * @param pinnedUsageSupplier supplier for current pinned cache usage
+     * @param capacity configured cache capacity in bytes
+     */
+    public void setSharedBlockCacheMetrics(
+            LongSupplier usageSupplier, LongSupplier pinnedUsageSupplier, long capacity) {
+        LongSupplier checkedUsageSupplier =
+                checkNotNull(usageSupplier, "usageSupplier must not be null");
+        LongSupplier checkedPinnedUsageSupplier =
+                checkNotNull(pinnedUsageSupplier, "pinnedUsageSupplier must not be null");
+        this.sharedBlockCacheUsageSupplier = checkedUsageSupplier;
+        this.sharedBlockCachePinnedUsageSupplier = checkedPinnedUsageSupplier;
+        this.sharedBlockCacheCapacity = capacity;
+    }
+
+    /**
+     * Sets the shared write buffer metrics.
+     *
+     * <p>The usage is RocksDB's approximate logical charge for memtable allocations. It is not a
+     * process RSS measurement or a hard memory bound.
+     *
+     * @param usageSupplier supplier for current shared write buffer usage
+     * @param capacity configured soft capacity in bytes, or 0 when disabled
+     */
+    public void setSharedWriteBufferMetrics(LongSupplier usageSupplier, long capacity) {
+        this.sharedWriteBufferUsageSupplier =
+                checkNotNull(usageSupplier, "usageSupplier must not be null");
+        this.sharedWriteBufferCapacity = capacity;
     }
 
     @Override

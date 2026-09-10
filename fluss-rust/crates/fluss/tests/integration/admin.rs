@@ -99,6 +99,7 @@ mod admin_test {
             .with_comment("User's age (optional)")
             .column("email", DataTypes::string())
             .primary_key(vec!["id".to_string()])
+            .unwrap()
             .build()
             .expect("Failed to build table schema");
 
@@ -217,6 +218,7 @@ mod admin_test {
                     .column("name", DataTypes::string())
                     .column("seq", DataTypes::bigint())
                     .primary_key(vec!["id".to_string()])
+                    .unwrap()
                     .enable_auto_increment("seq")
                     .expect("Failed to enable auto increment")
                     .build()
@@ -292,6 +294,7 @@ mod admin_test {
             .column("dt", DataTypes::string())
             .column("region", DataTypes::string())
             .primary_key(vec!["id", "dt", "region"])
+            .unwrap()
             .build()
             .expect("Failed to build table schema");
 

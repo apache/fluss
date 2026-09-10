@@ -82,6 +82,7 @@ import org.apache.fluss.server.entity.NotifyLakeTableOffsetData;
 import org.apache.fluss.server.entity.NotifyLeaderAndIsrData;
 import org.apache.fluss.server.entity.NotifyLeaderAndIsrResultForBucket;
 import org.apache.fluss.server.entity.NotifyRemoteLogOffsetsData;
+import org.apache.fluss.server.entity.ProduceLogDataForBucket;
 import org.apache.fluss.server.entity.PutKvDataForBucket;
 import org.apache.fluss.server.entity.StopReplicaData;
 import org.apache.fluss.server.entity.StopReplicaResultForBucket;
@@ -128,6 +129,7 @@ import org.apache.fluss.utils.ByteArraySlice;
 import org.apache.fluss.utils.FileUtils;
 import org.apache.fluss.utils.FlussPaths;
 import org.apache.fluss.utils.clock.Clock;
+import org.apache.fluss.utils.concurrent.FutureUtils;
 import org.apache.fluss.utils.concurrent.Scheduler;
 
 import org.slf4j.Logger;
@@ -431,6 +433,24 @@ public class ReplicaManager implements ServerReconfigurable {
                                     + "negative or zero: %d",
                             newMinInSyncReplicas));
         }
+
+        int newHistoricalPartitionThreadPoolMaxSize =
+                newConfig.get(ConfigOptions.SERVER_HISTORICAL_PARTITION_THREAD_POOL_MAX_SIZE);
+        if (newHistoricalPartitionThreadPoolMaxSize <= 0) {
+            throw new ConfigException(
+                    String.format(
+                            "Invalid configuration for %s, it must be greater than 0.",
+                            ConfigOptions.SERVER_HISTORICAL_PARTITION_THREAD_POOL_MAX_SIZE.key()));
+        }
+
+        int newMaxQueuedHistoricalRequests =
+                newConfig.get(ConfigOptions.NETTY_SERVER_MAX_QUEUED_HISTORICAL_REQUESTS);
+        if (newMaxQueuedHistoricalRequests <= 0) {
+            throw new ConfigException(
+                    String.format(
+                            "Invalid configuration for %s, it must be greater than 0.",
+                            ConfigOptions.NETTY_SERVER_MAX_QUEUED_HISTORICAL_REQUESTS.key()));
+        }
     }
 
     @Override
@@ -695,6 +715,47 @@ public class ReplicaManager implements ServerReconfigurable {
         // maybe do delay write operation.
         maybeAddDelayedWrite(
                 timeoutMs, requiredAcks, entriesPerBucket.size(), appendResult, responseCallback);
+    }
+
+    /** Appends historical log batches while preserving each original partition in the response. */
+    public void appendHistoricalRecordsToLog(
+            int timeoutMs,
+            int requiredAcks,
+            Collection<ProduceLogDataForBucket> entriesPerBucket,
+            @Nullable UserContext userContext,
+            Consumer<List<ProduceLogResultForBucket>> responseCallback) {
+        List<CompletableFuture<ProduceLogResultForBucket>> resultFutures =
+                new ArrayList<>(entriesPerBucket.size());
+        for (ProduceLogDataForBucket bucketData : entriesPerBucket) {
+            CompletableFuture<ProduceLogResultForBucket> resultFuture = new CompletableFuture<>();
+            resultFutures.add(resultFuture);
+            String originalPartitionName =
+                    checkNotNull(
+                            bucketData.originalPartitionName(),
+                            "originalPartitionName must not be null");
+            appendRecordsToLog(
+                    timeoutMs,
+                    requiredAcks,
+                    Collections.singletonMap(bucketData.tableBucket(), bucketData.records()),
+                    userContext,
+                    bucketResults -> {
+                        ProduceLogResultForBucket result = bucketResults.get(0);
+                        ProduceLogResultForBucket historicalResult =
+                                result.failed()
+                                        ? ProduceLogResultForBucket.historicalFailure(
+                                                result.getTableBucket(),
+                                                result.getError(),
+                                                originalPartitionName)
+                                        : ProduceLogResultForBucket.historicalSuccess(
+                                                result.getTableBucket(),
+                                                result.getBaseOffset(),
+                                                result.getWriteLogEndOffset(),
+                                                originalPartitionName);
+                        resultFuture.complete(historicalResult);
+                    });
+        }
+        FutureUtils.combineAll(resultFutures)
+                .thenAccept(results -> responseCallback.accept(new ArrayList<>(results)));
     }
 
     /**
@@ -1434,22 +1495,22 @@ public class ReplicaManager implements ServerReconfigurable {
                 LakeTableSnapshot lakeTableSnapshot = optLakeTableSnapshot.get();
                 long snapshotId = optLakeTableSnapshot.get().getSnapshotId();
                 replica.getLogTablet().updateLakeTableSnapshotId(snapshotId);
-                if (replica.isHistoricalPartition()) {
-                    // The historical overlay will be rebuilt from this snapshot's lake offset.
-                    // Refresh a cached lookuper before it becomes the fallback for data omitted
-                    // from the rebuilt overlay.
-                    historicalPartitionManager.requireLakeSnapshot(
-                            replica.getTableBucket().getTableId(), snapshotId);
-                }
                 lakeTableSnapshot
                         .getLogEndOffset(tb)
                         .ifPresent(replica.getLogTablet()::updateLakeLogEndOffset);
+                if (replica.isHistoricalPartition()) {
+                    // Local historical KV state will be rebuilt from this snapshot's lake offset.
+                    // Refresh a cached lookuper before it becomes the fallback for data omitted
+                    // from the rebuilt local state.
+                    historicalPartitionManager.requireLakeSnapshot(
+                            replica.getTableBucket().getTableId(), snapshotId);
+                }
             }
         } catch (Exception e) {
             if (replica.isHistoricalPartition()) {
                 // Historical recovery uses the lake offset as its durable base and replays the
                 // retained WAL from that offset. Reject leader activation if the latest lake
-                // progress cannot be loaded, instead of rebuilding the overlay from stale state.
+                // progress cannot be loaded, instead of rebuilding local KV from stale state.
                 throw e;
             }
             // Lake commit cleanup can race with this best-effort refresh and remove the
@@ -1795,19 +1856,17 @@ public class ReplicaManager implements ServerReconfigurable {
                     fetchParams.markReadOneMessage();
                 }
                 limitBytes = Math.max(0, limitBytes - recordBatchSize);
-                FetchLogResultForBucket fetchLogResult;
-                if (fetchedData.hasFilteredEndOffset()) {
-                    fetchLogResult =
-                            new FetchLogResultForBucket(
-                                    tb,
-                                    fetchedData.getRecords(),
-                                    readInfo.getHighWatermark(),
-                                    fetchedData.getFilteredEndOffset());
-                } else {
-                    fetchLogResult =
-                            new FetchLogResultForBucket(
-                                    tb, fetchedData.getRecords(), readInfo.getHighWatermark());
-                }
+                FetchLogResultForBucket fetchLogResult =
+                        FetchLogResultForBucket.records(
+                                tb,
+                                fetchedData.getRecords(),
+                                readInfo.getHighWatermark(),
+                                fetchedData.hasFilteredEndOffset()
+                                        ? fetchedData.getFilteredEndOffset()
+                                        : -1L,
+                                readInfo.hasMinRetainOffset()
+                                        ? readInfo.getMinRetainOffset()
+                                        : -1L);
                 logReadResult.put(
                         tb,
                         new LogReadResult(fetchLogResult, fetchedData.getFetchOffsetMetadata()));
@@ -1834,7 +1893,7 @@ public class ReplicaManager implements ServerReconfigurable {
                 if (replica != null && e instanceof LogOffsetOutOfRangeException) {
                     result = handleFetchOutOfRangeException(replica, fetchOffset, e);
                 } else {
-                    result = new FetchLogResultForBucket(tb, ApiError.fromThrowable(e));
+                    result = FetchLogResultForBucket.error(tb, ApiError.fromThrowable(e));
                 }
                 logReadResult.put(
                         tb, new LogReadResult(result, LogOffsetMetadata.UNKNOWN_OFFSET_METADATA));
@@ -1865,7 +1924,7 @@ public class ReplicaManager implements ServerReconfigurable {
             RemoteLogFetchInfo remoteLogFetchInfo =
                     fetchLogFromRemote(replica, normalizedFetchOffset);
             if (remoteLogFetchInfo != null) {
-                return new FetchLogResultForBucket(
+                return FetchLogResultForBucket.remote(
                         tb, remoteLogFetchInfo, replica.getLogHighWatermark());
             }
             // Remote log is expected to cover the offset, but segments/manifest may not be ready
@@ -1894,8 +1953,8 @@ public class ReplicaManager implements ServerReconfigurable {
             // todo: currently, we just return empty records directly
             // need to return the info of datalake to make client can fetch
             // from datalake directly
-            return new FetchLogResultForBucket(
-                    tb, MemoryLogRecords.EMPTY, replica.getLogHighWatermark());
+            return FetchLogResultForBucket.records(
+                    tb, MemoryLogRecords.EMPTY, replica.getLogHighWatermark(), -1L, -1L);
         }
         // Once we get a fetch out of range exception from local storage, we need to check whether
         // the log segment already upload to the remote storage. If uploaded, we will return a list
@@ -1905,13 +1964,13 @@ public class ReplicaManager implements ServerReconfigurable {
             try {
                 RemoteLogFetchInfo remoteLogFetchInfo = fetchLogFromRemote(replica, fetchOffset);
                 if (remoteLogFetchInfo != null) {
-                    return new FetchLogResultForBucket(
+                    return FetchLogResultForBucket.remote(
                             tb, remoteLogFetchInfo, replica.getLogHighWatermark());
                 }
             } catch (Exception ex) {
-                return new FetchLogResultForBucket(tb, ApiError.fromThrowable(ex));
+                return FetchLogResultForBucket.error(tb, ApiError.fromThrowable(ex));
             }
-            return new FetchLogResultForBucket(
+            return FetchLogResultForBucket.error(
                     tb,
                     ApiError.fromThrowable(
                             new LogOffsetOutOfRangeException(
@@ -1919,7 +1978,7 @@ public class ReplicaManager implements ServerReconfigurable {
                                             "The fetch offset %s is out of range for table bucket %s",
                                             fetchOffset, tb))));
         } else {
-            return new FetchLogResultForBucket(tb, ApiError.fromThrowable(e));
+            return FetchLogResultForBucket.error(tb, ApiError.fromThrowable(e));
         }
     }
 

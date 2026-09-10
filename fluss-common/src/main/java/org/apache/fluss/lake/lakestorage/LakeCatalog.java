@@ -96,6 +96,16 @@ public interface LakeCatalog extends AutoCloseable {
         @Nullable
         TableDescriptor getCurrentTable();
 
+        /**
+         * Get the lake table path currently associated with the Fluss table.
+         *
+         * @return the current lake table path, or null when there is no current Fluss table
+         */
+        @Nullable
+        default TablePath getCurrentLakeTablePath() {
+            return null;
+        }
+
         /** Get the expected table info of fluss. */
         TableDescriptor getExpectedTable();
     }

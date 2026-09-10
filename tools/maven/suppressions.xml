@@ -29,8 +29,4 @@
         files="[\\/]target[\\/]"
         checks=".*"/>
 
-    <!-- Classes copied from AWS -->
-    <suppress
-            files="com[\\/]amazonaws[\\/]services[\\/]s3[\\/]model[\\/]transform[\\/]XmlResponsesSaxParser.java"
-            checks=".*"/>
 </suppressions>

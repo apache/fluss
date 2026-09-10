@@ -349,6 +349,7 @@ class KvTabletTest {
                 schemaGetter,
                 tableConf.getChangelogImage(),
                 KvManager.getDefaultRateLimiter(),
+                null,
                 kvFlushScheduler,
                 null,
                 autoIncrementManager,
@@ -2292,6 +2293,14 @@ class KvTabletTest {
         assertThat(statistics.getCompactionPending()).isEqualTo(0);
         assertThat(statistics.getTotalMemoryUsage())
                 .isGreaterThan(0); // Block cache is pre-allocated
+
+        kvTablet.getRocksDBKv().put("key".getBytes(), "value".getBytes());
+        assertThat(statistics.getMemTableUnFlushedMemoryUsage()).isPositive();
+        assertThat(statistics.getTotalMemoryUsage())
+                .isEqualTo(
+                        statistics.getMemTableMemoryUsage()
+                                + statistics.getTableReadersMemoryUsage()
+                                + statistics.getBlockCacheMemoryUsage());
 
         // ========== Phase 1: Write and Flush ==========
         int numRecords = 10000;

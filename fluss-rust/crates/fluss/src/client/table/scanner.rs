@@ -2998,6 +2998,7 @@ mod tests {
                     remote_log_fetch_info: None,
                     records: None,
                     filtered_end_offset,
+                    min_retain_offset: None,
                 }],
             }],
         }
@@ -3052,6 +3053,7 @@ mod tests {
                     remote_log_fetch_info: None,
                     records: None,
                     filtered_end_offset: None,
+                    min_retain_offset: None,
                 }],
             }],
         };
@@ -3111,6 +3113,7 @@ mod tests {
                     remote_log_fetch_info: None,
                     records: None,
                     filtered_end_offset: None,
+                    min_retain_offset: None,
                 }],
             }],
         };
@@ -3140,7 +3143,7 @@ mod tests {
             .column("name", DataTypes::string());
 
         if has_primary_key {
-            schema_builder = schema_builder.primary_key(vec!["id"]);
+            schema_builder = schema_builder.primary_key(vec!["id"]).unwrap();
         }
 
         let schema = schema_builder.build().unwrap();
@@ -3460,6 +3463,7 @@ mod tests {
                             remote_log_fetch_info: None,
                             records: None,
                             filtered_end_offset: None,
+                            min_retain_offset: None,
                         }],
                     }],
                 };

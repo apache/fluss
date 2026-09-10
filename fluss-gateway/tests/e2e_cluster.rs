@@ -515,6 +515,7 @@ async fn assert_schema_recreation(api: &Api, connection: &FlussConnection) {
                     .column(columns[0], DataTypes::string())
                     .column(columns[1], DataTypes::string())
                     .primary_key(["id"])
+                    .unwrap()
                     .build()
                     .unwrap(),
             )
@@ -726,6 +727,7 @@ async fn metadata_apis_support_plaintext_and_sasl_fluss_clusters() {
                 .column("name", DataTypes::string())
                 .column("note", DataTypes::string())
                 .primary_key(["id"])
+                .unwrap()
                 .build()
                 .expect("build the KV schema"),
         )

@@ -244,7 +244,7 @@ pub fn ffi_descriptor_to_core(
     }
 
     if !descriptor.schema.primary_keys.is_empty() {
-        schema_builder = schema_builder.primary_key(descriptor.schema.primary_keys.clone());
+        schema_builder = schema_builder.primary_key(descriptor.schema.primary_keys.clone())?;
     }
 
     for auto_increment_column in &descriptor.schema.auto_increment_columns {

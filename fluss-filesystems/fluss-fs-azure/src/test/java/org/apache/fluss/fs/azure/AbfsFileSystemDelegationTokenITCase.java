@@ -45,6 +45,7 @@ import java.util.Map;
 class AbfsFileSystemDelegationTokenITCase extends FileSystemBehaviorTestSuite {
 
     private static final String ABFS_FS_PATH = "abfs://fluss@test.dfs.core.windows.net/test";
+    private static final String HNS_ENABLED = "fs.azure.account.hns.enabled";
 
     @BeforeAll
     static void setup() throws Exception {
@@ -64,7 +65,9 @@ class AbfsFileSystemDelegationTokenITCase extends FileSystemBehaviorTestSuite {
         new AbfsDelegationTokenReceiver().onNewTokensObtained(token);
 
         // Initialize without account key.
-        FileSystem.initialize(new Configuration(), null);
+        Configuration configuration = new Configuration();
+        configuration.setBoolean(HNS_ENABLED, false);
+        FileSystem.initialize(configuration, null);
     }
 
     @AfterAll

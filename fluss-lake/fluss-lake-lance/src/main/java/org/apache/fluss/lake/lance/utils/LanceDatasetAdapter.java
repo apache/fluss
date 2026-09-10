@@ -25,6 +25,7 @@ import com.lancedb.lance.ReadOptions;
 import com.lancedb.lance.Transaction;
 import com.lancedb.lance.WriteParams;
 import com.lancedb.lance.operation.Append;
+import com.lancedb.lance.operation.UpdateConfig;
 import org.apache.arrow.memory.BufferAllocator;
 import org.apache.arrow.memory.RootAllocator;
 import org.apache.arrow.vector.types.pojo.Schema;
@@ -57,14 +58,19 @@ public class LanceDatasetAdapter {
         String uri = config.getDatasetUri();
         ReadOptions options = LanceConfig.genReadOptionFromConfig(config);
         try (Dataset dataset = Dataset.open(allocator, uri, options)) {
+            // Lance rejects Append with no fragments, use a no-op UpdateConfig operation to
+            // create a new version carrying the transaction properties (tiering progress)
             Transaction transaction =
                     dataset.newTransactionBuilder()
-                            .operation(Append.builder().fragments(fragments).build())
+                            .operation(
+                                    fragments.isEmpty()
+                                            ? UpdateConfig.builder().build()
+                                            : Append.builder().fragments(fragments).build())
                             .transactionProperties(properties)
                             .build();
-            try (Dataset appendedDataset = transaction.commit()) {
+            try (Dataset committedDataset = transaction.commit()) {
                 // note: lance dataset version starts from 1
-                return appendedDataset.version();
+                return committedDataset.version();
             }
         }
     }

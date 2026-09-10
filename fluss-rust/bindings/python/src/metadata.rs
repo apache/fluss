@@ -176,7 +176,9 @@ impl Schema {
 
         if let Some(pk_columns) = primary_keys {
             if !pk_columns.is_empty() {
-                builder = builder.primary_key(pk_columns);
+                builder = builder
+                    .primary_key(pk_columns)
+                    .map_err(|e| FlussError::new_err(format!("Failed to build schema: {e}")))?;
             }
         }
 

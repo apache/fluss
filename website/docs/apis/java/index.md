@@ -367,6 +367,82 @@ LookupResult prefixLookup = table.newLookup()
         .get();
 ```
 
+### Multi-Table Scanner and Writer
+`MultiTable`, obtained from `connection.getMultiTable()`, lets a single scanner or writer work across many tables without creating a `Table` instance for each one.
+Like `Table`, a `MultiTable` instance is lightweight but not thread-safe.
+
+A `MultiTableLogScanner` subscribes to buckets by table path, and each poll returns records from all subscribed tables.
+Every `MultiTableRecord` carries the table path, the schema and schema id it was written with, the change type, and the underlying `ScanRecord`.
+Column projection and filter pushdown are not available on the multi-table scanner; every record carries the full row.
+```java
+MultiTable multiTable = connection.getMultiTable();
+TablePath ordersPath = TablePath.of("my_db", "orders");
+TablePath eventsPath = TablePath.of("my_db", "events");
+
+try (MultiTableLogScanner scanner = multiTable.newMultiTableScan().createLogScanner()) {
+    // non-partitioned table: (tablePath, bucket)
+    scanner.subscribeFromBeginning(ordersPath, 0);
+    // partitioned table: (tablePath, partitionId, bucket); using the wrong overload for a table throws
+    for (PartitionInfo partition : admin.listPartitionInfos(eventsPath).get()) {
+        scanner.subscribeFromBeginning(eventsPath, partition.getPartitionId(), 0);
+    }
+
+    while (true) {
+        MultiTableRecords records = scanner.poll(Duration.ofSeconds(1));
+        for (MultiTableRecord record : records) {
+            TablePath tablePath = record.getTablePath();
+            Schema schema = record.getSchema();
+            InternalRow row = record.getRow();
+            // Process the row
+            ...
+        }
+        // Consumed offsets are available per table and per bucket
+        for (TablePath tablePath : records.tablePaths()) {
+            for (TableBucket bucket : records.buckets(tablePath)) {
+                Long nextOffset = records.consumedUpToOffset(tablePath, bucket);
+                ...
+            }
+        }
+    }
+}
+```
+If a subscribed table is dropped and recreated, further subscriptions to it fail until its stale buckets are unsubscribed.
+
+A `MultiTableWriter` routes each record to the table named in the `MultiTableWriteRecord`.
+Log tables accept `forAppend`, primary key tables accept `forUpsert` and `forDelete`, and each record must carry the schema id the row was encoded against.
+Each writer owns its own buffers and sender thread, so create one per pipeline and always close it; `close()` flushes pending records.
+Rejected records (unknown table, operation not accepted by the table kind, row not matching the schema) are reported only through the returned future, never thrown by `write()` or `flush()`.
+```java
+int ordersSchemaId = admin.getTableInfo(ordersPath).get().getSchemaId();
+int usersSchemaId = admin.getTableInfo(usersPath).get().getSchemaId();
+
+try (MultiTableWriter writer = multiTable.newMultiTableWrite().createWriter()) {
+    // write() buffers the record and returns; the first write to a table blocks on a metadata lookup.
+    // The future completes once the server acknowledges the record, or fails if the record is rejected.
+    CompletableFuture<WriteResult> f1 =
+            writer.write(MultiTableWriteRecord.forAppend(ordersPath, orderRow, ordersSchemaId));
+    CompletableFuture<WriteResult> f2 =
+            writer.write(MultiTableWriteRecord.forUpsert(usersPath, userRow, usersSchemaId));
+    CompletableFuture<WriteResult> f3 =
+            writer.write(MultiTableWriteRecord.forDelete(usersPath, userRow, usersSchemaId));
+
+    // block until all buffered records are acknowledged
+    writer.flush();
+    // surface any rejected or failed records
+    CompletableFuture.allOf(f1, f2, f3).get();
+}
+```
+
+A common pattern is to forward records between log tables, reusing the scanned row and schema id.
+The schema id is resolved against the target table, so reusing `record.getSchemaId()` is only valid when the target shares the source's schema history (the same table, or a mirror created with identical DDL); otherwise pass a target schema id whose layout matches the row.
+When the source is a primary key table, map `record.getChangeType()` to `forUpsert` or `forDelete` and skip `UPDATE_BEFORE` records.
+```java
+for (MultiTableRecord record : scanner.poll(Duration.ofSeconds(1))) {
+    writer.write(MultiTableWriteRecord.forAppend(targetPath, record.getRow(), record.getSchemaId()))
+            .whenComplete((result, error) -> { if (error != null) { /* handle the rejected record */ } });
+}
+```
+
 ## Java Typed API
 
 Fluss provides a Typed API that allows you to work directly with Java POJOs (Plain Old Java Objects) instead of `InternalRow` objects. This simplifies development by automatically mapping your Java classes to Fluss table schemas.

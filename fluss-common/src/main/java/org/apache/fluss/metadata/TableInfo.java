@@ -113,6 +113,17 @@ public final class TableInfo {
     }
 
     /**
+     * Returns the table path used to access the external datalake table.
+     *
+     * <p>The returned path is derived from the Fluss table path and table-level datalake path
+     * options. If no custom datalake path option is configured, this returns the same path as
+     * {@link #getTablePath()}.
+     */
+    public TablePath getLakeTablePath() {
+        return LakeTableUtil.resolveLakeTablePath(tablePath, properties);
+    }
+
+    /**
      * Returns the unique identifier for the table within the cluster.
      *
      * <p>Each table is assigned a globally unique table ID when it is created. This ID is

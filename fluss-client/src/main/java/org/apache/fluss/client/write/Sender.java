@@ -45,6 +45,7 @@ import org.apache.fluss.utils.ExceptionUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import javax.annotation.Nullable;
 import javax.annotation.concurrent.GuardedBy;
 
 import java.util.ArrayList;
@@ -52,10 +53,12 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 
 import static org.apache.fluss.client.utils.ClientRpcMessageUtils.makeProduceLogRequest;
 import static org.apache.fluss.client.utils.ClientRpcMessageUtils.makePutKvRequest;
+import static org.apache.fluss.utils.PartitionUtils.HISTORICAL_PARTITION_VALUE;
 import static org.apache.fluss.utils.Preconditions.checkArgument;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
@@ -228,8 +231,8 @@ public class Sender implements Runnable {
                 // TODO: this try-catch is not needed when we don't update metadata for
                 //  unready partitions
                 Throwable t = ExceptionUtils.stripExecutionException(e);
-                if (t.getCause() instanceof PartitionNotExistException) {
-                    // ignore this exception, this is probably happen because the partition
+                if (t instanceof PartitionNotExistException) {
+                    handlePartitionNotExistException(readyCheckResult.unknownLeaderTables);
                 } else {
                     throw e;
                 }
@@ -250,10 +253,8 @@ public class Sender implements Runnable {
         // get the list of batches prepare to send.
         Map<Integer, List<ReadyWriteBatch>> batches =
                 accumulator.drain(clusterSnapshot, readyNodes, maxRequestSize);
-
         if (!batches.isEmpty()) {
             addToInflightBatches(batches);
-
             // TODO add logic for batch expire.
 
             sendWriteRequests(batches);
@@ -409,24 +410,79 @@ public class Sender implements Runnable {
                     batches);
         } else {
             writeBatchByTable.forEach(
-                    (tableId, writeBatches) -> {
-                        if (isLogBatches(writeBatches)) {
-                            sendProduceLogRequestAndHandleResponse(
-                                    gateway,
-                                    makeProduceLogRequest(
-                                            tableId, acks, maxRequestTimeoutMs, writeBatches),
-                                    tableId,
-                                    writeBatches);
-                        } else {
-                            sendPutKvRequestAndHandleResponse(
-                                    gateway,
-                                    makePutKvRequest(
-                                            tableId, acks, maxRequestTimeoutMs, writeBatches),
-                                    tableId,
-                                    writeBatches);
-                        }
-                    });
+                    (tableId, writeBatches) ->
+                            sendWriteRequestsForTable(gateway, tableId, acks, writeBatches));
         }
+    }
+
+    /**
+     * Sends normal and historical batches in separate requests.
+     *
+     * <p>Normal and historical writes cannot share a request. Both write protocols correlate
+     * historical responses by {@link TableBucket} and original partition name, so different
+     * original partitions targeting the same historical table bucket can remain in one request.
+     */
+    private void sendWriteRequestsForTable(
+            TabletServerGateway gateway,
+            long tableId,
+            short acks,
+            List<ReadyWriteBatch> writeBatches) {
+        boolean logBatches = isLogBatches(writeBatches);
+        List<ReadyWriteBatch> normalBatches = new ArrayList<>();
+        List<ReadyWriteBatch> historicalBatches = new ArrayList<>();
+
+        for (ReadyWriteBatch readyWriteBatch : writeBatches) {
+            if (readyWriteBatch.writeBatch().isHistoricalPartition()) {
+                historicalBatches.add(readyWriteBatch);
+            } else {
+                normalBatches.add(readyWriteBatch);
+            }
+        }
+
+        sendBatchesInRequest(gateway, tableId, acks, logBatches, normalBatches);
+        sendBatchesInRequest(gateway, tableId, acks, logBatches, historicalBatches);
+    }
+
+    private void sendBatchesInRequest(
+            TabletServerGateway gateway,
+            long tableId,
+            short acks,
+            boolean logBatches,
+            List<ReadyWriteBatch> writeBatches) {
+        if (writeBatches.isEmpty()) {
+            return;
+        }
+        if (logBatches) {
+            sendProduceLogRequestAndHandleResponse(
+                    gateway,
+                    makeProduceLogRequest(tableId, acks, maxRequestTimeoutMs, writeBatches),
+                    tableId,
+                    writeBatches);
+        } else {
+            sendPutKvRequestAndHandleResponse(
+                    gateway,
+                    makePutKvRequest(tableId, acks, maxRequestTimeoutMs, writeBatches),
+                    tableId,
+                    writeBatches);
+        }
+    }
+
+    private static Map<WriteBatchKey, ReadyWriteBatch> toWriteBatchesByKey(
+            List<ReadyWriteBatch> writeBatches) {
+        Map<WriteBatchKey, ReadyWriteBatch> writeBatchesByKey = new HashMap<>();
+        for (ReadyWriteBatch readyWriteBatch : writeBatches) {
+            WriteBatch writeBatch = readyWriteBatch.writeBatch();
+            WriteBatchKey key =
+                    new WriteBatchKey(
+                            readyWriteBatch.tableBucket(), writeBatch.getOriginalPartitionName());
+            ReadyWriteBatch previous = writeBatchesByKey.put(key, readyWriteBatch);
+            checkArgument(
+                    previous == null,
+                    "A write request contains duplicate table bucket %s and original partition %s.",
+                    readyWriteBatch.tableBucket(),
+                    writeBatch.getOriginalPartitionName());
+        }
+        return writeBatchesByKey;
     }
 
     /**
@@ -447,8 +503,7 @@ public class Sender implements Runnable {
             ProduceLogRequest request,
             long tableId,
             List<ReadyWriteBatch> writeBatches) {
-        Map<TableBucket, ReadyWriteBatch> recordsByBucket = new HashMap<>();
-        writeBatches.forEach(batch -> recordsByBucket.put(batch.tableBucket(), batch));
+        Map<WriteBatchKey, ReadyWriteBatch> writeBatchesByKey = toWriteBatchesByKey(writeBatches);
         long startTime = System.currentTimeMillis();
         gateway.produceLog(request)
                 .whenComplete(
@@ -459,7 +514,7 @@ public class Sender implements Runnable {
                                 handleWriteRequestException(e, writeBatches);
                             } else {
                                 handleProduceLogResponse(
-                                        produceLogResponse, tableId, recordsByBucket);
+                                        produceLogResponse, tableId, writeBatchesByKey);
                             }
                         });
     }
@@ -469,8 +524,7 @@ public class Sender implements Runnable {
             PutKvRequest request,
             long tableId,
             List<ReadyWriteBatch> writeBatches) {
-        Map<TableBucket, ReadyWriteBatch> recordsByBucket = new HashMap<>();
-        writeBatches.forEach(batch -> recordsByBucket.put(batch.tableBucket(), batch));
+        Map<WriteBatchKey, ReadyWriteBatch> writeBatchesByKey = toWriteBatchesByKey(writeBatches);
         long startTime = System.currentTimeMillis();
         gateway.putKv(request)
                 .whenComplete(
@@ -480,7 +534,7 @@ public class Sender implements Runnable {
                             if (e != null) {
                                 handleWriteRequestException(e, writeBatches);
                             } else {
-                                handlePutKvResponse(putKvResponse, tableId, recordsByBucket);
+                                handlePutKvResponse(putKvResponse, tableId, writeBatchesByKey);
                             }
                         });
     }
@@ -488,7 +542,7 @@ public class Sender implements Runnable {
     private void handleProduceLogResponse(
             ProduceLogResponse response,
             long tableId,
-            Map<TableBucket, ReadyWriteBatch> recordsByBucket) {
+            Map<WriteBatchKey, ReadyWriteBatch> writeBatchesByKey) {
         Set<PhysicalTablePath> invalidMetadataTablesSet = new HashSet<>();
         for (PbProduceLogRespForBucket logRespForBucket : response.getBucketsRespsList()) {
             TableBucket tb =
@@ -498,7 +552,13 @@ public class Sender implements Runnable {
                                     ? logRespForBucket.getPartitionId()
                                     : null,
                             logRespForBucket.getBucketId());
-            ReadyWriteBatch writeBatch = recordsByBucket.get(tb);
+            ReadyWriteBatch writeBatch =
+                    writeBatchesByKey.get(
+                            new WriteBatchKey(
+                                    tb,
+                                    logRespForBucket.hasOriginalPartitionName()
+                                            ? logRespForBucket.getOriginalPartitionName()
+                                            : null));
             if (logRespForBucket.hasErrorCode()) {
                 Set<PhysicalTablePath> invalidMetadataTables =
                         handleWriteBatchException(
@@ -514,7 +574,7 @@ public class Sender implements Runnable {
     private void handlePutKvResponse(
             PutKvResponse putKvResponse,
             long tableId,
-            Map<TableBucket, ReadyWriteBatch> recordsByBucket) {
+            Map<WriteBatchKey, ReadyWriteBatch> writeBatchesByKey) {
         Set<PhysicalTablePath> invalidMetadataTablesSet = new HashSet<>();
         for (PbPutKvRespForBucket respForBucket : putKvResponse.getBucketsRespsList()) {
             TableBucket tb =
@@ -528,7 +588,13 @@ public class Sender implements Runnable {
                 accumulator.updateThrottle(tb, respForBucket.getPressure());
             }
 
-            ReadyWriteBatch writeBatch = recordsByBucket.get(tb);
+            ReadyWriteBatch writeBatch =
+                    writeBatchesByKey.get(
+                            new WriteBatchKey(
+                                    tb,
+                                    respForBucket.hasOriginalPartitionName()
+                                            ? respForBucket.getOriginalPartitionName()
+                                            : null));
             if (writeBatch == null) {
                 continue;
             }
@@ -566,6 +632,9 @@ public class Sender implements Runnable {
             ReadyWriteBatch readyWriteBatch, ApiError error) {
         Set<PhysicalTablePath> invalidMetadataTables = new HashSet<>();
         WriteBatch writeBatch = readyWriteBatch.writeBatch();
+        // Historical queues use the original path as their accumulator key, so capture the actual
+        // RPC target before any retry handling.
+        PhysicalTablePath writeTargetPath = writeBatch.writeTargetPath();
         if (error.exception() instanceof StorageBackpressureException) {
             // Hard rejection: the storage engine reached its slowdown trigger and rejected the
             // write. Map it to full pressure (internal hard-rejection value 1.0f) so the bucket is
@@ -634,7 +703,10 @@ public class Sender implements Runnable {
                             readyWriteBatch.tableBucket(),
                             error.exception());
                 }
-                invalidMetadataTables.add(writeBatch.physicalTablePath());
+                // A historical batch remains keyed by its original partition path in the
+                // accumulator, but its RPC is sent to the internal historical partition. Invalidate
+                // the actual RPC target so the retry refreshes the historical bucket metadata.
+                invalidMetadataTables.add(writeTargetPath);
             }
         } else {
             LOG.warn(
@@ -647,6 +719,142 @@ public class Sender implements Runnable {
             failBatch(readyWriteBatch, error.exception(), writeBatch.attempts() < this.retries);
         }
         return invalidMetadataTables;
+    }
+
+    /**
+     * Rechecks unknown-leader partitions after a bulk metadata update reports {@link
+     * PartitionNotExistException}, and handles missing partitions for tables with historical
+     * partition support.
+     */
+    private void handlePartitionNotExistException(Set<PhysicalTablePath> unknownLeaderTables) {
+        for (PhysicalTablePath targetPath : unknownLeaderTables) {
+            if (!accumulator.isHistoricalPartitionEnabled(targetPath.getTablePath())) {
+                continue;
+            }
+            try {
+                metadataUpdater.checkAndUpdatePartitionMetadata(targetPath);
+            } catch (Exception e) {
+                Throwable t = ExceptionUtils.stripExecutionException(e);
+                if (t instanceof PartitionNotExistException) {
+                    handleMissingPartition(targetPath, t);
+                    continue;
+                }
+                throw e;
+            }
+        }
+    }
+
+    /**
+     * Handles a write target after refreshed metadata confirms that it no longer exists.
+     *
+     * <p>A missing historical target has no further fallback and is aborted. An original target is
+     * rerouted only after all requests to it have left the in-flight set, so no response from the
+     * old physical target can race with resetting its queued batches to the historical target.
+     */
+    private void handleMissingPartition(PhysicalTablePath targetPath, Throwable cause) {
+        if (HISTORICAL_PARTITION_VALUE.equals(targetPath.getPartitionName())) {
+            abortBatches(
+                    targetPath,
+                    newPartitionNotExistException(
+                            "Cannot continue historical writes to "
+                                    + targetPath
+                                    + " because refreshed metadata confirms that the partition "
+                                    + "no longer exists.",
+                            cause));
+            return;
+        }
+
+        if (hasInFlightBatches(targetPath)) {
+            // Supporting this case requires waiting for the outstanding responses, detaching the
+            // batches from the original TableBucket's idempotence state, preserving their order,
+            // and assigning new sequences for the historical TableBucket. Keep this transition
+            // simple by failing only the affected target.
+            // TODO: If this race occurs frequently in practice, implement the coordinated
+            // in-flight handoff instead of aborting the batches.
+            abortBatches(
+                    targetPath,
+                    newPartitionNotExistException(
+                            "Cannot safely reroute writes from missing partition "
+                                    + targetPath
+                                    + " while requests to it are still in flight because rerouting "
+                                    + "them to the historical partition could break idempotence.",
+                            cause));
+            return;
+        }
+
+        // TODO: No current in-flight request does not rule out an earlier attempt that was
+        // accepted while its response was lost. Rerouting such a batch can duplicate the write;
+        // target-scoped abort only exposes the ambiguity and cannot prevent an upper-layer replay
+        // from duplicating it. Resolve this with the durable FREEZING/RETIRED handoff; see
+        // https://github.com/apache/fluss/issues/4166.
+        PhysicalTablePath historicalPath =
+                PhysicalTablePath.of(targetPath.getTablePath(), HISTORICAL_PARTITION_VALUE);
+        @Nullable Throwable historicalTargetCause = null;
+        try {
+            if (metadataUpdater.checkAndUpdatePartitionMetadata(historicalPath)) {
+                accumulator.rerouteQueuedWritesToHistorical(
+                        targetPath,
+                        historicalPath,
+                        metadataUpdater.getPartitionIdOrElseThrow(historicalPath));
+                LOG.info(
+                        "Rerouted writes from partition {} to historical partition {}.",
+                        targetPath,
+                        historicalPath);
+                return;
+            }
+        } catch (PartitionNotExistException e) {
+            historicalTargetCause = e;
+        }
+
+        abortBatches(
+                targetPath,
+                newPartitionNotExistException(
+                        "Cannot reroute writes from "
+                                + targetPath
+                                + " because historical write target "
+                                + historicalPath
+                                + " does not exist according to refreshed metadata.",
+                        historicalTargetCause));
+    }
+
+    /** Returns whether a request to {@code targetPath} is still awaiting a response. */
+    private boolean hasInFlightBatches(PhysicalTablePath targetPath) {
+        return !getInFlightBatches(targetPath).isEmpty();
+    }
+
+    private List<ReadyWriteBatch> getInFlightBatches(PhysicalTablePath targetPath) {
+        List<ReadyWriteBatch> matchedBatches = new ArrayList<>();
+        synchronized (inFlightBatchesLock) {
+            for (List<ReadyWriteBatch> batches : inFlightBatches.values()) {
+                for (ReadyWriteBatch batch : batches) {
+                    if (batch.writeBatch().writeTargetPath().equals(targetPath)) {
+                        matchedBatches.add(batch);
+                    }
+                }
+            }
+        }
+        return matchedBatches;
+    }
+
+    private void abortBatches(PhysicalTablePath targetPath, PartitionNotExistException exception) {
+        List<ReadyWriteBatch> matchingInFlightBatches = getInFlightBatches(targetPath);
+        // Make the batches terminal before detaching their in-flight bookkeeping.
+        accumulator.abortBatches(targetPath, exception);
+        for (ReadyWriteBatch batch : matchingInFlightBatches) {
+            maybeRemoveFromInflightBatches(batch);
+            if (idempotenceManager.idempotenceEnabled()) {
+                idempotenceManager.removeInFlightBatch(batch);
+            }
+        }
+    }
+
+    private static PartitionNotExistException newPartitionNotExistException(
+            String message, @Nullable Throwable cause) {
+        PartitionNotExistException exception = new PartitionNotExistException(message);
+        if (cause != null) {
+            exception.initCause(cause);
+        }
+        return exception;
     }
 
     private void updateWriterMetrics(Map<Integer, List<ReadyWriteBatch>> batches) {
@@ -718,5 +926,36 @@ public class Sender implements Runnable {
      */
     void destroyResources() {
         accumulator.destroyResources();
+    }
+
+    private static final class WriteBatchKey {
+        private final TableBucket tableBucket;
+
+        // Distinguishes historical writes from different original partitions that share a target
+        // bucket. Normal writes have no original partition name.
+        private final @Nullable String originalPartitionName;
+
+        private WriteBatchKey(TableBucket tableBucket, @Nullable String originalPartitionName) {
+            this.tableBucket = tableBucket;
+            this.originalPartitionName = originalPartitionName;
+        }
+
+        @Override
+        public boolean equals(Object o) {
+            if (this == o) {
+                return true;
+            }
+            if (!(o instanceof WriteBatchKey)) {
+                return false;
+            }
+            WriteBatchKey that = (WriteBatchKey) o;
+            return tableBucket.equals(that.tableBucket)
+                    && Objects.equals(originalPartitionName, that.originalPartitionName);
+        }
+
+        @Override
+        public int hashCode() {
+            return Objects.hash(tableBucket, originalPartitionName);
+        }
     }
 }

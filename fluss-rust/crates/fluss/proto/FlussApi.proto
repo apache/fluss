@@ -878,14 +878,19 @@ message PbBucketMetadata {
   // optional as some time the leader may not elected yet
   optional int32 leader_id = 2;
   repeated int32 replica_id = 3 [packed = true];
-  // TODO: Add isr here.
   optional int32 leader_epoch = 4;
+  // Generation of the complete leader/ISR state.
+  // Absence indicates legacy metadata; -1 indicates no leader/ISR state exists.
+  optional int32 bucket_epoch = 5;
+  repeated int32 isr = 6 [packed = true];
 }
 
 message PbProduceLogReqForBucket {
   optional int64 partition_id = 1;
   required int32 bucket_id = 2;
   required bytes records = 3;
+  // The original partition name for a historical write; unset for a normal write.
+  optional string original_partition_name = 4;
 }
 
 message PbProduceLogRespForBucket {
@@ -894,6 +899,8 @@ message PbProduceLogRespForBucket {
   optional int32 error_code = 3;
   optional string error_message = 4;
   optional int64 base_offset = 5;
+  // The original partition name echoed from a historical write request; unset for a normal write.
+  optional string original_partition_name = 6;
 }
 
 message PbFetchLogReqForTable {
@@ -933,6 +940,9 @@ message PbFetchLogRespForBucket {
   // non-empty records field when only trailing batches were filtered. The client should start
   // its next fetch from the later of this offset and the end of the records it received.
   optional int64 filtered_end_offset = 9;
+  // The safe local log retention boundary confirmed by a committed KV snapshot. This is only
+  // returned for KV follower fetches and is distinct from the physical log_start_offset.
+  optional int64 min_retain_offset = 10;
 }
 
 message PbPutKvReqForBucket {

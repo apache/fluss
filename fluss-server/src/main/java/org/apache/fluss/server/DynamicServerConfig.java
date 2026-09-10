@@ -25,11 +25,14 @@ import org.apache.fluss.config.ConfigurationUtils;
 import org.apache.fluss.config.cluster.ConfigValidator;
 import org.apache.fluss.config.cluster.ServerReconfigurable;
 import org.apache.fluss.exception.ConfigException;
+import org.apache.fluss.security.acl.FlussPrincipal;
 import org.apache.fluss.server.config.ConfigRedactor;
 import org.apache.fluss.server.config.ConfigRedactors;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import javax.annotation.Nullable;
 
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -51,6 +54,7 @@ import static org.apache.fluss.config.ConfigOptions.KV_SHARED_RATE_LIMITER_BYTES
 import static org.apache.fluss.config.ConfigOptions.KV_SNAPSHOT_INTERVAL;
 import static org.apache.fluss.config.ConfigOptions.LOG_REPLICA_MIN_IN_SYNC_REPLICAS_NUMBER;
 import static org.apache.fluss.config.ConfigOptions.LOG_RETENTION_ROLL_ACTIVE_SEGMENT_ENABLED;
+import static org.apache.fluss.config.ConfigOptions.NETTY_SERVER_MAX_QUEUED_HISTORICAL_REQUESTS;
 import static org.apache.fluss.config.ConfigOptions.REMOTE_DATA_DIRS;
 import static org.apache.fluss.config.ConfigOptions.REMOTE_DATA_DIRS_STRATEGY;
 import static org.apache.fluss.config.ConfigOptions.REMOTE_DATA_DIRS_WEIGHTS;
@@ -58,6 +62,7 @@ import static org.apache.fluss.config.ConfigOptions.SERVER_DATA_DISK_WRITE_LIMIT
 import static org.apache.fluss.config.ConfigOptions.SERVER_DATA_DISK_WRITE_RECOVER_RATIO;
 import static org.apache.fluss.config.ConfigOptions.SERVER_HISTORICAL_PARTITION_LOOKUPER_CACHE_EXPIRE_AFTER_ACCESS;
 import static org.apache.fluss.config.ConfigOptions.SERVER_HISTORICAL_PARTITION_LOOKUP_CACHE_MAX_DISK_RATIO;
+import static org.apache.fluss.config.ConfigOptions.SERVER_HISTORICAL_PARTITION_THREAD_POOL_MAX_SIZE;
 import static org.apache.fluss.config.ConfigOptions.SERVER_SASL_CREDENTIALS;
 import static org.apache.fluss.config.ConfigOptions.SERVER_SASL_PLAIN_JAAS_CONFIG;
 import static org.apache.fluss.utils.concurrent.LockUtils.inReadLock;
@@ -86,6 +91,8 @@ class DynamicServerConfig {
                             SERVER_DATA_DISK_WRITE_LIMIT_RATIO.key(),
                             SERVER_HISTORICAL_PARTITION_LOOKUP_CACHE_MAX_DISK_RATIO.key(),
                             SERVER_HISTORICAL_PARTITION_LOOKUPER_CACHE_EXPIRE_AFTER_ACCESS.key(),
+                            SERVER_HISTORICAL_PARTITION_THREAD_POOL_MAX_SIZE.key(),
+                            NETTY_SERVER_MAX_QUEUED_HISTORICAL_REQUESTS.key(),
                             // Config options for remote.data.dirs
                             REMOTE_DATA_DIRS.key(),
                             REMOTE_DATA_DIRS_STRATEGY.key(),
@@ -180,9 +187,12 @@ class DynamicServerConfig {
      * Update the dynamic configuration and apply to registered ServerReconfigurable. If skipping
      * error config, only the error one will be ignored.
      */
-    void updateDynamicConfig(Map<String, String> newDynamicConfigs, boolean skipErrorConfig)
+    void updateDynamicConfig(
+            Map<String, String> newDynamicConfigs,
+            boolean skipErrorConfig,
+            @Nullable FlussPrincipal requester)
             throws Exception {
-        inWriteLock(lock, () -> updateCurrentConfig(newDynamicConfigs, skipErrorConfig));
+        inWriteLock(lock, () -> updateCurrentConfig(newDynamicConfigs, skipErrorConfig, requester));
     }
 
     Map<String, String> getDynamicConfigs() {
@@ -206,7 +216,10 @@ class DynamicServerConfig {
         return false;
     }
 
-    private void updateCurrentConfig(Map<String, String> newDynamicConfigs, boolean skipErrorConfig)
+    private void updateCurrentConfig(
+            Map<String, String> newDynamicConfigs,
+            boolean skipErrorConfig,
+            @Nullable FlussPrincipal requester)
             throws Exception {
         // Compute effective config changes (merge with initial configs)
         Map<String, String> effectiveChanges =
@@ -225,7 +238,7 @@ class DynamicServerConfig {
         Configuration newConfig = Configuration.fromMap(newConfigMap);
 
         // Apply changes to all registered ServerReconfigurable instances
-        applyToServerReconfigurables(newConfig, skipErrorConfig);
+        applyToServerReconfigurables(newConfig, skipErrorConfig, requester);
 
         // Update internal state
         updateInternalState(newConfig, newConfigMap, newDynamicConfigs);
@@ -444,9 +457,11 @@ class DynamicServerConfig {
      *
      * @param newConfig new configuration to apply
      * @param skipErrorConfig whether to skip errors
+     * @param requester the principal that requested the change, or null if triggered by the server
      * @throws Exception if apply fails and skipErrorConfig is false
      */
-    private void applyToServerReconfigurables(Configuration newConfig, boolean skipErrorConfig)
+    private void applyToServerReconfigurables(
+            Configuration newConfig, boolean skipErrorConfig, @Nullable FlussPrincipal requester)
             throws Exception {
         Configuration oldConfig = currentConfig;
         Set<ServerReconfigurable> appliedSet = new HashSet<>();
@@ -454,7 +469,7 @@ class DynamicServerConfig {
         // Validate all first
         for (ServerReconfigurable reconfigurable : serverReconfigures.values()) {
             try {
-                reconfigurable.validate(newConfig);
+                reconfigurable.validate(newConfig, requester);
             } catch (ConfigException e) {
                 LOG.error(
                         "Validation failed for {}: {}",

@@ -59,6 +59,7 @@ mod kv_table_test {
                     .column("name", DataTypes::string())
                     .column("age", DataTypes::bigint())
                     .primary_key(vec!["id"])
+                    .unwrap()
                     .build()
                     .expect("Failed to build schema"),
             )
@@ -198,6 +199,7 @@ mod kv_table_test {
                     .column("user_id", DataTypes::int())
                     .column("score", DataTypes::bigint())
                     .primary_key(vec!["region", "user_id"])
+                    .unwrap()
                     .build()
                     .expect("Failed to build schema"),
             )
@@ -317,6 +319,7 @@ mod kv_table_test {
                     )
                     .column("tags", DataTypes::array(DataTypes::string()))
                     .primary_key(vec!["id"])
+                    .unwrap()
                     .build()
                     .expect("schema"),
             )
@@ -502,6 +505,7 @@ mod kv_table_test {
                     )
                     .column("tags", DataTypes::array(DataTypes::string()))
                     .primary_key(vec!["region", "user_id"])
+                    .unwrap()
                     .build()
                     .expect("schema"),
             )
@@ -685,6 +689,7 @@ mod kv_table_test {
                     .column("id", DataTypes::int())
                     .column("name", DataTypes::string())
                     .primary_key(vec!["region", "id"])
+                    .unwrap()
                     .build()
                     .expect("Failed to build schema"),
             )
@@ -799,6 +804,7 @@ mod kv_table_test {
                     .column("c", DataTypes::bigint())
                     .column("d", DataTypes::string())
                     .primary_key(vec!["a", "b", "c"])
+                    .unwrap()
                     .build()
                     .expect("Failed to build schema"),
             )
@@ -905,6 +911,7 @@ mod kv_table_test {
                     .column("c", DataTypes::bigint())
                     .column("d", DataTypes::string())
                     .primary_key(vec!["region", "a", "b", "c"])
+                    .unwrap()
                     .build()
                     .expect("Failed to build schema"),
             )
@@ -1015,6 +1022,7 @@ mod kv_table_test {
                     .column("b", DataTypes::string())
                     .column("c", DataTypes::bigint())
                     .primary_key(vec!["a", "b", "c"])
+                    .unwrap()
                     .build()
                     .expect("Failed to build schema"),
             )
@@ -1070,6 +1078,7 @@ mod kv_table_test {
                     .column("name", DataTypes::string())
                     .column("value", DataTypes::bigint())
                     .primary_key(vec!["id".to_string()])
+                    .unwrap()
                     .build()
                     .expect("Failed to build schema"),
             )
@@ -1202,6 +1211,7 @@ mod kv_table_test {
                     .column("b", DataTypes::string())
                     .column("c", DataTypes::string())
                     .primary_key(vec!["a", "b"])
+                    .unwrap()
                     .build()
                     .expect("Failed to build schema"),
             )
@@ -1273,6 +1283,7 @@ mod kv_table_test {
                     .column("id", DataTypes::int())
                     .column("name", DataTypes::string())
                     .primary_key(vec!["id"])
+                    .unwrap()
                     .build()
                     .expect("Failed to build schema"),
             )
@@ -1380,6 +1391,7 @@ mod kv_table_test {
                     .column("col_bytes", DataTypes::bytes())
                     .column("col_binary", DataTypes::binary(4))
                     .primary_key(vec!["id"])
+                    .unwrap()
                     .build()
                     .expect("Failed to build schema"),
             )

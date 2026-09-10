@@ -520,7 +520,9 @@ fn table_descriptor(database: &str, body: CreateTableBody) -> GatewayResult<Tabl
         }
     }
     if let Some(primary_key) = body.primary_key {
-        schema = schema.primary_key(primary_key);
+        schema = schema.primary_key(primary_key).map_err(|error| {
+            GatewayError::invalid_argument(format!("invalid table schema: {error}"))
+        })?;
     }
     let schema = schema.build().map_err(|error| {
         GatewayError::invalid_argument(format!("invalid table schema: {error}"))
@@ -782,6 +784,7 @@ mod tests {
             )
             .with_comment("the order total")
             .primary_key(["id", "dt"])
+            .unwrap()
             .build()
             .expect("a fixture schema");
         let (status, location, body) = post(

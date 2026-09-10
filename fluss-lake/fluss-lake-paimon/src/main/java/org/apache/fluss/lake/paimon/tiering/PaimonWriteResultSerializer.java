@@ -19,10 +19,14 @@ package org.apache.fluss.lake.paimon.tiering;
 
 import org.apache.fluss.lake.serializer.SimpleVersionedSerializer;
 
+import org.apache.paimon.io.DataInputViewStreamWrapper;
+import org.apache.paimon.io.DataOutputSerializer;
 import org.apache.paimon.table.sink.CommitMessage;
 import org.apache.paimon.table.sink.CommitMessageSerializer;
 
+import java.io.ByteArrayInputStream;
 import java.io.IOException;
+import java.util.List;
 
 /** The {@link SimpleVersionedSerializer} for {@link PaimonWriteResult}. */
 public class PaimonWriteResultSerializer implements SimpleVersionedSerializer<PaimonWriteResult> {
@@ -38,8 +42,9 @@ public class PaimonWriteResultSerializer implements SimpleVersionedSerializer<Pa
 
     @Override
     public byte[] serialize(PaimonWriteResult paimonWriteResult) throws IOException {
-        CommitMessage commitMessage = paimonWriteResult.commitMessage();
-        return messageSer.serialize(commitMessage);
+        DataOutputSerializer output = new DataOutputSerializer(64);
+        messageSer.serializeList(paimonWriteResult.commitMessages(), output);
+        return output.getCopyOfBuffer();
     }
 
     @Override
@@ -52,7 +57,11 @@ public class PaimonWriteResultSerializer implements SimpleVersionedSerializer<Pa
                             + version
                             + ".");
         }
-        CommitMessage commitMessage = messageSer.deserialize(messageSer.getVersion(), serialized);
-        return new PaimonWriteResult(commitMessage);
+        try (DataInputViewStreamWrapper input =
+                new DataInputViewStreamWrapper(new ByteArrayInputStream(serialized))) {
+            List<CommitMessage> commitMessages =
+                    messageSer.deserializeList(messageSer.getVersion(), input);
+            return new PaimonWriteResult(commitMessages);
+        }
     }
 }

@@ -66,6 +66,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 
 import static org.apache.fluss.utils.Preconditions.checkArgument;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
@@ -123,7 +124,7 @@ public final class LogTablet {
 
     // The minimum offset that should be retained in the local log. This is used to ensure that,
     // the offset of kv snapshot should be retained, otherwise, kv recovery will fail.
-    private volatile long minRetainOffset;
+    private final AtomicLong minRetainOffset;
     // tracking the log start offset in remote storage
     private volatile long remoteLogStartOffset = Long.MAX_VALUE;
     // tracking the log end offset in remote storage
@@ -185,7 +186,7 @@ public final class LogTablet {
         // Default value to 0L for changelog to avoid cleaning up any segments in case of not
         // updating this value in time. Default value to Long.MAX_VALUE for normal log table,
         // as we don't need to retain logs for kv recovery.
-        this.minRetainOffset = isChangelog ? 0L : Long.MAX_VALUE;
+        this.minRetainOffset = new AtomicLong(isChangelog ? 0L : Long.MAX_VALUE);
     }
 
     public PhysicalTablePath getPhysicalTablePath() {
@@ -671,12 +672,25 @@ public final class LogTablet {
         }
     }
 
+    /**
+     * Advances the minimum retain offset monotonically.
+     *
+     * <p>Updates may arrive concurrently from replica recovery, coordinator snapshot notifications,
+     * and follower fetch processing, while log cleanup reads the value from a different thread.
+     * {@link AtomicLong} provides cross-thread visibility and makes the check-and-update atomic.
+     * The CAS loop implements a monotonic maximum: if another updater changes the value after it
+     * was read, the loop reloads the latest value and retries only when this update is still
+     * larger. This prevents a delayed, smaller offset from overwriting a newer retention boundary.
+     */
     public void updateMinRetainOffset(long minRetainOffset) {
-        if (minRetainOffset > this.minRetainOffset) {
-            this.minRetainOffset = minRetainOffset;
-
-            // try to delete the old segments that are not needed.
-            deleteSegmentsAlreadyExistsInRemote();
+        long currentMinRetainOffset = this.minRetainOffset.get();
+        while (minRetainOffset > currentMinRetainOffset) {
+            if (this.minRetainOffset.compareAndSet(currentMinRetainOffset, minRetainOffset)) {
+                // try to delete the old segments that are not needed.
+                deleteSegmentsAlreadyExistsInRemote();
+                return;
+            }
+            currentMinRetainOffset = this.minRetainOffset.get();
         }
     }
 
@@ -830,7 +844,8 @@ public final class LogTablet {
 
         try {
             // shouldn't clean up segments that will be used by kv recovery.
-            long effectiveCleanupToOffset = Math.min(minRetainOffset, requestedCleanupToOffset);
+            long effectiveCleanupToOffset =
+                    Math.min(minRetainOffset.get(), requestedCleanupToOffset);
             cleanupAction.cleanup(effectiveCleanupToOffset);
         } catch (IOException e) {
             LOG.error(
@@ -1611,6 +1626,6 @@ public final class LogTablet {
 
     @VisibleForTesting
     public long getMinRetainOffset() {
-        return minRetainOffset;
+        return minRetainOffset.get();
     }
 }

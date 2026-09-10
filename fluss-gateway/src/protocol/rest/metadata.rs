@@ -708,6 +708,7 @@ mod tests {
             .with_comment("the order total")
             .column("dt", DataType::String(StringType::with_nullable(false)))
             .primary_key(["id", "dt"])
+            .unwrap()
             .build()
             .expect("the described schema is valid");
         let descriptor = TableDescriptor::builder()

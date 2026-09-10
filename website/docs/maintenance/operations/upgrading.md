@@ -19,7 +19,7 @@ the rolling upgrade method. Specifically, upgrade the `TabletServers` one-by-one
 
 :::note
 1. During the server upgrade process, read and write operations in the cluster will not be affected.
-2. Currently, the Fluss `CoordinatorServer` does not yet support high availability (HA). During the `CoordinatorServer` upgrade stage, the `CoordinatorServer` will be in an unavailable state, which will affect admin operations such as table creation.
+2. With a single `CoordinatorServer`, admin operations such as table creation are unavailable while it is being upgraded. To avoid this, deploy multiple `CoordinatorServer` instances (see [CoordinatorServer HA](docs/install-deploy/deploying-distributed-cluster.md#fluss-coordinatorserver-high-availability-ha-setup)) and upgrade them one-by-one.
 :::
 
 The following is an example of upgrading the Fluss server from 0.6 to $FLUSS_VERSION$ on

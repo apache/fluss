@@ -1187,7 +1187,7 @@ public class ConfigOptions {
                     .intType()
                     .defaultValue(50)
                     .withDescription(
-                            "The number of historical lookup requests allowed to wait for lake lookup processing before throttling them.");
+                            "The maximum number of in-flight historical partition operations, including running and queued lookups and writes, before throttling new operations.");
 
     public static final ConfigOption<MemorySize> NETTY_SERVER_MAX_REQUEST_SIZE =
             key("netty.server.max-request-size")
@@ -1924,11 +1924,12 @@ public class ConfigOptions {
                     .booleanType()
                     .defaultValue(false)
                     .withDescription(
-                            "Whether to enable historical partition lookup for the table. "
+                            "Whether to enable historical partition access for the table. "
                                     + "When enabled, the coordinator creates and retains a system partition "
-                                    + "for routing lookups of expired partitions to lake storage. "
-                                    + "Currently, this option only supports auto-partitioned Paimon primary "
-                                    + "key tables with a single partition key. Disabled by default. "
+                                    + "for routing writes to expired partitions and, for primary-key tables, "
+                                    + "lookups of expired partitions to lake storage. Currently, this option "
+                                    + "only supports auto-partitioned Paimon tables with a single partition "
+                                    + "key. Disabled by default. "
                                     + "After changing this option, restart existing lookup jobs that need "
                                     + "to look up historical partition data so that their clients load the "
                                     + "updated table configuration.");
@@ -1944,6 +1945,22 @@ public class ConfigOptions {
                                     + "This ensures consistency in key encoding and bucketing, enabling seamless **Union Read** functionality across Fluss and Lakehouse. "
                                     + "The `table.datalake.format` can be pre-defined before enabling `table.datalake.enabled`. This allows the data lake feature to be dynamically enabled on the table without requiring table recreation. "
                                     + "If `table.datalake.format` is not explicitly set during table creation, the table will default to the format specified by the `datalake.format` configuration in the Fluss cluster.");
+
+    public static final ConfigOption<String> TABLE_DATALAKE_DATABASE_NAME =
+            key("table.datalake.database-name")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "Specifies the database name of the datalake table. This option is currently supported only for Paimon. "
+                                    + "If not set, the Fluss database name is used. The option may be configured before the Paimon table is created and cannot be changed after creation.");
+
+    public static final ConfigOption<String> TABLE_DATALAKE_TABLE_NAME =
+            key("table.datalake.table-name")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "Specifies the table name of the datalake table. This option is currently supported only for Paimon. "
+                                    + "If not set, the Fluss table name is used. The option may be configured before the Paimon table is created and cannot be changed after creation.");
 
     public static final ConfigOption<Duration> TABLE_DATALAKE_FRESHNESS =
             key("table.datalake.freshness")
@@ -2176,6 +2193,29 @@ public class ConfigOptions {
                                     + "The RateLimiter is always enabled. The default value is Long.MAX_VALUE (effectively unlimited). "
                                     + "Set to a lower value (e.g., 100MB) to limit the rate.");
 
+    public static final ConfigOption<MemorySize> KV_SHARED_BLOCK_CACHE_SIZE =
+            key("kv.rocksdb.shared-block-cache.size")
+                    .memoryType()
+                    .defaultValue(MemorySize.ZERO)
+                    .withDescription(
+                            "The soft capacity of the shared block cache for all RocksDB instances "
+                                    + "in the TabletServer. All KV tablets share a single block cache "
+                                    + "to improve memory utilization. Hot tablets can use more cache "
+                                    + "while cold tablets use less. Set to 0 to disable the shared "
+                                    + "block cache, in which case each tablet creates its own cache. "
+                                    + "This is not a hard limit on process memory. The default is 0.");
+
+    public static final ConfigOption<MemorySize> KV_SHARED_WRITE_BUFFER_SIZE =
+            key("kv.rocksdb.shared-write-buffer.size")
+                    .memoryType()
+                    .defaultValue(MemorySize.ZERO)
+                    .withDescription(
+                            "The shared soft memory limit for RocksDB memtables across all KV tablets "
+                                    + "in the TabletServer. Reaching the limit makes RocksDB flush memtables "
+                                    + "more aggressively, but it is not a hard limit on process memory. "
+                                    + "Set to 0 to disable the shared write buffer manager. "
+                                    + "The default is 0. Changes require a TabletServer restart.");
+
     // --------------------------------------------------------------------------
     // Provided configurable ColumnFamilyOptions within Fluss
     // --------------------------------------------------------------------------
@@ -2299,7 +2339,9 @@ public class ConfigOptions {
                     .defaultValue(MemorySize.parse("8mb"))
                     .withDescription(
                             "The amount of the cache for data blocks in RocksDB. "
-                                    + "The default block-cache size is `8MB`.");
+                                    + "The default block-cache size is `8MB`. "
+                                    + "This setting is ignored when "
+                                    + "kv.rocksdb.shared-block-cache.size is greater than 0.");
 
     public static final ConfigOption<Boolean> KV_USE_BLOOM_FILTER =
             key("kv.rocksdb.use-bloom-filter")

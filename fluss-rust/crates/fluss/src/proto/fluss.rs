@@ -1153,9 +1153,14 @@ pub struct PbBucketMetadata {
     pub leader_id: ::core::option::Option<i32>,
     #[prost(int32, repeated, tag = "3")]
     pub replica_id: ::prost::alloc::vec::Vec<i32>,
-    /// TODO: Add isr here.
     #[prost(int32, optional, tag = "4")]
     pub leader_epoch: ::core::option::Option<i32>,
+    /// Generation of the complete leader/ISR state.
+    /// Absence indicates legacy metadata; -1 indicates no leader/ISR state exists.
+    #[prost(int32, optional, tag = "5")]
+    pub bucket_epoch: ::core::option::Option<i32>,
+    #[prost(int32, repeated, tag = "6")]
+    pub isr: ::prost::alloc::vec::Vec<i32>,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct PbProduceLogReqForBucket {
@@ -1165,6 +1170,9 @@ pub struct PbProduceLogReqForBucket {
     pub bucket_id: i32,
     #[prost(bytes = "bytes", required, tag = "3")]
     pub records: ::prost::bytes::Bytes,
+    /// The original partition name for a historical write; unset for a normal write.
+    #[prost(string, optional, tag = "4")]
+    pub original_partition_name: ::core::option::Option<::prost::alloc::string::String>,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct PbProduceLogRespForBucket {
@@ -1178,6 +1186,9 @@ pub struct PbProduceLogRespForBucket {
     pub error_message: ::core::option::Option<::prost::alloc::string::String>,
     #[prost(int64, optional, tag = "5")]
     pub base_offset: ::core::option::Option<i64>,
+    /// The original partition name echoed from a historical write request; unset for a normal write.
+    #[prost(string, optional, tag = "6")]
+    pub original_partition_name: ::core::option::Option<::prost::alloc::string::String>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PbFetchLogReqForTable {
@@ -1240,6 +1251,10 @@ pub struct PbFetchLogRespForBucket {
     /// its next fetch from the later of this offset and the end of the records it received.
     #[prost(int64, optional, tag = "9")]
     pub filtered_end_offset: ::core::option::Option<i64>,
+    /// The safe local log retention boundary confirmed by a committed KV snapshot. This is only
+    /// returned for KV follower fetches and is distinct from the physical log_start_offset.
+    #[prost(int64, optional, tag = "10")]
+    pub min_retain_offset: ::core::option::Option<i64>,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct PbPutKvReqForBucket {

@@ -280,7 +280,7 @@ async fn start_internal(
     for warning in config.warnings() {
         log::warn!("{warning}");
     }
-    observability::init_metrics(config.server.metrics.enabled)?;
+    observability::init_metrics(&config.server)?;
 
     let listener = bind_listener(config.server.rest.bind_address, "REST").await?;
     let local_addr = listener

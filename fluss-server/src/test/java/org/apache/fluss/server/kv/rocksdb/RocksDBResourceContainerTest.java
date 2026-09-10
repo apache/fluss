@@ -19,17 +19,23 @@ package org.apache.fluss.server.kv.rocksdb;
 
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.server.kv.KvManager;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.rocksdb.BlockBasedTableConfig;
 import org.rocksdb.BloomFilter;
+import org.rocksdb.Cache;
 import org.rocksdb.ColumnFamilyOptions;
 import org.rocksdb.CompactionStyle;
 import org.rocksdb.CompressionType;
 import org.rocksdb.DBOptions;
+import org.rocksdb.FlushOptions;
 import org.rocksdb.InfoLogLevel;
+import org.rocksdb.LRUCache;
+import org.rocksdb.RateLimiter;
 import org.rocksdb.ReadOptions;
+import org.rocksdb.WriteBufferManager;
 import org.rocksdb.WriteOptions;
 import org.rocksdb.util.SizeUnit;
 
@@ -233,5 +239,107 @@ class RocksDBResourceContainerTest {
             assertThat(tableConfig.pinL0FilterAndIndexBlocksInCache()).isTrue();
             assertThat(tableConfig.pinTopLevelIndexAndFilter()).isTrue();
         }
+    }
+
+    @Test
+    void testTwoRocksDBInstancesShareCacheUntilOwnerClosesIt(@TempDir Path tempDir)
+            throws Exception {
+        byte[] firstKey = new byte[] {1};
+        byte[] firstValue = new byte[4096];
+        byte[] secondKey = new byte[] {2};
+        byte[] secondValue = new byte[4096];
+
+        try (Cache sharedCache = new LRUCache(64 * SizeUnit.MB);
+                RocksDBKv firstKv =
+                        buildRocksDBKvWithSharedCache(
+                                tempDir.resolve("first").toFile(), sharedCache);
+                RocksDBKv secondKv =
+                        buildRocksDBKvWithSharedCache(
+                                tempDir.resolve("second").toFile(), sharedCache)) {
+            assertThat(firstKv.getBlockCache()).isSameAs(sharedCache);
+            assertThat(secondKv.getBlockCache()).isSameAs(sharedCache);
+
+            firstKv.put(firstKey, firstValue);
+            secondKv.put(secondKey, secondValue);
+            try (FlushOptions flushOptions = new FlushOptions().setWaitForFlush(true)) {
+                firstKv.getDb().flush(flushOptions);
+                secondKv.getDb().flush(flushOptions);
+            }
+
+            assertThat(firstKv.get(firstKey)).isEqualTo(firstValue);
+            assertThat(secondKv.get(secondKey)).isEqualTo(secondValue);
+            assertThat(sharedCache.getUsage()).isPositive();
+
+            firstKv.close();
+            assertThat(sharedCache.isOwningHandle()).isTrue();
+            assertThat(secondKv.get(secondKey)).isEqualTo(secondValue);
+        }
+    }
+
+    @Test
+    void testTwoRocksDBInstancesShareWriteBufferManager(@TempDir Path tempDir) throws Exception {
+        byte[] value = new byte[(int) (512 * SizeUnit.KB)];
+        RateLimiter rateLimiter = KvManager.getDefaultRateLimiter();
+
+        try (Cache accountingCache = new LRUCache(4 * SizeUnit.MB);
+                WriteBufferManager writeBufferManager =
+                        new WriteBufferManager(4 * SizeUnit.MB, accountingCache);
+                RocksDBKv firstKv =
+                        buildRocksDBKvWithSharedWriteBufferManager(
+                                tempDir.resolve("first").toFile(),
+                                rateLimiter,
+                                writeBufferManager);
+                RocksDBKv secondKv =
+                        buildRocksDBKvWithSharedWriteBufferManager(
+                                tempDir.resolve("second").toFile(),
+                                rateLimiter,
+                                writeBufferManager)) {
+            firstKv.put(new byte[] {1}, value);
+            secondKv.put(new byte[] {2}, value);
+            assertThat(accountingCache.getUsage()).isPositive();
+
+            firstKv.close();
+            assertThat(writeBufferManager.isOwningHandle()).isTrue();
+            secondKv.put(new byte[] {3}, value);
+            assertThat(secondKv.get(new byte[] {2})).isEqualTo(value);
+        }
+    }
+
+    @Test
+    void testIndependentCacheClosedOnContainerClose() throws Exception {
+        // When no shared cache, the independent cache should be closed with the container
+        RocksDBResourceContainer container = new RocksDBResourceContainer();
+        container.getColumnOptions();
+        Cache blockCache = container.getBlockCache();
+        assertThat(blockCache).isNotNull();
+        assertThat(blockCache.isOwningHandle()).isTrue();
+        container.close();
+        assertThat(blockCache.isOwningHandle()).isFalse();
+    }
+
+    private RocksDBKv buildRocksDBKvWithSharedCache(File directory, Cache sharedCache)
+            throws Exception {
+        RocksDBResourceContainer container =
+                new RocksDBResourceContainer(
+                        new Configuration(),
+                        directory,
+                        false,
+                        KvManager.getDefaultRateLimiter(),
+                        sharedCache);
+        return new RocksDBKvBuilder(directory, container, container.getColumnOptions()).build();
+    }
+
+    private RocksDBKv buildRocksDBKvWithSharedWriteBufferManager(
+            File directory, RateLimiter rateLimiter, WriteBufferManager writeBufferManager)
+            throws Exception {
+        RocksDBResourceContainer container =
+                new RocksDBResourceContainer(
+                        new Configuration(),
+                        directory,
+                        false,
+                        rateLimiter,
+                        null,
+                        writeBufferManager);
+        return new RocksDBKvBuilder(directory, container, container.getColumnOptions()).build();
     }
 }

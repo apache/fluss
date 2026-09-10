@@ -43,6 +43,11 @@ class LakeStorageTest {
     private static final String TEST_LAKE_PLUGIN_FORMAT = "test-plugin";
 
     @Test
+    void testContextWithoutCurrentLakeTablePath() {
+        assertThat(new TestingLakeCatalogContext().getCurrentLakeTablePath()).isNull();
+    }
+
+    @Test
     void testInvalidPlugin() throws Exception {
         final Map<Class<?>, Iterator<?>> lakeStoragePlugins = new HashMap<>();
         lakeStoragePlugins.put(

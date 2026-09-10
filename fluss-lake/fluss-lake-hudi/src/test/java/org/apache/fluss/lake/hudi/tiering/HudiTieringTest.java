@@ -40,17 +40,25 @@ import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.types.DataTypes;
 
 import org.apache.hudi.client.HoodieFlinkWriteClient;
+import org.apache.hudi.common.model.HoodieCommitMetadata;
 import org.apache.hudi.common.model.HoodieTableType;
 import org.apache.hudi.common.model.HoodieWriteStat;
+import org.apache.hudi.common.model.WriteOperationType;
 import org.apache.hudi.common.table.HoodieTableMetaClient;
+import org.apache.hudi.common.table.timeline.HoodieActiveTimeline;
+import org.apache.hudi.common.table.timeline.HoodieTimeline;
 import org.apache.hudi.common.util.Option;
 import org.apache.hudi.configuration.FlinkOptions;
 import org.apache.hudi.sink.compact.FlinkCompactionConfig;
 import org.apache.hudi.sink.compact.strategy.CompactionPlanStrategy;
+import org.apache.hudi.storage.hadoop.HadoopStorageConfiguration;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.mockito.InOrder;
 
 import javax.annotation.Nullable;
@@ -60,6 +68,7 @@ import java.io.IOException;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.stream.Stream;
 
 import static org.apache.fluss.lake.committer.LakeCommitter.FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY;
 import static org.apache.fluss.lake.writer.LakeTieringFactory.FLUSS_LAKE_TIERING_COMMIT_USER;
@@ -68,12 +77,14 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.any;
 import static org.mockito.Mockito.anyList;
 import static org.mockito.Mockito.anyMap;
+import static org.mockito.Mockito.anyString;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.eq;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 /** Test for tiering Fluss records to Hudi via {@link HudiLakeTieringFactory}. */
@@ -152,6 +163,143 @@ class HudiTieringTest {
                     .containsEntry(FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY, "fluss-offset-file");
             assertThat(committer.getMissingLakeSnapshot(committedSnapshotId)).isNull();
         }
+    }
+
+    private static Stream<Arguments> emptyCommitArgs() {
+        // isPrimaryKeyTable: false is COPY_ON_WRITE with INSERT, true is MERGE_ON_READ with UPSERT
+        return Stream.of(Arguments.of(false), Arguments.of(true));
+    }
+
+    @ParameterizedTest
+    @MethodSource("emptyCommitArgs")
+    void testEmptyCommitCreatesInstant(boolean isPrimaryKeyTable) throws Exception {
+        TablePath tablePath =
+                TablePath.of("hudi", "test_empty_commit_" + (isPrimaryKeyTable ? "pk" : "log"));
+        TableDescriptor tableDescriptor =
+                isPrimaryKeyTable ? createPkTableDescriptor() : createLogTableDescriptor();
+        hudiLakeCatalog.createTable(
+                tablePath, tableDescriptor, new TestingLakeCatalogContext(tableDescriptor));
+        TableInfo tableInfo = TableInfo.of(tablePath, 1L, 0, tableDescriptor, null, 1L, 1L);
+
+        // the first commit on the fresh table is an empty commit
+        long emptySnapshotId;
+        try (LakeCommitter<HudiWriteResult, HudiCommittable> committer =
+                createLakeCommitter(tablePath, tableInfo)) {
+            HudiCommittable committable = committer.toCommittable(Collections.emptyList());
+            emptySnapshotId =
+                    committer
+                            .commit(
+                                    committable,
+                                    Collections.singletonMap(
+                                            FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY,
+                                            "fluss-offset-file"))
+                            .getCommittedSnapshotId();
+        }
+        assertThat(readLatestCommitMetadata(tablePath).getOperationType())
+                .isEqualTo(
+                        isPrimaryKeyTable ? WriteOperationType.UPSERT : WriteOperationType.INSERT);
+
+        // recovery sees the empty commit
+        try (LakeCommitter<HudiWriteResult, HudiCommittable> committer =
+                createLakeCommitter(tablePath, tableInfo)) {
+            CommittedLakeSnapshot missingLakeSnapshot = committer.getMissingLakeSnapshot(null);
+            assertThat(missingLakeSnapshot).isNotNull();
+            assertThat(missingLakeSnapshot.getLakeSnapshotId()).isEqualTo(emptySnapshotId);
+            assertThat(missingLakeSnapshot.getSnapshotProperties())
+                    .containsEntry("commit-user", FLUSS_LAKE_TIERING_COMMIT_USER)
+                    .containsEntry(FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY, "fluss-offset-file");
+        }
+
+        // tiering continues normally after the empty commit
+        long newSnapshotId =
+                writeAndCommit(
+                        tablePath,
+                        tableInfo,
+                        0L,
+                        logRecord(
+                                0L,
+                                1,
+                                "v1",
+                                isPrimaryKeyTable ? ChangeType.INSERT : ChangeType.APPEND_ONLY));
+        assertThat(newSnapshotId).isGreaterThan(emptySnapshotId);
+    }
+
+    @Test
+    void testEmptyCommitFailsWhenEmptyCommitDisallowed() throws Exception {
+        TablePath tablePath = TablePath.of("hudi", "test_empty_commit_disallowed");
+        TableDescriptor tableDescriptor =
+                TableDescriptor.builder()
+                        .schema(
+                                Schema.newBuilder()
+                                        .column("id", DataTypes.INT())
+                                        .column("name", DataTypes.STRING())
+                                        .build())
+                        .distributedBy(1, "id")
+                        .customProperty(
+                                HUDI_CONF_PREFIX + FlinkOptions.RECORD_KEY_FIELD.key(), "id")
+                        .customProperty(HUDI_CONF_PREFIX + "precombine.field", "name")
+                        .customProperty(HUDI_CONF_PREFIX + "hoodie.allow.empty.commit", "false")
+                        .build();
+        hudiLakeCatalog.createTable(
+                tablePath, tableDescriptor, new TestingLakeCatalogContext(tableDescriptor));
+        TableInfo tableInfo = TableInfo.of(tablePath, 1L, 0, tableDescriptor, null, 1L, 1L);
+
+        try (LakeCommitter<HudiWriteResult, HudiCommittable> committer =
+                createLakeCommitter(tablePath, tableInfo)) {
+            HudiCommittable committable = committer.toCommittable(Collections.emptyList());
+            assertThatThrownBy(() -> committer.commit(committable, Collections.emptyMap()))
+                    .isInstanceOf(IOException.class)
+                    .hasMessageContaining("hudi.hoodie.allow.empty.commit");
+            assertThat(committer.getMissingLakeSnapshot(null)).isNull();
+        }
+    }
+
+    @Test
+    void testEmptyCommitDoesNotPublishCheckpointMetadata() throws Exception {
+        TestingCommitterContext context = createTestingCommitterContext();
+        HoodieActiveTimeline activeTimeline = mock(HoodieActiveTimeline.class);
+        HoodieTimeline completedTimeline = mock(HoodieTimeline.class);
+        when(context.metaClient.getActiveTimeline()).thenReturn(activeTimeline);
+        when(activeTimeline.filterCompletedInstants()).thenReturn(completedTimeline);
+        when(completedTimeline.containsInstant(DATA_INSTANT)).thenReturn(true);
+        when(context.writeClient.startCommit(anyString(), eq(context.metaClient)))
+                .thenReturn(DATA_INSTANT);
+        when(context.writeClient.commitStats(
+                        eq(DATA_INSTANT), anyList(), any(Option.class), anyString()))
+                .thenReturn(true);
+
+        LakeCommitResult result =
+                context.committer.commit(
+                        context.committer.toCommittable(Collections.emptyList()),
+                        Collections.emptyMap());
+
+        assertThat(result.getCommittedSnapshotId()).isEqualTo(Long.parseLong(DATA_INSTANT));
+        verifyNoInteractions(context.ckpMetadata);
+    }
+
+    @Test
+    void testEmptyCommitFailureRollsBackWithoutCheckpointMetadata() throws Exception {
+        TestingCommitterContext context = createTestingCommitterContext();
+        HoodieActiveTimeline activeTimeline = mock(HoodieActiveTimeline.class);
+        HoodieTimeline completedTimeline = mock(HoodieTimeline.class);
+        when(context.metaClient.getActiveTimeline()).thenReturn(activeTimeline);
+        when(activeTimeline.filterCompletedInstants()).thenReturn(completedTimeline);
+        when(context.writeClient.startCommit(anyString(), eq(context.metaClient)))
+                .thenReturn(DATA_INSTANT);
+        when(context.writeClient.commitStats(
+                        eq(DATA_INSTANT), anyList(), any(Option.class), anyString()))
+                .thenReturn(true);
+        when(context.writeClient.rollback(DATA_INSTANT)).thenReturn(true);
+
+        assertThatThrownBy(
+                        () ->
+                                context.committer.commit(
+                                        context.committer.toCommittable(Collections.emptyList()),
+                                        Collections.emptyMap()))
+                .isInstanceOf(IOException.class)
+                .hasMessageContaining("was not completed");
+        verify(context.writeClient).rollback(DATA_INSTANT);
+        verifyNoInteractions(context.ckpMetadata);
     }
 
     @Test
@@ -304,6 +452,49 @@ class HudiTieringTest {
                 new TestingCommitterInitContext(tablePath, tableInfo));
     }
 
+    private long writeAndCommit(
+            TablePath tablePath, TableInfo tableInfo, long round, LogRecord record)
+            throws Exception {
+        HudiWriteResult writeResult;
+        try (LakeWriter<HudiWriteResult> writer =
+                hudiLakeTieringFactory.createLakeWriter(
+                        new TestingWriterInitContext(
+                                tablePath, new TableBucket(1L, 0), tableInfo, 0, round))) {
+            writer.write(record);
+            writeResult = writer.complete();
+        }
+        try (LakeCommitter<HudiWriteResult, HudiCommittable> committer =
+                createLakeCommitter(tablePath, tableInfo)) {
+            return committer
+                    .commit(
+                            committer.toCommittable(Collections.singletonList(writeResult)),
+                            Collections.singletonMap(
+                                    FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY, "fluss-offset-file"))
+                    .getCommittedSnapshotId();
+        }
+    }
+
+    private HoodieCommitMetadata readLatestCommitMetadata(TablePath tablePath) throws IOException {
+        String basePath =
+                tempWarehouseDir.toURI().toString()
+                        + tablePath.getDatabaseName()
+                        + "/"
+                        + tablePath.getTableName();
+        HoodieTableMetaClient metaClient =
+                HoodieTableMetaClient.builder()
+                        .setBasePath(basePath)
+                        .setConf(
+                                new HadoopStorageConfiguration(
+                                        new org.apache.hadoop.conf.Configuration()))
+                        .build();
+        HoodieTimeline timeline = metaClient.getActiveTimeline().filterCompletedInstants();
+        return timeline.readCommitMetadata(
+                timeline.getReverseOrderedInstants()
+                        .findFirst()
+                        .orElseThrow(
+                                () -> new IllegalStateException("No completed Hudi instant.")));
+    }
+
     private static TestingCommitterContext createTestingCommitterContext() {
         HudiWriteTableInfo hudiTableInfo = mock(HudiWriteTableInfo.class);
         HoodieFlinkWriteClient writeClient = mock(HoodieFlinkWriteClient.class);
@@ -313,6 +504,7 @@ class HudiTieringTest {
         org.apache.flink.configuration.Configuration flinkConfig =
                 new org.apache.flink.configuration.Configuration();
         flinkConfig.set(FlinkOptions.COMPACTION_SCHEDULE_ENABLED, true);
+        flinkConfig.set(FlinkOptions.OPERATION, WriteOperationType.UPSERT.value());
 
         when(hudiTableInfo.getWriteClient()).thenReturn(writeClient);
         when(hudiTableInfo.getMetaClient()).thenReturn(metaClient);
@@ -357,11 +549,28 @@ class HudiTieringTest {
                 .build();
     }
 
+    private static TableDescriptor createPkTableDescriptor() {
+        return TableDescriptor.builder()
+                .schema(
+                        Schema.newBuilder()
+                                .column("id", DataTypes.INT())
+                                .column("name", DataTypes.STRING())
+                                .primaryKey("id")
+                                .build())
+                .distributedBy(1, "id")
+                .customProperty(HUDI_CONF_PREFIX + "precombine.field", "name")
+                .build();
+    }
+
     private static LogRecord logRecord(long offset, int id, String name) {
+        return logRecord(offset, id, name, ChangeType.APPEND_ONLY);
+    }
+
+    private static LogRecord logRecord(long offset, int id, String name, ChangeType changeType) {
         GenericRow row = new GenericRow(2);
         row.setField(0, id);
         row.setField(1, BinaryString.fromString(name));
-        return new GenericRecord(offset, 1_000L + offset, ChangeType.APPEND_ONLY, row);
+        return new GenericRecord(offset, 1_000L + offset, changeType, row);
     }
 
     private static HoodieWriteStat writeStat() {

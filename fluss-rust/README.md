@@ -198,7 +198,7 @@ async fn main() -> Result<()> {
         .column("id", DataTypes::int())
         .column("name", DataTypes::string())
         .column("score", DataTypes::bigint())
-        .primary_key(vec!["id"])
+        .primary_key(vec!["id"])?
         .build()?;
     let descriptor = TableDescriptor::builder().schema(schema).build()?;
     admin.create_table(&table_path, &descriptor, true).await?;

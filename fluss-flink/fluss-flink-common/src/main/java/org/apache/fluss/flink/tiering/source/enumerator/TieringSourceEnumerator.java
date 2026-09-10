@@ -158,7 +158,7 @@ public class TieringSourceEnumerator
         this.coordinatorGateway =
                 GatewayClientProxy.createGatewayProxy(
                         metadataUpdater::getCoordinatorServer, rpcClient, CoordinatorGateway.class);
-        this.splitGenerator = new TieringSplitGenerator(flussAdmin);
+        this.splitGenerator = new TieringSplitGenerator(flussAdmin, metadataUpdater);
 
         LOG.info("Starting register Tiering Service to Fluss Coordinator...");
         try {

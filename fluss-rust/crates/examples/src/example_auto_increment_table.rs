@@ -39,7 +39,7 @@ pub async fn main() -> Result<()> {
                 .column("uid", DataTypes::string())
                 .column("region", DataTypes::string())
                 .column("uid_int", DataTypes::bigint())
-                .primary_key(vec!["uid"])
+                .primary_key(vec!["uid"])?
                 .enable_auto_increment("uid_int")?
                 .build()?,
         )

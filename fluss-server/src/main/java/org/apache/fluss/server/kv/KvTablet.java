@@ -69,10 +69,12 @@ import org.apache.fluss.utils.clock.SystemClock;
 
 import org.rocksdb.AbstractCompactionFilter;
 import org.rocksdb.AbstractCompactionFilterFactory;
+import org.rocksdb.Cache;
 import org.rocksdb.RateLimiter;
 import org.rocksdb.ReadOptions;
 import org.rocksdb.RocksIterator;
 import org.rocksdb.Snapshot;
+import org.rocksdb.WriteBufferManager;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -255,9 +257,9 @@ public final class KvTablet {
      * Creates a kv tablet with a dedicated {@link KvFlushScheduler} that is closed together with
      * the tablet. Production code must use {@link #create(PhysicalTablePath, TableBucket,
      * LogTablet, File, Configuration, TabletServerMetricGroup, BufferAllocator, MemorySegmentPool,
-     * KvFormat, RowMerger, ArrowCompressionInfo, SchemaGetter, ChangelogImage, RateLimiter,
-     * KvFlushScheduler, Runnable, AutoIncrementManager)} with the shared scheduler owned by {@link
-     * KvManager}.
+     * KvFormat, RowMerger, ArrowCompressionInfo, SchemaGetter, ChangelogImage, RateLimiter, Cache,
+     * KvFlushScheduler, Runnable, AutoIncrementManager, Clock, TableConfig)} with the shared
+     * scheduler owned by {@link KvManager}.
      */
     @VisibleForTesting
     public static KvTablet create(
@@ -292,6 +294,8 @@ public final class KvTablet {
                 schemaGetter,
                 changelogImage,
                 sharedRateLimiter,
+                null,
+                null,
                 new KvFlushScheduler(serverConf),
                 true,
                 null,
@@ -300,7 +304,7 @@ public final class KvTablet {
                 new TableConfig(new Configuration()));
     }
 
-    public static KvTablet create(
+    static KvTablet create(
             PhysicalTablePath tablePath,
             TableBucket tableBucket,
             LogTablet logTablet,
@@ -315,6 +319,8 @@ public final class KvTablet {
             SchemaGetter schemaGetter,
             ChangelogImage changelogImage,
             RateLimiter sharedRateLimiter,
+            @Nullable Cache sharedBlockCache,
+            @Nullable WriteBufferManager sharedWriteBufferManager,
             KvFlushScheduler kvFlushScheduler,
             @Nullable Runnable flushCompleteListener,
             AutoIncrementManager autoIncrementManager,
@@ -336,6 +342,55 @@ public final class KvTablet {
                 schemaGetter,
                 changelogImage,
                 sharedRateLimiter,
+                sharedBlockCache,
+                sharedWriteBufferManager,
+                kvFlushScheduler,
+                false,
+                flushCompleteListener,
+                autoIncrementManager,
+                clock,
+                tableConfig);
+    }
+
+    public static KvTablet create(
+            PhysicalTablePath tablePath,
+            TableBucket tableBucket,
+            LogTablet logTablet,
+            File kvTabletDir,
+            Configuration serverConf,
+            TabletServerMetricGroup serverMetricGroup,
+            BufferAllocator arrowBufferAllocator,
+            MemorySegmentPool memorySegmentPool,
+            KvFormat kvFormat,
+            RowMerger rowMerger,
+            ArrowCompressionInfo arrowCompressionInfo,
+            SchemaGetter schemaGetter,
+            ChangelogImage changelogImage,
+            RateLimiter sharedRateLimiter,
+            @Nullable Cache sharedBlockCache,
+            KvFlushScheduler kvFlushScheduler,
+            @Nullable Runnable flushCompleteListener,
+            AutoIncrementManager autoIncrementManager,
+            Clock clock,
+            TableConfig tableConfig)
+            throws IOException {
+        return create(
+                tablePath,
+                tableBucket,
+                logTablet,
+                kvTabletDir,
+                serverConf,
+                serverMetricGroup,
+                arrowBufferAllocator,
+                memorySegmentPool,
+                kvFormat,
+                rowMerger,
+                arrowCompressionInfo,
+                schemaGetter,
+                changelogImage,
+                sharedRateLimiter,
+                sharedBlockCache,
+                null,
                 kvFlushScheduler,
                 false,
                 flushCompleteListener,
@@ -359,6 +414,8 @@ public final class KvTablet {
             SchemaGetter schemaGetter,
             ChangelogImage changelogImage,
             RateLimiter sharedRateLimiter,
+            @Nullable Cache sharedBlockCache,
+            @Nullable WriteBufferManager sharedWriteBufferManager,
             KvFlushScheduler kvFlushScheduler,
             boolean closeFlushScheduler,
             @Nullable Runnable flushCompleteListener,
@@ -388,7 +445,13 @@ public final class KvTablet {
                                         kvValueLayout, rowTtl.get(), clock)
                                 : null;
         RocksDBKv kv =
-                buildRocksDBKv(serverConf, kvTabletDir, sharedRateLimiter, compactionFilterFactory);
+                buildRocksDBKv(
+                        serverConf,
+                        kvTabletDir,
+                        sharedRateLimiter,
+                        sharedBlockCache,
+                        sharedWriteBufferManager,
+                        compactionFilterFactory);
 
         // Create RocksDB statistics accessor (will be registered to TableMetricGroup by Replica)
         // Pass ResourceGuard to ensure thread-safe access during concurrent close operations
@@ -400,7 +463,7 @@ public final class KvTablet {
                         kv.getStatistics(),
                         kv.getResourceGuard(),
                         kv.getDefaultColumnFamilyHandle(),
-                        kv.getBlockCache());
+                        sharedBlockCache == null ? kv.getBlockCache() : null);
 
         return new KvTablet(
                 tablePath,
@@ -464,6 +527,8 @@ public final class KvTablet {
                 schemaGetter,
                 changelogImage,
                 sharedRateLimiter,
+                null,
+                null,
                 new KvFlushScheduler(serverConf),
                 true,
                 null,
@@ -476,6 +541,8 @@ public final class KvTablet {
             Configuration configuration,
             File kvDir,
             RateLimiter sharedRateLimiter,
+            @Nullable Cache sharedBlockCache,
+            @Nullable WriteBufferManager sharedWriteBufferManager,
             @Nullable
                     AbstractCompactionFilterFactory<? extends AbstractCompactionFilter<?>>
                             compactionFilterFactory)
@@ -484,7 +551,13 @@ public final class KvTablet {
         boolean resourcesOwnedByBuilder = false;
         try {
             rocksDBResourceContainer =
-                    new RocksDBResourceContainer(configuration, kvDir, true, sharedRateLimiter);
+                    new RocksDBResourceContainer(
+                            configuration,
+                            kvDir,
+                            true,
+                            sharedRateLimiter,
+                            sharedBlockCache,
+                            sharedWriteBufferManager);
             RocksDBKvBuilder rocksDBKvBuilder =
                     new RocksDBKvBuilder(
                                     kvDir,

@@ -27,6 +27,7 @@ import org.apache.fluss.fs.s3.token.S3DelegationTokenProvider;
 import org.apache.fluss.fs.s3.token.S3DelegationTokenReceiver;
 import org.apache.fluss.utils.StringUtils;
 
+import org.apache.hadoop.fs.s3a.Constants;
 import org.apache.hadoop.fs.s3a.S3AFileSystem;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -53,6 +54,7 @@ public class S3FileSystemPlugin implements FileSystemPlugin {
 
     private static final String ACCESS_KEY_ID = "fs.s3a.access.key";
     private static final String ACCESS_KEY_SECRET = "fs.s3a.secret.key";
+    private static final String REGION_KEY = "fs.s3a.region";
 
     private static final String ROLE_ARN_KEY = "fs.s3a.assumed.role.arn";
 
@@ -81,6 +83,7 @@ public class S3FileSystemPlugin implements FileSystemPlugin {
     org.apache.hadoop.conf.Configuration buildHadoopConfiguration(Configuration flussConfig) {
         org.apache.hadoop.conf.Configuration hadoopConfig =
                 mirrorCertainHadoopConfig(getHadoopConfiguration(flussConfig));
+        setDefaultInputStreamType(hadoopConfig);
         boolean hasCredentialProvider = hasConfiguredCredentialProvider(flussConfig);
         // Preserve whether the provider came from Fluss config. Token providers should not infer
         // explicit server-side provider mode from Hadoop default resources.
@@ -88,7 +91,19 @@ public class S3FileSystemPlugin implements FileSystemPlugin {
                 S3DelegationTokenProvider.CREDENTIAL_PROVIDER_EXPLICITLY_CONFIGURED,
                 hasCredentialProvider);
         setCredentialProvider(hadoopConfig);
+        mirrorRegionToEndpointRegion(hadoopConfig);
         return hadoopConfig;
+    }
+
+    private void setDefaultInputStreamType(org.apache.hadoop.conf.Configuration hadoopConfig) {
+        // hadoop-aws 3.4 defaults to the S3 Analytics Accelerator input stream, which changes
+        // resource usage and S3 read patterns. Keep the previous classic behavior unless users
+        // explicitly configure another stream or enable the legacy prefetch option.
+        if (hadoopConfig.get(Constants.INPUT_STREAM_TYPE) == null
+                && !hadoopConfig.getBoolean(
+                        Constants.PREFETCH_ENABLED_KEY, Constants.PREFETCH_ENABLED_DEFAULT)) {
+            hadoopConfig.set(Constants.INPUT_STREAM_TYPE, Constants.INPUT_STREAM_TYPE_CLASSIC);
+        }
     }
 
     org.apache.hadoop.conf.Configuration getHadoopConfiguration(Configuration flussConfig) {
@@ -125,6 +140,16 @@ public class S3FileSystemPlugin implements FileSystemPlugin {
             }
         }
         return hadoopConfig;
+    }
+
+    private void mirrorRegionToEndpointRegion(org.apache.hadoop.conf.Configuration hadoopConfig) {
+        // Hadoop 3.4 reads the S3 client region from fs.s3a.endpoint.region. Mirror after
+        // configuring credentials because delegated tokens may supply the documented s3.region
+        // alias. Do not override the new Hadoop key when it is explicit.
+        String legacyRegion = hadoopConfig.get(REGION_KEY, null);
+        if (legacyRegion != null && hadoopConfig.get(Constants.AWS_REGION, null) == null) {
+            hadoopConfig.set(Constants.AWS_REGION, legacyRegion);
+        }
     }
 
     private URI getInitURI(URI fsUri, org.apache.hadoop.conf.Configuration hadoopConfig) {

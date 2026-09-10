@@ -327,8 +327,8 @@ public final class Replica {
     public long logicalStorageKvSize() {
         if (isLeader() && isKvTable()) {
             if (isHistoricalPartition()) {
-                // Historical KV tablets do not create snapshots, so account for the local overlay
-                // using live SST files instead.
+                // Historical KV tablets do not create snapshots, so use live SST files to account
+                // for their local state instead.
                 KvTablet currentKvTablet = kvTablet;
                 return currentKvTablet == null ? 0L : currentKvTablet.liveSstFilesSize();
             }
@@ -740,24 +740,35 @@ public final class Replica {
 
         // init kv tablet and get the snapshot it uses to init if have any
         Optional<CompletedSnapshot> snapshotUsed = Optional.empty();
+        Exception lastError = null;
         for (int i = 1; i <= INIT_KV_TABLET_MAX_RETRY_TIMES; i++) {
             try {
                 snapshotUsed = initKvTablet();
+                lastError = null;
                 break;
             } catch (Exception e) {
+                lastError = e;
                 LOG.warn(
-                        "Fail to init kv tablet for bucket {}, retrying for {} times",
+                        "Failed to init kv tablet for bucket {} on attempt {}/{}.",
                         tableBucket,
                         i,
+                        INIT_KV_TABLET_MAX_RETRY_TIMES,
                         e);
             }
         }
-        // A historical KV tablet is a disposable overlay over the lake snapshot. It is recovered
-        // by replaying WAL from the lake log end offset and does not create its own KV snapshots.
-        if (isHistoricalPartition()) {
-            // TODO: Clean up historical KV state after the corresponding WAL is fully tiered to
-            // lake storage.
-        } else {
+        if (lastError != null) {
+            try {
+                dropKv();
+            } catch (Exception cleanupError) {
+                lastError.addSuppressed(cleanupError);
+            }
+            throw new KvStorageException(
+                    String.format(
+                            "Failed to create KV tablet for bucket %s after %s attempts.",
+                            tableBucket, INIT_KV_TABLET_MAX_RETRY_TIMES),
+                    lastError);
+        }
+        if (!isHistoricalPartition()) {
             startPeriodicKvSnapshot(snapshotUsed.orElse(null));
         }
     }
@@ -833,8 +844,8 @@ public final class Replica {
 
         // get the offset from which, we should restore from. default is 0
         long restoreStartOffset = isHistoricalPartition() ? historicalRecoveryStartOffset() : 0;
-        // The lake snapshot is the durable base for a historical overlay. Historical replicas
-        // therefore never restore a normal KV snapshot, even if one exists from older code.
+        // Lake is the durable base for local historical KV state. Historical replicas therefore
+        // never restore a normal KV snapshot, even if one exists from older code.
         Optional<CompletedSnapshot> optCompletedSnapshot =
                 isHistoricalPartition() ? Optional.empty() : getLatestSnapshot(tableBucket);
         try {
@@ -1044,7 +1055,14 @@ public final class Replica {
 
     private long historicalRecoveryStartOffset() {
         long lakeLogEndOffset = logTablet.getLakeLogEndOffset();
+        long localLogEndOffset = logTablet.localLogEndOffset();
         long logStartOffset = logTablet.logStartOffset();
+        checkState(
+                lakeLogEndOffset < 0 || lakeLogEndOffset <= localLogEndOffset,
+                "Cannot recover historical KV state: lake log end offset %s is beyond the "
+                        + "local log end offset %s.",
+                lakeLogEndOffset,
+                localLogEndOffset);
         long recoveryStartOffset = lakeLogEndOffset >= 0 ? lakeLogEndOffset : 0L;
         checkState(
                 recoveryStartOffset >= logStartOffset,
@@ -1161,9 +1179,11 @@ public final class Replica {
                                         "Leader not local for bucket %s on tabletServer %d",
                                         tableBucket, localTabletServerId));
                     }
-                    if (isHistoricalPartition()) {
+                    // Primary-key writes must go through PUT_KV so the log and local KV state are
+                    // updated together. PRODUCE_LOG is only valid for append-only tables.
+                    if (isKvTable()) {
                         throw new InvalidPartitionException(
-                                "Normal write request must not target a historical partition.");
+                                "Produce-log request must not target a primary-key table.");
                     }
 
                     validateInSyncReplicaSize(requiredAcks);
@@ -1274,7 +1294,7 @@ public final class Replica {
                 });
     }
 
-    /** Writes records to the local historical KV overlay of the leader replica. */
+    /** Writes records to the local historical KV state of the leader replica. */
     public LogAppendInfo putHistoricalRecordsToLeader(
             KvRecordBatch kvRecords,
             @Nullable int[] targetColumns,
@@ -1323,7 +1343,7 @@ public final class Replica {
         validateInSyncReplicaSize(requiredAcks);
     }
 
-    /** Looks up keys from the local historical KV overlay of the leader replica. */
+    /** Looks up keys from the local historical KV state of the leader replica. */
     public List<KvStateLookupResult> lookupHistoricalLocal(
             String originalPartitionName, List<byte[]> keys) throws Exception {
         return inReadLock(
@@ -1921,6 +1941,8 @@ public final class Replica {
         // the fetch do not prevent a follower from coming into sync.
         long initialHighWatermark = logTablet.getHighWatermark();
         long initialLogEndOffset = logTablet.localLogEndOffset();
+        long initialMinRetainOffset =
+                fetchParams.isFromFollower() && isKvTable() ? logTablet.getMinRetainOffset() : -1L;
         long readOffset =
                 fetchParams.fetchOffset() == FetchParams.FETCH_FROM_EARLIEST_OFFSET
                         ? logTablet.logStartOffset()
@@ -1947,7 +1969,8 @@ public final class Replica {
                 IOUtils.closeQuietly(filterContext.getReadContext());
             }
         }
-        return new LogReadInfo(fetchDataInfo, initialHighWatermark, initialLogEndOffset);
+        return new LogReadInfo(
+                fetchDataInfo, initialHighWatermark, initialLogEndOffset, initialMinRetainOffset);
     }
 
     /**

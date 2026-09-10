@@ -125,6 +125,27 @@ class RecordBatchFilterTest {
         assertThat(result).isTrue();
     }
 
+    @Test
+    void testCharStatisticsCanPruneRecordBatch() throws IOException {
+        RowType rowType = RowType.of(DataTypes.CHAR(3));
+        LogRecordBatchStatisticsCollector collector =
+                new LogRecordBatchStatisticsCollector(rowType, new int[] {0});
+        collector.processRow(GenericRow.of(BinaryString.fromString("cat")));
+        collector.processRow(GenericRow.of(BinaryString.fromString("ant")));
+        collector.processRow(GenericRow.of(BinaryString.fromString("dog")));
+
+        MemorySegmentOutputView outputView = new MemorySegmentOutputView(1024);
+        collector.writeStatistics(outputView);
+        DefaultLogRecordBatchStatistics statistics =
+                LogRecordBatchStatisticsParser.parseStatistics(
+                        outputView.getMemorySegment(), 0, rowType, TEST_SCHEMA_ID);
+
+        Predicate predicate =
+                new PredicateBuilder(rowType).greaterThan(0, BinaryString.fromString("zoo"));
+
+        assertThat(mayMatch(predicate, TEST_SCHEMA_ID, null, 3L, statistics)).isFalse();
+    }
+
     // =====================================================
     // Schema Evolution Tests
     // =====================================================

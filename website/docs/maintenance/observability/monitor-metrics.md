@@ -1103,9 +1103,9 @@ These metrics use Sum aggregation to show the total value across all buckets of 
   </tbody>
 </table>
 
-#### Server-level RocksDB Metrics (Sum Aggregation)
+#### Server-level RocksDB Metrics
 
-These metrics use Sum aggregation to show the total value across all tables in a server, providing a server-wide view of RocksDB resource usage.
+These metrics provide a server-wide view of RocksDB resource usage. The total memory metric sums usage across tables, while the shared block cache metrics report the single cache owned by the server.
 
 <table class="table table-bordered">
   <thead>
@@ -1119,10 +1119,35 @@ These metrics use Sum aggregation to show the total value across all tables in a
   </thead>
   <tbody>
     <tr>
-      <th rowspan="1"><strong>tabletserver</strong></th>
-      <td style={{textAlign: 'center', verticalAlign: 'middle' }} rowspan="1">-</td>
+      <th rowspan="6"><strong>tabletserver</strong></th>
+      <td style={{textAlign: 'center', verticalAlign: 'middle' }} rowspan="6">-</td>
       <td>rocksdbMemoryUsageTotal</td>
-      <td>Total memory usage across all RocksDB instances in this server (in bytes).</td>
+      <td>Total memory usage across all RocksDB instances in this server (in bytes). This includes memtables, table readers, and block cache. When <code>kv.rocksdb.shared-block-cache.size</code> is greater than 0, the shared block cache usage is counted once to avoid double-counting across tablets.</td>
+      <td>Gauge</td>
+    </tr>
+    <tr>
+      <td>rocksdbSharedBlockCacheUsage</td>
+      <td>Memory usage of the shared RocksDB block cache in this server (in bytes). Reports 0 when the shared block cache is disabled.</td>
+      <td>Gauge</td>
+    </tr>
+    <tr>
+      <td>rocksdbSharedBlockCacheCapacity</td>
+      <td>Configured soft capacity of the shared RocksDB block cache in this server (in bytes). Reports 0 when the shared block cache is disabled. This is not a hard limit on process memory.</td>
+      <td>Gauge</td>
+    </tr>
+    <tr>
+      <td>rocksdbSharedBlockCachePinnedUsage</td>
+      <td>Pinned memory usage of the shared RocksDB block cache in this server (in bytes). Reports 0 when the shared block cache is disabled.</td>
+      <td>Gauge</td>
+    </tr>
+    <tr>
+      <td>rocksdbSharedWriteBufferUsage</td>
+      <td>Approximate memory charged to the shared RocksDB write buffer manager in this server (in bytes). This is a logical accounting value, not process RSS or a hard memory bound. It is not added to <code>rocksdbMemoryUsageTotal</code>, whose memtable component already reports the same memory.</td>
+      <td>Gauge</td>
+    </tr>
+    <tr>
+      <td>rocksdbSharedWriteBufferCapacity</td>
+      <td>Configured soft capacity of the shared RocksDB write buffer manager in this server (in bytes). Reports 0 when the shared write buffer manager is disabled.</td>
       <td>Gauge</td>
     </tr>
   </tbody>
@@ -1160,12 +1185,12 @@ These metrics use Sum aggregation to show the total value across all tables in a
     </tr>
     <tr>
       <td>rocksdbBlockCacheMemoryUsageTotal</td>
-      <td>Total block cache memory usage across all buckets of this table (in bytes).</td>
+      <td>Total block cache memory usage across all buckets of this table (in bytes). When <code>kv.rocksdb.shared-block-cache.size</code> is greater than 0, this metric reports 0 because shared cache usage is not attributable to an individual table; it is reported at the server level via <code>rocksdbSharedBlockCacheUsage</code>.</td>
       <td>Gauge</td>
     </tr>
     <tr>
       <td>rocksdbBlockCachePinnedUsageTotal</td>
-      <td>Total pinned memory in block cache across all buckets of this table (in bytes).</td>
+      <td>Total pinned memory in block cache across all buckets of this table (in bytes). When <code>kv.rocksdb.shared-block-cache.size</code> is greater than 0, this metric reports 0 because shared pinned usage is not attributable to an individual table; it is reported at the server level via <code>rocksdbSharedBlockCachePinnedUsage</code>.</td>
       <td>Gauge</td>
     </tr>
   </tbody>

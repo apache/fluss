@@ -28,10 +28,12 @@ import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.exception.IllegalConfigurationException;
+import org.apache.fluss.exception.PartitionNotExistException;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.rpc.gateway.TabletServerGateway;
 import org.apache.fluss.rpc.metrics.ClientMetricGroup;
+import org.apache.fluss.utils.AutoPartitionStrategy;
 import org.apache.fluss.utils.CopyOnWriteMap;
 import org.apache.fluss.utils.clock.SystemClock;
 import org.apache.fluss.utils.concurrent.ExecutorThreadFactory;
@@ -42,6 +44,9 @@ import org.slf4j.LoggerFactory;
 import javax.annotation.concurrent.ThreadSafe;
 
 import java.time.Duration;
+import java.time.Instant;
+import java.time.ZonedDateTime;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
@@ -51,6 +56,8 @@ import java.util.concurrent.TimeUnit;
 import static org.apache.fluss.config.ConfigOptions.NoKeyAssigner.ROUND_ROBIN;
 import static org.apache.fluss.config.ConfigOptions.NoKeyAssigner.STICKY;
 import static org.apache.fluss.utils.ExceptionUtils.toException;
+import static org.apache.fluss.utils.PartitionUtils.HISTORICAL_PARTITION_VALUE;
+import static org.apache.fluss.utils.PartitionUtils.generateAutoPartitionTime;
 
 /**
  * A client that write records to server.
@@ -194,7 +201,16 @@ public class WriterClient {
             PhysicalTablePath physicalTablePath = record.getPhysicalTablePath();
             // Skip the call entirely on non-partitioned tables; there is no partition to create.
             if (tableInfo.isPartitioned()) {
-                dynamicPartitionCreator.checkAndCreatePartitionAsync(physicalTablePath, tableInfo);
+                boolean historicalPartitionEnabled =
+                        accumulator.checkAndCacheHistoricalPartitionEnabled(tableInfo);
+                if (historicalPartitionEnabled
+                        && mayBeExpiredHistoricalPartition(
+                                physicalTablePath, tableInfo, Instant.now())) {
+                    resolveHistoricalWriteTarget(physicalTablePath);
+                } else {
+                    dynamicPartitionCreator.checkAndCreatePartitionAsync(
+                            physicalTablePath, tableInfo);
+                }
             }
 
             // maybe create bucket assigner.
@@ -238,6 +254,76 @@ public class WriterClient {
                             sender != null && sender.isRunning() ? "running" : "closed"),
                     e);
         }
+    }
+
+    /**
+     * Returns whether a partition of a historical-partition-enabled table is old enough that it may
+     * have expired under its retention policy.
+     *
+     * <p>This client-side precheck uses the time zone resolved from the table configuration. A
+     * {@code true} result does not confirm that the partition is missing; the caller must refresh
+     * metadata before routing the write to a historical partition. If the table does not explicitly
+     * configure a time zone and the Client and Coordinator use different defaults, they may
+     * classify partitions near the retention boundary differently. Late classification may fail a
+     * write to an already removed original partition, while early classification only causes an
+     * extra metadata refresh.
+     */
+    static boolean mayBeExpiredHistoricalPartition(
+            PhysicalTablePath physicalTablePath, TableInfo tableInfo, Instant now) {
+        // TODO: Move this per-record configuration and time calculation off the hot path by using
+        // periodically refreshed, server-authoritative partition status; see
+        // https://github.com/apache/fluss/issues/4161.
+        String partitionName = physicalTablePath.getPartitionName();
+        if (partitionName == null) {
+            return false;
+        }
+
+        AutoPartitionStrategy strategy = tableInfo.getTableConfig().getAutoPartitionStrategy();
+        if (strategy.numToRetain() < 0) {
+            return false;
+        }
+
+        ZonedDateTime currentDateTime =
+                ZonedDateTime.ofInstant(now, strategy.timeZone().toZoneId());
+        String earliestRetainedPartition =
+                generateAutoPartitionTime(
+                        currentDateTime, -strategy.numToRetain(), strategy.timeUnit(), strategy);
+        return partitionName.compareTo(earliestRetainedPartition) < 0;
+    }
+
+    private void resolveHistoricalWriteTarget(PhysicalTablePath originalPath) {
+        // Keep refreshing while the target is still the original partition so its retirement can
+        // be detected before more records are appended to the stale route. Ideally, the Client
+        // should learn the server-authoritative partition status without synchronously refreshing
+        // metadata on the per-record path; see https://github.com/apache/fluss/issues/4161.
+        if (accumulator.hasHistoricalWriteTarget(originalPath)) {
+            return;
+        }
+
+        PhysicalTablePath targetPath = originalPath;
+        // The time check only limits metadata traffic. Invalidate a potentially stale cached route
+        // and authoritatively choose the target before the record enters the queue.
+        metadataUpdater.invalidPhysicalTableBucketAndPartitionMeta(
+                Collections.singleton(originalPath));
+        try {
+            if (!metadataUpdater.checkAndUpdatePartitionMetadata(originalPath)) {
+                throw new FlussRuntimeException(
+                        "Failed to resolve write target for " + originalPath + '.');
+            }
+        } catch (PartitionNotExistException ignored) {
+            targetPath =
+                    PhysicalTablePath.of(originalPath.getTablePath(), HISTORICAL_PARTITION_VALUE);
+            // TODO: Activate this target only after the lake-aware partition retirement protocol
+            // guarantees that all accepted original writes are readable from the lake; see
+            // https://github.com/apache/fluss/pull/3820.
+            if (!metadataUpdater.checkAndUpdatePartitionMetadata(targetPath)) {
+                throw new PartitionNotExistException(
+                        "Historical partition " + targetPath + " does not exist.");
+            }
+        }
+
+        accumulator.routeWritesTo(
+                originalPath, targetPath, metadataUpdater.getPartitionIdOrElseThrow(targetPath));
     }
 
     private void maybeAbortBatches(Throwable t) {

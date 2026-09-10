@@ -46,6 +46,7 @@ mod kv_changelog_test {
                     .column("id", DataTypes::int())
                     .column("name", DataTypes::string())
                     .primary_key(vec!["id"])
+                    .unwrap()
                     .build()
                     .expect("Failed to build schema"),
             )

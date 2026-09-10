@@ -15,6 +15,24 @@ Before upgrading, review any users, roles, scripts, or automation that call `cre
 
 ## Cluster Configuration Changes
 
+### AWS Credentials Providers Migrated to AWS SDK v2
+
+Starting in v1.0, the Fluss S3 filesystem plugin uses AWS SDK for Java v2 through Hadoop 3.4.3.
+
+If `s3.aws.credentials.provider`, `s3a.aws.credentials.provider`, or `fs.s3a.aws.credentials.provider` explicitly references an AWS SDK v1 provider, update it to the corresponding AWS SDK v2 class before upgrading.
+
+| AWS SDK v1 provider | AWS SDK v2 provider |
+|---|---|
+| `com.amazonaws.auth.ContainerCredentialsProvider` | `software.amazon.awssdk.auth.credentials.ContainerCredentialsProvider` |
+| `com.amazonaws.auth.EnvironmentVariableCredentialsProvider` | `software.amazon.awssdk.auth.credentials.EnvironmentVariableCredentialsProvider` |
+| `com.amazonaws.auth.InstanceProfileCredentialsProvider` | `software.amazon.awssdk.auth.credentials.InstanceProfileCredentialsProvider` |
+| `com.amazonaws.auth.WebIdentityTokenCredentialsProvider` | `software.amazon.awssdk.auth.credentials.WebIdentityTokenFileCredentialsProvider` |
+| `com.amazonaws.auth.profile.ProfileCredentialsProvider` | `software.amazon.awssdk.auth.credentials.ProfileCredentialsProvider` |
+
+Custom credentials providers must now implement `software.amazon.awssdk.auth.credentials.AwsCredentialsProvider` instead of `com.amazonaws.auth.AWSCredentialsProvider`. Implementations should provide credentials through `resolveCredentials()` rather than the SDK v1 `getCredentials()` and `refresh()` methods.
+
+Deployments using static access keys or the default AWS credentials provider chain do not require configuration changes.
+
 ### New `datalake.enabled` Cluster Configuration
 
 Starting in v1.0, Fluss introduces the cluster-level configuration `datalake.enabled` to control whether the cluster is ready to create and manage lakehouse tables.

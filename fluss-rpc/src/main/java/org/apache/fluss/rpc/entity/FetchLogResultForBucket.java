@@ -27,6 +27,7 @@ import org.apache.fluss.rpc.protocol.ApiError;
 
 import javax.annotation.Nullable;
 
+import static org.apache.fluss.utils.Preconditions.checkArgument;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
 /** Result of {@link FetchLogRequest} for each table bucket. */
@@ -36,56 +37,7 @@ public class FetchLogResultForBucket extends ResultForBucket {
     private final @Nullable LogRecords records;
     private final long highWatermark;
     private final long filteredEndOffset;
-
-    public FetchLogResultForBucket(
-            TableBucket tableBucket, LogRecords records, long highWatermark) {
-        this(
-                tableBucket,
-                null,
-                checkNotNull(records, "records can not be null"),
-                highWatermark,
-                -1L,
-                ApiError.NONE);
-    }
-
-    public FetchLogResultForBucket(
-            TableBucket tableBucket,
-            LogRecords records,
-            long highWatermark,
-            long filteredEndOffset) {
-        this(
-                tableBucket,
-                null,
-                checkNotNull(records, "records can not be null"),
-                highWatermark,
-                filteredEndOffset,
-                ApiError.NONE);
-    }
-
-    public FetchLogResultForBucket(TableBucket tableBucket, ApiError error) {
-        this(tableBucket, null, null, -1L, -1L, error);
-    }
-
-    public FetchLogResultForBucket(
-            TableBucket tableBucket, RemoteLogFetchInfo remoteLogFetchInfo, long highWatermark) {
-        this(
-                tableBucket,
-                checkNotNull(remoteLogFetchInfo, "remote log fetch info can not be null"),
-                null,
-                highWatermark,
-                -1L,
-                ApiError.NONE);
-    }
-
-    /**
-     * Create a filtered empty response with the correct next fetch offset. This is used when all
-     * batches are filtered out but we need to inform the client about the correct offset to
-     * continue fetching from.
-     */
-    public FetchLogResultForBucket(
-            TableBucket tableBucket, long highWatermark, long filteredEndOffset) {
-        this(tableBucket, null, null, highWatermark, filteredEndOffset, ApiError.NONE);
-    }
+    private final long minRetainOffset;
 
     private FetchLogResultForBucket(
             TableBucket tableBucket,
@@ -93,12 +45,57 @@ public class FetchLogResultForBucket extends ResultForBucket {
             @Nullable LogRecords records,
             long highWatermark,
             long filteredEndOffset,
+            long minRetainOffset,
             ApiError error) {
         super(tableBucket, error);
         this.remoteLogFetchInfo = remoteLogFetchInfo;
         this.records = records;
         this.highWatermark = highWatermark;
         this.filteredEndOffset = filteredEndOffset;
+        this.minRetainOffset = minRetainOffset;
+    }
+
+    /** Creates a successful local fetch result. */
+    public static FetchLogResultForBucket records(
+            TableBucket tableBucket,
+            LogRecords records,
+            long highWatermark,
+            long filteredEndOffset,
+            long minRetainOffset) {
+        checkArgument(minRetainOffset >= -1L, "Min retain offset must be at least -1.");
+        return new FetchLogResultForBucket(
+                tableBucket,
+                null,
+                checkNotNull(records, "records can not be null"),
+                highWatermark,
+                filteredEndOffset,
+                minRetainOffset,
+                ApiError.NONE);
+    }
+
+    /** Creates a successful remote fetch result. */
+    public static FetchLogResultForBucket remote(
+            TableBucket tableBucket, RemoteLogFetchInfo remoteLogFetchInfo, long highWatermark) {
+        return new FetchLogResultForBucket(
+                tableBucket,
+                checkNotNull(remoteLogFetchInfo, "remote log fetch info can not be null"),
+                null,
+                highWatermark,
+                -1L,
+                -1L,
+                ApiError.NONE);
+    }
+
+    /** Creates a successful empty fetch result. */
+    public static FetchLogResultForBucket empty(
+            TableBucket tableBucket, long highWatermark, long filteredEndOffset) {
+        return new FetchLogResultForBucket(
+                tableBucket, null, null, highWatermark, filteredEndOffset, -1L, ApiError.NONE);
+    }
+
+    /** Creates a failed fetch result. */
+    public static FetchLogResultForBucket error(TableBucket tableBucket, ApiError error) {
+        return new FetchLogResultForBucket(tableBucket, null, null, -1L, -1L, -1L, error);
     }
 
     /**
@@ -146,5 +143,15 @@ public class FetchLogResultForBucket extends ResultForBucket {
      */
     public long getFilteredEndOffset() {
         return filteredEndOffset;
+    }
+
+    /** Returns whether a KV snapshot retention boundary is included in this fetch result. */
+    public boolean hasMinRetainOffset() {
+        return minRetainOffset >= 0;
+    }
+
+    /** Returns the KV snapshot retention boundary included in this fetch result. */
+    public long getMinRetainOffset() {
+        return minRetainOffset;
     }
 }
