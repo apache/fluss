@@ -420,8 +420,9 @@ public class FlussAuthorizationITCase {
         // 3. getTableSchema
         // 4. getLatestKvSnapshots
         // 5. listPartitionInfos
-        // 6. getLatestLakeSnapshot
-        // 7. listOffsets
+        // 6. describeBuckets
+        // 7. getLatestLakeSnapshot
+        // 8. listOffsets
 
         // first check call these methods without authorization.
         assertThat(guestAdmin.listTables(DATA1_TABLE_PATH_PK.getDatabaseName()).get())
@@ -430,6 +431,7 @@ public class FlussAuthorizationITCase {
         assertNoTableDescribeAuth(() -> guestAdmin.getTableSchema(DATA1_TABLE_PATH_PK).get());
         assertNoTableDescribeAuth(() -> guestAdmin.getLatestKvSnapshots(DATA1_TABLE_PATH_PK).get());
         assertNoTableDescribeAuth(() -> guestAdmin.listPartitionInfos(DATA1_TABLE_PATH_PK).get());
+        assertNoTableDescribeAuth(() -> guestAdmin.describeBuckets(DATA1_TABLE_PATH_PK).get());
         assertNoTableDescribeAuth(
                 () -> guestAdmin.getLatestLakeSnapshot(DATA1_TABLE_PATH_PK).get());
         assertNoTableDescribeAuth(
@@ -465,6 +467,12 @@ public class FlussAuthorizationITCase {
         assertThat(guestAdmin.tableExists(DATA1_TABLE_PATH_PK).get()).isTrue();
         assertThat(guestAdmin.getLatestKvSnapshots(DATA1_TABLE_PATH_PK).get().getBucketIds())
                 .containsExactlyInAnyOrder(0, 1, 2);
+        assertThat(guestAdmin.describeBuckets(DATA1_TABLE_PATH_PK).get())
+                .hasSize(3)
+                .allSatisfy(
+                        bucketInfo ->
+                                assertThat(bucketInfo.getTablePath())
+                                        .isEqualTo(DATA1_TABLE_PATH_PK));
         assertThatThrownBy(() -> guestAdmin.listPartitionInfos(DATA1_TABLE_PATH_PK).get())
                 .rootCause()
                 .isInstanceOf(TableNotPartitionedException.class)

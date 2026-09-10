@@ -159,6 +159,18 @@ message GetTableInfoResponse {
   optional string remote_data_dir = 6;
 }
 
+// describe buckets request and response
+message DescribeBucketsRequest {
+  required PbTablePath table_path = 1;
+  optional PbPartitionSpec partition_spec = 2;
+}
+
+message DescribeBucketsResponse {
+  required PbTablePath table_path = 1;
+  required int64 table_id = 2;
+  repeated PbBucketInfo bucket_info = 3;
+}
+
 // list tables request and response
 message ListTablesRequest {
   required string database_name = 1;
@@ -883,6 +895,20 @@ message PbBucketMetadata {
   // Absence indicates legacy metadata; -1 indicates no leader/ISR state exists.
   optional int32 bucket_epoch = 5;
   repeated int32 isr = 6 [packed = true];
+}
+
+message PbBucketInfo {
+  optional int64 partition_id = 1;
+  optional string partition_name = 2;
+  required int32 bucket_id = 3;
+  // optional as the leader may not be elected yet
+  optional int32 leader_id = 4;
+  repeated int32 replica_id = 5 [packed = true];
+  optional int32 leader_epoch = 6;
+  // Generation of the complete leader/ISR state.
+  // Absence indicates legacy metadata; -1 indicates no leader/ISR state exists.
+  optional int32 bucket_epoch = 7;
+  repeated int32 isr = 8 [packed = true];
 }
 
 message PbProduceLogReqForBucket {
