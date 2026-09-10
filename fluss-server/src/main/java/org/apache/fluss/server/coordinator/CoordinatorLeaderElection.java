@@ -193,9 +193,10 @@ public class CoordinatorLeaderElection implements AutoCloseable {
     }
 
     /**
-     * Returns whether the coordinator group currently has an elected leader — this server or any
-     * other participant. Returns {@code false} when the state cannot be determined (e.g. ZooKeeper
-     * unreachable), because an unknown leader must not be reported as present to a readiness probe.
+     * Returns whether the coordinator group currently has an elected leader, this server or any
+     * other participant. Completes with {@code false} when the state cannot be determined (e.g.
+     * ZooKeeper unreachable), because an unknown leader must not be reported as present to a
+     * readiness probe.
      *
      * <p>"Elected" means the leader has registered its address in ZooKeeper, which happens during
      * leader initialization after fencing. The node is ephemeral, so a leader whose session expired
@@ -203,32 +204,26 @@ public class CoordinatorLeaderElection implements AutoCloseable {
      * the {@link LeaderLatch} view: the latch marks a participant as leader before initialization
      * has run, and keeps doing so when initialization fails.
      *
-     * <p>On a standby this performs a synchronous ZooKeeper read on the calling RPC worker thread,
-     * so it is intended for probe-frequency callers only (the Kubernetes readiness probe calls it
-     * at most every few seconds), not for hot paths. Worst case: while ZooKeeper is unreachable
-     * each call blocks its worker thread for the Curator retry budget ({@code
-     * zookeeper.client.max-retry-attempts} x {@code zookeeper.client.retry-wait}, 3 x 5 s by
-     * default) even though the probe gives up after its own 5 s timeout, so at a 5 s probe period
-     * about three of the {@code netty.server.num-worker-threads} (8 by default) stay blocked on a
-     * standby until ZooKeeper is back. A standby serves no other traffic, so that is accepted; move
-     * the read off the worker thread if that ever changes.
+     * <p>On a standby the answer is a ZooKeeper read issued on Curator's background thread, so the
+     * calling RPC worker is never blocked while ZooKeeper is unreachable: the read and its retries
+     * run off-thread and the future completes once Curator gets an answer or gives up.
      */
-    public boolean isLeaderElected() {
+    public CompletableFuture<Boolean> isLeaderElected() {
         if (closing.get()) {
-            return false;
+            return CompletableFuture.completedFuture(false);
         }
         if (state == State.LEADER) {
-            return true;
+            return CompletableFuture.completedFuture(true);
         }
-        try {
-            return zkClient.getCoordinatorLeaderAddress().isPresent();
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            return false;
-        } catch (Exception e) {
-            LOG.debug("Failed to read leader election state for server {}", serverId, e);
-            return false;
-        }
+        return zkClient.isCoordinatorLeaderRegistered()
+                .exceptionally(
+                        e -> {
+                            LOG.debug(
+                                    "Failed to read leader election state for server {}",
+                                    serverId,
+                                    e);
+                            return false;
+                        });
     }
 
     private void submitLeadershipEvent(Runnable leadershipEvent) {
