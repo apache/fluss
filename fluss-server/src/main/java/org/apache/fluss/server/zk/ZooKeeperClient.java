@@ -123,6 +123,7 @@ import java.util.OptionalLong;
 import java.util.Set;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Semaphore;
@@ -317,6 +318,32 @@ public class ZooKeeperClient implements AutoCloseable {
                 data ->
                         // maybe an empty node when a leader is elected but not registered
                         data.length == 0 ? null : ZkData.CoordinatorLeaderZNode.decode(data));
+    }
+
+    /**
+     * Whether a coordinator leader is registered in ZK, with the same semantics as {@link
+     * #getCoordinatorLeaderAddress()} (an empty node does not count). The read and its retries run
+     * on Curator's background thread, so the caller is never blocked while ZooKeeper is
+     * unreachable.
+     */
+    public CompletableFuture<Boolean> isCoordinatorLeaderRegistered() {
+        String path = ZkData.CoordinatorLeaderZNode.path();
+        return handleRequestInBackgroundAsync(
+                        Collections.singletonList(new ZkGetDataRequest(path)),
+                        ZkGetDataResponse::create)
+                .thenApply(
+                        responses -> {
+                            ZkGetDataResponse response = responses.get(0);
+                            if (response.getResultCode() == KeeperException.Code.NONODE) {
+                                return false;
+                            }
+                            Optional<KeeperException> error = response.resultException();
+                            if (error.isPresent()) {
+                                throw new CompletionException(error.get());
+                            }
+                            byte[] data = response.getData();
+                            return data != null && data.length > 0;
+                        });
     }
 
     /** Gets the list of coordinator server Ids. */

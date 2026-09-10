@@ -1588,7 +1588,9 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
             // A standby has no CoordinatorContext (the event processor is leader-only), so it
             // answers from its own election state: status UNKNOWN, zeroed counts, and the role
             // fields a readiness probe needs to tell a healthy standby from a wedged one.
-            return CompletableFuture.completedFuture(computeStandbyClusterHealth());
+            return coordinatorLeaderElection
+                    .isLeaderElected()
+                    .thenApply(CoordinatorService::computeStandbyClusterHealth);
         }
 
         AccessContextEvent<GetClusterHealthResponse> event =
@@ -1598,7 +1600,7 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         return event.getResultFuture();
     }
 
-    private GetClusterHealthResponse computeStandbyClusterHealth() {
+    private static GetClusterHealthResponse computeStandbyClusterHealth(boolean leaderElected) {
         GetClusterHealthResponse response = new GetClusterHealthResponse();
         response.setNumReplicas(0);
         response.setInSyncReplicas(0);
@@ -1606,7 +1608,7 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         response.setActiveLeaderReplicas(0);
         response.setStatus(3); // PbClusterHealthStatus.UNKNOWN
         response.setIsLeader(false);
-        response.setLeaderElected(coordinatorLeaderElection.isLeaderElected());
+        response.setLeaderElected(leaderElected);
         return response;
     }
 
