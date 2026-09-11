@@ -47,6 +47,7 @@ import org.apache.fluss.shaded.netty4.io.netty.channel.Channel;
 import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelFuture;
 import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelFutureListener;
 import org.apache.fluss.utils.ExponentialBackoff;
+import org.apache.fluss.utils.VersionInfo;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -270,11 +271,10 @@ final class ServerConnection {
                         .addLast("handler", new NettyClientHandler(new ResponseCallback()));
                 // start checking api versions
                 switchState(ConnectionState.CHECKING_API_VERSIONS);
-                // TODO: set correct client software name and version, used for metrics in server
                 ApiVersionsRequest request =
                         new ApiVersionsRequest()
                                 .setClientSoftwareName("fluss")
-                                .setClientSoftwareVersion("0.1.0");
+                                .setClientSoftwareVersion(VersionInfo.getVersion());
                 doSend(ApiKeys.API_VERSIONS, request, new CompletableFuture<>(), true)
                         .whenComplete(this::handleApiVersionsResponse);
             } else {
