@@ -19,7 +19,7 @@ use crate::client::ClientSchemaGetter;
 use crate::client::connection::FlussConnection;
 use crate::client::credentials::SecurityTokenManager;
 use crate::client::metadata::Metadata;
-use crate::client::table::batch_scanner::LimitBatchScanner;
+use crate::client::table::batch_scanner::{KvBatchScanner, KvSnapshotScanner, LimitBatchScanner};
 use crate::client::table::log_fetch_buffer::{
     CompletedFetch, DefaultCompletedFetch, FetchErrorAction, FetchErrorContext, FetchErrorLogLevel,
     FetchResult, LogFetchBuffer, NO_FILTERED_END_OFFSET, RemotePendingFetch,
@@ -177,6 +177,25 @@ impl<'a> TableScan<'a> {
                 .to_string(),
         })?;
         validate_limit_scan_fixed_schema(&self.table_info, self.fixed_schema)?;
+        self.validate_bucket(&table_bucket)?;
+        // Log tables decode as Arrow IPC, so only ARROW format is supported (KV
+        // tables use the value-record path and are exempt).
+        if !self.table_info.has_primary_key() {
+            validate_scan_support(&self.table_info.table_path, &self.table_info)?;
+        }
+        let schema_getter = self.build_schema_getter()?;
+        Ok(LimitBatchScanner::new(
+            self.conn.get_connections(),
+            self.metadata.clone(),
+            self.table_info,
+            schema_getter,
+            self.projected_fields,
+            table_bucket,
+            limit,
+        ))
+    }
+
+    fn validate_bucket(&self, table_bucket: &TableBucket) -> Result<()> {
         if table_bucket.table_id() != self.table_info.table_id {
             return Err(Error::IllegalArgument {
                 message: format!(
@@ -195,31 +214,107 @@ impl<'a> TableScan<'a> {
                 ),
             });
         }
-        // Log tables decode as Arrow IPC, so only ARROW format is supported (KV
-        // tables use the value-record path and are exempt).
-        if !self.table_info.has_primary_key() {
-            validate_scan_support(&self.table_info.table_path, &self.table_info)?;
-        }
-        // Pre-seed the current schema; older versions are fetched lazily while
-        // decoding log or KV batches. Mirrors `Table::new_lookup`.
+        Ok(())
+    }
+
+    /// Pre-seeds a schema getter with the current schema; older versions are
+    /// fetched lazily during batch decoding. Mirrors `Table::new_lookup`.
+    fn build_schema_getter(&self) -> Result<Arc<ClientSchemaGetter>> {
         let latest = SchemaInfo::new(
             self.table_info.get_schema().clone(),
             self.table_info.get_schema_id(),
         );
-        let schema_getter = Arc::new(ClientSchemaGetter::new(
+        Ok(Arc::new(ClientSchemaGetter::new(
             self.table_info.table_path.clone(),
             self.conn.get_admin()?,
             latest,
-        ));
-        Ok(LimitBatchScanner::new(
+        )))
+    }
+
+    /// Rejects a full KV scan on a log table or when a limit is configured.
+    fn ensure_kv_scan_supported(&self) -> Result<()> {
+        self.reject_filter("KV scanner")?;
+        if !self.table_info.has_primary_key() {
+            return Err(Error::UnsupportedOperation {
+                message: format!(
+                    "Full KV scan is only supported for primary key tables. Table: {}",
+                    self.table_info.table_path
+                ),
+            });
+        }
+        if let Some(limit) = self.limit {
+            return Err(Error::UnsupportedOperation {
+                message: format!(
+                    "Full KV scan doesn't support limit pushdown; use create_bucket_batch_scanner for a bounded scan. Table: {}, requested limit: {limit}",
+                    self.table_info.table_path
+                ),
+            });
+        }
+        Ok(())
+    }
+
+    /// Creates a full scan of a single primary-key bucket via the `ScanKv` RPC.
+    ///
+    /// Reads the current committed state of the bucket (one row per primary
+    /// key, already merged — not the changelog) with snapshot isolation.
+    /// Requires a primary-key table and no configured limit. Creation is cheap;
+    /// the first `ScanKv` request runs on the first
+    /// [`KvBatchScanner::next_batch`].
+    pub fn create_bucket_kv_scanner(self, table_bucket: TableBucket) -> Result<KvBatchScanner> {
+        self.ensure_kv_scan_supported()?;
+        self.validate_bucket(&table_bucket)?;
+        let schema_getter = self.build_schema_getter()?;
+        let batch_size_bytes = self.conn.config().scanner_kv_fetch_max_bytes;
+        Ok(KvBatchScanner::new(
             self.conn.get_connections(),
             self.metadata.clone(),
             self.table_info,
             schema_getter,
             self.projected_fields,
             table_bucket,
-            limit,
+            batch_size_bytes,
         ))
+    }
+
+    /// Creates a full scan of an entire primary-key table, scanning every
+    /// `(partition, bucket)` sequentially via the `ScanKv` RPC.
+    ///
+    /// Requires a primary-key table and no configured limit or filter. For a
+    /// partitioned table, partition metadata is resolved once when the scanner
+    /// is created.
+    pub async fn create_kv_scanner(self) -> Result<KvSnapshotScanner> {
+        self.ensure_kv_scan_supported()?;
+        let schema_getter = self.build_schema_getter()?;
+        let batch_size_bytes = self.conn.config().scanner_kv_fetch_max_bytes;
+        let rpc_client = self.conn.get_connections();
+        let table_id = self.table_info.table_id;
+        let num_buckets = self.table_info.get_num_buckets();
+        let partition_ids = if self.table_info.is_partitioned() {
+            self.conn
+                .get_admin()?
+                .list_partition_infos(&self.table_info.table_path)
+                .await?
+                .into_iter()
+                .map(|partition| Some(partition.get_partition_id()))
+                .collect()
+        } else {
+            vec![None]
+        };
+        let mut scanners = Vec::with_capacity(partition_ids.len() * num_buckets as usize);
+        for partition_id in partition_ids {
+            for bucket_id in 0..num_buckets {
+                scanners.push(KvBatchScanner::new(
+                    rpc_client.clone(),
+                    self.metadata.clone(),
+                    self.table_info.clone(),
+                    schema_getter.clone(),
+                    self.projected_fields.clone(),
+                    TableBucket::new_with_partition(table_id, partition_id, bucket_id),
+                    batch_size_bytes,
+                ));
+            }
+        }
+        Ok(KvSnapshotScanner::new(scanners))
     }
 
     /// Projects the scan to only include specified columns by their indices.

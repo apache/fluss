@@ -20,12 +20,20 @@ use std::ops::DerefMut;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 use std::time::Duration;
+#[cfg(test)]
+use tokio::io::DuplexStream;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::net::TcpStream;
 
 #[derive(Debug)]
 pub enum Transport {
-    Plain { inner: TcpStream },
+    Plain {
+        inner: TcpStream,
+    },
+    #[cfg(test)]
+    Test {
+        inner: DuplexStream,
+    },
 }
 
 impl AsyncRead for Transport {
@@ -36,6 +44,8 @@ impl AsyncRead for Transport {
     ) -> Poll<std::io::Result<()>> {
         match self.deref_mut() {
             Self::Plain { inner } => Pin::new(inner).poll_read(cx, buf),
+            #[cfg(test)]
+            Self::Test { inner } => Pin::new(inner).poll_read(cx, buf),
         }
     }
 }
@@ -48,23 +58,34 @@ impl AsyncWrite for Transport {
     ) -> Poll<std::io::Result<usize>> {
         match self.deref_mut() {
             Self::Plain { inner } => Pin::new(inner).poll_write(cx, buf),
+            #[cfg(test)]
+            Self::Test { inner } => Pin::new(inner).poll_write(cx, buf),
         }
     }
 
     fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
         match self.deref_mut() {
             Self::Plain { inner } => Pin::new(inner).poll_flush(cx),
+            #[cfg(test)]
+            Self::Test { inner } => Pin::new(inner).poll_flush(cx),
         }
     }
 
     fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
         match self.deref_mut() {
             Self::Plain { inner } => Pin::new(inner).poll_shutdown(cx),
+            #[cfg(test)]
+            Self::Test { inner } => Pin::new(inner).poll_shutdown(cx),
         }
     }
 }
 
 impl Transport {
+    #[cfg(test)]
+    pub(crate) fn from_duplex(inner: DuplexStream) -> Self {
+        Self::Test { inner }
+    }
+
     pub async fn connect(server: &str, timeout: Option<Duration>) -> Result<Self, RpcError> {
         let tcp_stream = Self::connect_timeout(server, timeout).await?;
         Ok(Transport::Plain { inner: tcp_stream })

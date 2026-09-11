@@ -28,7 +28,6 @@ pub struct ScanKvRequest {
 }
 
 impl ScanKvRequest {
-    #[allow(dead_code)]
     pub(crate) fn new(
         scanner_id: Option<Vec<u8>>,
         bucket_scan_req: Option<proto::PbScanReqForBucket>,

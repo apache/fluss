@@ -97,6 +97,10 @@ defmodule Fluss.Error do
           | :invalid_alter_table_exception
           | :deletion_disabled_exception
           | :storage_backpressure_exception
+          | :scanner_expired_exception
+          | :unknown_scanner_id_exception
+          | :invalid_scan_request_exception
+          | :too_many_scanners
           | :client_error
 
   @type t :: %__MODULE__{code: code(), error_code: integer(), message: String.t()}

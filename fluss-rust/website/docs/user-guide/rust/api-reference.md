@@ -27,6 +27,7 @@ Complete API reference for the Fluss Rust client.
 | `scanner_log_fetch_min_bytes`         | `i32`           | `1`                | Minimum bytes the server must accumulate before returning a fetch response           |
 | `scanner_log_fetch_wait_max_time_ms`  | `i32`           | `500`              | Maximum time (ms) the server may wait to satisfy min-bytes                           |
 | `scanner_log_fetch_max_bytes_for_bucket`| `i32`         | `1048576` (1 MB)   | Maximum bytes per fetch response per bucket for LogScanner                           |
+| `scanner_kv_fetch_max_bytes`          | `i32`           | `4194304` (4 MB)   | Maximum record bytes returned by each full KV scan RPC                               |
 | `connect_timeout_ms`                  | `u64`           | `120000`           | TCP connect timeout in milliseconds                                                  |
 | `security_protocol`                   | `String`        | `"PLAINTEXT"`      | `PLAINTEXT` (default) or `sasl` for SASL auth                                        |
 | `security_sasl_mechanism`             | `String`        | `"PLAIN"`          | SASL mechanism (only `PLAIN` is supported)                                           |
@@ -146,10 +147,12 @@ series are shared by `AppendWriter` (log tables) and `UpsertWriter` (PK tables).
 | `fn project(self, indices: &[usize]) -> Result<Self>`                       | Project columns by index                |
 | `fn project_by_name(self, names: &[&str]) -> Result<Self>`                  | Project columns by name                 |
 | `fn limit(self, n: i32) -> Result<Self>`                                    | Set a row limit (enables `create_bucket_batch_scanner`; rejected by log scanners) |
-| `fn filter(self, predicate: Predicate) -> Result<Self>`                     | Push a predicate down to log scanners; whole batches are pruned by statistics, and returned batches can still hold non-matching rows (see [Filter Pushdown](example/filter-pushdown.md); rejected by `create_bucket_batch_scanner`) |
+| `fn filter(self, predicate: Predicate) -> Result<Self>`                     | Push a predicate down to log scanners; whole batches are pruned by statistics, and returned batches can still hold non-matching rows (see [Filter Pushdown](example/filter-pushdown.md); rejected by bounded and KV batch scanners) |
 | `fn create_log_scanner(self) -> Result<LogScanner>`                         | Create a record-based log scanner; on a primary-key table, subscribes to its CDC changelog (per-record `ChangeType`) |
 | `fn create_record_batch_log_scanner(self) -> Result<RecordBatchLogScanner>` | Create an Arrow batch-based log scanner (log tables only — no per-record change types) |
 | `fn create_bucket_batch_scanner(self, bucket: TableBucket) -> Result<LimitBatchScanner>` | Bounded scan of one bucket (requires `limit`; runs on first `next_batch`) |
+| `fn create_bucket_kv_scanner(self, bucket: TableBucket) -> Result<KvBatchScanner>` | Full current-state scan of one primary-key bucket |
+| `async fn create_kv_scanner(self) -> Result<KvSnapshotScanner>`             | Full current-state scan of every bucket, including all current partitions |
 
 ## `LogScanner`
 
@@ -253,6 +256,46 @@ server-deduplicated state); yields a single batch of at most `n` rows.
 | `async fn next_batch(&mut self) -> Result<Option<ScanBatch>>` | Rows on the first call, `None` after |
 | `async fn collect_all_batches(&mut self) -> Result<Vec<ScanBatch>>` | Drain into all batches         |
 | `fn bucket(&self) -> &TableBucket`                            | The scanned bucket                   |
+
+## `KvBatchScanner`
+
+Full current-state scan of one primary-key bucket via the `ScanKv` RPC. It
+returns one merged row per live primary key rather than changelog events.
+Projection is applied client-side. `limit` and filter pushdown are rejected.
+
+The server opens a RocksDB snapshot for the bucket on the first read and keeps
+that snapshot across continuation requests. At most one request is in flight.
+A polling timeout does not cancel or resend that request, so the scanner can be
+polled again without skipping or duplicating rows.
+
+| Method                                                                             | Description |
+|------------------------------------------------------------------------------------|-------------|
+| `async fn next_batch(&mut self) -> Result<Option<ScanBatch>>`                      | Wait for the next non-empty batch, or `None` at EOF |
+| `async fn next_batch_with_timeout(&mut self, timeout: Duration) -> Result<KvBatchReadOutcome>` | Return a batch, timeout, or completion while preserving the in-flight request |
+| `async fn collect_all_batches(&mut self) -> Result<Vec<ScanBatch>>`                | Drain the bucket snapshot |
+| `async fn close(&mut self) -> Result<()>`                                          | Best-effort close of an unfinished server scanner; later reads fail unless it was already drained |
+| `fn bucket(&self) -> &TableBucket`                                                 | The scanned bucket |
+| `fn snapshot_log_offset(&self) -> Option<i64>`                                     | Log high-watermark captured when the snapshot opened |
+
+`KvBatchReadOutcome` is `Batch(ScanBatch)`, `TimedOut`, or `Finished`.
+Continuation failures are terminal because blindly retrying after the server
+may have advanced its cursor could skip or duplicate rows. Start a new scanner
+to restart the bucket.
+
+## `KvSnapshotScanner`
+
+Whole-table primary-key scan. It captures the current partition list when
+created, then scans every `(partition, bucket)` sequentially. Only one
+server-side scanner is open at a time, avoiding one pinned RocksDB snapshot per
+bucket. Each bucket receives its own snapshot when that bucket is opened; this
+is not a single atomic snapshot across the whole table.
+
+| Method                                                                             | Description |
+|------------------------------------------------------------------------------------|-------------|
+| `async fn next_batch(&mut self) -> Result<Option<ScanBatch>>`                      | Read the next batch across all buckets |
+| `async fn next_batch_with_timeout(&mut self, timeout: Duration) -> Result<KvBatchReadOutcome>` | Poll the current bucket without losing its in-flight request |
+| `async fn collect_all_batches(&mut self) -> Result<Vec<ScanBatch>>`                | Drain all captured partitions and buckets |
+| `async fn close(&mut self) -> Result<()>`                                          | Close the active bucket and discard unopened buckets; later reads fail unless all buckets were drained |
 
 ## `ScanRecord`
 

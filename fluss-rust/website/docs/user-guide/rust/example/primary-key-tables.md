@@ -167,6 +167,34 @@ start, `subscribe` at a specific offset instead of `EARLIEST_OFFSET`.
 
 To fetch all rows sharing a common primary-key prefix (by choosing a bucket key that's a strict prefix of the primary key), see [Prefix Lookup](./prefix-lookup.md).
 
+## Full KV Scan
+
+To scan the merged current view of a primary-key table without supplying keys,
+create a KV scanner. The whole-table scanner captures the current partition
+list, then visits every `(partition, bucket)` sequentially.
+
+```rust
+let mut scanner = table.new_scan().create_kv_scanner().await?;
+
+while let Some(batch) = scanner.next_batch().await? {
+    println!(
+        "bucket={} rows={}",
+        batch.bucket(),
+        batch.batch().num_rows()
+    );
+}
+```
+
+Use `project` or `project_by_name` before `create_kv_scanner` to return only
+selected columns. Projection is performed client-side. Filter pushdown and
+`limit` are not supported by full KV scans.
+
+Each bucket is read from a server-side snapshot that remains stable across
+continuation RPCs. Buckets are opened lazily, so a whole-table scan is not one
+atomic point-in-time snapshot across every bucket. To scan one explicit bucket,
+including a bucket in a partitioned table, use `create_bucket_kv_scanner` with
+the corresponding `TableBucket`.
+
 ## Limit Scan
 
 To read up to `n` rows of a bucket's current state without supplying keys, use a batch scanner. The server returns the deduplicated current rows as Arrow batches, which is convenient for previews or DataFusion sources.

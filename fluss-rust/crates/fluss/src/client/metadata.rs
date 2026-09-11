@@ -502,10 +502,17 @@ impl Metadata {
 #[cfg(test)]
 impl Metadata {
     pub(crate) fn new_for_test(cluster: Arc<Cluster>) -> Self {
+        Self::new_for_test_with_connections(cluster, Arc::new(RpcClient::new()))
+    }
+
+    pub(crate) fn new_for_test_with_connections(
+        cluster: Arc<Cluster>,
+        connections: Arc<RpcClient>,
+    ) -> Self {
         let (cluster_version_tx, _) = watch::channel(0);
         Metadata {
             cluster: RwLock::new(cluster),
-            connections: Arc::new(RpcClient::new()),
+            connections,
             bootstrap: Arc::from(""),
             cluster_version_tx,
         }
