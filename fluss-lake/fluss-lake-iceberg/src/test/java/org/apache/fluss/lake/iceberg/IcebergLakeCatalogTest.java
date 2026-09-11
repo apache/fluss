@@ -20,7 +20,6 @@ package org.apache.fluss.lake.iceberg;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.InvalidAlterTableException;
-import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.exception.TableAlreadyExistException;
 import org.apache.fluss.exception.TableNotExistException;
 import org.apache.fluss.lake.iceberg.testutils.IcebergTestUtils;
@@ -46,7 +45,6 @@ import org.apache.iceberg.catalog.Namespace;
 import org.apache.iceberg.catalog.SupportsNamespaces;
 import org.apache.iceberg.catalog.TableIdentifier;
 import org.apache.iceberg.types.Types;
-import org.assertj.core.api.Assertions;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -267,14 +265,9 @@ class IcebergLakeCatalogTest {
 
         TablePath tablePath = TablePath.of(database, tableName);
 
-        assertThatThrownBy(
-                        () ->
-                                flussIcebergCatalog.createTable(
-                                        tablePath,
-                                        tableDescriptor,
-                                        new TestingLakeCatalogContext()))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("Iceberg format supports at most one bucket key");
+        // Multi-bucket-key tables should now create successfully
+        flussIcebergCatalog.createTable(
+                tablePath, tableDescriptor, new TestingLakeCatalogContext());
     }
 
     @Test
@@ -479,15 +472,9 @@ class IcebergLakeCatalogTest {
 
         TablePath tablePath = TablePath.of(database, tableName);
 
-        // Do not allow multiple bucket keys for log table
-        assertThatThrownBy(
-                        () ->
-                                flussIcebergCatalog.createTable(
-                                        tablePath,
-                                        tableDescriptor,
-                                        new TestingLakeCatalogContext()))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("Iceberg format supports at most one bucket key");
+        // Multi-bucket-key log tables should now create successfully
+        flussIcebergCatalog.createTable(
+                tablePath, tableDescriptor, new TestingLakeCatalogContext());
     }
 
     @ParameterizedTest
@@ -515,15 +502,9 @@ class IcebergLakeCatalogTest {
                         .property(ConfigOptions.TABLE_DATALAKE_FRESHNESS, Duration.ofMillis(500));
         tableDescriptor.partitionedBy(partitionKeys);
 
-        Assertions.assertThatThrownBy(
-                        () ->
-                                flussIcebergCatalog.createTable(
-                                        t1,
-                                        tableDescriptor.build(),
-                                        new TestingLakeCatalogContext()))
-                .isInstanceOf(InvalidTableException.class)
-                .hasMessage(
-                        "Partition key only support string type for iceberg currently. Column `c1` is not string type.");
+        // Non-string partition keys should now be supported via identity transform
+        flussIcebergCatalog.createTable(
+                t1, tableDescriptor.build(), new TestingLakeCatalogContext());
     }
 
     @Test
