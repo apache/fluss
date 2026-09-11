@@ -589,6 +589,16 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
       <td>The number of kv pre-write buffer truncate due to the error happened when writing cdc to log per second.</td>
       <td>Meter</td>
     </tr>
+     <tr>
+      <td>kvPreWriteBufferMemoryUsageBytes</td>
+      <td>Estimated total memory usage of the KV pre-write buffers across all KV tablets in this server (in bytes), including the key/value payload bytes and the per-entry object overhead. It is an approximation for observability, not an exact measurement.</td>
+      <td>Gauge</td>
+    </tr>
+     <tr>
+      <td>kvPreWriteBufferEntryCount</td>
+      <td>The number of entries buffered in the KV pre-write buffers across all KV tablets in this server.</td>
+      <td>Gauge</td>
+    </tr>
     <tr>
       <td>kvWalMemoryPoolUsage</td>
       <td>Memory currently allocated from the server-wide WAL memory pool for primary key tables in this server (in bytes). The pool capacity is configured by <code>server.buffer.memory-size</code>.</td>
