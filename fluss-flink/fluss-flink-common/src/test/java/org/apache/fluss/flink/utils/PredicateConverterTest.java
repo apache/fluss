@@ -72,6 +72,33 @@ public class PredicateConverterTest {
 
     private static final PredicateConverter CONVERTER = new PredicateConverter(BUILDER);
 
+    /**
+     * Stronger than toString equality: BETWEEN must evaluate against rows. The parameterized
+     * toString check can pass even when Flink {@code ValueLiteralExpression} nodes were stored as
+     * literals without {@code extractLiteral}.
+     */
+    @Test
+    public void testBetweenEvaluatesAgainstRow() {
+        FieldReferenceExpression longRefExpr =
+                new FieldReferenceExpression(
+                        "long1", DataTypes.BIGINT(), Integer.MAX_VALUE, Integer.MAX_VALUE);
+        CallExpression between =
+                CallExpression.permanent(
+                        BuiltInFunctionDefinitions.BETWEEN,
+                        Arrays.asList(
+                                longRefExpr,
+                                new ValueLiteralExpression(10),
+                                new ValueLiteralExpression(20)),
+                        DataTypes.BOOLEAN());
+
+        Predicate predicate = between.accept(CONVERTER);
+        assertThat(predicate.test(GenericRow.of(15L))).isTrue();
+        assertThat(predicate.test(GenericRow.of(10L))).isTrue();
+        assertThat(predicate.test(GenericRow.of(20L))).isTrue();
+        assertThat(predicate.test(GenericRow.of(9L))).isFalse();
+        assertThat(predicate.test(GenericRow.of(21L))).isFalse();
+    }
+
     @MethodSource("provideResolvedExpression")
     @ParameterizedTest
     public void testVisitAndAutoTypeInference(ResolvedExpression expression, Predicate expected) {
@@ -252,7 +279,7 @@ public class PredicateConverterTest {
                                 BuiltInFunctionDefinitions.BETWEEN,
                                 Arrays.asList(longRefExpr, intLitExpr, intLitExpr2),
                                 DataTypes.BOOLEAN()),
-                        BUILDER.between(0, 10, 20)));
+                        BUILDER.between(0, 10L, 20L)));
     }
 
     @MethodSource("provideLikeExpressions")
