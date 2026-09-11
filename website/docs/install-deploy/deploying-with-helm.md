@@ -465,6 +465,10 @@ making rotation fully hands-off.
 | `tablet.storage.enabled` | Enable persistent volume claims for TabletServer | `false` |
 | `tablet.storage.size` | Tablet persistent volume size | `1Gi` |
 | `tablet.storage.storageClass` | Tablet storage class name | `nil` (uses default) |
+| `tablet.storage.volumes` | Multi-disk volume list; takes precedence over `size`/`storageClass` | `[]` |
+| `tablet.storage.volumes[*].name` | Volume name; mounted at `/tmp/fluss/<name>` | Required |
+| `tablet.storage.volumes[*].size` | Persistent volume size for this disk | Required |
+| `tablet.storage.volumes[*].storageClass` | Storage class name for this disk | `nil` (uses default) |
 
 ### Resource Parameters
 
@@ -710,6 +714,40 @@ tablet:
     size: 20Gi
     storageClass: fast-ssd
 ```
+
+#### Multiple Disks per Tablet Server (JBOD)
+
+Tablet servers can spread data across multiple local disks via the `data.dirs`
+configuration. Declare one volume per disk under `tablet.storage.volumes`; each
+entry becomes its own PersistentVolumeClaim mounted at `/tmp/fluss/<name>`, and
+the chart renders `data.dirs` with all mount paths in `server.yaml`:
+
+```yaml
+tablet:
+  storage:
+    enabled: true
+    volumes:
+      - name: data-0
+        size: 100Gi
+        storageClass: fast-ssd
+      - name: data-1
+        size: 100Gi
+        storageClass: fast-ssd
+```
+
+When `volumes` is set it takes precedence over the single-disk `size` and
+`storageClass` keys, and `configurationOverrides` must not set `data.dirs`
+itself. The server ignores the default `data.dir` whenever `data.dirs` is
+configured.
+
+:::warning
+Kubernetes forbids changing the `volumeClaimTemplates` of an existing
+StatefulSet. To switch an existing release from the single-disk layout to
+`volumes` (or to change the volume list), delete the tablet StatefulSet while
+keeping its pods and claims (`kubectl delete statefulset tablet-server
+--cascade=orphan`) before upgrading, or install a fresh release. Data on the
+old single PVC is not migrated to the new volume layout automatically.
+:::
 
 Configure remote storage:
 
