@@ -147,12 +147,15 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -198,6 +201,7 @@ public class ReplicaManager implements ServerReconfigurable {
 
     private final TabletServerMetadataCache metadataCache;
     private final ExecutorService ioExecutor;
+    private final ExecutorService replicaTransitionExecutor;
     private final ProjectionPushdownCache projectionsCache = new ProjectionPushdownCache();
     private final Lock replicaStateChangeLock = new ReentrantLock();
 
@@ -261,6 +265,7 @@ public class ReplicaManager implements ServerReconfigurable {
             ScannerManager scannerManager,
             Clock clock,
             ExecutorService ioExecutor,
+            ExecutorService replicaTransitionExecutor,
             LocalDiskManager localDiskManager,
             @Nullable PluginManager pluginManager)
             throws IOException {
@@ -289,6 +294,7 @@ public class ReplicaManager implements ServerReconfigurable {
                 scannerManager,
                 clock,
                 ioExecutor,
+                replicaTransitionExecutor,
                 localDiskManager,
                 pluginManager);
     }
@@ -312,6 +318,7 @@ public class ReplicaManager implements ServerReconfigurable {
             ScannerManager scannerManager,
             Clock clock,
             ExecutorService ioExecutor,
+            ExecutorService replicaTransitionExecutor,
             LocalDiskManager localDiskManager,
             @Nullable PluginManager pluginManager)
             throws IOException {
@@ -363,6 +370,7 @@ public class ReplicaManager implements ServerReconfigurable {
         this.userMetrics = userMetrics;
         this.clock = clock;
         this.ioExecutor = ioExecutor;
+        this.replicaTransitionExecutor = replicaTransitionExecutor;
         this.minInSyncReplicas = conf.get(ConfigOptions.LOG_REPLICA_MIN_IN_SYNC_REPLICAS_NUMBER);
         this.scannerManager = checkNotNull(scannerManager, "scannerManager");
         // Historical lookup cache capacity currently uses only the first data volume.
@@ -587,12 +595,18 @@ public class ReplicaManager implements ServerReconfigurable {
         inLock(
                 replicaStateChangeLock,
                 () -> {
+                    Map<TableBucket, NotifyLeaderAndIsrData> dataByTableBucket =
+                            new LinkedHashMap<>();
+                    for (NotifyLeaderAndIsrData data : notifyLeaderAndIsrDataList) {
+                        dataByTableBucket.put(data.getTableBucket(), data);
+                    }
+
                     // check or apply coordinator epoch.
                     validateAndApplyCoordinatorEpoch(requestCoordinatorEpoch, "notifyLeaderAndIsr");
 
                     List<NotifyLeaderAndIsrData> replicasToBeLeader = new ArrayList<>();
                     List<NotifyLeaderAndIsrData> replicasToBeFollower = new ArrayList<>();
-                    for (NotifyLeaderAndIsrData data : notifyLeaderAndIsrDataList) {
+                    for (NotifyLeaderAndIsrData data : dataByTableBucket.values()) {
                         LOG.info(
                                 "Try to become leaderAndFollower for {} with isr {}, replicas: {}",
                                 data.getTableBucket(),
@@ -1448,29 +1462,61 @@ public class ReplicaManager implements ServerReconfigurable {
                         .map(NotifyLeaderAndIsrData::getTableBucket)
                         .collect(Collectors.toSet()));
 
+        List<CompletableFuture<NotifyLeaderAndIsrResultForBucket>> makeLeaderFutures =
+                new ArrayList<>(replicasToBeLeader.size());
         for (NotifyLeaderAndIsrData data : replicasToBeLeader) {
             TableBucket tb = data.getTableBucket();
             try {
                 Replica replica = getReplicaOrException(tb);
-                // register replica to remote log manager first.
-                remoteLogManager.registerReplica(replica);
-
-                // Load the latest lake progress before leader activation. Historical KV recovery
-                // requires its lake log end offset, while failures remain best effort for normal
-                // replicas.
-                if (replica.isDataLakeEnabled()) {
-                    updateWithLakeTableSnapshot(replica);
-                }
-                replica.makeLeader(data);
-
-                // start the remote log tiering tasks for leaders
-                remoteLogManager.startLogTiering(replica);
-                result.put(tb, new NotifyLeaderAndIsrResultForBucket(tb));
+                makeLeaderFutures.add(
+                        CompletableFuture.supplyAsync(
+                                () -> makeLeader(replica, data), replicaTransitionExecutor));
             } catch (Exception e) {
                 LOG.error("Error make replica {} to leader", tb, e);
                 result.put(
                         tb, new NotifyLeaderAndIsrResultForBucket(tb, ApiError.fromThrowable(e)));
             }
+        }
+
+        try {
+            CompletableFuture.allOf(
+                            makeLeaderFutures.toArray(
+                                    new CompletableFuture<?>[makeLeaderFutures.size()]))
+                    .get();
+        } catch (InterruptedException e) {
+            makeLeaderFutures.forEach(future -> future.cancel(false));
+            Thread.currentThread().interrupt();
+            throw new CompletionException(e);
+        } catch (ExecutionException e) {
+            throw new CompletionException(e.getCause());
+        }
+        for (CompletableFuture<NotifyLeaderAndIsrResultForBucket> future : makeLeaderFutures) {
+            NotifyLeaderAndIsrResultForBucket leaderResult = future.join();
+            result.put(leaderResult.getTableBucket(), leaderResult);
+        }
+    }
+
+    private NotifyLeaderAndIsrResultForBucket makeLeader(
+            Replica replica, NotifyLeaderAndIsrData data) {
+        TableBucket tb = data.getTableBucket();
+        try {
+            // register replica to remote log manager first.
+            remoteLogManager.registerReplica(replica);
+
+            // Load the latest lake progress before leader activation. Historical KV recovery
+            // requires its lake log end offset, while failures remain best effort for normal
+            // replicas.
+            if (replica.isDataLakeEnabled()) {
+                updateWithLakeTableSnapshot(replica);
+            }
+            replica.makeLeader(data);
+
+            // start the remote log tiering tasks for leaders
+            remoteLogManager.startLogTiering(replica);
+            return new NotifyLeaderAndIsrResultForBucket(tb);
+        } catch (Exception e) {
+            LOG.error("Error make replica {} to leader", tb, e);
+            return new NotifyLeaderAndIsrResultForBucket(tb, ApiError.fromThrowable(e));
         }
     }
 

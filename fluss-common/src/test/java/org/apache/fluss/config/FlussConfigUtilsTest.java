@@ -189,6 +189,14 @@ class FlussConfigUtilsTest {
                 .isInstanceOf(IllegalConfigurationException.class)
                 .hasMessageContaining(ConfigOptions.TABLET_SERVER_ID.key())
                 .hasMessageContaining("it must be greater than or equal 0");
+
+        conf.set(ConfigOptions.TABLET_SERVER_ID, 0);
+        conf.set(ConfigOptions.TABLET_SERVER_REPLICA_TRANSITION_THREAD_NUM, 0);
+        assertThatThrownBy(() -> validateTabletConfigs(conf))
+                .isInstanceOf(IllegalConfigurationException.class)
+                .hasMessageContaining(
+                        ConfigOptions.TABLET_SERVER_REPLICA_TRANSITION_THREAD_NUM.key())
+                .hasMessageContaining("must be greater than or equal 1");
     }
 
     @Test
