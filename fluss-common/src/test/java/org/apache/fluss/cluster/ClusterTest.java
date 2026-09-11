@@ -17,6 +17,7 @@
 
 package org.apache.fluss.cluster;
 
+import org.apache.fluss.exception.InvalidBucketRoutingException;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TableOrPartition;
@@ -196,7 +197,7 @@ class ClusterTest {
                         () ->
                                 clusterWithoutBucketCount.getBucketCountOrFallback(
                                         rescaledTableInfo, partitionId))
-                .isInstanceOf(IllegalStateException.class)
+                .isInstanceOf(InvalidBucketRoutingException.class)
                 .hasMessageContaining("bucketCountEpoch 1");
     }
 

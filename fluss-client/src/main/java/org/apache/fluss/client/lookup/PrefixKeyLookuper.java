@@ -20,6 +20,7 @@ package org.apache.fluss.client.lookup;
 import org.apache.fluss.bucketing.BucketingFunction;
 import org.apache.fluss.client.metadata.MetadataUpdater;
 import org.apache.fluss.client.table.getter.PartitionGetter;
+import org.apache.fluss.exception.InvalidBucketRoutingException;
 import org.apache.fluss.exception.PartitionNotExistException;
 import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.SchemaGetter;
@@ -174,7 +175,7 @@ class PrefixKeyLookuper extends AbstractLookuper implements Lookuper {
                 bucketCount = routing.getBucketCount();
             } catch (PartitionNotExistException e) {
                 return CompletableFuture.completedFuture(new LookupResult(Collections.emptyList()));
-            } catch (IllegalStateException e) {
+            } catch (InvalidBucketRoutingException e) {
                 CompletableFuture<LookupResult> failed = new CompletableFuture<>();
                 failed.completeExceptionally(e);
                 return failed;

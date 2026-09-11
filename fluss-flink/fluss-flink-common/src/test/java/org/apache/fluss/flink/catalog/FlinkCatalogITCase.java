@@ -30,6 +30,7 @@ import org.apache.fluss.exception.InvalidPartitionException;
 import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.flink.FlinkConnectorOptions;
 import org.apache.fluss.metadata.DataLakeFormat;
+import org.apache.fluss.metadata.PartitionInfo;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.row.encode.KvValueLayout;
@@ -311,6 +312,47 @@ abstract class FlinkCatalogITCase {
                 .rootCause()
                 .isInstanceOf(CatalogException.class)
                 .hasMessage("The option 'auto-increment.fields' is not supported to alter yet.");
+    }
+
+    @Test
+    void testAlterPartitionedTableBucketCount() throws Exception {
+        String tableName = "test_alter_partitioned_table_bucket_count";
+        ObjectPath objectPath = new ObjectPath(DEFAULT_DB, tableName);
+        TablePath tablePath = TablePath.of(DEFAULT_DB, tableName);
+        tEnv.executeSql(
+                "create table "
+                        + tableName
+                        + " (a int, pt string) partitioned by (pt) with ('bucket.num' = '2')");
+        tEnv.executeSql("alter table " + tableName + " add partition (pt = 'old')");
+
+        CatalogTable table = (CatalogTable) catalog.getTable(objectPath);
+        assertThat(table.getOptions()).containsEntry(BUCKET_NUMBER.key(), "2");
+
+        try (Connection conn =
+                ConnectionFactory.createConnection(FLUSS_CLUSTER_EXTENSION.getClientConfig())) {
+            Admin admin = conn.getAdmin();
+            assertThat(admin.listPartitionInfos(tablePath).get())
+                    .singleElement()
+                    .satisfies(partition -> assertThat(partition.getBucketCount()).isEqualTo(2));
+
+            tEnv.executeSql("alter table " + tableName + " set ('bucket.num' = '4')");
+
+            table = (CatalogTable) catalog.getTable(objectPath);
+            assertThat(table.getOptions()).containsEntry(BUCKET_NUMBER.key(), "4");
+
+            tEnv.executeSql("alter table " + tableName + " add partition (pt = 'new')");
+
+            Map<String, Integer> bucketCountByPartition =
+                    admin.listPartitionInfos(tablePath).get().stream()
+                            .collect(
+                                    Collectors.toMap(
+                                            PartitionInfo::getPartitionName,
+                                            PartitionInfo::getBucketCount));
+            assertThat(bucketCountByPartition)
+                    .hasSize(2)
+                    .containsEntry("old", 2)
+                    .containsEntry("new", 4);
+        }
     }
 
     @Test

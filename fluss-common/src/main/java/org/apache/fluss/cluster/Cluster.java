@@ -18,6 +18,7 @@
 package org.apache.fluss.cluster;
 
 import org.apache.fluss.annotation.Internal;
+import org.apache.fluss.exception.InvalidBucketRoutingException;
 import org.apache.fluss.exception.PartitionNotExistException;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
@@ -345,7 +346,7 @@ public final class Cluster {
         }
         long bucketCountEpoch = tableInfo.getBucketCountEpoch();
         if (bucketCountEpoch > 0) {
-            throw new IllegalStateException(
+            throw new InvalidBucketRoutingException(
                     "Routing bucket count is unavailable for "
                             + tableOrPartition
                             + " at bucketCountEpoch "

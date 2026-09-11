@@ -130,7 +130,12 @@ import static org.apache.fluss.testutils.common.CommonTestUtils.waitUntil;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-/** Test for {@link FlussAdmin}. */
+/**
+ * Integration tests for {@link FlussAdmin}.
+ *
+ * <p>Tests are split between this class and {@link FlussAdmin2ITCase} to stay within Checkstyle's
+ * 3000-line limit per file. Add new tests to {@link FlussAdmin2ITCase}.
+ */
 class FlussAdminITCase extends ClientToServerITCaseBase {
 
     protected static final TablePath DEFAULT_TABLE_PATH = TablePath.of("test_db", "person");

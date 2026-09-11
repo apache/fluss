@@ -464,41 +464,58 @@ public class FlussAdmin implements Admin {
             return CompletableFuture.completedFuture(partitionInfos);
         }
 
-        return CompletableFuture.supplyAsync(
-                () -> {
-                    TablePath tablePath = tableInfo.getTablePath();
-                    PhysicalTablePath historicalPartitionPath =
-                            PhysicalTablePath.of(tablePath, HISTORICAL_PARTITION_VALUE);
-                    try {
-                        Cluster refreshedCluster =
-                                sendMetadataRequestAndRebuildCluster(
-                                        readOnlyGateway,
-                                        true,
-                                        metadataUpdater.getCluster(),
-                                        Collections.singleton(tablePath),
-                                        Collections.singleton(historicalPartitionPath),
-                                        null);
-                        Optional<Long> historicalPartitionId =
-                                refreshedCluster.getPartitionId(historicalPartitionPath);
-                        if (historicalPartitionId.isPresent()) {
-                            partitionInfos.add(
-                                    new PartitionInfo(
-                                            historicalPartitionId.get(),
-                                            ResolvedPartitionSpec.fromPartitionName(
-                                                    tableInfo.getPartitionKeys(),
-                                                    HISTORICAL_PARTITION_VALUE),
-                                            null,
-                                            tableInfo.getNumBuckets()));
-                        }
-                        return partitionInfos;
-                    } catch (Exception e) {
-                        Throwable cause = ExceptionUtils.stripExecutionException(e);
-                        if (cause instanceof PartitionNotExistException) {
-                            return partitionInfos;
-                        }
-                        throw new FlussRuntimeException(
-                                "Failed to resolve historical partition for " + tablePath, cause);
+        TablePath tablePath = tableInfo.getTablePath();
+        PhysicalTablePath historicalPartitionPath =
+                PhysicalTablePath.of(tablePath, HISTORICAL_PARTITION_VALUE);
+        Cluster cluster = metadataUpdater.getCluster();
+        // A cached partition may belong to a previous table with the same name.
+        Optional<Long> historicalPartitionId =
+                cluster.getTableId(tablePath)
+                        .filter(tableId -> tableId == tableInfo.getTableId())
+                        .flatMap(ignored -> cluster.getPartitionId(historicalPartitionPath));
+        CompletableFuture<Optional<Long>> partitionIdFuture;
+        if (historicalPartitionId.isPresent()) {
+            partitionIdFuture = CompletableFuture.completedFuture(historicalPartitionId);
+        } else {
+            partitionIdFuture =
+                    CompletableFuture.supplyAsync(
+                            () -> {
+                                try {
+                                    Cluster refreshedCluster =
+                                            sendMetadataRequestAndRebuildCluster(
+                                                    readOnlyGateway,
+                                                    true,
+                                                    cluster,
+                                                    Collections.singleton(tablePath),
+                                                    Collections.singleton(historicalPartitionPath),
+                                                    null);
+                                    return refreshedCluster.getPartitionId(historicalPartitionPath);
+                                } catch (Exception e) {
+                                    Throwable cause = ExceptionUtils.stripExecutionException(e);
+                                    if (cause instanceof PartitionNotExistException) {
+                                        return Optional.empty();
+                                    }
+                                    throw new FlussRuntimeException(
+                                            "Failed to resolve historical partition for "
+                                                    + tablePath,
+                                            cause);
+                                }
+                            },
+                            refreshExecutor);
+        }
+        return partitionIdFuture.thenApply(
+                partitionId -> {
+                    if (partitionId.isPresent()) {
+                        partitionInfos.add(
+                                new PartitionInfo(
+                                        partitionId.get(),
+                                        ResolvedPartitionSpec.fromPartitionName(
+                                                tableInfo.getPartitionKeys(),
+                                                HISTORICAL_PARTITION_VALUE),
+                                        null,
+                                        tableInfo.getNumBuckets()));
                     }
+                    return partitionInfos;
                 });
     }
 

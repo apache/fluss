@@ -23,6 +23,7 @@ import org.apache.fluss.cluster.Cluster;
 import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.exception.InvalidBucketRoutingException;
 import org.apache.fluss.exception.PartitionNotExistException;
 import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.PhysicalTablePath;
@@ -171,7 +172,7 @@ class PrimaryKeyLookuperTest {
 
             assertThat(resultFuture).isCompletedExceptionally();
             assertThatThrownBy(() -> resultFuture.get(5, TimeUnit.SECONDS))
-                    .hasCauseInstanceOf(IllegalStateException.class)
+                    .hasCauseInstanceOf(InvalidBucketRoutingException.class)
                     .hasMessageContaining("Routing bucket count is unavailable")
                     .hasMessageContaining("bucketCountEpoch 1");
         } finally {
