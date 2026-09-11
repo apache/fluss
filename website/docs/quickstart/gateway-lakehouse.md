@@ -3,9 +3,11 @@ title: Ingesting HTTP Events into a Real-Time Lakehouse
 sidebar_position: 4
 ---
 
-This guide will help you ingest JSON records through Fluss Gateway, query them
-immediately from Fluss, and continuously tier the same table into Apache Paimon
-for historical analysis.
+This guide shows how an application can send JSON events to Fluss through
+the Gateway REST API and immediately read them back — without setting up
+a message queue, a Flink ingestion pipeline, or a separate Paimon writer.
+The same table serves both real-time queries and historical lakehouse
+analytics, with Paimon tiering handled automatically in the background.
 
 The example tracks orders flowing through a simple order management system.
 The application writes one HTTP request per batch, no Kafka producer, no
@@ -15,11 +17,11 @@ handles writing to Paimon continuously in the background.
 
 In this quickstart, you will:
 
-- start a local Fluss cluster, Fluss Gateway, Flink, Paimon, and RustFS;
-- create a lake-enabled Fluss table through the Gateway REST API;
-- send JSON order records over HTTP;
-- query newly written rows immediately through Flink SQL and Union Read;
-- verify that records are continuously tiered to Paimon.
+- spin up Fluss, Fluss Gateway, Flink, Paimon, and RustFS with Docker Compose;
+- create a lake-enabled table through the Gateway REST API;
+- write JSON order records over HTTP;
+- read the records back immediately through Flink SQL before any tiering occurs;
+- confirm that the rows are continuously tiered into Paimon.
 
 :::caution Developer Preview - Fluss 1.0 (unreleased)
 Fluss Gateway is a preview feature in Fluss 1.0, which has not yet been
@@ -474,16 +476,17 @@ exit;
 
 ## What This Quickstart Demonstrates
 
-For this use case, the application does not need to create or operate:
+The application in this quickstart never touches Kafka, Flink, or Paimon directly.
+It only makes HTTP requests to the Gateway. Specifically, there is no need for:
 
-- a Kafka topic and producer;
-- a Flink ingestion job;
+- a Kafka topic or producer;
+- a dedicated Flink ingestion job;
 - a Paimon writer;
-- separate schemas for the streaming and lake tables.
+- separate table definitions for the streaming and lake layers.
 
-The reusable Lakehouse Tiering Service still runs as a Flink job, but it is
-a shared infrastructure for all lake-enabled Fluss tables rather than
-application-specific ingestion code. The application only speaks HTTP.
+The Lakehouse Tiering Service does run on Flink, but as shared infrastructure
+that serves all Lake-enabled Fluss tables — not as code the application owns
+or operates.
 
 ## Preview limitations
 
