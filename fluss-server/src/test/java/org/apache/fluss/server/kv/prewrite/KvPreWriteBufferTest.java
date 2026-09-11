@@ -455,6 +455,36 @@ class KvPreWriteBufferTest {
     }
 
     @Test
+    void testEstimatedMemoryUsage() {
+        KvPreWriteBuffer buffer = new KvPreWriteBuffer(TestingMetricGroups.TABLET_SERVER_METRICS);
+
+        assertThat(buffer.memoryUsageBytes()).isEqualTo(0L);
+        assertThat(buffer.entryCount()).isEqualTo(0);
+
+        // +key1(10 bytes), +key2(11 bytes), -key3(4 bytes): 25 payload bytes in total
+        bufferInsert(buffer, "key1", "value1", 1);
+        bufferInsert(buffer, "key2", "value22", 2);
+        bufferDelete(buffer, "key3", 3);
+        long payloadBytes = 25;
+
+        // the estimation covers the payload bytes plus the per-entry object overhead
+        assertThat(buffer.memoryUsageBytes()).isGreaterThan(payloadBytes);
+        assertThat(buffer.entryCount()).isEqualTo(3);
+
+        // flushing all entries releases the whole accounted usage
+        flushBuffer(buffer, Long.MAX_VALUE);
+        assertThat(buffer.memoryUsageBytes()).isEqualTo(0L);
+        assertThat(buffer.entryCount()).isEqualTo(0);
+
+        // truncating entries also releases their accounted usage
+        bufferInsert(buffer, "key1", "value1", 4);
+        assertThat(buffer.memoryUsageBytes()).isPositive();
+        buffer.truncateTo(4, TruncateReason.ERROR);
+        assertThat(buffer.memoryUsageBytes()).isEqualTo(0L);
+        assertThat(buffer.entryCount()).isEqualTo(0);
+    }
+
+    @Test
     void testCompleteFlushDetachesFlushedEntriesFromPreviousChain() {
         KvPreWriteBuffer buffer = new KvPreWriteBuffer(TestingMetricGroups.TABLET_SERVER_METRICS);
         KvPreWriteBuffer.Key key = toKey("k");

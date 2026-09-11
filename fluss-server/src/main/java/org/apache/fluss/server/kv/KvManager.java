@@ -227,6 +227,15 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
                     this::getSharedBlockCachePinnedUsage,
                     conf.get(ConfigOptions.KV_SHARED_BLOCK_CACHE_SIZE).getBytes());
         }
+        tabletServerMetricGroup.setPreWriteBufferMetrics(
+                () ->
+                        currentKvs.values().stream()
+                                .mapToLong(KvTablet::kvPreWriteBufferMemoryUsageBytes)
+                                .sum(),
+                () ->
+                        currentKvs.values().stream()
+                                .mapToInt(KvTablet::kvPreWriteBufferEntryCount)
+                                .sum());
     }
 
     private static RateLimiter createSharedRateLimiter(Configuration conf) {

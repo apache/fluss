@@ -839,6 +839,16 @@ public final class KvTablet {
         return inReadLock(kvLock, () -> flushState);
     }
 
+    /** Returns an instantaneous estimate of this kv tablet's pre-write buffer memory usage. */
+    public long kvPreWriteBufferMemoryUsageBytes() {
+        return kvPreWriteBuffer.memoryUsageBytes();
+    }
+
+    /** Returns the number of entries held in this kv tablet's pre-write buffer. */
+    public int kvPreWriteBufferEntryCount() {
+        return kvPreWriteBuffer.entryCount();
+    }
+
     @VisibleForTesting
     void setFlushState(FlushState state) {
         inWriteLock(kvLock, () -> flushState = state);
