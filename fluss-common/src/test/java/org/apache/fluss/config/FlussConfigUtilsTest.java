@@ -213,6 +213,79 @@ class FlussConfigUtilsTest {
 
         conf.set(ConfigOptions.LOG_RETENTION_CHECK_INTERVAL, Duration.ofMillis(1));
         validateCoordinatorConfigs(conf);
+
+        conf.setString(ConfigOptions.LOG_RETENTION_CHECK_INTERVAL.key(), Long.MAX_VALUE + "s");
+        assertThatThrownBy(() -> validateCoordinatorConfigs(conf))
+                .isInstanceOf(IllegalConfigurationException.class)
+                .hasMessageContaining("must be representable in milliseconds")
+                .hasCauseInstanceOf(ArithmeticException.class);
+    }
+
+    @Test
+    void testValidateLogSegmentMaxTime() {
+        Configuration conf = new Configuration();
+        conf.set(ConfigOptions.REMOTE_DATA_DIR, "s3://bucket/path");
+
+        assertThat(conf.get(ConfigOptions.LOG_SEGMENT_MAX_TIME)).isEqualTo(Duration.ZERO);
+        validateCoordinatorConfigs(conf);
+
+        conf.set(ConfigOptions.LOG_SEGMENT_MAX_TIME, Duration.ofMillis(-1));
+        assertThatThrownBy(() -> validateCoordinatorConfigs(conf))
+                .isInstanceOf(IllegalConfigurationException.class)
+                .hasMessageContaining(ConfigOptions.LOG_SEGMENT_MAX_TIME.key())
+                .hasMessageContaining("must be 0 or greater than or equal 1 ms");
+
+        conf.set(ConfigOptions.LOG_SEGMENT_MAX_TIME, Duration.ofNanos(1));
+        assertThatThrownBy(() -> validateCoordinatorConfigs(conf))
+                .isInstanceOf(IllegalConfigurationException.class)
+                .hasMessageContaining(ConfigOptions.LOG_SEGMENT_MAX_TIME.key());
+
+        conf.setString(ConfigOptions.LOG_SEGMENT_MAX_TIME.key(), Long.MAX_VALUE + "s");
+        assertThatThrownBy(() -> validateCoordinatorConfigs(conf))
+                .isInstanceOf(IllegalConfigurationException.class)
+                .hasMessageContaining("must be representable in milliseconds")
+                .hasCauseInstanceOf(ArithmeticException.class);
+
+        conf.set(ConfigOptions.LOG_SEGMENT_MAX_TIME, Duration.ofMillis(1));
+        validateCoordinatorConfigs(conf);
+
+        conf.setString(ConfigOptions.LOG_SEGMENT_MAX_TIME.key(), Long.MAX_VALUE + "ms");
+        validateCoordinatorConfigs(conf);
+    }
+
+    @Test
+    void testValidateLogSegmentMaxTimeJitter() {
+        Configuration conf = new Configuration();
+        conf.set(ConfigOptions.REMOTE_DATA_DIR, "s3://bucket/path");
+
+        assertThat(conf.get(ConfigOptions.LOG_SEGMENT_MAX_TIME_JITTER)).isEqualTo(Duration.ZERO);
+        validateCoordinatorConfigs(conf);
+
+        conf.set(ConfigOptions.LOG_SEGMENT_MAX_TIME_JITTER, Duration.ofMillis(-1));
+        assertThatThrownBy(() -> validateCoordinatorConfigs(conf))
+                .isInstanceOf(IllegalConfigurationException.class)
+                .hasMessageContaining(ConfigOptions.LOG_SEGMENT_MAX_TIME_JITTER.key())
+                .hasMessageContaining("must be 0 or greater than or equal 1 ms");
+
+        conf.set(ConfigOptions.LOG_SEGMENT_MAX_TIME_JITTER, Duration.ofNanos(1));
+        assertThatThrownBy(() -> validateCoordinatorConfigs(conf))
+                .isInstanceOf(IllegalConfigurationException.class)
+                .hasMessageContaining(ConfigOptions.LOG_SEGMENT_MAX_TIME_JITTER.key());
+
+        conf.setString(ConfigOptions.LOG_SEGMENT_MAX_TIME_JITTER.key(), Long.MAX_VALUE + "s");
+        assertThatThrownBy(() -> validateCoordinatorConfigs(conf))
+                .isInstanceOf(IllegalConfigurationException.class)
+                .hasMessageContaining("must be representable in milliseconds")
+                .hasCauseInstanceOf(ArithmeticException.class);
+
+        conf.set(ConfigOptions.LOG_SEGMENT_MAX_TIME_JITTER, Duration.ofMillis(1));
+        assertThatThrownBy(() -> validateCoordinatorConfigs(conf))
+                .isInstanceOf(IllegalConfigurationException.class)
+                .hasMessageContaining(ConfigOptions.LOG_SEGMENT_MAX_TIME_JITTER.key())
+                .hasMessageContaining(ConfigOptions.LOG_SEGMENT_MAX_TIME.key());
+
+        conf.set(ConfigOptions.LOG_SEGMENT_MAX_TIME, Duration.ofMillis(10));
+        validateCoordinatorConfigs(conf);
     }
 
     @Test

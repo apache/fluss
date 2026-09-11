@@ -44,7 +44,7 @@ public class LogTestUtils {
         LazyIndex<TimeIndex> timeIdx =
                 LazyIndex.forTime(FlussPaths.timeIndexFile(dataDir, offset), offset, 1500);
         return new LogSegment(
-                LogFormat.ARROW, fileLogRecords, idx, timeIdx, offset, indexIntervalBytes);
+                LogFormat.ARROW, fileLogRecords, idx, timeIdx, offset, indexIntervalBytes, 0L);
     }
 
     public static void writeNonsenseToFile(File fileName, long position, int size)
