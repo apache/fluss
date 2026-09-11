@@ -87,11 +87,13 @@ public class WriterMetricGroup extends AbstractMetricGroup {
         bytesPerBatch =
                 histogram(
                         MetricNames.WRITER_BYTES_PER_BATCH,
-                        new DescriptiveStatisticsHistogram(WINDOW_SIZE));
+                        new DescriptiveStatisticsHistogram(
+                                WINDOW_SIZE, DescriptiveStatisticsHistogram.DEFAULT_MAX_AGE));
         recordPerBatch =
                 histogram(
                         MetricNames.WRITER_RECORDS_PER_BATCH,
-                        new DescriptiveStatisticsHistogram(WINDOW_SIZE));
+                        new DescriptiveStatisticsHistogram(
+                                WINDOW_SIZE, DescriptiveStatisticsHistogram.DEFAULT_MAX_AGE));
     }
 
     public void setBatchQueueTimeMs(long batchQueueTimeMs) {

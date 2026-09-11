@@ -148,23 +148,28 @@ public class RequestsMetrics {
             requestBytes =
                     metricGroup.histogram(
                             MetricNames.REQUEST_BYTES,
-                            new DescriptiveStatisticsHistogram(WINDOW_SIZE));
+                            new DescriptiveStatisticsHistogram(
+                                    WINDOW_SIZE, DescriptiveStatisticsHistogram.DEFAULT_MAX_AGE));
             requestQueueTimeMs =
                     metricGroup.histogram(
                             MetricNames.REQUEST_QUEUE_TIME_MS,
-                            new DescriptiveStatisticsHistogram(WINDOW_SIZE));
+                            new DescriptiveStatisticsHistogram(
+                                    WINDOW_SIZE, DescriptiveStatisticsHistogram.DEFAULT_MAX_AGE));
             requestProcessTimeMs =
                     metricGroup.histogram(
                             MetricNames.REQUEST_PROCESS_TIME_MS,
-                            new DescriptiveStatisticsHistogram(WINDOW_SIZE));
+                            new DescriptiveStatisticsHistogram(
+                                    WINDOW_SIZE, DescriptiveStatisticsHistogram.DEFAULT_MAX_AGE));
             responseSendTimeMs =
                     metricGroup.histogram(
                             MetricNames.RESPONSE_SEND_TIME_MS,
-                            new DescriptiveStatisticsHistogram(WINDOW_SIZE));
+                            new DescriptiveStatisticsHistogram(
+                                    WINDOW_SIZE, DescriptiveStatisticsHistogram.DEFAULT_MAX_AGE));
             totalTimeMs =
                     metricGroup.histogram(
                             MetricNames.REQUEST_TOTAL_TIME_MS,
-                            new DescriptiveStatisticsHistogram(WINDOW_SIZE));
+                            new DescriptiveStatisticsHistogram(
+                                    WINDOW_SIZE, DescriptiveStatisticsHistogram.DEFAULT_MAX_AGE));
         }
 
         public Counter getRequestsCount() {
