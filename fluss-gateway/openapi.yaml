@@ -981,11 +981,15 @@ components:
           description: |-
             Columns targeted by every entry in this batch. KV tables only.
 
-            Every primary-key column must be included, and every non-primary-key,
-            non-auto-increment column in the table must be nullable. Missing or explicit-null nullable
-            targets are written as null; untargeted columns are preserved. Deletes require only
-            primary-key values and clear the targeted non-key columns; the row is removed when all
-            non-key columns become null.
+            Every primary-key column must be included, and every column omitted from the target
+            columns must be nullable. A NOT NULL target column must be present with a non-null value
+            in every upsert row. Missing or explicit-null nullable targets are written as null, and
+            untargeted columns are preserved. Deletes require only primary-key values and clear the
+            targeted non-key columns, so Fluss rejects a delete that would null a NOT NULL target
+            column. The row is removed when all non-key columns become null. On a table with an
+            auto-increment column a NOT NULL target column outside the primary key is rejected
+            outright, because the auto-increment column is always set and the row can never be
+            removed, so such a delete could never succeed.
           items:
             type: string
           minItems: 1
