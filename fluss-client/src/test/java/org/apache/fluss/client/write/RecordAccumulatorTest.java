@@ -628,12 +628,14 @@ class RecordAccumulatorTest {
                     (bucket, offset, exception) -> completedFuture.complete(exception),
                     cluster,
                     tb1.getBucket(),
+                    DATA1_TABLE_INFO.getNumBuckets(),
                     false);
             accum.append(
                     createRecord(row),
                     (bucket, offset, exception) -> abortedFuture.complete(exception),
                     cluster,
                     tb2.getBucket(),
+                    DATA1_TABLE_INFO.getNumBuckets(),
                     false);
 
             List<ReadyWriteBatch> batches =
