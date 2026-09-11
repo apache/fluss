@@ -42,6 +42,8 @@ gpg:                using RSA key E2C45417BED5C104154F341085BACB5AEFAE3202
 gpg: Good signature from "Jark Wu (CODE SIGNING KEY) <jark@apache.org>"
 ```
 
+Verify that the signing key fingerprint is listed in `KEYS`.
+
 ## Verifying checksums
 
 Next, verify all the checksums:
@@ -49,6 +51,8 @@ Next, verify all the checksums:
 ```bash
 shasum -a 512 --check ./*.sha512
 ```
+
+On Linux, use `sha512sum --check ./*.sha512` if `shasum` is unavailable.
 
 If the verification is successful, you will see a message like this:
 
@@ -60,7 +64,7 @@ fluss-1.0.0-src.tgz: OK
 
 ## Verifying build
 
-Unzip the source release archive (`fluss-1.0.0-src.tgz`), and verify that the source release builds correctly (may with different Java version and Maven version), you can run the following commands:
+Extract `fluss-1.0.0-src.tgz` and verify that it builds correctly:
 
 ```bash
 mvn clean package -DskipTests
@@ -75,7 +79,7 @@ cargo +1.88.0 build --locked --release --manifest-path fluss-gateway/Cargo.toml 
 
 ## Verifying LICENSE/NOTICE
 
-Unzip the source release archive, and verify that:
+Extract the source release archive and verify that:
 
 1. Check the LICENSE and NOTICE files are correct.
 2. All files have ASF license headers if necessary.
