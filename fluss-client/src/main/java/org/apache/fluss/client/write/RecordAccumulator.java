@@ -66,6 +66,7 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.apache.fluss.record.LogRecordBatchFormat.NO_BATCH_SEQUENCE;
@@ -116,7 +117,7 @@ public final class RecordAccumulator {
     private final Object resourcesLock = new Object();
 
     @GuardedBy("resourcesLock")
-    private boolean resourcesDestroyed;
+    private final AtomicBoolean resourcesDestroyed = new AtomicBoolean(false);
 
     /** The pool of lazily created arrow {@link ArrowWriter}s for arrow log write batch. */
     private final ArrowWriterPool arrowWriterPool;
@@ -634,7 +635,7 @@ public final class RecordAccumulator {
      */
     public void deallocate(WriteBatch batch) {
         synchronized (resourcesLock) {
-            if (incomplete.removeIfPresent(batch) && !resourcesDestroyed) {
+            if (incomplete.removeIfPresent(batch) && !resourcesDestroyed.get()) {
                 writerBufferPool.returnAll(batch.pooledMemorySegments());
             }
         }
@@ -1494,20 +1495,16 @@ public final class RecordAccumulator {
     @VisibleForTesting
     public void destroyResources() {
         synchronized (resourcesLock) {
-            if (resourcesDestroyed) {
+            if (resourcesDestroyed.get()) {
                 return;
             }
-            resourcesDestroyed = true;
+            resourcesDestroyed.compareAndSet(false, true);
             writerBufferPool.close();
             arrowWriterPool.close();
             bufferAllocator.close();
             chunkedFactory.close();
         }
         diskWriteBackoffDeadlinesNanos.clear();
-        writerBufferPool.close();
-        arrowWriterPool.close();
-        bufferAllocator.close();
-        chunkedFactory.close();
     }
 
     /** Per table bucket and write batches. */
