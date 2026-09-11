@@ -891,12 +891,17 @@ public class ClientRpcMessageUtils {
     }
 
     public static ClusterHealth toClusterHealth(GetClusterHealthResponse resp) {
+        boolean servedByLeader = !resp.hasIsLeader() || resp.isIsLeader();
+        boolean leaderElected =
+                servedByLeader || (resp.hasLeaderElected() && resp.isLeaderElected());
         return new ClusterHealth(
                 resp.getNumReplicas(),
                 resp.getInSyncReplicas(),
                 resp.getNumLeaderReplicas(),
                 resp.getActiveLeaderReplicas(),
-                toClusterHealthStatus(resp.getStatus()));
+                toClusterHealthStatus(resp.getStatus()),
+                servedByLeader,
+                leaderElected);
     }
 
     private static ClusterHealthStatus toClusterHealthStatus(int pbStatus) {

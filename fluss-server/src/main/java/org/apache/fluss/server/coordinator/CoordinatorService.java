@@ -1604,10 +1604,31 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
             authorizer.authorize(currentSession(), OperationType.DESCRIBE, Resource.cluster());
         }
 
+        if (!isLeader()) {
+            // A standby has no CoordinatorContext (the event processor is leader-only), so it
+            // answers from its own election state.
+            return coordinatorLeaderElection
+                    .isLeaderElected()
+                    .thenApply(CoordinatorService::computeStandbyClusterHealth);
+        }
+
         AccessContextEvent<GetClusterHealthResponse> event =
-                new AccessContextEvent<>(CoordinatorService::computeClusterHealth);
+                new AccessContextEvent<>(
+                        ctx -> computeClusterHealth(ctx).setIsLeader(true).setLeaderElected(true));
         eventManagerSupplier.get().put(event);
         return event.getResultFuture();
+    }
+
+    private static GetClusterHealthResponse computeStandbyClusterHealth(boolean leaderElected) {
+        GetClusterHealthResponse response = new GetClusterHealthResponse();
+        response.setNumReplicas(0);
+        response.setInSyncReplicas(0);
+        response.setNumLeaderReplicas(0);
+        response.setActiveLeaderReplicas(0);
+        response.setStatus(3); // PbClusterHealthStatus.UNKNOWN
+        response.setIsLeader(false);
+        response.setLeaderElected(leaderElected);
+        return response;
     }
 
     @VisibleForTesting

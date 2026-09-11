@@ -70,6 +70,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
 import static org.apache.fluss.cluster.rebalance.RebalanceStatus.COMPLETED;
@@ -123,6 +125,7 @@ class ZooKeeperClientTest {
         // try to get leader address, should return empty since node leader address stored in
         // zk
         assertThat(zookeeperClient.getCoordinatorLeaderAddress()).isEmpty();
+        assertThat(zookeeperClient.getCoordinatorLeaderAddressAsync().join()).isEmpty();
         CoordinatorAddress coordinatorAddress =
                 new CoordinatorAddress(
                         "2", Endpoint.fromListenersString("CLIENT://localhost1:10012"));
@@ -131,6 +134,24 @@ class ZooKeeperClientTest {
         // check get leader address
         CoordinatorAddress gottenAddress = zookeeperClient.getCoordinatorLeaderAddress().get();
         assertThat(gottenAddress).isEqualTo(coordinatorAddress);
+        assertThat(zookeeperClient.getCoordinatorLeaderAddressAsync().join())
+                .contains(coordinatorAddress);
+    }
+
+    @Test
+    void testGetCoordinatorLeaderAddressAsyncFailsFastWithoutInflightPermit() throws Exception {
+        Configuration conf = new Configuration();
+        conf.set(ConfigOptions.REMOTE_DATA_DIR, remoteDataDir);
+        conf.set(ConfigOptions.ZOOKEEPER_MAX_INFLIGHT_REQUESTS, 0);
+        try (ZooKeeperClient noPermitClient =
+                ZooKeeperTestUtils.createZooKeeperClient(
+                        conf,
+                        ZOO_KEEPER_EXTENSION_WRAPPER.getCustomExtension().getConnectString(),
+                        NOPErrorHandler.INSTANCE)) {
+            CompletableFuture<CompletableFuture<Optional<CoordinatorAddress>>> call =
+                    CompletableFuture.supplyAsync(noPermitClient::getCoordinatorLeaderAddressAsync);
+            assertThat(call.get(10, TimeUnit.SECONDS)).isCompletedExceptionally();
+        }
     }
 
     @Test

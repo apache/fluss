@@ -17,6 +17,8 @@
 
 package org.apache.fluss.client.utils;
 
+import org.apache.fluss.client.admin.ClusterHealth;
+import org.apache.fluss.client.admin.ClusterHealthStatus;
 import org.apache.fluss.client.write.KvWriteBatch;
 import org.apache.fluss.client.write.ReadyWriteBatch;
 import org.apache.fluss.memory.MemorySegment;
@@ -24,6 +26,7 @@ import org.apache.fluss.memory.PreAllocatedPagedOutputView;
 import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.rpc.messages.GetClusterHealthResponse;
 import org.apache.fluss.rpc.messages.PutKvRequest;
 import org.apache.fluss.rpc.protocol.MergeMode;
 
@@ -39,11 +42,7 @@ import static org.apache.fluss.record.TestData.DATA1_TABLE_PATH_PK;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-/**
- * Tests for {@link ClientRpcMessageUtils}.
- *
- * <p>Focuses on MergeMode consistency validation in makePutKvRequest.
- */
+/** Tests for {@link ClientRpcMessageUtils}. */
 class ClientRpcMessageUtilsTest {
 
     private static final long TABLE_ID = DATA1_TABLE_ID_PK;
@@ -124,6 +123,38 @@ class ClientRpcMessageUtilsTest {
                 ClientRpcMessageUtils.makePutKvRequest(TABLE_ID, ACKS, TIMEOUT_MS, readyBatches);
 
         assertThat(request.getAggMode()).isEqualTo(MergeMode.OVERWRITE.getProtoValue());
+    }
+
+    @Test
+    void testToClusterHealthRoleFields() {
+        // a response without the role fields comes from a leader that predates them
+        ClusterHealth legacy = ClientRpcMessageUtils.toClusterHealth(clusterHealthResponse(0));
+        assertThat(legacy.isServedByLeader()).isTrue();
+        assertThat(legacy.isLeaderElected()).isTrue();
+
+        // a standby answer carries both fields
+        ClusterHealth standby =
+                ClientRpcMessageUtils.toClusterHealth(
+                        clusterHealthResponse(3).setIsLeader(false).setLeaderElected(true));
+        assertThat(standby.getStatus()).isEqualTo(ClusterHealthStatus.UNKNOWN);
+        assertThat(standby.isServedByLeader()).isFalse();
+        assertThat(standby.isLeaderElected()).isTrue();
+
+        // a leader-served response always means an elected leader, whatever the field says
+        ClusterHealth leader =
+                ClientRpcMessageUtils.toClusterHealth(
+                        clusterHealthResponse(0).setIsLeader(true).setLeaderElected(false));
+        assertThat(leader.isServedByLeader()).isTrue();
+        assertThat(leader.isLeaderElected()).isTrue();
+    }
+
+    private static GetClusterHealthResponse clusterHealthResponse(int status) {
+        return new GetClusterHealthResponse()
+                .setNumReplicas(0)
+                .setInSyncReplicas(0)
+                .setNumLeaderReplicas(0)
+                .setActiveLeaderReplicas(0)
+                .setStatus(status);
     }
 
     private KvWriteBatch createKvWriteBatch(int bucketId, MergeMode mergeMode) throws Exception {

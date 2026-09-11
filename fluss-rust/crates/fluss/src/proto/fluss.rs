@@ -1065,6 +1065,10 @@ pub struct GetClusterHealthResponse {
     /// PbClusterHealthStatus: GREEN=0, YELLOW=1, RED=2, UNKNOWN=3
     #[prost(int32, required, tag = "5")]
     pub status: i32,
+    #[prost(bool, optional, tag = "6")]
+    pub is_leader: ::core::option::Option<bool>,
+    #[prost(bool, optional, tag = "7")]
+    pub leader_elected: ::core::option::Option<bool>,
 }
 /// --------------- Inner classes ----------------
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]

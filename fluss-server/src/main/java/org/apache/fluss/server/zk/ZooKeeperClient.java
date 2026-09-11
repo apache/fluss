@@ -102,6 +102,7 @@ import org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.CreateMode;
 import org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.KeeperException;
 import org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.data.Stat;
 import org.apache.fluss.utils.ExceptionUtils;
+import org.apache.fluss.utils.concurrent.FutureUtils;
 import org.apache.fluss.utils.types.Tuple2;
 
 import org.slf4j.Logger;
@@ -123,6 +124,7 @@ import java.util.OptionalLong;
 import java.util.Set;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Semaphore;
@@ -317,6 +319,52 @@ public class ZooKeeperClient implements AutoCloseable {
                 data ->
                         // maybe an empty node when a leader is elected but not registered
                         data.length == 0 ? null : ZkData.CoordinatorLeaderZNode.decode(data));
+    }
+
+    /**
+     * Asynchronous {@link #getCoordinatorLeaderAddress()}: the same result (an empty node yields an
+     * empty address), but the read and its retries run on Curator's background thread, so the
+     * caller is never blocked while ZooKeeper is unreachable. Admission is non-blocking too: when
+     * every in-flight permit is taken, the returned future fails at once instead of parking the
+     * caller.
+     */
+    public CompletableFuture<Optional<CoordinatorAddress>> getCoordinatorLeaderAddressAsync() {
+        String path = ZkData.CoordinatorLeaderZNode.path();
+        // This read serves readiness probes on an RPC worker, so it must not block on a permit
+        // while a ZooKeeper outage holds all of them; the caller treats the failure as "unknown".
+        if (!inFlightRequests.tryAcquire()) {
+            return FutureUtils.completedExceptionally(
+                    new IllegalStateException(
+                            "All ZooKeeper in-flight request permits are taken, skipping read of "
+                                    + path));
+        }
+        CompletableFuture<List<ZkGetDataResponse>> future = new CompletableFuture<>();
+        try {
+            zkClient.getData()
+                    .inBackground(
+                            createBackgroundCallback(
+                                    Collections.singletonList(new ZkGetDataRequest(path)),
+                                    ZkGetDataResponse::create,
+                                    future))
+                    .forPath(path);
+        } catch (Exception e) {
+            inFlightRequests.release();
+            future.completeExceptionally(e);
+        }
+        return future.thenApply(
+                responses -> {
+                    ZkGetDataResponse response = responses.get(0);
+                    if (response.getResultCode() == KeeperException.Code.NONODE) {
+                        return Optional.empty();
+                    }
+                    Optional<KeeperException> error = response.resultException();
+                    if (error.isPresent()) {
+                        throw new CompletionException(error.get());
+                    }
+                    return Optional.ofNullable(response.getData())
+                            .filter(data -> data.length > 0)
+                            .map(data -> ZkData.CoordinatorLeaderZNode.decode(data));
+                });
     }
 
     /** Gets the list of coordinator server Ids. */
