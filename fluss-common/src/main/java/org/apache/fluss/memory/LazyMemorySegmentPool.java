@@ -64,7 +64,7 @@ public class LazyMemorySegmentPool implements MemorySegmentPool, Closeable {
     @GuardedBy("lock")
     private boolean closed;
 
-    private int pageUsage;
+    private volatile int pageUsage;
 
     @VisibleForTesting
     LazyMemorySegmentPool(
@@ -244,7 +244,7 @@ public class LazyMemorySegmentPool implements MemorySegmentPool, Closeable {
 
     /** Returns the number of pages currently allocated to callers. */
     public int usedPages() {
-        return inLock(lock, () -> pageUsage);
+        return pageUsage;
     }
 
     @Override
@@ -269,7 +269,6 @@ public class LazyMemorySegmentPool implements MemorySegmentPool, Closeable {
         }
     }
 
-    /** Returns the number of threads currently blocked waiting for pages. */
     public int queued() {
         return inLock(lock, waiters::size);
     }

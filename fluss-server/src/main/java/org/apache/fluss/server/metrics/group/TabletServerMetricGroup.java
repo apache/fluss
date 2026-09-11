@@ -17,7 +17,6 @@
 
 package org.apache.fluss.server.metrics.group;
 
-import org.apache.fluss.memory.LazyMemorySegmentPool;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TablePath;
@@ -220,13 +219,12 @@ public class TabletServerMetricGroup extends AbstractMetricGroup {
      * Registers gauges for the server-wide WAL memory pool used by primary key tables. Called once
      * by KvManager when creating the server buffer pool.
      *
-     * @param walMemoryPool the server-wide WAL memory segment pool
+     * @param usageSupplier supplier for the bytes currently allocated from the pool
+     * @param capacity the total pool capacity in bytes
      */
-    public void setWalMemoryPoolMetrics(LazyMemorySegmentPool walMemoryPool) {
-        LazyMemorySegmentPool pool = checkNotNull(walMemoryPool, "walMemoryPool must not be null");
-        gauge(MetricNames.WAL_MEMORY_POOL_USAGE, () -> (long) pool.usedPages() * pool.pageSize());
-        gauge(MetricNames.WAL_MEMORY_POOL_CAPACITY, pool::totalSize);
-        gauge(MetricNames.WAL_MEMORY_POOL_WAITING_THREADS, pool::queued);
+    public void registerKvWalMemoryPoolMetrics(LongSupplier usageSupplier, long capacity) {
+        gauge(MetricNames.KV_WAL_MEMORY_POOL_USAGE, usageSupplier::getAsLong);
+        gauge(MetricNames.KV_WAL_MEMORY_POOL_CAPACITY, () -> capacity);
     }
 
     @Override

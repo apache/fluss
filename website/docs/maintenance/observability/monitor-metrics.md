@@ -463,8 +463,8 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
   </thead>
   <tbody>
     <tr>
-      <th rowspan="40"><strong>tabletserver</strong></th>
-      <td style={{textAlign: 'center', verticalAlign: 'middle' }} rowspan="28">-</td>
+      <th rowspan="39"><strong>tabletserver</strong></th>
+      <td style={{textAlign: 'center', verticalAlign: 'middle' }} rowspan="27">-</td>
       <td>messagesInPerSecond</td>
       <td>The number of messages written per second to this server.</td>
       <td>Meter</td>
@@ -590,18 +590,13 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
       <td>Meter</td>
     </tr>
     <tr>
-      <td>walMemoryPoolUsage</td>
+      <td>kvWalMemoryPoolUsage</td>
       <td>Memory currently allocated from the server-wide WAL memory pool for primary key tables in this server (in bytes). The pool capacity is configured by <code>server.buffer.memory-size</code>.</td>
       <td>Gauge</td>
     </tr>
     <tr>
-      <td>walMemoryPoolCapacity</td>
+      <td>kvWalMemoryPoolCapacity</td>
       <td>Total capacity of the server-wide WAL memory pool for primary key tables in this server (in bytes).</td>
-      <td>Gauge</td>
-    </tr>
-    <tr>
-      <td>walMemoryPoolWaitingThreads</td>
-      <td>The number of threads currently blocked waiting for pages from the server-wide WAL memory pool. A non-zero value indicates the pool is exhausted and writes to primary key tables are being throttled.</td>
       <td>Gauge</td>
     </tr>
     <tr>

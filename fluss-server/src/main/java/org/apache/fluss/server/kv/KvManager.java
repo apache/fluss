@@ -205,7 +205,11 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
             this.sharedWriteBufferManager = createdWriteBufferManager;
             tabletServerMetricGroup.setSharedWriteBufferMetrics(
                     this::getSharedWriteBufferUsage, sharedWriteBufferCapacity);
-            tabletServerMetricGroup.setWalMemoryPoolMetrics(memorySegmentPool);
+            // bind the pool as the data source locally so the supplier does not capture the
+            // whole KvManager, and convert pages to bytes here rather than in the metric group
+            LazyMemorySegmentPool walPool = memorySegmentPool;
+            tabletServerMetricGroup.registerKvWalMemoryPoolMetrics(
+                    () -> (long) walPool.usedPages() * walPool.pageSize(), walPool.totalSize());
         } catch (RuntimeException | Error e) {
             IOUtils.closeQuietly(createdWriteBufferManager);
             IOUtils.closeQuietly(createdWriteBufferAccountingCache);

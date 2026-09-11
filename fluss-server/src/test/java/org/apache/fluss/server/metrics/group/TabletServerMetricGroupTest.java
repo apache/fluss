@@ -17,11 +17,6 @@
 
 package org.apache.fluss.server.metrics.group;
 
-import org.apache.fluss.config.ConfigOptions;
-import org.apache.fluss.config.Configuration;
-import org.apache.fluss.config.MemorySize;
-import org.apache.fluss.memory.LazyMemorySegmentPool;
-import org.apache.fluss.memory.MemorySegment;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TablePath;
@@ -31,9 +26,6 @@ import org.apache.fluss.metrics.registry.NOPMetricRegistry;
 import org.apache.fluss.server.kv.rocksdb.RocksDBStatistics;
 
 import org.junit.jupiter.api.Test;
-
-import java.io.IOException;
-import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
@@ -86,33 +78,15 @@ class TabletServerMetricGroupTest {
     }
 
     @Test
-    void testWalMemoryPoolMetrics() throws IOException {
-        // 128kb total memory with 64kb pages gives a pool of 2 pages
-        Configuration conf = new Configuration();
-        conf.set(ConfigOptions.SERVER_BUFFER_MEMORY_SIZE, MemorySize.parse("128kb"));
-        conf.set(ConfigOptions.SERVER_BUFFER_PAGE_SIZE, MemorySize.parse("64kb"));
-        LazyMemorySegmentPool pool = LazyMemorySegmentPool.createServerBufferPool(conf);
-
+    void testWalMemoryPoolMetrics() {
         TabletServerMetricGroup metricGroup =
                 new TabletServerMetricGroup(
                         NOPMetricRegistry.INSTANCE, "cluster", "rack", "host", 0);
-        metricGroup.setWalMemoryPoolMetrics(pool);
+        metricGroup.registerKvWalMemoryPoolMetrics(() -> 100L, 256L);
 
-        assertThat(gaugeValue(metricGroup, MetricNames.WAL_MEMORY_POOL_USAGE)).isEqualTo(0L);
-        assertThat(gaugeValue(metricGroup, MetricNames.WAL_MEMORY_POOL_CAPACITY))
-                .isEqualTo(128 * 1024L);
-        assertThat(gaugeValue(metricGroup, MetricNames.WAL_MEMORY_POOL_WAITING_THREADS))
-                .isEqualTo(0);
-
-        List<MemorySegment> pages = pool.allocatePages(2);
-        assertThat(gaugeValue(metricGroup, MetricNames.WAL_MEMORY_POOL_USAGE))
-                .isEqualTo(2 * 64 * 1024L);
-
-        pool.returnPage(pages.get(0));
-        assertThat(gaugeValue(metricGroup, MetricNames.WAL_MEMORY_POOL_USAGE))
-                .isEqualTo(64 * 1024L);
-        assertThat(gaugeValue(metricGroup, MetricNames.WAL_MEMORY_POOL_WAITING_THREADS))
-                .isEqualTo(0);
+        assertThat(gaugeValue(metricGroup, MetricNames.KV_WAL_MEMORY_POOL_USAGE)).isEqualTo(100L);
+        assertThat(gaugeValue(metricGroup, MetricNames.KV_WAL_MEMORY_POOL_CAPACITY))
+                .isEqualTo(256L);
     }
 
     private static Object gaugeValue(TabletServerMetricGroup metricGroup, String metricName) {
