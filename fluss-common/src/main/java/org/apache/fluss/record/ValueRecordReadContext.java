@@ -21,7 +21,6 @@ import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.SchemaGetter;
 import org.apache.fluss.row.decode.RowDecoder;
-import org.apache.fluss.types.DataType;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -50,8 +49,7 @@ public class ValueRecordReadContext implements ValueRecordBatch.ReadContext {
                 schemaId,
                 (id) -> {
                     Schema schema = schemaGetter.getSchema(schemaId);
-                    return RowDecoder.create(
-                            kvFormat, schema.getRowType().getChildren().toArray(new DataType[0]));
+                    return RowDecoder.create(kvFormat, schema);
                 });
     }
 }

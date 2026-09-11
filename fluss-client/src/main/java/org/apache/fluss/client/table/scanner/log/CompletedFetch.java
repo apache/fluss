@@ -30,6 +30,7 @@ import org.apache.fluss.record.IndexedLogRecord;
 import org.apache.fluss.record.LogRecord;
 import org.apache.fluss.record.LogRecordBatch;
 import org.apache.fluss.record.LogRecordReadContext;
+import org.apache.fluss.row.ColumnValueDecodingRow;
 import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.rpc.protocol.ApiError;
@@ -134,7 +135,7 @@ public abstract class CompletedFetch {
                 record.logOffset(),
                 record.timestamp(),
                 record.getChangeType(),
-                newRow,
+                ColumnValueDecodingRow.wrap(newRow),
                 getRecordSizeInBytes(record));
     }
 

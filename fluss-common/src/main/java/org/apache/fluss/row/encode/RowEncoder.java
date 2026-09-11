@@ -18,12 +18,17 @@
 package org.apache.fluss.row.encode;
 
 import org.apache.fluss.annotation.PublicEvolving;
+import org.apache.fluss.compression.ColumnValueCodec;
 import org.apache.fluss.memory.MemorySegment;
 import org.apache.fluss.metadata.KvFormat;
+import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.row.BinaryRow;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.RowType;
+
+import java.util.BitSet;
+import java.util.Map;
 
 /**
  * An encoder to write {@link BinaryRow binary format InternalRow}. It's used to write row
@@ -60,6 +65,30 @@ public interface RowEncoder extends AutoCloseable {
         } else {
             throw new IllegalArgumentException("Unsupported kv format: " + kvFormat);
         }
+    }
+
+    /** Creates a row encoder that applies the table's configured column-value encoding. */
+    static RowEncoder create(
+            KvFormat kvFormat, Schema schema, Map<String, String> tableProperties) {
+        DataType[] fieldDataTypes = schema.getRowType().getChildren().toArray(new DataType[0]);
+        Map<Integer, String> compressionByColumn =
+                ColumnValueCodec.compressionByColumn(schema, tableProperties);
+        BitSet encodedColumns = new BitSet(schema.getColumns().size());
+        for (Integer columnIndex : compressionByColumn.keySet()) {
+            encodedColumns.set(columnIndex);
+        }
+        if (kvFormat == KvFormat.COMPACTED) {
+            return new CompactedRowEncoder(fieldDataTypes, encodedColumns, compressionByColumn);
+        } else if (kvFormat == KvFormat.INDEXED) {
+            return new IndexedRowEncoder(fieldDataTypes, encodedColumns, compressionByColumn);
+        } else {
+            throw new IllegalArgumentException("Unsupported kv format: " + kvFormat);
+        }
+    }
+
+    /** Returns whether this encoder transforms configured column values. */
+    default boolean hasColumnValueEncoding() {
+        return false;
     }
 
     /** Start to write a new row. */

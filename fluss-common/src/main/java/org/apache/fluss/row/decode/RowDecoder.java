@@ -18,12 +18,17 @@
 package org.apache.fluss.row.decode;
 
 import org.apache.fluss.annotation.PublicEvolving;
+import org.apache.fluss.compression.ColumnValueCodec;
 import org.apache.fluss.memory.MemorySegment;
 import org.apache.fluss.metadata.KvFormat;
+import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.record.ValueRecord;
 import org.apache.fluss.row.BinaryRow;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.types.DataType;
+
+import java.util.BitSet;
+import java.util.Collections;
 
 /**
  * A decoder to read {@link BinaryRow binary format InternalRow} from a byte array or memory segment
@@ -40,6 +45,19 @@ public interface RowDecoder {
             return new CompactedRowDecoder(fieldDataTypes);
         } else if (kvFormat == KvFormat.INDEXED) {
             return new IndexedRowDecoder(fieldDataTypes);
+        } else {
+            throw new IllegalArgumentException("Unsupported kv format: " + kvFormat);
+        }
+    }
+
+    /** Creates a row decoder that restores self-describing column values. */
+    static RowDecoder create(KvFormat kvFormat, Schema schema) {
+        DataType[] fieldDataTypes = schema.getRowType().getChildren().toArray(new DataType[0]);
+        BitSet decodedColumns = ColumnValueCodec.bytesColumnIndexes(schema);
+        if (kvFormat == KvFormat.COMPACTED) {
+            return new CompactedRowDecoder(fieldDataTypes, decodedColumns, Collections.emptyMap());
+        } else if (kvFormat == KvFormat.INDEXED) {
+            return new IndexedRowDecoder(fieldDataTypes, decodedColumns, Collections.emptyMap());
         } else {
             throw new IllegalArgumentException("Unsupported kv format: " + kvFormat);
         }
