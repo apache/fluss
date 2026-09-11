@@ -475,7 +475,7 @@ CALL sys.rebalance('RACK_AWARE,REPLICA_DISTRIBUTION,LEADER_DISTRIBUTION');
 
 ### list_rebalance
 
-Query the progress and status of a rebalance operation. This procedure allows you to monitor ongoing or completed rebalance operations to track their progress and view detailed information about bucket movements.
+Query the progress and status of the ongoing rebalance operation, including detailed information about bucket movements.
 
 **Syntax:**
 
@@ -491,18 +491,20 @@ CALL [catalog_name.]sys.list_rebalance(
 
 **Parameters:**
 
-- `rebalanceId` (optional): The rebalance ID to query. If omitted, returns the progress of the most recent rebalance operation. The rebalance ID is returned when calling the `rebalance` procedure.
+- `rebalanceId` (optional): The rebalance ID to query. If omitted, returns the progress of the most recent rebalance operation. The ID to pass here is the value returned by the `rebalance` procedure or listed by `list_rebalances`; an ID from the retained history is served from that history.
 
-**Returns:** An array of strings containing:
-- Rebalance ID: The unique identifier of the rebalance operation
-- Rebalance total status: The overall status of the rebalance. Possible values are:
+**Returns:** At most one row with the following columns:
+- `rebalance_id`: The unique identifier of the rebalance operation
+- `rebalance_status`: The overall status of the rebalance. Possible values are:
     - `NOT_STARTED`: The rebalance has been created but not yet started
     - `REBALANCING`: The rebalance is currently in progress
     - `COMPLETED`: The rebalance has successfully completed
     - `FAILED`: The rebalance has failed
     - `CANCELED`: The rebalance has been canceled
-- Rebalance progress: The completion percentage (e.g., `75.5%`)
-- Rebalance detail progress for bucket: Detailed progress information for each bucket being moved
+- `rebalance_progress`: The completion percentage (e.g., `75.5%`)
+- `rebalance_plan`: Detailed progress information for each bucket being moved, as JSON
+- `started_at`: The time the rebalance was started, rendered in the session time zone (set `table.local-time-zone` to control it). `NULL` if unknown
+- `completed_at`: The time the rebalance reached a final status, rendered in the session time zone (set `table.local-time-zone` to control it). `NULL` while the rebalance is still in progress
 
 If no rebalance is found, returns empty line.
 
@@ -517,6 +519,34 @@ CALL sys.list_rebalance();
 
 -- List a specific rebalance progress by ID
 CALL sys.list_rebalance('rebalance-12345');
+```
+
+### list_rebalances
+
+List all known rebalance operations as summaries: the ongoing rebalance (if any) followed by the retained history of finished rebalances, newest first. Use `list_rebalance` to query the detailed progress of a single rebalance.
+
+**Syntax:**
+
+```sql
+CALL [catalog_name.]sys.list_rebalances()
+```
+
+**Returns:** One row per known rebalance with the following columns:
+- `rebalance_id`: The unique identifier of the rebalance operation
+- `rebalance_status`: The overall status of the rebalance (same values as `list_rebalance`)
+- `started_at`: The time the rebalance was started, rendered in the session time zone (set `table.local-time-zone` to control it). `NULL` if unknown
+- `completed_at`: The time the rebalance reached a final status, rendered in the session time zone (set `table.local-time-zone` to control it). `NULL` while the rebalance is still in progress
+
+If no rebalance is known, returns empty line.
+
+**Example:**
+
+```sql title="Flink SQL"
+-- Use the Fluss catalog (replace 'fluss_catalog' with your catalog name if different)
+USE fluss_catalog;
+
+-- List all known rebalances
+CALL sys.list_rebalances();
 ```
 
 ### cancel_rebalance
@@ -537,7 +567,7 @@ CALL [catalog_name.]sys.cancel_rebalance(
 
 **Parameters:**
 
-- `rebalanceId` (optional): The rebalance ID to cancel. If omitted, cancels the most recent rebalance operation. The rebalance ID is returned when calling the `rebalance` procedure.
+- `rebalanceId` (optional): The rebalance ID to cancel. If omitted, cancels the most recent rebalance operation. The ID to pass here is the value returned by the `rebalance` procedure.
 
 **Returns:** An array with a single element `'success'` if the operation completes successfully.
 

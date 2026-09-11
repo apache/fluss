@@ -1003,6 +1003,10 @@ pub struct ListRebalanceProgressResponse {
     pub rebalance_status: ::core::option::Option<i32>,
     #[prost(message, repeated, tag = "3")]
     pub table_progress: ::prost::alloc::vec::Vec<PbRebalanceProgressForTable>,
+    #[prost(int64, optional, tag = "4")]
+    pub started_at_ms: ::core::option::Option<i64>,
+    #[prost(int64, optional, tag = "5")]
+    pub completed_at_ms: ::core::option::Option<i64>,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct CancelRebalanceRequest {
@@ -1011,6 +1015,13 @@ pub struct CancelRebalanceRequest {
 }
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct CancelRebalanceResponse {}
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ListRebalancesRequest {}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ListRebalancesResponse {
+    #[prost(message, repeated, tag = "1")]
+    pub rebalance_infos: ::prost::alloc::vec::Vec<PbRebalanceInfo>,
+}
 /// Register producer offsets request and response
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct RegisterProducerOffsetsRequest {
@@ -1736,6 +1747,17 @@ pub struct PbRebalanceProgressForBucket {
     pub rebalance_plan: PbRebalancePlanForBucket,
     #[prost(int32, required, tag = "2")]
     pub rebalance_status: i32,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct PbRebalanceInfo {
+    #[prost(string, required, tag = "1")]
+    pub rebalance_id: ::prost::alloc::string::String,
+    #[prost(int32, required, tag = "2")]
+    pub rebalance_status: i32,
+    #[prost(int64, optional, tag = "3")]
+    pub started_at_ms: ::core::option::Option<i64>,
+    #[prost(int64, optional, tag = "4")]
+    pub completed_at_ms: ::core::option::Option<i64>,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct PbRebalancePlanForBucket {
