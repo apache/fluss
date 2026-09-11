@@ -679,10 +679,24 @@ class ArrowKafkaRecordTranscoderTest {
                 });
     }
 
-    @Test
-    void testDecodeFailureAfterValidRecordHasNoPartialOutputAndRemainsUsable() throws Exception {
-        TableInfo table = valueTable(true);
-        Record valid = new Record(1L, null, bytes("valid"), Collections.emptyList());
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void testDecodeFailureAfterValidRecordHasNoPartialOutputAndRemainsUsable(boolean metadata)
+            throws Exception {
+        Schema.Builder schema =
+                Schema.newBuilder().column("_kafka_value", DataTypes.STRING().copy(false));
+        if (metadata) {
+            schema.column("_kafka_metadata", metadataType(true));
+        }
+        TableInfo table = table(descriptor(schema.build(), true).build());
+        KafkaTopicWritePlan plan = transcoder.prepare(table);
+        Record valid =
+                new Record(
+                        Record.NO_TIMESTAMP,
+                        TimestampType.LOG_APPEND_TIME,
+                        null,
+                        bytes("valid"),
+                        Collections.emptyList());
         for (byte[] invalid : new byte[][] {null, {(byte) 0xc3, 0x28}, {(byte) 0xff}}) {
             AtomicReference<BytesView> output = new AtomicReference<>();
             Throwable failure =
@@ -690,7 +704,7 @@ class ArrowKafkaRecordTranscoderTest {
                             () ->
                                     output.set(
                                             transcoder.transcode(
-                                                    0,
+                                                    7,
                                                     Arrays.asList(
                                                             valid,
                                                             new Record(
@@ -698,16 +712,21 @@ class ArrowKafkaRecordTranscoderTest {
                                                                     null,
                                                                     invalid,
                                                                     Collections.emptyList())),
-                                                    table)));
+                                                    plan)));
             assertThat(failure).isInstanceOf(KafkaRecordEncodingException.class);
             assertThat(failure.getSuppressed()).isEmpty();
             assertThat(output).hasNullValue();
         }
         read(
-                transcoder.transcode(0, Collections.singletonList(valid), table),
+                transcoder.transcode(3, Collections.singletonList(valid), plan),
                 table,
                 1,
-                row -> assertThat(row.getString(0).toString()).isEqualTo("valid"));
+                row -> {
+                    assertThat(row.getString(0).toString()).isEqualTo("valid");
+                    if (metadata) {
+                        assertMetadata(row, 1, Record.NO_TIMESTAMP, 1, 3);
+                    }
+                });
     }
 
     @Test
