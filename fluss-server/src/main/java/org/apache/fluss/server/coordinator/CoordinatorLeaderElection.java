@@ -198,11 +198,14 @@ public class CoordinatorLeaderElection implements AutoCloseable {
      * ZooKeeper unreachable), because an unknown leader must not be reported as present to a
      * readiness probe.
      *
-     * <p>"Elected" means the leader has registered its address in ZooKeeper, which happens during
-     * leader initialization after fencing. The node is ephemeral, so a leader whose session expired
-     * or whose initialization failed and was cleaned up no longer counts. This is deliberately not
-     * the {@link LeaderLatch} view: the latch marks a participant as leader before initialization
-     * has run, and keeps doing so when initialization fails.
+     * <p>"Elected" means the leader has registered its address in ZooKeeper, which happens early in
+     * leader initialization, right after fencing. The node is ephemeral, so a leader whose session
+     * expired or whose initialization failed and was cleaned up no longer counts. A node naming
+     * this server while it is not {@code LEADER} does not count either: it is this server's own
+     * initialization, still running or failed without the cleanup removing the node, and neither is
+     * a functioning leader. This is deliberately not the {@link LeaderLatch} view: the latch marks
+     * a participant as leader before initialization has run, and keeps doing so when initialization
+     * fails.
      *
      * <p>On a standby the answer is a ZooKeeper read issued on Curator's background thread, so the
      * calling RPC worker is never blocked while ZooKeeper is unreachable: the read and its retries
@@ -215,7 +218,8 @@ public class CoordinatorLeaderElection implements AutoCloseable {
         if (state == State.LEADER) {
             return CompletableFuture.completedFuture(true);
         }
-        return zkClient.isCoordinatorLeaderRegistered()
+        return zkClient.getCoordinatorLeaderAddressAsync()
+                .thenApply(leader -> leader.isPresent() && !leader.get().getId().equals(serverId))
                 .exceptionally(
                         e -> {
                             LOG.debug(

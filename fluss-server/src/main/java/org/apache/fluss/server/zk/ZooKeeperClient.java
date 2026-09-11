@@ -102,6 +102,7 @@ import org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.CreateMode;
 import org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.KeeperException;
 import org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.data.Stat;
 import org.apache.fluss.utils.ExceptionUtils;
+import org.apache.fluss.utils.concurrent.FutureUtils;
 import org.apache.fluss.utils.types.Tuple2;
 
 import org.slf4j.Logger;
@@ -321,29 +322,50 @@ public class ZooKeeperClient implements AutoCloseable {
     }
 
     /**
-     * Whether a coordinator leader is registered in ZK, with the same semantics as {@link
-     * #getCoordinatorLeaderAddress()} (an empty node does not count). The read and its retries run
-     * on Curator's background thread, so the caller is never blocked while ZooKeeper is
-     * unreachable.
+     * Asynchronous {@link #getCoordinatorLeaderAddress()}: the same result (an empty node yields an
+     * empty address), but the read and its retries run on Curator's background thread, so the
+     * caller is never blocked while ZooKeeper is unreachable. Admission is non-blocking too: when
+     * every in-flight permit is taken, the returned future fails at once instead of parking the
+     * caller.
      */
-    public CompletableFuture<Boolean> isCoordinatorLeaderRegistered() {
+    public CompletableFuture<Optional<CoordinatorAddress>> getCoordinatorLeaderAddressAsync() {
         String path = ZkData.CoordinatorLeaderZNode.path();
-        return handleRequestInBackgroundAsync(
-                        Collections.singletonList(new ZkGetDataRequest(path)),
-                        ZkGetDataResponse::create)
-                .thenApply(
-                        responses -> {
-                            ZkGetDataResponse response = responses.get(0);
-                            if (response.getResultCode() == KeeperException.Code.NONODE) {
-                                return false;
-                            }
-                            Optional<KeeperException> error = response.resultException();
-                            if (error.isPresent()) {
-                                throw new CompletionException(error.get());
-                            }
-                            byte[] data = response.getData();
-                            return data != null && data.length > 0;
-                        });
+        // This read serves readiness probes on an RPC worker, so it must not block on a permit
+        // while
+        // a ZooKeeper outage holds all of them; the caller treats the failure as "unknown".
+        if (!inFlightRequests.tryAcquire()) {
+            return FutureUtils.completedExceptionally(
+                    new IllegalStateException(
+                            "All ZooKeeper in-flight request permits are taken, skipping read of "
+                                    + path));
+        }
+        CompletableFuture<List<ZkGetDataResponse>> future = new CompletableFuture<>();
+        try {
+            zkClient.getData()
+                    .inBackground(
+                            createBackgroundCallback(
+                                    Collections.singletonList(new ZkGetDataRequest(path)),
+                                    ZkGetDataResponse::create,
+                                    future))
+                    .forPath(path);
+        } catch (Exception e) {
+            inFlightRequests.release();
+            future.completeExceptionally(e);
+        }
+        return future.thenApply(
+                responses -> {
+                    ZkGetDataResponse response = responses.get(0);
+                    if (response.getResultCode() == KeeperException.Code.NONODE) {
+                        return Optional.empty();
+                    }
+                    Optional<KeeperException> error = response.resultException();
+                    if (error.isPresent()) {
+                        throw new CompletionException(error.get());
+                    }
+                    return Optional.ofNullable(response.getData())
+                            .filter(data -> data.length > 0)
+                            .map(data -> ZkData.CoordinatorLeaderZNode.decode(data));
+                });
     }
 
     /** Gets the list of coordinator server Ids. */

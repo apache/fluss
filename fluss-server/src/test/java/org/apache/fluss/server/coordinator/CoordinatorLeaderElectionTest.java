@@ -168,6 +168,43 @@ class CoordinatorLeaderElectionTest {
     }
 
     @Test
+    void testIsLeaderElectedIgnoresOwnRegistrationUntilInitialized() throws Exception {
+        CoordinatorLeaderElection election =
+                new CoordinatorLeaderElection(zooKeeperClient, "coordinator-initializing");
+        CoordinatorAddress ownAddress =
+                new CoordinatorAddress(
+                        "coordinator-initializing",
+                        Collections.singletonList(new Endpoint("localhost", 9124, "CLIENT")));
+        CountDownLatch registered = new CountDownLatch(1);
+        CountDownLatch allowInitialization = new CountDownLatch(1);
+        try {
+            // CoordinatorServer registers the leader address first and starts the leader services
+            // after it: in that window the node names this server, but nothing is serving yet.
+            election.startElectLeaderAsync(
+                    () -> {
+                        registerLeader(ownAddress);
+                        registered.countDown();
+                        waitUntilReleased(allowInitialization);
+                    },
+                    ignored -> unregisterLeader(ownAddress));
+            assertThat(registered.await(30, TimeUnit.SECONDS)).isTrue();
+            assertThat(zooKeeperClient.getCoordinatorLeaderAddress()).contains(ownAddress);
+            assertThat(election.isLeader()).isFalse();
+            assertThat(election.isLeaderElected().join()).isFalse();
+
+            allowInitialization.countDown();
+            waitUntil(
+                    election::isLeader,
+                    Duration.ofSeconds(30),
+                    "Coordinator did not become leader");
+            assertThat(election.isLeaderElected().join()).isTrue();
+        } finally {
+            allowInitialization.countDown();
+            election.close();
+        }
+    }
+
+    @Test
     void testInitializationFailureKeepsLeaderLatchAndBlocksReElection() throws Exception {
         CoordinatorLeaderElection failedElection =
                 new CoordinatorLeaderElection(zooKeeperClient, "coordinator-init-failure");
