@@ -1388,6 +1388,28 @@ public class ConfigOptions {
                             "Setting a value greater than zero will cause the client to resend any record whose "
                                     + "send fails with a potentially transient error.");
 
+    public static final ConfigOption<Duration> CLIENT_WRITER_DISK_WRITE_LOCKED_BACKOFF =
+            key("client.writer.disk-write-locked.backoff")
+                    .durationType()
+                    .defaultValue(Duration.ofSeconds(1))
+                    .withDescription(
+                            "The initial retry backoff when disk write protection rejects a write. "
+                                    + "Applies to both Log and KV writes, independently of KV backpressure. "
+                                    + "The backoff doubles with the batch retry count and uses 20% jitter, "
+                                    + "up to client.writer.disk-write-locked.backoff-max. "
+                                    + "The value must be at least 1ms and no greater than the maximum backoff.");
+
+    public static final ConfigOption<Duration> CLIENT_WRITER_DISK_WRITE_LOCKED_BACKOFF_MAX =
+            key("client.writer.disk-write-locked.backoff-max")
+                    .durationType()
+                    .defaultValue(Duration.ofSeconds(10))
+                    .withDescription(
+                            "The maximum retry backoff for a bucket whose writes are rejected by disk "
+                                    + "write protection. Must be between the initial backoff and 2147483647ms. "
+                                    + "Setting this equal to the initial backoff uses a fixed delay without jitter. "
+                                    + "Writes retry automatically after the delay, subject to client.writer.retries. "
+                                    + "Flush and graceful close also respect this delay.");
+
     public static final ConfigOption<Boolean> CLIENT_WRITER_ENABLE_IDEMPOTENCE =
             key("client.writer.enable-idempotence")
                     .booleanType()
