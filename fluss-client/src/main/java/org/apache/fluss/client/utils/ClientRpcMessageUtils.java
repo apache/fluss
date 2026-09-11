@@ -882,11 +882,7 @@ public class ClientRpcMessageUtils {
     }
 
     public static ClusterHealth toClusterHealth(GetClusterHealthResponse resp) {
-        // A response without is_leader comes from a leader that predates the field — a standby
-        // of those versions rejects the request instead of answering.
         boolean servedByLeader = !resp.hasIsLeader() || resp.isIsLeader();
-        // A leader-served response always means an elected leader, as ClusterHealth#isLeaderElected
-        // promises; same rule as ClusterHealthReadinessCheck#evaluateCoordinator.
         boolean leaderElected =
                 servedByLeader || (resp.hasLeaderElected() && resp.isLeaderElected());
         return new ClusterHealth(

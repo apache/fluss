@@ -331,8 +331,7 @@ public class ZooKeeperClient implements AutoCloseable {
     public CompletableFuture<Optional<CoordinatorAddress>> getCoordinatorLeaderAddressAsync() {
         String path = ZkData.CoordinatorLeaderZNode.path();
         // This read serves readiness probes on an RPC worker, so it must not block on a permit
-        // while
-        // a ZooKeeper outage holds all of them; the caller treats the failure as "unknown".
+        // while a ZooKeeper outage holds all of them; the caller treats the failure as "unknown".
         if (!inFlightRequests.tryAcquire()) {
             return FutureUtils.completedExceptionally(
                     new IllegalStateException(

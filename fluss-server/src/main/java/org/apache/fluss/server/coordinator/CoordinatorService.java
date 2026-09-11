@@ -1586,8 +1586,7 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
 
         if (!isLeader()) {
             // A standby has no CoordinatorContext (the event processor is leader-only), so it
-            // answers from its own election state: status UNKNOWN, zeroed counts, and the role
-            // fields a readiness probe needs to tell a healthy standby from a wedged one.
+            // answers from its own election state.
             return coordinatorLeaderElection
                     .isLeaderElected()
                     .thenApply(CoordinatorService::computeStandbyClusterHealth);

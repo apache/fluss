@@ -788,7 +788,7 @@ public interface Admin extends AutoCloseable {
      *       confirmed active (e.g., leader election or KV snapshot recovery is still in progress).
      *   <li>{@link ClusterHealthStatus#UNKNOWN} — the Coordinator was unable to determine cluster
      *       health (e.g., the server does not support this API), or the answering coordinator is a
-     *       standby (see below).
+     *       standby.
      * </ul>
      *
      * <p>This API is designed for the situation like a Kubernetes readiness-probe gate during
@@ -796,12 +796,20 @@ public interface Admin extends AutoCloseable {
      * replicas have fully recovered before the next server is restarted.
      *
      * <p>Unlike other admin operations, a <b>standby</b> coordinator answers this request instead
-     * of rejecting it with a {@code NotCoordinatorLeaderException} (so a readiness probe can gate
-     * on it). If the client's coordinator address is stale — e.g. during a coordinator failover,
-     * before the client's metadata refreshes — the returned {@link ClusterHealth} carries {@link
-     * ClusterHealth#isServedByLeader()} {@code false}, status {@code UNKNOWN}, and zeroed replica
-     * counts. Callers that monitor cluster health should check {@link
-     * ClusterHealth#isServedByLeader()} before interpreting the counts.
+     * of rejecting it with a {@code NotCoordinatorLeaderException}, so it is safe to use as a
+     * readiness probe.
+     *
+     * <p>If the client's coordinator address is stale, for example during a coordinator failover
+     * before the client's metadata refreshes, the returned {@link ClusterHealth} reports:
+     *
+     * <ul>
+     *   <li>{@link ClusterHealth#isServedByLeader()} {@code false}
+     *   <li>status {@code UNKNOWN}
+     *   <li>all replica counters set to zero, since a standby has no replica state
+     * </ul>
+     *
+     * <p>Callers that monitor cluster health should check {@link ClusterHealth#isServedByLeader()}
+     * before interpreting the counts.
      *
      * @return a {@link CompletableFuture} that completes with the cluster health information.
      * @since 1.0

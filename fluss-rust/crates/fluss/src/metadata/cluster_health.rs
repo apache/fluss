@@ -58,22 +58,12 @@ pub struct ClusterHealth {
     pub num_leader_replicas: i32,
     pub active_leader_replicas: i32,
     pub status: ClusterHealthStatus,
-    /// Whether the coordinator that answered is the current leader. `false` means a
-    /// standby answered (e.g. a stale coordinator address during a failover): `status`
-    /// is `Unknown` and the replica counts are zero, not cluster facts. Responses from
-    /// servers that predate the field report `true`; a standby of those versions
-    /// rejects the request instead of answering.
     pub served_by_leader: bool,
-    /// Whether the coordinator group currently has an elected leader, the answering
-    /// server or another one. A leader-served response always reports `true`.
     pub leader_elected: bool,
 }
 
 impl ClusterHealth {
     pub fn from_pb(pb: &GetClusterHealthResponse) -> Result<Self> {
-        // A response without is_leader comes from a leader that predates the field; a
-        // standby of those versions rejects the request instead of answering. A
-        // leader-served response always means an elected leader.
         let served_by_leader = pb.is_leader.unwrap_or(true);
         Ok(Self {
             num_replicas: pb.num_replicas,
