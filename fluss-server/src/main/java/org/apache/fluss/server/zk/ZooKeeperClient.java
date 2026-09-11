@@ -1893,6 +1893,15 @@ public class ZooKeeperClient implements AutoCloseable {
         return zkClient;
     }
 
+    /**
+     * Returns the Curator wrapper owned by this client for tests that need a decorating client over
+     * the same ZooKeeper connection. The returned wrapper must not be closed by the caller.
+     */
+    @VisibleForTesting
+    public CuratorFrameworkWithUnhandledErrorListener getCuratorFrameworkWrapper() {
+        return curatorFrameworkWrapper;
+    }
+
     // --------------------------------------------------------------------------------------------
     // Table and Partition Metadata
     // --------------------------------------------------------------------------------------------

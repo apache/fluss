@@ -27,6 +27,9 @@ import org.apache.fluss.exception.InvalidAlterTableException;
 import org.apache.fluss.exception.TableNotExistException;
 import org.apache.fluss.exception.TooManyBucketsException;
 import org.apache.fluss.lake.lakestorage.LakeCatalog;
+import org.apache.fluss.lake.lakestorage.LakeStorage;
+import org.apache.fluss.lake.lakestorage.LakeStoragePlugin;
+import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.DatabaseDescriptor;
 import org.apache.fluss.metadata.ResolvedPartitionSpec;
 import org.apache.fluss.metadata.Schema;
@@ -34,7 +37,10 @@ import org.apache.fluss.metadata.TableChange;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.plugin.PluginManager;
 import org.apache.fluss.server.entity.TablePropertyChanges;
+import org.apache.fluss.server.lakehouse.TestingPaimonStoragePlugin;
+import org.apache.fluss.server.lakehouse.TestingPaimonStoragePlugin.TestingPaimonLakeStorage;
 import org.apache.fluss.server.zk.CuratorFrameworkWithUnhandledErrorListener;
 import org.apache.fluss.server.zk.NOPErrorHandler;
 import org.apache.fluss.server.zk.ZooKeeperClient;
@@ -61,10 +67,10 @@ import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.EnumSource;
 import org.junit.jupiter.params.provider.MethodSource;
 
-import java.lang.reflect.Field;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -235,21 +241,41 @@ class AlterBucketNumTest {
     }
 
     /**
-     * Builds a coordinator-side MetadataManager and reflectively injects the given stub as the
-     * cluster lake catalog, so lake propagation can be exercised without a real Paimon catalog.
+     * Builds a coordinator-side {@link MetadataManager} through the real plugin and lake-catalog
+     * initialization path, with the supplied catalog returned by the testing Paimon storage.
      */
-    private static MetadataManager buildMetadataManagerWithLakeCatalog(LakeCatalog stub)
-            throws Exception {
-        LakeCatalogDynamicLoader loader =
-                new LakeCatalogDynamicLoader(new Configuration(), null, true);
-        Field containerField =
-                LakeCatalogDynamicLoader.class.getDeclaredField("lakeCatalogContainer");
-        containerField.setAccessible(true);
-        Object container = containerField.get(loader);
-        Field catalogField = container.getClass().getDeclaredField("lakeCatalog");
-        catalogField.setAccessible(true);
-        catalogField.set(container, stub);
-        return new MetadataManager(zookeeperClient, new Configuration(), loader);
+    private static MetadataManager buildMetadataManagerWithLakeCatalog(LakeCatalog catalog) {
+        LakeStoragePlugin plugin =
+                new TestingPaimonStoragePlugin() {
+                    @Override
+                    public LakeStorage createLakeStorage(Configuration configuration) {
+                        return new TestingPaimonLakeStorage() {
+                            @Override
+                            public LakeCatalog createLakeCatalog() {
+                                return catalog;
+                            }
+                        };
+                    }
+                };
+
+        PluginManager pluginManager =
+                new PluginManager() {
+                    @Override
+                    @SuppressWarnings("unchecked")
+                    public <P> Iterator<P> load(Class<P> service) {
+                        if (service == LakeStoragePlugin.class) {
+                            return Collections.singletonList((P) plugin).iterator();
+                        }
+                        return Collections.<P>emptyList().iterator();
+                    }
+                };
+
+        Configuration conf = new Configuration();
+        conf.set(ConfigOptions.DATALAKE_ENABLED, true);
+        conf.set(ConfigOptions.DATALAKE_FORMAT, DataLakeFormat.PAIMON);
+
+        LakeCatalogDynamicLoader loader = new LakeCatalogDynamicLoader(conf, pluginManager, true);
+        return new MetadataManager(zookeeperClient, conf, loader);
     }
 
     /**
@@ -309,7 +335,7 @@ class AlterBucketNumTest {
      */
     private static final class CountingLakeCatalog implements LakeCatalog {
         private final AtomicInteger attempts = new AtomicInteger();
-        private volatile boolean failing;
+        private final boolean failing;
         private volatile Integer lastBucketCount;
 
         CountingLakeCatalog(boolean failing) {
@@ -1009,10 +1035,8 @@ class AlterBucketNumTest {
     }
 
     /** Shares the test ZK connection so decorating subclasses can override single methods. */
-    private static CuratorFrameworkWithUnhandledErrorListener sharedZkWrapper() throws Exception {
-        Field wrapperField = ZooKeeperClient.class.getDeclaredField("curatorFrameworkWrapper");
-        wrapperField.setAccessible(true);
-        return (CuratorFrameworkWithUnhandledErrorListener) wrapperField.get(zookeeperClient);
+    private static CuratorFrameworkWithUnhandledErrorListener sharedZkWrapper() {
+        return zookeeperClient.getCuratorFrameworkWrapper();
     }
 
     /**

@@ -28,6 +28,7 @@ import java.io.DataInputStream;
 import java.io.DataOutputStream;
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 
 /** A testing implementation of {@link LakeSource}. */
@@ -41,20 +42,41 @@ public class TestingLakeSource implements LakeSource<LakeSplit> {
     // partition infos of partitions contain lake splits
     private final List<PartitionInfo> partitionInfos;
 
+    private final List<LakeSplit> explicitSplits;
+    private final boolean useExplicitSplits;
+
     public TestingLakeSource() {
         this.bucketNum = 0;
         this.partitionInfos = null;
+        this.explicitSplits = Collections.emptyList();
+        this.useExplicitSplits = false;
     }
 
     public TestingLakeSource(int bucketNum, List<PartitionInfo> partitionInfos) {
         this.bucketNum = bucketNum;
         this.partitionInfos = partitionInfos;
+        this.explicitSplits = Collections.emptyList();
+        this.useExplicitSplits = false;
+    }
+
+    private TestingLakeSource(List<? extends LakeSplit> explicitSplits) {
+        this.bucketNum = 0;
+        this.partitionInfos = null;
+        this.explicitSplits = new ArrayList<>(explicitSplits);
+        this.useExplicitSplits = true;
     }
 
     private TestingLakeSource(TestingLakeSource source) {
         this.bucketNum = source.bucketNum;
         this.partitionInfos =
                 source.partitionInfos == null ? null : new ArrayList<>(source.partitionInfos);
+        this.explicitSplits = new ArrayList<>(source.explicitSplits);
+        this.useExplicitSplits = source.useExplicitSplits;
+    }
+
+    /** Creates a source whose planner returns exactly the supplied splits. */
+    public static TestingLakeSource fromSplits(List<? extends LakeSplit> splits) {
+        return new TestingLakeSource(splits);
     }
 
     @Override
@@ -75,7 +97,9 @@ public class TestingLakeSource implements LakeSource<LakeSplit> {
 
     @Override
     public Planner<LakeSplit> createPlanner(PlannerContext context) throws IOException {
-        return new TestingPlanner(bucketNum, partitionInfos);
+        return useExplicitSplits
+                ? TestingPlanner.fromSplits(explicitSplits)
+                : new TestingPlanner(bucketNum, partitionInfos);
     }
 
     @Override

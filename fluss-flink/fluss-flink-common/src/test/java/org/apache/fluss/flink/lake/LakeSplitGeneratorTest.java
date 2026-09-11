@@ -17,14 +17,15 @@
 
 package org.apache.fluss.flink.lake;
 
-import org.apache.fluss.client.admin.Admin;
 import org.apache.fluss.client.initializer.OffsetsInitializer;
 import org.apache.fluss.client.metadata.LakeSnapshot;
 import org.apache.fluss.flink.lake.split.LakeSnapshotAndFlussLogSplit;
+import org.apache.fluss.flink.sink.testutils.TestAdminAdapter;
 import org.apache.fluss.flink.source.split.SourceSplitBase;
 import org.apache.fluss.lake.source.LakeSource;
 import org.apache.fluss.lake.source.LakeSplit;
-import org.apache.fluss.lake.source.Planner;
+import org.apache.fluss.lake.source.TestingLakeSource;
+import org.apache.fluss.lake.source.TestingLakeSplit;
 import org.apache.fluss.metadata.PartitionInfo;
 import org.apache.fluss.metadata.ResolvedPartitionSpec;
 import org.apache.fluss.metadata.Schema;
@@ -35,6 +36,7 @@ import org.apache.fluss.types.DataTypes;
 
 import org.junit.jupiter.api.Test;
 
+import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
@@ -43,11 +45,6 @@ import java.util.concurrent.CompletableFuture;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyList;
-import static org.mockito.ArgumentMatchers.eq;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.when;
 
 /**
  * Unit test for the fail-loud guard in {@link LakeSplitGenerator}: for a primary-key table, if the
@@ -65,7 +62,6 @@ class LakeSplitGeneratorTest {
      * STRING, c STRING; PK a+c) whose single partition "p" has {@code partitionBucketCount}
      * enumerated buckets and a single lake split landing in {@code lakeSplitBucket}.
      */
-    @SuppressWarnings("unchecked")
     private static LakeSplitGenerator createGenerator(int partitionBucketCount, int lakeSplitBucket)
             throws Exception {
         TablePath tablePath = TablePath.of("db", "pk_table");
@@ -83,29 +79,19 @@ class LakeSplitGeneratorTest {
                         .build();
         TableInfo tableInfo = TableInfo.of(tablePath, 1L, 1, descriptor, null, 1L, 1L);
 
-        LakeSplit lakeSplit = mock(LakeSplit.class);
-        when(lakeSplit.partition()).thenReturn(Collections.singletonList("p"));
-        when(lakeSplit.bucket()).thenReturn(lakeSplitBucket);
-
-        Planner<LakeSplit> planner = mock(Planner.class);
-        when(planner.plan()).thenReturn(Collections.singletonList(lakeSplit));
-        LakeSource<LakeSplit> lakeSource = mock(LakeSource.class);
-        when(lakeSource.createPlanner(any())).thenReturn(planner);
-
-        Admin admin = mock(Admin.class);
-        when(admin.getReadableLakeSnapshot(tablePath))
-                .thenReturn(
-                        CompletableFuture.completedFuture(new LakeSnapshot(1L, new HashMap<>())));
-
-        OffsetsInitializer.BucketOffsetsRetriever retriever =
-                mock(OffsetsInitializer.BucketOffsetsRetriever.class);
-        OffsetsInitializer stoppingOffsetInitializer = mock(OffsetsInitializer.class);
-        Map<Integer, Long> stoppingOffsets = new HashMap<>();
-        for (int bucket = 0; bucket < partitionBucketCount; bucket++) {
-            stoppingOffsets.put(bucket, 0L);
-        }
-        when(stoppingOffsetInitializer.getBucketOffsets(eq("p"), anyList(), any()))
-                .thenReturn(stoppingOffsets);
+        LakeSplit lakeSplit = new TestingLakeSplit(lakeSplitBucket, Collections.singletonList("p"));
+        LakeSource<LakeSplit> lakeSource =
+                TestingLakeSource.fromSplits(Collections.singletonList(lakeSplit));
+        TestAdminAdapter admin =
+                new TestAdminAdapter() {
+                    @Override
+                    public CompletableFuture<LakeSnapshot> getReadableLakeSnapshot(
+                            TablePath ignored) {
+                        return CompletableFuture.completedFuture(
+                                new LakeSnapshot(1L, new HashMap<>()));
+                    }
+                };
+        OffsetsInitializer.BucketOffsetsRetriever retriever = new ZeroOffsetsRetriever();
 
         // the partition "p" carries its own bucket count (so an out-of-range lake bucket can be
         // detected against the enumerated range [0, partitionBucketCount))
@@ -121,9 +107,38 @@ class LakeSplitGeneratorTest {
                 admin,
                 lakeSource,
                 retriever,
-                stoppingOffsetInitializer,
+                OffsetsInitializer.latest(),
                 partitionBucketCount,
                 () -> Collections.singleton(partitionInfo));
+    }
+
+    private static final class ZeroOffsetsRetriever
+            implements OffsetsInitializer.BucketOffsetsRetriever {
+
+        @Override
+        public Map<Integer, Long> latestOffsets(String partitionName, Collection<Integer> buckets) {
+            return zeroOffsets(buckets);
+        }
+
+        @Override
+        public Map<Integer, Long> earliestOffsets(
+                String partitionName, Collection<Integer> buckets) {
+            return zeroOffsets(buckets);
+        }
+
+        @Override
+        public Map<Integer, Long> offsetsFromTimestamp(
+                String partitionName, Collection<Integer> buckets, long timestamp) {
+            return zeroOffsets(buckets);
+        }
+
+        private static Map<Integer, Long> zeroOffsets(Collection<Integer> buckets) {
+            Map<Integer, Long> offsets = new HashMap<>();
+            for (Integer bucket : buckets) {
+                offsets.put(bucket, 0L);
+            }
+            return offsets;
+        }
     }
 
     @Test

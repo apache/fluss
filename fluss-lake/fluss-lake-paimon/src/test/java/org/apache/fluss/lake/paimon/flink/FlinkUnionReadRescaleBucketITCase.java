@@ -53,7 +53,6 @@ import java.util.stream.Collectors;
 import static org.apache.fluss.flink.source.testutils.FlinkRowAssertionsUtils.collectRowsWithTimeout;
 import static org.apache.fluss.lake.paimon.utils.PaimonConversions.toPaimon;
 import static org.apache.fluss.testutils.DataTestUtils.row;
-import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
@@ -355,9 +354,7 @@ class FlinkUnionReadRescaleBucketITCase extends FlinkUnionReadTestBase {
         admin.dropPartition(
                         tablePath, new PartitionSpec(Collections.singletonMap("c", "old")), false)
                 .get();
-        retry(
-                Duration.ofSeconds(60),
-                () -> assertThat(admin.listPartitionInfos(tablePath).get()).hasSize(1));
+        assertThat(admin.listPartitionInfos(tablePath).get()).hasSize(1);
 
         // union read: the expired "old" partition is served entirely from the lake (with its
         // original bucket count), the "new" partition from Fluss+lake
