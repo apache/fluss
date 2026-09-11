@@ -387,6 +387,7 @@ class MultiTableWriterImpl implements MultiTableWriter {
         }
 
         WriteRecord buildAppendRecord(InternalRow row) {
+            AbstractTableWriter.checkNotNullConstraints(row, tableInfo, null /* targetColumns */);
             PhysicalTablePath physicalPath = getPhysicalPath(row);
             byte[] bucketKey =
                     logBucketKeyEncoder != null ? logBucketKeyEncoder.encodeKey(row) : null;
@@ -424,6 +425,7 @@ class MultiTableWriterImpl implements MultiTableWriter {
         final KvFormat kvFormat;
         final WriteFormat kvWriteFormat;
         final RowEncoder kvRowEncoder;
+        final int[] primaryKeyIndexes;
 
         PrimaryTableWriteState(TablePath tablePath, TableInfo tableInfo) {
             super(tablePath, tableInfo);
@@ -444,6 +446,7 @@ class MultiTableWriterImpl implements MultiTableWriter {
             this.kvFormat = tableInfo.getTableConfig().getKvFormat();
             this.kvWriteFormat = WriteFormat.fromKvFormat(this.kvFormat);
             this.kvRowEncoder = RowEncoder.create(this.kvFormat, rowType);
+            this.primaryKeyIndexes = tableInfo.getSchema().getPrimaryKeyIndexes();
         }
 
         @Override
@@ -464,6 +467,7 @@ class MultiTableWriterImpl implements MultiTableWriter {
         }
 
         WriteRecord buildUpsertRecord(InternalRow row) {
+            AbstractTableWriter.checkNotNullConstraints(row, tableInfo, null /* targetColumns */);
             byte[] key = primaryKeyEncoder.encodeKey(row);
             return WriteRecord.forUpsert(
                     tableInfo,
@@ -477,6 +481,7 @@ class MultiTableWriterImpl implements MultiTableWriter {
         }
 
         WriteRecord buildDeleteRecord(InternalRow row) {
+            AbstractTableWriter.checkNotNullConstraints(row, tableInfo, primaryKeyIndexes);
             byte[] key = primaryKeyEncoder.encodeKey(row);
             return WriteRecord.forDelete(
                     tableInfo,
