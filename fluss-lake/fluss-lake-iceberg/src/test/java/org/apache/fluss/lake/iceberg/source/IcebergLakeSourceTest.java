@@ -21,11 +21,14 @@ package org.apache.fluss.lake.iceberg.source;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.lake.source.LakeSource;
 import org.apache.fluss.lake.source.RecordReader;
+import org.apache.fluss.lake.source.SortedRecordReader;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.predicate.Predicate;
 import org.apache.fluss.predicate.PredicateBuilder;
 import org.apache.fluss.record.LogRecord;
 import org.apache.fluss.row.BinaryString;
+import org.apache.fluss.row.GenericRow;
+import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.types.IntType;
 import org.apache.fluss.types.RowType;
@@ -87,6 +90,84 @@ class IcebergLakeSourceTest extends IcebergSourceTestBase {
 
         assertThat(result.acceptedPredicates()).isEmpty();
         assertThat(result.remainingPredicates()).isEmpty();
+    }
+
+    @Test
+    void testSortedReaderSupportsMissingLakeSplit() throws Exception {
+        TablePath tablePath = TablePath.of("fluss", "test_sorted_reader_without_split");
+        Schema schema =
+                new Schema(
+                        Arrays.asList(
+                                required(1, "event_time", Types.TimestampType.withZone()),
+                                optional(2, "name", Types.StringType.get())),
+                        Collections.singleton(1));
+        createTable(tablePath, schema, PartitionSpec.unpartitioned());
+
+        LakeSource<IcebergSplit> lakeSource = lakeStorage.createLakeSource(tablePath);
+        RecordReader recordReader =
+                lakeSource.createRecordReader(
+                        new LakeSource.ReaderContext<IcebergSplit>() {
+                            @Override
+                            public IcebergSplit lakeSplit() {
+                                return null;
+                            }
+
+                            @Override
+                            public boolean requireSortedRecords() {
+                                return true;
+                            }
+                        });
+
+        assertThat(recordReader).isInstanceOf(SortedRecordReader.class);
+        SortedRecordReader sortedRecordReader = (SortedRecordReader) recordReader;
+        assertThat(
+                        sortedRecordReader
+                                .order()
+                                .compare(
+                                        GenericRow.of(TimestampLtz.fromEpochMillis(1)),
+                                        GenericRow.of(TimestampLtz.fromEpochMillis(2))))
+                .isNegative();
+        try (CloseableIterator<LogRecord> iterator = sortedRecordReader.read()) {
+            assertThat(iterator.hasNext()).isFalse();
+        }
+    }
+
+    @Test
+    void testSortedReaderComparesPrimaryKeyProjection() throws Exception {
+        TablePath tablePath = TablePath.of("fluss", "test_sorted_reader_key_projection");
+        Schema schema =
+                new Schema(
+                        Arrays.asList(
+                                optional(1, "name", Types.StringType.get()),
+                                required(2, "event_time", Types.TimestampType.withZone()),
+                                optional(3, "value", Types.StringType.get())),
+                        Collections.singleton(2));
+        createTable(tablePath, schema, PartitionSpec.unpartitioned());
+
+        LakeSource<IcebergSplit> lakeSource = lakeStorage.createLakeSource(tablePath);
+        lakeSource.withProject(new int[][] {{0}, {1}});
+        SortedRecordReader sortedRecordReader =
+                (SortedRecordReader)
+                        lakeSource.createRecordReader(
+                                new LakeSource.ReaderContext<IcebergSplit>() {
+                                    @Override
+                                    public IcebergSplit lakeSplit() {
+                                        return null;
+                                    }
+
+                                    @Override
+                                    public boolean requireSortedRecords() {
+                                        return true;
+                                    }
+                                });
+
+        assertThat(
+                        sortedRecordReader
+                                .order()
+                                .compare(
+                                        GenericRow.of(TimestampLtz.fromEpochMillis(1)),
+                                        GenericRow.of(TimestampLtz.fromEpochMillis(2))))
+                .isNegative();
     }
 
     @Test

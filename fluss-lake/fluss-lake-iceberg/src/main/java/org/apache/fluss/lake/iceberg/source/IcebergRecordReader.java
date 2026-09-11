@@ -93,8 +93,7 @@ public class IcebergRecordReader implements RecordReader {
 
         private final org.apache.iceberg.io.CloseableIterator<Record> icebergRecordIterator;
 
-        private final ProjectedRow projectedRow;
-        private final IcebergRecordAsFlussRow icebergRecordAsFlussRow;
+        private final int[] projectedPositions;
 
         public IcebergRecordAsFlussRecordIterator(
                 CloseableIterable<Record> icebergRecordIterator, Types.StructType struct) {
@@ -107,8 +106,7 @@ public class IcebergRecordReader implements RecordReader {
                     IcebergUtils.isLegacyTable(new Schema(struct.fields()))
                             ? struct.fields().size() - LEGACY_SYSTEM_COLUMNS.size()
                             : struct.fields().size();
-            projectedRow = ProjectedRow.from(IntStream.range(0, businessFieldCount).toArray());
-            icebergRecordAsFlussRow = new IcebergRecordAsFlussRow();
+            projectedPositions = IntStream.range(0, businessFieldCount).toArray();
         }
 
         @Override
@@ -136,8 +134,8 @@ public class IcebergRecordReader implements RecordReader {
                     NO_SYSTEM_COLUMN_VALUE,
                     NO_SYSTEM_COLUMN_VALUE,
                     ChangeType.INSERT,
-                    projectedRow.replaceRow(
-                            icebergRecordAsFlussRow.replaceIcebergRecord(icebergRecord)));
+                    ProjectedRow.from(projectedPositions)
+                            .replaceRow(new IcebergRecordAsFlussRow(icebergRecord)));
         }
     }
 }
