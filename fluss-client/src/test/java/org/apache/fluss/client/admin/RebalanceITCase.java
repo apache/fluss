@@ -210,6 +210,73 @@ public class RebalanceITCase {
     }
 
     @Test
+    void testRebalanceFullGoalChainBalancesEachTable() throws Exception {
+        String dbName = "db-table-goal-chain";
+        admin.createDatabase(dbName, DatabaseDescriptor.EMPTY, false).get();
+        admin.addServerTag(Collections.singletonList(3), ServerTag.PERMANENT_OFFLINE).get();
+        long[] tableIds = new long[2];
+        for (int i = 0; i < tableIds.length; i++) {
+            tableIds[i] =
+                    createTable(
+                            new TablePath(dbName, "table-goal-chain-" + i), DATA1_TABLE_DESCRIPTOR);
+            FLUSS_CLUSTER_EXTENSION.waitUntilTableReady(tableIds[i]);
+        }
+        admin.removeServerTag(Collections.singletonList(3), ServerTag.PERMANENT_OFFLINE).get();
+
+        String rebalanceId =
+                admin.rebalance(
+                                Arrays.asList(
+                                        GoalType.RACK_AWARE,
+                                        GoalType.TABLE_REPLICA_DISTRIBUTION,
+                                        GoalType.REPLICA_DISTRIBUTION,
+                                        GoalType.TABLE_LEADER_DISTRIBUTION,
+                                        GoalType.LEADER_DISTRIBUTION))
+                        .get();
+        retry(
+                Duration.ofMinutes(2),
+                () -> {
+                    Optional<RebalanceProgress> progress = admin.listRebalanceProgress(null).get();
+                    assertThat(progress).isPresent();
+                    assertThat(progress.get().rebalanceId()).isEqualTo(rebalanceId);
+                    assertThat(progress.get().status()).isEqualTo(RebalanceStatus.COMPLETED);
+                    for (long tableId : tableIds) {
+                        for (int serverId = 0; serverId < 4; serverId++) {
+                            ReplicaManager replicaManager =
+                                    FLUSS_CLUSTER_EXTENSION
+                                            .getTabletServerById(serverId)
+                                            .getReplicaManager();
+                            long replicas =
+                                    replicaManager
+                                            .onlineReplicas()
+                                            .filter(
+                                                    replica ->
+                                                            replica.getTableBucket().getTableId()
+                                                                    == tableId)
+                                            .count();
+                            long leaders =
+                                    replicaManager
+                                            .onlineReplicas()
+                                            .filter(
+                                                    replica ->
+                                                            replica.getTableBucket().getTableId()
+                                                                            == tableId
+                                                                    && replica.isLeader())
+                                            .count();
+                            // Each table has 3 buckets with replication factor 3 over 4 alive
+                            // servers, so the per-table balance windows are [2, 3] replicas and
+                            // [0, 1] leaders. The replica window is asserted exactly: the offline
+                            // tag is removed before the rebalance, so no evacuation happens and
+                            // the replica placement is deterministic. The leader window keeps one
+                            // extra unit of tolerance because a leader is occasionally left
+                            // unmigrated, tracked at https://github.com/apache/fluss/issues/2405.
+                            assertThat(replicas).isBetween(2L, 3L);
+                            assertThat(leaders).isBetween(0L, 2L);
+                        }
+                    }
+                });
+    }
+
+    @Test
     void testListRebalanceProgress() throws Exception {
         String dbName = "db-rebalance-list";
         admin.createDatabase(dbName, DatabaseDescriptor.EMPTY, false).get();

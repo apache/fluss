@@ -26,7 +26,9 @@ import org.apache.flink.table.annotation.ProcedureHint;
 import org.apache.flink.table.procedure.ProcedureContext;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
+import java.util.stream.Collectors;
 
 /**
  * Procedure to trigger rebalance.
@@ -41,6 +43,8 @@ import java.util.List;
  * CALL sys.rebalance('REPLICA_DISTRIBUTION');
  * -- Trigger rebalance with REPLICA_DISTRIBUTION and LEADER_DISTRIBUTION goals
  * CALL sys.rebalance('REPLICA_DISTRIBUTION,LEADER_DISTRIBUTION');
+ * -- Trigger rebalance with the recommended table-aware goal order
+ * CALL sys.rebalance('RACK_AWARE,TABLE_REPLICA_DISTRIBUTION,REPLICA_DISTRIBUTION,TABLE_LEADER_DISTRIBUTION,LEADER_DISTRIBUTION');
  * </pre>
  */
 public class RebalanceProcedure extends ProcedureBase {
@@ -57,19 +61,26 @@ public class RebalanceProcedure extends ProcedureBase {
         return new String[] {rebalanceId};
     }
 
+    private static final String VALID_GOALS =
+            Arrays.stream(GoalType.values()).map(Enum::name).collect(Collectors.joining(", "));
+
     private static List<GoalType> validateAndGetPriorityGoals(String priorityGoals) {
         if (priorityGoals == null || priorityGoals.trim().isEmpty()) {
             throw new IllegalArgumentException(
-                    "priority goals cannot be null or empty. You can specify one goal as 'REPLICA_DISTRIBUTION' or "
-                            + "specify multi goals as 'REPLICA_DISTRIBUTION,LEADER_DISTRIBUTION' (split by ',')");
+                    "priority goals cannot be null or empty. Valid goals are "
+                            + VALID_GOALS
+                            + ". You can specify one goal or specify multiple goals in priority "
+                            + "order (split by ',').");
         }
 
         priorityGoals = priorityGoals.trim();
         String[] splitGoals = priorityGoals.split(",");
         if (splitGoals.length == 0) {
             throw new IllegalArgumentException(
-                    "priority goals cannot be empty. You can specify one goal as 'REPLICA_DISTRIBUTION' "
-                            + "or specify multi goals as 'REPLICA_DISTRIBUTION,LEADER_DISTRIBUTION' (split by ',')");
+                    "priority goals cannot be empty. Valid goals are "
+                            + VALID_GOALS
+                            + ". You can specify one goal or specify multiple goals in priority "
+                            + "order (split by ',').");
         }
         List<GoalType> goalTypes = new ArrayList<>();
         for (String goal : splitGoals) {

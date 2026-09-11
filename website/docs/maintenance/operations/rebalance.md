@@ -62,7 +62,9 @@ System.out.println("Rebalance started with ID: " + rebalanceId);
 // Trigger rebalance with multiple goals in priority order
 List<GoalType> multipleGoals = Arrays.asList(
     GoalType.RACK_AWARE,
+    GoalType.TABLE_REPLICA_DISTRIBUTION,
     GoalType.REPLICA_DISTRIBUTION,
+    GoalType.TABLE_LEADER_DISTRIBUTION,
     GoalType.LEADER_DISTRIBUTION
 );
 String rebalanceId = admin.rebalance(multipleGoals).get();
@@ -70,11 +72,13 @@ String rebalanceId = admin.rebalance(multipleGoals).get();
 
 Available rebalance goals:
 - **RACK_AWARE**: Ensures replicas of the same bucket are distributed across different racks. This goal is essential for high availability in multi-rack deployments, as it prevents data loss when an entire rack fails.
+- **TABLE_REPLICA_DISTRIBUTION**: Ensures replicas of each table are near balanced across TabletServers. Use this before cluster-wide replica balancing for hot tables or after cluster expansion.
 - **REPLICA_DISTRIBUTION**: Ensures the number of replicas on each TabletServer is near balanced
+- **TABLE_LEADER_DISTRIBUTION**: Ensures leaders of each table are near balanced across TabletServers. It first transfers leadership between existing replicas and moves leader replicas only when necessary.
 - **LEADER_DISTRIBUTION**: Ensures the number of leader replicas on each TabletServer is near balanced
 
 :::tip Goal Priority
-Goals are processed in the order specified. When using `RACK_AWARE`, always place it first to ensure subsequent goals (like `REPLICA_DISTRIBUTION`) respect rack constraints. If `RACK_AWARE` is not the first goal, replica movements may violate rack awareness requirements.
+Goals are processed in the order specified. When using `RACK_AWARE`, always place it first to ensure subsequent goals respect rack constraints. For table-aware balancing, use `RACK_AWARE`, `TABLE_REPLICA_DISTRIBUTION`, `REPLICA_DISTRIBUTION`, `TABLE_LEADER_DISTRIBUTION`, then `LEADER_DISTRIBUTION`. If `RACK_AWARE` is not first, replica movements may violate rack awareness requirements.
 :::
 
 ### 3. Monitor Progress
@@ -167,7 +171,9 @@ public class RebalanceExample {
             System.out.println("Triggering rebalance...");
             List<GoalType> goals = Arrays.asList(
                 GoalType.RACK_AWARE,
+                GoalType.TABLE_REPLICA_DISTRIBUTION,
                 GoalType.REPLICA_DISTRIBUTION,
+                GoalType.TABLE_LEADER_DISTRIBUTION,
                 GoalType.LEADER_DISTRIBUTION
             );
             String rebalanceId = admin.rebalance(goals).get();
@@ -226,7 +232,7 @@ Example using Flink SQL:
 CALL sys.add_server_tag('0', 'PERMANENT_OFFLINE');
 
 -- Trigger rebalance with rack-aware goal (recommended)
-CALL sys.rebalance('RACK_AWARE,REPLICA_DISTRIBUTION,LEADER_DISTRIBUTION');
+CALL sys.rebalance('RACK_AWARE,TABLE_REPLICA_DISTRIBUTION,REPLICA_DISTRIBUTION,TABLE_LEADER_DISTRIBUTION,LEADER_DISTRIBUTION');
 
 -- Monitor progress
 CALL sys.list_rebalance();
@@ -242,22 +248,24 @@ CALL sys.cancel_rebalance();
 When your cluster is deployed across multiple racks for high availability, always place `RACK_AWARE` as the **first** goal in your rebalance request. This ensures that:
 
 1. The rebalance algorithm first satisfies rack distribution constraints
-2. Subsequent goals (like `REPLICA_DISTRIBUTION` and `LEADER_DISTRIBUTION`) only consider movements that maintain rack awareness
+2. Subsequent goals (like `TABLE_REPLICA_DISTRIBUTION`, `REPLICA_DISTRIBUTION`, `TABLE_LEADER_DISTRIBUTION` and `LEADER_DISTRIBUTION`) only consider movements that maintain rack awareness
 3. You won't end up with multiple replicas of the same bucket on the same rack
 
 **Recommended goal order for multi-rack deployments:**
 ```java
 List<GoalType> goals = Arrays.asList(
-    GoalType.RACK_AWARE,           // First: ensure rack distribution
-    GoalType.REPLICA_DISTRIBUTION, // Second: balance replica count
-    GoalType.LEADER_DISTRIBUTION   // Third: balance leader count
+    GoalType.RACK_AWARE,                 // First: ensure rack distribution
+    GoalType.TABLE_REPLICA_DISTRIBUTION, // Second: balance replica count of each table
+    GoalType.REPLICA_DISTRIBUTION,       // Third: balance replica count of the cluster
+    GoalType.TABLE_LEADER_DISTRIBUTION,  // Fourth: balance leader count of each table
+    GoalType.LEADER_DISTRIBUTION         // Fifth: balance leader count of the cluster
 );
 ```
 
 **Example using Flink SQL:**
 ```sql
 -- Correct: RACK_AWARE first ensures rack-balanced assignments
-CALL sys.rebalance('RACK_AWARE,REPLICA_DISTRIBUTION,LEADER_DISTRIBUTION');
+CALL sys.rebalance('RACK_AWARE,TABLE_REPLICA_DISTRIBUTION,REPLICA_DISTRIBUTION,TABLE_LEADER_DISTRIBUTION,LEADER_DISTRIBUTION');
 
 -- Incorrect: May produce non-rack-balanced assignments
 -- CALL sys.rebalance('REPLICA_DISTRIBUTION,RACK_AWARE');  -- Don't do this!

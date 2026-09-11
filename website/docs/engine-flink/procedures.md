@@ -443,9 +443,11 @@ CALL [catalog_name.]sys.rebalance(
 
 **Parameters:**
 
-- `priorityGoals` (required): The rebalance goals to achieve, specified as goal types. Can be a single goal (e.g., `'REPLICA_DISTRIBUTION'`) or multiple goals separated by commas (e.g., `'RACK_AWARE,REPLICA_DISTRIBUTION,LEADER_DISTRIBUTION'`). Valid goal types are:
+- `priorityGoals` (required): The rebalance goals to achieve, specified as goal types. Can be a single goal (e.g., `'TABLE_REPLICA_DISTRIBUTION'`) or multiple goals separated by commas (e.g., `'RACK_AWARE,TABLE_REPLICA_DISTRIBUTION,REPLICA_DISTRIBUTION,TABLE_LEADER_DISTRIBUTION,LEADER_DISTRIBUTION'`). Valid goal types are:
     - `'RACK_AWARE'`: Ensures replicas of the same bucket are distributed across different racks. This goal should be placed first when rack awareness is required to prevent non-rack-balanced assignments.
+    - `'TABLE_REPLICA_DISTRIBUTION'`: Ensures replicas of each table are near balanced across TabletServers.
     - `'REPLICA_DISTRIBUTION'`: Generates replica movement tasks to ensure the number of replicas on each TabletServer is near balanced.
+    - `'TABLE_LEADER_DISTRIBUTION'`: Ensures leaders of each table are near balanced across TabletServers.
     - `'LEADER_DISTRIBUTION'`: Generates leadership movement and leader replica movement tasks to ensure the number of leader replicas on each TabletServer is near balanced.
 
 **Returns:** An array with a single element containing the rebalance ID (e.g., `'rebalance-12345'`), which can be used to track or cancel the rebalance operation.
@@ -464,13 +466,13 @@ CALL [catalog_name.]sys.rebalance(
 USE fluss_catalog;
 
 -- Trigger rebalance with rack-aware goal (recommended for multi-rack deployments)
-CALL sys.rebalance('RACK_AWARE,REPLICA_DISTRIBUTION');
+CALL sys.rebalance('RACK_AWARE,TABLE_REPLICA_DISTRIBUTION,REPLICA_DISTRIBUTION');
 
 -- Trigger rebalance with replica distribution goal only
 CALL sys.rebalance('REPLICA_DISTRIBUTION');
 
 -- Trigger rebalance with multiple goals in priority order
-CALL sys.rebalance('RACK_AWARE,REPLICA_DISTRIBUTION,LEADER_DISTRIBUTION');
+CALL sys.rebalance('RACK_AWARE,TABLE_REPLICA_DISTRIBUTION,REPLICA_DISTRIBUTION,TABLE_LEADER_DISTRIBUTION,LEADER_DISTRIBUTION');
 ```
 
 ### list_rebalance

@@ -21,7 +21,13 @@ import org.apache.fluss.metadata.TableBucket;
 
 import org.junit.jupiter.api.Test;
 
+import java.util.Arrays;
+import java.util.SortedSet;
+import java.util.TreeSet;
+
+import static org.apache.fluss.server.coordinator.rebalance.RebalanceTestUtils.addBucket;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Test for {@link ServerModel}. */
 public class ServerModelTest {
@@ -75,6 +81,40 @@ public class ServerModelTest {
         assertThat(serverModel.replicas()).hasSize(5);
         assertThat(serverModel.numLeaderReplicas()).isEqualTo(2);
         assertThat(serverModel.tables()).containsExactly(1L, 3L);
+    }
+
+    @Test
+    void testPerTableIndexesTrackRelocationsAndDuplicateInsertions() {
+        SortedSet<ServerModel> servers = new TreeSet<>();
+        ServerModel server0 = new ServerModel(0, "rack0", false);
+        ServerModel server1 = new ServerModel(1, "rack1", false);
+        servers.add(server0);
+        servers.add(server1);
+        ClusterModel cluster = new ClusterModel(servers);
+        TableBucket p0 = new TableBucket(7, 0L, 0);
+        TableBucket p1 = new TableBucket(7, 1L, 0);
+        addBucket(cluster, p0, Arrays.asList(0));
+        addBucket(cluster, p1, Arrays.asList(0, 1));
+
+        assertThat(server0.numReplicas(7)).isEqualTo(2);
+        assertThat(server0.numLeaderReplicas(7)).isEqualTo(2);
+        assertThat(server0.replicas(7)).hasSize(2);
+        assertThat(server0.leaderReplicas(7)).hasSize(2);
+        cluster.relocateReplica(p0, 0, 1);
+        assertThat(server0.numReplicas(7)).isEqualTo(1);
+        assertThat(server1.numReplicas(7)).isEqualTo(2);
+        assertThat(server1.numLeaderReplicas(7)).isEqualTo(1);
+        cluster.relocateLeadership(p1, 0, 1);
+        assertThat(server0.numLeaderReplicas(7)).isZero();
+        assertThat(server1.numLeaderReplicas(7)).isEqualTo(2);
+        server0.removeReplica(p1);
+        assertThat(server0.replicas(7)).isEmpty();
+        assertThat(server0.tables()).doesNotContain(7L);
+
+        assertThatThrownBy(() -> server1.putReplica(p0, new ReplicaModel(p0, server1, true)))
+                .isInstanceOf(IllegalStateException.class);
+        assertThat(server1.numReplicas(7)).isEqualTo(2);
+        assertThat(server1.numLeaderReplicas(7)).isEqualTo(2);
     }
 
     @Test

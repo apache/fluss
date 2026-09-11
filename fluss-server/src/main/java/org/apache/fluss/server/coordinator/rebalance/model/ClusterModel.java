@@ -132,6 +132,22 @@ public class ClusterModel {
     }
 
     /**
+     * Returns the number of replicas of every table in the cluster, keyed by table id and
+     * aggregated over all partitions of a partitioned table.
+     *
+     * <p>The whole map is built in a single pass over the buckets, so that callers that need the
+     * counts of many tables do not rescan the buckets once per table.
+     */
+    public Map<Long, Integer> numReplicasByTable() {
+        Map<Long, Integer> numReplicasByTable = new HashMap<>();
+        for (Map.Entry<TableBucket, BucketModel> entry : bucketsByTableBucket.entrySet()) {
+            numReplicasByTable.merge(
+                    entry.getKey().getTableId(), entry.getValue().replicas().size(), Integer::sum);
+        }
+        return numReplicasByTable;
+    }
+
+    /**
      * @return All the leader replicas in the cluster.
      */
     public Set<ReplicaModel> leaderReplicas() {
@@ -151,6 +167,23 @@ public class ClusterModel {
             numLeaderReplicas += bucket.leader() != null ? 1 : 0;
         }
         return numLeaderReplicas;
+    }
+
+    /**
+     * Returns the number of leader replicas of every table in the cluster, keyed by table id and
+     * aggregated over all partitions of a partitioned table.
+     *
+     * <p>The whole map is built in a single pass over the buckets, see {@link
+     * #numReplicasByTable()}.
+     */
+    public Map<Long, Integer> numLeaderReplicasByTable() {
+        Map<Long, Integer> numLeaderReplicasByTable = new HashMap<>();
+        for (Map.Entry<TableBucket, BucketModel> entry : bucketsByTableBucket.entrySet()) {
+            if (entry.getValue().leader() != null) {
+                numLeaderReplicasByTable.merge(entry.getKey().getTableId(), 1, Integer::sum);
+            }
+        }
+        return numLeaderReplicasByTable;
     }
 
     public SortedMap<Long, List<BucketModel>> getBucketsByTable() {
