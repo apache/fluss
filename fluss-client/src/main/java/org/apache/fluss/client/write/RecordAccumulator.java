@@ -48,6 +48,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import javax.annotation.Nullable;
+import javax.annotation.concurrent.GuardedBy;
 
 import java.io.IOException;
 import java.time.Duration;
@@ -112,8 +113,11 @@ public final class RecordAccumulator {
     /** The chunked allocation manager factory, stored for explicit native memory release. */
     private final ChunkedAllocationManager.ChunkedFactory chunkedFactory;
 
-    /** Guard to make {@link #destroyResources()} idempotent. */
-    private final AtomicBoolean resourcesDestroyed = new AtomicBoolean(false);
+    /** Coordinates batch memory deallocation with resource destruction. */
+    private final Object resourcesLock = new Object();
+
+    @GuardedBy("resourcesLock")
+    private boolean resourcesDestroyed;
 
     /** The pool of lazily created arrow {@link ArrowWriter}s for arrow log write batch. */
     private final ArrowWriterPool arrowWriterPool;
@@ -368,20 +372,22 @@ public final class RecordAccumulator {
         return batches;
     }
 
-    public void reEnqueue(ReadyWriteBatch readyWriteBatch) {
+    /** Re-enqueue a batch unless it was completed concurrently. */
+    public boolean reEnqueue(ReadyWriteBatch readyWriteBatch) {
         WriteBatch batch = readyWriteBatch.writeBatch();
-        if (batch.isDone()) {
-            return;
-        }
-        batch.reEnqueued();
         Deque<WriteBatch> deque =
                 getOrCreateDeque(readyWriteBatch.tableBucket(), batch.physicalTablePath());
         synchronized (deque) {
+            if (batch.isDone()) {
+                return false;
+            }
+            batch.reEnqueued();
             if (idempotenceManager.idempotenceEnabled()) {
                 insertInSequenceOrder(deque, batch, readyWriteBatch.tableBucket());
             } else {
                 deque.addFirst(batch);
             }
+            return true;
         }
     }
 
@@ -543,12 +549,24 @@ public final class RecordAccumulator {
 
     private void abortBatch(final Exception reason, WriteBatch batch) {
         Deque<WriteBatch> dq = getDeque(batch.physicalTablePath(), batch.bucketId());
+        boolean aborted;
         synchronized (dq) {
-            batch.abortRecordAppends();
+            aborted = batch.trySetAborted();
+            if (aborted) {
+                batch.abortRecordAppends();
+            }
             dq.remove(batch);
         }
-        batch.abort(reason);
-        deallocate(batch);
+
+        // A response may have completed the batch after abortAllBatches() took its snapshot. In
+        // that case, skip the abort callback but still claim deallocation if it is still pending.
+        try {
+            if (aborted) {
+                batch.completeAbort(reason);
+            }
+        } finally {
+            deallocate(batch);
+        }
     }
 
     /** Get the deque for the given table-bucket, creating it if necessary. */
@@ -608,10 +626,19 @@ public final class RecordAccumulator {
         }
     }
 
-    /** Deallocate the record batch. */
+    /**
+     * Deallocate the record batch if this call wins ownership of it.
+     *
+     * <p>Response handling and fatal cleanup may race, so removing the batch from the incomplete
+     * set determines which caller returns its memory. The same lock prevents resource destruction
+     * from overtaking that return.
+     */
     public void deallocate(WriteBatch batch) {
-        incomplete.remove(batch);
-        writerBufferPool.returnAll(batch.pooledMemorySegments());
+        synchronized (resourcesLock) {
+            if (incomplete.removeIfPresent(batch) && !resourcesDestroyed) {
+                writerBufferPool.returnAll(batch.pooledMemorySegments());
+            }
+        }
     }
 
     /**
@@ -1467,8 +1494,15 @@ public final class RecordAccumulator {
      */
     @VisibleForTesting
     public void destroyResources() {
-        if (!resourcesDestroyed.compareAndSet(false, true)) {
-            return;
+        synchronized (resourcesLock) {
+            if (resourcesDestroyed) {
+                return;
+            }
+            resourcesDestroyed = true;
+            writerBufferPool.close();
+            arrowWriterPool.close();
+            bufferAllocator.close();
+            chunkedFactory.close();
         }
         diskWriteBackoffDeadlinesNanos.clear();
         writerBufferPool.close();

@@ -55,6 +55,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.apache.fluss.client.utils.ClientRpcMessageUtils.makeProduceLogRequest;
 import static org.apache.fluss.client.utils.ClientRpcMessageUtils.makePutKvRequest;
@@ -94,6 +95,9 @@ public class Sender implements Runnable {
 
     /** true when the caller wants to ignore all unsent/inflight messages and force close. */
     private volatile boolean forceClose;
+
+    /** The first fatal error that requires the sender thread to abort all incomplete batches. */
+    private final AtomicReference<Throwable> fatalError = new AtomicReference<>();
 
     private final Object wakeupLock = new Object();
     private boolean wakeup;
@@ -151,30 +155,42 @@ public class Sender implements Runnable {
     public void run() {
         LOG.debug("Starting Fluss write sender thread.");
 
-        // main loop, runs until close is called.
-        while (running) {
+        try {
+            // main loop, runs until close is called.
+            while (running) {
+                try {
+                    runOnce();
+                } catch (Exception e) {
+                    LOG.error("Uncaught error in Fluss write sender thread: ", e);
+                }
+            }
+
+            LOG.debug(
+                    "Beginning shutdown of Fluss log record write I/O thread, sending remaining records.");
+
+            // okay we stopped accepting requests but there may still be requests in the accumulator
+            // or waiting for acknowledgment, wait until these are completed.
+            // TODO Check the in flight request count in the accumulator.
+            while (!forceClose && ((accumulator.hasUnDrained()))) {
+                try {
+                    runOnce();
+                } catch (Exception e) {
+                    LOG.error("Uncaught error in Fluss write sender I/O thread: ", e);
+                }
+            }
+        } catch (Throwable t) {
+            recordFatalError(t);
+            ExceptionUtils.rethrow(t);
+        } finally {
             try {
-                runOnce();
-            } catch (Throwable t) {
-                LOG.error("Uncaught error in Fluss write sender thread: ", t);
+                Throwable t = fatalError.get();
+                if (t != null) {
+                    maybeAbortBatches(t);
+                }
+            } finally {
+                destroyResources();
             }
         }
-
-        LOG.debug(
-                "Beginning shutdown of Fluss log record write I/O thread, sending remaining records.");
-
-        // okay we stopped accepting requests but there may still be requests in the accumulator or
-        // waiting for acknowledgment, wait until these are completed.
-        // TODO Check the in flight request count in the accumulator.
-        while (!forceClose && ((accumulator.hasUnDrained()))) {
-            try {
-                runOnce();
-            } catch (Exception e) {
-                LOG.error("Uncaught error in Fluss write sender I/O thread: ", e);
-            }
-        }
-
-        destroyResources();
 
         // TODO if force close failed, add logic to abort incomplete batches.
         LOG.debug("Shutdown of Fluss write sender I/O thread has completed.");
@@ -189,10 +205,13 @@ public class Sender implements Runnable {
             try {
                 idempotenceManager.maybeWaitForWriterId(targetTables);
             } catch (Throwable t) {
+                if (t instanceof Error) {
+                    throw (Error) t;
+                }
                 // TODO: If 'only request to init writer_id when we have valid target tables' have
                 // been down, this if check can be removed.
                 if (!targetTables.isEmpty()) {
-                    maybeAbortBatches((Exception) t);
+                    maybeAbortBatches(t);
                 } else {
                     LOG.trace("No target tables, ignore init writer id error", t);
                 }
@@ -305,20 +324,32 @@ public class Sender implements Runnable {
         }
     }
 
-    private void maybeAbortBatches(Exception exception) {
-        if (accumulator.hasIncomplete()) {
-            LOG.error("Aborting write batches due to fatal error", exception);
-            accumulator.abortAllBatches(exception);
+    private void maybeAbortBatches(Throwable t) {
+        try {
+            if (accumulator.hasIncomplete()) {
+                LOG.error("Aborting write batches due to fatal error", t);
+                accumulator.abortAllBatches(ExceptionUtils.toException(t));
+            }
+        } finally {
+            synchronized (inFlightBatchesLock) {
+                inFlightBatches.clear();
+            }
         }
     }
 
     private void reEnqueueBatch(ReadyWriteBatch readyWriteBatch) {
-        accumulator.reEnqueue(readyWriteBatch);
+        boolean reEnqueued = accumulator.reEnqueue(readyWriteBatch);
         maybeRemoveFromInflightBatches(readyWriteBatch);
 
         // metrics for retry record count.
         writerMetricGroup.recordsRetryTotal().inc(readyWriteBatch.writeBatch().getRecordCount());
         wakeup();
+        if (reEnqueued) {
+            // metrics for retry record count.
+            writerMetricGroup
+                    .recordsRetryTotal()
+                    .inc(readyWriteBatch.writeBatch().getRecordCount());
+        }
     }
 
     /**
@@ -454,18 +485,23 @@ public class Sender implements Runnable {
         if (writeBatches.isEmpty()) {
             return;
         }
-        if (logBatches) {
-            sendProduceLogRequestAndHandleResponse(
-                    gateway,
-                    makeProduceLogRequest(tableId, acks, maxRequestTimeoutMs, writeBatches),
-                    tableId,
-                    writeBatches);
-        } else {
-            sendPutKvRequestAndHandleResponse(
-                    gateway,
-                    makePutKvRequest(tableId, acks, maxRequestTimeoutMs, writeBatches),
-                    tableId,
-                    writeBatches);
+        try {
+            if (logBatches) {
+                sendProduceLogRequestAndHandleResponse(
+                        gateway,
+                        makeProduceLogRequest(tableId, acks, maxRequestTimeoutMs, writeBatches),
+                        tableId,
+                        writeBatches);
+            } else {
+                sendPutKvRequestAndHandleResponse(
+                        gateway,
+                        makePutKvRequest(tableId, acks, maxRequestTimeoutMs, writeBatches),
+                        tableId,
+                        writeBatches);
+            }
+        } catch (Exception e) {
+            // A synchronous failure belongs only to the batches in this individual RPC.
+            handleWriteRequestException(e, writeBatches);
         }
     }
 
@@ -616,6 +652,12 @@ public class Sender implements Runnable {
     }
 
     private void handleWriteRequestException(Throwable t, List<ReadyWriteBatch> writeBatches) {
+        Throwable cause = Errors.maybeUnwrapException(t);
+        if (cause instanceof Error) {
+            recordFatalError(cause);
+            return;
+        }
+
         ApiError error = ApiError.fromThrowable(t);
 
         // if batch failed because of retrievable exception, we need to retry send all those
@@ -627,6 +669,18 @@ public class Sender implements Runnable {
         }
 
         metadataUpdater.invalidPhysicalTableBucketMeta(invalidMetadataTablesSet);
+    }
+
+    private void recordFatalError(Throwable t) {
+        // Request callbacks may run on a network thread. Only publish the fatal state here; the
+        // sender thread aborts incomplete batches in run() before destroying accumulator resources.
+        accumulator.close();
+        if (fatalError.compareAndSet(null, t)) {
+            LOG.error("Fatal error in Fluss write sender:", t);
+        }
+        running = false;
+        forceClose = true;
+        wakeup();
     }
 
     /** Handle the exception and return a set of tables for which the metadata is invalid. */

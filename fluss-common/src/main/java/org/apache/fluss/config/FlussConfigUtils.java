@@ -124,6 +124,8 @@ public class FlussConfigUtils {
 
     public static void validateCoordinatorConfigs(Configuration conf) {
         validateServerConfigs(conf);
+        validMinDuration(conf, ConfigOptions.COORDINATOR_CONTROL_REQUEST_RETRY_BACKOFF, 1);
+        validMinDuration(conf, ConfigOptions.COORDINATOR_CONTROL_REQUEST_TIMEOUT, 1);
     }
 
     public static void validateTabletConfigs(Configuration conf) {
