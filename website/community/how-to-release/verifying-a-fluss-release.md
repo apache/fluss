@@ -28,7 +28,10 @@ gpg --import KEYS
 Next, verify all `.asc` files:
 
 ```bash
-for i in *.tgz; do echo $i; gpg --verify $i.asc $i; done
+for i in ./*.tgz; do
+  echo "$i"
+  gpg --verify "$i.asc" "$i" || exit 1
+done
 ```
 If the verification is successful, you will see a message like this:
 
@@ -44,15 +47,15 @@ gpg: Good signature from "Jark Wu (CODE SIGNING KEY) <jark@apache.org>"
 Next, verify all the checksums:
 
 ```bash
-shasum *.sha512 > checklist.chk; shasum -c checklist.chk
+shasum -a 512 --check ./*.sha512
 ```
 
 If the verification is successful, you will see a message like this:
 
 ```
-fluss-1.0.0-bin.tgz.sha512: OK
-fluss-gateway-1.0.0-bin-linux-amd64.tgz.sha512: OK
-fluss-1.0.0-src.tgz.sha512: OK
+fluss-1.0.0-bin.tgz: OK
+fluss-gateway-1.0.0-bin-linux-amd64.tgz: OK
+fluss-1.0.0-src.tgz: OK
 ```
 
 ## Verifying build
@@ -61,6 +64,13 @@ Unzip the source release archive (`fluss-1.0.0-src.tgz`), and verify that the so
 
 ```bash
 mvn clean package -DskipTests
+```
+
+Gateway is a separate Cargo workspace, not built by Maven or the `fluss-rust`
+workspace. With Rust 1.88 installed, also run from the extracted source root:
+
+```bash
+cargo +1.88.0 build --locked --release --manifest-path fluss-gateway/Cargo.toml --bin fluss-gateway
 ```
 
 ## Verifying LICENSE/NOTICE
@@ -93,6 +103,7 @@ The Rust workspace's dependency licenses are checked with [cargo-deny](https://e
 
 ## Verifying the Gateway distribution
 
+Set `RELEASE_VERSION`, `RC_NUM`, and the full `RELEASE_COMMIT` from the vote email.
 Extract the Gateway archive on the matching Linux architecture and check its
 version, configuration, health endpoint, and graceful shutdown:
 
@@ -100,6 +111,7 @@ version, configuration, health endpoint, and graceful shutdown:
 tar -xzf fluss-gateway-${RELEASE_VERSION}-bin-linux-amd64.tgz
 cd fluss-gateway-${RELEASE_VERSION}-bin-linux-amd64
 
+test "$(cat RELEASE_COMMIT)" = "${RELEASE_COMMIT:?Set the recorded RC commit}" || exit 1
 bin/fluss-gateway --version
 bin/fluss-gateway.sh --bind-address 127.0.0.1:8080 &
 GATEWAY_PID=$!
@@ -124,15 +136,19 @@ docker buildx imagetools inspect \
   apache/fluss-gateway:${RELEASE_VERSION}-rc${RC_NUM}
 ```
 
-Then verify the image on matching `amd64` and `arm64` Docker hosts:
+Record the top-level image index `Digest` (including `sha256:`) in the vote
+thread as `GATEWAY_IMAGE_DIGEST`. Then verify that same digest on matching
+`amd64` and `arm64` Docker hosts:
 
 ```bash
-docker pull apache/fluss-gateway:${RELEASE_VERSION}-rc${RC_NUM}
+docker pull "apache/fluss-gateway@${GATEWAY_IMAGE_DIGEST:?Set the RC image index digest}"
+image_commit="$(docker run --rm --entrypoint cat "apache/fluss-gateway@${GATEWAY_IMAGE_DIGEST}" /opt/fluss/RELEASE_COMMIT)" || exit 1
+test "${image_commit}" = "${RELEASE_COMMIT:?Set the recorded RC commit}" || exit 1
 
 # Run the checked-in smoke test from the root of the extracted Fluss source
 # release, not from the Gateway binary distribution used above.
 cd /path/to/fluss-${RELEASE_VERSION}
-GATEWAY_IMAGE=apache/fluss-gateway:${RELEASE_VERSION}-rc${RC_NUM} \
+GATEWAY_IMAGE=apache/fluss-gateway@${GATEWAY_IMAGE_DIGEST} \
   docker/fluss-gateway/smoke-test.sh
 ```
 

@@ -22,8 +22,20 @@ set -o errexit
 set -o nounset
 set -o pipefail
 
+# Use the same explicit unsigned development mode as the packaging script.
+SKIP_GPG=${SKIP_GPG:-false}
+if [[ "${SKIP_GPG}" != "true" && "${SKIP_GPG}" != "false" ]]; then
+    echo "SKIP_GPG must be true or false." >&2
+    exit 1
+fi
+
 if [[ -z "${RELEASE_VERSION:-}" ]]; then
     echo "RELEASE_VERSION was not set." >&2
+    exit 1
+fi
+
+if [[ "${SKIP_GPG}" == "false" && -z "${RELEASE_COMMIT:-}" ]]; then
+    echo "RELEASE_COMMIT must be the full commit hash recorded for the RC tag." >&2
     exit 1
 fi
 
@@ -61,6 +73,17 @@ for arch in ${ARCHES}; do
     if [[ ! -d "${package_dir}" ]]; then
         echo "${archive} does not contain ${package_name}/." >&2
         exit 1
+    fi
+    if [[ "${SKIP_GPG}" == "false" ]]; then
+        if [[ ! -f "${package_dir}/RELEASE_COMMIT" ]]; then
+            echo "${archive} does not contain RELEASE_COMMIT; use a signed RC archive." >&2
+            exit 1
+        fi
+        archive_commit="$(cat "${package_dir}/RELEASE_COMMIT")"
+        if [[ "${archive_commit}" != "${RELEASE_COMMIT}" ]]; then
+            echo "${archive} was built from ${archive_commit}, not RELEASE_COMMIT ${RELEASE_COMMIT}." >&2
+            exit 1
+        fi
     fi
     mkdir -p "${BUILD_DIR}/${arch}"
     cp -a "${package_dir}/." "${BUILD_DIR}/${arch}/"

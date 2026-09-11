@@ -333,12 +333,20 @@ $ cd tools
 tools $ OLD_VERSION=$CURRENT_SNAPSHOT_VERSION NEW_VERSION=$RELEASE_VERSION releasing/update_branch_version.sh
 ```
 
-Tag the release commit:
+Before tagging, complete the [client version and dependency audit preparation](#9-publish-client-rc-artifacts-cratesio--pypi)
+from the repository root and commit any resulting changes, including both Rust
+workspaces' lockfiles. Return to `tools/`, then tag the release commit and export
+its full hash for all subsequent builds:
 
 ```bash
 git tag -s ${TAG} -m "${TAG}"
-RELEASE_COMMIT="$(git rev-parse "${TAG}^{}")"
+export RELEASE_COMMIT="$(git rev-parse "${TAG}^{}")"
 ```
+
+Use a clean checkout of that same commit on every build machine. Source and
+signed Gateway release builds reject a different `HEAD` or tracked changes and
+package only committed files. Do not use `SKIP_GPG=true` for release candidates;
+it is reserved for unsigned development and CI builds.
 
 ### 2. Create source release files
 
@@ -497,7 +505,16 @@ If you can't login Docker ID in your region because of network issues, you can f
 
 Next, we need to build and push Docker images for the release candidates. This will enable users to easily test the new functionality using the Quickstart guide in the [Fluss documentation](https://fluss.apache.org/docs/quickstart/flink/) improving accessibility and feedback during the release validation phase.
 
-From the root directory of the source code, run the following commands to build and push the fluss Docker image.
+On the image-build machine, export the recorded `RELEASE_COMMIT` and verify
+that the Dockerfiles and preparation scripts are from that RC. From the
+repository root, check:
+
+```bash
+test "$(git rev-parse HEAD)" = "${RELEASE_COMMIT:?Set the recorded RC commit}" || exit 1
+git diff --quiet && git diff --cached --quiet || exit 1
+```
+
+Then run the following commands to build and push the fluss Docker image.
 
 ```bash
 $ rm -rf docker/fluss/build-target/
@@ -509,10 +526,15 @@ docker/fluss $ docker buildx build --push --platform linux/arm64/v8,linux/amd64 
 ```
 
 Like the Java image, the Gateway image consumes a prepared binary distribution
-instead of compiling project sources in buildx, so both voted archives have to be
+instead of compiling project sources in buildx, so both RC archives have to be
 unpacked into `docker/fluss-gateway/build-target/` first. Step 5 moved them out of
 `tools/releasing/release/`, so point `GATEWAY_RELEASE_DIR` at the staging working
 copy that now holds them:
+
+Before running `prepare_build.sh`, [verify the signatures and checksums](verifying-a-fluss-release.md#verifying-signatures)
+of both archives on the image-build machine. The script checks each archive's
+packaged `RELEASE_COMMIT` against the exported RC commit before preparing image
+inputs; it does not authenticate them.
 
 ```bash
 docker/fluss $ cd ../..
@@ -524,10 +546,8 @@ $ RELEASE_VERSION=$RELEASE_VERSION \
 If you build the images on a different machine than the one that created the
 archives, download both `fluss-gateway-${RELEASE_VERSION}-bin-linux-*.tgz` files
 from `https://dist.apache.org/repos/dist/dev/fluss/fluss-${RELEASE_VERSION}-rc${RC_NUM}/`
-into any directory and point `GATEWAY_RELEASE_DIR` there instead. Only the `.tgz`
-files are needed. Also copy the `RELEASE_COMMIT` value recorded when the RC tag
-was created and export it on the image-build machine; do not derive it from that
-machine's checkout.
+with their `.asc` and `.sha512` files into any directory and point
+`GATEWAY_RELEASE_DIR` there instead.
 
 The Dockerfile selects the matching `build-target/<arch>` directory for each
 target platform:
@@ -578,7 +598,7 @@ fluss-rust/scripts/bump-version.sh <previous_version> ${RELEASE_VERSION}
 # The Elixir binding has its own version attribute — set @version "${RELEASE_VERSION}" in
 #   fluss-rust/bindings/elixir/mix.exs
 # Regenerate the Rust dependency/license audit (cargo-deny):
-(cd fluss-rust && python3 scripts/dependencies.py)
+(cd fluss-rust && python3 scripts/dependencies.py generate)
 ```
 
 Pushing the **RC tag** (`v${RELEASE_VERSION}-rc${RC_NUM}`) triggers the client workflows:
@@ -778,13 +798,25 @@ Pushing the `v${RELEASE_VERSION}` tag also triggers the client release workflows
 Make sure that you are authenticated with your Docker ID, and that your Docker ID has access to `apache/fluss`, `apache/fluss-gateway`, and `apache/fluss-quickstart-flink`: `docker login -u <username>`. If you do not have access, you should seek help via the dev mailing list.
 :::
 
+For Gateway, set `GATEWAY_IMAGE_DIGEST` to the approved RC's image index digest
+recorded during
+[RC verification](verifying-a-fluss-release.md#verifying-the-gateway-distribution)
+(including `sha256:`). Promote that digest rather than rebuilding or resolving
+the mutable RC tag.
+
 ```bash
+: "${GATEWAY_IMAGE_DIGEST:?Set the approved Gateway RC image index digest}"
+
 docker buildx imagetools create apache/fluss:${RELEASE_VERSION}-rc${RC_NUM} --tag apache/fluss:${RELEASE_VERSION}
 
-docker buildx imagetools create apache/fluss-gateway:${RELEASE_VERSION}-rc${RC_NUM} --tag apache/fluss-gateway:${RELEASE_VERSION}
+docker buildx imagetools create "apache/fluss-gateway@${GATEWAY_IMAGE_DIGEST}" --tag apache/fluss-gateway:${RELEASE_VERSION}
 
 docker buildx imagetools create apache/fluss-quickstart-flink:1.20-${RELEASE_VERSION}-rc${RC_NUM} --tag apache/fluss-quickstart-flink:1.20-${RELEASE_VERSION}
+
+docker buildx imagetools inspect apache/fluss-gateway:${RELEASE_VERSION}
 ```
+
+Confirm that the final Gateway tag resolves to the recorded image index digest.
 
 ### 6. Update `fluss-versions.json`
 
