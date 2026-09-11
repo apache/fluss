@@ -90,6 +90,12 @@ public class TabletServerMetricGroup extends AbstractMetricGroup {
 
     private volatile long sharedWriteBufferCapacity;
 
+    /** Supplier for aggregated pre-write buffer memory usage, set by KvManager. */
+    private volatile LongSupplier preWriteBufferMemoryUsageSupplier = () -> 0L;
+
+    /** Supplier for aggregated pre-write buffer entry count, set by KvManager. */
+    private volatile LongSupplier preWriteBufferEntryCountSupplier = () -> 0L;
+
     public TabletServerMetricGroup(
             MetricRegistry registry, String clusterId, String rack, String hostname, int serverId) {
         super(registry, new String[] {clusterId, hostname, NAME}, null);
@@ -151,6 +157,9 @@ public class TabletServerMetricGroup extends AbstractMetricGroup {
 
         // Register server-level RocksDB aggregated metrics
         registerServerRocksDBMetrics();
+
+        // Register server-level pre-write buffer aggregated metrics
+        registerServerKvPreWriteBufferMetrics();
     }
 
     /**
@@ -213,6 +222,34 @@ public class TabletServerMetricGroup extends AbstractMetricGroup {
         this.sharedWriteBufferUsageSupplier =
                 checkNotNull(usageSupplier, "usageSupplier must not be null");
         this.sharedWriteBufferCapacity = capacity;
+    }
+
+    /**
+     * Register server-level pre-write buffer aggregated metrics. These metrics aggregate the memory
+     * usage of the pre-write buffers of all KV tablets in this server.
+     */
+    private void registerServerKvPreWriteBufferMetrics() {
+        gauge(
+                MetricNames.KV_PRE_WRITE_BUFFER_MEMORY_USAGE_BYTES,
+                () -> preWriteBufferMemoryUsageSupplier.getAsLong());
+        gauge(
+                MetricNames.KV_PRE_WRITE_BUFFER_ENTRY_COUNT,
+                () -> preWriteBufferEntryCountSupplier.getAsLong());
+    }
+
+    /**
+     * Sets the aggregated pre-write buffer metrics. Called by KvManager at construction time.
+     *
+     * @param memoryUsageSupplier supplier for the estimated memory usage of all pre-write buffers
+     * @param entryCountSupplier supplier for the total number of buffered entries across all
+     *     pre-write buffers
+     */
+    public void setPreWriteBufferMetrics(
+            LongSupplier memoryUsageSupplier, LongSupplier entryCountSupplier) {
+        this.preWriteBufferMemoryUsageSupplier =
+                checkNotNull(memoryUsageSupplier, "memoryUsageSupplier must not be null");
+        this.preWriteBufferEntryCountSupplier =
+                checkNotNull(entryCountSupplier, "entryCountSupplier must not be null");
     }
 
     @Override

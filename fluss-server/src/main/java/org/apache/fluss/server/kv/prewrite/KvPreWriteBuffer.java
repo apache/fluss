@@ -89,6 +89,19 @@ import static org.apache.fluss.utils.UnsafeUtils.BYTE_ARRAY_BASE_OFFSET;
 @NotThreadSafe
 public class KvPreWriteBuffer {
 
+    /**
+     * Estimated JVM heap overhead of a single buffered entry besides its key/value payload bytes,
+     * covering the {@link KvEntry} object, its {@link Key} and {@link Value} wrappers, the byte
+     * array headers and the linked list node.
+     */
+    private static final long PER_ENTRY_OVERHEAD_BYTES = 144;
+
+    /**
+     * Estimated JVM heap overhead of a hash map node for an entry that is the latest version of its
+     * key in the buffer.
+     */
+    private static final long PER_MAP_NODE_OVERHEAD_BYTES = 32;
+
     // a mapping from the key to the kv-entry
     private final Map<Key, KvEntry> kvEntryMap = new HashMap<>();
 
@@ -104,6 +117,13 @@ public class KvPreWriteBuffer {
 
     // Accumulated byte size of entries not yet completed by a flush.
     private long pendingFlushBytes = 0;
+
+    // Estimated total memory footprint of the held entries, updated incrementally on the write
+    // path.
+    private volatile long memoryUsageBytes = 0;
+
+    // Number of held entries.
+    private volatile int entryCount = 0;
 
     public KvPreWriteBuffer(TabletServerMetricGroup serverMetricGroup) {
         truncateAsDuplicatedCount = serverMetricGroup.kvTruncateAsDuplicatedCount();
@@ -164,8 +184,8 @@ public class KvPreWriteBuffer {
         allKvEntries.addLast(kvEntry);
         // update the max lsn
         maxLogSequenceNumber = lsn;
-        // track accumulated bytes for flush budget gating
-        pendingFlushBytes += entryBytes(key, value);
+        // update the accounting for flush budget gating and metrics
+        addToAccounting(kvEntry);
     }
 
     /**
@@ -209,8 +229,7 @@ public class KvPreWriteBuffer {
                                 + ", targetLogSequenceNumber="
                                 + targetLogSequenceNumber);
             }
-            pendingFlushBytes -= entryBytes(entry.getKey(), entry.getValue());
-            boolean removed = kvEntryMap.remove(entry.getKey(), entry);
+            boolean removed = removeFromMapAndAccounting(entry);
             // the removed entry is no longer the successor of its previous version; clear the
             // forward link so the truncated entry does not stay reachable through it
             if (entry.previousEntry != null) {
@@ -232,6 +251,21 @@ public class KvPreWriteBuffer {
     /** Returns the accumulated byte size of all entries waiting to be flushed. */
     public long pendingFlushBytes() {
         return pendingFlushBytes;
+    }
+
+    /** Returns the number of entries currently held in this buffer. */
+    public int entryCount() {
+        return entryCount;
+    }
+
+    /**
+     * Returns an estimation of the total memory footprint of the entries currently held in this
+     * buffer, including the key/value payload bytes tracked by {@link #pendingFlushBytes()} and the
+     * per-entry JVM object overhead. This is an approximation for observability purposes, not an
+     * exact measurement.
+     */
+    public long memoryUsageBytes() {
+        return memoryUsageBytes;
     }
 
     /**
@@ -269,8 +303,7 @@ public class KvPreWriteBuffer {
                 throw new IllegalStateException("Prepared flush entry is not in PREPARED state.");
             }
             entry.state = EntryState.FLUSHED;
-            pendingFlushBytes -= entryBytes(entry.getKey(), entry.getValue());
-            kvEntryMap.remove(entry.getKey(), entry);
+            removeFromMapAndAccounting(entry);
             // the immediate successor is the only live referencer of a flushed entry; clearing
             // its reference makes the flushed entry (and, transitively, its older versions)
             // unreachable instead of being retained while no longer counted by pendingFlushBytes
@@ -303,6 +336,37 @@ public class KvPreWriteBuffer {
                 entry.state = EntryState.ACTIVE;
             }
         }
+    }
+
+    /**
+     * Adds an entry to the incrementally maintained memory estimate and entry count. An entry
+     * without a previous version is the latest version of a new key and thus adds one map node.
+     */
+    private void addToAccounting(KvEntry entry) {
+        long bytes = entryBytes(entry.getKey(), entry.getValue());
+        pendingFlushBytes += bytes;
+        memoryUsageBytes +=
+                bytes
+                        + PER_ENTRY_OVERHEAD_BYTES
+                        + (entry.previousEntry == null ? PER_MAP_NODE_OVERHEAD_BYTES : 0L);
+        entryCount++;
+    }
+
+    /**
+     * Removes an entry from the key map and deducts it from the incrementally maintained memory
+     * estimate and entry count. Returns whether the entry was the latest version of its key and
+     * thus removed from the map.
+     */
+    private boolean removeFromMapAndAccounting(KvEntry entry) {
+        long bytes = entryBytes(entry.getKey(), entry.getValue());
+        pendingFlushBytes -= bytes;
+        boolean removedFromMap = kvEntryMap.remove(entry.getKey(), entry);
+        memoryUsageBytes -=
+                bytes
+                        + PER_ENTRY_OVERHEAD_BYTES
+                        + (removedFromMap ? PER_MAP_NODE_OVERHEAD_BYTES : 0L);
+        entryCount--;
+        return removedFromMap;
     }
 
     private static long entryBytes(Key key, Value value) {
