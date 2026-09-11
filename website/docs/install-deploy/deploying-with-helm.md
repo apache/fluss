@@ -446,7 +446,7 @@ making rotation fully hands-off.
 
 | Parameter | Description | Default |
 |-----------|-------------|---------|
-| `coordinator.numberOfReplicas` | Number of CoordinatorServer replicas to deploy. Replicas beyond the elected leader run as warm standbys — see [Coordinator High Availability](#coordinator-high-availability) | `1` |
+| `coordinator.numberOfReplicas` | Number of CoordinatorServer replicas to deploy. One replica is the elected leader and the others run as warm standbys. See [Coordinator High Availability](#coordinator-high-availability) | `1` |
 
 ### Scheduling Parameters
 
@@ -885,9 +885,9 @@ The Coordinator should be upgraded **after** all TabletServers are fully upgrade
 
 ### Coordinator High Availability
 
-CoordinatorServer high availability is supported: with `coordinator.numberOfReplicas` greater
-than `1`, one replica is elected leader and the others run as warm standbys that take over via
-leader election when the leader fails. The default stays `1` — raising it is an explicit choice.
+Set `coordinator.numberOfReplicas` above `1` to run the CoordinatorServer with high availability.
+One replica is elected leader. The others run as warm standbys and take over through leader
+election when the leader fails. The default is `1`, so high availability is opt-in.
 
 ```yaml
 coordinator:
@@ -900,46 +900,46 @@ coordinator:
 #### Coordinator Readiness Probe
 
 A standby coordinator binds the same client port as the leader, so a TCP check cannot tell a
-healthy standby from a wedged one. The coordinator readiness probe instead asks the local server
+healthy standby from a hung one. The coordinator readiness probe instead asks the local server
 for its role and election state:
 
-- The **leader** is Ready regardless of cluster health color. Its readiness controls the DNS
-  record clients bootstrap against, so it must not depend on TabletServer health — the
-  TabletServer probes already gate rolling upgrades on cluster recovery.
-- A **standby** is Ready only when the coordinator group currently has an elected leader. "All
-  coordinator pods Ready" therefore certifies a functioning group, and a rolling update will not
-  proceed past a pod whose group has no leader.
+- The **leader** is Ready with any cluster health status. Its readiness controls the DNS record
+  that clients bootstrap against, so it must not depend on TabletServer health. The TabletServer
+  probes already hold a rolling upgrade until the cluster has recovered.
+- A **standby** is Ready only while the coordinator group has an elected leader. When every
+  coordinator pod is Ready, the group has a working leader, and a rolling update stops at a pod
+  whose group has none.
 
-The gate runs on a pod's first boot; once it has passed (or its
-`healthCheckTimeoutSeconds` budget is exhausted), the probe latches a cheap TCP-only check for
-the rest of the pod's lifetime, so a later ZooKeeper blip cannot flip all coordinators NotReady
-at once. The probe parameters mirror the TabletServer ones under
-`coordinator.readinessProbe.*`, including `healthCheckAuth` for clusters whose client listener
-enforces SASL.
+The election check runs only while a pod starts. Once it passes, or once the
+`healthCheckTimeoutSeconds` budget (20 minutes by default) runs out, the probe switches to a
+TCP-only check for the rest of the pod's life. A later ZooKeeper outage therefore cannot mark
+every coordinator NotReady at the same time. The probe parameters are the same as the
+TabletServer ones, under `coordinator.readinessProbe.*`. Set `healthCheckAuth` when the client
+listener enforces SASL.
 
-Version skew: the probe script ships inside the Fluss image, so this chart version needs an
-image that supports role-aware cluster health. With an **older image** (one that already ships
-`readiness-check.sh` but without role support), a standby coordinator stays NotReady until the
-`healthCheckTimeoutSeconds` budget (20 minutes by default) expires and the probe latches the
-TCP-only fallback — the rollout completes, but each standby pod burns the full budget first.
-Images that predate `readiness-check.sh` entirely never become Ready under this chart. Keep the
-chart and image versions in step, or lower `healthCheckTimeoutSeconds` for the transition
-rollout. An **older chart** with a newer image keeps its TCP-only coordinator probe and is
-unaffected.
+The probe script ships inside the Fluss image, so this chart version needs an image whose
+cluster health API reports the coordinator role. With an older image that ships
+`readiness-check.sh` without role support, a standby coordinator stays NotReady until the
+`healthCheckTimeoutSeconds` budget expires and the probe falls back to the TCP-only check. The
+rollout completes, but every standby pod waits out the full budget first. Images without
+`readiness-check.sh` never become Ready under this chart. Upgrade the chart and the image
+together, or lower `healthCheckTimeoutSeconds` for the transition rollout. An older chart with a
+newer image keeps its TCP-only coordinator probe and is not affected.
 
 #### Running More Than One Replica
 
-- **Client bootstrap:** list every coordinator replica in `bootstrap.servers`, e.g.
+- **Client bootstrap:** list every coordinator replica in `bootstrap.servers`, for example
   `coordinator-server-0.coordinator-server-hs.<ns>:9124,coordinator-server-1.coordinator-server-hs.<ns>:9124,coordinator-server-2.coordinator-server-hs.<ns>:9124`.
-  A standby answers client requests with `NotCoordinatorLeaderException`; clients retry other
-  bootstrap addresses, so any live replica in the list keeps bootstrap working during failover.
+  A standby answers client requests with `NotCoordinatorLeaderException` and clients retry the
+  other bootstrap addresses, so any live replica in the list keeps bootstrap working during a
+  failover.
 - **PodDisruptionBudget:** enable `coordinator.podDisruptionBudget` with `maxUnavailable: 1` so
   voluntary disruptions (node drains) never take down more than one coordinator at a time.
-- **Rolling updates:** the StatefulSet updates one pod at a time from the highest ordinal down.
-  When the leader is restarted, a standby takes over via leader election; the restarted pod
-  rejoins as a standby and flips Ready once it sees the elected leader.
+- **Rolling updates:** the StatefulSet updates one pod at a time, from the highest ordinal down.
+  When the leader restarts, a standby takes over through leader election. The restarted pod
+  rejoins as a standby and becomes Ready once it sees the elected leader.
 - **Spreading:** use `coordinator.affinity` or `coordinator.topologySpreadConstraints` to keep
-  replicas on separate nodes or zones — colocated replicas share their failure domain.
+  replicas on separate nodes or zones. Replicas on the same node share its failure domain.
 
 ## Custom Container Images
 
@@ -986,9 +986,10 @@ livenessProbe:
   failureThreshold: 100
 ```
 
-Readiness is role-aware: TabletServers gate on cluster health for safe rolling upgrades (see
-[Cluster Health Readiness Probe](#cluster-health-readiness-probe)), and CoordinatorServers gate
-on leader/standby election state (see
+Readiness depends on the server role. TabletServers check cluster health before reporting
+Ready, so a rolling upgrade waits for recovery (see
+[Cluster Health Readiness Probe](#cluster-health-readiness-probe)). CoordinatorServers check
+their leader or standby election state (see
 [Coordinator Readiness Probe](#coordinator-readiness-probe)).
 
 ### Logs

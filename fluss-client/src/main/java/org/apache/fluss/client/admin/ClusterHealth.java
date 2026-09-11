@@ -24,10 +24,9 @@ import java.util.Objects;
 /**
  * Cluster health information returned by {@link Admin#getClusterHealth()}.
  *
- * <p>A standby coordinator answers this request instead of rejecting it (so Kubernetes readiness
- * probes can gate on it). A response served by a standby carries {@link #isServedByLeader()} {@code
- * false}, status {@link ClusterHealthStatus#UNKNOWN}, and zeroed replica counts — callers that
- * monitor cluster health should check {@link #isServedByLeader()} before interpreting the counts.
+ * <p>A {@code standby} coordinator answers this request instead of rejecting it, so callers that
+ * monitor cluster health should check {@link #isServedByLeader()} before interpreting the replica
+ * counts.
  *
  * @since 1.0
  */
@@ -79,22 +78,10 @@ public final class ClusterHealth {
         return status;
     }
 
-    /**
-     * Whether the coordinator that answered is the current leader. {@code false} means a standby
-     * answered (e.g. the client's coordinator address was stale during a failover): the status is
-     * {@link ClusterHealthStatus#UNKNOWN} and the replica counts are zero, not cluster facts.
-     * Responses from servers that predate this field report {@code true} — a standby of those
-     * versions rejects the request instead of answering.
-     */
     public boolean isServedByLeader() {
         return servedByLeader;
     }
 
-    /**
-     * Whether the coordinator group currently has an elected leader — the answering server or any
-     * other participant. Only meaningful when {@link #isServedByLeader()} is {@code false}; a
-     * leader-served response always reports {@code true}.
-     */
     public boolean isLeaderElected() {
         return leaderElected;
     }

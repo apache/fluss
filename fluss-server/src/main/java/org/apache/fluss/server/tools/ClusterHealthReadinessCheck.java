@@ -296,9 +296,7 @@ public final class ClusterHealthReadinessCheck {
                         .isPresent()) {
             // A standby from a version that predates standby-served cluster health rejects
             // the RPC. There is nothing to wait for on that version, so report
-            // API-unsupported and let the caller latch its TCP fallback. In the Helm chart
-            // this path cannot fire — the probe and the server ship in the same image — but
-            // it keeps a hand-run probe against an older remote server from looping forever.
+            // API-unsupported and let the caller latch its TCP fallback.
             System.err.println(
                     "[readiness-check] Standby coordinator does not serve cluster health"
                             + " (pre-upgrade version): "
@@ -331,12 +329,8 @@ public final class ClusterHealthReadinessCheck {
 
     /**
      * Coordinator-role readiness: a leader is Ready regardless of cluster color (coordinator
-     * readiness must not depend on tablet health — the tablet probes gate on cluster recovery); a
-     * standby is Ready only when the coordinator group currently has an elected leader.
-     *
-     * <p>A response without the {@code is_leader} field comes from a leader that predates the field
-     * — a standby of such a version rejects the RPC instead of answering — so it is treated as
-     * leader-served and Ready.
+     * readiness must not depend on tablet health); a standby is Ready only when the coordinator
+     * group currently has an elected leader.
      */
     static int evaluateCoordinator(GetClusterHealthResponse resp) {
         boolean isLeader = !resp.hasIsLeader() || resp.isIsLeader();

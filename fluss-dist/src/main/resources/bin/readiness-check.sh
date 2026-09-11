@@ -28,13 +28,13 @@
 #            and has bound its RPC port. Fast, no external dependency.
 #
 #   Step 2 — Cluster health check, role-dependent (READINESS_ROLE):
-#            tablet (default) — call the LOCAL TabletServer's Cluster Health
-#            API (which forwards to the Coordinator over the internal
-#            listener) and pass only if status is GREEN. YELLOW/RED/UNKNOWN
-#            means recovery is incomplete — block the upgrade.
-#            coordinator — call the LOCAL CoordinatorServer's Cluster Health
-#            API. A leader passes regardless of cluster color; a standby
-#            passes only when the coordinator group has an elected leader.
+#            * tablet (default) — call the LOCAL TabletServer's Cluster Health
+#            API, which forwards to the Coordinator over the internal
+#            listener, and pass only if status is GREEN. The YELLOW/RED/UNKNOWN
+#            status means recovery is incomplete.
+#            * coordinator — call the LOCAL CoordinatorServer's Cluster Health
+#            API. A leader passes with any status. A standby passes only
+#            when the coordinator group has an elected leader.
 #
 # Both steps must pass for the pod to be marked Ready.
 #
@@ -248,8 +248,8 @@ local_exit=$?
 
 case $local_exit in
     0)
-        # Gate passed — latch fast path for the rest of this pod's life.
-        log_to_main "[readiness-check] Health gate passed (${ROLE} role); latching fast path — next probe will switch to TCP-only port check"
+        # Check passed — latch fast path for the rest of this pod's life.
+        log_to_main "[readiness-check] Health check passed (${ROLE} role); latching fast path — next probe will switch to TCP-only port check"
         touch "${FIRST_READY_MARKER}"
         exit 0
         ;;
