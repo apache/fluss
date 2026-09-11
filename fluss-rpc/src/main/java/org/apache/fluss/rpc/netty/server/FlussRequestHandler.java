@@ -66,8 +66,8 @@ public class FlussRequestHandler implements RequestHandler<FlussRequest> {
             // check if the coordinator server is the current leader if the API is a coordinator
             // TODO: we should only check coordinator APIs instead of all APIs
             // GET_CLUSTER_HEALTH is answerable by a standby coordinator: it reports the
-            // server's own role and election state so Kubernetes readiness probes can tell
-            // a healthy standby from a wedged one.
+            // server's own role and election state so a readiness probes can tell
+            // a healthy standby from one that is hung.
             if (isCoordinator
                     && api.getApiKey() != ApiKeys.API_VERSIONS
                     && api.getApiKey() != ApiKeys.GET_CLUSTER_HEALTH) {
