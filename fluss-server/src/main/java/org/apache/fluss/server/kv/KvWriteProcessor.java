@@ -139,7 +139,7 @@ public final class KvWriteProcessor {
         this.rowMerger = rowMerger;
         // Pre-create DefaultRowMerger for OVERWRITE mode to avoid creating new instances
         // on every putAsLeader call. Used for undo recovery scenarios.
-        this.overwriteRowMerger = new DefaultRowMerger(kvFormat, DeleteBehavior.ALLOW);
+        this.overwriteRowMerger = DefaultRowMerger.forBlindOverwrite(kvFormat);
         this.arrowCompressionInfo = arrowCompressionInfo;
         this.schemaGetter = schemaGetter;
         this.changelogImage = changelogImage;

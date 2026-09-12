@@ -37,6 +37,7 @@ import java.io.Serializable;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.EnumSet;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Objects;
@@ -65,6 +66,7 @@ public final class Schema implements Serializable {
     private final List<Column> columns;
     private final @Nullable PrimaryKey primaryKey;
     private final List<String> autoIncrementColumnNames;
+    private final List<SequenceGroup> sequenceGroups;
     private final RowType rowType;
 
     /**
@@ -77,11 +79,13 @@ public final class Schema implements Serializable {
             List<Column> columns,
             @Nullable PrimaryKey primaryKey,
             int highestFieldId,
-            List<String> autoIncrementColumnNames) {
+            List<String> autoIncrementColumnNames,
+            List<SequenceGroup> sequenceGroups) {
         this.columns =
                 normalizeColumns(columns, primaryKey, autoIncrementColumnNames, highestFieldId);
         this.primaryKey = primaryKey;
         this.autoIncrementColumnNames = autoIncrementColumnNames;
+        this.sequenceGroups = Collections.unmodifiableList(new ArrayList<>(sequenceGroups));
         // pre-create the row type as it is the most frequently used part of the schema
         this.rowType =
                 new RowType(
@@ -94,6 +98,15 @@ public final class Schema implements Serializable {
                                                         column.columnId))
                                 .collect(Collectors.toList()));
         this.highestFieldId = highestFieldId;
+
+        // enforce every schema-level sequence group invariant here so that a built Schema is
+        // always consistent; merge-engine and log-table rejections still run at table creation
+        validateSequenceGroups(
+                this.rowType,
+                this.primaryKey,
+                this.autoIncrementColumnNames,
+                this.columns,
+                this.sequenceGroups);
     }
 
     public List<Column> getColumns() {
@@ -140,6 +153,19 @@ public final class Schema implements Serializable {
                 .filter(col -> col.getName().equals(columnName))
                 .findFirst()
                 .flatMap(Column::getAggFunction);
+    }
+
+    /** Returns true if at least one column of this schema is protected by a sequence group. */
+    public boolean hasSequenceGroup() {
+        return !sequenceGroups.isEmpty();
+    }
+
+    /**
+     * Gets the sequence groups declared on this schema, empty when it declares none. Each group
+     * relates an ordered list of sequence columns to the columns they protect.
+     */
+    public List<SequenceGroup> getSequenceGroups() {
+        return sequenceGroups;
     }
 
     /** Returns the primary key indexes, if any, otherwise returns an empty array. */
@@ -233,6 +259,8 @@ public final class Schema implements Serializable {
                 + primaryKey
                 + ", autoIncrementColumnNames="
                 + autoIncrementColumnNames
+                + ", sequenceGroups="
+                + sequenceGroups
                 + ", highestFieldId="
                 + highestFieldId
                 + '}';
@@ -250,12 +278,14 @@ public final class Schema implements Serializable {
         return Objects.equals(columns, schema.columns)
                 && Objects.equals(autoIncrementColumnNames, schema.autoIncrementColumnNames)
                 && Objects.equals(primaryKey, schema.primaryKey)
+                && Objects.equals(sequenceGroups, schema.sequenceGroups)
                 && highestFieldId == schema.highestFieldId;
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(columns, primaryKey, autoIncrementColumnNames, highestFieldId);
+        return Objects.hash(
+                columns, primaryKey, autoIncrementColumnNames, sequenceGroups, highestFieldId);
     }
 
     // --------------------------------------------------------------------------------------------
@@ -275,11 +305,13 @@ public final class Schema implements Serializable {
         private final List<Column> columns;
         private @Nullable PrimaryKey primaryKey;
         private final List<String> autoIncrementColumnNames;
+        private final List<SequenceGroup> sequenceGroups;
         private AtomicInteger highestFieldId;
 
         private Builder() {
             columns = new ArrayList<>();
             autoIncrementColumnNames = new ArrayList<>();
+            sequenceGroups = new ArrayList<>();
             highestFieldId = new AtomicInteger(-1);
         }
 
@@ -298,6 +330,7 @@ public final class Schema implements Serializable {
 
             // Copy the metadata members
             this.autoIncrementColumnNames.addAll(schema.getAutoIncrementColumnNames());
+            this.sequenceGroups.addAll(schema.getSequenceGroups());
             schema.getPrimaryKey().ifPresent(pk -> this.primaryKey = pk);
 
             return this;
@@ -489,6 +522,26 @@ public final class Schema implements Serializable {
         }
 
         /**
+         * Declares a sequence group, relating an ordered list of sequence columns to the columns
+         * they protect. A protected column then only takes an incoming value when the sequence
+         * columns are not older than the stored ones, and every group is arbitrated on its own.
+         *
+         * <p>Passing more than one sequence column declares a composite sequence key, where the
+         * columns are compared in the given order and the first unequal one decides.
+         *
+         * @param sequenceColumns the columns ordering the group, in comparison order
+         * @param protectedColumns the columns held under that order
+         */
+        public Builder sequenceGroup(List<String> sequenceColumns, List<String> protectedColumns) {
+            checkNotNull(sequenceColumns, "Sequence columns must not be null.");
+            checkNotNull(protectedColumns, "Protected columns must not be null.");
+            checkArgument(!sequenceColumns.isEmpty(), "Sequence columns must not be empty.");
+            checkArgument(!protectedColumns.isEmpty(), "Protected columns must not be empty.");
+            sequenceGroups.add(new SequenceGroup(sequenceColumns, protectedColumns));
+            return this;
+        }
+
+        /**
          * Declares a primary key constraint for a set of given columns. Primary key uniquely
          * identify a row in a table. Neither of columns in a primary can be nullable. Adding a
          * primary key will force the column(s) to be marked {@code NOT NULL}. A table can have at
@@ -567,13 +620,77 @@ public final class Schema implements Serializable {
 
         /** Returns an instance of an {@link Schema}. */
         public Schema build() {
-            return new Schema(columns, primaryKey, highestFieldId.get(), autoIncrementColumnNames);
+            return new Schema(
+                    columns,
+                    primaryKey,
+                    highestFieldId.get(),
+                    autoIncrementColumnNames,
+                    sequenceGroups);
         }
     }
 
     // --------------------------------------------------------------------------------------------
     // Helper classes for representing the schema
     // --------------------------------------------------------------------------------------------
+
+    /**
+     * A sequence group, relating an ordered list of sequence columns to the columns they protect.
+     *
+     * <p>The order of the sequence columns is semantically significant because it defines the
+     * composite comparison key. The protected columns have set semantics, although the declaration
+     * order is preserved for deterministic serialization.
+     *
+     * @since 0.7
+     */
+    @PublicStable
+    public static final class SequenceGroup implements Serializable {
+        private static final long serialVersionUID = 1L;
+        private final List<String> sequenceColumns;
+        private final List<String> protectedColumns;
+
+        public SequenceGroup(List<String> sequenceColumns, List<String> protectedColumns) {
+            this.sequenceColumns = Collections.unmodifiableList(new ArrayList<>(sequenceColumns));
+            this.protectedColumns = Collections.unmodifiableList(new ArrayList<>(protectedColumns));
+        }
+
+        /** The columns defining the comparison key, in comparison order. */
+        public List<String> getSequenceColumns() {
+            return sequenceColumns;
+        }
+
+        /** The columns held under this order. */
+        public List<String> getProtectedColumns() {
+            return protectedColumns;
+        }
+
+        @Override
+        public boolean equals(Object o) {
+            if (this == o) {
+                return true;
+            }
+            if (o == null || getClass() != o.getClass()) {
+                return false;
+            }
+            SequenceGroup that = (SequenceGroup) o;
+            return Objects.equals(sequenceColumns, that.sequenceColumns)
+                    && Objects.equals(protectedColumns, that.protectedColumns);
+        }
+
+        @Override
+        public int hashCode() {
+            return Objects.hash(sequenceColumns, protectedColumns);
+        }
+
+        @Override
+        public String toString() {
+            return "SequenceGroup{"
+                    + "sequenceColumns="
+                    + sequenceColumns
+                    + ", protectedColumns="
+                    + protectedColumns
+                    + '}';
+        }
+    }
 
     /**
      * column in a schema.
@@ -833,6 +950,175 @@ public final class Schema implements Serializable {
         return names.stream()
                 .filter(name -> Collections.frequency(names, name) > 1)
                 .collect(Collectors.toSet());
+    }
+
+    /**
+     * Rejects a sequence group configuration that would leave the schema in an inconsistent state.
+     * Everything checked here can be decided from the schema alone; merge-engine and log-table
+     * rejections are left to {@code TableDescriptorValidation} at table creation.
+     */
+    private static void validateSequenceGroups(
+            RowType rowType,
+            @Nullable PrimaryKey primaryKey,
+            List<String> autoIncrementColumnNames,
+            List<Column> columns,
+            List<SequenceGroup> sequenceGroups) {
+        if (sequenceGroups.isEmpty()) {
+            return;
+        }
+
+        for (SequenceGroup group : sequenceGroups) {
+            if (group.getSequenceColumns().isEmpty()) {
+                throw new IllegalArgumentException(
+                        "The sequence columns of a sequence group must not be empty.");
+            }
+            if (group.getProtectedColumns().isEmpty()) {
+                throw new IllegalArgumentException(
+                        "The protected columns of a sequence group must not be empty.");
+            }
+        }
+
+        List<String> primaryKeyNames =
+                primaryKey == null ? Collections.emptyList() : primaryKey.getColumnNames();
+        EnumSet<DataTypeRoot> supportedTypes =
+                EnumSet.of(
+                        DataTypeRoot.INTEGER,
+                        DataTypeRoot.BIGINT,
+                        DataTypeRoot.TIMESTAMP_WITHOUT_TIME_ZONE,
+                        DataTypeRoot.TIMESTAMP_WITH_LOCAL_TIME_ZONE);
+
+        // collect the columns declared as sequence and as protected across every group, so that we
+        // can reject a column belonging to more than one group or crossing the two roles
+        Set<String> allSequenceColumns = new HashSet<>();
+        Set<String> allProtectedColumns = new HashSet<>();
+
+        for (SequenceGroup group : sequenceGroups) {
+            List<String> sequenceColumns = group.getSequenceColumns();
+            List<String> protectedColumns = group.getProtectedColumns();
+
+            rejectDuplicateWithinGroup(sequenceColumns, "sequence");
+            rejectDuplicateWithinGroup(protectedColumns, "protected");
+
+            for (String sequenceColumn : sequenceColumns) {
+                int columnIndex = rowType.getFieldIndex(sequenceColumn);
+                if (columnIndex < 0) {
+                    throw new IllegalArgumentException(
+                            String.format(
+                                    "The sequence column '%s' doesn't exist in schema.",
+                                    sequenceColumn));
+                }
+                if (primaryKeyNames.contains(sequenceColumn)) {
+                    throw new IllegalArgumentException(
+                            String.format(
+                                    "The sequence column '%s' must not be a primary key column.",
+                                    sequenceColumn));
+                }
+                // the group it orders decides when it advances, so an aggregate function on it
+                // would let a stale row move the sequence backwards
+                if (aggFunctionOf(columns, sequenceColumn).isPresent()) {
+                    throw new IllegalArgumentException(
+                            String.format(
+                                    "The sequence column '%s' orders a sequence group, "
+                                            + "so it must not have an aggregate function.",
+                                    sequenceColumn));
+                }
+                DataType columnType = rowType.getTypeAt(columnIndex);
+                if (!supportedTypes.contains(columnType.getTypeRoot())) {
+                    throw new IllegalArgumentException(
+                            String.format(
+                                    "The sequence column '%s' must be one type of "
+                                            + "[INT, BIGINT, TIMESTAMP, TIMESTAMP_LTZ], but got %s.",
+                                    sequenceColumn, columnType));
+                }
+                // a sequence column names the order of one group only. This also rejects two
+                // groups sharing all their sequence columns, which are the same group twice.
+                if (!allSequenceColumns.add(sequenceColumn)) {
+                    throw new IllegalArgumentException(
+                            String.format(
+                                    "The sequence column '%s' must not be shared by more than one sequence group.",
+                                    sequenceColumn));
+                }
+            }
+
+            for (String protectedColumn : protectedColumns) {
+                int columnIndex = rowType.getFieldIndex(protectedColumn);
+                if (columnIndex < 0) {
+                    throw new IllegalArgumentException(
+                            String.format(
+                                    "The protected column '%s' doesn't exist in schema.",
+                                    protectedColumn));
+                }
+                // a primary key column holds the same value in both rows being merged, so it can
+                // neither be held back by a group nor order one
+                if (primaryKeyNames.contains(protectedColumn)) {
+                    throw new IllegalArgumentException(
+                            String.format(
+                                    "The primary key column '%s' must not be put in a sequence group.",
+                                    protectedColumn));
+                }
+                if (!allProtectedColumns.add(protectedColumn)) {
+                    throw new IllegalArgumentException(
+                            String.format(
+                                    "The column '%s' must not be protected by more than one sequence group.",
+                                    protectedColumn));
+                }
+            }
+        }
+
+        // a sequence column reports the order of its own group, so it cannot also be held back by
+        // another one
+        for (String sequenceColumn : allSequenceColumns) {
+            if (allProtectedColumns.contains(sequenceColumn)) {
+                throw new IllegalArgumentException(
+                        String.format(
+                                "The sequence column '%s' orders a sequence group, "
+                                        + "so it must not be put into another one.",
+                                sequenceColumn));
+            }
+        }
+
+        // a client may not write an auto increment column, so a group containing one could never
+        // be updated.
+        for (String groupField : allSequenceColumns) {
+            if (autoIncrementColumnNames.contains(groupField)) {
+                throw new IllegalArgumentException(
+                        String.format(
+                                "The auto increment column '%s' must not order a sequence group.",
+                                groupField));
+            }
+        }
+        for (String groupField : allProtectedColumns) {
+            if (autoIncrementColumnNames.contains(groupField)) {
+                throw new IllegalArgumentException(
+                        String.format(
+                                "The auto increment column '%s' must not be put in a sequence group.",
+                                groupField));
+            }
+        }
+    }
+
+    private static Optional<AggFunction> aggFunctionOf(List<Column> columns, String name) {
+        return columns.stream()
+                .filter(column -> column.getName().equals(name))
+                .findFirst()
+                .flatMap(Column::getAggFunction);
+    }
+
+    /**
+     * Rejects a column named more than once in the same list, since a repeated name always signals
+     * a typo: naming a column twice as a sequence column would degenerate the comparison key, and
+     * naming it twice as a protected column adds nothing.
+     */
+    private static void rejectDuplicateWithinGroup(List<String> names, String role) {
+        Set<String> seen = new HashSet<>();
+        for (String name : names) {
+            if (!seen.add(name)) {
+                throw new IllegalArgumentException(
+                        String.format(
+                                "The %s column '%s' is declared more than once in the same sequence group.",
+                                role, name));
+            }
+        }
     }
 
     public static RowType getKeyRowType(Schema schema, int[] keyIndexes) {
