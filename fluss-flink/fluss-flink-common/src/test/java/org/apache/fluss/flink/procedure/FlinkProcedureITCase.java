@@ -28,6 +28,7 @@ import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.MemorySize;
 import org.apache.fluss.exception.AuthorizationException;
 import org.apache.fluss.exception.NoRebalanceInProgressException;
+import org.apache.fluss.exception.RebalanceFailureException;
 import org.apache.fluss.exception.SecurityDisabledException;
 import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.TablePath;
@@ -742,6 +743,40 @@ public abstract class FlinkProcedureITCase {
 
         // delete rebalance plan to avoid conflict with other tests.
         FLUSS_CLUSTER_EXTENSION.getZooKeeperClient().deleteRebalanceTask();
+    }
+
+    @Test
+    void testPreferredLeaderElectionProcedure() throws Exception {
+        try {
+            String rebalance =
+                    String.format(
+                            "Call %s.sys.rebalance('PREFERRED_LEADER_ELECTION')", CATALOG_NAME);
+            try (CloseableIterator<Row> rows = tEnv.executeSql(rebalance).collect()) {
+                assertThat(CollectionUtil.iteratorToList(rows)).hasSize(1);
+            }
+
+            retry(
+                    Duration.ofMinutes(2),
+                    () -> {
+                        Optional<RebalanceProgress> progress =
+                                admin.listRebalanceProgress(null).get();
+                        assertThat(progress).isPresent();
+                        assertThat(progress.get().status()).isEqualTo(RebalanceStatus.COMPLETED);
+                    });
+
+            assertThatThrownBy(
+                            () ->
+                                    tEnv.executeSql(
+                                                    String.format(
+                                                            "Call %s.sys.rebalance('PREFERRED_LEADER_ELECTION,LEADER_DISTRIBUTION')",
+                                                            CATALOG_NAME))
+                                            .await())
+                    .rootCause()
+                    .isInstanceOf(RebalanceFailureException.class)
+                    .hasMessageContaining("must be used as a standalone rebalance goal");
+        } finally {
+            FLUSS_CLUSTER_EXTENSION.getZooKeeperClient().deleteRebalanceTask();
+        }
     }
 
     @Test

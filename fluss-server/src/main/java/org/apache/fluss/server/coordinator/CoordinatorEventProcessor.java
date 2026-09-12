@@ -1613,6 +1613,23 @@ public class CoordinatorEventProcessor implements EventProcessor {
                         coordinatorContext.getAssignment(tableBucket), newReplicas);
 
         if (planForBucket.isLeaderChanged() && !reassignment.isBeingReassigned()) {
+            int targetLeader = planForBucket.getNewLeader();
+            Optional<LeaderAndIsr> leaderAndIsr =
+                    coordinatorContext.getBucketLeaderAndIsr(tableBucket);
+            Optional<ServerTag> targetServerTag = coordinatorContext.getServerTag(targetLeader);
+            if (!leaderAndIsr.isPresent()
+                    || !leaderAndIsr.get().isr().contains(targetLeader)
+                    || !coordinatorContext.isReplicaOnline(targetLeader, tableBucket)
+                    || (targetServerTag.isPresent()
+                            && (targetServerTag.get() == ServerTag.TEMPORARY_OFFLINE
+                                    || targetServerTag.get() == ServerTag.PERMANENT_OFFLINE))) {
+                LOG.warn(
+                        "Skipping leader-only rebalance for tableBucket {} because target leader {} is no longer eligible.",
+                        tableBucket,
+                        targetLeader);
+                rebalanceManager.finishRebalanceTask(tableBucket, RebalanceStatus.FAILED);
+                return;
+            }
             // buckets only need to change leader like leader replica rebalance.
             // Don't finish the task immediately; wait for the NotifyLeaderAndIsr response
             // from the tablet server to confirm the leader change has been applied.
@@ -1622,7 +1639,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
             tableBucketStateMachine.handleStateChange(
                     Collections.singleton(tableBucket),
                     OnlineBucket,
-                    new ReassignmentLeaderElection(newReplicas));
+                    new ReassignmentLeaderElection(newReplicas, false));
         } else {
             try {
                 LOG.info(
