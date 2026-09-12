@@ -35,7 +35,9 @@ import static org.apache.fluss.utils.Preconditions.checkNotNull;
 /**
  * Holds a scanned Arrow batch together with the log metadata of the batch.
  *
- * <p>This class only supports append-only log tables. CDC tables are not supported.
+ * <p>Supports both append-only log tables and primary-key changelog tables. For primary-key tables,
+ * the stored per-row change types are retained and exposed through {@link #getChangeType(int)} and
+ * {@link #getChangeTypes()}; append-only batches do not materialize a change-type vector.
  *
  * <p>The caller must close this object after use in order to release the underlying Arrow memory.
  */
@@ -123,8 +125,8 @@ public class ArrowBatchData implements AutoCloseable {
      * Returns the stored per-row change-type vector as a read-only buffer.
      *
      * <p>The buffer contains one {@link ChangeType#toByteValue() encoded byte} for every row and is
-     * absent for append-only batches. The returned buffer remains valid for the lifetime of this
-     * object.
+     * absent for append-only batches. The buffer is backed by on-heap memory and stays valid even
+     * after this object is {@link #close() closed}.
      */
     public Optional<ByteBuffer> getChangeTypes() {
         return changeTypes == null
