@@ -44,7 +44,7 @@ public enum ApiKeys {
     UPDATE_METADATA(1013, 0, 0, PRIVATE),
     // Version 1: Supports original_partition_name in requests and responses for historical writes.
     PRODUCE_LOG(1014, 0, 1, PUBLIC),
-    FETCH_LOG(1015, 0, 0, PUBLIC),
+    FETCH_LOG(1015, 0, 1, PUBLIC),
 
     // Version 0: Uses lake's encoder for primary key encoding (legacy behavior).
     // Version 1: Uses CompactedKeyEncoder for primary key encoding when bucket key differs from

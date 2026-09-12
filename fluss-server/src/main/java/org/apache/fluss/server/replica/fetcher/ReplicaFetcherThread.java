@@ -22,18 +22,20 @@ import org.apache.fluss.exception.DuplicateSequenceException;
 import org.apache.fluss.exception.InvalidOffsetException;
 import org.apache.fluss.exception.InvalidRecordException;
 import org.apache.fluss.exception.OutOfOrderSequenceException;
-import org.apache.fluss.exception.RemoteStorageException;
 import org.apache.fluss.exception.StorageException;
+import org.apache.fluss.metadata.LeaderEpochOffset;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.record.MemoryLogRecords;
 import org.apache.fluss.remote.RemoteLogFetchInfo;
 import org.apache.fluss.remote.RemoteLogSegment;
+import org.apache.fluss.rpc.entity.FetchLogEpochInfo;
 import org.apache.fluss.rpc.entity.FetchLogResultForBucket;
 import org.apache.fluss.rpc.messages.FetchLogRequest;
+import org.apache.fluss.rpc.messages.PbFetchLogReqForBucket;
+import org.apache.fluss.rpc.messages.PbFetchLogReqForTable;
 import org.apache.fluss.server.log.LogAppendInfo;
 import org.apache.fluss.server.log.LogTablet;
-import org.apache.fluss.server.log.remote.RemoteLogManager;
 import org.apache.fluss.server.log.remote.RemoteLogStorage.IndexType;
 import org.apache.fluss.server.metrics.group.TabletServerMetricGroup;
 import org.apache.fluss.server.replica.Replica;
@@ -41,8 +43,6 @@ import org.apache.fluss.server.replica.ReplicaManager;
 import org.apache.fluss.server.replica.fetcher.LeaderEndpoint.FetchData;
 import org.apache.fluss.shaded.netty4.io.netty.buffer.ByteBuf;
 import org.apache.fluss.shaded.netty4.io.netty.util.ReferenceCountUtil;
-import org.apache.fluss.utils.FileUtils;
-import org.apache.fluss.utils.FlussPaths;
 import org.apache.fluss.utils.concurrent.ShutdownableThread;
 import org.apache.fluss.utils.log.FairBucketStatusMap;
 
@@ -53,11 +53,11 @@ import javax.annotation.Nullable;
 import javax.annotation.concurrent.GuardedBy;
 
 import java.io.File;
-import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.StandardCopyOption;
 import java.util.Collections;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
@@ -149,6 +149,49 @@ final class ReplicaFetcherThread extends ShutdownableThread {
                                 fetchLogContext =
                                         leader.buildFetchLogContext(
                                                 fairBucketStatusMap.bucketStatusMap());
+                                if (fetchLogContext.isPresent()) {
+                                    FetchLogContext context =
+                                            fetchLogContext
+                                                    .get()
+                                                    .withFetchStates(
+                                                            fairBucketStatusMap.bucketStatusMap());
+                                    for (PbFetchLogReqForTable table :
+                                            context.getFetchLogRequest().getTablesReqsList()) {
+                                        for (PbFetchLogReqForBucket bucket :
+                                                table.getBucketsReqsList()) {
+                                            TableBucket tb =
+                                                    new TableBucket(
+                                                            table.getTableId(),
+                                                            bucket.hasPartitionId()
+                                                                    ? bucket.getPartitionId()
+                                                                    : null,
+                                                            bucket.getBucketId());
+                                            try {
+                                                Replica replica =
+                                                        replicaManager.getReplicaOrException(tb);
+                                                int epoch = replica.getLeaderEpoch();
+                                                context.setLeaderEpoch(tb, epoch);
+                                                if (replica.getLogTablet().isLeaderEpochEnabled()) {
+                                                    bucket.setCurrentLeaderEpoch(epoch)
+                                                            .setLastFetchedEpoch(
+                                                                    replica.getLogTablet()
+                                                                            .lastFetchedEpoch(
+                                                                                    bucket
+                                                                                            .getFetchOffset()));
+                                                }
+
+                                            } catch (Exception e) {
+                                                LOG.error(
+                                                        "Cannot read replication history for {}",
+                                                        tb,
+                                                        e);
+                                                removeBucket(tb);
+                                                return Optional.empty();
+                                            }
+                                        }
+                                    }
+                                    fetchLogContext = Optional.of(context);
+                                }
                                 if (!fetchLogContext.isPresent()) {
                                     LOG.trace(
                                             "There are no active buckets. Back off for {} ms before "
@@ -265,7 +308,8 @@ final class ReplicaFetcherThread extends ShutdownableThread {
         if (responseData != null) {
             bucketStatusMapLock.lock();
             try {
-                handleFetchLogResponse(responseData.getFetchLogResultMap(), bucketsWithError);
+                handleFetchLogResponse(
+                        fetchLogContext, responseData.getFetchLogResultMap(), bucketsWithError);
             } finally {
                 // release buffer handle by fetchLogResponse.
                 releaseFetchDataBuffer(responseData);
@@ -289,13 +333,16 @@ final class ReplicaFetcherThread extends ShutdownableThread {
     }
 
     private void handleFetchLogResponse(
+            FetchLogContext context,
             Map<TableBucket, FetchLogResultForBucket> responseData,
             Set<TableBucket> replicasWithError) {
         responseData.forEach(
                 (tableBucket, replicaData) -> {
                     BucketFetchStatus currentFetchStatus =
                             fairBucketStatusMap.statusValue(tableBucket);
-                    if (currentFetchStatus == null || !currentFetchStatus.isReadyForFetch()) {
+                    if (currentFetchStatus == null
+                            || !currentFetchStatus.isReadyForFetch()
+                            || !context.matches(tableBucket, currentFetchStatus)) {
                         return;
                     }
 
@@ -303,10 +350,17 @@ final class ReplicaFetcherThread extends ShutdownableThread {
                     switch (replicaData.getError().error()) {
                         case NONE:
                             handleFetchLogResponseOfSuccessBucket(
-                                    tableBucket, currentFetchStatus, replicaData);
+                                    tableBucket,
+                                    currentFetchStatus,
+                                    replicaData,
+                                    context.getRequest(tableBucket),
+                                    context.leaderEpoch(tableBucket));
                             break;
                         case LOG_OFFSET_OUT_OF_RANGE_EXCEPTION:
-                            if (!handleOutOfRangeError(tableBucket, currentFetchStatus)) {
+                            if (!handleOutOfRangeError(
+                                    tableBucket,
+                                    currentFetchStatus,
+                                    context.leaderEpoch(tableBucket))) {
                                 replicasWithError.add(tableBucket);
                             }
                             break;
@@ -330,26 +384,59 @@ final class ReplicaFetcherThread extends ShutdownableThread {
     private void handleFetchLogResponseOfSuccessBucket(
             TableBucket tableBucket,
             BucketFetchStatus currentFetchStatus,
-            FetchLogResultForBucket replicaData) {
+            FetchLogResultForBucket replicaData,
+            PbFetchLogReqForBucket request,
+            int expectedEpoch) {
         try {
             long nextFetchOffset = -1L;
+            FetchLogEpochInfo epochInfo = replicaData.epochInfo();
+            Replica currentReplica = replicaManager.getReplicaOrException(tableBucket);
+            if (epochInfo != null && !currentReplica.getLogTablet().isLeaderEpochEnabled()) {
+                // A response prepared before disabling must not apply an epoch-based truncation.
+                return;
+            }
+            if (currentReplica.isLeader()
+                    || currentReplica.getLeaderEpoch() != expectedEpoch
+                    || (epochInfo != null && epochInfo.leaderEpoch() != expectedEpoch)) {
+                return;
+            }
+            if (epochInfo != null && epochInfo.divergingEpoch() != null) {
+                LeaderEpochOffset divergence = epochInfo.divergingEpoch();
+                Optional<LeaderEpochOffset> localEnd =
+                        currentReplica.getLogTablet().endOffsetForEpoch(divergence.epoch());
+                if (!localEnd.isPresent()) {
+                    currentReplica.invalidateFollowerEpochHistory(
+                            leader.leaderServerId(), expectedEpoch);
+                    return;
+                }
+                long truncateOffset = Math.min(divergence.offset(), localEnd.get().offset());
+                if (!currentReplica.truncateFollowerToEpochOffset(
+                        truncateOffset, leader.leaderServerId(), expectedEpoch)) {
+                    return;
+                }
+                fairBucketStatusMap.updateAndMoveToEnd(
+                        tableBucket,
+                        new BucketFetchStatus(
+                                currentFetchStatus.tableId(),
+                                currentFetchStatus.tablePath(),
+                                truncateOffset,
+                                null));
+                return;
+            }
             if (replicaData.fetchFromRemote()) {
-                nextFetchOffset = processFetchResultFromRemoteStorage(tableBucket, replicaData);
+                nextFetchOffset =
+                        processFetchResultFromRemoteStorage(
+                                tableBucket, replicaData, expectedEpoch);
             } else {
                 LogAppendInfo logAppendInfo =
                         processFetchResultFromLocalStorage(
-                                tableBucket, currentFetchStatus.fetchOffset(), replicaData);
+                                tableBucket,
+                                currentFetchStatus.fetchOffset(),
+                                replicaData,
+                                expectedEpoch);
                 if (logAppendInfo.validBytes() > 0) {
                     nextFetchOffset = logAppendInfo.lastOffset() + 1;
                 }
-            }
-
-            // Propagate the leader's KV snapshot retention boundary to the follower even when the
-            // successful response contains no records, so obsolete local log segments can be
-            // cleaned up.
-            Replica replica = replicaManager.getReplicaOrException(tableBucket);
-            if (replica.isKvTable() && replicaData.hasMinRetainOffset()) {
-                replica.getLogTablet().updateMinRetainOffset(replicaData.getMinRetainOffset());
             }
 
             if (nextFetchOffset != -1L && fairBucketStatusMap.contains(tableBucket)) {
@@ -381,8 +468,17 @@ final class ReplicaFetcherThread extends ShutdownableThread {
             } else if (e instanceof DuplicateSequenceException
                     || e instanceof OutOfOrderSequenceException
                     || e instanceof InvalidOffsetException) {
-                // TODO this part of logic need to be removed after we introduce leader epoch cache.
-                // Trace by https://github.com/apache/fluss/issues/673
+                if (replicaData.epochInfo() != null
+                        && request.hasLastFetchedEpoch()
+                        && request.getLastFetchedEpoch() >= 0) {
+                    LOG.error(
+                            "Replication offset or sequence mismatch after epoch validation for {}",
+                            tableBucket,
+                            e);
+                    removeBucket(tableBucket);
+                    return;
+                }
+                // Legacy peers and unknown prefixes still use the existing recovery path.
                 LOG.error(
                         "Founding recoverable error while processing data for bucket {} at offset {}, try to "
                                 + "truncate to LeaderEndOffsetSnapshot",
@@ -390,7 +486,8 @@ final class ReplicaFetcherThread extends ShutdownableThread {
                         currentFetchStatus.fetchOffset(),
                         e);
                 try {
-                    truncateToLeaderEndOffsetSnapshot(tableBucket, currentFetchStatus.tablePath());
+                    truncateToLeaderEndOffsetSnapshot(
+                            tableBucket, currentFetchStatus.tablePath(), expectedEpoch);
                 } catch (Exception ex) {
                     LOG.error(
                             "Error while truncating bucket {} at offset {}",
@@ -410,8 +507,8 @@ final class ReplicaFetcherThread extends ShutdownableThread {
         }
     }
 
-    private void truncateToLeaderEndOffsetSnapshot(TableBucket tableBucket, TablePath tablePath)
-            throws Exception {
+    private void truncateToLeaderEndOffsetSnapshot(
+            TableBucket tableBucket, TablePath tablePath, int expectedEpoch) throws Exception {
         long leaderLocalEndOffsetWhileBecomeLeader =
                 leader.fetchLeaderEndOffsetSnapshot(tableBucket).get();
         long localLogEndOffset =
@@ -419,7 +516,7 @@ final class ReplicaFetcherThread extends ShutdownableThread {
         if (leaderLocalEndOffsetWhileBecomeLeader != 0L
                 && leaderLocalEndOffsetWhileBecomeLeader < localLogEndOffset) {
             // truncate to leaderEndOffsetSnapshot to reset follower's WriterState and fetch offset.
-            truncate(tableBucket, leaderLocalEndOffsetWhileBecomeLeader);
+            truncate(tableBucket, leaderLocalEndOffsetWhileBecomeLeader, expectedEpoch);
 
             // update fetch status.
             BucketFetchStatus bucketFetchStatus =
@@ -432,9 +529,10 @@ final class ReplicaFetcherThread extends ShutdownableThread {
         }
     }
 
-    private boolean handleOutOfRangeError(TableBucket tableBucket, BucketFetchStatus fetchStatus) {
+    private boolean handleOutOfRangeError(
+            TableBucket tableBucket, BucketFetchStatus fetchStatus, int expectedEpoch) {
         try {
-            BucketFetchStatus newFetchStatus = fetchOffsetAndTruncate(tableBucket);
+            BucketFetchStatus newFetchStatus = fetchOffsetAndTruncate(tableBucket, expectedEpoch);
             fairBucketStatusMap.updateAndMoveToEnd(tableBucket, newFetchStatus);
             LOG.info(
                     "Current offset {} for table bucket {} is out of range, which typically implies "
@@ -450,7 +548,8 @@ final class ReplicaFetcherThread extends ShutdownableThread {
     }
 
     /** Handle a replica whose offset is out of range and return a new fetch offset. */
-    private BucketFetchStatus fetchOffsetAndTruncate(TableBucket tableBucket) throws Exception {
+    private BucketFetchStatus fetchOffsetAndTruncate(TableBucket tableBucket, int expectedEpoch)
+            throws Exception {
         Replica replica = replicaManager.getReplicaOrException(tableBucket);
         long replicaEndOffset = replica.getLocalLogEndOffset();
 
@@ -476,7 +575,7 @@ final class ReplicaFetcherThread extends ShutdownableThread {
                     tableBucket,
                     replicaEndOffset,
                     leaderEndOffset);
-            truncate(tableBucket, leaderEndOffset);
+            truncate(tableBucket, leaderEndOffset, expectedEpoch);
             return new BucketFetchStatus(
                     tableBucket.getTableId(), replica.getTablePath(), leaderEndOffset, null);
         } else {
@@ -514,7 +613,8 @@ final class ReplicaFetcherThread extends ShutdownableThread {
             // Only truncate log when current leader's log start offset is greater than follower's
             // log end offset.
             if (leaderStartOffset > replicaEndOffset) {
-                truncateFullyAndStartAt(tableBucket, leaderStartOffset);
+                replica.truncateFollowerFullyAndStartAt(
+                        leaderStartOffset, leader.leaderServerId(), expectedEpoch);
             }
 
             long offsetToFetch = Math.max(leaderStartOffset, replicaEndOffset);
@@ -560,7 +660,10 @@ final class ReplicaFetcherThread extends ShutdownableThread {
     }
 
     private LogAppendInfo processFetchResultFromLocalStorage(
-            TableBucket tableBucket, long fetchOffset, FetchLogResultForBucket replicaData)
+            TableBucket tableBucket,
+            long fetchOffset,
+            FetchLogResultForBucket replicaData,
+            int expectedEpoch)
             throws Exception {
         Replica replica = replicaManager.getReplicaOrException(tableBucket);
         LogTablet logTablet = replica.getLogTablet();
@@ -581,26 +684,13 @@ final class ReplicaFetcherThread extends ShutdownableThread {
                 replicaData.getHighWatermark());
 
         // Append the messages to the follower log tablet.
-        LogAppendInfo logAppendInfo = replica.appendRecordsToFollower(records);
+        LogAppendInfo logAppendInfo =
+                replica.appendRecordsToFollower(
+                        replicaData, leader.leaderServerId(), expectedEpoch);
         LOG.trace(
                 "Follower has replica log end offset {} after appending {} bytes of messages for replica {}",
                 logTablet.localLogEndOffset(),
                 records.sizeInBytes(),
-                tableBucket);
-
-        // For the follower replica, we do not need to keep its segment base offset and physical
-        // position. These values will be computed upon becoming leader or handling a preferred read
-        // replica fetch.
-        // TODO, to avoid lose data in case of leader change, we now change to update highWatermark
-        // first for follower instead of first for leader. The reason why can see
-        // https://cwiki.apache.org/confluence/display/KAFKA/KIP-101+-+Alter+Replication+Protocol+to+use+Leader+Epoch+rather+than+High+Watermark+for+Truncation
-        // for more details. However, this is just a temporary solution, if we want to have a strong
-        // consistency guarantee, we should do as KIP-101 do, trace by:
-        // https://github.com/apache/fluss/issues/673
-        logTablet.updateHighWatermark(logTablet.localLogEndOffset());
-        LOG.trace(
-                "Follower received high watermark {} from the leader for replica {}",
-                replicaData.getHighWatermark(),
                 tableBucket);
 
         serverMetricGroup.replicationBytesIn().inc(records.sizeInBytes());
@@ -609,75 +699,47 @@ final class ReplicaFetcherThread extends ShutdownableThread {
     }
 
     private long processFetchResultFromRemoteStorage(
-            TableBucket tb, FetchLogResultForBucket replicaData) {
-        RemoteLogFetchInfo rlFetchInfo = replicaData.remoteLogFetchInfo();
-        checkNotNull(rlFetchInfo, "RemoteLogFetchInfo is null");
+            TableBucket tb, FetchLogResultForBucket replicaData, int expectedEpoch)
+            throws Exception {
+        RemoteLogFetchInfo info =
+                checkNotNull(replicaData.remoteLogFetchInfo(), "RemoteLogFetchInfo is null");
         Replica replica = replicaManager.getReplicaOrException(tb);
-        RemoteLogManager rlm = replicaManager.getRemoteLogManager();
-
-        // TODO after introduce leader epoch cache, we need to rebuild the local leader epoch
-        // cache. Trace by https://github.com/apache/fluss/issues/673
-
-        // update next fetch offset and writer id snapshot in local.
-        RemoteLogSegment remoteLogSegmentWithMaxStartOffset =
-                rlFetchInfo
-                        .remoteLogSegmentList()
-                        .get(rlFetchInfo.remoteLogSegmentList().size() - 1);
-        // build writer snapshots until remoteLogSegment.endOffset() and start segment from
-        // until remoteLogSegment.endOffset().
-        long nextFetchOffset = remoteLogSegmentWithMaxStartOffset.remoteLogEndOffset();
-
+        RemoteLogSegment segment =
+                info.remoteLogSegmentList().get(info.remoteLogSegmentList().size() - 1);
+        long nextOffset = segment.remoteLogEndOffset();
+        File download =
+                Files.createTempFile(
+                                replica.getLogTablet().getLogDir().toPath(),
+                                "writer-snapshot-",
+                                ".tmp")
+                        .toFile();
         try {
-            // Truncate the existing local log before restoring the writer id snapshots.
-            replica.truncateFullyAndStartAt(nextFetchOffset);
-
-            // TODO maybe need increase log start offset.
-
-            LogTablet log = replica.getLogTablet();
-            // 1. Perform a truncate before calling buildWriterIdSnapshotFile() to ensure that all
-            // historical data is completely cleaned up.
-            log.writerStateManager().truncateFullyAndStartAt(0L);
-
-            // 2. download writer id snapshots from remote storage.
-            File snapshotFile = FlussPaths.writerSnapshotFile(log.getLogDir(), nextFetchOffset);
-            buildWriterIdSnapshotFile(snapshotFile, remoteLogSegmentWithMaxStartOffset, rlm);
-
-            // 3. Perform a reloadSnapshots after buildWriterIdSnapshotFile() to load the latest
-            // downloaded writerId snapshot file into the writerStateManager.
-            // Note: This must occur  after the file is downloaded, so we cannot call
-            // truncateFullyAndReloadSnapshots() here to avoid  deleting the newly downloaded
-            // writerId snapshot file.
-            log.writerStateManager().reloadSnapshots();
-            log.loadWriterSnapshot(nextFetchOffset);
-            LOG.info(
-                    "Build the writer snapshots from remote storage for {} with active "
-                            + "writer size: {} and remoteLogEndOffset: {}",
-                    tb,
-                    log.writerStateManager().activeWriters().size(),
-                    nextFetchOffset);
-        } catch (Exception e) {
-            LOG.error(
-                    "Failed to truncate and restore writer snapshot for {} while log hash been moved to remote",
-                    tb,
-                    e);
+            // Download before replacing local state. A network failure must leave the fetch
+            // position and the existing WAL intact.
+            try (java.io.InputStream input =
+                    replicaManager
+                            .getRemoteLogManager()
+                            .getRemoteLogStorage()
+                            .fetchIndex(segment, IndexType.WRITER_ID_SNAPSHOT)) {
+                Files.copy(input, download.toPath(), StandardCopyOption.REPLACE_EXISTING);
+            }
+            FetchLogEpochInfo epochInfo = replicaData.epochInfo();
+            List<LeaderEpochOffset> epochs =
+                    epochInfo == null ? Collections.emptyList() : segment.leaderEpochs();
+            replica.restoreFollowerFromRemote(
+                    nextOffset,
+                    download,
+                    epochs,
+                    epochInfo == null ? nextOffset : replicaData.getHighWatermark(),
+                    leader.leaderServerId(),
+                    expectedEpoch);
+            return nextOffset;
+        } finally {
+            Files.deleteIfExists(download.toPath());
         }
-        return nextFetchOffset;
     }
 
-    private void buildWriterIdSnapshotFile(
-            File snapshotFile, RemoteLogSegment remoteLogSegment, RemoteLogManager rlm)
-            throws RemoteStorageException, IOException {
-        File tmpSnapshotFile = new File(snapshotFile.getAbsolutePath() + ".tmp");
-        // Copy it to snapshot file in atomic manner.
-        Files.copy(
-                rlm.getRemoteLogStorage()
-                        .fetchIndex(remoteLogSegment, IndexType.WRITER_ID_SNAPSHOT),
-                tmpSnapshotFile.toPath(),
-                StandardCopyOption.REPLACE_EXISTING);
-        FileUtils.atomicMoveWithFallback(tmpSnapshotFile.toPath(), snapshotFile.toPath(), false);
-    }
-
-    private void truncate(TableBucket tableBucket, long offset) {
+    private void truncate(TableBucket tableBucket, long offset, int expectedEpoch) {
         Replica replica = replicaManager.getReplicaOrException(tableBucket);
         LogTablet log = replica.getLogTablet();
 
@@ -689,12 +751,7 @@ final class ReplicaFetcherThread extends ShutdownableThread {
                     log.getHighWatermark());
         }
 
-        replica.truncateTo(offset);
-    }
-
-    private void truncateFullyAndStartAt(TableBucket tableBucket, long offset) {
-        Replica replica = replicaManager.getReplicaOrException(tableBucket);
-        replica.truncateFullyAndStartAt(offset);
+        replica.truncateFollowerTo(offset, leader.leaderServerId(), expectedEpoch);
     }
 
     @Override

@@ -222,6 +222,22 @@ public class RemoteLogITCase {
         // restart follower
         FLUSS_CLUSTER_EXTENSION.startTabletServer(follower);
         FLUSS_CLUSTER_EXTENSION.waitUntilReplicaExpandToIsr(tb, follower);
+        assertThat(
+                        FLUSS_CLUSTER_EXTENSION
+                                .waitAndGetFollowerReplica(tb, follower)
+                                .getLogTablet()
+                                .lastFetchedEpoch(100))
+                .isEqualTo(
+                        FLUSS_CLUSTER_EXTENSION
+                                .waitAndGetLeaderReplica(tb)
+                                .getLogTablet()
+                                .lastFetchedEpoch(100));
+        assertThat(
+                        FLUSS_CLUSTER_EXTENSION
+                                .waitAndGetFollowerReplica(tb, follower)
+                                .getLogTablet()
+                                .lastFetchedEpoch(100))
+                .isGreaterThanOrEqualTo(0);
     }
 
     @Test

@@ -17,6 +17,7 @@
 
 package org.apache.fluss.rpc.util;
 
+import org.apache.fluss.metadata.LeaderEpochOffset;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.ResolvedPartitionSpec;
 import org.apache.fluss.metadata.TableBucket;
@@ -25,12 +26,14 @@ import org.apache.fluss.record.LogRecords;
 import org.apache.fluss.record.MemoryLogRecords;
 import org.apache.fluss.remote.RemoteLogFetchInfo;
 import org.apache.fluss.remote.RemoteLogSegment;
+import org.apache.fluss.rpc.entity.FetchLogEpochInfo;
 import org.apache.fluss.rpc.entity.FetchLogResultForBucket;
 import org.apache.fluss.rpc.messages.LookupRequest;
 import org.apache.fluss.rpc.messages.PbAclFilter;
 import org.apache.fluss.rpc.messages.PbAclInfo;
 import org.apache.fluss.rpc.messages.PbFetchLogRespForBucket;
 import org.apache.fluss.rpc.messages.PbKeyValue;
+import org.apache.fluss.rpc.messages.PbLeaderEpochOffset;
 import org.apache.fluss.rpc.messages.PbPartitionSpec;
 import org.apache.fluss.rpc.messages.PbRemoteLogFetchInfo;
 import org.apache.fluss.rpc.messages.PbRemoteLogSegment;
@@ -208,8 +211,14 @@ public class CommonRpcMessageUtils {
                             pbRemoteLogSegment.hasMaxTimestamp()
                                     ? pbRemoteLogSegment.getMaxTimestamp()
                                     : -1;
+                    List<LeaderEpochOffset> segmentEpochs = new ArrayList<>();
+                    for (PbLeaderEpochOffset epoch : pbRemoteLogSegment.getLeaderEpochsList()) {
+                        segmentEpochs.add(
+                                new LeaderEpochOffset(epoch.getEpoch(), epoch.getOffset()));
+                    }
                     RemoteLogSegment remoteLogSegment =
                             RemoteLogSegment.Builder.builder()
+                                    .leaderEpochs(segmentEpochs)
                                     .tableBucket(tb)
                                     .physicalTablePath(physicalTablePath)
                                     .remoteLogSegmentId(
@@ -253,6 +262,22 @@ public class CommonRpcMessageUtils {
             }
         }
 
+        if (respForBucket.hasCurrentLeaderEpoch()) {
+            List<LeaderEpochOffset> starts = new ArrayList<>();
+            for (PbLeaderEpochOffset start : respForBucket.getEpochStartsList()) {
+                starts.add(new LeaderEpochOffset(start.getEpoch(), start.getOffset()));
+            }
+            LeaderEpochOffset divergence =
+                    respForBucket.hasDivergingEpoch()
+                            ? new LeaderEpochOffset(
+                                    respForBucket.getDivergingEpoch().getEpoch(),
+                                    respForBucket.getDivergingEpoch().getOffset())
+                            : null;
+            fetchLogResultForBucket =
+                    fetchLogResultForBucket.withEpochInfo(
+                            new FetchLogEpochInfo(
+                                    respForBucket.getCurrentLeaderEpoch(), divergence, starts));
+        }
         return fetchLogResultForBucket;
     }
 

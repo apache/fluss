@@ -17,6 +17,7 @@
 
 package org.apache.fluss.remote;
 
+import org.apache.fluss.metadata.LeaderEpochOffset;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.core.JsonGenerator;
@@ -52,6 +53,7 @@ public class RemoteLogManifestJsonSerde
     private static final String MAX_TIMESTAMP_FIELD = "max_timestamp";
     private static final String SEGMENT_SIZE_IN_BYTES_FIELD = "size_in_bytes";
     private static final String HIGHEST_COPIED_END_OFFSET_FIELD = "highest_copied_end_offset";
+    private static final String LEADER_EPOCHS_FIELD = "leader_epochs";
     private static final int SNAPSHOT_VERSION = 1;
 
     @Override
@@ -99,6 +101,16 @@ public class RemoteLogManifestJsonSerde
             generator.writeNumberField(MAX_TIMESTAMP_FIELD, remoteLogSegment.maxTimestamp());
             generator.writeNumberField(
                     SEGMENT_SIZE_IN_BYTES_FIELD, remoteLogSegment.segmentSizeInBytes());
+            if (!remoteLogSegment.leaderEpochs().isEmpty()) {
+                generator.writeArrayFieldStart(LEADER_EPOCHS_FIELD);
+                for (LeaderEpochOffset epoch : remoteLogSegment.leaderEpochs()) {
+                    generator.writeStartObject();
+                    generator.writeNumberField("epoch", epoch.epoch());
+                    generator.writeNumberField(START_OFFSET_FIELD, epoch.offset());
+                    generator.writeEndObject();
+                }
+                generator.writeEndArray();
+            }
             generator.writeEndObject();
         }
         generator.writeEndArray();
@@ -149,6 +161,17 @@ public class RemoteLogManifestJsonSerde
             }
             if (logicalEndOffsetNode != null) {
                 segmentBuilder.logicalEndOffset(logicalEndOffsetNode.asLong());
+            }
+            JsonNode epochNodes = entryJson.get(LEADER_EPOCHS_FIELD);
+            if (epochNodes != null) {
+                List<LeaderEpochOffset> epochs = new ArrayList<>();
+                for (JsonNode epoch : epochNodes) {
+                    epochs.add(
+                            new LeaderEpochOffset(
+                                    epoch.get("epoch").asInt(),
+                                    epoch.get(START_OFFSET_FIELD).asLong()));
+                }
+                segmentBuilder.leaderEpochs(epochs);
             }
             snapshotEntries.add(segmentBuilder.build());
         }

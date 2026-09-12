@@ -27,6 +27,7 @@ import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.exception.InvalidTimestampException;
 import org.apache.fluss.exception.LogOffsetOutOfRangeException;
 import org.apache.fluss.exception.LogStorageException;
+import org.apache.fluss.metadata.LeaderEpochOffset;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
@@ -42,6 +43,7 @@ import org.apache.fluss.record.MemoryLogRecords;
 import org.apache.fluss.server.log.LocalLog.SegmentDeletionReason;
 import org.apache.fluss.server.metrics.group.BucketMetricGroup;
 import org.apache.fluss.server.metrics.group.TabletServerMetricGroup;
+import org.apache.fluss.utils.FileUtils;
 import org.apache.fluss.utils.FlussPaths;
 import org.apache.fluss.utils.clock.Clock;
 import org.apache.fluss.utils.concurrent.Scheduler;
@@ -88,6 +90,9 @@ public final class LogTablet {
 
     // Configured local storage root that owns this tablet, for example /data-0.
     private final File dataDir;
+
+    @GuardedBy("lock")
+    private final LeaderEpochHistory leaderEpochHistory;
     // Logical table/partition identity of this tablet.
     private final PhysicalTablePath physicalPath;
 
@@ -125,6 +130,7 @@ public final class LogTablet {
     // The minimum offset that should be retained in the local log. This is used to ensure that,
     // the offset of kv snapshot should be retained, otherwise, kv recovery will fail.
     private final AtomicLong minRetainOffset;
+    private volatile boolean leaderEpochEnabled;
     // tracking the log start offset in remote storage
     private volatile long remoteLogStartOffset = Long.MAX_VALUE;
     // tracking the log end offset in remote storage
@@ -154,10 +160,22 @@ public final class LogTablet {
             WriterStateManager writerStateManager,
             TableConfig tableConfig,
             boolean isChangelog,
-            Clock clock) {
+            Clock clock)
+            throws IOException {
         this.dataDir = dataDir;
         this.physicalPath = physicalPath;
         this.localLog = localLog;
+        this.leaderEpochEnabled = conf.get(ConfigOptions.LOG_REPLICATION_LEADER_EPOCH_ENABLED);
+        this.leaderEpochHistory =
+                new LeaderEpochHistory(new File(getLogDir(), "leader-epoch-checkpoint"));
+        // LogLoader may have removed an incomplete tail. Make that recovery durable before
+        // removing boundaries that described it.
+        localLog.getSegments().activeSegment().flush();
+        FileUtils.flushDirIfExists(getLogDir().toPath());
+        leaderEpochHistory.truncateFromEnd(localLogEndOffset());
+        if (!leaderEpochEnabled) {
+            leaderEpochHistory.invalidate();
+        }
         this.maxSegmentFileSize = (int) conf.get(ConfigOptions.LOG_SEGMENT_FILE_SIZE).getBytes();
         this.logFlushIntervalMessages = conf.get(ConfigOptions.LOG_FLUSH_INTERVAL_MESSAGES);
         int writerExpirationCheckIntervalMs =
@@ -504,6 +522,116 @@ public final class LogTablet {
         return append(records, false);
     }
 
+    /** Whether this tablet participates in epoch-aware replication. */
+    public boolean isLeaderEpochEnabled() {
+        return leaderEpochEnabled;
+    }
+
+    /** Changes replication mode without assigning an epoch to previously untracked records. */
+    void setLeaderEpochEnabled(boolean enabled) {
+        synchronized (lock) {
+            if (enabled == leaderEpochEnabled) {
+                return;
+            }
+            try {
+                // Persist loss of knowledge before publishing the mode change. Enabling cannot
+                // assign the current epoch a different start offset from its existing replicas.
+                leaderEpochHistory.invalidate();
+                leaderEpochEnabled = enabled;
+            } catch (IOException e) {
+                throw new LogStorageException(
+                        "Failed to change leader epoch mode for " + getTableBucket(), e);
+            }
+        }
+    }
+
+    /** Records the boundary of a newly elected leader before accepting its writes. */
+    public void assignLeaderEpoch(int epoch) throws IOException {
+        synchronized (lock) {
+            if (!leaderEpochEnabled) {
+                return;
+            }
+            leaderEpochHistory.truncateFromEnd(localLogEndOffset());
+            leaderEpochHistory.assign(epoch, localLogEndOffset());
+        }
+    }
+
+    /** Returns the epoch of the last record before the given fetch offset, or -1 if unknown. */
+    public int lastFetchedEpoch(long fetchOffset) {
+        synchronized (lock) {
+            return leaderEpochHistory.epochForOffset(fetchOffset - 1, localLogEndOffset());
+        }
+    }
+
+    /** Returns the end of the last known epoch at or before the requested epoch. */
+    public Optional<LeaderEpochOffset> endOffsetForEpoch(int epoch) {
+        synchronized (lock) {
+            return leaderEpochHistory.endOffsetFor(epoch, localLogEndOffset());
+        }
+    }
+
+    /** Returns the epoch boundaries covering a replicated range. */
+    public List<LeaderEpochOffset> epochEntries(long start, long end) {
+        synchronized (lock) {
+            return leaderEpochHistory.entries(start, end);
+        }
+    }
+
+    /** Appends records and their source history under the same log lock. */
+    public LogAppendInfo appendAsFollower(MemoryLogRecords records, List<LeaderEpochOffset> epochs)
+            throws Exception {
+        if (!leaderEpochEnabled) {
+            return appendAsFollower(records);
+        }
+        synchronized (lock) {
+            long endOffset = localLogEndOffset();
+            for (LogRecordBatch batch : records.batches()) {
+                checkArgument(
+                        batch.baseLogOffset() == endOffset,
+                        "Non-contiguous replication append at %s, expected %s",
+                        batch.baseLogOffset(),
+                        endOffset);
+                endOffset = batch.lastLogOffset() + 1;
+            }
+            return append(records, false, epochs);
+        }
+    }
+
+    /** Forgets unverified history before reading records from a legacy replication source. */
+    public void invalidateLeaderEpochHistory() throws IOException {
+        synchronized (lock) {
+            leaderEpochHistory.invalidate();
+        }
+    }
+
+    /** Installs the writer snapshot and epoch history of a committed remote log prefix. */
+    public void restoreFromRemote(
+            long endOffset, File writerSnapshot, List<LeaderEpochOffset> epochs) {
+        synchronized (lock) {
+            try {
+                truncateFullyAndStartAt(endOffset);
+                // Force loading the downloaded snapshot even though the WAL already ends here.
+                writerStateManager.truncateFullyAndStartAt(0L);
+                File target = FlussPaths.writerSnapshotFile(getLogDir(), endOffset);
+                FileUtils.flushFileIfExists(writerSnapshot.toPath());
+                FileUtils.atomicMoveWithFallback(writerSnapshot.toPath(), target.toPath());
+                writerStateManager.reloadSnapshots();
+                loadWriterSnapshot(endOffset);
+                localLog.getSegments().activeSegment().flush();
+                FileUtils.flushDirIfExists(getLogDir().toPath());
+                if (leaderEpochEnabled) {
+                    leaderEpochHistory.append(epochs, 0, endOffset);
+                }
+            } catch (Exception e) {
+                IOException failure =
+                        e instanceof IOException ? (IOException) e : new IOException(e);
+                leaderEpochHistory.markFailed(failure);
+                throw new LogStorageException(
+                        "Failed to restore remote log for " + getTableBucket(), failure);
+            }
+        }
+    }
+
     /** Read messages from the local log without projection or filter. */
     public FetchDataInfo read(
             long readOffset, int maxLength, FetchIsolation fetchIsolation, boolean minOneMessage)
@@ -757,6 +885,14 @@ public final class LogTablet {
     }
 
     private void onHighWatermarkUpdated(long previousHighWatermark, long currentHighWatermark) {
+        long cleanupToOffset =
+                remoteLogEndOffset == -1L
+                        ? highestCopiedEndOffset
+                        : Math.min(remoteLogEndOffset, highestCopiedEndOffset);
+        if (previousHighWatermark < cleanupToOffset && currentHighWatermark >= cleanupToOffset) {
+            // Remote offsets may arrive before a follower learns the committed high watermark.
+            deleteSegmentsAlreadyExistsInRemote();
+        }
         if (!isDataLakeEnabled) {
             return;
         }
@@ -922,6 +1058,14 @@ public final class LogTablet {
      */
     private LogAppendInfo append(MemoryLogRecords records, boolean appendAsLeader)
             throws Exception {
+        return append(records, appendAsLeader, null);
+    }
+
+    private LogAppendInfo append(
+            MemoryLogRecords records,
+            boolean appendAsLeader,
+            @Nullable List<LeaderEpochOffset> sourceEpochs)
+            throws Exception {
         LogAppendInfo appendInfo = analyzeAndValidateRecords(records);
 
         // return if we have no valid records.
@@ -934,6 +1078,7 @@ public final class LogTablet {
 
         synchronized (lock) {
             localLog.checkIfMemoryMappedBufferClosed();
+            leaderEpochHistory.ensureUsable();
             if (appendAsLeader) {
                 long offset = localLog.getLocalLogEndOffset();
                 // assign offsets to the message set.
@@ -987,11 +1132,34 @@ public final class LogTablet {
                 // Append the records, and increment the local log end offset immediately after
                 // append because write to the transaction index below may fail, and we want to
                 // ensure that the offsets of future appends still grow monotonically.
-                localLog.append(
-                        appendInfo.lastOffset(),
-                        appendInfo.maxTimestamp(),
-                        appendInfo.startOffsetOfMaxTimestamp(),
-                        validRecords);
+                if (!appendAsLeader) {
+                    if (!leaderEpochEnabled) {
+                        sourceEpochs = null;
+                    }
+                    if (sourceEpochs == null
+                            || sourceEpochs.isEmpty()
+                            || sourceEpochs.get(0).offset() > localLogEndOffset()
+                            || (sourceEpochs.get(0).offset() < localLogEndOffset()
+                                    && leaderEpochHistory.epochForOffset(
+                                                    localLogEndOffset() - 1, localLogEndOffset())
+                                            != sourceEpochs.get(0).epoch())) {
+                        leaderEpochHistory.invalidate();
+                    }
+                    if (sourceEpochs != null) {
+                        leaderEpochHistory.append(
+                                sourceEpochs, localLogEndOffset(), appendInfo.lastOffset() + 1);
+                    }
+                }
+                try {
+                    localLog.append(
+                            appendInfo.lastOffset(),
+                            appendInfo.maxTimestamp(),
+                            appendInfo.startOffsetOfMaxTimestamp(),
+                            validRecords);
+                } catch (IOException e) {
+                    leaderEpochHistory.markFailed(e);
+                    throw e;
+                }
                 updateHighWatermarkWithLogEndOffset();
 
                 // update the writer state.
@@ -1148,6 +1316,9 @@ public final class LogTablet {
 
     /** Truncate this log so that it ends with the greatest offset < targetOffset. */
     boolean truncateTo(long targetOffset) throws LogStorageException {
+        synchronized (lock) {
+            leaderEpochHistory.ensureUsable();
+        }
         if (targetOffset < 0) {
             throw new IllegalArgumentException(
                     String.format(
@@ -1174,6 +1345,9 @@ public final class LogTablet {
                         truncateFullyAndStartAt(targetOffset);
                     } else {
                         List<LogSegment> deletedSegments = localLog.truncateTo(targetOffset);
+                        localLog.getSegments().activeSegment().flush();
+                        FileUtils.flushDirIfExists(getLogDir().toPath());
+                        leaderEpochHistory.truncateFromEnd(localLogEndOffset());
 
                         deleteWriterSnapshots(deletedSegments, writerStateManager);
                         rebuildWriterState(targetOffset, writerStateManager);
@@ -1185,6 +1359,7 @@ public final class LogTablet {
 
                     return true;
                 } catch (IOException e) {
+                    leaderEpochHistory.markFailed(e);
                     throw new LogStorageException(
                             String.format(
                                     "Error while truncating log for bucket %s to offset %s.",
@@ -1200,11 +1375,13 @@ public final class LogTablet {
         LOG.debug("Truncate and start at offset {} for bucket {}", newOffset, getTableBucket());
         synchronized (lock) {
             try {
+                leaderEpochHistory.invalidate();
                 localLog.truncateFullyAndStartAt(newOffset);
                 writerStateManager.truncateFullyAndStartAt(newOffset);
                 rebuildWriterState(newOffset, writerStateManager);
                 updateHighWatermark(localLog.getLocalLogEndOffset());
             } catch (IOException e) {
+                leaderEpochHistory.markFailed(e);
                 throw new LogStorageException(
                         String.format(
                                 "Error while truncating log for bucket %s to offset %s.",

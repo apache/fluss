@@ -52,6 +52,7 @@ import static org.apache.fluss.config.ConfigOptions.DATALAKE_FORMAT;
 import static org.apache.fluss.config.ConfigOptions.KV_LEADER_REPLICA_MEMORY_RESERVED;
 import static org.apache.fluss.config.ConfigOptions.KV_SHARED_RATE_LIMITER_BYTES_PER_SEC;
 import static org.apache.fluss.config.ConfigOptions.KV_SNAPSHOT_INTERVAL;
+import static org.apache.fluss.config.ConfigOptions.LOG_REPLICATION_LEADER_EPOCH_ENABLED;
 import static org.apache.fluss.config.ConfigOptions.LOG_REPLICA_MIN_IN_SYNC_REPLICAS_NUMBER;
 import static org.apache.fluss.config.ConfigOptions.LOG_RETENTION_ROLL_ACTIVE_SEGMENT_ENABLED;
 import static org.apache.fluss.config.ConfigOptions.NETTY_SERVER_MAX_QUEUED_HISTORICAL_REQUESTS;
@@ -83,6 +84,7 @@ class DynamicServerConfig {
                     Arrays.asList(
                             DATALAKE_FORMAT.key(),
                             LOG_RETENTION_ROLL_ACTIVE_SEGMENT_ENABLED.key(),
+                            LOG_REPLICATION_LEADER_EPOCH_ENABLED.key(),
                             LOG_REPLICA_MIN_IN_SYNC_REPLICAS_NUMBER.key(),
                             KV_LEADER_REPLICA_MEMORY_RESERVED.key(),
                             KV_SHARED_RATE_LIMITER_BYTES_PER_SEC.key(),

@@ -27,6 +27,7 @@ import org.apache.fluss.rpc.entity.FetchLogResultForBucket;
 import org.apache.fluss.rpc.gateway.TabletServerGateway;
 import org.apache.fluss.rpc.messages.PbPutKvRespForBucket;
 import org.apache.fluss.rpc.messages.PutKvResponse;
+import org.apache.fluss.rpc.messages.StopReplicaRequest;
 import org.apache.fluss.server.entity.FetchReqInfo;
 import org.apache.fluss.server.log.FetchParams;
 import org.apache.fluss.server.replica.Replica;
@@ -66,6 +67,7 @@ import static org.apache.fluss.server.testutils.RpcMessageTestUtils.createTable;
 import static org.apache.fluss.server.testutils.RpcMessageTestUtils.newFetchLogRequest;
 import static org.apache.fluss.server.testutils.RpcMessageTestUtils.newLookupRequest;
 import static org.apache.fluss.server.testutils.RpcMessageTestUtils.newPutKvRequest;
+import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeStopBucketReplica;
 import static org.apache.fluss.testutils.DataTestUtils.assertLogRecordsEquals;
 import static org.apache.fluss.testutils.DataTestUtils.assertLogRecordsEqualsWithRowKind;
 import static org.apache.fluss.testutils.DataTestUtils.genKvRecordBatch;
@@ -269,9 +271,21 @@ public class ReplicaFetcherITCase {
                         .get()
                         .id();
 
-        int leaderEpoch = 0;
-        // stop the follower replica for the bucket
-        FLUSS_CLUSTER_EXTENSION.stopReplica(followerToStop, tb, leaderEpoch);
+        LeaderAndIsr currentLeaderAndIsr = zkClient.getLeaderAndIsr(tb).get();
+        // Remove the local follower so it can be recreated in the same leader epoch.
+        FLUSS_CLUSTER_EXTENSION
+                .newTabletServerClientForNode(followerToStop)
+                .stopReplica(
+                        new StopReplicaRequest()
+                                .setCoordinatorEpoch(currentLeaderAndIsr.coordinatorEpoch())
+                                .addAllStopReplicasReqs(
+                                        Collections.singleton(
+                                                makeStopBucketReplica(
+                                                        tb,
+                                                        true,
+                                                        false,
+                                                        currentLeaderAndIsr.leaderEpoch()))))
+                .get();
 
         // put kv record batch to the leader,
         // but as one server is killed, the put won't be ack
@@ -310,20 +324,17 @@ public class ReplicaFetcherITCase {
 
         // start the follower replica by notify leaderAndIsr,
         // then the kv should be flushed finally
-        LeaderAndIsr currentLeaderAndIsr = zkClient.getLeaderAndIsr(tb).get();
-        LeaderAndIsr newLeaderAndIsr =
-                new LeaderAndIsr(
-                        currentLeaderAndIsr.leader(),
-                        currentLeaderAndIsr.leaderEpoch() + 1,
-                        currentLeaderAndIsr.isr(),
-                        Collections.emptyList(),
-                        currentLeaderAndIsr.coordinatorEpoch(),
-                        currentLeaderAndIsr.bucketEpoch());
         FLUSS_CLUSTER_EXTENSION.notifyLeaderAndIsr(
-                followerToStop, DATA1_TABLE_PATH, tb, newLeaderAndIsr, Arrays.asList(0, 1, 2));
+                followerToStop,
+                DATA1_TABLE_PATH_PK,
+                tb,
+                currentLeaderAndIsr,
+                Arrays.asList(0, 1, 2));
 
         // wait until the put future is done
-        putResponse.get();
+        for (PbPutKvRespForBucket result : putResponse.get().getBucketsRespsList()) {
+            assertThat(result.hasErrorCode()).isFalse();
+        }
 
         // then we can check all the value
         for (Tuple2<byte[], byte[]> keyValue : expectedKeyValues) {

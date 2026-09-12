@@ -144,7 +144,7 @@ public class ReplicaFetcherThreadTest {
         ServerNode follower =
                 new ServerNode(
                         followerServerId, "localhost", 10001, ServerType.TABLET_SERVER, "rack2");
-        leaderEndpoint = new TestingLeaderEndpoint(conf, leaderRM, follower);
+        leaderEndpoint = new TestingLeaderEndpoint(conf, leaderRM, follower, leaderServerId);
         followerFetcher =
                 new ReplicaFetcherThread("test-fetcher-thread", followerRM, leaderEndpoint, 1000);
 
@@ -277,7 +277,7 @@ public class ReplicaFetcherThreadTest {
     }
 
     @Test
-    void testFollowerHighWatermarkHigherThanOrEqualToLeader() throws Exception {
+    void testFollowerHighWatermarkConvergesToLeader() throws Exception {
         Replica leaderReplica = leaderRM.getReplicaOrException(tb);
         Replica followerReplica = followerRM.getReplicaOrException(tb);
 
@@ -310,7 +310,15 @@ public class ReplicaFetcherThreadTest {
                             assertThat(followerReplica.getLocalLogEndOffset())
                                     .isEqualTo(baseOffset + 10L));
             assertThat(followerReplica.getLogHighWatermark())
-                    .isGreaterThanOrEqualTo(leaderReplica.getLogHighWatermark());
+                    .isLessThanOrEqualTo(leaderReplica.getLogHighWatermark())
+                    .isLessThanOrEqualTo(followerReplica.getLocalLogEndOffset());
+            retry(
+                    Duration.ofSeconds(20),
+                    () -> {
+                        assertThat(leaderReplica.getLogHighWatermark()).isEqualTo(baseOffset + 10L);
+                        assertThat(followerReplica.getLogHighWatermark())
+                                .isEqualTo(baseOffset + 10L);
+                    });
         }
     }
 
@@ -479,7 +487,7 @@ public class ReplicaFetcherThreadTest {
                             ServerType.TABLET_SERVER,
                             "rack2");
             TestingLeaderEndpoint testingEndpoint =
-                    new TestingLeaderEndpoint(conf, leaderRM, followerNode);
+                    new TestingLeaderEndpoint(conf, leaderRM, followerNode, leaderServerId);
 
             // Append records to leader so fetch responses carry actual data
             CompletableFuture<List<ProduceLogResultForBucket>> future = new CompletableFuture<>();
@@ -595,6 +603,7 @@ public class ReplicaFetcherThreadTest {
 
     private LocalDiskManager createLocalDiskManager(int serverId) throws Exception {
         Configuration conf = new Configuration();
+        conf.set(ConfigOptions.SERVER_DATA_DISK_WRITE_LIMIT_RATIO, 1.0);
         conf.set(ConfigOptions.TABLET_SERVER_ID, serverId);
         conf.setString(ConfigOptions.DATA_DIR, tempDir.getAbsolutePath() + "/server-" + serverId);
         return LocalDiskManager.create(conf);

@@ -307,6 +307,8 @@ public class LogTieringTask implements Runnable {
                             .remoteLogEndOffset(segmentEndOffset)
                             .maxTimestamp(segment.maxTimestampSoFar())
                             .segmentSizeInBytes(sizeInBytes)
+                            .leaderEpochs(
+                                    log.epochEntries(segment.getBaseOffset(), segmentEndOffset))
                             .build();
             try {
                 remoteLogStorage.copyLogSegmentFiles(copyRemoteLogSegment, logSegmentFiles);

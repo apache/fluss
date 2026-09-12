@@ -71,7 +71,8 @@ public final class FetchParams {
     private final int minFetchBytes;
     private final long maxWaitMs;
     private final FetchLogReadPreference readPreference;
-    // TODO: add more params like epoch etc.
+    private int currentLeaderEpoch = -1;
+    private int lastFetchedEpoch = -1;
 
     public FetchParams(int replicaId, int maxFetchBytes) {
         this(
@@ -132,6 +133,20 @@ public final class FetchParams {
                 maxWaitMs,
                 tableFilterInfoMap,
                 FetchLogReadPreference.LOCAL_FIRST);
+    }
+
+    /** Sets replication epoch fields for the bucket currently being fetched. */
+    public void setCurrentFetchEpoch(int currentLeaderEpoch, int lastFetchedEpoch) {
+        this.currentLeaderEpoch = currentLeaderEpoch;
+        this.lastFetchedEpoch = lastFetchedEpoch;
+    }
+
+    public int currentLeaderEpoch() {
+        return currentLeaderEpoch;
+    }
+
+    public int lastFetchedEpoch() {
+        return lastFetchedEpoch;
     }
 
     public void setCurrentFetch(

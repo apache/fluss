@@ -18,6 +18,9 @@
 package org.apache.fluss.server.log;
 
 import org.apache.fluss.annotation.Internal;
+import org.apache.fluss.rpc.entity.FetchLogEpochInfo;
+
+import javax.annotation.Nullable;
 
 /** Structure used for lower level reads. */
 @Internal
@@ -27,16 +30,36 @@ public class LogReadInfo {
     private final long highWatermark;
     private final long logEndOffset;
     private final long minRetainOffset;
+    @Nullable private final FetchLogEpochInfo epochInfo;
 
     public LogReadInfo(
             FetchDataInfo fetchedData,
             long highWatermark,
             long logEndOffset,
             long minRetainOffset) {
+        this(fetchedData, highWatermark, logEndOffset, minRetainOffset, null);
+    }
+
+    public LogReadInfo(
+            FetchDataInfo fetchedData,
+            long highWatermark,
+            long logEndOffset,
+            long minRetainOffset,
+            @Nullable FetchLogEpochInfo epochInfo) {
+        this.epochInfo = epochInfo;
         this.fetchedData = fetchedData;
         this.highWatermark = highWatermark;
         this.logEndOffset = logEndOffset;
         this.minRetainOffset = minRetainOffset;
+    }
+
+    @Nullable
+    public FetchLogEpochInfo epochInfo() {
+        return epochInfo;
+    }
+
+    public LogReadInfo withEpochInfo(@Nullable FetchLogEpochInfo info) {
+        return new LogReadInfo(fetchedData, highWatermark, logEndOffset, minRetainOffset, info);
     }
 
     public FetchDataInfo getFetchedData() {

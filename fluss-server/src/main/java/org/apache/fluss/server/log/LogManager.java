@@ -412,6 +412,20 @@ public final class LogManager extends TabletManagerBase implements ServerReconfi
         }
     }
 
+    /** Applies epoch reconciliation only while its replication mode is enabled. */
+    public boolean truncateToWithEpoch(TableBucket tableBucket, long offset) {
+        return inLock(
+                logCreationOrDeletionLock,
+                () -> {
+                    LogTablet log = currentLogs.get(tableBucket);
+                    if (log == null || !log.isLeaderEpochEnabled()) {
+                        return false;
+                    }
+                    truncateTo(tableBucket, offset);
+                    return true;
+                });
+    }
+
     public void truncateFullyAndStartAt(TableBucket tableBucket, long newOffset) {
         LogTablet logTablet = currentLogs.get(tableBucket);
         // If the log tablet does not exist, skip it.
@@ -568,6 +582,16 @@ public final class LogManager extends TabletManagerBase implements ServerReconfi
 
     @Override
     public void reconfigure(Configuration newConfig) {
+        inLock(
+                logCreationOrDeletionLock,
+                () -> {
+                    boolean enabled =
+                            newConfig.get(ConfigOptions.LOG_REPLICATION_LEADER_EPOCH_ENABLED);
+                    for (LogTablet log : currentLogs.values()) {
+                        log.setLeaderEpochEnabled(enabled);
+                    }
+                    conf.set(ConfigOptions.LOG_REPLICATION_LEADER_EPOCH_ENABLED, enabled);
+                });
         boolean newRollExpiredActiveSegmentEnabled =
                 newConfig.get(ConfigOptions.LOG_RETENTION_ROLL_ACTIVE_SEGMENT_ENABLED);
         boolean oldRollExpiredActiveSegmentEnabled =

@@ -36,6 +36,7 @@ import org.apache.fluss.metadata.AggFunctionType;
 import org.apache.fluss.metadata.AggFunctions;
 import org.apache.fluss.metadata.DatabaseChange;
 import org.apache.fluss.metadata.DatabaseSummary;
+import org.apache.fluss.metadata.LeaderEpochOffset;
 import org.apache.fluss.metadata.PartitionSpec;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.ResolvedPartitionSpec;
@@ -54,6 +55,7 @@ import org.apache.fluss.record.LogRecords;
 import org.apache.fluss.record.MemoryLogRecords;
 import org.apache.fluss.remote.RemoteLogFetchInfo;
 import org.apache.fluss.remote.RemoteLogSegment;
+import org.apache.fluss.rpc.entity.FetchLogEpochInfo;
 import org.apache.fluss.rpc.entity.FetchLogResultForBucket;
 import org.apache.fluss.rpc.entity.LimitScanResultForBucket;
 import org.apache.fluss.rpc.entity.ListOffsetsResultForBucket;
@@ -1062,7 +1064,14 @@ public class ServerRpcMessageUtils {
                                 tableId,
                                 fetchLogReqForBucket.getFetchOffset(),
                                 fetchLogReqForBucket.getMaxFetchBytes(),
-                                projectionFields));
+                                projectionFields,
+                                fetchLogReqForBucket.hasCurrentLeaderEpoch()
+                                                && fetchLogReqForBucket.hasLastFetchedEpoch()
+                                        ? fetchLogReqForBucket.getCurrentLeaderEpoch()
+                                        : -1,
+                                fetchLogReqForBucket.hasLastFetchedEpoch()
+                                        ? fetchLogReqForBucket.getLastFetchedEpoch()
+                                        : -1));
             }
         }
 
@@ -1083,6 +1092,22 @@ public class ServerRpcMessageUtils {
             FetchLogResultForBucket bucketResult = entry.getValue();
             PbFetchLogRespForBucket fetchLogRespForBucket =
                     new PbFetchLogRespForBucket().setBucketId(tb.getBucket());
+            FetchLogEpochInfo epochInfo = bucketResult.epochInfo();
+            if (epochInfo != null) {
+                fetchLogRespForBucket.setCurrentLeaderEpoch(epochInfo.leaderEpoch());
+                if (epochInfo.divergingEpoch() != null) {
+                    fetchLogRespForBucket
+                            .setDivergingEpoch()
+                            .setEpoch(epochInfo.divergingEpoch().epoch())
+                            .setOffset(epochInfo.divergingEpoch().offset());
+                }
+                for (LeaderEpochOffset start : epochInfo.epochStarts()) {
+                    fetchLogRespForBucket
+                            .addEpochStart()
+                            .setEpoch(start.epoch())
+                            .setOffset(start.offset());
+                }
+            }
             if (bucketResult.hasFilteredEndOffset()) {
                 fetchLogRespForBucket.setFilteredEndOffset(bucketResult.getFilteredEndOffset());
             }
@@ -1115,6 +1140,12 @@ public class ServerRpcMessageUtils {
                                         .setRemoteLogEndOffset(logSegment.remoteLogEndOffset())
                                         .setSegmentSizeInBytes(logSegment.segmentSizeInBytes())
                                         .setMaxTimestamp(logSegment.maxTimestamp());
+                        for (LeaderEpochOffset epoch : logSegment.leaderEpochs()) {
+                            pbRemoteLogSegment
+                                    .addLeaderEpoch()
+                                    .setEpoch(epoch.epoch())
+                                    .setOffset(epoch.offset());
+                        }
                         remoteLogSegmentList.add(pbRemoteLogSegment);
                     }
                     fetchLogRespForBucket

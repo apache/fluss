@@ -137,6 +137,7 @@ public final class FlussClusterExtension
     private final Map<Integer, TabletServer> tabletServers;
     private final Map<Integer, ServerInfo> tabletServerInfos;
     private final Configuration clusterConf;
+    private final Map<Integer, Configuration> tabletServerConfigs;
     private final Clock clock;
     private final String[] racks;
     private final List<String> remoteDirNames;
@@ -153,13 +154,17 @@ public final class FlussClusterExtension
             Configuration clusterConf,
             Clock clock,
             String[] racks,
-            List<String> remoteDirNames) {
+            List<String> remoteDirNames,
+            Map<Integer, Configuration> tabletServerConfigs) {
         this.initialNumOfTabletServers = numOfTabletServers;
         this.tabletServers = new HashMap<>(numOfTabletServers);
         this.coordinatorServerListeners = coordinatorServerListeners;
         this.tabletServerListeners = tabletServerListeners;
         this.tabletServerInfos = new HashMap<>();
         this.clusterConf = clusterConf;
+        this.tabletServerConfigs = new HashMap<>();
+        tabletServerConfigs.forEach(
+                (id, config) -> this.tabletServerConfigs.put(id, new Configuration(config)));
         this.clock = clock;
         checkArgument(
                 racks != null && racks.length == numOfTabletServers,
@@ -339,7 +344,13 @@ public final class FlussClusterExtension
         tabletServerConf.setString(ConfigOptions.BIND_LISTENERS, tabletServerListeners);
         tabletServerConf.setDouble(ConfigOptions.SERVER_DATA_DISK_WRITE_LIMIT_RATIO, 1.0);
         if (overwriteConfig != null) {
-            tabletServerConf.addAll(overwriteConfig);
+            tabletServerConfigs
+                    .computeIfAbsent(serverId, id -> new Configuration())
+                    .addAll(overwriteConfig);
+        }
+        Configuration nodeConfig = tabletServerConfigs.get(serverId);
+        if (nodeConfig != null) {
+            tabletServerConf.addAll(nodeConfig);
         }
 
         setRemoteDataDir(tabletServerConf);
@@ -1017,6 +1028,7 @@ public final class FlussClusterExtension
         private List<String> remoteDirNames = Collections.emptyList();
 
         private final Configuration clusterConf = new Configuration();
+        private final Map<Integer, Configuration> tabletServerConfigs = new HashMap<>();
 
         public Builder() {
             // reduce testing resources
@@ -1043,6 +1055,12 @@ public final class FlussClusterExtension
         /** Sets the base cluster configuration for TabletServer and CoordinatorServer. */
         public Builder setClusterConf(Configuration clusterConf) {
             clusterConf.toMap().forEach(this.clusterConf::setString);
+            return this;
+        }
+
+        /** Sets persistent configuration overrides for one tablet server, including restarts. */
+        public Builder setTabletServerConf(int serverId, Configuration config) {
+            tabletServerConfigs.put(serverId, new Configuration(config));
             return this;
         }
 
@@ -1091,7 +1109,8 @@ public final class FlussClusterExtension
                     clusterConf,
                     clock,
                     racks,
-                    remoteDirNames);
+                    remoteDirNames,
+                    tabletServerConfigs);
         }
     }
 }

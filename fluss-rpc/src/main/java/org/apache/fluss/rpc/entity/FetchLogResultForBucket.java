@@ -38,6 +38,7 @@ public class FetchLogResultForBucket extends ResultForBucket {
     private final long highWatermark;
     private final long filteredEndOffset;
     private final long minRetainOffset;
+    @Nullable private final FetchLogEpochInfo epochInfo;
 
     private FetchLogResultForBucket(
             TableBucket tableBucket,
@@ -47,12 +48,51 @@ public class FetchLogResultForBucket extends ResultForBucket {
             long filteredEndOffset,
             long minRetainOffset,
             ApiError error) {
+        this(
+                tableBucket,
+                remoteLogFetchInfo,
+                records,
+                highWatermark,
+                filteredEndOffset,
+                minRetainOffset,
+                error,
+                null);
+    }
+
+    private FetchLogResultForBucket(
+            TableBucket tableBucket,
+            @Nullable RemoteLogFetchInfo remoteLogFetchInfo,
+            @Nullable LogRecords records,
+            long highWatermark,
+            long filteredEndOffset,
+            long minRetainOffset,
+            ApiError error,
+            @Nullable FetchLogEpochInfo epochInfo) {
         super(tableBucket, error);
+        this.epochInfo = epochInfo;
         this.remoteLogFetchInfo = remoteLogFetchInfo;
         this.records = records;
         this.highWatermark = highWatermark;
         this.filteredEndOffset = filteredEndOffset;
         this.minRetainOffset = minRetainOffset;
+    }
+
+    /** Returns a copy carrying replica epoch information. */
+    public FetchLogResultForBucket withEpochInfo(@Nullable FetchLogEpochInfo epochInfo) {
+        return new FetchLogResultForBucket(
+                getTableBucket(),
+                remoteLogFetchInfo,
+                records,
+                highWatermark,
+                filteredEndOffset,
+                minRetainOffset,
+                getError(),
+                epochInfo);
+    }
+
+    @Nullable
+    public FetchLogEpochInfo epochInfo() {
+        return epochInfo;
     }
 
     /** Creates a successful local fetch result. */

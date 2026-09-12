@@ -129,18 +129,8 @@ public class AdjustIsrITCase {
                                                 .getHighWatermark())
                                 .isEqualTo(10L));
 
-        currentLeaderAndIsr = zkClient.getLeaderAndIsr(tb).get();
-        LeaderAndIsr newLeaderAndIsr =
-                new LeaderAndIsr(
-                        currentLeaderAndIsr.leader(),
-                        currentLeaderAndIsr.leaderEpoch() + 1,
-                        isr,
-                        currentLeaderAndIsr.standbyReplicas(),
-                        currentLeaderAndIsr.coordinatorEpoch(),
-                        currentLeaderAndIsr.bucketEpoch());
         isr.add(stopFollower);
-        FLUSS_CLUSTER_EXTENSION.notifyLeaderAndIsr(
-                stopFollower, DATA1_TABLE_PATH, tb, newLeaderAndIsr, isr);
+        FLUSS_CLUSTER_EXTENSION.restartTabletServer(stopFollower, new Configuration());
         // retry until the stop follower add back to ISR.
         retry(
                 Duration.ofMinutes(1),

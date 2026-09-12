@@ -17,13 +17,20 @@
 
 package org.apache.fluss.remote;
 
+import org.apache.fluss.metadata.LeaderEpochOffset;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.utils.json.JsonSerdeTestBase;
+import org.apache.fluss.utils.json.JsonSerdeUtils;
+
+import org.junit.jupiter.api.Test;
 
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.UUID;
+
+import static org.assertj.core.api.Assertions.assertThat;
 
 /** Tests of {@link RemoteLogManifestJsonSerde}. */
 class RemoteLogManifestJsonSerdeTest extends JsonSerdeTestBase<RemoteLogManifest> {
@@ -100,6 +107,32 @@ class RemoteLogManifestJsonSerdeTest extends JsonSerdeTestBase<RemoteLogManifest
 
     protected RemoteLogManifestJsonSerdeTest() {
         super(RemoteLogManifestJsonSerde.INSTANCE);
+    }
+
+    @Test
+    void testLeaderEpochHistorySurvivesManifestRoundTrip() throws Exception {
+        RemoteLogSegment segment =
+                RemoteLogSegment.Builder.builder()
+                        .physicalTablePath(TABLE_PATH1)
+                        .tableBucket(TABLE_BUCKET1)
+                        .remoteLogSegmentId(UUID.randomUUID())
+                        .remoteLogStartOffset(10)
+                        .remoteLogEndOffset(30)
+                        .maxTimestamp(0)
+                        .segmentSizeInBytes(100)
+                        .leaderEpochs(
+                                Arrays.asList(
+                                        new LeaderEpochOffset(4, 5), new LeaderEpochOffset(7, 20)))
+                        .build();
+        RemoteLogManifest manifest =
+                new RemoteLogManifest(
+                        TABLE_PATH1, TABLE_BUCKET1, Collections.singletonList(segment));
+        byte[] json =
+                JsonSerdeUtils.writeValueAsBytes(manifest, RemoteLogManifestJsonSerde.INSTANCE);
+        assertThat(JsonSerdeUtils.readValue(json, RemoteLogManifestJsonSerde.INSTANCE))
+                .isEqualTo(manifest);
+        assertThat(segment.withLogicalRange(15, 25).leaderEpochs())
+                .containsExactly(new LeaderEpochOffset(4, 5), new LeaderEpochOffset(7, 20));
     }
 
     @Override

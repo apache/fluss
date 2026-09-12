@@ -2358,6 +2358,8 @@ impl LogFetcher {
                             fetch_offset: offset,
                             max_fetch_bytes: self.fetch_max_bytes_for_bucket,
                             routing_bucket_count: None,
+                            current_leader_epoch: None,
+                            last_fetched_epoch: None,
                         };
 
                         fetch_log_req_for_buckets
@@ -3000,6 +3002,9 @@ mod tests {
                     records: None,
                     filtered_end_offset,
                     min_retain_offset: None,
+                    current_leader_epoch: None,
+                    diverging_epoch: None,
+                    epoch_starts: Vec::new(),
                 }],
             }],
         }
@@ -3055,6 +3060,9 @@ mod tests {
                     records: None,
                     filtered_end_offset: None,
                     min_retain_offset: None,
+                    current_leader_epoch: None,
+                    diverging_epoch: None,
+                    epoch_starts: Vec::new(),
                 }],
             }],
         };
@@ -3115,6 +3123,9 @@ mod tests {
                     records: None,
                     filtered_end_offset: None,
                     min_retain_offset: None,
+                    current_leader_epoch: None,
+                    diverging_epoch: None,
+                    epoch_starts: Vec::new(),
                 }],
             }],
         };
@@ -3465,6 +3476,9 @@ mod tests {
                             records: None,
                             filtered_end_offset: None,
                             min_retain_offset: None,
+                            current_leader_epoch: None,
+                            diverging_epoch: None,
+                            epoch_starts: Vec::new(),
                         }],
                     }],
                 };

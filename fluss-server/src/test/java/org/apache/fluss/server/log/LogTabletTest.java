@@ -21,6 +21,7 @@ import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.MemorySize;
 import org.apache.fluss.exception.OutOfOrderSequenceException;
+import org.apache.fluss.metadata.LeaderEpochOffset;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.record.LogRecord;
@@ -42,6 +43,7 @@ import org.junit.jupiter.api.io.TempDir;
 
 import java.io.File;
 import java.io.IOException;
+import java.nio.file.Files;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -112,6 +114,135 @@ final class LogTabletTest extends LogTestBase {
     @AfterEach
     public void teardown() throws Exception {
         scheduler.shutdown();
+    }
+
+    @Test
+    void testDisablingEpochHistorySurvivesReenableWithExistingData() throws Exception {
+        logTablet.assignLeaderEpoch(3);
+        logTablet.appendAsLeader(genMemoryLogRecordsWithWriterId(DATA1, 1L, 0, 0L));
+        Configuration disabled = new Configuration(conf);
+        disabled.set(ConfigOptions.LOG_REPLICATION_LEADER_EPOCH_ENABLED, false);
+        reopenLogTablet(disabled);
+        assertThat(logTablet.lastFetchedEpoch(10)).isEqualTo(-1);
+        logTablet.assignLeaderEpoch(4);
+        logTablet.appendAsLeader(genMemoryLogRecordsWithWriterId(DATA1, 1L, 1, 0L));
+        assertThat(logTablet.lastFetchedEpoch(20)).isEqualTo(-1);
+        reopenLogTablet(conf);
+        assertThat(logTablet.lastFetchedEpoch(20)).isEqualTo(-1);
+        logTablet.assignLeaderEpoch(5);
+        logTablet.appendAsLeader(genMemoryLogRecordsWithWriterId(DATA1, 1L, 2, 0L));
+        assertThat(logTablet.lastFetchedEpoch(20)).isEqualTo(-1);
+        assertThat(logTablet.lastFetchedEpoch(30)).isEqualTo(5);
+    }
+
+    private void reopenLogTablet(Configuration configuration) throws Exception {
+        logTablet.close();
+        logTablet =
+                LogTablet.create(
+                        tempDir,
+                        PhysicalTablePath.of(DATA1_TABLE_PATH),
+                        logDir,
+                        configuration,
+                        new AtomicBoolean(
+                                configuration.get(
+                                        ConfigOptions.LOG_RETENTION_ROLL_ACTIVE_SEGMENT_ENABLED)),
+                        TestingMetricGroups.TABLET_SERVER_METRICS,
+                        0,
+                        scheduler,
+                        LogFormat.ARROW,
+                        1,
+                        false,
+                        SystemClock.getInstance(),
+                        true);
+    }
+
+    @Test
+    void testUnverifiedSourceDoesNotExtendKnownLocalEpoch() throws Exception {
+        logTablet.assignLeaderEpoch(3);
+        logTablet.appendAsLeader(genMemoryLogRecordsWithWriterId(DATA1, 1L, 0, 0L));
+        logTablet.appendAsFollower(
+                genMemoryLogRecordsWithWriterId(DATA1, 2L, 0, 10L),
+                Collections.singletonList(new LeaderEpochOffset(5, 5)));
+        assertThat(logTablet.lastFetchedEpoch(20)).isEqualTo(-1);
+        assertThat(logTablet.localLogEndOffset()).isEqualTo(20);
+    }
+
+    @Test
+    void testDisabledRemoteRestoreDoesNotImportEpochHistory() throws Exception {
+        logTablet.assignLeaderEpoch(3);
+        logTablet.appendAsLeader(genMemoryLogRecordsWithWriterId(DATA1, 1L, 0, 0L));
+        takeWriterSnapshot(logTablet);
+        File downloaded = new File(tempDir, "remote-writer-snapshot");
+        Files.copy(writerSnapshotFile(logDir, 10).toPath(), downloaded.toPath());
+        Configuration disabled = new Configuration(conf);
+        disabled.set(ConfigOptions.LOG_REPLICATION_LEADER_EPOCH_ENABLED, false);
+        reopenLogTablet(disabled);
+        logTablet.restoreFromRemote(
+                10, downloaded, Collections.singletonList(new LeaderEpochOffset(3, 0)));
+        assertThat(logTablet.lastFetchedEpoch(10)).isEqualTo(-1);
+        reopenLogTablet(conf);
+        assertThat(logTablet.lastFetchedEpoch(10)).isEqualTo(-1);
+        logTablet.assignLeaderEpoch(4);
+        logTablet.appendAsLeader(genMemoryLogRecordsWithWriterId(DATA1, 1L, 1, 0L));
+        assertThat(logTablet.localLogEndOffset()).isEqualTo(20);
+        assertThat(logTablet.lastFetchedEpoch(20)).isEqualTo(4);
+    }
+
+    @Test
+    void testRemoteRestoreInstallsWriterStateAndEpochHistory() throws Exception {
+        logTablet.assignLeaderEpoch(3);
+        logTablet.appendAsLeader(genMemoryLogRecordsWithWriterId(DATA1, 1L, 0, 0L));
+        takeWriterSnapshot(logTablet);
+        File downloaded = new File(tempDir, "downloaded-writer-snapshot");
+        Files.copy(writerSnapshotFile(logDir, 10).toPath(), downloaded.toPath());
+        logTablet.assignLeaderEpoch(5);
+        logTablet.appendAsLeader(genMemoryLogRecordsWithWriterId(DATA1, 2L, 0, 0L));
+
+        logTablet.restoreFromRemote(
+                10, downloaded, Collections.singletonList(new LeaderEpochOffset(3, 0)));
+        assertThat(logTablet.localLogEndOffset()).isEqualTo(10);
+        assertThat(latestWriterStateEndOffset(logTablet)).isEqualTo(10);
+        assertThat(logTablet.lastFetchedEpoch(10)).isEqualTo(3);
+        assertThat(logTablet.endOffsetForEpoch(5)).contains(new LeaderEpochOffset(3, 10));
+        logTablet.assignLeaderEpoch(6);
+        logTablet.appendAsLeader(genMemoryLogRecordsWithWriterId(DATA1, 1L, 1, 0L));
+        assertThat(logTablet.localLogEndOffset()).isEqualTo(20);
+        assertThat(logTablet.lastFetchedEpoch(20)).isEqualTo(6);
+        logTablet.close();
+        logTablet =
+                LogTablet.create(
+                        tempDir,
+                        PhysicalTablePath.of(DATA1_TABLE_PATH),
+                        logDir,
+                        conf,
+                        new AtomicBoolean(
+                                conf.get(ConfigOptions.LOG_RETENTION_ROLL_ACTIVE_SEGMENT_ENABLED)),
+                        TestingMetricGroups.TABLET_SERVER_METRICS,
+                        0,
+                        scheduler,
+                        LogFormat.ARROW,
+                        1,
+                        false,
+                        SystemClock.getInstance(),
+                        true);
+        assertThat(logTablet.lastFetchedEpoch(20)).isEqualTo(6);
+        logTablet.appendAsLeader(genMemoryLogRecordsWithWriterId(DATA1, 1L, 2, 0L));
+        assertThat(logTablet.localLogEndOffset()).isEqualTo(30);
+    }
+
+    @Test
+    void testRemoteCleanupResumesWhenHighWatermarkCatchesUp() throws Exception {
+        for (int i = 0; i < 4; i++) {
+            logTablet.appendAsLeader(genMemoryLogRecordsByObject(DATA1));
+            if (i < 3) {
+                logTablet.roll(Optional.empty());
+            }
+        }
+        logTablet.updateRemoteLogOffsets(0L, 30L, 30L);
+        assertThat(logTablet.logSegments()).hasSize(4);
+        logTablet.updateHighWatermark(30L);
+        assertThat(logTablet.logSegments()).hasSize(1);
+        assertThat(logTablet.localLogStartOffset()).isEqualTo(30L);
     }
 
     @Test

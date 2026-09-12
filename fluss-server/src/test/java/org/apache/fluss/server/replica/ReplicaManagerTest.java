@@ -1266,6 +1266,8 @@ class ReplicaManagerTest extends ReplicaTestBase {
         // Values should be 1, 2, 3 (in any order due to concurrency)
         assertThat(autoIncrementValues).containsExactlyInAnyOrder(1L, 2L, 3L);
 
+        // The insert response returns before the async KV flush publishes the high watermark.
+        waitUntilHighWatermark(tb, 3);
         // Verify exactly 3 changelog entries were written (one per unique key)
         FetchLogResultForBucket logResult = fetchLog(tb, 0L);
         // Only the first upsert for a given primary key generates changelog records. Subsequent

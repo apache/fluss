@@ -1553,6 +1553,12 @@ public class ReplicaManager implements ServerReconfigurable {
                         .map(Replica::getTableBucket)
                         .collect(Collectors.toSet()));
 
+        for (Replica replica : replicasBecomeFollower) {
+            if (!replica.getLogTablet().isLeaderEpochEnabled()) {
+                replica.truncateTo(replica.getLogHighWatermark());
+            }
+        }
+
         replicasBecomeFollower.forEach(
                 replica -> completeDelayedOperations(replica.getTableBucket()));
 
@@ -1564,7 +1570,8 @@ public class ReplicaManager implements ServerReconfigurable {
         // TODO this logic need to be removed after we introduce leader epoch cache, and fetcher
         // manager support truncating while fetching. Trace by
         // https://github.com/apache/fluss/issues/673
-        truncateToHighWatermark(replicasBecomeFollower);
+        // Preserve the tail until the fetch response identifies the common log history.
+        // A follower's committed watermark can lag behind the previous leader's watermark.
 
         // add fetcher for those follower replicas.
         addFetcherForReplicas(replicasBecomeFollower, result);
@@ -1836,6 +1843,8 @@ public class ReplicaManager implements ServerReconfigurable {
                     }
                 }
 
+                fetchParams.setCurrentFetchEpoch(
+                        fetchReqInfo.currentLeaderEpoch(), fetchReqInfo.lastFetchedEpoch());
                 LogReadInfo readInfo = replica.fetchRecords(fetchParams);
 
                 // Once we read from a non-empty bucket, we stop ignoring request and bucket
@@ -1848,15 +1857,16 @@ public class ReplicaManager implements ServerReconfigurable {
                 limitBytes = Math.max(0, limitBytes - recordBatchSize);
                 FetchLogResultForBucket fetchLogResult =
                         FetchLogResultForBucket.records(
-                                tb,
-                                fetchedData.getRecords(),
-                                readInfo.getHighWatermark(),
-                                fetchedData.hasFilteredEndOffset()
-                                        ? fetchedData.getFilteredEndOffset()
-                                        : -1L,
-                                readInfo.hasMinRetainOffset()
-                                        ? readInfo.getMinRetainOffset()
-                                        : -1L);
+                                        tb,
+                                        fetchedData.getRecords(),
+                                        readInfo.getHighWatermark(),
+                                        fetchedData.hasFilteredEndOffset()
+                                                ? fetchedData.getFilteredEndOffset()
+                                                : -1L,
+                                        readInfo.hasMinRetainOffset()
+                                                ? readInfo.getMinRetainOffset()
+                                                : -1L)
+                                .withEpochInfo(readInfo.epochInfo());
                 logReadResult.put(
                         tb,
                         new LogReadResult(fetchLogResult, fetchedData.getFetchOffsetMetadata()));
@@ -1882,6 +1892,19 @@ public class ReplicaManager implements ServerReconfigurable {
                 FetchLogResultForBucket result;
                 if (replica != null && e instanceof LogOffsetOutOfRangeException) {
                     result = handleFetchOutOfRangeException(replica, fetchOffset, e);
+                    if (isFromFollower
+                            && fetchReqInfo.currentLeaderEpoch() >= 0
+                            && result.fetchFromRemote()) {
+                        try {
+                            result =
+                                    replica.withRemoteFetchEpoch(
+                                            result, fetchReqInfo.currentLeaderEpoch());
+                        } catch (Exception epochError) {
+                            result =
+                                    FetchLogResultForBucket.error(
+                                            tb, ApiError.fromThrowable(epochError));
+                        }
+                    }
                 } else {
                     result = FetchLogResultForBucket.error(tb, ApiError.fromThrowable(e));
                 }
@@ -2145,6 +2168,11 @@ public class ReplicaManager implements ServerReconfigurable {
                 }
             }
 
+            if (fetchLogResultForBucket.epochInfo() != null
+                    && fetchLogResultForBucket.epochInfo().divergingEpoch() != null) {
+                errorReadingData = true;
+                break;
+            }
             if (!fetchLogResultForBucket.fetchFromRemote()) {
                 hasFetchFromLocal = true;
                 bytesReadable += fetchLogResultForBucket.recordsOrEmpty().sizeInBytes();
@@ -2420,19 +2448,6 @@ public class ReplicaManager implements ServerReconfigurable {
         }
 
         LOG.info("Swept orphan tablet directories for bucket {}", tb);
-    }
-
-    private void truncateToHighWatermark(List<Replica> replicas) {
-        for (Replica replica : replicas) {
-            long highWatermark = replica.getLogTablet().getHighWatermark();
-            LOG.info(
-                    "Truncating the logEndOffset for replica id {} of table bucket {} to local "
-                            + "highWatermark {} as it becomes the follower",
-                    serverId,
-                    replica.getTableBucket(),
-                    highWatermark);
-            replica.truncateTo(highWatermark);
-        }
     }
 
     private void validateAndApplyCoordinatorEpoch(int requestCoordinatorEpoch, String requestName) {

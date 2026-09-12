@@ -934,16 +934,23 @@ message PbFetchLogReqForTable {
 message PbFetchLogReqForBucket {
   optional int64 partition_id = 1;
   required int32 bucket_id = 2;
-  // TODO leader epoch
   required int64 fetch_offset = 3;
   required int32 max_fetch_bytes = 4;
   optional int32 routing_bucket_count = 5;
+  // Replication only. Both fields must be present to request epoch validation.
+  optional int32 current_leader_epoch = 6;
+  optional int32 last_fetched_epoch = 7;
 }
 
 message PbFetchLogRespForTable {
   required int64 table_id = 1;
   repeated PbFetchLogRespForBucket buckets_resp = 2;
 }
+message PbLeaderEpochOffset {
+  required int32 epoch = 1;
+  required int64 offset = 2;
+}
+
 message PbFetchLogRespForBucket {
   optional int64 partition_id = 1;
   required int32 bucket_id = 2;
@@ -960,6 +967,9 @@ message PbFetchLogRespForBucket {
   // The safe local log retention boundary confirmed by a committed KV snapshot. This is only
   // returned for KV follower fetches and is distinct from the physical log_start_offset.
   optional int64 min_retain_offset = 10;
+  optional int32 current_leader_epoch = 11;
+  optional PbLeaderEpochOffset diverging_epoch = 12;
+  repeated PbLeaderEpochOffset epoch_starts = 13;
 }
 
 message PbPutKvReqForBucket {
@@ -1157,6 +1167,7 @@ message PbRemoteLogSegment {
   required int64 remote_log_end_offset = 3;
   required int32 segment_size_in_bytes = 4;
   optional int64 max_timestamp = 5;
+  repeated PbLeaderEpochOffset leader_epochs = 6;
 }
 
 message PbPartitionInfo {

@@ -1241,13 +1241,17 @@ pub struct PbFetchLogReqForBucket {
     pub partition_id: ::core::option::Option<i64>,
     #[prost(int32, required, tag = "2")]
     pub bucket_id: i32,
-    /// TODO leader epoch
     #[prost(int64, required, tag = "3")]
     pub fetch_offset: i64,
     #[prost(int32, required, tag = "4")]
     pub max_fetch_bytes: i32,
     #[prost(int32, optional, tag = "5")]
     pub routing_bucket_count: ::core::option::Option<i32>,
+    /// Replication only. Both fields must be present to request epoch validation.
+    #[prost(int32, optional, tag = "6")]
+    pub current_leader_epoch: ::core::option::Option<i32>,
+    #[prost(int32, optional, tag = "7")]
+    pub last_fetched_epoch: ::core::option::Option<i32>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PbFetchLogRespForTable {
@@ -1255,6 +1259,13 @@ pub struct PbFetchLogRespForTable {
     pub table_id: i64,
     #[prost(message, repeated, tag = "2")]
     pub buckets_resp: ::prost::alloc::vec::Vec<PbFetchLogRespForBucket>,
+}
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct PbLeaderEpochOffset {
+    #[prost(int32, required, tag = "1")]
+    pub epoch: i32,
+    #[prost(int64, required, tag = "2")]
+    pub offset: i64,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PbFetchLogRespForBucket {
@@ -1284,6 +1295,12 @@ pub struct PbFetchLogRespForBucket {
     /// returned for KV follower fetches and is distinct from the physical log_start_offset.
     #[prost(int64, optional, tag = "10")]
     pub min_retain_offset: ::core::option::Option<i64>,
+    #[prost(int32, optional, tag = "11")]
+    pub current_leader_epoch: ::core::option::Option<i32>,
+    #[prost(message, optional, tag = "12")]
+    pub diverging_epoch: ::core::option::Option<PbLeaderEpochOffset>,
+    #[prost(message, repeated, tag = "13")]
+    pub epoch_starts: ::prost::alloc::vec::Vec<PbLeaderEpochOffset>,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct PbPutKvReqForBucket {
@@ -1570,7 +1587,7 @@ pub struct PbRemoteLogFetchInfo {
     #[prost(int32, optional, tag = "4")]
     pub first_start_pos: ::core::option::Option<i32>,
 }
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PbRemoteLogSegment {
     #[prost(string, required, tag = "1")]
     pub remote_log_segment_id: ::prost::alloc::string::String,
@@ -1582,6 +1599,8 @@ pub struct PbRemoteLogSegment {
     pub segment_size_in_bytes: i32,
     #[prost(int64, optional, tag = "5")]
     pub max_timestamp: ::core::option::Option<i64>,
+    #[prost(message, repeated, tag = "6")]
+    pub leader_epochs: ::prost::alloc::vec::Vec<PbLeaderEpochOffset>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PbPartitionInfo {

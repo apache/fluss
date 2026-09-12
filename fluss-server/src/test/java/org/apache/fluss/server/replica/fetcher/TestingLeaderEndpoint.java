@@ -49,6 +49,7 @@ import static org.apache.fluss.utils.function.ThrowingRunnable.unchecked;
 public class TestingLeaderEndpoint implements LeaderEndpoint {
 
     private final ReplicaManager replicaManager;
+    private final int leaderServerId;
     private final ServerNode localNode;
     /** The max size for the fetch response. */
     private final int maxFetchSize;
@@ -72,8 +73,12 @@ public class TestingLeaderEndpoint implements LeaderEndpoint {
             new java.util.concurrent.CopyOnWriteArrayList<>();
 
     public TestingLeaderEndpoint(
-            Configuration conf, ReplicaManager replicaManager, ServerNode localNode) {
+            Configuration conf,
+            ReplicaManager replicaManager,
+            ServerNode localNode,
+            int leaderServerId) {
         this.replicaManager = replicaManager;
+        this.leaderServerId = leaderServerId;
         this.localNode = localNode;
         this.maxFetchSize = (int) conf.get(ConfigOptions.LOG_REPLICA_FETCH_MAX_BYTES).getBytes();
         this.maxFetchSizeForBucket =
@@ -85,7 +90,7 @@ public class TestingLeaderEndpoint implements LeaderEndpoint {
 
     @Override
     public int leaderServerId() {
-        return localNode.id();
+        return leaderServerId;
     }
 
     @Override
@@ -213,11 +218,12 @@ public class TestingLeaderEndpoint implements LeaderEndpoint {
                                 value.hasMinRetainOffset() ? value.getMinRetainOffset() : -1L;
                         FetchLogResultForBucket memoryResult =
                                 FetchLogResultForBucket.records(
-                                        tb,
-                                        memRecords,
-                                        value.getHighWatermark(),
-                                        filteredEndOffset,
-                                        minRetainOffset);
+                                                tb,
+                                                memRecords,
+                                                value.getHighWatermark(),
+                                                filteredEndOffset,
+                                                minRetainOffset)
+                                        .withEpochInfo(value.epochInfo());
                         result.put(tb, memoryResult);
                     } else {
                         result.put(tb, value);

@@ -32,6 +32,8 @@ public final class FetchReqInfo {
     @Nullable private final int[] projectFields;
 
     private int maxBytes;
+    private final int currentLeaderEpoch;
+    private final int lastFetchedEpoch;
 
     public FetchReqInfo(long tableId, long fetchOffset, int maxBytes) {
         this(tableId, fetchOffset, maxBytes, null);
@@ -39,10 +41,30 @@ public final class FetchReqInfo {
 
     public FetchReqInfo(
             long tableId, long fetchOffset, int maxBytes, @Nullable int[] projectFields) {
+        this(tableId, fetchOffset, maxBytes, projectFields, -1, -1);
+    }
+
+    public FetchReqInfo(
+            long tableId,
+            long fetchOffset,
+            int maxBytes,
+            @Nullable int[] projectFields,
+            int currentLeaderEpoch,
+            int lastFetchedEpoch) {
+        this.currentLeaderEpoch = currentLeaderEpoch;
+        this.lastFetchedEpoch = lastFetchedEpoch;
         this.tableId = tableId;
         this.fetchOffset = fetchOffset;
         this.maxBytes = maxBytes;
         this.projectFields = projectFields;
+    }
+
+    public int currentLeaderEpoch() {
+        return currentLeaderEpoch;
+    }
+
+    public int lastFetchedEpoch() {
+        return lastFetchedEpoch;
     }
 
     public long getTableId() {
@@ -97,11 +119,20 @@ public final class FetchReqInfo {
             return false;
         }
 
-        return fetchOffset == fetchReqInfo.fetchOffset && maxBytes == fetchReqInfo.maxBytes;
+        return fetchOffset == fetchReqInfo.fetchOffset
+                && maxBytes == fetchReqInfo.maxBytes
+                && currentLeaderEpoch == fetchReqInfo.currentLeaderEpoch
+                && lastFetchedEpoch == fetchReqInfo.lastFetchedEpoch;
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(tableId, fetchOffset, maxBytes, Arrays.hashCode(projectFields));
+        return Objects.hash(
+                tableId,
+                fetchOffset,
+                maxBytes,
+                Arrays.hashCode(projectFields),
+                currentLeaderEpoch,
+                lastFetchedEpoch);
     }
 }

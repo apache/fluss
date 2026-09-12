@@ -36,6 +36,7 @@ import org.apache.fluss.exception.NotLeaderOrFollowerException;
 import org.apache.fluss.exception.TooManyScannersException;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.ChangelogImage;
+import org.apache.fluss.metadata.LeaderEpochOffset;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.Schema;
@@ -53,6 +54,8 @@ import org.apache.fluss.record.KvRecordBatch;
 import org.apache.fluss.record.LogRecordReadContext;
 import org.apache.fluss.record.LogRecords;
 import org.apache.fluss.record.MemoryLogRecords;
+import org.apache.fluss.rpc.entity.FetchLogEpochInfo;
+import org.apache.fluss.rpc.entity.FetchLogResultForBucket;
 import org.apache.fluss.rpc.protocol.Errors;
 import org.apache.fluss.rpc.protocol.MergeMode;
 import org.apache.fluss.rpc.util.PredicateMessageUtils;
@@ -500,9 +503,10 @@ public final class Replica {
 
                             int requestLeaderEpoch = data.getLeaderEpoch();
                             if (requestLeaderEpoch > leaderEpoch) {
-                                boolean isNewLeader = !isLeader();
+                                boolean resetFollowerOffsets = !isLeader();
                                 leaderEpoch = requestLeaderEpoch;
                                 onBecomeNewLeader();
+                                logTablet.assignLeaderEpoch(leaderEpoch);
                                 leaderReplicaIdOpt.set(localTabletServerId);
                                 // onBecomeNewLeader may recover a KV snapshot, so start the ISR lag
                                 // grace period after it completes.
@@ -513,7 +517,7 @@ public final class Replica {
                                     followerReplica.resetFollowerReplicaState(
                                             currentTimeMs,
                                             leaderEndOffset,
-                                            isNewLeader,
+                                            resetFollowerOffsets,
                                             data.getIsr()
                                                     .contains(followerReplica.getFollowerId()));
                                 }
@@ -1240,6 +1244,121 @@ public final class Replica {
         return logTablet.appendAsFollower(memoryLogRecords);
     }
 
+    /** Applies a fetch response only while the replica still follows its requested leader epoch. */
+    public LogAppendInfo appendRecordsToFollower(
+            FetchLogResultForBucket data, int expectedLeader, int expectedEpoch) throws Exception {
+        return inReadLock(
+                leaderIsrUpdateLock,
+                () -> {
+                    validateFollowerEpoch(expectedLeader, expectedEpoch);
+                    FetchLogEpochInfo epochInfo =
+                            logTablet.isLeaderEpochEnabled() ? data.epochInfo() : null;
+                    MemoryLogRecords records = (MemoryLogRecords) data.recordsOrEmpty();
+                    LogAppendInfo appended;
+                    if (epochInfo == null) {
+                        appended = logTablet.appendAsFollower(records);
+                        logTablet.updateHighWatermark(logTablet.localLogEndOffset());
+                    } else {
+                        if (epochInfo.leaderEpoch() != expectedEpoch) {
+                            throw new FencedLeaderEpochException(
+                                    "Fetch response refers to a different leader epoch.");
+                        }
+                        appended = logTablet.appendAsFollower(records, epochInfo.epochStarts());
+                        logTablet.updateHighWatermark(
+                                Math.min(data.getHighWatermark(), logTablet.localLogEndOffset()));
+                    }
+                    if (isKvTable() && data.hasMinRetainOffset()) {
+                        logTablet.updateMinRetainOffset(data.getMinRetainOffset());
+                    }
+                    return appended;
+                });
+    }
+
+    /** Truncates a divergent follower tail without crossing a concurrent role change. */
+    public void truncateFollowerTo(long offset, int expectedLeader, int expectedEpoch) {
+        inReadLock(
+                leaderIsrUpdateLock,
+                () -> {
+                    validateFollowerEpoch(expectedLeader, expectedEpoch);
+                    logManager.truncateTo(tableBucket, offset);
+                });
+    }
+
+    /** Serializes an epoch-based truncation with role changes and dynamic configuration. */
+    public boolean truncateFollowerToEpochOffset(
+            long offset, int expectedLeader, int expectedEpoch) {
+        return inReadLock(
+                leaderIsrUpdateLock,
+                () -> {
+                    validateFollowerEpoch(expectedLeader, expectedEpoch);
+                    return logManager.truncateToWithEpoch(tableBucket, offset);
+                });
+    }
+
+    public void invalidateFollowerEpochHistory(int expectedLeader, int expectedEpoch)
+            throws IOException {
+        inReadLock(
+                leaderIsrUpdateLock,
+                () -> {
+                    validateFollowerEpoch(expectedLeader, expectedEpoch);
+                    logTablet.invalidateLeaderEpochHistory();
+                });
+    }
+
+    public void truncateFollowerFullyAndStartAt(
+            long offset, int expectedLeader, int expectedEpoch) {
+        inReadLock(
+                leaderIsrUpdateLock,
+                () -> {
+                    validateFollowerEpoch(expectedLeader, expectedEpoch);
+                    truncateFullyAndStartAt(offset);
+                });
+    }
+
+    /** Installs a downloaded remote snapshot only if its requested leader is still current. */
+    public void restoreFollowerFromRemote(
+            long endOffset,
+            File writerSnapshot,
+            List<LeaderEpochOffset> epochs,
+            long leaderHighWatermark,
+            int expectedLeader,
+            int expectedEpoch) {
+        inReadLock(
+                leaderIsrUpdateLock,
+                () -> {
+                    validateFollowerEpoch(expectedLeader, expectedEpoch);
+                    logTablet.restoreFromRemote(endOffset, writerSnapshot, epochs);
+                    logTablet.updateHighWatermark(Math.min(endOffset, leaderHighWatermark));
+                });
+    }
+
+    /** Attaches the leader identity to a remote fetch response after the manifest lookup. */
+    public FetchLogResultForBucket withRemoteFetchEpoch(
+            FetchLogResultForBucket result, int expectedEpoch) {
+        return inReadLock(
+                leaderIsrUpdateLock,
+                () -> {
+                    if (!isLeader() || leaderEpoch != expectedEpoch) {
+                        throw new FencedLeaderEpochException(
+                                "Leader changed during remote log lookup.");
+                    }
+                    return logTablet.isLeaderEpochEnabled()
+                            ? result.withEpochInfo(
+                                    new FetchLogEpochInfo(
+                                            leaderEpoch, null, Collections.emptyList()))
+                            : result;
+                });
+    }
+
+    private void validateFollowerEpoch(int expectedLeader, int expectedEpoch) {
+        if (isLeader()
+                || leaderEpoch != expectedEpoch
+                || !Objects.equals(getLeaderId(), expectedLeader)) {
+            throw new FencedLeaderEpochException(
+                    "Replica no longer follows the requested leader epoch.");
+        }
+    }
+
     /**
      * Samples the recent backpressure pressure for piggyback on a put response. Also records the
      * value on this bucket's {@link BucketMetricGroup} for table-level aggregation.
@@ -1409,22 +1528,91 @@ public final class Replica {
                             physicalPath));
         }
         if (fetchParams.isFromFollower()) {
-            long followerFetchTimeMs = clock.milliseconds();
-            LogReadInfo logReadInfo =
+            LogReadInfo result =
                     inReadLock(
                             leaderIsrUpdateLock,
                             () -> {
                                 LogTablet localLog = localLogOrThrow(fetchParams.fetchOnlyLeader());
-                                return readRecords(fetchParams, localLog);
+                                boolean epochRequest =
+                                        localLog.isLeaderEpochEnabled()
+                                                && fetchParams.currentLeaderEpoch() >= 0;
+                                if (epochRequest
+                                        && fetchParams.currentLeaderEpoch() != leaderEpoch) {
+                                    throw new FencedLeaderEpochException(
+                                            "Fetch request refers to a different leader epoch.");
+                                }
+                                if (epochRequest
+                                        && fetchParams.lastFetchedEpoch() >= 0
+                                        && localLog.lastFetchedEpoch(fetchParams.fetchOffset())
+                                                != fetchParams.lastFetchedEpoch()) {
+                                    Optional<LeaderEpochOffset> boundary =
+                                            localLog.endOffsetForEpoch(
+                                                    fetchParams.lastFetchedEpoch());
+                                    if (boundary.isPresent()) {
+                                        if (boundary.get().epoch() == fetchParams.lastFetchedEpoch()
+                                                && boundary.get().offset()
+                                                        >= fetchParams.fetchOffset()) {
+                                            boundary =
+                                                    localLog.endOffsetForEpoch(
+                                                            fetchParams.lastFetchedEpoch() - 1);
+                                        }
+                                        if (boundary.isPresent()) {
+                                            return new LogReadInfo(
+                                                    new FetchDataInfo(MemoryLogRecords.EMPTY),
+                                                    localLog.getHighWatermark(),
+                                                    localLog.localLogEndOffset(),
+                                                    -1,
+                                                    new FetchLogEpochInfo(
+                                                            leaderEpoch,
+                                                            boundary.get(),
+                                                            Collections.emptyList()));
+                                        }
+                                    }
+                                    // Preserve legacy interoperability for prefixes without epoch
+                                    // proof; their history remains unknown.
+                                }
+                                long fetchTime = clock.milliseconds();
+                                LogReadInfo info = readRecords(fetchParams, localLog);
+                                FollowerReplica follower =
+                                        getFollowerReplicaOrThrown(fetchParams.replicaId());
+                                follower.updateFetchState(
+                                        info.getFetchedData().getFetchOffsetMetadata(),
+                                        fetchTime,
+                                        info.getLogEndOffset());
+                                return info.withEpochInfo(
+                                        new FetchLogEpochInfo(
+                                                leaderEpoch,
+                                                null,
+                                                epochRequest
+                                                        ? localLog.epochEntries(
+                                                                fetchParams.fetchOffset(),
+                                                                info.getLogEndOffset())
+                                                        : Collections.emptyList()));
                             });
-
-            FollowerReplica followerReplica = getFollowerReplicaOrThrown(fetchParams.replicaId());
-            updateFollowerFetchState(
-                    followerReplica,
-                    logReadInfo.getFetchedData().getFetchOffsetMetadata(),
-                    followerFetchTimeMs,
-                    logReadInfo.getLogEndOffset());
-            return logReadInfo;
+            FetchLogEpochInfo epochInfo = result.epochInfo();
+            if (epochInfo.divergingEpoch() == null) {
+                FollowerReplica follower = followerReplicasMap.get(fetchParams.replicaId());
+                if (follower != null) {
+                    maybeExpandISr(follower, epochInfo.leaderEpoch());
+                    boolean incremented =
+                            inReadLock(
+                                    leaderIsrUpdateLock,
+                                    () ->
+                                            isLeader()
+                                                    && leaderEpoch == epochInfo.leaderEpoch()
+                                                    && followerReplicasMap.get(
+                                                                    fetchParams.replicaId())
+                                                            == follower
+                                                    && maybeIncrementLeaderHW(
+                                                            logTablet, clock.milliseconds()));
+                    if (incremented) {
+                        tryCompleteDelayedOperations();
+                    }
+                }
+            }
+            return logTablet.isLeaderEpochEnabled() && fetchParams.currentLeaderEpoch() >= 0
+                    ? result
+                    : result.withEpochInfo(null);
         } else {
             return inReadLock(
                     leaderIsrUpdateLock,
@@ -1556,45 +1744,6 @@ public final class Replica {
 
         // update isr info.
         isrState = new IsrState.CommittedIsrState(isr, standbyReplicas);
-    }
-
-    private void updateFollowerFetchState(
-            FollowerReplica followerReplica,
-            LogOffsetMetadata followerFetchOffsetMetadata,
-            long followerFetchTimeMs,
-            long leaderLogEndOffset)
-            throws IOException {
-        long prevFollowerEndOffset = followerReplica.stateSnapshot().getLogEndOffset();
-
-        // Apply read lock here to avoid the race between ISR updates and the fetch requests from
-        // rebooted follower. It could break the tablet server epoch checks in the ISR expansion.
-        inReadLock(
-                leaderIsrUpdateLock,
-                () ->
-                        followerReplica.updateFetchState(
-                                followerFetchOffsetMetadata,
-                                followerFetchTimeMs,
-                                leaderLogEndOffset));
-
-        // Check if this in-sync replica needs to be added to the ISR.
-        maybeExpandISr(followerReplica);
-
-        // check if the HW of the replica can now be incremented since the replica may already be in
-        // the ISR and its LEO has just incremented
-        boolean leaderHWIncremented = false;
-        if (prevFollowerEndOffset != followerReplica.stateSnapshot().getLogEndOffset()) {
-            leaderHWIncremented = maybeIncrementLeaderHW(logTablet, followerFetchTimeMs);
-        }
-
-        if (leaderHWIncremented) {
-            tryCompleteDelayedOperations();
-        }
-
-        LOG.debug(
-                "Recorded replica {} log end offset (LEO) position {} for bucket {}.",
-                localTabletServerId,
-                followerFetchOffsetMetadata.getMessageOffset(),
-                tableBucket);
     }
 
     private FollowerReplica getFollowerReplicaOrThrown(int followerId) {
@@ -2091,11 +2240,17 @@ public final class Replica {
      *
      * <p>This function can be triggered when a replica's LEO has incremented.
      */
-    private void maybeExpandISr(FollowerReplica followerReplica) {
+    private void maybeExpandISr(FollowerReplica followerReplica, int expectedEpoch) {
         boolean needsIsrUpdate =
                 inReadLock(
                         leaderIsrUpdateLock,
-                        () -> !isrState.isInflight() && needsExpandIsr(followerReplica));
+                        () ->
+                                isLeader()
+                                        && leaderEpoch == expectedEpoch
+                                        && followerReplicasMap.get(followerReplica.getFollowerId())
+                                                == followerReplica
+                                        && !isrState.isInflight()
+                                        && needsExpandIsr(followerReplica));
 
         if (needsIsrUpdate) {
             Optional<IsrState.PendingExpandIsrState> adjustIsrUpdateOpt =
@@ -2105,6 +2260,9 @@ public final class Replica {
                                 IsrState currentIsrState = isrState;
                                 // check if this replica needs to be added to the ISR.
                                 if (isLeader()
+                                        && leaderEpoch == expectedEpoch
+                                        && followerReplicasMap.get(followerReplica.getFollowerId())
+                                                == followerReplica
                                         && currentIsrState instanceof IsrState.CommittedIsrState
                                         && needsExpandIsr(followerReplica)) {
                                     return Optional.of(

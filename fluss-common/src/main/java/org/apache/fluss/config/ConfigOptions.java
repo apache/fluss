@@ -985,6 +985,18 @@ public class ConfigOptions {
                                     + "we would fsync after every message; if it were 5 we would fsync after every "
                                     + "five messages.");
 
+    public static final ConfigOption<Boolean> LOG_REPLICATION_LEADER_EPOCH_ENABLED =
+            key("log.replication.leader-epoch.enabled")
+                    .booleanType()
+                    .defaultValue(true)
+                    .withDescription(
+                            "Whether to validate replication log history using leader epochs. "
+                                    + "Can be changed dynamically with alterClusterConfigs. Disabled peers remain compatible "
+                                    + "through legacy replication, which cannot verify divergent histories. "
+                                    + "Disabling discards local epoch history; enabling does not reconstruct "
+                                    + "unknown history for existing records. New boundaries are established "
+                                    + "by subsequent leader epochs, not by changing this option.");
+
     public static final ConfigOption<Duration> LOG_FLUSH_OFFSET_CHECKPOINT_INTERVAL =
             key("log.flush.offset.checkpoint-interval")
                     .durationType()
