@@ -43,6 +43,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
+import java.nio.ByteBuffer;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -507,6 +508,65 @@ public class LogScannerITCase extends ClientToServerITCaseBase {
     }
 
     @Test
+    void testPollArrowBatchesWithPrimaryKeyChangelog() throws Exception {
+        TablePath tablePath = TablePath.of("test_db_1", "test_arrow_batches_with_changelog");
+        TableDescriptor tableDescriptor =
+                TableDescriptor.builder()
+                        .schema(
+                                Schema.newBuilder()
+                                        .column("a", DataTypes.INT())
+                                        .column("b", DataTypes.STRING())
+                                        .primaryKey("a")
+                                        .build())
+                        .distributedBy(1)
+                        .logFormat(LogFormat.ARROW)
+                        .build();
+        createTable(tablePath, tableDescriptor, false);
+
+        try (Table table = conn.getTable(tablePath)) {
+            UpsertWriter writer = table.newUpsert().createWriter();
+            writer.upsert(row(1, "old")).get();
+            writer.flush();
+            writer.upsert(row(1, "new")).get();
+            writer.flush();
+            writer.upsert(row(2, "deleted")).get();
+            writer.flush();
+            writer.delete(row(2, "deleted")).get();
+            writer.flush();
+
+            ChangeType[] expectedChangeTypes = {
+                ChangeType.INSERT,
+                ChangeType.UPDATE_BEFORE,
+                ChangeType.UPDATE_AFTER,
+                ChangeType.INSERT,
+                ChangeType.DELETE
+            };
+            int[] expectedKeys = {1, 1, 1, 2, 2};
+            String[] expectedValues = {"old", "old", "new", "deleted", "deleted"};
+
+            try (LogScanner scanner = table.newScan().createLogScanner()) {
+                scanner.subscribeFromBeginning(0);
+                pollAndVerifyChangelogArrowBatches(
+                        scanner, expectedChangeTypes, expectedKeys, expectedValues, 0);
+            }
+
+            try (LogScanner scanner = table.newScan().project(new int[] {1}).createLogScanner()) {
+                scanner.subscribeFromBeginning(0);
+                pollAndVerifyProjectedChangelogArrowBatches(
+                        scanner, expectedChangeTypes, expectedValues);
+            }
+
+            // Offset 2 starts in the middle of the update batch and verifies that slicing keeps
+            // the change-type vector aligned with the Arrow rows.
+            try (LogScanner scanner = table.newScan().createLogScanner()) {
+                scanner.subscribe(0, 2L);
+                pollAndVerifyChangelogArrowBatches(
+                        scanner, expectedChangeTypes, expectedKeys, expectedValues, 2);
+            }
+        }
+    }
+
+    @Test
     void testPollArrowBatchesWithSchemaEvolution() throws Exception {
         TablePath tablePath = TablePath.of("test_db_1", "test_arrow_batches_with_schema_evolution");
         TableDescriptor tableDescriptor =
@@ -548,7 +608,7 @@ public class LogScannerITCase extends ClientToServerITCaseBase {
 
             int totalRecords = 6;
             // subscribe from beginning and verify all 6 records
-            try (LogScannerImpl scanner = (LogScannerImpl) table.newScan().createLogScanner()) {
+            try (LogScanner scanner = table.newScan().createLogScanner()) {
                 scanner.subscribeFromBeginning(0);
                 pollAndVerifyArrowBatches(scanner, totalRecords, 0);
             }
@@ -556,7 +616,7 @@ public class LogScannerITCase extends ClientToServerITCaseBase {
             // subscribe from the middle of the first batch (offset 1)
             // to ensure records before the subscribe offset are not returned
             int subscribeOffset = 1;
-            try (LogScannerImpl scanner2 = (LogScannerImpl) table.newScan().createLogScanner()) {
+            try (LogScanner scanner2 = table.newScan().createLogScanner()) {
                 scanner2.subscribe(0, subscribeOffset);
                 pollAndVerifyArrowBatches(
                         scanner2, totalRecords - subscribeOffset, subscribeOffset);
@@ -565,7 +625,7 @@ public class LogScannerITCase extends ClientToServerITCaseBase {
     }
 
     private void pollAndVerifyArrowBatches(
-            LogScannerImpl scanner, int expectedRecords, int minExpectedOffset) {
+            LogScanner scanner, int expectedRecords, int minExpectedOffset) {
         int count = 0;
         long deadline = System.nanoTime() + Duration.ofSeconds(30).toNanos();
         while (count < expectedRecords) {
@@ -599,6 +659,78 @@ public class LogScannerITCase extends ClientToServerITCaseBase {
             }
         }
         assertThat(count).isEqualTo(expectedRecords);
+    }
+
+    private void pollAndVerifyChangelogArrowBatches(
+            LogScanner scanner,
+            ChangeType[] expectedChangeTypes,
+            int[] expectedKeys,
+            String[] expectedValues,
+            int startingOffset) {
+        int count = startingOffset;
+        long deadline = System.nanoTime() + Duration.ofSeconds(30).toNanos();
+        while (count < expectedChangeTypes.length) {
+            assertThat(System.nanoTime())
+                    .as(
+                            "Timed out waiting for %s changelog records, got %s",
+                            expectedChangeTypes.length - startingOffset, count - startingOffset)
+                    .isLessThan(deadline);
+            try (ArrowScanRecords records = scanner.pollRecordBatch(Duration.ofSeconds(1))) {
+                for (ArrowBatchData batch : records) {
+                    try (ArrowBatchData b = batch) {
+                        assertThat(b.isAppendOnly()).isFalse();
+                        ByteBuffer changeTypes = b.getChangeTypes().get();
+                        assertThat(changeTypes.remaining()).isEqualTo(b.getRecordCount());
+                        IntVector keys = (IntVector) b.getVectorSchemaRoot().getVector(0);
+                        VarCharVector values = (VarCharVector) b.getVectorSchemaRoot().getVector(1);
+                        for (int rowId = 0; rowId < b.getRecordCount(); rowId++) {
+                            long offset = b.getBaseLogOffset() + rowId;
+                            assertThat(offset).isEqualTo(count);
+                            assertThat(b.getChangeType(rowId))
+                                    .isEqualTo(expectedChangeTypes[count]);
+                            assertThat(changeTypes.get(rowId))
+                                    .isEqualTo(expectedChangeTypes[count].toByteValue());
+                            assertThat(keys.get(rowId)).isEqualTo(expectedKeys[count]);
+                            assertThat(values.getObject(rowId).toString())
+                                    .isEqualTo(expectedValues[count]);
+                            count++;
+                        }
+                    }
+                }
+            }
+        }
+        assertThat(count).isEqualTo(expectedChangeTypes.length);
+    }
+
+    private void pollAndVerifyProjectedChangelogArrowBatches(
+            LogScanner scanner, ChangeType[] expectedChangeTypes, String[] expectedValues) {
+        int count = 0;
+        long deadline = System.nanoTime() + Duration.ofSeconds(30).toNanos();
+        while (count < expectedChangeTypes.length) {
+            assertThat(System.nanoTime())
+                    .as(
+                            "Timed out waiting for %s projected changelog records, got %s",
+                            expectedChangeTypes.length, count)
+                    .isLessThan(deadline);
+            try (ArrowScanRecords records = scanner.pollRecordBatch(Duration.ofSeconds(1))) {
+                for (ArrowBatchData batch : records) {
+                    try (ArrowBatchData b = batch) {
+                        assertThat(b.getVectorSchemaRoot().getFieldVectors()).hasSize(1);
+                        VarCharVector values = (VarCharVector) b.getVectorSchemaRoot().getVector(0);
+                        for (int rowId = 0; rowId < b.getRecordCount(); rowId++) {
+                            long offset = b.getBaseLogOffset() + rowId;
+                            assertThat(offset).isEqualTo(count);
+                            assertThat(b.getChangeType(rowId))
+                                    .isEqualTo(expectedChangeTypes[count]);
+                            assertThat(values.getObject(rowId).toString())
+                                    .isEqualTo(expectedValues[count]);
+                            count++;
+                        }
+                    }
+                }
+            }
+        }
+        assertThat(count).isEqualTo(expectedChangeTypes.length);
     }
 
     private static ScanRecords pollUntilProgressOnly(
