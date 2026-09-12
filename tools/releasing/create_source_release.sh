@@ -28,6 +28,11 @@ if [ -z "${RELEASE_VERSION:-}" ]; then
     exit 1
 fi
 
+if [ -z "${RELEASE_COMMIT:-}" ]; then
+    echo "RELEASE_COMMIT must be the full commit hash recorded for the RC tag." >&2
+    exit 1
+fi
+
 # fail immediately
 set -o errexit
 set -o nounset
@@ -59,6 +64,17 @@ FLUSS_DIR=`pwd`
 RELEASE_DIR=${FLUSS_DIR}/tools/releasing/release
 CLONE_DIR=${RELEASE_DIR}/fluss-tmp-clone
 
+current_commit="$(git rev-parse HEAD)"
+tracked_changes="$(git status --porcelain --untracked-files=no)"
+if [[ "${current_commit}" != "${RELEASE_COMMIT}" ]]; then
+    echo "HEAD does not match RELEASE_COMMIT ${RELEASE_COMMIT}." >&2
+    exit 1
+fi
+if [[ -n "${tracked_changes}" ]]; then
+    echo "Commit or discard tracked changes before building release artifacts." >&2
+    exit 1
+fi
+
 echo "Creating source package"
 
 mkdir -p ${RELEASE_DIR}
@@ -66,6 +82,7 @@ mkdir -p ${RELEASE_DIR}
 # create a temporary git clone to ensure that we have a pristine source release
 git clone ${FLUSS_DIR} ${CLONE_DIR}
 cd ${CLONE_DIR}
+git checkout --detach "${RELEASE_COMMIT}"
 
 rsync -a \
   --exclude ".git" --exclude ".gitignore" --exclude ".gitattributes" \

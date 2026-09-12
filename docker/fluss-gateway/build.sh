@@ -71,6 +71,7 @@ RELEASE_VERSION="${gateway_version}" \
 GATEWAY_ARCHES="${GATEWAY_ARCH}" \
 GATEWAY_RELEASE_DIR="${RELEASE_DIR}" \
 GATEWAY_IMAGE_BUILD_DIR="${BUILD_DIR}" \
+SKIP_GPG=true \
     "${SCRIPT_DIR}/prepare_build.sh"
 
 image_version="${FLUSS_VERSION:-${gateway_version}}"
