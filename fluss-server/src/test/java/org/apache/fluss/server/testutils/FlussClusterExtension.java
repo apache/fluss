@@ -263,11 +263,16 @@ public final class FlussClusterExtension
 
     /** Start a coordinator server. start a new one if no coordinator server exists. */
     public void startCoordinatorServer() throws Exception {
+        startCoordinatorServer(coordinatorServerListeners);
+    }
+
+    /** Start a coordinator server with the given listeners. */
+    public void startCoordinatorServer(String bindListeners) throws Exception {
         if (coordinatorServer == null) {
             // if no coordinator server exists, create a new coordinator server and start
             Configuration conf = new Configuration(clusterConf);
             conf.setString(ConfigOptions.ZOOKEEPER_ADDRESS, zooKeeperServer.getConnectString());
-            conf.setString(ConfigOptions.BIND_LISTENERS, coordinatorServerListeners);
+            conf.setString(ConfigOptions.BIND_LISTENERS, bindListeners);
             setRemoteDataDir(conf);
             setRemoteDataDirs(conf);
             coordinatorServer = new CoordinatorServer(conf, clock);
@@ -310,6 +315,16 @@ public final class FlussClusterExtension
         startTabletServer(serverId, false);
     }
 
+    /** Start a new tablet server with the given listeners. */
+    public void startTabletServer(int serverId, String bindListeners) throws Exception {
+        if (tabletServers.containsKey(serverId)) {
+            throw new IllegalArgumentException("Tablet server " + serverId + " already exists.");
+        }
+        Configuration overwriteConfig = new Configuration();
+        overwriteConfig.setString(ConfigOptions.BIND_LISTENERS, bindListeners);
+        startTabletServer(serverId, overwriteConfig);
+    }
+
     public void startTabletServer(int serverId, boolean forceStartIfExists) throws Exception {
         if (tabletServers.containsKey(serverId)) {
             if (!forceStartIfExists) {
@@ -317,7 +332,7 @@ public final class FlussClusterExtension
                         "Tablet server " + serverId + " already exists.");
             }
         }
-        startTabletServer(serverId, null);
+        startTabletServer(serverId, (Configuration) null);
     }
 
     private void startTabletServer(int serverId, @Nullable Configuration overwriteConfig)
