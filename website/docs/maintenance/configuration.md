@@ -212,6 +212,36 @@ The logging-related environment options (`env.log.dir`, `env.log.level`, `env.lo
 | kv.scanner.max-per-server                         | Integer    | 200                           | The maximum total number of concurrent KV scanner sessions allowed across all buckets on a single tablet server. New scan requests that exceed this limit will be rejected with an error. The default value is 200.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 | kv.scanner.max-batch-size                         | MemorySize | 10mb                          | Server-side cap on the per-batch payload size for KV full-scan responses. The effective batch size is min(client-requested batch_size_bytes, this value). Protects the tablet server from out-of-memory if a client passes an excessively large batch size. The default value is 10mb.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 
+## Client disk write protection backoff
+
+| Key | Default | Type | Description |
+| :--- | :--- | :--- | :--- |
+| `client.writer.disk-write-locked.backoff` | `1 s` | Duration | The initial retry backoff when disk write protection rejects a write. Applies to both Log and KV writes, independently of KV backpressure. The backoff doubles with the batch retry count and uses 20% jitter, up to client.writer.disk-write-locked.backoff-max. The value must be at least 1ms and no greater than the maximum backoff. |
+| `client.writer.disk-write-locked.backoff-max` | `10 s` | Duration | The maximum retry backoff for a bucket whose writes are rejected by disk write protection. Must be between the initial backoff and 2147483647ms. Setting this equal to the initial backoff uses a fixed delay without jitter. Writes retry automatically after the delay, subject to client.writer.retries. Flush and graceful close also respect this delay. |
+
+Java writers back off after a TabletServer rejects a write with `DISK_WRITE_LOCKED`.
+The wait applies to both Log and KV writes and to all queued batches targeting the same
+physical table bucket, including historical partition writes. Other buckets remain eligible
+for normal scheduling. Requests already in flight cannot be recalled.
+
+Set `client.writer.disk-write-locked.backoff` (default `1s`) and
+`client.writer.disk-write-locked.backoff-max` (default `10s`) in the **client** configuration.
+The initial value must be at least `1ms`, and the maximum must be between the initial value
+and `2147483647ms`. The backoff doubles with the existing batch retry count, with ±20% jitter
+and a cap at the maximum. Setting the two values equal selects a fixed delay without jitter.
+Actual delays are always at least `1ms`.
+
+Disk backoff is independent of `client.writer.kv-backpressure.max-throttle`; when both apply,
+the writer waits for the longer remaining duration. A successful in-flight write or a KV
+pressure value of zero does not clear an active disk wait. Writes retry automatically after
+the wait, subject to `client.writer.retries`. Flush and graceful close respect the wait;
+the existing close timeout still applies. After disk protection is lifted, the next retry
+can take up to the remaining backoff window, plus normal scheduling and RPC time.
+
+This behavior requires upgrading the Java client or the connector that bundles it.
+It uses the existing server error code and requires no server protocol upgrade.
+The per-bucket backoff does not impose a cluster-wide bandwidth limit.
+
 ## Metrics
 
 More metrics example could be found in [Observability - Metric Reporters](observability/metric-reporters.md).
