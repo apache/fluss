@@ -30,7 +30,7 @@ Next, verify all `.asc` files:
 ```bash
 for i in ./*.tgz; do
   echo "$i"
-  gpg --verify "$i.asc" "$i" || exit 1
+  gpg --verify "$i.asc" "$i"
 done
 ```
 If the verification is successful, you will see a message like this:
@@ -115,7 +115,7 @@ version, configuration, health endpoint, and graceful shutdown:
 tar -xzf fluss-gateway-${RELEASE_VERSION}-bin-linux-amd64.tgz
 cd fluss-gateway-${RELEASE_VERSION}-bin-linux-amd64
 
-test "$(cat RELEASE_COMMIT)" = "${RELEASE_COMMIT:?Set the recorded RC commit}" || exit 1
+test "$(cat RELEASE_COMMIT)" = "${RELEASE_COMMIT:?Set the recorded RC commit}"
 bin/fluss-gateway --version
 bin/fluss-gateway.sh --bind-address 127.0.0.1:8080 &
 GATEWAY_PID=$!
@@ -146,8 +146,8 @@ thread as `GATEWAY_IMAGE_DIGEST`. Then verify that same digest on matching
 
 ```bash
 docker pull "apache/fluss-gateway@${GATEWAY_IMAGE_DIGEST:?Set the RC image index digest}"
-image_commit="$(docker run --rm --entrypoint cat "apache/fluss-gateway@${GATEWAY_IMAGE_DIGEST}" /opt/fluss/RELEASE_COMMIT)" || exit 1
-test "${image_commit}" = "${RELEASE_COMMIT:?Set the recorded RC commit}" || exit 1
+image_commit="$(docker run --rm --entrypoint cat "apache/fluss-gateway@${GATEWAY_IMAGE_DIGEST}" /opt/fluss/RELEASE_COMMIT)"
+test "${image_commit}" = "${RELEASE_COMMIT:?Set the recorded RC commit}"
 
 # Run the checked-in smoke test from the root of the extracted Fluss source
 # release, not from the Gateway binary distribution used above.

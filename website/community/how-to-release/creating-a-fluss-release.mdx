@@ -333,14 +333,26 @@ $ cd tools
 tools $ OLD_VERSION=$CURRENT_SNAPSHOT_VERSION NEW_VERSION=$RELEASE_VERSION releasing/update_branch_version.sh
 ```
 
-Before tagging, complete the [client version and dependency audit preparation](#9-publish-client-rc-artifacts-cratesio--pypi)
-from the repository root and commit any resulting changes, including both Rust
-workspaces' lockfiles. Return to `tools/`, then tag the release commit and export
-its full hash for all subsequent builds:
+Before tagging, update the client versions, lockfiles, and dependency reports
+from the repository root:
+
+```bash
+# Update the Rust workspace version (also drives the Python/C++/Elixir-NIF crates).
+fluss-rust/scripts/bump-version.sh <previous_version> ${RELEASE_VERSION}
+# Set @version "${RELEASE_VERSION}" in fluss-rust/bindings/elixir/mix.exs.
+cargo update --workspace --manifest-path fluss-rust/Cargo.toml
+cargo update --workspace --manifest-path fluss-gateway/Cargo.toml
+python3 fluss-rust/scripts/dependencies.py generate
+just --justfile fluss-gateway/justfile --working-directory fluss-gateway deps
+```
+
+Commit all version, lockfile, and dependency-report changes. Return to `tools/`,
+then tag and push the release commit before using other build machines:
 
 ```bash
 git tag -s ${TAG} -m "${TAG}"
 export RELEASE_COMMIT="$(git rev-parse "${TAG}^{}")"
+git push origin "${TAG}"
 ```
 
 Use a clean checkout of that same commit on every build machine. Source and
@@ -510,8 +522,9 @@ that the Dockerfiles and preparation scripts are from that RC. From the
 repository root, check:
 
 ```bash
-test "$(git rev-parse HEAD)" = "${RELEASE_COMMIT:?Set the recorded RC commit}" || exit 1
-git diff --quiet && git diff --cached --quiet || exit 1
+test "$(git rev-parse HEAD)" = "${RELEASE_COMMIT:?Set the recorded RC commit}" &&
+git diff --quiet &&
+git diff --cached --quiet
 ```
 
 Then run the following commands to build and push the fluss Docker image.
@@ -580,26 +593,9 @@ Then, update the `dockerVersion` field for the current release RC version in the
 
 This ensures that the **Quickstart guide** in the documentation references the correct Docker image for the release candidate. This will help developers to easily test the new release candidate using the Quickstart guide.
 
-### 8. Push the RC tag
-
-```bash
-git push origin $TAG
-```
-
-### 9. Publish client RC artifacts (crates.io / PyPI)
+### 8. Verify client RC artifacts (crates.io / PyPI)
 
 The Rust, Python, and C++ clients live in `fluss-rust/` and release from this repository under the **same version and tag** — there is no separate client release.
-
-Before tagging, make sure the client versions match `${RELEASE_VERSION}`:
-
-```bash
-# Rust workspace version (also drives the python/cpp/elixir-NIF crates via version.workspace)
-fluss-rust/scripts/bump-version.sh <previous_version> ${RELEASE_VERSION}
-# The Elixir binding has its own version attribute — set @version "${RELEASE_VERSION}" in
-#   fluss-rust/bindings/elixir/mix.exs
-# Regenerate the Rust dependency/license audit (cargo-deny):
-(cd fluss-rust && python3 scripts/dependencies.py generate)
-```
 
 Pushing the **RC tag** (`v${RELEASE_VERSION}-rc${RC_NUM}`) triggers the client workflows:
 

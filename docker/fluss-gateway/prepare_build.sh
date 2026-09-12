@@ -35,7 +35,7 @@ if [[ -z "${RELEASE_VERSION:-}" ]]; then
 fi
 
 if [[ "${SKIP_GPG}" == "false" && -z "${RELEASE_COMMIT:-}" ]]; then
-    echo "RELEASE_COMMIT must be the full commit hash recorded for the RC tag." >&2
+    echo "Set RELEASE_COMMIT to the full RC commit hash, or use SKIP_GPG=true for an unsigned development build." >&2
     exit 1
 fi
 
