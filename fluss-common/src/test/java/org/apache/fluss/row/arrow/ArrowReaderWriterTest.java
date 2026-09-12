@@ -38,8 +38,11 @@ import org.apache.fluss.types.RowType;
 import org.apache.fluss.utils.ArrowUtils;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 
 import java.io.IOException;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 
@@ -404,6 +407,69 @@ class ArrowReaderWriterTest {
                     assertThat(row.getMap(1).keyArray().getInt(j)).isEqualTo(key);
                     assertThat(row.getMap(1).valueArray().getInt(j)).isEqualTo(key * 2);
                 }
+            }
+        }
+    }
+
+    /**
+     * Tests that timestamp values with a negative micro/nano representation round trip correctly.
+     */
+    @ParameterizedTest
+    @CsvSource({"false,6", "true,6", "false,9", "true,9"})
+    void testNegativeTimestampRoundTrip(boolean ltz, int precision) throws IOException {
+        // for precision 6, the rows below are -1001us, -1000us, -1us, 0, 1us, 1999us;
+        // for precision 9, they are -1000001ns, -1000000ns, -1ns, 0, 1ns, 1999999ns.
+        long[] millis = {-2, -1, -1, 0, 0, 1};
+        int[] nanoOfMillis =
+                precision == 9
+                        ? new int[] {999_999, 0, 999_999, 0, 1, 999_999}
+                        : new int[] {999_000, 0, 999_000, 0, 1_000, 999_000};
+
+        DataType timestampType =
+                ltz ? DataTypes.TIMESTAMP_LTZ(precision) : DataTypes.TIMESTAMP(precision);
+        RowType rowType = DataTypes.ROW(DataTypes.FIELD("ts", timestampType));
+
+        List<InternalRow> expectedRows = new ArrayList<>();
+        try (BufferAllocator allocator = new RootAllocator(Long.MAX_VALUE);
+                VectorSchemaRoot root =
+                        VectorSchemaRoot.create(ArrowUtils.toArrowSchema(rowType), allocator);
+                ArrowWriterPool provider = new ArrowWriterPool(allocator);
+                ArrowWriter writer =
+                        provider.getOrCreateWriter(
+                                1L, 1, Integer.MAX_VALUE, rowType, NO_COMPRESSION)) {
+            for (int i = 0; i < millis.length; i++) {
+                if (ltz) {
+                    expectedRows.add(
+                            GenericRow.of(
+                                    TimestampLtz.fromEpochMillis(millis[i], nanoOfMillis[i])));
+                } else {
+                    expectedRows.add(
+                            GenericRow.of(TimestampNtz.fromMillis(millis[i], nanoOfMillis[i])));
+                }
+                writer.writeRow(expectedRows.get(i));
+            }
+
+            AbstractPagedOutputView pagedOutputView =
+                    new ManagedPagedOutputView(new TestingMemorySegmentPool(10 * 1024));
+
+            // skip arrow batch header.
+            int size =
+                    writer.serializeToOutputView(
+                            pagedOutputView, recordBatchHeaderSize(CURRENT_LOG_MAGIC_VALUE));
+            int heapMemorySize = Math.max(size, writer.estimatedSizeInBytes());
+            MemorySegment segment = MemorySegment.allocateHeapMemory(heapMemorySize);
+
+            assertThat(pagedOutputView.getWrittenSegments().size()).isEqualTo(1);
+            MemorySegment firstSegment = pagedOutputView.getCurrentSegment();
+            firstSegment.copyTo(recordBatchHeaderSize(CURRENT_LOG_MAGIC_VALUE), segment, 0, size);
+
+            ArrowReader reader =
+                    ArrowUtils.createArrowReader(segment, 0, size, root, allocator, rowType);
+            int rowCount = reader.getRowCount();
+            assertThat(rowCount).isEqualTo(expectedRows.size());
+            for (int i = 0; i < rowCount; i++) {
+                ColumnarRow row = reader.read(i);
+                assertThatRow(row).withSchema(rowType).isEqualTo(expectedRows.get(i));
             }
         }
     }
