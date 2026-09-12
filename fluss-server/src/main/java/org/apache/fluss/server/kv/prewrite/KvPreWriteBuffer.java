@@ -412,7 +412,8 @@ public class KvPreWriteBuffer {
             return value;
         }
 
-        long getLogSequenceNumber() {
+        /** Returns the WAL offset that produced this mutation. */
+        public long getLogSequenceNumber() {
             return logSequenceNumber;
         }
 

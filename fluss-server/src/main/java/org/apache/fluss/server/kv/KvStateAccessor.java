@@ -18,7 +18,10 @@
 package org.apache.fluss.server.kv;
 
 import org.apache.fluss.annotation.Internal;
+import org.apache.fluss.record.BinaryValue;
+import org.apache.fluss.row.encode.ValueDecoder;
 import org.apache.fluss.server.kv.historical.HistoricalKvKeyEncoder;
+import org.apache.fluss.server.kv.historical.HistoricalKvTombstone;
 import org.apache.fluss.server.kv.prewrite.KvPreWriteBuffer;
 import org.apache.fluss.server.kv.prewrite.KvPreWriteBuffer.Key;
 import org.apache.fluss.server.kv.prewrite.KvPreWriteBuffer.TruncateReason;
@@ -27,6 +30,7 @@ import org.apache.fluss.server.kv.rocksdb.RocksDBKv;
 import javax.annotation.Nullable;
 
 import java.io.IOException;
+import java.util.function.Supplier;
 
 import static org.apache.fluss.utils.Preconditions.checkArgument;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
@@ -34,9 +38,6 @@ import static org.apache.fluss.utils.Preconditions.checkNotNull;
 /** Accesses a KV tablet's local prewrite buffer and RocksDB state. */
 @Internal
 public final class KvStateAccessor {
-
-    /** Encoded RocksDB value marking a deleted key in historical KV state. */
-    static final byte[] HISTORICAL_TOMBSTONE = new byte[0];
 
     private final KvPreWriteBuffer preWriteBuffer;
     private final RocksDBKv rocksDBKv;
@@ -71,25 +72,41 @@ public final class KvStateAccessor {
         return Key.of(HistoricalKvKeyEncoder.encode(partitionName, primaryKey));
     }
 
-    /** Looks up an encoded key from the local prewrite buffer and RocksDB state. */
-    public KvStateLookupResult lookup(Key key) throws IOException {
-        KvPreWriteBuffer.Value bufferedValue = preWriteBuffer.get(key);
-        if (bufferedValue != null) {
-            byte[] value = bufferedValue.get();
-            return value == null
-                    ? KvStateLookupResult.deleted()
-                    : KvStateLookupResult.present(value);
-        }
+    /** Looks up local state, preserving the distinction between missing keys and deletes. */
+    public KvStateLookupResult lookupLocal(Key key) throws IOException {
+        KvStateLookupResult preWriteResult = lookupPreWriteBuffer(key);
+        return preWriteResult.status() == KvStateLookupResult.Status.NOT_FOUND
+                ? lookupRocksDB(key)
+                : preWriteResult;
+    }
 
-        byte[] value = rocksDBKv.get(key.get());
-        if (value == null) {
-            return KvStateLookupResult.notFound();
+    /**
+     * Looks up a decoded value from the prewrite buffer, then uses saved results or RocksDB on a
+     * miss.
+     *
+     * <p>A delete in the prewrite buffer stops fallback. When a fallback is supplied, its saved
+     * value is returned directly without reading RocksDB or decoding it again.
+     *
+     * <p>Callers must hold the KV lock. Write batches must keep the write lock throughout apply so
+     * their prewrite mutations remain visible to later records in the batch.
+     *
+     * @param key the encoded physical key to look up
+     * @param valueDecoder decodes values read from local state
+     * @param fallbackLookup an in-memory lookup of previously saved results, or null to read
+     *     RocksDB on a prewrite buffer miss
+     */
+    @Nullable
+    public BinaryValue lookup(
+            Key key, ValueDecoder valueDecoder, @Nullable Supplier<BinaryValue> fallbackLookup)
+            throws IOException {
+        KvStateLookupResult localResult = lookupPreWriteBuffer(key);
+        if (localResult.status() == KvStateLookupResult.Status.NOT_FOUND) {
+            if (fallbackLookup != null) {
+                return fallbackLookup.get();
+            }
+            localResult = lookupRocksDB(key);
         }
-        // Historical KV tablets persist deletes as empty values so that a local miss does not
-        // expose a stale value from lake storage after the buffered delete has been flushed.
-        return value.length == 0
-                ? KvStateLookupResult.deleted()
-                : KvStateLookupResult.present(value);
+        return localResult.isPresent() ? valueDecoder.decodeValue(localResult.value()) : null;
     }
 
     /** Adds an insert mutation to the prewrite buffer. */
@@ -117,5 +134,27 @@ public final class KvStateAccessor {
     /** Truncates pending mutations to the given log offset. */
     public void truncateTo(long logOffset, TruncateReason reason) {
         preWriteBuffer.truncateTo(logOffset, reason);
+    }
+
+    /** Looks up the prewrite buffer, distinguishing missing keys from pending deletes. */
+    private KvStateLookupResult lookupPreWriteBuffer(Key key) {
+        KvPreWriteBuffer.Value preWriteValue = preWriteBuffer.get(key);
+        if (preWriteValue == null) {
+            return KvStateLookupResult.notFound();
+        }
+        byte[] value = preWriteValue.get();
+        return value == null ? KvStateLookupResult.deleted() : KvStateLookupResult.present(value);
+    }
+
+    private KvStateLookupResult lookupRocksDB(Key key) throws IOException {
+        byte[] value = rocksDBKv.get(key.get());
+        if (value == null) {
+            return KvStateLookupResult.notFound();
+        }
+        // Historical KV tablets persist deletes as offset-tagged tombstones so that a local miss
+        // does not expose a stale value from lake storage after the buffered delete is flushed.
+        return historicalPartition && HistoricalKvTombstone.isTombstone(value)
+                ? KvStateLookupResult.deleted()
+                : KvStateLookupResult.present(value);
     }
 }

@@ -35,10 +35,10 @@ import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.RowPartitionGetter;
 import org.apache.fluss.row.encode.KeyEncoder;
 import org.apache.fluss.row.encode.RowEncoder;
-import org.apache.fluss.row.encode.ValueEncoder;
 import org.apache.fluss.row.indexed.IndexedRow;
 import org.apache.fluss.server.kv.autoinc.AutoIncIDRange;
 import org.apache.fluss.server.kv.historical.HistoricalKvKeyEncoder;
+import org.apache.fluss.server.kv.historical.HistoricalKvTombstone;
 import org.apache.fluss.server.log.FetchIsolation;
 import org.apache.fluss.server.log.LogTablet;
 import org.apache.fluss.server.zk.ZooKeeperClient;
@@ -56,7 +56,6 @@ import javax.annotation.Nullable;
 import java.util.List;
 
 import static org.apache.fluss.server.TabletManagerBase.getTableInfo;
-import static org.apache.fluss.server.kv.KvStateAccessor.HISTORICAL_TOMBSTONE;
 import static org.apache.fluss.utils.Preconditions.checkArgument;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
@@ -81,7 +80,7 @@ public class KvRecoverHelper {
 
     private KeyEncoder keyEncoder;
     private RowEncoder rowEncoder;
-    private final ValueEncoder valueEncoder;
+    private final KvStateValueEncoder stateValueEncoder;
     @Nullable private final RowTtlTimestampProvider rowTtlTimestampProvider;
     private final SchemaGetter schemaGetter;
 
@@ -109,7 +108,7 @@ public class KvRecoverHelper {
         this.kvFormat = kvFormat;
         this.logFormat = logFormat;
         this.schemaGetter = schemaGetter;
-        this.valueEncoder = kvTablet.getValueEncoder();
+        this.stateValueEncoder = kvTablet.getStateValueEncoder();
         this.rowTtlTimestampProvider = kvTablet.getRowTtlTimestampProvider();
         this.remoteLogFetcher = remoteLogFetcher;
         this.historicalPartition = historicalPartition;
@@ -149,7 +148,9 @@ public class KvRecoverHelper {
                     (resumeRecord) -> {
                         if (resumeRecord.value == null) {
                             if (historicalPartition) {
-                                kvBatchWriter.put(resumeRecord.key, HISTORICAL_TOMBSTONE);
+                                kvBatchWriter.put(
+                                        resumeRecord.key,
+                                        HistoricalKvTombstone.encode(resumeRecord.logOffset));
                             } else {
                                 kvBatchWriter.delete(resumeRecord.key);
                             }
@@ -296,9 +297,9 @@ public class KvRecoverHelper {
                         // the log row format may not compatible with kv row format,
                         // e.g, arrow vs. compacted, thus needs a conversion here.
                         BinaryRow row = toKvRow(logRow);
-                        value =
-                                valueEncoder.encodeValue(
-                                        new BinaryValue(currentSchemaId.shortValue(), row));
+                        BinaryValue binaryValue =
+                                new BinaryValue(currentSchemaId.shortValue(), row);
+                        value = stateValueEncoder.encodeValue(binaryValue, logRecord.logOffset());
                     }
                     resumeRecordConsumer.accept(
                             new KeyValueAndLogOffset(

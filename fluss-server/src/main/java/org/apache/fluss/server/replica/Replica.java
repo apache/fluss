@@ -66,6 +66,7 @@ import org.apache.fluss.server.kv.KvTablet;
 import org.apache.fluss.server.kv.RemoteLogFetcher;
 import org.apache.fluss.server.kv.autoinc.AutoIncIDRange;
 import org.apache.fluss.server.kv.historical.HistoricalValueLookup;
+import org.apache.fluss.server.kv.historical.LocalValueLookupResult;
 import org.apache.fluss.server.kv.rocksdb.RocksDBKvBuilder;
 import org.apache.fluss.server.kv.scan.OpenScanResult;
 import org.apache.fluss.server.kv.scan.ScannerContext;
@@ -114,6 +115,7 @@ import org.apache.fluss.utils.CloseableRegistry;
 import org.apache.fluss.utils.FlussPaths;
 import org.apache.fluss.utils.IOUtils;
 import org.apache.fluss.utils.clock.Clock;
+import org.apache.fluss.utils.function.FunctionWithException;
 import org.apache.fluss.utils.types.Tuple2;
 
 import org.slf4j.Logger;
@@ -911,8 +913,11 @@ public final class Replica {
                         tableBucket,
                         physicalPath);
 
-                // actually, kv manager always create a kv tablet since we will drop the kv
-                // if it exists before init kv tablet
+                // Rebuild state in a fresh directory, as with snapshot recovery.
+                // Recovery retries can reuse the tablet opened by the first attempt.
+                if (kvTablet == null) {
+                    kvManager.createTabletDir(logTablet.getDataDir(), physicalPath, tableBucket);
+                }
                 kvTablet =
                         kvManager.getOrCreateKv(
                                 physicalPath,
@@ -939,6 +944,10 @@ public final class Replica {
             }
 
             logTablet.updateMinRetainOffset(restoreStartOffset);
+            if (isHistoricalPartition()) {
+                checkNotNull(kvTablet, "kv tablet should not be null.")
+                        .advanceHistoricalCleanupOffset(restoreStartOffset);
+            }
             recoverKvTablet(restoreStartOffset, rowCount, autoIncIDRange);
         } catch (Exception e) {
             throw new KvStorageException(
@@ -1301,40 +1310,38 @@ public final class Replica {
     }
 
     /**
-     * Finds historical write keys that require lake fallback without mutating local KV state.
-     *
-     * <p>The caller must keep historical writes for this table bucket ordered until the subsequent
-     * {@link #putHistoricalRecordsToLeader} call completes.
+     * Looks up previous values without holding replica or KV locks during lake I/O, then writes the
+     * records to the local historical KV state.
      */
-    public List<byte[]> findKeysRequiringLakeLookup(
-            KvRecordBatch kvRecords,
-            @Nullable int[] targetColumns,
-            MergeMode mergeMode,
-            String originalPartitionName,
-            int expectedLeaderEpoch,
-            int requiredAcks)
-            throws Exception {
-        return inReadLock(
-                leaderIsrUpdateLock,
-                () -> {
-                    validateHistoricalWrite(expectedLeaderEpoch, requiredAcks);
-                    KvTablet kv = this.kvTablet;
-                    checkNotNull(kv, "KvTablet for the historical replica shouldn't be null.");
-                    return kv.findKeysRequiringLakeLookup(
-                            kvRecords, targetColumns, mergeMode, originalPartitionName);
-                });
-    }
-
-    /** Writes records to the local historical KV state of the leader replica. */
     public LogAppendInfo putHistoricalRecordsToLeader(
             KvRecordBatch kvRecords,
             @Nullable int[] targetColumns,
             MergeMode mergeMode,
             String originalPartitionName,
-            HistoricalValueLookup memoizedLakeLookup,
+            FunctionWithException<List<byte[]>, List<byte[]>, Exception> lakeLookup,
             int expectedLeaderEpoch,
             int requiredAcks)
             throws Exception {
+        checkNotNull(lakeLookup, "Historical lake lookup must not be null");
+        LocalValueLookupResult localLookupResult =
+                inReadLock(
+                        leaderIsrUpdateLock,
+                        () -> {
+                            validateHistoricalWrite(expectedLeaderEpoch, requiredAcks);
+                            KvTablet kv = this.kvTablet;
+                            checkNotNull(
+                                    kv, "KvTablet for the historical replica shouldn't be null.");
+                            return kv.probeLocalPreviousValues(
+                                    kvRecords, targetColumns, mergeMode, originalPartitionName);
+                        });
+
+        List<byte[]> missingKeys = localLookupResult.keysMissingLocally();
+        // Both the replica read lock and the KV read lock have been released before lake I/O.
+        List<byte[]> lakeValues =
+                missingKeys.isEmpty() ? Collections.emptyList() : lakeLookup.apply(missingKeys);
+        HistoricalValueLookup historicalValueLookup =
+                localLookupResult.createValueLookup(lakeValues);
+
         return inReadLock(
                 leaderIsrUpdateLock,
                 () -> {
@@ -1347,9 +1354,46 @@ public final class Replica {
                                     targetColumns,
                                     mergeMode,
                                     originalPartitionName,
-                                    memoizedLakeLookup);
+                                    historicalValueLookup);
                     maybeIncrementLeaderHW(logTablet, clock.milliseconds());
                     return appendInfo;
+                });
+    }
+
+    /**
+     * Updates the historical cleanup offset if it is valid.
+     *
+     * <p>{@code beforeUpdate} runs after validation and before the new cleanup offset becomes
+     * visible to the RocksDB compaction filter.
+     */
+    public void tryUpdateHistoricalCleanupOffset(long newCleanupOffset, Runnable beforeUpdate) {
+        checkNotNull(beforeUpdate, "beforeUpdate must not be null.");
+        inWriteLock(
+                leaderIsrUpdateLock,
+                () -> {
+                    if (!isLeader() || !historicalPartition) {
+                        return;
+                    }
+                    KvTablet currentKvTablet = kvTablet;
+                    if (currentKvTablet == null) {
+                        return;
+                    }
+                    long currentCleanupOffset = currentKvTablet.getHistoricalCleanupOffset();
+                    long localLogEndOffset = logTablet.localLogEndOffset();
+                    if (newCleanupOffset < currentCleanupOffset
+                            || newCleanupOffset > localLogEndOffset) {
+                        LOG.warn(
+                                "Ignore invalid historical cleanup offset {} for {} with "
+                                        + "current cleanup offset {} and local log end "
+                                        + "offset {}.",
+                                newCleanupOffset,
+                                tableBucket,
+                                currentCleanupOffset,
+                                localLogEndOffset);
+                        return;
+                    }
+                    beforeUpdate.run();
+                    currentKvTablet.advanceHistoricalCleanupOffset(newCleanupOffset);
                 });
     }
 

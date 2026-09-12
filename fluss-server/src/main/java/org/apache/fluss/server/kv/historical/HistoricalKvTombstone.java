@@ -18,21 +18,26 @@
 package org.apache.fluss.server.kv.historical;
 
 import org.apache.fluss.annotation.Internal;
-import org.apache.fluss.record.BinaryValue;
+import org.apache.fluss.row.encode.KvValueLayout;
 
-import javax.annotation.Nullable;
+import static org.apache.fluss.utils.Preconditions.checkArgument;
 
-/** Looks up a previous value already memoized for the current historical write request. */
+/** Utilities for tombstones stored in local historical KV state. */
 @Internal
-@FunctionalInterface
-public interface HistoricalValueLookup {
+public final class HistoricalKvTombstone {
 
-    /**
-     * Returns the decoded previous value, or null when the key was absent or deleted.
-     *
-     * <p>This method is invoked while the KV write lock is held and must not perform local or lake
-     * I/O.
-     */
-    @Nullable
-    BinaryValue lookup(byte[] primaryKey);
+    private HistoricalKvTombstone() {}
+
+    /** Encodes a tombstone tagged with the WAL offset that produced the delete. */
+    public static byte[] encode(long logOffset) {
+        checkArgument(logOffset >= 0L, "Historical KV log offset must be non-negative.");
+        byte[] tombstone = new byte[KvValueLayout.TAGGED.valueTagLength()];
+        KvValueLayout.TAGGED.writeValueTag(tombstone, logOffset);
+        return tombstone;
+    }
+
+    /** Returns whether the raw historical value is an offset-tagged tombstone. */
+    public static boolean isTombstone(byte[] rawValue) {
+        return rawValue.length == KvValueLayout.TAGGED.valueTagLength();
+    }
 }

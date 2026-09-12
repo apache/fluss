@@ -41,7 +41,9 @@ import org.apache.fluss.row.encode.ValueEncoder;
 import org.apache.fluss.rpc.protocol.MergeMode;
 import org.apache.fluss.server.kv.autoinc.AutoIncIDRange;
 import org.apache.fluss.server.kv.autoinc.AutoIncrementManager;
+import org.apache.fluss.server.kv.historical.HistoricalKvTombstone;
 import org.apache.fluss.server.kv.historical.HistoricalValueLookup;
+import org.apache.fluss.server.kv.historical.LocalValueLookupResult;
 import org.apache.fluss.server.kv.prewrite.KvPreWriteBuffer;
 import org.apache.fluss.server.kv.prewrite.KvPreWriteBuffer.PreparedFlush;
 import org.apache.fluss.server.kv.rocksdb.RocksDBKv;
@@ -92,11 +94,12 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.Executor;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.locks.ReadWriteLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 
-import static org.apache.fluss.server.kv.KvStateAccessor.HISTORICAL_TOMBSTONE;
 import static org.apache.fluss.utils.PartitionUtils.HISTORICAL_PARTITION_VALUE;
+import static org.apache.fluss.utils.Preconditions.checkArgument;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 import static org.apache.fluss.utils.Preconditions.checkState;
 import static org.apache.fluss.utils.concurrent.LockUtils.inReadLock;
@@ -121,6 +124,10 @@ public final class KvTablet {
             64 - Long.numberOfLeadingZeros(MAX_FLUSH_RETRY_DELAY_MS / MIN_FLUSH_RETRY_DELAY_MS);
 
     private static final long ROW_COUNT_DISABLED = -1;
+
+    // Retain recent historical KV state within this WAL offset distance of lake progress.
+    // TODO: Consider time-based retention after lake coverage is confirmed.
+    private static final long HISTORICAL_KV_RETENTION_OFFSET_DISTANCE = 60_000L;
 
     /**
      * Max records per native write of the asynchronous flush; mirrors the batching capacity of
@@ -148,7 +155,8 @@ public final class KvTablet {
     // A lock that guards all modifications to the kv.
     private final ReadWriteLock kvLock = new ReentrantReadWriteLock();
     private final KvValueLayout kvValueLayout;
-    private final ValueEncoder valueEncoder;
+    private final KvStateValueEncoder stateValueEncoder;
+    private final AtomicLong historicalCleanupOffset;
     @Nullable private final RowTtlTimestampProvider rowTtlTimestampProvider;
     private final boolean rowTtlEnabled;
     private final AutoIncrementManager autoIncrementManager;
@@ -199,6 +207,7 @@ public final class KvTablet {
             KvValueLayout kvValueLayout,
             ValueEncoder valueEncoder,
             ValueDecoder valueDecoder,
+            AtomicLong historicalCleanupOffset,
             @Nullable RocksDBStatistics rocksDBStatistics,
             KvFlushScheduler kvFlushScheduler,
             boolean closeFlushScheduler,
@@ -222,7 +231,11 @@ public final class KvTablet {
         this.kvStateAccessor =
                 new KvStateAccessor(kvPreWriteBuffer, rocksDBKv, historicalPartition);
         this.kvValueLayout = kvValueLayout;
-        this.valueEncoder = valueEncoder;
+        this.stateValueEncoder =
+                historicalPartition
+                        ? valueEncoder::encodeValue
+                        : (value, logOffset) -> valueEncoder.encodeValue(value);
+        this.historicalCleanupOffset = historicalCleanupOffset;
         this.rowTtlTimestampProvider = rowTtlTimestampProvider;
         this.rowTtlEnabled = rowTtlEnabled;
         this.kvWriteProcessor =
@@ -237,7 +250,7 @@ public final class KvTablet {
                         schemaGetter,
                         changelogImage,
                         autoIncrementManager,
-                        valueEncoder,
+                        stateValueEncoder,
                         valueDecoder,
                         rowTtlTimestampProvider,
                         clock);
@@ -424,11 +437,16 @@ public final class KvTablet {
             TableConfig tableConfig)
             throws IOException {
         checkNotNull(tableConfig, "tableConfig must not be null.");
+        boolean historicalPartition =
+                HISTORICAL_PARTITION_VALUE.equals(tablePath.getPartitionName());
         Optional<Duration> rowTtl = tableConfig.getKvTTL();
-        KvValueLayout kvValueLayout = KvValueLayout.fromTableConfig(tableConfig);
+        KvValueLayout kvValueLayout =
+                historicalPartition
+                        ? KvValueLayout.TAGGED
+                        : KvValueLayout.fromTableConfig(tableConfig);
         @Nullable
         RowTtlTimestampProvider rowTtlTimestampProvider =
-                kvValueLayout.hasValueTag()
+                !historicalPartition && kvValueLayout.hasValueTag()
                         ? RowTtlTimestampProvider.create(
                                 tableConfig, schemaGetter, ZoneId.systemDefault())
                         : null;
@@ -437,13 +455,19 @@ public final class KvTablet {
                         ? ValueEncoder.forLayout(kvValueLayout)
                         : ValueEncoder.forLayout(kvValueLayout, rowTtlTimestampProvider);
         ValueDecoder valueDecoder = new ValueDecoder(schemaGetter, kvFormat, kvValueLayout);
+        AtomicLong historicalCleanupOffset = new AtomicLong(0L);
         @Nullable
         AbstractCompactionFilterFactory<? extends AbstractCompactionFilter<?>>
                 compactionFilterFactory =
-                        rowTtl.isPresent()
+                        historicalPartition
                                 ? RowTtlCompactionFilterFactory.create(
-                                        kvValueLayout, rowTtl.get(), clock)
-                                : null;
+                                        kvValueLayout,
+                                        HISTORICAL_KV_RETENTION_OFFSET_DISTANCE,
+                                        () -> historicalCleanupOffset.get() - 1L)
+                                : rowTtl.isPresent()
+                                        ? RowTtlCompactionFilterFactory.create(
+                                                kvValueLayout, rowTtl.get(), clock)
+                                        : null;
         RocksDBKv kv =
                 buildRocksDBKv(
                         serverConf,
@@ -483,6 +507,7 @@ public final class KvTablet {
                 kvValueLayout,
                 valueEncoder,
                 valueDecoder,
+                historicalCleanupOffset,
                 rocksDBStatistics,
                 kvFlushScheduler,
                 closeFlushScheduler,
@@ -579,8 +604,8 @@ public final class KvTablet {
         }
     }
 
-    ValueEncoder getValueEncoder() {
-        return valueEncoder;
+    KvStateValueEncoder getStateValueEncoder() {
+        return stateValueEncoder;
     }
 
     @Nullable
@@ -728,16 +753,15 @@ public final class KvTablet {
      * Puts records for one original partition into this historical KV tablet.
      *
      * <p>The original partition name namespaces the physical primary keys because one historical
-     * bucket can contain records from multiple original partitions. The supplied fallback may only
-     * read lake results already resolved for this request; it must not perform lake I/O while the
-     * tablet lock is held.
+     * bucket can contain records from multiple original partitions. The supplied lookup must
+     * contain every previous value required by this batch and must not perform I/O.
      */
     public LogAppendInfo putHistoricalAsLeader(
             KvRecordBatch kvRecords,
             @Nullable int[] targetColumns,
             MergeMode mergeMode,
             String originalPartitionName,
-            HistoricalValueLookup memoizedLakeLookup)
+            HistoricalValueLookup historicalValueLookup)
             throws Exception {
         checkState(historicalPartition, "%s is not a historical KV tablet", tableBucket);
         return putAsLeader(
@@ -745,16 +769,16 @@ public final class KvTablet {
                 targetColumns,
                 mergeMode,
                 checkNotNull(originalPartitionName, "originalPartitionName must not be null"),
-                checkNotNull(memoizedLakeLookup, "memoizedLakeLookup must not be null"));
+                checkNotNull(historicalValueLookup, "Historical value lookup must not be null"));
     }
 
     /**
-     * Finds keys whose historical write requires an old value that is absent from local state.
+     * Probes the local previous values required by a historical write.
      *
      * <p>This method only reads KV entries and uses the tablet read lock. Lake I/O must be
      * performed by the caller after this method releases the tablet lock.
      */
-    public List<byte[]> findKeysRequiringLakeLookup(
+    public LocalValueLookupResult probeLocalPreviousValues(
             KvRecordBatch kvRecords,
             @Nullable int[] targetColumns,
             MergeMode mergeMode,
@@ -765,7 +789,7 @@ public final class KvTablet {
                 kvLock,
                 () -> {
                     rocksDBKv.checkIfRocksDBClosed();
-                    return kvWriteProcessor.findKeysRequiringLakeLookup(
+                    return kvWriteProcessor.probeLocalPreviousValues(
                             kvRecords,
                             targetColumns,
                             mergeMode,
@@ -781,7 +805,7 @@ public final class KvTablet {
             @Nullable int[] targetColumns,
             MergeMode mergeMode,
             @Nullable String originalPartitionName,
-            @Nullable HistoricalValueLookup memoizedLakeLookup)
+            @Nullable HistoricalValueLookup historicalValueLookup)
             throws Exception {
         return inWriteLock(
                 kvLock,
@@ -810,7 +834,7 @@ public final class KvTablet {
                             mergeMode,
                             kvStateAccessor,
                             originalPartitionName,
-                            memoizedLakeLookup);
+                            historicalValueLookup);
                 });
     }
 
@@ -832,6 +856,21 @@ public final class KvTablet {
 
     public long getFlushedLogOffset() {
         return flushedLogOffset;
+    }
+
+    /** Advances the exclusive historical cleanup offset without allowing it to move backwards. */
+    public boolean advanceHistoricalCleanupOffset(long cleanupOffset) {
+        checkState(historicalPartition, "%s is not a historical KV tablet", tableBucket);
+        checkArgument(cleanupOffset >= 0L, "Historical cleanup offset must be non-negative.");
+        long previousCleanupOffset =
+                historicalCleanupOffset.getAndAccumulate(cleanupOffset, Math::max);
+        return cleanupOffset > previousCleanupOffset;
+    }
+
+    /** Returns the current exclusive cleanup offset for a historical overlay. */
+    public long getHistoricalCleanupOffset() {
+        checkState(historicalPartition, "%s is not a historical KV tablet", tableBucket);
+        return historicalCleanupOffset.get();
     }
 
     @VisibleForTesting
@@ -979,7 +1018,9 @@ public final class KvTablet {
                         if (historicalPartition) {
                             // A physical delete would turn a local miss into a lake lookup and
                             // could expose the stale value that this mutation deleted.
-                            kvBatchWriter.put(entry.getKey().get(), HISTORICAL_TOMBSTONE);
+                            kvBatchWriter.put(
+                                    entry.getKey().get(),
+                                    HistoricalKvTombstone.encode(entry.getLogSequenceNumber()));
                         } else {
                             kvBatchWriter.delete(entry.getKey().get());
                         }
@@ -1171,7 +1212,7 @@ public final class KvTablet {
                     List<ByteArraySlice> values = new ArrayList<>(keys.size());
                     for (byte[] key : keys) {
                         KvPreWriteBuffer.Key lookupKey = kvStateAccessor.encodeKey(key, null);
-                        byte[] rawValue = kvStateAccessor.lookup(lookupKey).value();
+                        byte[] rawValue = kvStateAccessor.lookupLocal(lookupKey).value();
                         values.add(kvValueLayout.toValueBodySlice(rawValue));
                     }
                     return values;
@@ -1192,7 +1233,7 @@ public final class KvTablet {
                     if (value == null) {
                         return KvStateLookupResult.notFound();
                     }
-                    return value.length == 0
+                    return HistoricalKvTombstone.isTombstone(value)
                             ? KvStateLookupResult.deleted()
                             : KvStateLookupResult.present(value);
                 });

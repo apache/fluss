@@ -15,24 +15,21 @@
  * limitations under the License.
  */
 
-package org.apache.fluss.server.kv.historical;
+package org.apache.fluss.server.kv;
 
 import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.record.BinaryValue;
 
-import javax.annotation.Nullable;
-
-/** Looks up a previous value already memoized for the current historical write request. */
+/** Encodes KV state values using the encoding policy bound to their tablet. */
 @Internal
 @FunctionalInterface
-public interface HistoricalValueLookup {
+public interface KvStateValueEncoder {
 
     /**
-     * Returns the decoded previous value, or null when the key was absent or deleted.
+     * Encodes a state value at its producing WAL offset.
      *
-     * <p>This method is invoked while the KV write lock is held and must not perform local or lake
-     * I/O.
+     * <p>Historical state uses the offset as its value tag. Normal state ignores the offset and
+     * uses its configured plain or row TTL encoding.
      */
-    @Nullable
-    BinaryValue lookup(byte[] primaryKey);
+    byte[] encodeValue(BinaryValue value, long logOffset);
 }
