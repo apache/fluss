@@ -274,4 +274,47 @@ class LakeTableHelperTest {
                 System.currentTimeMillis(),
                 System.currentTimeMillis());
     }
+
+    /**
+     * Verifies that {@link LakeTableHelper#registerLakeTableSnapshotV2} stamps each new entry with
+     * a strictly monotonically increasing {@code commit_timestamp}, which is the building block for
+     * #2625's out-of-order-tolerant latest-snapshot selection.
+     */
+    @Test
+    void testRegisterLakeTableSnapshotV2StampsMonotonicCommitTimestamp(@TempDir Path tempDir)
+            throws Exception {
+        LakeTableHelper lakeTableHelper = new LakeTableHelper(zookeeperClient, tempDir.toString());
+        long tableId = 42L;
+        TablePath tablePath = TablePath.of("test_db", "ts_mono_test");
+        zookeeperClient.registerTable(tablePath, createTableReg(tableId));
+
+        // Register three snapshots back-to-back, keeping history so we can inspect all timestamps.
+        for (long sid = 1L; sid <= 3L; sid++) {
+            FsPath p = storeOffsetFile(lakeTableHelper, tablePath, tableId, sid * 100L);
+            lakeTableHelper.registerLakeTableSnapshotV2(
+                    tableId,
+                    new LakeTable.LakeSnapshotMetadata(sid, p, p),
+                    LakeCommitResult.KEEP_ALL_PREVIOUS);
+        }
+
+        List<LakeTable.LakeSnapshotMetadata> persisted =
+                zookeeperClient.getLakeTable(tableId).get().getLakeSnapshotMetadatas();
+        assertThat(persisted).hasSize(3);
+
+        // All timestamps must be non-zero (server-side stamped) and strictly increasing.
+        long prev = Long.MIN_VALUE;
+        for (LakeTable.LakeSnapshotMetadata md : persisted) {
+            assertThat(md.getCommitTimestamp())
+                    .as("entry " + md.getSnapshotId())
+                    .isGreaterThan(prev)
+                    .isNotEqualTo(LakeTable.LakeSnapshotMetadata.UNKNOWN_COMMIT_TIMESTAMP);
+            prev = md.getCommitTimestamp();
+        }
+
+        // And getLatestLakeSnapshotMetadata returns the entry whose timestamp is largest.
+        LakeTable.LakeSnapshotMetadata latest =
+                zookeeperClient.getLakeTable(tableId).get().getLatestLakeSnapshotMetadata();
+        assertThat(latest).isNotNull();
+        assertThat(latest.getSnapshotId()).isEqualTo(3L);
+    }
 }
