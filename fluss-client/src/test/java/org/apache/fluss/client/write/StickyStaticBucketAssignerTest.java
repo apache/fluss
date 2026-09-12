@@ -43,6 +43,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 /** Test for {@link StickyBucketAssigner}. */
 class StickyStaticBucketAssignerTest {
+    private final int numBuckets = 3;
     ServerNode node1 = new ServerNode(1, "localhost", 90, ServerType.TABLET_SERVER, "rack1");
     ServerNode node2 = new ServerNode(2, "localhost", 91, ServerType.TABLET_SERVER, "rack2");
     ServerNode node3 = new ServerNode(3, "localhost", 92, ServerType.TABLET_SERVER, "rack3");
@@ -62,26 +63,26 @@ class StickyStaticBucketAssignerTest {
         // init cluster.
         Cluster cluster = updateCluster(Arrays.asList(bucket1, bucket2, bucket3));
         StickyBucketAssigner stickyBucketAssigner =
-                new StickyBucketAssigner(DATA1_PHYSICAL_TABLE_PATH, 3);
-        int bucketId = stickyBucketAssigner.assignBucket(cluster);
+                new StickyBucketAssigner(DATA1_PHYSICAL_TABLE_PATH);
+        int bucketId = stickyBucketAssigner.assignBucket(cluster, numBuckets);
         assertThat(bucketId >= 0 && bucketId < 3).isTrue();
 
         for (int i = 0; i < 10; i++) {
-            int newBucketId = stickyBucketAssigner.assignBucket(cluster);
+            int newBucketId = stickyBucketAssigner.assignBucket(cluster, numBuckets);
             assertThat(newBucketId >= 0 && newBucketId < 3).isTrue();
             assertThat(newBucketId).isEqualTo(bucketId);
         }
 
         // on new batch.
-        stickyBucketAssigner.onNewBatch(cluster, bucketId);
-        int newBucketId = stickyBucketAssigner.assignBucket(cluster);
+        stickyBucketAssigner.onNewBatch(cluster, 3, bucketId);
+        int newBucketId = stickyBucketAssigner.assignBucket(cluster, numBuckets);
         assertThat(newBucketId >= 0 && newBucketId < 3).isTrue();
         assertThat(newBucketId).isNotEqualTo(bucketId);
 
         for (int i = 0; i < 100; i++) {
-            int prevBucketId = stickyBucketAssigner.assignBucket(cluster);
-            stickyBucketAssigner.onNewBatch(cluster, bucketId);
-            int nextBucketId = stickyBucketAssigner.assignBucket(cluster);
+            int prevBucketId = stickyBucketAssigner.assignBucket(cluster, numBuckets);
+            stickyBucketAssigner.onNewBatch(cluster, 3, bucketId);
+            int nextBucketId = stickyBucketAssigner.assignBucket(cluster, numBuckets);
             assertThat(prevBucketId).isEqualTo(nextBucketId);
         }
     }
@@ -91,13 +92,13 @@ class StickyStaticBucketAssignerTest {
         // init cluster.
         Cluster cluster = updateCluster(Arrays.asList(bucket1, bucket2, bucket3));
         StickyBucketAssigner stickyBucketAssigner =
-                new StickyBucketAssigner(DATA1_PHYSICAL_TABLE_PATH, 3);
-        int bucketId = stickyBucketAssigner.assignBucket(cluster);
+                new StickyBucketAssigner(DATA1_PHYSICAL_TABLE_PATH);
+        int bucketId = stickyBucketAssigner.assignBucket(cluster, numBuckets);
         for (int i = 0; i < 3; i++) {
             if (i != bucketId) {
                 // If the preBucketId != currentBucketId, the bucket id should not change.
-                stickyBucketAssigner.onNewBatch(cluster, i);
-                int newBucketId = stickyBucketAssigner.assignBucket(cluster);
+                stickyBucketAssigner.onNewBatch(cluster, 3, i);
+                int newBucketId = stickyBucketAssigner.assignBucket(cluster, numBuckets);
                 assertThat(newBucketId).isEqualTo(bucketId);
             }
         }
@@ -108,13 +109,13 @@ class StickyStaticBucketAssignerTest {
         // init cluster.
         Cluster cluster = updateCluster(Collections.singletonList(bucket1));
         StickyBucketAssigner stickyBucketAssigner =
-                new StickyBucketAssigner(DATA1_PHYSICAL_TABLE_PATH, 3);
-        int bucketId = stickyBucketAssigner.assignBucket(cluster);
+                new StickyBucketAssigner(DATA1_PHYSICAL_TABLE_PATH);
+        int bucketId = stickyBucketAssigner.assignBucket(cluster, numBuckets);
 
         for (int i = 0; i < 100; i++) {
             // If there is only one available bucket, the bucket id should not change.
-            stickyBucketAssigner.onNewBatch(cluster, bucketId);
-            assertThat(stickyBucketAssigner.assignBucket(cluster)).isEqualTo(bucketId);
+            stickyBucketAssigner.onNewBatch(cluster, 3, bucketId);
+            assertThat(stickyBucketAssigner.assignBucket(cluster, numBuckets)).isEqualTo(bucketId);
         }
     }
 
@@ -133,45 +134,46 @@ class StickyStaticBucketAssignerTest {
         Cluster cluster = updateCluster(allBuckets);
 
         // Assure we never choose bucket 1 for tp1 because it is unavailable.
-        StickyBucketAssigner stickyBucketAssigner = new StickyBucketAssigner(tp1, 3);
-        int bucketForTp1 = stickyBucketAssigner.assignBucket(cluster);
+        StickyBucketAssigner stickyBucketAssigner = new StickyBucketAssigner(tp1);
+        int bucketForTp1 = stickyBucketAssigner.assignBucket(cluster, numBuckets);
         assertThat(bucketForTp1).isNotEqualTo(1);
         for (int i = 0; i < 100; i++) {
-            stickyBucketAssigner.onNewBatch(cluster, bucketForTp1);
-            assertThat(stickyBucketAssigner.assignBucket(cluster)).isNotEqualTo(1);
+            stickyBucketAssigner.onNewBatch(cluster, 3, bucketForTp1);
+            assertThat(stickyBucketAssigner.assignBucket(cluster, numBuckets)).isNotEqualTo(1);
         }
 
         // Assure we always choose bucket 1 for tp2.
-        stickyBucketAssigner = new StickyBucketAssigner(tp2, 3);
-        int bucketForTp2 = stickyBucketAssigner.assignBucket(cluster);
+        stickyBucketAssigner = new StickyBucketAssigner(tp2);
+        int bucketForTp2 = stickyBucketAssigner.assignBucket(cluster, numBuckets);
         assertThat(bucketForTp2).isEqualTo(1);
         for (int i = 0; i < 100; i++) {
-            stickyBucketAssigner.onNewBatch(cluster, bucketForTp2);
-            assertThat(stickyBucketAssigner.assignBucket(cluster)).isEqualTo(1);
+            stickyBucketAssigner.onNewBatch(cluster, 3, bucketForTp2);
+            assertThat(stickyBucketAssigner.assignBucket(cluster, numBuckets)).isEqualTo(1);
         }
 
         // Assure that we can still choose one bucket even if there are no available buckets.
-        stickyBucketAssigner = new StickyBucketAssigner(tp3, 3);
-        int bucketForTp3 = stickyBucketAssigner.assignBucket(cluster);
+        stickyBucketAssigner = new StickyBucketAssigner(tp3);
+        int bucketForTp3 = stickyBucketAssigner.assignBucket(cluster, numBuckets);
         assertThat(bucketForTp3).isIn(0, 1, 2);
-        stickyBucketAssigner.onNewBatch(cluster, bucketForTp3);
-        assertThat(stickyBucketAssigner.assignBucket(cluster)).isIn(0, 1, 2);
+        stickyBucketAssigner.onNewBatch(cluster, 3, bucketForTp3);
+        assertThat(stickyBucketAssigner.assignBucket(cluster, numBuckets)).isIn(0, 1, 2);
     }
 
     @Test
     void testMultiThreadToCallOnNewBatch() {
         Cluster cluster = updateCluster(Arrays.asList(bucket1, bucket2, bucket3));
         StickyBucketAssigner stickyBucketAssigner =
-                new StickyBucketAssigner(PhysicalTablePath.of(DATA1_TABLE_PATH), 3);
-        int bucketId = stickyBucketAssigner.assignBucket(cluster);
+                new StickyBucketAssigner(PhysicalTablePath.of(DATA1_TABLE_PATH));
+        int bucketId = stickyBucketAssigner.assignBucket(cluster, numBuckets);
         Queue<Integer> bucketIds = new ConcurrentLinkedQueue<>();
         Thread[] threads = new Thread[100];
         for (int i = 0; i < 100; i++) {
             threads[i] =
                     new Thread(
                             () -> {
-                                stickyBucketAssigner.onNewBatch(cluster, bucketId);
-                                int newBucketId = stickyBucketAssigner.assignBucket(cluster);
+                                stickyBucketAssigner.onNewBatch(cluster, 3, bucketId);
+                                int newBucketId =
+                                        stickyBucketAssigner.assignBucket(cluster, numBuckets);
                                 bucketIds.add(newBucketId);
                             });
             threads[i].start();

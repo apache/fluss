@@ -274,8 +274,7 @@ public class TieringTestBase extends AbstractTestBase {
                 KeyEncoder.ofBucketKeyEncoder(
                         rowType, tableDescriptor.getBucketKeys(), DataLakeFormat.PAIMON);
         HashBucketAssigner hashBucketAssigner =
-                new HashBucketAssigner(
-                        DEFAULT_BUCKET_NUM, BucketingFunction.of(DataLakeFormat.PAIMON));
+                new HashBucketAssigner(BucketingFunction.of(DataLakeFormat.PAIMON));
         Map<Integer, Long> bucketRows = new HashMap<>();
         try (Table table = conn.getTable(tablePath)) {
             UpsertWriter upsertWriter = table.newUpsert().createWriter();
@@ -285,7 +284,7 @@ public class TieringTestBase extends AbstractTestBase {
                 upsertWriter.upsert(row);
                 // bucket statistics
                 byte[] key = keyEncoder.encodeKey(row);
-                int bucketId = hashBucketAssigner.assignBucket(key);
+                int bucketId = hashBucketAssigner.assignBucket(key, DEFAULT_BUCKET_NUM);
                 bucketRows.merge(bucketId, 1L, Long::sum);
             }
             upsertWriter.flush();
@@ -329,8 +328,7 @@ public class TieringTestBase extends AbstractTestBase {
                 KeyEncoder.ofBucketKeyEncoder(
                         rowType, tableDescriptor.getBucketKeys(), DataLakeFormat.PAIMON);
         HashBucketAssigner hashBucketAssigner =
-                new HashBucketAssigner(
-                        DEFAULT_BUCKET_NUM, BucketingFunction.of(DataLakeFormat.PAIMON));
+                new HashBucketAssigner(BucketingFunction.of(DataLakeFormat.PAIMON));
         Map<Integer, Long> bucketRows = new HashMap<>();
         try (Table table = conn.getTable(tablePath)) {
             AppendWriter appendWriter = table.newAppend().createWriter();
@@ -339,7 +337,7 @@ public class TieringTestBase extends AbstractTestBase {
                         partitionName == null ? row(i, "v" + i) : row(i, "v" + i, partitionName);
                 appendWriter.append(row);
                 byte[] key = keyEncoder.encodeKey(row);
-                int bucketId = hashBucketAssigner.assignBucket(key);
+                int bucketId = hashBucketAssigner.assignBucket(key, DEFAULT_BUCKET_NUM);
 
                 bucketRows.merge(bucketId, 1L, Long::sum);
             }

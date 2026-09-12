@@ -287,7 +287,7 @@ public final class Cluster {
         }
     }
 
-    public Long getPartitionIdOrElseThrow(PhysicalTablePath physicalTablePath) {
+    public long getPartitionIdOrElseThrow(PhysicalTablePath physicalTablePath) {
         Long partitionId = partitionsIdByPath.get(physicalTablePath);
         if (partitionId == null) {
             throw new PartitionNotExistException(
@@ -331,6 +331,18 @@ public final class Cluster {
      */
     public Optional<Integer> getBucketCount(TableOrPartition tableOrPartition) {
         return Optional.ofNullable(bucketCountByTableOrPartition.get(tableOrPartition));
+    }
+
+    /**
+     * Get the actual bucket count for the given table or partition, throwing an exception if its
+     * bucket layout is not available yet.
+     */
+    public int getBucketCountOrElseThrow(TableOrPartition tableOrPartition) {
+        return getBucketCount(tableOrPartition)
+                .orElseThrow(
+                        () ->
+                                new IllegalStateException(
+                                        "Bucket count is unavailable for " + tableOrPartition));
     }
 
     /**

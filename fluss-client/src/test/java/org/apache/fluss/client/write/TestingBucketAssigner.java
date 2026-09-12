@@ -21,16 +21,32 @@ import org.apache.fluss.cluster.Cluster;
 
 import javax.annotation.Nullable;
 
-/**
- * An abstract bucket assigner to assign a bucket dynamically. The bucket id determined during
- * sending to Fluss cluster by the status of cluster and write batch accumulation.
- */
-abstract class DynamicBucketAssigner implements BucketAssigner {
+import static org.apache.fluss.utils.Preconditions.checkArgument;
+
+/** A bucket assigner whose routing can be controlled by tests. */
+class TestingBucketAssigner implements BucketAssigner {
+    private volatile int bucketId;
+
+    void setBucketId(int bucketId) {
+        this.bucketId = bucketId;
+    }
 
     @Override
     public int assignBucket(@Nullable byte[] bucketKey, Cluster cluster, int bucketCount) {
-        return assignBucket(cluster, bucketCount);
+        int assignedBucket = bucketId;
+        checkArgument(
+                assignedBucket >= 0 && assignedBucket < bucketCount,
+                "Bucket id %s is outside bucket count %s.",
+                assignedBucket,
+                bucketCount);
+        return assignedBucket;
     }
 
-    public abstract int assignBucket(Cluster cluster, int bucketCount);
+    @Override
+    public boolean abortIfBatchFull() {
+        return false;
+    }
+
+    @Override
+    public void onNewBatch(Cluster cluster, int bucketCount, int prevBucketId) {}
 }

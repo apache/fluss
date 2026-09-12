@@ -273,7 +273,7 @@ class FlussLakeTableITCase {
                 KeyEncoder.ofBucketKeyEncoder(
                         rowType, tableDescriptor.getBucketKeys(), dataLakeFormat);
         HashBucketAssigner bucketAssigner =
-                new HashBucketAssigner(DEFAULT_BUCKET_COUNT, BucketingFunction.of(dataLakeFormat));
+                new HashBucketAssigner(BucketingFunction.of(dataLakeFormat));
         Map<String, Long> partitionIdByNames = null;
         if (isPartitioned) {
             partitionIdByNames =
@@ -299,7 +299,8 @@ class FlussLakeTableITCase {
                                         tableId,
                                         partitionIdByNames.get(partition),
                                         bucketAssigner.assignBucket(
-                                                bucketKeyEncoder.encodeKey(row)));
+                                                bucketKeyEncoder.encodeKey(row),
+                                                DEFAULT_BUCKET_COUNT));
                         expectedRows
                                 .computeIfAbsent(assignedBucket, (k) -> new ArrayList<>())
                                 .add(row);
@@ -312,7 +313,8 @@ class FlussLakeTableITCase {
                     TableBucket assignedBucket =
                             new TableBucket(
                                     tableId,
-                                    bucketAssigner.assignBucket(bucketKeyEncoder.encodeKey(row)));
+                                    bucketAssigner.assignBucket(
+                                            bucketKeyEncoder.encodeKey(row), DEFAULT_BUCKET_COUNT));
                     expectedRows.computeIfAbsent(assignedBucket, (k) -> new ArrayList<>()).add(row);
                 }
             }

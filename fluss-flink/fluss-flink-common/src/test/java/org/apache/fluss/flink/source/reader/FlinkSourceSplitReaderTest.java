@@ -692,8 +692,8 @@ class FlinkSourceSplitReaderTest extends FlinkTestBase {
                         DEFAULT_PK_TABLE_SCHEMA.getRowType(),
                         DEFAULT_PK_TABLE_SCHEMA.getPrimaryKeyIndexes());
         byte[] key = keyEncoder.encodeKey(row);
-        HashBucketAssigner hashBucketAssigner = new HashBucketAssigner(DEFAULT_BUCKET_NUM);
-        return hashBucketAssigner.assignBucket(key);
+        HashBucketAssigner hashBucketAssigner = new HashBucketAssigner();
+        return hashBucketAssigner.assignBucket(key, DEFAULT_BUCKET_NUM);
     }
 
     private List<SourceSplitBase> getHybridSnapshotLogSplits(TablePath tablePath) throws Exception {

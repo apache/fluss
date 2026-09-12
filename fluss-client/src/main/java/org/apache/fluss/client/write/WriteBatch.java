@@ -54,7 +54,7 @@ public abstract class WriteBatch {
 
     // The bucket count used to calculate this batch's bucketId; carried into the request so the
     // TabletServer can validate it against the actual count (INVALID_BUCKET_ROUTING on mismatch).
-    private final int bucketCount;
+    private int bucketCount;
 
     protected final List<WriteCallback> callbacks = new ArrayList<>();
     private final AtomicReference<FinalState> finalState = new AtomicReference<>(null);
@@ -213,6 +213,11 @@ public abstract class WriteBatch {
 
     public int getBucketCount() {
         return bucketCount;
+    }
+
+    /** Updates the routing count of an unsent batch whose bucket ID remains valid. */
+    void setBucketCount(int bucketCount) {
+        this.bucketCount = bucketCount;
     }
 
     public long tableId() {

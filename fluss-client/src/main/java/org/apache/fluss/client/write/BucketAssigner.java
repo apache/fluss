@@ -35,16 +35,18 @@ interface BucketAssigner {
      * assigner, this method can change the chosen sticky bucket for the new batch.
      *
      * @param cluster The current cluster metadata
+     * @param bucketCount The current number of buckets
      * @param prevBucketId The bucket previously selected for the record that triggered a new batch
      */
-    void onNewBatch(Cluster cluster, int prevBucketId);
+    void onNewBatch(Cluster cluster, int bucketCount, int prevBucketId);
 
     /**
      * Assign the bucket the given bucket key.
      *
      * @param bucketKey the bucket key
      * @param cluster the cluster
+     * @param bucketCount the current number of buckets
      * @return the bucket id
      */
-    int assignBucket(@Nullable byte[] bucketKey, Cluster cluster);
+    int assignBucket(@Nullable byte[] bucketKey, Cluster cluster, int bucketCount);
 }

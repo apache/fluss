@@ -2,7 +2,7 @@
  * Licensed to the Apache Software Foundation (ASF) under one or more
  * contributor license agreements.  See the NOTICE file distributed with
  * this work for additional information regarding copyright ownership.
- * The ASF licenses this file to You under the Apache License, Version 2.0
+ * The ASF licenses this file to you under the Apache License, Version 2.0
  * (the "License"); you may not use this file except in compliance with
  * the License.  You may obtain a copy of the License at
  *
@@ -15,22 +15,23 @@
  * limitations under the License.
  */
 
-package org.apache.fluss.client.write;
+package org.apache.fluss.exception;
 
-import org.apache.fluss.cluster.Cluster;
-
-import javax.annotation.Nullable;
+import org.apache.fluss.annotation.PublicEvolving;
 
 /**
- * An abstract bucket assigner to assign a bucket dynamically. The bucket id determined during
- * sending to Fluss cluster by the status of cluster and write batch accumulation.
+ * Thrown when bucket rescaling invalidates records buffered with a temporary bucket count.
+ *
+ * <p>The affected records have not been sent. Applications can resubmit them using the same writer,
+ * which has already adopted the resolved bucket count.
  */
-abstract class DynamicBucketAssigner implements BucketAssigner {
+@PublicEvolving
+public class BucketRescaleException extends RuntimeException {
 
-    @Override
-    public int assignBucket(@Nullable byte[] bucketKey, Cluster cluster, int bucketCount) {
-        return assignBucket(cluster, bucketCount);
+    private static final long serialVersionUID = 1L;
+
+    /** Creates an exception describing the bucket rescale and how to retry the records. */
+    public BucketRescaleException(String message) {
+        super(message);
     }
-
-    public abstract int assignBucket(Cluster cluster, int bucketCount);
 }
