@@ -24,6 +24,7 @@ import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelHandlerContext;
 
 import org.apache.kafka.common.protocol.ApiKeys;
 import org.apache.kafka.common.protocol.Errors;
+import org.apache.kafka.common.requests.AbstractRequest;
 import org.apache.kafka.common.requests.AbstractResponse;
 import org.apache.kafka.common.requests.ApiVersionsRequest;
 import org.apache.kafka.common.requests.ApiVersionsResponse;
@@ -46,21 +47,15 @@ public class KafkaRequestHandlerTest {
                 new ApiVersionsRequest.Builder().build(latestVersion);
         ChannelHandlerContext ctx = new TestingChannelHandlerContext();
         KafkaRequest request =
-                new KafkaRequest(
+                newRequest(
                         ApiKeys.API_VERSIONS,
                         (short) (latestVersion + 1), // unsupported version
                         new RequestHeader(ApiKeys.API_VERSIONS, latestVersion, "client-id", 0),
                         apiVersionsRequest,
-                        ByteBufAllocator.DEFAULT.buffer(),
-                        ctx,
-                        new CompletableFuture<>());
+                        ctx);
         handler.handleApiVersionsRequest(request);
 
-        ByteBuf responseBuffer = request.responseBuffer();
-        ApiVersionsResponse response =
-                (ApiVersionsResponse)
-                        AbstractResponse.parseResponse(
-                                responseBuffer.nioBuffer(), request.header());
+        ApiVersionsResponse response = (ApiVersionsResponse) parseResponse(request);
         Map<Errors, Integer> errorCounts = response.errorCounts();
         assertThat(1).isEqualTo(errorCounts.size());
         assertThat(1).isEqualTo(errorCounts.get(Errors.UNSUPPORTED_VERSION));
@@ -74,21 +69,15 @@ public class KafkaRequestHandlerTest {
                 new ApiVersionsRequest.Builder().build(latestVersion);
         ChannelHandlerContext ctx = new TestingChannelHandlerContext();
         KafkaRequest request =
-                new KafkaRequest(
+                newRequest(
                         ApiKeys.API_VERSIONS,
                         latestVersion,
                         new RequestHeader(ApiKeys.API_VERSIONS, latestVersion, "client-id", 0),
                         apiVersionsRequest,
-                        ByteBufAllocator.DEFAULT.buffer(),
-                        ctx,
-                        new CompletableFuture<>());
+                        ctx);
         handler.handleApiVersionsRequest(request);
 
-        ByteBuf responseBuffer = request.responseBuffer();
-        ApiVersionsResponse response =
-                (ApiVersionsResponse)
-                        AbstractResponse.parseResponse(
-                                responseBuffer.nioBuffer(), request.header());
+        ApiVersionsResponse response = (ApiVersionsResponse) parseResponse(request);
         Map<Errors, Integer> errorCounts = response.errorCounts();
         assertThat(1).isEqualTo(errorCounts.size());
         assertThat(1).isEqualTo(errorCounts.get(Errors.NONE));
@@ -110,6 +99,37 @@ public class KafkaRequestHandlerTest {
                                         .isEqualTo(apiKeys.latestVersion());
                             }
                         });
+    }
+
+    private static KafkaRequest newRequest(
+            ApiKeys apiKey,
+            short apiVersion,
+            RequestHeader header,
+            AbstractRequest requestBody,
+            ChannelHandlerContext context) {
+        ByteBuf requestBuffer = ByteBufAllocator.DEFAULT.buffer();
+        try {
+            return new KafkaRequest(
+                    apiKey,
+                    apiVersion,
+                    header,
+                    requestBody,
+                    requestBuffer,
+                    context,
+                    new CompletableFuture<>());
+        } finally {
+            // Mirror KafkaCommandDecoder's ownership transfer to KafkaRequest.
+            requestBuffer.release();
+        }
+    }
+
+    private static AbstractResponse parseResponse(KafkaRequest request) {
+        ByteBuf responseBuffer = request.responseBuffer();
+        try {
+            return AbstractResponse.parseResponse(responseBuffer.nioBuffer(), request.header());
+        } finally {
+            responseBuffer.release();
+        }
     }
 
     private static KafkaRequestHandler createKafkaRequestHandler() {
