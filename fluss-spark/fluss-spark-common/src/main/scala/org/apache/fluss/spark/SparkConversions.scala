@@ -105,8 +105,32 @@ object SparkConversions {
         org.apache.fluss.metadata.TableChange.set(p.property(), p.value())
       case p: TableChange.RemoveProperty =>
         org.apache.fluss.metadata.TableChange.reset(p.property())
+      case p: TableChange.AddColumn =>
+        if (p.fieldNames().length != 1) {
+          throw new UnsupportedOperationException(
+            s"Adding nested columns is not supported: ${p.fieldNames().mkString(".")}")
+        }
+        if (p.defaultValue() != null) {
+          throw new UnsupportedOperationException(
+            s"Adding column with default value is not supported: ${p.fieldNames().head}")
+        }
+        org.apache.fluss.metadata.TableChange.addColumn(
+          p.fieldNames().head,
+          SparkToFlussTypeVisitor.visit(p.dataType()).copy(p.isNullable()),
+          p.comment(),
+          toFlussColumnPosition(p.position()))
       // TODO Add full support for table changes
       case _ => throw new UnsupportedOperationException("Unsupported table change")
+    }
+  }
+
+  private def toFlussColumnPosition(position: TableChange.ColumnPosition)
+      : org.apache.fluss.metadata.TableChange.ColumnPosition = {
+    position match {
+      case _: TableChange.First => org.apache.fluss.metadata.TableChange.ColumnPosition.first()
+      case p: TableChange.After =>
+        org.apache.fluss.metadata.TableChange.ColumnPosition.after(p.column())
+      case _ => org.apache.fluss.metadata.TableChange.ColumnPosition.last()
     }
   }
 }
