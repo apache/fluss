@@ -679,6 +679,41 @@ public interface Admin extends AutoCloseable {
     CompletableFuture<Void> removeServerTag(List<Integer> tabletServers, ServerTag serverTag);
 
     /**
+     * Add a server tag to all currently registered tabletServers in the specified racks.
+     *
+     * <p>Rack membership is resolved once to a snapshot of server IDs. TabletServers registered in
+     * those racks later do not inherit the tag. Callers must cordon the racks before invoking this
+     * method if new tabletServers must not enter them.
+     *
+     * <p>If no registered tabletServer matches, authorization is still checked and the operation
+     * completes successfully without making changes.
+     *
+     * @param racks the rack identifiers to match. Must not be null or empty and must not contain
+     *     null, empty, or whitespace-only elements.
+     * @param serverTag the server tag to add. Must not be null.
+     * @throws IllegalArgumentException if {@code racks} is empty or contains a null, empty, or
+     *     whitespace-only element.
+     */
+    CompletableFuture<Void> addServerTagByRack(List<String> racks, ServerTag serverTag);
+
+    /**
+     * Remove a server tag from all currently registered tabletServers in the specified racks.
+     *
+     * <p>Only current rack membership is considered. Tags on offline tabletServers or tabletServers
+     * that moved to another rack must be removed by ID with {@link #removeServerTag}.
+     *
+     * <p>If no registered tabletServer matches, authorization is still checked and the operation
+     * completes successfully without making changes.
+     *
+     * @param racks the rack identifiers to match. Must not be null or empty and must not contain
+     *     null, empty, or whitespace-only elements.
+     * @param serverTag the server tag to remove. Must not be null.
+     * @throws IllegalArgumentException if {@code racks} is empty or contains a null, empty, or
+     *     whitespace-only element.
+     */
+    CompletableFuture<Void> removeServerTagByRack(List<String> racks, ServerTag serverTag);
+
+    /**
      * Based on the provided {@code priorityGoals}, Fluss performs load balancing on the cluster's
      * bucket load.
      *

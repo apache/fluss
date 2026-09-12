@@ -429,6 +429,91 @@ CALL sys.remove_server_tag('0', 'PERMANENT_OFFLINE');
 CALL sys.remove_server_tag('1,2,3', 'TEMPORARY_OFFLINE');
 ```
 
+### add_server_tag_by_rack
+
+Add a server tag to TabletServers that belong to the specified racks when the Coordinator processes the request. This is a convenience operation that resolves the current rack membership and tags the matched TabletServer IDs in one operation.
+
+**Syntax:**
+
+```sql
+CALL [catalog_name.]sys.add_server_tag_by_rack(
+  racks => 'STRING',
+  serverTag => 'STRING'
+)
+```
+
+**Parameters:**
+
+- `racks` (required): The rack identifiers to target. Can be a single rack (e.g., `'rack-0'`) or multiple racks separated by commas (e.g., `'rack-0,rack-1'`).
+- `serverTag` (required): The tag to add to the matched TabletServers. Valid values are:
+    - `'PERMANENT_OFFLINE'`: Indicates the TabletServer is permanently offline and will be decommissioned. All buckets on this server will be migrated during the next rebalance.
+    - `'TEMPORARY_OFFLINE'`: Indicates the TabletServer is temporarily offline (e.g., for upgrading). Buckets may be temporarily migrated but can return after the server comes back online.
+
+**Returns:** An array with a single element `'success'` if the operation completes successfully.
+
+**Important Notes:**
+
+- Only TabletServers registered in a requested rack when the Coordinator processes the operation are tagged. If no TabletServer matches, the operation succeeds without making changes.
+- The operation does not create a persistent rack policy. TabletServers that register in the rack later do not inherit the tag.
+- The caller must have `ALTER` permission on the cluster even when no TabletServer matches.
+- If any matched TabletServer already has a different tag, the operation fails and none of the tags take effect.
+- Before decommissioning a physical rack, cordon it in the external scheduler so that no new TabletServer can be scheduled there. This procedure is not a hard fence and does not move existing replicas. After adding `PERMANENT_OFFLINE`, trigger a rebalance and verify that the rack has no remaining assignments before stopping its machines.
+
+**Example:**
+
+```sql title="Flink SQL"
+-- Use the Fluss catalog (replace 'fluss_catalog' with your catalog name if different)
+USE fluss_catalog;
+
+-- Add PERMANENT_OFFLINE tag to all TabletServers in rack-0
+CALL sys.add_server_tag_by_rack('rack-0', 'PERMANENT_OFFLINE');
+
+-- Add TEMPORARY_OFFLINE tag to all TabletServers in rack-0 and rack-1
+CALL sys.add_server_tag_by_rack('rack-0,rack-1', 'TEMPORARY_OFFLINE');
+```
+
+### remove_server_tag_by_rack
+
+Remove a server tag from TabletServers that belong to the specified racks when the Coordinator processes the request.
+
+**Syntax:**
+
+```sql
+CALL [catalog_name.]sys.remove_server_tag_by_rack(
+  racks => 'STRING',
+  serverTag => 'STRING'
+)
+```
+
+**Parameters:**
+
+- `racks` (required): The rack identifiers to target. Can be a single rack (e.g., `'rack-0'`) or multiple racks separated by commas (e.g., `'rack-0,rack-1'`).
+- `serverTag` (required): The tag to remove from the matched TabletServers. Valid values are:
+    - `'PERMANENT_OFFLINE'`: Remove the permanent offline tag from the TabletServer.
+    - `'TEMPORARY_OFFLINE'`: Remove the temporary offline tag from the TabletServer.
+
+**Returns:** An array with a single element `'success'` if the operation completes successfully.
+
+**Important Notes:**
+
+- Only TabletServers registered in a requested rack when the Coordinator processes the operation are considered. If no TabletServer matches, the operation succeeds without making changes.
+- The caller must have `ALTER` permission on the cluster even when no TabletServer matches.
+- If any matched TabletServer has a different tag, the operation fails and none of the tags are removed.
+- A tagged TabletServer that is offline or has moved to another rack is not selected by its former rack. Remove its tag explicitly with `remove_server_tag` and its TabletServer ID.
+
+**Example:**
+
+```sql title="Flink SQL"
+-- Use the Fluss catalog (replace 'fluss_catalog' with your catalog name if different)
+USE fluss_catalog;
+
+-- Remove PERMANENT_OFFLINE tag from all TabletServers in rack-0
+CALL sys.remove_server_tag_by_rack('rack-0', 'PERMANENT_OFFLINE');
+
+-- Remove TEMPORARY_OFFLINE tag from all TabletServers in rack-0 and rack-1
+CALL sys.remove_server_tag_by_rack('rack-0,rack-1', 'TEMPORARY_OFFLINE');
+```
+
 ### rebalance
 
 Trigger a rebalance operation to redistribute buckets across TabletServers in the cluster. This procedure helps balance workload based on specified goals, such as distributing replicas or leaders evenly across the cluster.
@@ -455,7 +540,7 @@ CALL [catalog_name.]sys.rebalance(
 - Multiple goals can be specified in priority order. The system will attempt to achieve goals in the order specified.
 - When rack awareness is required, place `RACK_AWARE` as the first goal to ensure subsequent goals respect rack constraints.
 - Rebalance operations run asynchronously in the background. Use the returned rebalance ID to monitor progress.
-- The rebalance operation respects server tags set by `add_server_tag`. For example, servers marked with `PERMANENT_OFFLINE` will have their buckets migrated away.
+- The rebalance operation respects server tags set by `add_server_tag` and `add_server_tag_by_rack`. For example, servers marked with `PERMANENT_OFFLINE` will have their buckets migrated away.
 
 **Example:**
 

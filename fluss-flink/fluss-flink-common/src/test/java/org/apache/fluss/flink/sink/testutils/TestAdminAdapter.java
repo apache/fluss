@@ -275,8 +275,18 @@ public class TestAdminAdapter implements Admin {
     }
 
     @Override
+    public CompletableFuture<Void> addServerTagByRack(List<String> racks, ServerTag serverTag) {
+        throw new UnsupportedOperationException("Not implemented in TestAdminAdapter");
+    }
+
+    @Override
     public CompletableFuture<Void> removeServerTag(
             List<Integer> tabletServers, ServerTag serverTag) {
+        throw new UnsupportedOperationException("Not implemented in TestAdminAdapter");
+    }
+
+    @Override
+    public CompletableFuture<Void> removeServerTagByRack(List<String> racks, ServerTag serverTag) {
         throw new UnsupportedOperationException("Not implemented in TestAdminAdapter");
     }
 

@@ -749,12 +749,28 @@ message AddServerTagRequest {
 message AddServerTagResponse {
 }
 
+message AddServerTagByRackRequest {
+  repeated string racks = 1;
+  required int32 server_tag = 2;
+}
+
+message AddServerTagByRackResponse {
+}
+
 message RemoveServerTagRequest {
   repeated int32 server_ids = 1 [packed = true];
   required int32 server_tag = 2;
 }
 
 message RemoveServerTagResponse {
+}
+
+message RemoveServerTagByRackRequest {
+  repeated string racks = 1;
+  required int32 server_tag = 2;
+}
+
+message RemoveServerTagByRackResponse {
 }
 
 message RebalanceRequest {

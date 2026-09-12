@@ -991,6 +991,15 @@ pub struct AddServerTagRequest {
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct AddServerTagResponse {}
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct AddServerTagByRackRequest {
+    #[prost(string, repeated, tag = "1")]
+    pub racks: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    #[prost(int32, required, tag = "2")]
+    pub server_tag: i32,
+}
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct AddServerTagByRackResponse {}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct RemoveServerTagRequest {
     #[prost(int32, repeated, tag = "1")]
     pub server_ids: ::prost::alloc::vec::Vec<i32>,
@@ -999,6 +1008,15 @@ pub struct RemoveServerTagRequest {
 }
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct RemoveServerTagResponse {}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct RemoveServerTagByRackRequest {
+    #[prost(string, repeated, tag = "1")]
+    pub racks: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    #[prost(int32, required, tag = "2")]
+    pub server_tag: i32,
+}
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct RemoveServerTagByRackResponse {}
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct RebalanceRequest {
     #[prost(int32, repeated, tag = "1")]

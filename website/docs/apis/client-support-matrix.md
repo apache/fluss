@@ -96,7 +96,9 @@ Admin operations are available under FlussAdmin interface.
 | Cluster   | Rebalance              | ✔️                                  |             |               |            |
 | Cluster   | ListRebalanceProgress  | ✔️                                  |             |               |            |
 | Server    | AddServerTag           | ✔️                                  |             |               |            |
+| Server    | AddServerTagByRack     | ✔️                                  |             |               |            |
 | Server    | RemoveServerTag        | ✔️                                  |             |               |            |
+| Server    | RemoveServerTagByRack  | ✔️                                  |             |               |            |
 | ACL       | CreateAcls             | ✔️                                  |             |               |            |
 | ACL       | DropAcls               | ✔️                                  |             |               |            |
 | ACL       | ListAcls               | ✔️                                  |             |               |            |
