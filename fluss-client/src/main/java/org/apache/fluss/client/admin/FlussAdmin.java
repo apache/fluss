@@ -142,8 +142,8 @@ import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.toAclBindings;
 import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.toPbAclBindingFilters;
 import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.toPbAclFilter;
 import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.toPbAclInfos;
-import static org.apache.fluss.utils.Preconditions.checkArgument;
 import static org.apache.fluss.utils.PartitionUtils.HISTORICAL_PARTITION_VALUE;
+import static org.apache.fluss.utils.Preconditions.checkArgument;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 import static org.apache.fluss.utils.StringUtils.isNullOrWhitespaceOnly;
 
