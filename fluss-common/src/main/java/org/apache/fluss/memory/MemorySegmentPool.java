@@ -29,6 +29,15 @@ import java.util.List;
 public interface MemorySegmentPool {
 
     /**
+     * Opens an allocation whose pages are returned together on close. The caller must release
+     * references to those pages before closing it. Bounded pools may abort a blocked allocation to
+     * allow another allocation to finish; callers must unwind and close the aborted allocation.
+     */
+    default MemoryAllocation newAllocation() {
+        return new MemoryAllocation(this);
+    }
+
+    /**
      * Get the page size of each page this pool holds.
      *
      * @return the page size
