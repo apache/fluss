@@ -79,7 +79,6 @@ import org.apache.fluss.exception.SecurityTokenException;
 import org.apache.fluss.exception.ServerNotExistException;
 import org.apache.fluss.exception.ServerTagAlreadyExistException;
 import org.apache.fluss.exception.ServerTagNotExistException;
-import org.apache.fluss.exception.StaleMetadataException;
 import org.apache.fluss.exception.StorageBackpressureException;
 import org.apache.fluss.exception.StorageException;
 import org.apache.fluss.exception.TableAlreadyExistException;
@@ -288,12 +287,8 @@ public enum Errors {
             73,
             "Historical partition request is throttled because too many historical requests are in flight.",
             HistoricalPartitionThrottledException::new),
-    STALE_METADATA(
-            74,
-            "The metadata is stale. The client should refresh metadata and retry.",
-            StaleMetadataException::new),
     INVALID_BUCKET_ROUTING(
-            75,
+            74,
             "The request's bucket routing information is missing or invalid. The client should "
                     + "refresh partition metadata and rebuild the request.",
             InvalidBucketRoutingException::new);

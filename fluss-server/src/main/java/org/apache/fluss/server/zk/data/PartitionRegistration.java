@@ -18,7 +18,6 @@
 package org.apache.fluss.server.zk.data;
 
 import org.apache.fluss.config.ConfigOptions;
-import org.apache.fluss.exception.StaleMetadataException;
 import org.apache.fluss.metadata.TablePartition;
 
 import javax.annotation.Nullable;
@@ -89,9 +88,13 @@ public class PartitionRegistration {
      * per-partition count.
      *
      * <p>The fallback is only valid at {@code bucketCountEpoch == 0} (legacy table or old server).
-     * At {@code bucketCountEpoch > 0}, the first ALTER must have backfilled the per-partition
-     * count; a missing count indicates an incomplete backfill and throws {@link
-     * StaleMetadataException} so the caller can refresh metadata and retry.
+     * At {@code bucketCountEpoch > 0}, the first ALTER bucket.num atomically backfills the
+     * per-partition count of every existing partition in the same ZooKeeper transaction that bumps
+     * the epoch (see {@code ZooKeeperClient#updateTableWithPartitionBucketCountBackfill}), so a
+     * partition observed at {@code bucketCountEpoch > 0} always carries a count. Reaching the throw
+     * below therefore means that invariant was broken (an internal bug, e.g. a partial backfill);
+     * it is theoretically unreachable and is surfaced as an {@link IllegalStateException} rather
+     * than a retriable error, since a client metadata refresh cannot repair server-side state.
      */
     public int getBucketCountOrDefault(int tableBucketCount, long bucketCountEpoch) {
         if (bucketCount != null) {
@@ -100,11 +103,12 @@ public class PartitionRegistration {
         if (bucketCountEpoch == 0) {
             return tableBucketCount;
         }
-        throw new StaleMetadataException(
+        throw new IllegalStateException(
                 "Partition "
                         + partitionId
                         + " is missing a per-partition bucket count at bucketCountEpoch "
-                        + bucketCountEpoch);
+                        + bucketCountEpoch
+                        + "; the ALTER bucket.num backfill invariant was broken.");
     }
 
     public TablePartition toTablePartition() {

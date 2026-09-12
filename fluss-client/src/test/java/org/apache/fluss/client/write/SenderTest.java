@@ -1735,28 +1735,6 @@ final class SenderTest {
     }
 
     @Test
-    void testStaleMetadataUsesGenericRetryPath() throws Exception {
-        Sender retrySender = setupWithIdempotenceState(createIdempotenceManager(false), 1, 0);
-        CompletableFuture<Exception> future = new CompletableFuture<>();
-        appendToAccumulator(tb1, row(1, "a"), (tb, leo, e) -> future.complete(e));
-        retrySender.runOnce();
-        assertThat(retrySender.numOfInFlightBatches(tb1)).isEqualTo(1);
-
-        Cluster clusterBeforeError = metadataUpdater.getCluster();
-        finishRequest(tb1, 0, createProduceLogResponse(tb1, Errors.STALE_METADATA));
-        assertThat(future).isNotDone();
-
-        // Simulate the metadata refresh that makes the re-enqueued batch routable again.
-        metadataUpdater.updateCluster(clusterBeforeError);
-        retrySender.runOnce();
-        assertThat(retrySender.numOfInFlightBatches(tb1)).isEqualTo(1);
-
-        finishRequest(tb1, 0, createProduceLogResponse(tb1, 0L, 1L));
-        retrySender.runOnce();
-        assertThat(future.get()).isNull();
-    }
-
-    @Test
     void testInvalidBucketRoutingFailsBatchAndInvalidatesBucketAssigner() throws Exception {
         // Recreate sender with a tracking bucketAssignerInvalidator.
         IdempotenceManager idempotenceManager = createIdempotenceManager(false);
