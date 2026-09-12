@@ -58,6 +58,8 @@ import org.apache.fluss.rpc.messages.GetLakeSnapshotRequest;
 import org.apache.fluss.rpc.messages.GetLakeSnapshotResponse;
 import org.apache.fluss.rpc.messages.GetLatestKvSnapshotsRequest;
 import org.apache.fluss.rpc.messages.GetLatestKvSnapshotsResponse;
+import org.apache.fluss.rpc.messages.GetServerInfoRequest;
+import org.apache.fluss.rpc.messages.GetServerInfoResponse;
 import org.apache.fluss.rpc.messages.GetTableInfoRequest;
 import org.apache.fluss.rpc.messages.GetTableInfoResponse;
 import org.apache.fluss.rpc.messages.GetTableSchemaRequest;
@@ -92,6 +94,7 @@ import org.apache.fluss.server.metadata.PartitionMetadata;
 import org.apache.fluss.server.metadata.PartitionNegativeCache;
 import org.apache.fluss.server.metadata.ServerMetadataCache;
 import org.apache.fluss.server.metadata.TableMetadata;
+import org.apache.fluss.server.metrics.ServerNodeMetrics;
 import org.apache.fluss.server.tablet.TabletService;
 import org.apache.fluss.server.utils.ServerRpcMessageUtils;
 import org.apache.fluss.server.zk.ZooKeeperClient;
@@ -149,6 +152,7 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
     protected final @Nullable Authorizer authorizer;
     protected final DynamicConfigManager dynamicConfigManager;
     protected final PartitionNegativeCache partitionNegativeCache;
+    private final ServerNodeMetrics serverNodeMetrics;
 
     private long tokenLastUpdateTimeMs = 0;
     private ObtainedSecurityToken securityToken = null;
@@ -162,7 +166,8 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
             MetadataManager metadataManager,
             @Nullable Authorizer authorizer,
             DynamicConfigManager dynamicConfigManager,
-            ExecutorService ioExecutor) {
+            ExecutorService ioExecutor,
+            ServerNodeMetrics serverNodeMetrics) {
         this.remoteFileSystem = remoteFileSystem;
         this.provider = provider;
         this.apiManager = new ApiManager(provider);
@@ -172,6 +177,7 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
         this.dynamicConfigManager = dynamicConfigManager;
         this.partitionNegativeCache = new PartitionNegativeCache();
         this.ioExecutor = ioExecutor;
+        this.serverNodeMetrics = serverNodeMetrics;
     }
 
     @VisibleForTesting
@@ -602,6 +608,14 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
         List<ConfigEntry> configs = dynamicConfigManager.describeConfigs();
         return CompletableFuture.completedFuture(
                 new DescribeClusterConfigsResponse().addAllConfigs(toPbConfigEntries(configs)));
+    }
+
+    @Override
+    public CompletableFuture<GetServerInfoResponse> getServerInfo(GetServerInfoRequest request) {
+        if (authorizer != null) {
+            authorizer.authorize(currentSession(), OperationType.DESCRIBE, Resource.cluster());
+        }
+        return CompletableFuture.completedFuture(serverNodeMetrics.toResponse());
     }
 
     protected MetadataResponse processMetadataRequest(

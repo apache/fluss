@@ -22,23 +22,38 @@ package org.apache.fluss.rpc.entity;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.rpc.protocol.ApiError;
 
+import javax.annotation.Nullable;
+
 /** Result of {@link org.apache.fluss.rpc.messages.GetTableStatsResponse} for each table bucket. */
 public class TableStatsResultForBucket extends ResultForBucket {
 
     private final long rowCount;
+    private final @Nullable Long dataSizeBytes;
 
     public TableStatsResultForBucket(TableBucket tableBucket, long rowCount) {
+        this(tableBucket, rowCount, null);
+    }
+
+    public TableStatsResultForBucket(
+            TableBucket tableBucket, long rowCount, @Nullable Long dataSizeBytes) {
         super(tableBucket);
         this.rowCount = rowCount;
+        this.dataSizeBytes = dataSizeBytes;
     }
 
     public TableStatsResultForBucket(TableBucket tableBucket, ApiError error) {
         super(tableBucket, error);
         this.rowCount = -1;
+        this.dataSizeBytes = null;
     }
 
     /** Returns the row count of the table bucket. If the request is failed, it will return -1. */
     public long getRowCount() {
         return rowCount;
+    }
+
+    /** Returns the data size of the table bucket. If unavailable, it will return null. */
+    public @Nullable Long getDataSizeBytes() {
+        return dataSizeBytes;
     }
 }

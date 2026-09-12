@@ -34,6 +34,8 @@ import org.apache.fluss.rpc.messages.GetLakeSnapshotRequest;
 import org.apache.fluss.rpc.messages.GetLakeSnapshotResponse;
 import org.apache.fluss.rpc.messages.GetLatestKvSnapshotsRequest;
 import org.apache.fluss.rpc.messages.GetLatestKvSnapshotsResponse;
+import org.apache.fluss.rpc.messages.GetServerInfoRequest;
+import org.apache.fluss.rpc.messages.GetServerInfoResponse;
 import org.apache.fluss.rpc.messages.GetTableInfoRequest;
 import org.apache.fluss.rpc.messages.GetTableInfoResponse;
 import org.apache.fluss.rpc.messages.GetTableSchemaRequest;
@@ -202,4 +204,18 @@ public interface AdminReadOnlyGateway extends RpcGateway {
      */
     @RPC(api = ApiKeys.GET_CLUSTER_HEALTH)
     CompletableFuture<GetClusterHealthResponse> getClusterHealth(GetClusterHealthRequest request);
+
+    /**
+     * Get the latest server information collected by the server that receives the request.
+     *
+     * @param request get server information request
+     * @return a future returns the local server information snapshot
+     */
+    @RPC(api = ApiKeys.GET_SERVER_INFO)
+    default CompletableFuture<GetServerInfoResponse> getServerInfo(GetServerInfoRequest request) {
+        CompletableFuture<GetServerInfoResponse> future = new CompletableFuture<>();
+        future.completeExceptionally(
+                new UnsupportedOperationException("Server information unavailable"));
+        return future;
+    }
 }

@@ -45,6 +45,19 @@ public class ServerNodeTest {
         assertThat(serverNode.hashCode()).isNotEqualTo(serverNode2.hashCode());
         assertThat(serverNode).isEqualTo(new ServerNode(0, "HOST1", 9023, ServerType.COORDINATOR));
 
+        NodeResourceInfo resourceInfo =
+                new NodeResourceInfo(4.0, 1024L, 0.5, 512L, null, null, 1000L);
+        ServerNode enrichedServerNode = serverNode.withResourceInfo(resourceInfo);
+        assertThat(enrichedServerNode.resourceInfo()).isEqualTo(resourceInfo);
+        assertThat(enrichedServerNode.startupTimeMs()).isNull();
+        assertThat(enrichedServerNode).isEqualTo(serverNode);
+        assertThat(enrichedServerNode.hashCode()).isEqualTo(serverNode.hashCode());
+
+        ServerNode startedServerNode = enrichedServerNode.withStartupTimeMs(1000L);
+        assertThat(startedServerNode.startupTimeMs()).isEqualTo(1000L);
+        assertThat(startedServerNode.resourceInfo()).isEqualTo(resourceInfo);
+        assertThat(startedServerNode).isEqualTo(serverNode);
+
         assertThat(serverNode.toString()).isEqualTo("HOST1:9023 (id: cs-0, rack: null)");
         assertThat(serverNode2.toString()).isEqualTo("HOST2:9123 (id: ts-1, rack: null)");
     }

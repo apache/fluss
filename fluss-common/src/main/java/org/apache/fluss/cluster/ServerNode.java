@@ -39,20 +39,49 @@ public class ServerNode {
     /** rack info for ServerNode. Currently, only tabletServer has rack info. */
     private final @Nullable String rack;
 
+    /** The latest machine resource snapshot for this node, when available. */
+    private final @Nullable NodeResourceInfo resourceInfo;
+
+    /** The time when the server process started, in epoch milliseconds, when available. */
+    private final @Nullable Long startupTimeMs;
+
     // Cache hashCode as it is called in performance sensitive parts of the code (e.g.
     // RecordAccumulator.ready)
     private Integer hash;
 
     public ServerNode(int id, String host, int port, ServerType serverType) {
-        this(id, host, port, serverType, null);
+        this(id, host, port, serverType, null, null);
     }
 
     public ServerNode(int id, String host, int port, ServerType serverType, @Nullable String rack) {
+        this(id, host, port, serverType, rack, null);
+    }
+
+    public ServerNode(
+            int id,
+            String host,
+            int port,
+            ServerType serverType,
+            @Nullable String rack,
+            @Nullable NodeResourceInfo resourceInfo) {
+        this(id, host, port, serverType, rack, resourceInfo, null);
+    }
+
+    private ServerNode(
+            int id,
+            String host,
+            int port,
+            ServerType serverType,
+            @Nullable String rack,
+            @Nullable NodeResourceInfo resourceInfo,
+            @Nullable Long startupTimeMs) {
         this.id = id;
         this.host = host;
         this.port = port;
         this.serverType = serverType;
         this.rack = rack;
+        this.resourceInfo = resourceInfo;
+        this.startupTimeMs = startupTimeMs;
         if (serverType == ServerType.COORDINATOR) {
             this.uid = "cs-" + id;
         } else {
@@ -94,6 +123,26 @@ public class ServerNode {
     /** The rack for this node. */
     public @Nullable String rack() {
         return rack;
+    }
+
+    /** Returns the latest machine resource snapshot for this node, or null when unavailable. */
+    public @Nullable NodeResourceInfo resourceInfo() {
+        return resourceInfo;
+    }
+
+    /** Returns a copy of this node with the given machine resource snapshot. */
+    public ServerNode withResourceInfo(@Nullable NodeResourceInfo resourceInfo) {
+        return new ServerNode(id, host, port, serverType, rack, resourceInfo, startupTimeMs);
+    }
+
+    /** Returns the server process startup time in epoch milliseconds, or null when unavailable. */
+    public @Nullable Long startupTimeMs() {
+        return startupTimeMs;
+    }
+
+    /** Returns a copy of this node with the given server process startup time. */
+    public ServerNode withStartupTimeMs(@Nullable Long startupTimeMs) {
+        return new ServerNode(id, host, port, serverType, rack, resourceInfo, startupTimeMs);
     }
 
     /**
