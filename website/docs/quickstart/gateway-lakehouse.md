@@ -1,7 +1,8 @@
 ---
 title: Ingesting HTTP Events into a Real-Time Lakehouse
-sidebar_position: 4
+sidebar_position: 5
 ---
+import ThemedImage from '@site/src/components/ThemedImage';
 
 This guide shows how an application can send JSON events to Fluss through
 the Gateway REST API and immediately read them back — without setting up
@@ -16,6 +17,12 @@ query visibility in the hot tier, and the reusable Lakehouse Tiering Service
 handles writing to Paimon continuously in the background.
 
 In this quickstart, you will:
+
+<ThemedImage
+    alt="gateway lakehouse guide"
+    light="gateway-lakehouse-light.png"
+    dark="gateway-lakehouse-dark.png"
+/>
 
 - spin up Fluss, Fluss Gateway, Flink, Paimon, and RustFS with Docker Compose;
 - create a lake-enabled table through the Gateway REST API;
@@ -448,7 +455,15 @@ SELECT COUNT(*) AS lake_rows FROM orders$lake;
 The count becomes `3` after the tiering cycle commits the rows.
 
 To see the difference between the two query forms, write one more record
-through the Gateway from another terminal:
+through the Gateway from another terminal. If you're in a fresh terminal,
+re-set the same variables used earlier:
+
+```bash
+GATEWAY_URL=http://localhost:8080
+CLUSTER=default
+DATABASE=gateway_demo
+```
+and then continue with:
 
 ```bash
 curl -sS --fail-with-body -X POST \
