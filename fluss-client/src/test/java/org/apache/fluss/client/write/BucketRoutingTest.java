@@ -20,6 +20,7 @@
 package org.apache.fluss.client.write;
 
 import org.apache.fluss.client.metrics.TestingWriterMetricGroup;
+import org.apache.fluss.client.utils.MetadataUtils;
 import org.apache.fluss.cluster.BucketLocation;
 import org.apache.fluss.cluster.Cluster;
 import org.apache.fluss.cluster.ServerNode;
@@ -46,6 +47,10 @@ import org.apache.fluss.record.LogRecordReadContext;
 import org.apache.fluss.record.MemoryLogRecords;
 import org.apache.fluss.record.TestingSchemaGetter;
 import org.apache.fluss.row.InternalRow;
+import org.apache.fluss.rpc.gateway.AdminReadOnlyGateway;
+import org.apache.fluss.rpc.messages.MetadataRequest;
+import org.apache.fluss.rpc.messages.MetadataResponse;
+import org.apache.fluss.server.coordinator.TestCoordinatorGateway;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.utils.CloseableIterator;
 import org.apache.fluss.utils.InternalRowUtils;
@@ -93,6 +98,78 @@ class BucketRoutingTest {
     private static final long PARTITION_ID = 42;
     private static final ServerNode NODE =
             new ServerNode(1, "localhost", 1234, ServerType.TABLET_SERVER);
+
+    @ParameterizedTest
+    @EnumSource(WriteFormat.class)
+    void testNewPartitionUsesLatestTableBucketCount(WriteFormat format) throws Exception {
+        TableInfo table = tableInfo(2, true, format.isKv());
+        RecordAccumulator accumulator = accumulator(ConfigOptions.NoKeyAssigner.STICKY);
+        Cluster metadata = cluster(2, true);
+        try {
+            for (int count : new int[] {4, 6}) {
+                MetadataResponse response = new MetadataResponse();
+                response.addTabletServer()
+                        .setNodeId(NODE.id())
+                        .setHost(NODE.host())
+                        .setPort(NODE.port());
+                response.addPartitionMetadata()
+                        .setTableId(table.getTableId())
+                        .setPartitionId(PARTITION_ID)
+                        .setPartitionName(PATH.getPartitionName())
+                        .setBucketCount(count);
+                AdminReadOnlyGateway gateway =
+                        new TestCoordinatorGateway() {
+                            @Override
+                            public CompletableFuture<MetadataResponse> metadata(
+                                    MetadataRequest request) {
+                                return CompletableFuture.completedFuture(response);
+                            }
+                        };
+                metadata =
+                        MetadataUtils.sendMetadataRequestAndRebuildCluster(
+                                gateway,
+                                true,
+                                metadata,
+                                null,
+                                null,
+                                Collections.singleton(PARTITION_ID));
+
+                // Keep the original TableInfo while starting a new, unresolved partition.
+                PhysicalTablePath newPath =
+                        PhysicalTablePath.of(PATH.getTablePath(), "new_" + count);
+                CompletableFuture<Exception> completion = new CompletableFuture<>();
+                accumulator.append(
+                        record(table, format, 1, 1, newPath),
+                        (bucket, offset, error) -> completion.complete(error),
+                        metadata);
+                int bucketId = new HashBucketAssigner().assignBucket(new byte[] {1}, count);
+                WriteBatch batch = accumulator.getDequeOrThrow(newPath, bucketId).getFirst();
+                assertThat(batch.getBucketCount()).isEqualTo(count);
+                assertThat(accumulator.ready(metadata).readyNodes).isEmpty();
+                assertThat(completion).isNotDone();
+
+                Cluster resolved = cluster(count, true, PARTITION_ID + count, newPath);
+                assertThat(accumulator.ready(resolved).readyNodes).containsExactly(NODE.id());
+                List<ReadyWriteBatch> batches =
+                        accumulator
+                                .drain(
+                                        resolved,
+                                        Collections.singleton(NODE.id()),
+                                        Integer.MAX_VALUE)
+                                .get(NODE.id());
+                assertThat(batches).hasSize(1);
+                assertThat(batches.get(0).writeBatch()).isSameAs(batch);
+                batch.complete(batches.get(0).tableBucket(), 0L);
+                accumulator.deallocate(batch);
+                assertThat(completion.get(10, TimeUnit.SECONDS)).isNull();
+            }
+            assertThat(accumulator.hasIncomplete()).isFalse();
+        } finally {
+            accumulator.close();
+            accumulator.abortAllBatches(new RuntimeException("test cleanup"));
+            accumulator.destroyResources();
+        }
+    }
 
     @ParameterizedTest
     @MethodSource("hashLayouts")

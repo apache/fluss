@@ -241,6 +241,16 @@ public class MetadataUtils {
                         newBucketCountByTableOrPartition.put(
                                 TableOrPartition.ofPartition(pbPartitionMetadata.getPartitionId()),
                                 bucketCount);
+
+                        // TODO: This is a temporary workaround: use the largest observed partition
+                        // bucket count as the table-level count. The proper solution is to extend
+                        // the metadata RPC path to return the table's bucket count and bucket count
+                        // epoch together.
+                        TableOrPartition table = TableOrPartition.ofTable(tableId);
+                        int previousTableBucketCount =
+                                cluster == null ? 0 : cluster.getBucketCount(table).orElse(0);
+                        newBucketCountByTableOrPartition.merge(
+                                table, Math.max(previousTableBucketCount, bucketCount), Math::max);
                     }
                 });
 
