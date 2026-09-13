@@ -22,7 +22,6 @@ import org.apache.fluss.exception.InvalidAlterTableException
 import org.apache.fluss.metadata._
 import org.apache.fluss.types.{DataTypes, RowType}
 
-import org.apache.spark.SparkException
 import org.apache.spark.sql.{AnalysisException, Row}
 import org.apache.spark.sql.catalyst.analysis.PartitionsAlreadyExistException
 import org.apache.spark.sql.connector.catalog.Identifier
@@ -60,20 +59,37 @@ class SparkCatalogTest extends FlussSparkTestBase {
     }
   }
 
+  test("Catalog: add nested column is not supported") {
+    withTable("t") {
+      sql("CREATE TABLE t (id int, s struct<a:int,b:string>)")
+
+      // fluss has no nested column concept, rejected by the conversion layer
+      val nestedException = intercept[UnsupportedOperationException] {
+        sql("ALTER TABLE t ADD COLUMN s.c bigint")
+      }
+      assertThat(nestedException).hasMessageContaining(
+        "Adding nested columns is not supported: s.c")
+
+      val table = admin.getTableInfo(createTablePath("t")).get()
+      assertThatList(table.getRowType.getFieldNames).containsExactly("id", "s")
+    }
+  }
+
   test("Catalog: add columns with unsupported position") {
     withTable("t") {
       sql("CREATE TABLE t (id int, name string)")
 
-      // only the last position is supported: FIRST/AFTER fail at the Fluss RPC serialization
-      // layer (ColumnPositionType only knows LAST), surfaced by Spark as a SparkException
-      val firstException = intercept[SparkException] {
+      // only the last position is supported, FIRST/AFTER are rejected by the conversion layer
+      val firstException = intercept[UnsupportedOperationException] {
         sql("ALTER TABLE t ADD COLUMN age bigint FIRST")
       }
-      assertThat(firstException).hasMessageContaining("Unsupported ColumnPositionType: FIRST")
-      val afterException = intercept[SparkException] {
+      assertThat(firstException).hasMessageContaining(
+        "Adding column with position is not supported")
+      val afterException = intercept[UnsupportedOperationException] {
         sql("ALTER TABLE t ADD COLUMN age bigint AFTER id")
       }
-      assertThat(afterException).hasMessageContaining("Unsupported ColumnPositionType: AFTER")
+      assertThat(afterException).hasMessageContaining(
+        "Adding column with position is not supported")
 
       val table = admin.getTableInfo(createTablePath("t")).get()
       assertThatList(table.getRowType.getFieldNames).containsExactly("id", "name")
@@ -84,12 +100,12 @@ class SparkCatalogTest extends FlussSparkTestBase {
     withTable("t") {
       sql("CREATE TABLE t (id int, name string)")
 
-      // fluss only supports adding nullable columns currently, the server rejects the change
-      // and the IllegalArgumentException is wrapped as UnknownServerException over the RPC
-      val notNullException = intercept[ExecutionException] {
+      // fluss only supports adding nullable columns, rejected by the conversion layer
+      val notNullException = intercept[UnsupportedOperationException] {
         sql("ALTER TABLE t ADD COLUMN age bigint NOT NULL")
       }
-      assertThat(notNullException).hasMessageContaining("Column age must be nullable.")
+      assertThat(notNullException).hasMessageContaining(
+        "Adding non-nullable column is not supported")
 
       val table = admin.getTableInfo(createTablePath("t")).get()
       assertThatList(table.getRowType.getFieldNames).containsExactly("id", "name")
@@ -109,12 +125,15 @@ class SparkCatalogTest extends FlussSparkTestBase {
     withTable("t") {
       sql("CREATE TABLE t (id int, name string)")
 
-      // ALTER TABLE ADD COLUMN with a DEFAULT clause behaves differently: Spark silently drops
-      // the default value (the catalog does not support it) and still adds a nullable column at
-      // the end.
-      sql("ALTER TABLE t ADD COLUMN age bigint DEFAULT 18")
+      // Adding a column with a default value is rejected by the conversion layer.
+      val alterException = intercept[UnsupportedOperationException] {
+        sql("ALTER TABLE t ADD COLUMN age bigint DEFAULT 18")
+      }
+      assertThat(alterException)
+        .hasMessageContaining("Adding column with default value is not supported")
+
       val table = admin.getTableInfo(createTablePath("t")).get()
-      assertThatList(table.getRowType.getFieldNames).containsExactly("id", "name", "age")
+      assertThatList(table.getRowType.getFieldNames).containsExactly("id", "name")
     }
   }
 

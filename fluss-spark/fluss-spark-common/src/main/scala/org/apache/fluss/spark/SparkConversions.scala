@@ -114,6 +114,10 @@ object SparkConversions {
           throw new UnsupportedOperationException(
             s"Adding column with default value is not supported: ${p.fieldNames().head}")
         }
+        if (!p.isNullable()) {
+          throw new UnsupportedOperationException(
+            s"Adding non-nullable column is not supported: ${p.fieldNames().head}")
+        }
         org.apache.fluss.metadata.TableChange.addColumn(
           p.fieldNames().head,
           SparkToFlussTypeVisitor.visit(p.dataType()).copy(p.isNullable()),
@@ -126,11 +130,12 @@ object SparkConversions {
 
   private def toFlussColumnPosition(position: TableChange.ColumnPosition)
       : org.apache.fluss.metadata.TableChange.ColumnPosition = {
-    position match {
-      case _: TableChange.First => org.apache.fluss.metadata.TableChange.ColumnPosition.first()
-      case p: TableChange.After =>
-        org.apache.fluss.metadata.TableChange.ColumnPosition.after(p.column())
-      case _ => org.apache.fluss.metadata.TableChange.ColumnPosition.last()
+    // Fluss only supports appending columns at the end (LAST), which Spark represents as null.
+    if (position == null) {
+      org.apache.fluss.metadata.TableChange.ColumnPosition.last()
+    } else {
+      throw new UnsupportedOperationException(
+        s"Adding column with position is not supported: $position")
     }
   }
 }
