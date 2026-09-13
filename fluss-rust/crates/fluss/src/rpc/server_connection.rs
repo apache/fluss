@@ -84,18 +84,28 @@ pub struct ServerApiVersions {
 }
 
 impl ServerApiVersions {
-    /// Build from the server's advertised API version list.
-    pub(crate) fn new(server_versions: &[PbApiVersion]) -> Self {
+    /// Build from the server's advertised API version list, returning an error if a relevant
+    /// protocol value cannot be represented by the client's API version types.
+    pub(crate) fn new(server_versions: &[PbApiVersion]) -> Result<Self, Error> {
+        let to_i16 = |field_name: &str, value: i32| {
+            i16::try_from(value).map_err(|source| Error::UnexpectedError {
+                message: format!(
+                    "Server advertised {field_name} value {value}, which is outside the supported i16 range"
+                ),
+                source: Some(Box::new(source)),
+            })
+        };
+
         let mut versions = HashMap::new();
         for sv in server_versions {
-            let api_key = ApiKey::from(i16::try_from(sv.api_key).unwrap());
+            let api_key = ApiKey::from(to_i16("api_key", sv.api_key)?);
             // Skip unknown API keys — the client does not support them.
             let client_range = match api_key.supported_versions() {
                 Some(range) => range,
                 None => continue,
             };
-            let server_min = i16::try_from(sv.min_version).unwrap();
-            let server_max = i16::try_from(sv.max_version).unwrap();
+            let server_min = to_i16("min_version", sv.min_version)?;
+            let server_max = to_i16("max_version", sv.max_version)?;
             let min_version = client_range.min().0.max(server_min);
             let max_version = client_range.max().0.min(server_max);
             if min_version > max_version {
@@ -115,7 +125,7 @@ impl ServerApiVersions {
                 versions.insert(api_key, Ok(ApiVersion(max_version)));
             }
         }
-        Self { versions }
+        Ok(Self { versions })
     }
 
     /// Get the negotiated (highest usable) version for a given API key.
@@ -270,7 +280,7 @@ impl RpcClient {
         let request = ApiVersionsRequest::new("fluss-rust", env!("CARGO_PKG_VERSION"));
         let response = connection.request(request).await?;
         validate_server_type(expected_server_type, response.server_type)?;
-        let api_versions = ServerApiVersions::new(&response.api_versions);
+        let api_versions = ServerApiVersions::new(&response.api_versions)?;
         *connection.api_versions.lock() = Some(api_versions);
         Ok(())
     }
@@ -916,6 +926,10 @@ mod tests {
         TEST_LOCK.get_or_init(|| AsyncMutex::new(()))
     }
 
+    fn server_api_versions(server_versions: &[PbApiVersion]) -> ServerApiVersions {
+        ServerApiVersions::new(server_versions).unwrap()
+    }
+
     type SnapshotEntry = (CompositeKey, Option<Unit>, Option<SharedString>, DebugValue);
 
     fn has_api_label(key: &CompositeKey, label: &str) -> bool {
@@ -999,7 +1013,7 @@ mod tests {
         tokio::spawn(mock_echo_server(server));
 
         let conn = ServerConnectionInner::new(BufStream::new(client), usize::MAX, Arc::from("t"));
-        *conn.api_versions.lock() = Some(ServerApiVersions::new(&[PbApiVersion {
+        *conn.api_versions.lock() = Some(server_api_versions(&[PbApiVersion {
             api_key: 1014,
             min_version: 0,
             max_version: 0,
@@ -1044,7 +1058,7 @@ mod tests {
         tokio::spawn(mock_echo_server(server));
 
         let conn = ServerConnectionInner::new(BufStream::new(client), usize::MAX, Arc::from("t"));
-        *conn.api_versions.lock() = Some(ServerApiVersions::new(&[PbApiVersion {
+        *conn.api_versions.lock() = Some(server_api_versions(&[PbApiVersion {
             api_key: 1012,
             min_version: 0,
             max_version: 0,
@@ -1085,7 +1099,7 @@ mod tests {
         let (client, server) = tokio::io::duplex(64);
         drop(server); // force write failure on request path
         let conn = ServerConnectionInner::new(BufStream::new(client), usize::MAX, Arc::from("t"));
-        *conn.api_versions.lock() = Some(ServerApiVersions::new(&[PbApiVersion {
+        *conn.api_versions.lock() = Some(server_api_versions(&[PbApiVersion {
             api_key: 1014,
             min_version: 0,
             max_version: 0,
@@ -1138,7 +1152,7 @@ mod tests {
         tokio::spawn(mock_error_server(server));
 
         let conn = ServerConnectionInner::new(BufStream::new(client), usize::MAX, Arc::from("t"));
-        *conn.api_versions.lock() = Some(ServerApiVersions::new(&[PbApiVersion {
+        *conn.api_versions.lock() = Some(server_api_versions(&[PbApiVersion {
             api_key: 1014,
             min_version: 0,
             max_version: 0,
@@ -1215,7 +1229,7 @@ mod tests {
                 max_version: 5,
             },
         ];
-        let negotiated = ServerApiVersions::new(&server_versions);
+        let negotiated = server_api_versions(&server_versions);
 
         // Successful negotiation cases
         assert_eq!(
@@ -1223,7 +1237,7 @@ mod tests {
             ApiVersion(3)
         );
 
-        let old_server_versions = ServerApiVersions::new(&[PbApiVersion {
+        let old_server_versions = server_api_versions(&[PbApiVersion {
             api_key: 1016,
             min_version: 0,
             max_version: 2,
@@ -1262,10 +1276,61 @@ mod tests {
 
         // Key not advertised by server → error
         assert!(
-            ServerApiVersions::new(&[])
+            server_api_versions(&[])
                 .highest_available_version(ApiKey::FetchLog)
                 .is_err()
         );
+    }
+
+    #[test]
+    fn server_api_versions_returns_error_for_out_of_range_api_key() {
+        let api_key = i32::from(i16::MAX) + 1;
+        let error = ServerApiVersions::new(&[PbApiVersion {
+            api_key,
+            min_version: 0,
+            max_version: 0,
+        }])
+        .unwrap_err();
+
+        assert!(matches!(
+            error,
+            Error::UnexpectedError { message, .. }
+                if message.contains("api_key") && message.contains(&api_key.to_string())
+        ));
+    }
+
+    #[test]
+    fn server_api_versions_returns_error_for_out_of_range_min_version() {
+        let min_version = i32::from(i16::MAX) + 1;
+        let error = ServerApiVersions::new(&[PbApiVersion {
+            api_key: 1014,
+            min_version,
+            max_version: 0,
+        }])
+        .unwrap_err();
+
+        assert!(matches!(
+            error,
+            Error::UnexpectedError { message, .. }
+                if message.contains("min_version") && message.contains(&min_version.to_string())
+        ));
+    }
+
+    #[test]
+    fn server_api_versions_returns_error_for_out_of_range_max_version() {
+        let max_version = i32::from(i16::MIN) - 1;
+        let error = ServerApiVersions::new(&[PbApiVersion {
+            api_key: 1014,
+            min_version: 0,
+            max_version,
+        }])
+        .unwrap_err();
+
+        assert!(matches!(
+            error,
+            Error::UnexpectedError { message, .. }
+                if message.contains("max_version") && message.contains(&max_version.to_string())
+        ));
     }
 
     #[test]

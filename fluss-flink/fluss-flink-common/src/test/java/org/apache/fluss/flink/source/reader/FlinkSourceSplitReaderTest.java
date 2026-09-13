@@ -23,6 +23,8 @@ import org.apache.fluss.client.table.scanner.ScanRecord;
 import org.apache.fluss.client.table.writer.AppendWriter;
 import org.apache.fluss.client.table.writer.UpsertWriter;
 import org.apache.fluss.client.write.HashBucketAssigner;
+import org.apache.fluss.config.ConfigOptions;
+import org.apache.fluss.config.Configuration;
 import org.apache.fluss.flink.lake.split.LakeSnapshotAndFlussLogSplit;
 import org.apache.fluss.flink.source.metrics.FlinkSourceReaderMetrics;
 import org.apache.fluss.flink.source.split.HybridSnapshotLogSplit;
@@ -43,12 +45,15 @@ import org.apache.fluss.types.RowType;
 import org.apache.flink.connector.base.source.reader.RecordsWithSplitIds;
 import org.apache.flink.connector.base.source.reader.splitreader.SplitsAddition;
 import org.apache.flink.connector.base.source.reader.splitreader.SplitsChange;
+import org.apache.flink.metrics.Gauge;
 import org.apache.flink.metrics.testutils.MetricListener;
+import org.apache.flink.runtime.metrics.MetricNames;
 import org.apache.flink.runtime.metrics.groups.InternalSourceReaderMetricGroup;
 import org.apache.flink.table.api.ValidationException;
 import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -56,12 +61,14 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.OptionalLong;
 import java.util.Set;
 
 import static org.apache.fluss.client.table.scanner.log.LogScanner.EARLIEST_OFFSET;
 import static org.apache.fluss.flink.source.testutils.RecordAndPosAssert.assertThatRecordAndPos;
 import static org.apache.fluss.testutils.DataTestUtils.row;
+import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -242,6 +249,133 @@ class FlinkSourceSplitReaderTest extends FlinkTestBase {
 
             assignSplitsAndFetchUntilRetrieveRecords(
                     splitReader, logSplits, expectedRecords, schema.getRowType());
+        }
+    }
+
+    @Test
+    void testPendingRecordsMetric() throws Exception {
+        int recordsPerBucket = 5;
+        Schema schema =
+                Schema.newBuilder()
+                        .column("id", DataTypes.INT())
+                        .column("name", DataTypes.STRING())
+                        .build();
+        TablePath tablePath = TablePath.of(DEFAULT_DB, "test-pending-records-metric");
+        long tableId =
+                createTable(
+                        tablePath,
+                        TableDescriptor.builder()
+                                .schema(schema)
+                                .distributedBy(DEFAULT_BUCKET_NUM)
+                                .build());
+        // Keep each row in a separate log batch so each fetch leaves observable lag behind.
+        appendRowsInSeparateBatches(tablePath, recordsPerBucket * DEFAULT_BUCKET_NUM);
+
+        Configuration sourceConf = new Configuration(clientConf);
+        sourceConf.setInt(ConfigOptions.CLIENT_SCANNER_LOG_MAX_POLL_RECORDS, 1);
+        sourceConf.setString(
+                ConfigOptions.CLIENT_SCANNER_LOG_FETCH_MAX_BYTES_FOR_BUCKET.key(), "1b");
+        MetricListener metricListener = new MetricListener();
+        FlinkSourceReaderMetrics sourceReaderMetrics =
+                new FlinkSourceReaderMetrics(
+                        InternalSourceReaderMetricGroup.mock(metricListener.getMetricGroup()));
+
+        FlinkSourceSplitReader splitReader =
+                new FlinkSourceSplitReader(
+                        sourceConf,
+                        tablePath,
+                        schema.getRowType(),
+                        null,
+                        null,
+                        null,
+                        sourceReaderMetrics);
+        boolean splitReaderClosed = false;
+        try {
+            // the metric is registered when the split reader creates the log scanner, and reports
+            // 0 before anything is fetched
+            Optional<Gauge<Long>> pendingRecords =
+                    metricListener.getGauge(MetricNames.PENDING_RECORDS);
+            assertThat(pendingRecords).isPresent();
+            assertThat((long) pendingRecords.get().getValue()).isEqualTo(0L);
+
+            LogSplit firstStreamingSplit = new LogSplit(new TableBucket(tableId, 0), null, 0L);
+            LogSplit secondStreamingSplit = new LogSplit(new TableBucket(tableId, 1), null, 0L);
+            LogSplit boundedSplit = new LogSplit(new TableBucket(tableId, 2), null, 0L, 1L);
+            List<SourceSplitBase> logSplits =
+                    Arrays.asList(firstStreamingSplit, secondStreamingSplit, boundedSplit);
+            splitReader.handleSplitsChanges(new SplitsAddition<>(logSplits));
+            // Assigned buckets have no known high watermark until their first fetch completes.
+            assertThat((long) pendingRecords.get().getValue()).isEqualTo(0L);
+
+            Map<String, Integer> fetchedRowsBySplit = new HashMap<>();
+            Set<String> finishedSplits = new HashSet<>();
+            boolean aggregationVerified = false;
+            while (fetchedRowsBySplit.getOrDefault(firstStreamingSplit.splitId(), 0)
+                            < recordsPerBucket
+                    || fetchedRowsBySplit.getOrDefault(secondStreamingSplit.splitId(), 0)
+                            < recordsPerBucket
+                    || !finishedSplits.contains(boundedSplit.splitId())) {
+                RecordsWithSplitIds<RecordAndPos> records = splitReader.fetch();
+                int rowsInFetch = 0;
+                String splitId = records.nextSplit();
+                while (splitId != null) {
+                    while (records.nextRecordFromSplit() != null) {
+                        rowsInFetch++;
+                        fetchedRowsBySplit.put(
+                                splitId, fetchedRowsBySplit.getOrDefault(splitId, 0) + 1);
+                    }
+                    splitId = records.nextSplit();
+                }
+                finishedSplits.addAll(records.finishedSplits());
+                records.recycle();
+
+                if (rowsInFetch > 0) {
+                    int firstStreamingFetched =
+                            fetchedRowsBySplit.getOrDefault(firstStreamingSplit.splitId(), 0);
+                    int secondStreamingFetched =
+                            fetchedRowsBySplit.getOrDefault(secondStreamingSplit.splitId(), 0);
+
+                    if (firstStreamingFetched > 0 && secondStreamingFetched > 0) {
+                        assertThat(firstStreamingFetched).isLessThanOrEqualTo(recordsPerBucket);
+                        assertThat(secondStreamingFetched).isLessThanOrEqualTo(recordsPerBucket);
+                        assertThat((long) pendingRecords.get().getValue())
+                                .isEqualTo(
+                                        2L * recordsPerBucket
+                                                - firstStreamingFetched
+                                                - secondStreamingFetched);
+                        if (firstStreamingFetched < recordsPerBucket
+                                && secondStreamingFetched < recordsPerBucket) {
+                            aggregationVerified = true;
+                        }
+                    }
+                }
+            }
+
+            assertThat(aggregationVerified).isTrue();
+            assertThat(fetchedRowsBySplit.get(boundedSplit.splitId())).isEqualTo(1);
+            assertThat(recordsPerBucket - fetchedRowsBySplit.get(boundedSplit.splitId()))
+                    .isPositive();
+            // The bounded bucket was unassigned with records still unread, so only the two fully
+            // consumed streaming buckets contribute to the final value.
+            assertThat((long) pendingRecords.get().getValue()).isEqualTo(0L);
+
+            // Closing a scanner with unread records must remove its gauge from the aggregate.
+            appendRowsInSeparateBatches(tablePath, recordsPerBucket * DEFAULT_BUCKET_NUM);
+            retry(
+                    Duration.ofMinutes(1),
+                    () -> {
+                        RecordsWithSplitIds<RecordAndPos> records = splitReader.fetch();
+                        records.recycle();
+                        assertThat((long) pendingRecords.get().getValue()).isPositive();
+                    });
+
+            splitReaderClosed = true;
+            splitReader.close();
+            assertThat((long) pendingRecords.get().getValue()).isZero();
+        } finally {
+            if (!splitReaderClosed) {
+                splitReader.close();
+            }
         }
     }
 
@@ -529,6 +663,16 @@ class FlinkSourceSplitReaderTest extends FlinkTestBase {
         }
 
         return internalRows;
+    }
+
+    private void appendRowsInSeparateBatches(TablePath tablePath, int rows) throws Exception {
+        try (Table table = conn.getTable(tablePath)) {
+            AppendWriter appendWriter = table.newAppend().createWriter();
+            for (int i = 0; i < rows; i++) {
+                appendWriter.append(row(i, "v" + i));
+                appendWriter.flush();
+            }
+        }
     }
 
     private static String toLogSplitId(TableBucket tableBucket) {

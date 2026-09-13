@@ -32,6 +32,7 @@ import org.apache.fluss.memory.PreAllocatedPagedOutputView;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
+import org.apache.fluss.metadata.TableOrPartition;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.metrics.MetricNames;
 import org.apache.fluss.record.LogRecordBatchStatisticsCollector;
@@ -47,6 +48,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import javax.annotation.Nullable;
+import javax.annotation.concurrent.GuardedBy;
 
 import java.io.IOException;
 import java.util.ArrayDeque;
@@ -62,7 +64,6 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
-import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.apache.fluss.record.LogRecordBatchFormat.NO_BATCH_SEQUENCE;
@@ -108,8 +109,11 @@ public final class RecordAccumulator {
     /** The chunked allocation manager factory, stored for explicit native memory release. */
     private final ChunkedAllocationManager.ChunkedFactory chunkedFactory;
 
-    /** Guard to make {@link #destroyResources()} idempotent. */
-    private final AtomicBoolean resourcesDestroyed = new AtomicBoolean(false);
+    /** Coordinates batch memory deallocation with resource destruction. */
+    private final Object resourcesLock = new Object();
+
+    @GuardedBy("resourcesLock")
+    private boolean resourcesDestroyed;
 
     /** The pool of lazily created arrow {@link ArrowWriter}s for arrow log write batch. */
     private final ArrowWriterPool arrowWriterPool;
@@ -200,6 +204,7 @@ public final class RecordAccumulator {
             WriteCallback callback,
             Cluster cluster,
             int bucketId,
+            int bucketCount,
             boolean abortIfBatchFull)
             throws Exception {
         PhysicalTablePath physicalTablePath = writeRecord.getPhysicalTablePath();
@@ -226,7 +231,7 @@ public final class RecordAccumulator {
                     bucketAndWriteBatches.batches.computeIfAbsent(
                             bucketId, k -> new ArrayDeque<>());
             synchronized (dq) {
-                RecordAppendResult appendResult = tryAppend(writeRecord, callback, dq);
+                RecordAppendResult appendResult = tryAppend(writeRecord, callback, bucketCount, dq);
                 if (appendResult != null) {
                     return appendResult;
                 }
@@ -242,7 +247,13 @@ public final class RecordAccumulator {
             synchronized (dq) {
                 RecordAppendResult appendResult =
                         appendNewBatch(
-                                writeRecord, callback, bucketId, tableInfo, dq, memorySegments);
+                                writeRecord,
+                                callback,
+                                bucketId,
+                                bucketCount,
+                                tableInfo,
+                                dq,
+                                memorySegments);
                 if (appendResult.newBatchCreated) {
                     memorySegments = Collections.emptyList();
                 }
@@ -278,6 +289,7 @@ public final class RecordAccumulator {
         Set<Integer> readyNodes = new HashSet<>();
         long nextReadyCheckDelayMs = batchTimeoutMs;
         Set<PhysicalTablePath> unknownLeaderTables = new HashSet<>();
+        Set<PhysicalTablePath> invalidBucketRoutingTables = new HashSet<>();
         // Go table by table so that we can get queue sizes for buckets in a table and calculate
         // cumulative frequency table (used in bucket assigner).
 
@@ -287,13 +299,15 @@ public final class RecordAccumulator {
                             bucketAndWriteBatches,
                             readyNodes,
                             unknownLeaderTables,
+                            invalidBucketRoutingTables,
                             cluster,
                             nextReadyCheckDelayMs);
         }
 
         // TODO and the earliest time at which any non-send-able bucket will be ready;
 
-        return new ReadyCheckResult(readyNodes, nextReadyCheckDelayMs, unknownLeaderTables);
+        return new ReadyCheckResult(
+                readyNodes, nextReadyCheckDelayMs, unknownLeaderTables, invalidBucketRoutingTables);
     }
 
     /**
@@ -323,20 +337,22 @@ public final class RecordAccumulator {
         return batches;
     }
 
-    public void reEnqueue(ReadyWriteBatch readyWriteBatch) {
+    /** Re-enqueue a batch unless it was completed concurrently. */
+    public boolean reEnqueue(ReadyWriteBatch readyWriteBatch) {
         WriteBatch batch = readyWriteBatch.writeBatch();
-        if (batch.isDone()) {
-            return;
-        }
-        batch.reEnqueued();
         Deque<WriteBatch> deque =
                 getOrCreateDeque(readyWriteBatch.tableBucket(), batch.physicalTablePath());
         synchronized (deque) {
+            if (batch.isDone()) {
+                return false;
+            }
+            batch.reEnqueued();
             if (idempotenceManager.idempotenceEnabled()) {
                 insertInSequenceOrder(deque, batch, readyWriteBatch.tableBucket());
             } else {
                 deque.addFirst(batch);
             }
+            return true;
         }
     }
 
@@ -435,11 +451,18 @@ public final class RecordAccumulator {
         return Boolean.TRUE.equals(historicalPartitionEnabledByTable.get(tablePath));
     }
 
-    /** Reroutes queued batches for {@code originalPath} to the historical target. */
-    void rerouteQueuedWritesToHistorical(
+    /**
+     * Reroutes queued batches for {@code originalPath} to the historical target.
+     *
+     * @return {@code true} if the batches were rerouted successfully or were already targeting the
+     *     historical partition; {@code false} if any queued batch was routed with a bucket count
+     *     that differs from the historical partition's bucket count
+     */
+    boolean rerouteQueuedWritesToHistorical(
             PhysicalTablePath originalPath,
             PhysicalTablePath historicalPath,
-            long historicalPartitionId) {
+            long historicalPartitionId,
+            @Nullable Integer historicalBucketCount) {
         BucketAndWriteBatches writeTarget =
                 checkNotNull(
                         writeBatches.get(originalPath),
@@ -449,7 +472,17 @@ public final class RecordAccumulator {
         synchronized (writeTarget) {
             if (writeTarget.isHistoricalWriteTarget()) {
                 writeTarget.partitionId = historicalPartitionId;
-                return;
+                return true;
+            }
+            if (historicalBucketCount != null) {
+                for (Deque<WriteBatch> deque : writeTarget.batches.values()) {
+                    for (WriteBatch batch : deque) {
+                        if (batch.getBucketCount() > 0
+                                && batch.getBucketCount() != historicalBucketCount) {
+                            return false;
+                        }
+                    }
+                }
             }
             // New appends observe the historical route and are marked as historical. Existing
             // queued batches are converted below before the Sender can drain again.
@@ -477,6 +510,7 @@ public final class RecordAccumulator {
                 }
             }
         }
+        return true;
     }
 
     /** Aborts incomplete batches whose current RPC target is {@code targetPath}. */
@@ -498,12 +532,24 @@ public final class RecordAccumulator {
 
     private void abortBatch(final Exception reason, WriteBatch batch) {
         Deque<WriteBatch> dq = getDeque(batch.physicalTablePath(), batch.bucketId());
+        boolean aborted;
         synchronized (dq) {
-            batch.abortRecordAppends();
+            aborted = batch.trySetAborted();
+            if (aborted) {
+                batch.abortRecordAppends();
+            }
             dq.remove(batch);
         }
-        batch.abort(reason);
-        deallocate(batch);
+
+        // A response may have completed the batch after abortAllBatches() took its snapshot. In
+        // that case, skip the abort callback but still claim deallocation if it is still pending.
+        try {
+            if (aborted) {
+                batch.completeAbort(reason);
+            }
+        } finally {
+            deallocate(batch);
+        }
     }
 
     /** Get the deque for the given table-bucket, creating it if necessary. */
@@ -563,10 +609,19 @@ public final class RecordAccumulator {
         }
     }
 
-    /** Deallocate the record batch. */
+    /**
+     * Deallocate the record batch if this call wins ownership of it.
+     *
+     * <p>Response handling and fatal cleanup may race, so removing the batch from the incomplete
+     * set determines which caller returns its memory. The same lock prevents resource destruction
+     * from overtaking that return.
+     */
     public void deallocate(WriteBatch batch) {
-        incomplete.remove(batch);
-        writerBufferPool.returnAll(batch.pooledMemorySegments());
+        synchronized (resourcesLock) {
+            if (incomplete.removeIfPresent(batch) && !resourcesDestroyed) {
+                writerBufferPool.returnAll(batch.pooledMemorySegments());
+            }
+        }
     }
 
     /**
@@ -640,6 +695,7 @@ public final class RecordAccumulator {
             BucketAndWriteBatches bucketAndWriteBatches,
             Set<Integer> readyNodes,
             Set<PhysicalTablePath> unknownLeaderTables,
+            Set<PhysicalTablePath> invalidBucketRoutingTables,
             Cluster cluster,
             long nextReadyCheckDelayMs) {
         // first check this table has partitionId.
@@ -658,6 +714,13 @@ public final class RecordAccumulator {
             }
         }
 
+        Integer actualBucketCount =
+                bucketAndWriteBatches.isPartitionedTable
+                        ? cluster.getBucketCount(
+                                        TableOrPartition.ofPartition(
+                                                bucketAndWriteBatches.partitionId))
+                                .orElse(null)
+                        : null;
         Map<Integer, Deque<WriteBatch>> batches = bucketAndWriteBatches.batches;
         // Collect the queue sizes for available buckets to be used in adaptive bucket allocate.
 
@@ -665,6 +728,7 @@ public final class RecordAccumulator {
         for (Map.Entry<Integer, Deque<WriteBatch>> entry : batches.entrySet()) {
             Deque<WriteBatch> deque = entry.getValue();
 
+            final WriteBatch batch;
             final long waitedTimeMs;
             final int dequeSize;
             final boolean full;
@@ -676,7 +740,7 @@ public final class RecordAccumulator {
             synchronized (deque) {
                 // Deque are often empty in this path, esp with large bucket counts,
                 // so we exit early if we can.
-                WriteBatch batch = deque.peekFirst();
+                batch = deque.peekFirst();
                 if (batch == null) {
                     continue;
                 }
@@ -684,6 +748,11 @@ public final class RecordAccumulator {
                 waitedTimeMs = batch.waitedTimeMs(clock.milliseconds());
                 dequeSize = deque.size();
                 full = dequeSize > 1 || batch.isClosed();
+            }
+
+            if (actualBucketCount != null && batch.getBucketCount() != actualBucketCount) {
+                invalidBucketRoutingTables.add(targetPath);
+                return nextReadyCheckDelayMs;
             }
 
             int bucketId = entry.getKey();
@@ -770,6 +839,7 @@ public final class RecordAccumulator {
             WriteRecord writeRecord,
             WriteCallback callback,
             int bucketId,
+            int bucketCount,
             TableInfo tableInfo,
             Deque<WriteBatch> deque,
             List<MemorySegment> segments)
@@ -787,7 +857,7 @@ public final class RecordAccumulator {
                         ? bucketAndWriteBatches
                         : deque;
         synchronized (routeLock) {
-            RecordAppendResult appendResult = tryAppend(writeRecord, callback, deque);
+            RecordAppendResult appendResult = tryAppend(writeRecord, callback, bucketCount, deque);
             if (appendResult != null) {
                 // Somebody else found us a batch, return the one we waited for! Hopefully this
                 // doesn't happen often...
@@ -802,6 +872,7 @@ public final class RecordAccumulator {
                     createWriteBatch(
                             writeRecord,
                             bucketId,
+                            bucketCount,
                             tableInfo,
                             writeFormat,
                             physicalTablePath,
@@ -819,6 +890,7 @@ public final class RecordAccumulator {
     private WriteBatch createWriteBatch(
             WriteRecord writeRecord,
             int bucketId,
+            int bucketCount,
             TableInfo tableInfo,
             WriteFormat writeFormat,
             PhysicalTablePath physicalTablePath,
@@ -832,6 +904,7 @@ public final class RecordAccumulator {
                 return new KvWriteBatch(
                         tableInfo.getTableId(),
                         bucketId,
+                        bucketCount,
                         physicalTablePath,
                         tableInfo.getSchemaId(),
                         writeFormat.toKvFormat(),
@@ -859,6 +932,7 @@ public final class RecordAccumulator {
                 return new ArrowLogWriteBatch(
                         tableInfo.getTableId(),
                         bucketId,
+                        bucketCount,
                         physicalTablePath,
                         tableInfo.getSchemaId(),
                         arrowWriter,
@@ -871,6 +945,7 @@ public final class RecordAccumulator {
                 return new CompactedLogWriteBatch(
                         tableInfo.getTableId(),
                         bucketId,
+                        bucketCount,
                         physicalTablePath,
                         schemaId,
                         outputView.getPreAllocatedSize(),
@@ -882,6 +957,7 @@ public final class RecordAccumulator {
                 return new IndexedLogWriteBatch(
                         tableInfo.getTableId(),
                         bucketId,
+                        bucketCount,
                         physicalTablePath,
                         tableInfo.getSchemaId(),
                         outputView.getPreAllocatedSize(),
@@ -895,18 +971,22 @@ public final class RecordAccumulator {
     }
 
     private RecordAppendResult tryAppend(
-            WriteRecord writeRecord, WriteCallback callback, Deque<WriteBatch> deque)
+            WriteRecord writeRecord,
+            WriteCallback callback,
+            int bucketCount,
+            Deque<WriteBatch> deque)
             throws Exception {
         if (closed) {
             throw new FlussRuntimeException("Writer closed while send in progress");
         }
         WriteBatch last = deque.peekLast();
         if (last != null) {
-            boolean success = last.tryAppend(writeRecord, callback);
+            boolean success =
+                    last.getBucketCount() == bucketCount && last.tryAppend(writeRecord, callback);
             if (!success) {
-                // The last batch is either full/closed or belongs to a different table/write
-                // format/schema. Close it so the incoming record rolls over to a compatible new
-                // batch.
+                // The last batch is either full/closed or belongs to a different table, write
+                // format, schema, or bucket layout. Close it so the incoming record rolls over to
+                // a compatible new batch.
                 // TODO For ArrowLogWriteBatch, close here is a heavy operation (including build
                 // logic), we need to avoid do that in an lock which locked dq. However, why we not
                 // remove build logic out of close for ArrowLogWriteBatch is that we want to release
@@ -1331,14 +1411,17 @@ public final class RecordAccumulator {
         public final Set<Integer> readyNodes;
         public final long nextReadyCheckDelayMs;
         public final Set<PhysicalTablePath> unknownLeaderTables;
+        public final Set<PhysicalTablePath> invalidBucketRoutingTables;
 
         public ReadyCheckResult(
                 Set<Integer> readyNodes,
                 long nextReadyCheckDelayMs,
-                Set<PhysicalTablePath> unknownLeaderTables) {
+                Set<PhysicalTablePath> unknownLeaderTables,
+                Set<PhysicalTablePath> invalidBucketRoutingTables) {
             this.readyNodes = readyNodes;
             this.nextReadyCheckDelayMs = nextReadyCheckDelayMs;
             this.unknownLeaderTables = unknownLeaderTables;
+            this.invalidBucketRoutingTables = invalidBucketRoutingTables;
         }
     }
 
@@ -1359,13 +1442,16 @@ public final class RecordAccumulator {
      */
     @VisibleForTesting
     public void destroyResources() {
-        if (!resourcesDestroyed.compareAndSet(false, true)) {
-            return;
+        synchronized (resourcesLock) {
+            if (resourcesDestroyed) {
+                return;
+            }
+            resourcesDestroyed = true;
+            writerBufferPool.close();
+            arrowWriterPool.close();
+            bufferAllocator.close();
+            chunkedFactory.close();
         }
-        writerBufferPool.close();
-        arrowWriterPool.close();
-        bufferAllocator.close();
-        chunkedFactory.close();
     }
 
     /** Per table bucket and write batches. */

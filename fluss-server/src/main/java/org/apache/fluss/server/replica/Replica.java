@@ -193,6 +193,12 @@ public final class Replica {
 
     private final SchemaGetter schemaGetter;
     private volatile TableInfo tableInfo;
+
+    // Routing state carried with activation: both values are immutable per bucket, so they are
+    // set once and never change. Null until the coordinator notifies them.
+    private volatile @Nullable Integer routingBucketCount;
+    private volatile @Nullable Long bucketCountEpoch;
+
     private final boolean historicalPartition;
     // logFormat and arrowCompressionInfo are immutable and used in hot-path, so cache them here.
     private final LogFormat logFormat;
@@ -449,6 +455,29 @@ public final class Replica {
         return logFormat;
     }
 
+    /**
+     * Adopts the routing state carried by the notification. Both values are immutable per bucket,
+     * so unset fields never overwrite known ones.
+     */
+    public void updateRoutingState(NotifyLeaderAndIsrData data) {
+        if (data.getBucketCount() != null) {
+            this.routingBucketCount = data.getBucketCount();
+        }
+        if (data.getBucketCountEpoch() != null) {
+            this.bucketCountEpoch = data.getBucketCountEpoch();
+        }
+    }
+
+    /** The actual bucket count of the owning table/partition, or null if not yet notified. */
+    public @Nullable Integer getRoutingBucketCount() {
+        return routingBucketCount;
+    }
+
+    /** The bucket layout epoch of the owning table, or null if not yet notified. */
+    public @Nullable Long getBucketCountEpoch() {
+        return bucketCountEpoch;
+    }
+
     public void makeLeader(NotifyLeaderAndIsrData data) throws IOException {
         boolean leaderHWIncremented =
                 inWriteLock(
@@ -458,6 +487,7 @@ public final class Replica {
                             validateBucketEpoch(requestBucketEpoch);
 
                             coordinatorEpoch = data.getCoordinatorEpoch();
+                            updateRoutingState(data);
 
                             long currentTimeMs = clock.milliseconds();
                             // Updating the assignment and ISR state is safe if the bucket epoch is
@@ -530,6 +560,7 @@ public final class Replica {
                     validateBucketEpoch(requestBucketEpoch);
 
                     coordinatorEpoch = data.getCoordinatorEpoch();
+                    updateRoutingState(data);
 
                     updateAssignmentAndIsr(
                             Collections.emptyList(),
@@ -1853,6 +1884,13 @@ public final class Replica {
         return inReadLock(
                 leaderIsrUpdateLock,
                 () -> {
+                    if (!isLeader()) {
+                        throw new NotLeaderOrFollowerException(
+                                String.format(
+                                        "Leader not local for bucket %s on tabletServer %d",
+                                        tableBucket, localTabletServerId));
+                    }
+
                     int offsetType = listOffsetsParam.getOffsetType();
                     if (offsetType == ListOffsetsParam.TIMESTAMP_OFFSET_TYPE) {
                         return getOffsetByTimestamp(remoteLogManager, listOffsetsParam);

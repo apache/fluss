@@ -738,7 +738,11 @@ public final class FlussClusterExtension
             Map<String, PartitionRegistration> partitions =
                     zooKeeperClient.getPartitionRegistrations(tablePath);
             for (PartitionRegistration partition : partitions.values()) {
-                for (int bucketId = 0; bucketId < bucketCount; bucketId++) {
+                // partitions diverge from the table-level count after ALTER bucket.num
+                int partitionBucketCount =
+                        partition.getBucketCountOrDefault(
+                                bucketCount, tableRegistration.bucketCountEpoch);
+                for (int bucketId = 0; bucketId < partitionBucketCount; bucketId++) {
                     tableBuckets.add(
                             new TableBucket(tableId, partition.getPartitionId(), bucketId));
                 }
@@ -866,7 +870,9 @@ public final class FlussClusterExtension
                                 PhysicalTablePath.of(tablePath),
                                 tableBucket,
                                 replicas,
-                                leaderAndIsr));
+                                leaderAndIsr,
+                                3,
+                                0L));
         NotifyLeaderAndIsrRequest notifyLeaderAndIsrRequest =
                 ServerRpcMessageUtils.makeNotifyLeaderAndIsrRequest(
                         0, Collections.singletonList(reqForBucket));

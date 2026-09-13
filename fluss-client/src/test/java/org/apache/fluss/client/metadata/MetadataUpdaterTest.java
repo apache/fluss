@@ -17,15 +17,20 @@
 
 package org.apache.fluss.client.metadata;
 
+import org.apache.fluss.client.utils.MetadataUtils;
 import org.apache.fluss.cluster.Cluster;
 import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.StaleMetadataException;
+import org.apache.fluss.metadata.TableOrPartition;
+import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.rpc.RpcClient;
 import org.apache.fluss.rpc.gateway.AdminReadOnlyGateway;
 import org.apache.fluss.rpc.messages.MetadataRequest;
 import org.apache.fluss.rpc.messages.MetadataResponse;
+import org.apache.fluss.rpc.messages.PbPartitionMetadata;
+import org.apache.fluss.rpc.messages.PbTableMetadata;
 import org.apache.fluss.rpc.metrics.TestingClientMetricGroup;
 import org.apache.fluss.server.coordinator.TestCoordinatorGateway;
 
@@ -68,6 +73,83 @@ public class MetadataUpdaterTest {
                                         rpcClient, CS_NODE, gateway2, 3))
                 .isInstanceOf(StaleMetadataException.class)
                 .hasMessageContaining("The metadata is stale.");
+    }
+
+    @Test
+    void testMetadataBucketCountCompatibility() throws Exception {
+        long tableId = 1L;
+        long legacyPartitionId = 2L;
+        long explicitPartitionId = 3L;
+        long unassignedPartitionId = 4L;
+        TablePath tablePath = TablePath.of("db", "table");
+
+        MetadataResponse response = new MetadataResponse();
+        response.addTabletServer()
+                .setNodeId(TS_NODE.id())
+                .setHost(TS_NODE.host())
+                .setPort(TS_NODE.port());
+
+        PbTableMetadata tableMetadata = response.addTableMetadata().setTableId(tableId);
+        tableMetadata
+                .setTablePath()
+                .setDatabaseName(tablePath.getDatabaseName())
+                .setTableName(tablePath.getTableName());
+        for (int bucketId = 0; bucketId < 3; bucketId++) {
+            tableMetadata.addBucketMetadata().setBucketId(bucketId);
+        }
+
+        PbPartitionMetadata legacyPartition =
+                response.addPartitionMetadata()
+                        .setTableId(tableId)
+                        .setPartitionId(legacyPartitionId)
+                        .setPartitionName("legacy");
+        legacyPartition.addBucketMetadata().setBucketId(0);
+        legacyPartition.addBucketMetadata().setBucketId(1);
+        assertThat(legacyPartition.hasBucketCount()).isFalse();
+
+        PbPartitionMetadata explicitPartition =
+                response.addPartitionMetadata()
+                        .setTableId(tableId)
+                        .setPartitionId(explicitPartitionId)
+                        .setPartitionName("explicit")
+                        .setBucketCount(4);
+        explicitPartition.addBucketMetadata().setBucketId(0);
+        explicitPartition.addBucketMetadata().setBucketId(1);
+
+        response.addPartitionMetadata()
+                .setTableId(tableId)
+                .setPartitionId(unassignedPartitionId)
+                .setPartitionName("unassigned");
+
+        Cluster originCluster =
+                new Cluster(
+                        Collections.singletonMap(TS_NODE.id(), TS_NODE),
+                        CS_NODE,
+                        Collections.emptyMap(),
+                        Collections.emptyMap(),
+                        Collections.emptyMap(),
+                        Collections.emptyMap());
+        AdminReadOnlyGateway gateway =
+                new TestCoordinatorGateway() {
+                    @Override
+                    public CompletableFuture<MetadataResponse> metadata(MetadataRequest request) {
+                        return CompletableFuture.completedFuture(response);
+                    }
+                };
+
+        Cluster updatedCluster =
+                MetadataUtils.sendMetadataRequestAndRebuildCluster(
+                        gateway, true, originCluster, null, null, null);
+
+        assertThat(updatedCluster.getBucketCount(TableOrPartition.ofTable(tableId))).hasValue(3);
+        assertThat(updatedCluster.getBucketCount(TableOrPartition.ofPartition(legacyPartitionId)))
+                .hasValue(2);
+        assertThat(updatedCluster.getBucketCount(TableOrPartition.ofPartition(explicitPartitionId)))
+                .hasValue(4);
+        assertThat(
+                        updatedCluster.getBucketCount(
+                                TableOrPartition.ofPartition(unassignedPartitionId)))
+                .isEmpty();
     }
 
     private static final class TestingAdminReadOnlyGateway extends TestCoordinatorGateway {

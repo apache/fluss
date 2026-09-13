@@ -66,6 +66,7 @@ public class DynamicPartitionCreator {
         this.fatalErrorHandler = fatalErrorHandler;
     }
 
+    /** Ensures the partition exists, creating it asynchronously when enabled. */
     public void checkAndCreatePartitionAsync(
             PhysicalTablePath physicalTablePath, TableInfo tableInfo) {
         String partitionName = physicalTablePath.getPartitionName();

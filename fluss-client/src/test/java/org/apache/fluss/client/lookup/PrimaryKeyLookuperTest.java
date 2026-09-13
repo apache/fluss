@@ -23,6 +23,7 @@ import org.apache.fluss.cluster.Cluster;
 import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.exception.InvalidBucketRoutingException;
 import org.apache.fluss.exception.PartitionNotExistException;
 import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.PhysicalTablePath;
@@ -59,6 +60,7 @@ import static org.apache.fluss.client.metadata.TestingMetadataUpdater.COORDINATO
 import static org.apache.fluss.client.metadata.TestingMetadataUpdater.NODE1;
 import static org.apache.fluss.utils.PartitionUtils.HISTORICAL_PARTITION_VALUE;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Tests for {@link PrimaryKeyLookuper}. */
 class PrimaryKeyLookuperTest {
@@ -138,7 +140,51 @@ class PrimaryKeyLookuperTest {
         }
     }
 
+    @Test
+    void testRescaledPartitionMissingBucketCountFailsWithIllegalStateException() throws Exception {
+        // A rescaled table cannot safely route a partition whose actual bucket count is missing.
+        // Preserve the async API while exposing a diagnostic IllegalStateException as the cause.
+        TableInfo rescaledTableInfo = createTableInfo(1L);
+        ControllableLookupGateway gateway = new ControllableLookupGateway();
+        TestingMetadataUpdater metadataUpdater =
+                TestingMetadataUpdater.builder(
+                                Collections.singletonMap(TABLE_PATH, rescaledTableInfo))
+                        .withTabletServerGateway(NODE1.id(), gateway)
+                        .build();
+        // The cluster carries no per-partition bucket count for the active partition.
+        metadataUpdater.updateCluster(createCluster());
+
+        LookupClient lookupClient = new LookupClient(new Configuration(), metadataUpdater);
+        try {
+            PrimaryKeyLookuper lookuper =
+                    new PrimaryKeyLookuper(
+                            rescaledTableInfo,
+                            new TestingSchemaGetter(
+                                    rescaledTableInfo.getSchemaId(), rescaledTableInfo.getSchema()),
+                            metadataUpdater,
+                            lookupClient,
+                            false);
+            ProjectedRow lookupKey =
+                    ProjectedRow.from(new int[] {0, 1})
+                            .replaceRow(GenericRow.of(1, BinaryString.fromString(PARTITION_A)));
+
+            CompletableFuture<LookupResult> resultFuture = lookuper.lookup(lookupKey);
+
+            assertThat(resultFuture).isCompletedExceptionally();
+            assertThatThrownBy(() -> resultFuture.get(5, TimeUnit.SECONDS))
+                    .hasCauseInstanceOf(InvalidBucketRoutingException.class)
+                    .hasMessageContaining("Routing bucket count is unavailable")
+                    .hasMessageContaining("bucketCountEpoch 1");
+        } finally {
+            lookupClient.close(Duration.ofSeconds(5));
+        }
+    }
+
     private static TableInfo createTableInfo() {
+        return createTableInfo(0L);
+    }
+
+    private static TableInfo createTableInfo(long bucketCountEpoch) {
         Schema schema =
                 Schema.newBuilder()
                         .column("id", DataTypes.INT())
@@ -156,7 +202,8 @@ class PrimaryKeyLookuperTest {
                         .property(ConfigOptions.TABLE_DATALAKE_FORMAT, DataLakeFormat.PAIMON)
                         .property(ConfigOptions.TABLE_DATALAKE_HISTORICAL_PARTITION_ENABLED, true)
                         .build();
-        return TableInfo.of(TABLE_PATH, TABLE_ID, 1, tableDescriptor, null, 0L, 0L);
+        return TableInfo.of(
+                TABLE_PATH, TABLE_ID, 1, tableDescriptor, null, 0L, 0L, bucketCountEpoch);
     }
 
     private static Cluster createCluster() {
@@ -185,7 +232,8 @@ class PrimaryKeyLookuperTest {
                 COORDINATOR,
                 bucketLocationsByPath,
                 Collections.singletonMap(TABLE_PATH, TABLE_ID),
-                partitionIdsByPath);
+                partitionIdsByPath,
+                Collections.emptyMap());
     }
 
     private static BucketLocation createBucketLocation(

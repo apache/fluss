@@ -54,7 +54,10 @@ public class FlinkConnectorOptions {
             ConfigOptions.key("bucket.num")
                     .intType()
                     .noDefaultValue()
-                    .withDescription("The number of buckets of a Fluss table.");
+                    .withDescription(
+                            "The target number of buckets for a Fluss table. "
+                                    + "For partitioned tables, this value applies to newly created "
+                                    + "partitions; existing partitions retain their original bucket count.");
 
     public static final ConfigOption<String> BUCKET_KEY =
             ConfigOptions.key("bucket.key")
@@ -268,8 +271,8 @@ public class FlinkConnectorOptions {
     public static final List<String> ALTER_DISALLOW_OPTIONS =
             Arrays.asList(
                     AUTO_INCREMENT_FIELDS.key(),
-                    BUCKET_NUMBER.key(),
                     BUCKET_KEY.key(),
+                    BUCKET_NUMBER.key(),
                     BOOTSTRAP_SERVERS.key());
 
     // -------------------------------------------------------------------------------------------

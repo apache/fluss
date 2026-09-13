@@ -18,9 +18,13 @@
 package org.apache.fluss.cluster;
 
 import org.apache.fluss.annotation.Internal;
+import org.apache.fluss.exception.InvalidBucketRoutingException;
 import org.apache.fluss.exception.PartitionNotExistException;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.TableInfo;
+import org.apache.fluss.metadata.TableOrPartition;
+import org.apache.fluss.metadata.TablePartition;
 import org.apache.fluss.metadata.TablePath;
 
 import javax.annotation.Nullable;
@@ -28,6 +32,7 @@ import javax.annotation.Nullable;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -52,19 +57,23 @@ public final class Cluster {
     private final Map<Long, TablePath> pathByTableId;
     private final Map<PhysicalTablePath, Long> partitionsIdByPath;
     private final Map<Long, String> partitionNameById;
+    private final Map<TableOrPartition, Integer> bucketCountByTableOrPartition;
 
     public Cluster(
             Map<Integer, ServerNode> aliveTabletServersById,
             @Nullable ServerNode coordinatorServer,
             Map<PhysicalTablePath, List<BucketLocation>> bucketLocationsByPath,
             Map<TablePath, Long> tableIdByPath,
-            Map<PhysicalTablePath, Long> partitionsIdByPath) {
+            Map<PhysicalTablePath, Long> partitionsIdByPath,
+            Map<TableOrPartition, Integer> bucketCountByTableOrPartition) {
         this.coordinatorServer = coordinatorServer;
         this.aliveTabletServersById = Collections.unmodifiableMap(aliveTabletServersById);
         this.aliveTabletServers =
                 Collections.unmodifiableList(new ArrayList<>(aliveTabletServersById.values()));
         this.tableIdByPath = Collections.unmodifiableMap(tableIdByPath);
         this.partitionsIdByPath = Collections.unmodifiableMap(partitionsIdByPath);
+        this.bucketCountByTableOrPartition =
+                Collections.unmodifiableMap(bucketCountByTableOrPartition);
 
         // Index the bucket locations by table path, and index bucket location by bucket.
         // Note that this code is performance sensitive if there are a large number of buckets,
@@ -127,12 +136,35 @@ public final class Cluster {
                         new ArrayList<>(tablePathAndBucketLocations.getValue()));
             }
         }
+        // resolve the invalid table or partition keys so the bucket count map can be filtered
+        Set<TableOrPartition> invalidTableOrPartitions = new HashSet<>();
+        for (PhysicalTablePath path : physicalTablesToInvalid) {
+            if (path.getPartitionName() == null) {
+                Long tableId = tableIdByPath.get(path.getTablePath());
+                if (tableId != null) {
+                    invalidTableOrPartitions.add(TableOrPartition.ofTable(tableId));
+                }
+            } else {
+                Long partitionId = partitionsIdByPath.get(path);
+                if (partitionId != null) {
+                    invalidTableOrPartitions.add(TableOrPartition.ofPartition(partitionId));
+                }
+            }
+        }
+        Map<TableOrPartition, Integer> newBucketCountByTableOrPartition = new HashMap<>();
+        for (Map.Entry<TableOrPartition, Integer> entry :
+                bucketCountByTableOrPartition.entrySet()) {
+            if (!invalidTableOrPartitions.contains(entry.getKey())) {
+                newBucketCountByTableOrPartition.put(entry.getKey(), entry.getValue());
+            }
+        }
         return new Cluster(
                 new HashMap<>(aliveTabletServersById),
                 coordinatorServer,
                 newBucketLocationsByPath,
                 new HashMap<>(tableIdByPath),
-                new HashMap<>(partitionsIdByPath));
+                new HashMap<>(partitionsIdByPath),
+                newBucketCountByTableOrPartition);
     }
 
     /** Invalidates bucket metadata and partition ID mappings for the given physical table paths. */
@@ -148,7 +180,8 @@ public final class Cluster {
                 coordinatorServer,
                 new HashMap<>(cluster.availableLocationsByPath),
                 new HashMap<>(tableIdByPath),
-                newPartitionsIdByPath);
+                newPartitionsIdByPath,
+                new HashMap<>(cluster.bucketCountByTableOrPartition));
     }
 
     @Nullable
@@ -226,6 +259,24 @@ public final class Cluster {
         return Optional.ofNullable(partitionsIdByPath.get(physicalTablePath));
     }
 
+    /**
+     * Resolve a {@link PhysicalTablePath} to its current {@link TablePartition} (tableId +
+     * partitionId) from this snapshot. Retained for name resolution; the actual bucket-count lookup
+     * uses {@link #getBucketCount(TableOrPartition)}. Resolving both ids from the same snapshot
+     * avoids combining a stale tableId/partitionId with a newer one after a replacement.
+     */
+    public Optional<TablePartition> getTablePartition(PhysicalTablePath physicalTablePath) {
+        Long partitionId = partitionsIdByPath.get(physicalTablePath);
+        if (partitionId == null) {
+            return Optional.empty();
+        }
+        Long tableId = tableIdByPath.get(physicalTablePath.getTablePath());
+        if (tableId == null) {
+            return Optional.empty();
+        }
+        return Optional.of(new TablePartition(tableId, partitionId));
+    }
+
     public TableBucket getTableBucket(
             long tableId, PhysicalTablePath physicalTablePath, int bucketId) {
         if (physicalTablePath.getPartitionName() != null) {
@@ -274,11 +325,48 @@ public final class Cluster {
         return partitionsIdByPath;
     }
 
+    /**
+     * Get the actual bucket count for the given table or partition. Returns empty if its bucket
+     * layout is not available yet.
+     */
+    public Optional<Integer> getBucketCount(TableOrPartition tableOrPartition) {
+        return Optional.ofNullable(bucketCountByTableOrPartition.get(tableOrPartition));
+    }
+
+    /**
+     * Gets the actual bucket count for the given table or partition, falling back to the
+     * table-level count when the table has never been rescaled.
+     */
+    public int getBucketCountOrFallback(TableInfo tableInfo, @Nullable Long partitionId) {
+        TableOrPartition tableOrPartition =
+                TableOrPartition.of(tableInfo.getTableId(), partitionId);
+        Integer bucketCount = bucketCountByTableOrPartition.get(tableOrPartition);
+        if (bucketCount != null) {
+            return bucketCount;
+        }
+        long bucketCountEpoch = tableInfo.getBucketCountEpoch();
+        if (bucketCountEpoch > 0) {
+            throw new InvalidBucketRoutingException(
+                    "Routing bucket count is unavailable for "
+                            + tableOrPartition
+                            + " at bucketCountEpoch "
+                            + bucketCountEpoch
+                            + "; refusing to fall back to the table-level count.");
+        }
+        return tableInfo.getNumBuckets();
+    }
+
+    /** Get the table or partition to bucket count map. */
+    public Map<TableOrPartition, Integer> getBucketCountByTableOrPartition() {
+        return bucketCountByTableOrPartition;
+    }
+
     /** Create an empty cluster instance with no nodes and no table-buckets. */
     public static Cluster empty() {
         return new Cluster(
                 Collections.emptyMap(),
                 null,
+                Collections.emptyMap(),
                 Collections.emptyMap(),
                 Collections.emptyMap(),
                 Collections.emptyMap());

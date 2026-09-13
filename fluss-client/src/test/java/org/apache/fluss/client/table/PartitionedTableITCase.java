@@ -45,7 +45,6 @@ import java.util.Optional;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_PATH_PK;
 import static org.apache.fluss.testutils.DataTestUtils.row;
 import static org.apache.fluss.testutils.InternalRowAssert.assertThatRow;
-import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.apache.fluss.testutils.common.CommonTestUtils.waitValue;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -221,19 +220,14 @@ class PartitionedTableITCase extends ClientToServerITCaseBase {
             upsertWriter.upsert(row).get();
         }
 
-        // add one row will not throw TooManyPartitionsException immediately.
-        upsertWriter.upsert(row(10, "a" + 10, "10"));
-
-        // add another rows will throw TooManyPartitionsException final.
-        retry(
-                Duration.ofMinutes(1),
-                () ->
-                        assertThatThrownBy(() -> upsertWriter.upsert(row(10, "a" + 10, "10")).get())
-                                .rootCause()
-                                .isInstanceOf(TooManyPartitionsException.class)
-                                .hasMessageContaining(
-                                        "Exceed the maximum number of partitions for table "
-                                                + "test_db_1.test_pk_table_1, only allow 10 partitions."));
+        // Dynamic partition creation is synchronous (the bucket id needs the partition's own
+        // bucket count), so a partition that cannot be created fails the record right away.
+        assertThatThrownBy(() -> upsertWriter.upsert(row(10, "a" + 10, "10")).get())
+                .rootCause()
+                .isInstanceOf(TooManyPartitionsException.class)
+                .hasMessageContaining(
+                        "Exceed the maximum number of partitions for table "
+                                + "test_db_1.test_pk_table_1, only allow 10 partitions.");
     }
 
     private Schema createPartitionedTable(TablePath tablePath, boolean isPrimaryTable)

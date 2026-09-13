@@ -175,6 +175,12 @@ public class TestAdminAdapter implements Admin {
 
     @Override
     public CompletableFuture<List<PartitionInfo>> listPartitionInfos(
+            TablePath tablePath, boolean includeSystemPartitions) {
+        throw new UnsupportedOperationException("Not implemented in TestAdminAdapter");
+    }
+
+    @Override
+    public CompletableFuture<List<PartitionInfo>> listPartitionInfos(
             TablePath tablePath, PartitionSpec partialPartitionSpec) {
         throw new UnsupportedOperationException("Not implemented in TestAdminAdapter");
     }

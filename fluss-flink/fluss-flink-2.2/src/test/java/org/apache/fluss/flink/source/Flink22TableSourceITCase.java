@@ -18,4 +18,10 @@
 package org.apache.fluss.flink.source;
 
 /** IT case for {@link FlinkTableSource} in Flink 2.2. */
-public class Flink22TableSourceITCase extends FlinkTableSourceITCase {}
+public class Flink22TableSourceITCase extends FlinkTableSourceITCase {
+
+    @Override
+    protected boolean supportsLookupCustomShuffle() {
+        return true;
+    }
+}

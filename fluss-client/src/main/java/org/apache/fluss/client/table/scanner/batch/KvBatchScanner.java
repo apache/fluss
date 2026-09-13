@@ -20,10 +20,12 @@ package org.apache.fluss.client.table.scanner.batch;
 import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.client.metadata.MetadataUpdater;
+import org.apache.fluss.cluster.Cluster;
 import org.apache.fluss.exception.LeaderNotAvailableException;
 import org.apache.fluss.metadata.SchemaGetter;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
+import org.apache.fluss.metadata.TableOrPartition;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.record.DefaultValueRecordBatch;
 import org.apache.fluss.record.ValueRecord;
@@ -177,6 +179,7 @@ public final class KvBatchScanner implements BatchScanner {
                     "Leader for bucket " + bucket + " is not available. Please retry the scan.");
         }
 
+        Cluster cluster = metadataUpdater.getCluster();
         PbScanReqForBucket bucketReq =
                 new PbScanReqForBucket()
                         .setTableId(bucket.getTableId())
@@ -184,6 +187,8 @@ public final class KvBatchScanner implements BatchScanner {
         if (bucket.getPartitionId() != null) {
             bucketReq.setPartitionId(bucket.getPartitionId());
         }
+        cluster.getBucketCount(TableOrPartition.of(bucket.getTableId(), bucket.getPartitionId()))
+                .ifPresent(bucketReq::setRoutingBucketCount);
 
         ScanKvRequest request =
                 new ScanKvRequest()

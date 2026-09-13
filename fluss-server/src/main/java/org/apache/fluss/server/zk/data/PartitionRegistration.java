@@ -45,10 +45,22 @@ public class PartitionRegistration {
      */
     private final @Nullable String remoteDataDir;
 
-    public PartitionRegistration(long tableId, long partitionId, @Nullable String remoteDataDir) {
+    /**
+     * The bucket count of this partition. It is null when deserialized from an older version that
+     * does not persist per-partition bucket count. In that case, callers should fall back to the
+     * table-level bucket count.
+     */
+    private final @Nullable Integer bucketCount;
+
+    public PartitionRegistration(
+            long tableId,
+            long partitionId,
+            @Nullable String remoteDataDir,
+            @Nullable Integer bucketCount) {
         this.tableId = tableId;
         this.partitionId = partitionId;
         this.remoteDataDir = remoteDataDir;
+        this.bucketCount = bucketCount;
     }
 
     public long getTableId() {
@@ -64,6 +76,41 @@ public class PartitionRegistration {
         return remoteDataDir;
     }
 
+    /** Returns the bucket count of this partition, or null if not persisted (old data). */
+    @Nullable
+    public Integer getBucketCount() {
+        return bucketCount;
+    }
+
+    /**
+     * Returns the bucket count of this partition, falling back to the given table-level bucket
+     * count when this partition was persisted by an older version that does not store the
+     * per-partition count.
+     *
+     * <p>The fallback is only valid at {@code bucketCountEpoch == 0} (legacy table or old server).
+     * At {@code bucketCountEpoch > 0}, the first ALTER bucket.num atomically backfills the
+     * per-partition count of every existing partition in the same ZooKeeper transaction that bumps
+     * the epoch (see {@code ZooKeeperClient#updateTableWithPartitionBucketCountBackfill}), so a
+     * partition observed at {@code bucketCountEpoch > 0} always carries a count. Reaching the throw
+     * below therefore means that invariant was broken (an internal bug, e.g. a partial backfill);
+     * it is theoretically unreachable and is surfaced as an {@link IllegalStateException} rather
+     * than a retriable error, since a client metadata refresh cannot repair server-side state.
+     */
+    public int getBucketCountOrDefault(int tableBucketCount, long bucketCountEpoch) {
+        if (bucketCount != null) {
+            return bucketCount;
+        }
+        if (bucketCountEpoch == 0) {
+            return tableBucketCount;
+        }
+        throw new IllegalStateException(
+                "Partition "
+                        + partitionId
+                        + " is missing a per-partition bucket count at bucketCountEpoch "
+                        + bucketCountEpoch
+                        + "; the ALTER bucket.num backfill invariant was broken.");
+    }
+
     public TablePartition toTablePartition() {
         return new TablePartition(tableId, partitionId);
     }
@@ -77,7 +124,7 @@ public class PartitionRegistration {
      * @return a new registration with the given remote data directory
      */
     public PartitionRegistration newRemoteDataDir(String remoteDataDir) {
-        return new PartitionRegistration(tableId, partitionId, remoteDataDir);
+        return new PartitionRegistration(tableId, partitionId, remoteDataDir, bucketCount);
     }
 
     @Override
@@ -88,12 +135,13 @@ public class PartitionRegistration {
         PartitionRegistration that = (PartitionRegistration) o;
         return tableId == that.tableId
                 && partitionId == that.partitionId
-                && Objects.equals(remoteDataDir, that.remoteDataDir);
+                && Objects.equals(remoteDataDir, that.remoteDataDir)
+                && Objects.equals(bucketCount, that.bucketCount);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(tableId, partitionId, remoteDataDir);
+        return Objects.hash(tableId, partitionId, remoteDataDir, bucketCount);
     }
 
     @Override
@@ -106,6 +154,8 @@ public class PartitionRegistration {
                 + ", remoteDataDir='"
                 + remoteDataDir
                 + '\''
+                + ", bucketCount="
+                + bucketCount
                 + '}';
     }
 }

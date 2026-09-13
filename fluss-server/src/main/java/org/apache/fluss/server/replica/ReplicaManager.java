@@ -25,6 +25,7 @@ import org.apache.fluss.config.cluster.ServerReconfigurable;
 import org.apache.fluss.exception.ConfigException;
 import org.apache.fluss.exception.FencedLeaderEpochException;
 import org.apache.fluss.exception.HistoricalPartitionThrottledException;
+import org.apache.fluss.exception.InvalidBucketRoutingException;
 import org.apache.fluss.exception.InvalidColumnProjectionException;
 import org.apache.fluss.exception.InvalidCoordinatorException;
 import org.apache.fluss.exception.InvalidPartitionException;
@@ -427,6 +428,24 @@ public class ReplicaManager implements ServerReconfigurable {
                             "Invalid log.replica.min-in-sync-replicas-number can not be "
                                     + "negative or zero: %d",
                             newMinInSyncReplicas));
+        }
+
+        int newHistoricalPartitionThreadPoolMaxSize =
+                newConfig.get(ConfigOptions.SERVER_HISTORICAL_PARTITION_THREAD_POOL_MAX_SIZE);
+        if (newHistoricalPartitionThreadPoolMaxSize <= 0) {
+            throw new ConfigException(
+                    String.format(
+                            "Invalid configuration for %s, it must be greater than 0.",
+                            ConfigOptions.SERVER_HISTORICAL_PARTITION_THREAD_POOL_MAX_SIZE.key()));
+        }
+
+        int newMaxQueuedHistoricalRequests =
+                newConfig.get(ConfigOptions.NETTY_SERVER_MAX_QUEUED_HISTORICAL_REQUESTS);
+        if (newMaxQueuedHistoricalRequests <= 0) {
+            throw new ConfigException(
+                    String.format(
+                            "Invalid configuration for %s, it must be greater than 0.",
+                            ConfigOptions.NETTY_SERVER_MAX_QUEUED_HISTORICAL_REQUESTS.key()));
         }
     }
 
@@ -1347,12 +1366,10 @@ public class ReplicaManager implements ServerReconfigurable {
                     // remote.
                     TableBucket tb = notifyRemoteLogOffsetsData.getTableBucket();
                     LogTablet logTablet = getReplicaOrException(tb).getLogTablet();
-                    logTablet.updateHighestCopiedEndOffset(
+                    logTablet.updateRemoteLogOffsets(
+                            notifyRemoteLogOffsetsData.getRemoteLogStartOffset(),
+                            notifyRemoteLogOffsetsData.getRemoteLogEndOffset(),
                             notifyRemoteLogOffsetsData.getHighestCopiedEndOffset());
-                    logTablet.updateRemoteLogStartOffset(
-                            notifyRemoteLogOffsetsData.getRemoteLogStartOffset());
-                    logTablet.updateRemoteLogEndOffset(
-                            notifyRemoteLogOffsetsData.getRemoteLogEndOffset());
                     responseCallback.accept(new NotifyRemoteLogOffsetsResponse());
                 });
     }
@@ -2500,6 +2517,9 @@ public class ReplicaManager implements ServerReconfigurable {
                                 clock,
                                 remoteLogManager,
                                 scannerManager);
+                // Initialize the routing state before the replica becomes visible, so a
+                // ready leader always has its routing bucket count ready.
+                replica.updateRoutingState(data);
                 if (!existingLogTabletOpt.isPresent()) {
                     localDiskManager.recordReplicaLoad(dataDir, isKvTable);
                 }
@@ -2529,6 +2549,63 @@ public class ReplicaManager implements ServerReconfigurable {
         } else {
             throw new UnknownTableOrBucketException("Unknown table or bucket: " + tableBucket);
         }
+    }
+
+    /**
+     * Validates the routing bucket count of a client request against the replica-local routing
+     * state. The target bucket is resolved first through {@link
+     * #getReplicaOrException(TableBucket)}, so an unknown, non-local, or offline replica fails
+     * immediately with its standard API exception. Missing or mismatched routing information fails
+     * with INVALID_BUCKET_ROUTING. Online followers skip the leader-only routing validation.
+     *
+     * <p>Only client requests may be validated; follower-initiated requests carry bucket ids
+     * assigned authoritatively by NotifyLeaderAndIsr and must skip this check.
+     */
+    public void validateRoutingBucketCount(TableBucket tableBucket, int routingBucketCount) {
+        Replica replica = getReplicaOrException(tableBucket);
+        if (!replica.isLeader()) {
+            return;
+        }
+
+        Integer actual = replica.getRoutingBucketCount();
+        if (routingBucketCount <= 0) {
+            if (resolveBucketCountEpoch(replica) > 0) {
+                throw new InvalidBucketRoutingException(
+                        "Invalid bucket routing for "
+                                + tableBucket
+                                + ": the request did not include a routing bucket count; expected "
+                                + actual
+                                + ". Refresh partition metadata, recompute the bucket id, and "
+                                + "rebuild the request.");
+            }
+            return;
+        }
+
+        if (actual == null) {
+            return;
+        }
+        if (routingBucketCount != actual) {
+            throw new InvalidBucketRoutingException(
+                    "Invalid bucket routing for "
+                            + tableBucket
+                            + ": requested bucket count "
+                            + routingBucketCount
+                            + ", expected "
+                            + actual
+                            + ". Refresh partition metadata, recompute the bucket id, and rebuild "
+                            + "the request.");
+        }
+    }
+
+    /**
+     * Resolves the effective bucket layout epoch as the maximum of the replica-local value and the
+     * metadata cache: ALTER bucket.num advances only the cache, and the epoch is monotonic.
+     */
+    private long resolveBucketCountEpoch(Replica replica) {
+        Long replicaEpoch = replica.getBucketCountEpoch();
+        long cachedEpoch =
+                metadataCache.getBucketCountEpoch(replica.getTableBucket().getTableId()).orElse(0L);
+        return Math.max(replicaEpoch == null ? 0L : replicaEpoch, cachedEpoch);
     }
 
     public HostedReplica getReplica(TableBucket tableBucket) {

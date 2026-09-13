@@ -128,6 +128,7 @@ public class ArrowLogWriteBatchTest {
                 new ArrowLogWriteBatch(
                         tb.getTableId(),
                         tb.getBucket(),
+                        DATA1_TABLE_INFO.getNumBuckets(),
                         DATA1_PHYSICAL_TABLE_PATH,
                         DATA1_TABLE_INFO.getSchemaId(),
                         writerProvider.getOrCreateWriter(
@@ -210,6 +211,7 @@ public class ArrowLogWriteBatchTest {
                     new ArrowLogWriteBatch(
                             tb.getTableId(),
                             tb.getBucket(),
+                            DATA1_TABLE_INFO.getNumBuckets(),
                             DATA1_PHYSICAL_TABLE_PATH,
                             DATA1_TABLE_INFO.getSchemaId(),
                             arrowWriter,
@@ -308,6 +310,7 @@ public class ArrowLogWriteBatchTest {
         return new ArrowLogWriteBatch(
                 tb.getTableId(),
                 tb.getBucket(),
+                DATA1_TABLE_INFO.getNumBuckets(),
                 DATA1_PHYSICAL_TABLE_PATH,
                 DATA1_TABLE_INFO.getSchemaId(),
                 writerProvider.getOrCreateWriter(

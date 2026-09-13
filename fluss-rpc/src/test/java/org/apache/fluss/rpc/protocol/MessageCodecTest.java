@@ -34,6 +34,7 @@ import org.apache.fluss.rpc.netty.server.RequestsMetrics;
 import org.apache.fluss.security.auth.PlainTextAuthenticationPlugin;
 import org.apache.fluss.shaded.netty4.io.netty.buffer.ByteBuf;
 import org.apache.fluss.shaded.netty4.io.netty.buffer.ByteBufAllocator;
+import org.apache.fluss.shaded.netty4.io.netty.buffer.Unpooled;
 import org.apache.fluss.shaded.netty4.io.netty.channel.Channel;
 import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelHandlerContext;
 import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelId;
@@ -47,6 +48,8 @@ import java.util.Collections;
 
 import static org.apache.fluss.testutils.ByteBufChannel.toByteBuf;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -102,6 +105,29 @@ class MessageCodecTest {
         assertThat(actual.getClientSoftwareName()).isEqualTo("test");
         assertThat(actual.getClientSoftwareVersion()).isEqualTo("1.0.0");
         assertThat(byteBuf.readerIndex()).isEqualTo(byteBuf.writerIndex());
+    }
+
+    @Test
+    void testEncodeRequestReleasesBufferOnFailure() {
+        ByteBufAllocator allocator = mock(ByteBufAllocator.class);
+        ByteBuf buffer = Unpooled.buffer();
+        when(allocator.ioBuffer(anyInt(), anyInt())).thenReturn(buffer);
+
+        OutOfMemoryError error = new OutOfMemoryError("Direct buffer memory");
+        ApiMessage request = mock(ApiMessage.class);
+        when(request.totalSize()).thenReturn(1);
+        when(request.writeTo(buffer)).thenThrow(error);
+
+        assertThatThrownBy(
+                        () ->
+                                MessageCodec.encodeRequest(
+                                        allocator,
+                                        ApiKeys.API_VERSIONS.id,
+                                        ApiKeys.API_VERSIONS.highestSupportedVersion,
+                                        1001,
+                                        request))
+                .isSameAs(error);
+        assertThat(buffer.refCnt()).isZero();
     }
 
     @Test

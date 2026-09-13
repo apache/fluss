@@ -96,7 +96,9 @@ class ReplicaFetcherManagerTest extends ReplicaTestBase {
                                         Arrays.asList(leader.id(), TABLET_SERVER_ID),
                                         Collections.emptyList(),
                                         INITIAL_COORDINATOR_EPOCH,
-                                        LeaderAndIsr.INITIAL_BUCKET_EPOCH))),
+                                        LeaderAndIsr.INITIAL_BUCKET_EPOCH),
+                                3,
+                                0L)),
                 result -> {});
 
         InitialFetchStatus initialFetchStatus =
@@ -143,7 +145,9 @@ class ReplicaFetcherManagerTest extends ReplicaTestBase {
                                         Collections.emptyList(),
                                         Collections.emptyList(),
                                         INITIAL_COORDINATOR_EPOCH,
-                                        LeaderAndIsr.INITIAL_BUCKET_EPOCH))),
+                                        LeaderAndIsr.INITIAL_BUCKET_EPOCH),
+                                3,
+                                0L)),
                 result::set);
 
         assertThat(result.get()).hasSize(1);

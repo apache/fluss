@@ -74,7 +74,7 @@ public interface LakeTableLookuper extends AutoCloseable {
     /** Context for a lake table point lookup. */
     final class LookupContext {
         private final ResolvedPartitionSpec partitionSpec;
-        private final int bucketId;
+        private final @Nullable Integer bucketId;
         private final short schemaId;
         private final RowType valueRowType;
         private final LookupMetricRecorder lookupMetricRecorder;
@@ -83,14 +83,15 @@ public interface LakeTableLookuper extends AutoCloseable {
          * Creates a lookup context.
          *
          * @param partitionSpec resolved Fluss partition spec for the lookup
-         * @param bucketId target bucket id in the lake table
+         * @param bucketId target bucket id in the lake table, or null when the caller cannot
+         *     determine it and the implementation has to resolve it from the lake metadata
          * @param schemaId schema id to encode the returned Fluss value with
          * @param valueRowType row type to encode the returned Fluss value with
          * @param lookupMetricRecorder recorder for lake table point lookup metrics
          */
         public LookupContext(
                 ResolvedPartitionSpec partitionSpec,
-                int bucketId,
+                @Nullable Integer bucketId,
                 short schemaId,
                 RowType valueRowType,
                 LookupMetricRecorder lookupMetricRecorder) {
@@ -107,8 +108,11 @@ public interface LakeTableLookuper extends AutoCloseable {
             return partitionSpec;
         }
 
-        /** Returns the target bucket id in the lake table. */
-        public int bucketId() {
+        /**
+         * Returns the target bucket id in the lake table, or null when the implementation has to
+         * resolve it from the lake metadata.
+         */
+        public @Nullable Integer bucketId() {
             return bucketId;
         }
 

@@ -115,17 +115,20 @@ final class LogTabletTest extends LogTestBase {
     }
 
     @Test
-    void testRemoteLogEndOffsetCanReset() {
-        logTablet.updateRemoteLogStartOffset(0L);
-        logTablet.updateRemoteLogEndOffset(10L);
+    void testRemoteLogOffsetsCanResetAfterEmptyManifest() {
+        logTablet.updateRemoteLogOffsets(0L, 10L, 10L);
         assertThat(logTablet.canFetchFromRemoteLog(0L)).isTrue();
+        assertThat(logTablet.canFetchFromRemoteLog(10L)).isFalse();
 
-        logTablet.updateRemoteLogEndOffset(-1L);
+        logTablet.updateRemoteLogOffsets(Long.MAX_VALUE, -1L, 10L);
         assertThat(logTablet.canFetchFromRemoteLog(0L)).isFalse();
+        assertThat(logTablet.canFetchFromRemoteLog(10L)).isFalse();
 
         // A new non-empty range can become readable after the empty state.
-        logTablet.updateRemoteLogEndOffset(5L);
-        assertThat(logTablet.canFetchFromRemoteLog(0L)).isTrue();
+        logTablet.updateRemoteLogOffsets(10L, 20L, 20L);
+        assertThat(logTablet.canFetchFromRemoteLog(0L)).isFalse();
+        assertThat(logTablet.canFetchFromRemoteLog(10L)).isTrue();
+        assertThat(logTablet.canFetchFromRemoteLog(20L)).isFalse();
     }
 
     @Test

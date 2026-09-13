@@ -18,6 +18,7 @@
 package org.apache.fluss.server.utils;
 
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.TableChange;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.record.KvRecordBatch;
 import org.apache.fluss.record.MemoryLogRecords;
@@ -26,6 +27,7 @@ import org.apache.fluss.rpc.entity.FetchLogResultForBucket;
 import org.apache.fluss.rpc.entity.LookupResultForBucket;
 import org.apache.fluss.rpc.entity.ProduceLogResultForBucket;
 import org.apache.fluss.rpc.entity.PutKvResultForBucket;
+import org.apache.fluss.rpc.messages.AlterTableRequest;
 import org.apache.fluss.rpc.messages.FetchLogResponse;
 import org.apache.fluss.rpc.messages.LookupResponse;
 import org.apache.fluss.rpc.messages.PbBucketMetadata;
@@ -67,6 +69,16 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Tests for {@link ServerRpcMessageUtils}. */
 class ServerRpcMessageUtilsTest {
+
+    @Test
+    void testAlterTableDistributionChanges() {
+        AlterTableRequest request = new AlterTableRequest();
+        assertThat(ServerRpcMessageUtils.toAlterTableDistributionChanges(request)).isEmpty();
+
+        request.setModifyBucketCount().setNewBucketCount(8);
+        assertThat(ServerRpcMessageUtils.toAlterTableDistributionChanges(request))
+                .containsExactly(TableChange.modifyBucketCount(8));
+    }
 
     @Test
     void testFetchLogResponseContainsMinRetainOffset() {

@@ -216,6 +216,28 @@ class FlussConfigUtilsTest {
     }
 
     @Test
+    void testValidateCoordinatorRequestDurations() {
+        Configuration conf = new Configuration();
+        conf.set(ConfigOptions.REMOTE_DATA_DIR, "s3://bucket/path");
+
+        conf.set(ConfigOptions.COORDINATOR_CONTROL_REQUEST_RETRY_BACKOFF, Duration.ZERO);
+        assertThatThrownBy(() -> validateCoordinatorConfigs(conf))
+                .isInstanceOf(IllegalConfigurationException.class)
+                .hasMessageContaining(ConfigOptions.COORDINATOR_CONTROL_REQUEST_RETRY_BACKOFF.key())
+                .hasMessageContaining("must be greater than or equal 1 ms");
+
+        conf.set(ConfigOptions.COORDINATOR_CONTROL_REQUEST_RETRY_BACKOFF, Duration.ofMillis(1));
+        conf.set(ConfigOptions.COORDINATOR_CONTROL_REQUEST_TIMEOUT, Duration.ZERO);
+        assertThatThrownBy(() -> validateCoordinatorConfigs(conf))
+                .isInstanceOf(IllegalConfigurationException.class)
+                .hasMessageContaining(ConfigOptions.COORDINATOR_CONTROL_REQUEST_TIMEOUT.key())
+                .hasMessageContaining("must be greater than or equal 1 ms");
+
+        conf.set(ConfigOptions.COORDINATOR_CONTROL_REQUEST_TIMEOUT, Duration.ofMillis(1));
+        validateCoordinatorConfigs(conf);
+    }
+
+    @Test
     void testValidateHistoricalLookupCacheConfigs() {
         Configuration conf = new Configuration();
         conf.set(ConfigOptions.REMOTE_DATA_DIR, "s3://bucket/path");

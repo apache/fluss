@@ -47,6 +47,12 @@ public class MetricNames {
     public static final String KV_LEADER_REPLICA_CAPACITY = "kvLeaderReplicaCapacity";
     public static final String REPLICAS_TO_DELETE_COUNT = "replicasToDeleteCount";
     public static final String PENDING_LEADER_ACTIVATION_COUNT = "pendingLeaderActivationCount";
+    // for coordinator sender (per-tablet-server control request sender threads)
+    public static final String SENDER_QUEUE_SIZE = "senderQueueSize";
+    public static final String SENDER_QUEUE_TIME_MS = "senderQueueTimeMs";
+    public static final String SENDER_RETRY_COUNT = "senderRetryCount";
+    public static final String SENDER_STALE_DROP_COUNT = "senderStaleDropCount";
+    public static final String SENDER_ALIVE = "senderAlive";
 
     // for coordinator event processor
     public static final String EVENT_QUEUE_SIZE = "eventQueueSize";
@@ -271,6 +277,13 @@ public class MetricNames {
     public static final String ROCKSDB_BLOCK_CACHE_PINNED_USAGE_TOTAL =
             "rocksdbBlockCachePinnedUsageTotal";
 
+    // Server-level KV WAL memory pool metrics for primary key tables
+    /** Memory used by the KV WAL memory pool for primary key tables in this server (bytes). */
+    public static final String KV_WAL_MEMORY_POOL_USAGE = "kvWalMemoryPoolUsage";
+
+    /** Total capacity of the KV WAL memory pool for primary key tables in this server (bytes). */
+    public static final String KV_WAL_MEMORY_POOL_CAPACITY = "kvWalMemoryPoolCapacity";
+
     // --------------------------------------------------------------------------------------------
     // metrics for table bucket
     // --------------------------------------------------------------------------------------------
@@ -331,6 +344,7 @@ public class MetricNames {
     public static final String SCANNER_FETCH_LATENCY_MS = "fetchLatencyMs";
     public static final String SCANNER_FETCH_RATE = "fetchRequestsPerSecond";
     public static final String SCANNER_BYTES_PER_REQUEST = "bytesPerRequest";
+    public static final String SCANNER_RECORDS_LAG = "recordsLag";
     public static final String SCANNER_REMOTE_FETCH_BYTES_RATE = "remoteFetchBytesPerSecond";
     public static final String SCANNER_REMOTE_FETCH_RATE = "remoteFetchRequestsPerSecond";
     public static final String SCANNER_REMOTE_FETCH_ERROR_RATE = "remoteFetchErrorPerSecond";

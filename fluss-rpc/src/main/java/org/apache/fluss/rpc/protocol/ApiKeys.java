@@ -91,7 +91,8 @@ public enum ApiKeys {
     DROP_ACLS(1041, 0, 0, PUBLIC),
     LAKE_TIERING_HEARTBEAT(1042, 0, 0, PRIVATE),
     CONTROLLED_SHUTDOWN(1043, 0, 0, PRIVATE),
-    ALTER_TABLE(1044, 0, 0, PUBLIC),
+    // Version 1: supports modifying the table distribution's bucket count.
+    ALTER_TABLE(1044, 0, 1, PUBLIC),
     DESCRIBE_CLUSTER_CONFIGS(1045, 0, 0, PUBLIC),
     ALTER_CLUSTER_CONFIGS(1046, 0, 0, PUBLIC),
     ADD_SERVER_TAG(1047, 0, 0, PUBLIC),

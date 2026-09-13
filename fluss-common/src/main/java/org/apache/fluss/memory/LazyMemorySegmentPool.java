@@ -64,7 +64,7 @@ public class LazyMemorySegmentPool implements MemorySegmentPool, Closeable {
     @GuardedBy("lock")
     private boolean closed;
 
-    private int pageUsage;
+    private volatile int pageUsage;
 
     @VisibleForTesting
     LazyMemorySegmentPool(
@@ -240,6 +240,11 @@ public class LazyMemorySegmentPool implements MemorySegmentPool, Closeable {
     @Override
     public int freePages() {
         return inLock(lock, () -> this.maxPages - this.pageUsage);
+    }
+
+    /** Returns the number of pages currently allocated to callers. */
+    public int usedPages() {
+        return pageUsage;
     }
 
     @Override

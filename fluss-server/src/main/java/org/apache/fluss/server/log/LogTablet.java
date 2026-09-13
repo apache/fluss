@@ -638,36 +638,54 @@ public final class LogTablet {
         return findOffset;
     }
 
-    public void updateRemoteLogStartOffset(long remoteLogStartOffset) {
+    private void updateRemoteLogStartOffset(long remoteLogStartOffset) {
         long prev = this.remoteLogStartOffset;
         if (prev == Long.MAX_VALUE || remoteLogStartOffset > prev) {
             this.remoteLogStartOffset = remoteLogStartOffset;
         }
     }
 
+    /** Updates the size of the log segments currently retained in remote storage. */
     public void updateRemoteLogSize(long remoteLogSize) {
         this.remoteLogSize = remoteLogSize;
     }
 
-    public void updateRemoteLogEndOffset(long remoteLogEndOffset) {
+    /**
+     * Updates the remote log offsets from one committed manifest.
+     *
+     * <p>The remote-readable start and end offsets are published before advancing the copied
+     * watermark and deleting local segments. This prevents fetches from observing locally deleted
+     * offsets before the corresponding remote range becomes readable. Local segments are cleaned up
+     * at most once.
+     */
+    public void updateRemoteLogOffsets(
+            long newRemoteLogStartOffset, long remoteLogEndOffset, long highestCopiedEndOffset) {
+        updateRemoteLogStartOffset(newRemoteLogStartOffset);
+
+        boolean shouldCleanup = false;
         if ((remoteLogEndOffset == -1L && this.remoteLogEndOffset != -1L)
                 || remoteLogEndOffset > this.remoteLogEndOffset) {
             this.remoteLogEndOffset = remoteLogEndOffset;
-            // Before highestCopiedEndOffset was introduced, remoteLogEndOffset was also the copy
-            // progress watermark. Preserve that behavior for existing callers.
-            if (remoteLogEndOffset >= 0L) {
-                this.highestCopiedEndOffset =
-                        Math.max(this.highestCopiedEndOffset, remoteLogEndOffset);
-            }
-
-            // try to delete these segments already exist in remote storage.
-            deleteSegmentsAlreadyExistsInRemote();
+            shouldCleanup = true;
         }
-    }
-
-    public void updateHighestCopiedEndOffset(long highestCopiedEndOffset) {
         if (highestCopiedEndOffset > this.highestCopiedEndOffset) {
             this.highestCopiedEndOffset = highestCopiedEndOffset;
+            shouldCleanup = true;
+        }
+        // The remote-readable end offset should never trail the copied watermark unless the
+        // manifest is empty (remoteLogEndOffset == -1). A non-empty manifest with a readable end
+        // behind the copied watermark means local segments could be cleaned up beyond the range
+        // that is actually readable from remote, which risks an unreadable offset gap.
+        if (this.remoteLogEndOffset != -1L
+                && this.remoteLogEndOffset < this.highestCopiedEndOffset) {
+            LOG.warn(
+                    "Remote readable end offset {} is behind copied watermark {} for bucket {}; "
+                            + "local cleanup will be bounded by the readable end offset.",
+                    this.remoteLogEndOffset,
+                    this.highestCopiedEndOffset,
+                    getTableBucket());
+        }
+        if (shouldCleanup) {
             deleteSegmentsAlreadyExistsInRemote();
         }
     }
@@ -789,8 +807,19 @@ public final class LogTablet {
         }
     }
 
+    /**
+     * Deletes eligible local segments that have already been copied to remote storage.
+     *
+     * <p>For a non-empty manifest, cleanup never advances past the remote-readable end offset. An
+     * empty manifest keeps using the copied watermark so retention can continue after all remote
+     * segments have expired.
+     */
     public void deleteSegmentsAlreadyExistsInRemote() {
-        cleanupSegments(highestCopiedEndOffset, this::cleanupTieredSegments);
+        long cleanupToOffset =
+                remoteLogEndOffset == -1L
+                        ? highestCopiedEndOffset
+                        : Math.min(remoteLogEndOffset, highestCopiedEndOffset);
+        cleanupSegments(cleanupToOffset, this::cleanupTieredSegments);
     }
 
     /**

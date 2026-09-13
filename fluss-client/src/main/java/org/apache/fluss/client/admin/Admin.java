@@ -325,6 +325,30 @@ public interface Admin extends AutoCloseable {
     CompletableFuture<List<PartitionInfo>> listPartitionInfos(TablePath tablePath);
 
     /**
+     * List partitions in the given table asynchronously, optionally including coordinator-managed
+     * system partitions.
+     *
+     * <p>System partitions are created and managed by the coordinator to support internal table
+     * functionality. For example, the {@code __historical__} partition is created when {@link
+     * ConfigOptions#TABLE_DATALAKE_HISTORICAL_PARTITION_ENABLED} is enabled. It provides a shared
+     * routing target for writes to expired partitions and, for primary-key tables, lookups of
+     * expired partition data in lake storage.
+     *
+     * <p>The following exceptions can be anticipated when calling {@code get()} on returned future.
+     *
+     * <ul>
+     *   <li>{@link TableNotExistException} if the table does not exist.
+     *   <li>{@link TableNotPartitionedException} if the table is not partitioned.
+     * </ul>
+     *
+     * @param tablePath The path of the table.
+     * @param includeSystemPartitions If true, also include system partitions such as {@code
+     *     __historical__}; otherwise, return only regular partitions.
+     */
+    CompletableFuture<List<PartitionInfo>> listPartitionInfos(
+            TablePath tablePath, boolean includeSystemPartitions);
+
+    /**
      * List all partitions in fluss cluster that are under the given table and the given partial
      * PartitionSpec asynchronously.
      *

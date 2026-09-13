@@ -52,6 +52,10 @@ public abstract class WriteBatch {
     private final WriteFormat writeFormat;
     private final int bucketId;
 
+    // The bucket count used to calculate this batch's bucketId; carried into the request so the
+    // TabletServer can validate it against the actual count (INVALID_BUCKET_ROUTING on mismatch).
+    private final int bucketCount;
+
     protected final List<WriteCallback> callbacks = new ArrayList<>();
     private final AtomicReference<FinalState> finalState = new AtomicReference<>(null);
     private final AtomicInteger attempts = new AtomicInteger(0);
@@ -70,6 +74,7 @@ public abstract class WriteBatch {
     public WriteBatch(
             long tableId,
             int bucketId,
+            int bucketCount,
             PhysicalTablePath physicalTablePath,
             int schemaId,
             WriteFormat writeFormat,
@@ -82,6 +87,7 @@ public abstract class WriteBatch {
         this.writeFormat = checkNotNull(writeFormat, "write format must be not null");
         this.isHistoricalPartition = isHistoricalPartition;
         this.bucketId = bucketId;
+        this.bucketCount = bucketCount;
         this.requestFuture = new RequestFuture();
         this.recordCount = 0;
     }
@@ -167,11 +173,20 @@ public abstract class WriteBatch {
 
     /** Abort the batch and complete the future and callbacks. */
     public void abort(Exception exception) {
-        if (!finalState.compareAndSet(null, FinalState.ABORTED)) {
+        if (!trySetAborted()) {
             throw new IllegalStateException(
                     "Batch has already been completed in final stata " + finalState.get());
         }
 
+        completeAbort(exception);
+    }
+
+    boolean trySetAborted() {
+        return finalState.compareAndSet(null, FinalState.ABORTED);
+    }
+
+    /** Complete the abort after the caller has atomically changed the final state. */
+    void completeAbort(Exception exception) {
         LOG.trace(
                 "Abort batch for table path {} with bucket_id {}",
                 physicalTablePath,
@@ -194,6 +209,10 @@ public abstract class WriteBatch {
 
     public int bucketId() {
         return bucketId;
+    }
+
+    public int getBucketCount() {
+        return bucketCount;
     }
 
     public long tableId() {

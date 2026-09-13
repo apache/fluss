@@ -370,7 +370,8 @@ class AutoPartitionManagerTest {
                     remoteDataDir,
                     partitionAssignment,
                     fromPartitionName(table.getPartitionKeys(), partitionName),
-                    false);
+                    false,
+                    table.getNumBuckets());
             // mock the partition is created in zk.
             autoPartitionManager.addPartition(tableId, partitionName);
         }
@@ -454,7 +455,8 @@ class AutoPartitionManagerTest {
                 remoteDataDir,
                 partitionAssignment,
                 fromPartitionName(table.getPartitionKeys(), "2024-09-15"),
-                false);
+                false,
+                table.getNumBuckets());
         autoPartitionManager.addPartition(table.getTableId(), "2024-09-15");
 
         metadataManager.dropPartition(
@@ -551,7 +553,8 @@ class AutoPartitionManagerTest {
                     remoteDataDir,
                     partitionAssignment,
                     fromPartitionName(table.getPartitionKeys(), i + ""),
-                    false);
+                    false,
+                    table.getNumBuckets());
             // mock the partition is created in zk.
             autoPartitionManager.addPartition(tableId, i + "");
         }
@@ -734,6 +737,69 @@ class AutoPartitionManagerTest {
         assertThat(partitionsNum).isEqualTo(5);
     }
 
+    /**
+     * Verifies that the cached {@link TableInfo} update is the eventual-consistency boundary for
+     * auto-created partition bucket counts: partitions created before the refresh keep the old
+     * count, while later partitions use the new count.
+     */
+    @Test
+    void testAutoCreatedPartitionUsesCachedBucketCount() throws Exception {
+        ZonedDateTime startTime =
+                LocalDateTime.parse("2024-09-10T00:00:00").atZone(ZoneId.systemDefault());
+        long startMs = startTime.toInstant().toEpochMilli();
+        ManualClock clock = new ManualClock(startMs);
+        ManuallyTriggeredScheduledExecutorService periodicExecutor =
+                new ManuallyTriggeredScheduledExecutorService();
+
+        AutoPartitionManager autoPartitionManager =
+                new AutoPartitionManager(
+                        new TestingServerMetadataCache(3),
+                        metadataManager,
+                        remoteDirDynamicLoader,
+                        new Configuration(),
+                        disabledCapacityController(),
+                        clock,
+                        periodicExecutor);
+        autoPartitionManager.start();
+
+        // DAY-partitioned table with 4 buckets per partition, never auto-drop, pre-create 4
+        TableInfo table = createPartitionedTableWithBuckets(-1, 4, AutoPartitionTimeUnit.DAY, 4);
+        TablePath tablePath = table.getTablePath();
+        autoPartitionManager.addAutoPartitionTable(table, true);
+        periodicExecutor.triggerNonPeriodicScheduledTask();
+
+        Map<String, PartitionRegistration> partitions =
+                zookeeperClient.getPartitionRegistrations(tablePath);
+        assertThat(partitions.keySet())
+                .containsExactlyInAnyOrder("20240910", "20240911", "20240912", "20240913");
+        // all pre-created partitions carry the original bucket count 4
+        for (PartitionRegistration reg : partitions.values()) {
+            assertThat(reg.getBucketCount()).isEqualTo(4);
+        }
+
+        // Simulate the first half of ALTER bucket.num 4 -> 8: ZK is updated, but the coordinator
+        // event has not refreshed AutoPartitionManager's cached TableInfo yet.
+        TableRegistration reg = zookeeperClient.getTable(tablePath).get();
+        zookeeperClient.updateTable(tablePath, reg.newBucketCount(8));
+        clock.advanceTime(Duration.ofDays(1).plusHours(23));
+        periodicExecutor.triggerPeriodicScheduledTasks();
+
+        partitions = zookeeperClient.getPartitionRegistrations(tablePath);
+        assertThat(partitions.get("20240914").getBucketCount()).isEqualTo(4);
+
+        // Complete event propagation and create the next partition from the refreshed cache.
+        TableInfo updatedTable = createUpdatedBucketCountTableInfo(table, 8);
+        autoPartitionManager.updateAutoPartitionTables(updatedTable);
+        periodicExecutor.triggerNonPeriodicScheduledTask();
+        clock.advanceTime(Duration.ofDays(1));
+        periodicExecutor.triggerPeriodicScheduledTasks();
+
+        partitions = zookeeperClient.getPartitionRegistrations(tablePath);
+        assertThat(partitions.get("20240910").getBucketCount()).isEqualTo(4);
+        assertThat(partitions.get("20240914").getBucketCount()).isEqualTo(4);
+        assertThat(partitions.get("20240915").getBucketCount()).isEqualTo(8);
+    }
+
     @Test
     void testAutoCreatePartitionChecksCapacityWithoutReservation() throws Exception {
         ZonedDateTime startTime =
@@ -795,14 +861,16 @@ class AutoPartitionManagerTest {
                 remoteDataDir,
                 partitionAssignment,
                 fromPartitionName(table.getPartitionKeys(), "2025042600"),
-                false);
+                false,
+                table.getNumBuckets());
         metadataManager.createPartition(
                 tablePath,
                 table.getTableId(),
                 remoteDataDir,
                 partitionAssignment,
                 fromPartitionName(table.getPartitionKeys(), "2025042601"),
-                false);
+                false,
+                table.getNumBuckets());
         autoPartitionManager.addPartition(table.getTableId(), "2025042600");
         autoPartitionManager.addPartition(table.getTableId(), "2025042601");
         capacityController.updateObservedKvLeaderReplicaCount((long) table.getNumBuckets() * 2);
@@ -1218,7 +1286,8 @@ class AutoPartitionManagerTest {
                 remoteDataDir,
                 partitionAssignment,
                 fromPartitionName(tableInfo.getPartitionKeys(), partitionName),
-                false);
+                false,
+                bucketAssignments.size());
         autoPartitionManager.addPartition(tableInfo.getTableId(), partitionName);
     }
 
@@ -1418,6 +1487,24 @@ class AutoPartitionManagerTest {
                 ConfigOptions.TABLE_DATALAKE_HISTORICAL_PARTITION_ENABLED,
                 historicalPartitionEnabled);
         return createUpdatedTableInfo(original, newProperties);
+    }
+
+    /** Creates a new TableInfo with an updated table-level bucket count, reusing the original. */
+    private TableInfo createUpdatedBucketCountTableInfo(TableInfo original, int newNumBuckets) {
+        return new TableInfo(
+                original.getTablePath(),
+                original.getTableId(),
+                original.getSchemaId(),
+                original.getSchema(),
+                original.getBucketKeys(),
+                original.getPartitionKeys(),
+                newNumBuckets,
+                original.getProperties(),
+                original.getCustomProperties(),
+                original.getRemoteDataDir(),
+                original.getComment().orElse(null),
+                original.getCreatedTime(),
+                System.currentTimeMillis());
     }
 
     private TableInfo createUpdatedTableInfo(TableInfo original, Configuration newProperties) {

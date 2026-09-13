@@ -22,10 +22,12 @@ import org.apache.fluss.metrics.Counter;
 import org.apache.fluss.metrics.Gauge;
 import org.apache.fluss.metrics.Histogram;
 import org.apache.fluss.metrics.Meter;
+import org.apache.fluss.metrics.Metric;
 import org.apache.fluss.metrics.SimpleCounter;
 import org.apache.fluss.metrics.groups.MetricGroup;
 
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
 import java.util.function.BiFunction;
@@ -37,6 +39,7 @@ public class TestMetricGroup implements MetricGroup {
     private final Map<String, String> variables;
     private final BiFunction<String, Optional<CharacterFilter>, String> metricIdentifierFunction;
     private final BiFunction<CharacterFilter, Optional<Character>, String> logicalScopeFunction;
+    private final Map<String, Metric> metrics = new HashMap<>();
 
     public TestMetricGroup(
             String[] scopeComponents,
@@ -49,32 +52,48 @@ public class TestMetricGroup implements MetricGroup {
         this.logicalScopeFunction = logicalScopeFunction;
     }
 
+    /** Creates a default {@link TestMetricGroup} suitable for unit tests. */
+    public static TestMetricGroup createTestMetricGroup() {
+        return newBuilder().build();
+    }
+
     public static TestMetricGroupBuilder newBuilder() {
         return new TestMetricGroupBuilder();
     }
 
+    /** Returns a metric previously registered under the given name. */
+    public Metric getMetric(String name) {
+        return metrics.get(name);
+    }
+
     @Override
     public Counter counter(String name) {
-        return new SimpleCounter();
+        SimpleCounter counter = new SimpleCounter();
+        metrics.put(name, counter);
+        return counter;
     }
 
     @Override
     public <C extends Counter> C counter(String name, C counter) {
+        metrics.put(name, counter);
         return counter;
     }
 
     @Override
     public <T, G extends Gauge<T>> G gauge(String name, G gauge) {
+        metrics.put(name, gauge);
         return gauge;
     }
 
     @Override
     public <H extends Histogram> H histogram(String name, H histogram) {
+        metrics.put(name, histogram);
         return histogram;
     }
 
     @Override
     public <M extends Meter> M meter(String name, M meter) {
+        metrics.put(name, meter);
         return meter;
     }
 

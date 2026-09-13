@@ -361,10 +361,16 @@ class HistoricalLakeLookupManager implements AutoCloseable {
             LakeTableLookuper.LookupMetricRecorder lookupMetricRecorder) {
         TableBucket tableBucket = lookupData.tableBucket();
         TablePath tablePath = tableInfo.getLakeTablePath();
+
+        // The request's bucket id only routes the request. It matches the lake layout only while
+        // the table was never rescaled; otherwise the lake lookuper resolves the bucket itself.
+        Integer lakeBucketId =
+                tableInfo.getBucketCountEpoch() == 0 ? tableBucket.getBucket() : null;
+
         LakeTableLookuper.LookupContext lookupContext =
                 new LakeTableLookuper.LookupContext(
                         originalPartitionSpec,
-                        tableBucket.getBucket(),
+                        lakeBucketId,
                         (short) schemaInfo.getSchemaId(),
                         schemaInfo.getSchema().getRowType(),
                         lookupMetricRecorder);

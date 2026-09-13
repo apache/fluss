@@ -68,6 +68,7 @@ import javax.annotation.Nullable;
 
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
@@ -85,6 +86,12 @@ import static org.apache.fluss.server.utils.TableDescriptorValidation.validateAl
 public class MetadataManager {
 
     private static final Logger LOG = LoggerFactory.getLogger(MetadataManager.class);
+
+    /**
+     * Max internal retries for the side-effect-free ALTER read-modify-write when a CAS/epoch
+     * conflict (BadVersionException) indicates a concurrent metadata change.
+     */
+    private static final int MAX_ALTER_TABLE_RETRIES = 3;
 
     private final ZooKeeperClient zookeeperClient;
     private final int maxPartitionNum;
@@ -508,6 +515,102 @@ public class MetadataManager {
         }
     }
 
+    private void propagateBucketCountToLake(
+            TablePath tablePath,
+            TableInfo tableInfo,
+            int newBucketCount,
+            FlussPrincipal flussPrincipal) {
+        if (!tableInfo.getTableConfig().isDataLakeEnabled()) {
+            return;
+        }
+        // Paimon only tracks a bucket count for Fixed Bucket tables (bucket-key non-empty).
+        if (tableInfo.getBucketKeys().isEmpty()) {
+            return;
+        }
+        LakeCatalog lakeCatalog =
+                lakeCatalogDynamicLoader.getLakeCatalogContainer().getLakeCatalog();
+        if (lakeCatalog == null) {
+            throw new FlussRuntimeException(
+                    "Cannot propagate ALTER bucket.num to the lake side for table "
+                            + tablePath
+                            + " because the Fluss cluster does not have a lake catalog configured.");
+        }
+        TableDescriptor currentDescriptor = tableInfo.toTableDescriptor();
+        List<TableChange> bucketCountChange =
+                Collections.singletonList(TableChange.modifyBucketCount(newBucketCount));
+        LakeCatalog.Context lakeCatalogContext =
+                new CoordinatorService.DefaultLakeCatalogContext(
+                        false,
+                        tableInfo.getLakeTablePath(),
+                        flussPrincipal,
+                        currentDescriptor,
+                        currentDescriptor);
+        // Lake First: this runs BEFORE the Fluss ZK commit, so a lake failure aborts the ALTER
+        // with the Fluss side unchanged.
+        try {
+            lakeCatalog.alterTable(
+                    tableInfo.getLakeTablePath(), bucketCountChange, lakeCatalogContext);
+        } catch (TableNotExistException e) {
+            throw new FlussRuntimeException(
+                    "Lake table doesn't exist for lake-enabled table "
+                            + tablePath
+                            + ", which shouldn't happen. Please check if the lake table was deleted manually.",
+                    e);
+        } catch (Exception e) {
+            throw new FlussRuntimeException(
+                    String.format(
+                            "ALTER bucket.num for table %s was aborted: propagating the new "
+                                    + "bucket count (%d) to the lake schema failed. The Fluss "
+                                    + "side was NOT changed. Re-run the same ALTER once the "
+                                    + "lake is reachable.",
+                            tablePath, newBucketCount),
+                    e);
+        }
+    }
+
+    /**
+     * Validates an ALTER bucket.num request: only partitioned tables are supported and the new
+     * value must fall within [1, maxBucketNum]. Runs before the lake-side propagation so an invalid
+     * ALTER never mutates lake metadata.
+     */
+    private void validateBucketNumRescale(
+            TablePath tablePath, TableInfo tableInfo, int newBucketNum) {
+        // Non-partitioned tables require creating new bucket assignments and initializing
+        // LogTablets on TabletServers, which is not yet implemented.
+        if (tableInfo.getPartitionKeys().isEmpty()) {
+            throw new InvalidAlterTableException(
+                    String.format(
+                            "Cannot alter 'bucket.num' on non-partitioned table %s. "
+                                    + "Non-partitioned table rescale is not yet supported.",
+                            tablePath));
+        }
+        // A rescaled table routes late writes of retired partitions through the historical
+        // partition, whose own fixed layout can diverge from post-rescale partitions; supporting
+        // the combination is left to future work.
+        if (tableInfo.getTableConfig().isHistoricalPartitionEnabled()) {
+            throw new InvalidAlterTableException(
+                    String.format(
+                            "Cannot alter 'bucket.num' on table %s with historical partition "
+                                    + "enabled. Altering 'bucket.num' on such tables is not "
+                                    + "supported yet.",
+                            tablePath));
+        }
+        if (newBucketNum < 1) {
+            throw new InvalidAlterTableException(
+                    String.format(
+                            "Cannot alter 'bucket.num' to %d on table %s. "
+                                    + "The bucket count must be at least 1.",
+                            newBucketNum, tablePath));
+        }
+        if (newBucketNum > maxBucketNum) {
+            throw new TooManyBucketsException(
+                    String.format(
+                            "Cannot alter 'bucket.num' to %d on table %s, "
+                                    + "exceeding the maximum of %d buckets per partition.",
+                            newBucketNum, tablePath, maxBucketNum));
+        }
+    }
+
     /** Alters table properties and invokes the callbacks around the metadata update. */
     public void alterTableProperties(
             TablePath tablePath,
@@ -516,74 +619,297 @@ public class MetadataManager {
             boolean ignoreIfNotExists,
             FlussPrincipal flussPrincipal,
             BiConsumer<TableInfo, TableDescriptor> beforeUpdate,
-            BiConsumer<TableInfo, TableDescriptor> afterUpdate) {
-        try {
-            // it throws TableNotExistException if the table or database not exists
-            TableRegistration tableReg = getTableRegistration(tablePath);
-            SchemaInfo schemaInfo = getLatestSchema(tablePath);
-            // we can't use MetadataManager#getTable here, because it will add the default
-            // lake options to the table properties, which may cause the validation failure
-            TableInfo tableInfo = tableReg.toTableInfo(tablePath, schemaInfo);
-
-            // validate the changes
-            validateAlterTableProperties(tableInfo, tablePropertyChanges.tableKeysToChange());
-
-            TableDescriptor tableDescriptor = tableInfo.toTableDescriptor();
-            TableDescriptor newDescriptor =
-                    getUpdatedTableDescriptor(tableDescriptor, tablePropertyChanges);
-
-            if (newDescriptor != null) {
-                // is to enable datalake for the table
-                if (isDataLakeEnabled(newDescriptor) && !isDataLakeEnabled(tableDescriptor)) {
-                    // The table was created before cluster-level datalake was enabled.
-                    // Backfill `table.datalake.format` before enabling datalake on the table
-                    // so the updated table metadata stays consistent with the cluster setting.
-                    if (!tableInfo.getTableConfig().getDataLakeFormat().isPresent()) {
-                        DataLakeFormat dataLakeFormat =
-                                lakeCatalogDynamicLoader
-                                        .getLakeCatalogContainer()
-                                        .getDataLakeFormat();
-                        if (dataLakeFormat == null) {
-                            throw new InvalidAlterTableException(
-                                    "Cannot alter table "
-                                            + tablePath
-                                            + " in data lake, because the Fluss cluster doesn't enable datalake tables.");
-                        }
-                        newDescriptor = newDescriptor.withDataLakeFormat(dataLakeFormat);
-                    }
-                }
-
-                // reuse the same validate logic with the createTable() method
-                validateTableDescriptor(newDescriptor);
-
-                beforeUpdate.accept(tableInfo, newDescriptor);
-
-                // pre alter table properties, e.g. create lake table in lake storage if it's to
-                // enable datalake for the table
-                preAlterTableProperties(
-                        tablePath, tableDescriptor, newDescriptor, tableChanges, flussPrincipal);
-                // update the table to zk
-                TableRegistration updatedTableRegistration =
-                        tableReg.newProperties(
-                                newDescriptor.getProperties(), newDescriptor.getCustomProperties());
-                zookeeperClient.updateTable(tablePath, updatedTableRegistration);
-                afterUpdate.accept(tableInfo, newDescriptor);
-            } else {
-                LOG.info(
-                        "No properties changed when alter table {}, skip update table.", tablePath);
-            }
-        } catch (Exception e) {
-            if (e instanceof TableNotExistException) {
+            BiConsumer<TableInfo, TableDescriptor> afterUpdate,
+            int coordinatorZkVersion) {
+        int attempt = 0;
+        while (true) {
+            try {
+                doAlterTablePropertiesOnce(
+                        tablePath,
+                        tableChanges,
+                        tablePropertyChanges,
+                        flussPrincipal,
+                        beforeUpdate,
+                        afterUpdate,
+                        coordinatorZkVersion);
+                return;
+            } catch (TableNotExistException e) {
                 if (ignoreIfNotExists) {
                     return;
                 }
-                throw (TableNotExistException) e;
-            } else if (e instanceof RuntimeException) {
-                throw (RuntimeException) e;
-            } else {
+                throw e;
+            } catch (KeeperException.NoNodeException e) {
+                if (!isTablePresent(tablePath)) {
+                    if (ignoreIfNotExists) {
+                        return;
+                    }
+                    throw new TableNotExistException("Table " + tablePath + " does not exist.", e);
+                }
+                retryAlterOrThrow(tablePath, ++attempt, e);
+            } catch (KeeperException.BadVersionException e) {
+                retryAlterOrThrow(tablePath, ++attempt, e);
+            } catch (RuntimeException e) {
+                throw e;
+            } catch (Exception e) {
                 throw new FlussRuntimeException(
                         "Failed to alter table properties: " + tablePath, e);
             }
+        }
+    }
+
+    /** Alters the default bucket count for newly created partitions. */
+    public void alterBucketCount(
+            TablePath tablePath,
+            int newBucketCount,
+            boolean ignoreIfNotExists,
+            FlussPrincipal flussPrincipal,
+            int coordinatorZkVersion) {
+        int attempt = 0;
+        while (true) {
+            try {
+                ZooKeeperClient.VersionedData<TableRegistration> versionedTableReg =
+                        getTableRegistrationWithVersion(tablePath);
+                TableRegistration tableReg = versionedTableReg.data();
+                Map<String, String> defaultTableLakeOptions =
+                        lakeCatalogDynamicLoader
+                                .getLakeCatalogContainer()
+                                .getDefaultTableLakeOptions();
+                Map<String, String> tableLakeOptions =
+                        defaultTableLakeOptions == null
+                                ? null
+                                : new HashMap<>(defaultTableLakeOptions);
+                removeSensitiveTableOptions(tableLakeOptions);
+                TableInfo tableInfo =
+                        tableReg.toTableInfo(
+                                tablePath, getLatestSchema(tablePath), tableLakeOptions);
+                validateBucketNumRescale(tablePath, tableInfo, newBucketCount);
+                if (newBucketCount == tableInfo.getNumBuckets()) {
+                    return;
+                }
+
+                // Lake First: a lake failure aborts the ALTER with Fluss unchanged. The
+                // propagation is idempotent, so it re-runs after each metadata conflict.
+                propagateBucketCountToLake(tablePath, tableInfo, newBucketCount, flussPrincipal);
+
+                // TODO: bucket-layout ALTERs should be rejected during a rolling server upgrade.
+                Map<String, ZooKeeperClient.VersionedData<PartitionRegistration>> backfills =
+                        computePartitionBucketCountBackfill(
+                                tablePath,
+                                tableInfo.getNumBuckets(),
+                                tableInfo.getBucketCountEpoch());
+                zookeeperClient.updateTableWithPartitionBucketCountBackfill(
+                        tablePath,
+                        tableReg.newBucketCount(newBucketCount),
+                        versionedTableReg.zkVersion(),
+                        backfills,
+                        coordinatorZkVersion);
+                return;
+            } catch (TableNotExistException e) {
+                if (ignoreIfNotExists) {
+                    return;
+                }
+                throw e;
+            } catch (KeeperException.NoNodeException e) {
+                if (!isTablePresent(tablePath)) {
+                    if (ignoreIfNotExists) {
+                        return;
+                    }
+                    throw new TableNotExistException("Table " + tablePath + " does not exist.", e);
+                }
+                retryAlterOrThrow(tablePath, ++attempt, e);
+            } catch (KeeperException.BadVersionException e) {
+                retryAlterOrThrow(tablePath, ++attempt, e);
+            } catch (RuntimeException e) {
+                throw e;
+            } catch (Exception e) {
+                throw new FlussRuntimeException(
+                        "Failed to alter bucket count for table: " + tablePath, e);
+            }
+        }
+    }
+
+    private void retryAlterOrThrow(TablePath tablePath, int attempt, Exception cause) {
+        if (attempt >= MAX_ALTER_TABLE_RETRIES) {
+            throw new FlussRuntimeException(
+                    String.format(
+                            "Failed to alter table properties for %s after %d retries "
+                                    + "due to concurrent metadata changes; please retry.",
+                            tablePath, attempt),
+                    cause);
+        }
+        LOG.info(
+                "Retrying ALTER on table {} due to a concurrent metadata change (attempt {}).",
+                tablePath,
+                attempt);
+    }
+
+    /** Returns whether the table registration node still exists in ZooKeeper. */
+    private boolean isTablePresent(TablePath tablePath) {
+        try {
+            return zookeeperClient.tableExist(tablePath);
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    /**
+     * One attempt of the property ALTER read-modify-write. The ZK write is CAS-guarded by the table
+     * version read here plus the coordinator epoch version. Since {@link #preAlterTableProperties}
+     * may apply external lake side effects, a version conflict is surfaced instead of being retried
+     * automatically.
+     */
+    private void doAlterTablePropertiesOnce(
+            TablePath tablePath,
+            List<TableChange> tableChanges,
+            TablePropertyChanges tablePropertyChanges,
+            FlussPrincipal flussPrincipal,
+            BiConsumer<TableInfo, TableDescriptor> beforeUpdate,
+            BiConsumer<TableInfo, TableDescriptor> afterUpdate,
+            int coordinatorZkVersion)
+            throws Exception {
+        // it throws TableNotExistException if the table or database not exists
+        ZooKeeperClient.VersionedData<TableRegistration> versionedTableReg =
+                getTableRegistrationWithVersion(tablePath);
+        TableRegistration tableReg = versionedTableReg.data();
+        int tableZkVersion = versionedTableReg.zkVersion();
+        SchemaInfo schemaInfo = getLatestSchema(tablePath);
+        // we can't use MetadataManager#getTable here, because it will add the default
+        // lake options to the table properties, which may cause the validation failure
+        TableInfo tableInfo = tableReg.toTableInfo(tablePath, schemaInfo);
+
+        // validate the changes
+        validateAlterTableProperties(tableInfo, tablePropertyChanges.tableKeysToChange());
+
+        TableDescriptor tableDescriptor = tableInfo.toTableDescriptor();
+        TableDescriptor newDescriptor =
+                getUpdatedTableDescriptor(tableDescriptor, tablePropertyChanges);
+
+        if (newDescriptor != null) {
+            // is to enable datalake for the table
+            if (isDataLakeEnabled(newDescriptor) && !isDataLakeEnabled(tableDescriptor)) {
+                // The table was created before cluster-level datalake was enabled.
+                // Backfill `table.datalake.format` before enabling datalake on the table
+                // so the updated table metadata stays consistent with the cluster setting.
+                if (!tableInfo.getTableConfig().getDataLakeFormat().isPresent()) {
+                    DataLakeFormat dataLakeFormat =
+                            lakeCatalogDynamicLoader.getLakeCatalogContainer().getDataLakeFormat();
+                    if (dataLakeFormat == null) {
+                        throw new InvalidAlterTableException(
+                                "Cannot alter table "
+                                        + tablePath
+                                        + " in data lake, because the Fluss cluster doesn't enable datalake tables.");
+                    }
+                    newDescriptor = newDescriptor.withDataLakeFormat(dataLakeFormat);
+                }
+            }
+
+            // Enabling the historical partition on a rescaled table is unsupported: the
+            // historical partition would be created with the new table-level count while retired
+            // lake data still uses the pre-rescale layout. bucketCountEpoch never decreases, so
+            // this also rejects a table that was rescaled while the feature was temporarily
+            // disabled. Checked before validateTableDescriptor so the rescale rejection is not
+            // masked by unrelated option-dependency errors.
+            if (!tableInfo.getTableConfig().isHistoricalPartitionEnabled()
+                    && Configuration.fromMap(newDescriptor.getProperties())
+                            .get(ConfigOptions.TABLE_DATALAKE_HISTORICAL_PARTITION_ENABLED)
+                    && tableInfo.getBucketCountEpoch() > 0) {
+                throw new InvalidAlterTableException(
+                        String.format(
+                                "Cannot enable historical partition on table %s after "
+                                        + "'bucket.num' has been altered. Enabling it on a "
+                                        + "rescaled table is not supported yet.",
+                                tablePath));
+            }
+
+            // reuse the same validate logic with the createTable() method
+            validateTableDescriptor(newDescriptor);
+
+            beforeUpdate.accept(tableInfo, newDescriptor);
+
+            // pre alter table properties, e.g. create lake table in lake storage if it's to
+            // enable datalake for the table. NOTE: this may have external (lake catalog) side
+            // effects and is therefore NOT safe to auto-retry.
+            preAlterTableProperties(
+                    tablePath, tableDescriptor, newDescriptor, tableChanges, flussPrincipal);
+
+            TableRegistration updatedTableRegistration =
+                    tableReg.newProperties(
+                            newDescriptor.getProperties(), newDescriptor.getCustomProperties());
+            try {
+                zookeeperClient.updateTableWithPartitionBucketCountBackfill(
+                        tablePath,
+                        updatedTableRegistration,
+                        tableZkVersion,
+                        Collections.emptyMap(),
+                        coordinatorZkVersion);
+            } catch (KeeperException.BadVersionException e) {
+                throw new FlussRuntimeException(
+                        String.format(
+                                "Concurrent metadata change while altering table %s; the change was "
+                                        + "not committed, please retry the ALTER.",
+                                tablePath),
+                        e);
+            }
+            afterUpdate.accept(tableInfo, newDescriptor);
+        } else {
+            LOG.info("No properties changed when alter table {}, skip update table.", tablePath);
+        }
+    }
+
+    /**
+     * Computes the bucket-count backfill for existing legacy partitions that do not persist their
+     * own count. Before the first bucket rescale, every partition has the same layout as the table,
+     * so the pre-ALTER table count is authoritative and no per-partition assignment lookup is
+     * needed. Nothing is written here: the caller commits the returned registrations together with
+     * the table-level bucket.num update in a single ZK transaction, CAS-guarded by the versions
+     * captured here.
+     *
+     * <p>Idempotent: partitions that already have a persisted bucket count are skipped. A missing
+     * count after the epoch has advanced indicates inconsistent metadata and cannot be inferred
+     * from the current table-level count.
+     */
+    private Map<String, ZooKeeperClient.VersionedData<PartitionRegistration>>
+            computePartitionBucketCountBackfill(
+                    TablePath tablePath, int oldBucketCount, long bucketCountEpoch) {
+        try {
+            Map<String, ZooKeeperClient.VersionedData<PartitionRegistration>> backfills =
+                    new HashMap<>();
+            Map<String, ZooKeeperClient.VersionedData<PartitionRegistration>> registrations =
+                    zookeeperClient.getPartitionRegistrationsWithVersion(tablePath);
+            for (Map.Entry<String, ZooKeeperClient.VersionedData<PartitionRegistration>> entry :
+                    registrations.entrySet()) {
+                String partitionName = entry.getKey();
+                ZooKeeperClient.VersionedData<PartitionRegistration> versionedRegistration =
+                        entry.getValue();
+                PartitionRegistration reg = versionedRegistration.data();
+                if (reg.getBucketCount() != null) {
+                    // Already has bucket count persisted, skip. Idempotent so retries are safe.
+                    continue;
+                }
+                if (bucketCountEpoch > 0) {
+                    throw new InvalidAlterTableException(
+                            String.format(
+                                    "Cannot alter 'bucket.num' on table %s: partition '%s' has no "
+                                            + "persisted bucket count after bucket count epoch %d.",
+                                    tablePath, partitionName, bucketCountEpoch));
+                }
+                PartitionRegistration updatedReg =
+                        new PartitionRegistration(
+                                reg.getTableId(),
+                                reg.getPartitionId(),
+                                reg.getRemoteDataDir(),
+                                oldBucketCount);
+                backfills.put(
+                        partitionName,
+                        new ZooKeeperClient.VersionedData<>(
+                                updatedReg, versionedRegistration.zkVersion()));
+            }
+            return backfills;
+        } catch (RuntimeException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new FlussRuntimeException(
+                    "Failed to compute partition bucket count backfill for table: " + tablePath, e);
         }
     }
 
@@ -792,6 +1118,24 @@ public class MetadataManager {
         return optionalTable.get();
     }
 
+    /**
+     * Reads the table registration together with the ZK version of its znode, for a subsequent
+     * compare-and-set write. Throws {@link TableNotExistException} when the table does not exist.
+     */
+    private ZooKeeperClient.VersionedData<TableRegistration> getTableRegistrationWithVersion(
+            TablePath tablePath) {
+        Optional<ZooKeeperClient.VersionedData<TableRegistration>> optionalTable;
+        try {
+            optionalTable = zookeeperClient.getTableWithVersion(tablePath);
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+        if (!optionalTable.isPresent()) {
+            throw new TableNotExistException("Table '" + tablePath + "' does not exist.");
+        }
+        return optionalTable.get();
+    }
+
     public SchemaInfo getLatestSchema(TablePath tablePath) throws SchemaNotExistException {
         final int currentSchemaId;
         try {
@@ -842,13 +1186,18 @@ public class MetadataManager {
                 "Fail to get partitions from zookeeper for table " + tablePath);
     }
 
+    /**
+     * Creates a partition. The {@code bucketCount} is the table-level count the partition is
+     * created under; it becomes the partition's own persisted bucket count from here on.
+     */
     public void createPartition(
             TablePath tablePath,
             long tableId,
             String remoteDataDir,
             PartitionAssignment partitionAssignment,
             ResolvedPartitionSpec partition,
-            boolean ignoreIfExists) {
+            boolean ignoreIfExists,
+            int bucketCount) {
         String partitionName = partition.getPartitionName();
         Optional<PartitionRegistration> optionalPartitionRegistration =
                 getOptionalPartitionRegistration(tablePath, partitionName);
@@ -880,12 +1229,15 @@ public class MetadataManager {
                     e);
         }
 
-        int bucketCount = partitionAssignment.getBucketAssignments().size();
-        if (bucketCount > maxBucketNum) {
+        int assignmentBucketCount = partitionAssignment.getBucketAssignments().size();
+        if (assignmentBucketCount > maxBucketNum) {
             throw new TooManyBucketsException(
                     String.format(
                             "Partition '%s' has %d buckets for table %s, exceeding the maximum of %d buckets per partition.",
-                            partition.getPartitionName(), bucketCount, tablePath, maxBucketNum));
+                            partition.getPartitionName(),
+                            assignmentBucketCount,
+                            tablePath,
+                            maxBucketNum));
         }
 
         try {
@@ -897,7 +1249,8 @@ public class MetadataManager {
                     partitionAssignment,
                     remoteDataDir,
                     tablePath,
-                    tableId);
+                    tableId,
+                    bucketCount);
             LOG.info(
                     "Register partition {} to zookeeper for table [{}].", partitionName, tablePath);
         } catch (KeeperException.NodeExistsException nodeExistsException) {

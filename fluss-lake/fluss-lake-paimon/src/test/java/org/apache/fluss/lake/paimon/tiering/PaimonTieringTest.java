@@ -75,9 +75,11 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.stream.Stream;
 
 import static org.apache.fluss.lake.committer.LakeCommitter.FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY;
@@ -476,6 +478,125 @@ class PaimonTieringTest {
                     getPaimonRowsThreePartition(tablePath, partition);
             verifyLogTableRecordsThreePartition(actualRecords, expectRecords, bucket);
         }
+    }
+
+    @Test
+    void testTieringStampsPartitionBucketCountAcrossRounds() throws Exception {
+        // After ALTER bucket.num=8: files tiered for the "old" partition are stamped with its
+        // actual count 4 (writer override) while the "new" partition inherits the schema value 8;
+        // a second tiering round passes Paimon's native bucket-count check (historical 4 ==
+        // writer 4), and all rows of both partitions stay readable via bucket-aware reads.
+        int schemaBucketCount = 8;
+        int oldPartitionBucketCount = 4;
+        int recordsPerBucketPerRound = 2;
+        TablePath tablePath = TablePath.of("paimon", "test_partition_bucket_count_stamp");
+        createTable(
+                tablePath,
+                false,
+                true,
+                schemaBucketCount,
+                Collections.singletonMap(CoreOptions.BUCKET_KEY.key(), "c1"));
+
+        TableDescriptor descriptor =
+                TableDescriptor.builder()
+                        .schema(
+                                org.apache.fluss.metadata.Schema.newBuilder()
+                                        .column("c1", org.apache.fluss.types.DataTypes.INT())
+                                        .column("c2", org.apache.fluss.types.DataTypes.STRING())
+                                        .column("c3", org.apache.fluss.types.DataTypes.STRING())
+                                        .build())
+                        .partitionedBy("c3")
+                        .distributedBy(schemaBucketCount, "c1")
+                        .property(ConfigOptions.TABLE_DATALAKE_ENABLED, true)
+                        .build();
+        TableInfo tableInfo =
+                TableInfo.of(tablePath, 0, 1, descriptor, DEFAULT_REMOTE_DATA_DIR, 1L, 1L);
+
+        // two independent tiering rounds against the SAME partitions; each round creates fresh
+        // writers and its own committer, exactly as TieringCommitOperator does
+        for (int round = 0; round < 2; round++) {
+            List<PaimonWriteResult> paimonWriteResults = new ArrayList<>();
+            // "old" partition: created before the ALTER, still routes by its original bucket count
+            for (int bucket = 0; bucket < oldPartitionBucketCount; bucket++) {
+                try (LakeWriter<PaimonWriteResult> lakeWriter =
+                        createLakeWriter(
+                                tablePath, bucket, "old", 1L, tableInfo, oldPartitionBucketCount)) {
+                    for (LogRecord logRecord :
+                            genLogTableRecords("old", bucket, recordsPerBucketPerRound).f0) {
+                        lakeWriter.write(logRecord);
+                    }
+                    paimonWriteResults.add(lakeWriter.complete());
+                }
+            }
+            // "new" partition: created after the ALTER, routes by the schema bucket count
+            for (int bucket = 0; bucket < schemaBucketCount; bucket++) {
+                try (LakeWriter<PaimonWriteResult> lakeWriter =
+                        createLakeWriter(tablePath, bucket, "new", 2L, tableInfo, null)) {
+                    for (LogRecord logRecord :
+                            genLogTableRecords("new", bucket, recordsPerBucketPerRound).f0) {
+                        lakeWriter.write(logRecord);
+                    }
+                    paimonWriteResults.add(lakeWriter.complete());
+                }
+            }
+            try (LakeCommitter<PaimonWriteResult, PaimonCommittable> lakeCommitter =
+                    createLakeCommitter(tablePath, tableInfo, new Configuration())) {
+                PaimonCommittable committable = lakeCommitter.toCommittable(paimonWriteResults);
+                lakeCommitter.commit(committable, Collections.emptyMap());
+            }
+        }
+
+        // files of BOTH rounds carry each partition's actual bucket count
+        assertThat(totalBucketsOfPartition(tablePath, "old"))
+                .containsExactly(oldPartitionBucketCount);
+        assertThat(totalBucketsOfPartition(tablePath, "new")).containsExactly(schemaBucketCount);
+
+        // both partitions must stay fully readable through the bucket-aware read path, each
+        // holding exactly its own (rounds * records * bucketCount) rows
+        assertThat(rowCountOfPartition(tablePath, "old"))
+                .isEqualTo(2 * recordsPerBucketPerRound * oldPartitionBucketCount);
+        assertThat(rowCountOfPartition(tablePath, "new"))
+                .isEqualTo(2 * recordsPerBucketPerRound * schemaBucketCount);
+    }
+
+    private int rowCountOfPartition(TablePath tablePath, String partition) throws Exception {
+        FileStoreTable fileStoreTable =
+                (FileStoreTable) paimonCatalog.getTable(toPaimon(tablePath));
+        ReadBuilder readBuilder =
+                fileStoreTable
+                        .newReadBuilder()
+                        .withPartitionFilter(Collections.singletonMap("c3", partition));
+        int rowCount = 0;
+        try (CloseableIterator<InternalRow> iterator =
+                readBuilder
+                        .newRead()
+                        .createReader(readBuilder.newScan().plan().splits())
+                        .toCloseableIterator()) {
+            while (iterator.hasNext()) {
+                iterator.next();
+                rowCount++;
+            }
+        }
+        return rowCount;
+    }
+
+    private Set<Integer> totalBucketsOfPartition(TablePath tablePath, String partition)
+            throws Exception {
+        FileStoreTable fileStoreTable =
+                (FileStoreTable) paimonCatalog.getTable(toPaimon(tablePath));
+        List<Split> splits =
+                fileStoreTable
+                        .newReadBuilder()
+                        .withPartitionFilter(Collections.singletonMap("c3", partition))
+                        .newScan()
+                        .plan()
+                        .splits();
+        assertThat(splits).isNotEmpty();
+        Set<Integer> totalBuckets = new HashSet<>();
+        for (Split split : splits) {
+            totalBuckets.add(((DataSplit) split).totalBuckets());
+        }
+        return totalBuckets;
     }
 
     @ParameterizedTest
@@ -929,6 +1050,17 @@ class PaimonTieringTest {
             @Nullable Long partitionId,
             TableInfo tableInfo)
             throws IOException {
+        return createLakeWriter(tablePath, bucket, partition, partitionId, tableInfo, null);
+    }
+
+    private LakeWriter<PaimonWriteResult> createLakeWriter(
+            TablePath tablePath,
+            int bucket,
+            @Nullable String partition,
+            @Nullable Long partitionId,
+            TableInfo tableInfo,
+            @Nullable Integer partitionBucketCount)
+            throws IOException {
         return paimonLakeTieringFactory.createLakeWriter(
                 new WriterInitContext() {
                     @Override
@@ -951,6 +1083,13 @@ class PaimonTieringTest {
                     @Override
                     public TableInfo tableInfo() {
                         return tableInfo;
+                    }
+
+                    @Override
+                    public int bucketCount() {
+                        return partitionBucketCount != null
+                                ? partitionBucketCount
+                                : tableInfo.getNumBuckets();
                     }
                 });
     }
