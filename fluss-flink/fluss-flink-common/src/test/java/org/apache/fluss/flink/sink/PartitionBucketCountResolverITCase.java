@@ -97,50 +97,22 @@ class PartitionBucketCountResolverITCase extends FlinkTestBase {
     }
 
     @Test
-    void testResolveBucketCountsAgainstRealCluster() throws Exception {
+    void testResolveBucketCountsAndCachingWithRealCluster() throws Exception {
         TablePath tablePath = TablePath.of(DEFAULT_DB, "resolver_it_" + System.currentTimeMillis());
         createTable(tablePath, tableDescriptor);
-        // Old partition, created before the rescale: 4 buckets.
+        // Old partition, created before the rescale: 2 buckets.
         createPartition(tablePath, "2024-01");
-        // Rescale: partitions created afterwards use 8 buckets.
+        // Rescale: partitions created afterwards use 4 buckets.
         alterBucketCount(tablePath, NEW_BUCKET_NUM);
         createPartition(tablePath, "2024-02");
 
-        // Cold start with an empty cache: the resolver must hit real cluster metadata.
-        PartitionBucketCountResolver resolver =
-                new PartitionBucketCountResolver(tablePath, clientConf, NEW_BUCKET_NUM);
+        // Cold start with an empty cache: the resolver must hit real cluster metadata. A single
+        // listPartitionInfos call warms up every existing partition of the table.
+        CountingResolver resolver = new CountingResolver(tablePath, admin, NEW_BUCKET_NUM);
 
         // The pre-rescale partition keeps its own count — not the rescaled table-level value.
         assertThat(resolver.bucketCountOf("2024-01")).isEqualTo(OLD_BUCKET_NUM);
         // The post-rescale partition resolves to the new count.
-        assertThat(resolver.bucketCountOf("2024-02")).isEqualTo(NEW_BUCKET_NUM);
-
-        // A partition that doesn't exist yet falls back to the current table-level count.
-        assertThat(resolver.bucketCountOf("2024-03")).isEqualTo(NEW_BUCKET_NUM);
-
-        // The fallback matches the count the partition actually gets once created.
-        createPartition(tablePath, "2024-03");
-        assertThat(bucketCountByPartitionName(tablePath)).containsEntry("2024-03", NEW_BUCKET_NUM);
-
-        // Cached entries stay stable across repeated lookups.
-        assertThat(resolver.bucketCountOf("2024-01")).isEqualTo(OLD_BUCKET_NUM);
-        assertThat(resolver.bucketCountOf("2024-02")).isEqualTo(NEW_BUCKET_NUM);
-        assertThat(resolver.bucketCountOf("2024-03")).isEqualTo(NEW_BUCKET_NUM);
-    }
-
-    @Test
-    void testCacheAvoidsRepeatedMetadataFetches() throws Exception {
-        TablePath tablePath =
-                TablePath.of(DEFAULT_DB, "resolver_cache_it_" + System.currentTimeMillis());
-        createTable(tablePath, tableDescriptor);
-        createPartition(tablePath, "2024-01");
-        alterBucketCount(tablePath, NEW_BUCKET_NUM);
-        createPartition(tablePath, "2024-02");
-
-        CountingResolver resolver = new CountingResolver(tablePath, admin, NEW_BUCKET_NUM);
-
-        // Miss: one listPartitionInfos call warms up every existing partition of the table.
-        assertThat(resolver.bucketCountOf("2024-01")).isEqualTo(OLD_BUCKET_NUM);
         assertThat(resolver.bucketCountOf("2024-02")).isEqualTo(NEW_BUCKET_NUM);
         assertThat(resolver.listCalls.get()).isEqualTo(1);
 
@@ -149,11 +121,15 @@ class PartitionBucketCountResolverITCase extends FlinkTestBase {
         assertThat(resolver.bucketCountOf("2024-02")).isEqualTo(NEW_BUCKET_NUM);
         assertThat(resolver.listCalls.get()).isEqualTo(1);
 
-        // A partition that doesn't exist yet falls back to the table-level count: the miss costs
-        // one list call (to confirm the partition is absent) plus one table-level lookup.
+        // A partition that doesn't exist yet falls back to the current table-level count; the
+        // miss costs one list call (to confirm the partition is absent) plus one table lookup.
         assertThat(resolver.bucketCountOf("2024-03")).isEqualTo(NEW_BUCKET_NUM);
         assertThat(resolver.listCalls.get()).isEqualTo(2);
         assertThat(resolver.tableCalls.get()).isEqualTo(1);
+
+        // The fallback matches the count the partition actually gets once created.
+        createPartition(tablePath, "2024-03");
+        assertThat(bucketCountByPartitionName(tablePath)).containsEntry("2024-03", NEW_BUCKET_NUM);
 
         // The fallback value is cached: repeated lookups of the same partition cost nothing.
         assertThat(resolver.bucketCountOf("2024-03")).isEqualTo(NEW_BUCKET_NUM);
