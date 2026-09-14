@@ -144,13 +144,16 @@ public class PaimonConversions {
         return builder.build();
     }
 
-    /** Encodes a Paimon row as a Fluss KV value. */
+    /**
+     * Encodes a Paimon row as a Fluss KV value.
+     *
+     * @throws RuntimeException if encoding or closing the encoder fails
+     */
     public static byte[] toFlussValue(
             org.apache.paimon.data.InternalRow paimonRow,
             short schemaId,
             org.apache.fluss.types.RowType valueRowType,
-            KvFormat kvFormat)
-            throws Exception {
+            KvFormat kvFormat) {
         PaimonRowAsFlussRow flussRow = new PaimonRowAsFlussRow(paimonRow);
         InternalRow.FieldGetter[] fieldGetters = InternalRow.createFieldGetters(valueRowType);
         try (RowEncoder rowEncoder = RowEncoder.create(kvFormat, valueRowType)) {
@@ -159,6 +162,8 @@ public class PaimonConversions {
                 rowEncoder.encodeField(i, fieldGetters[i].getFieldOrNull(flussRow));
             }
             return ValueEncoder.encodeValue(schemaId, rowEncoder.finishRow());
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to encode Paimon lookup row as Fluss value.", e);
         }
     }
 

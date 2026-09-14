@@ -251,6 +251,46 @@ class PaimonLakeTableLookuperTest {
     }
 
     @Test
+    void testScanLookupFiltersRowsBeforeLimit() throws Exception {
+        TablePath tablePath = TablePath.of(DB, "scan_row_filter");
+        Schema schema = pkSchema();
+        FileStoreTable table =
+                createPaimonTable(
+                        tablePath,
+                        TableDescriptor.builder()
+                                .schema(schema)
+                                .partitionedBy("dt")
+                                .distributedBy(1, "id")
+                                .customProperty("paimon.read.batch-size", "1")
+                                .build());
+        writeAndCommitData(
+                table,
+                Collections.singletonMap(
+                        0,
+                        Arrays.asList(
+                                paimonRow(1, "20240101", "Alice"),
+                                paimonRow(3, "20240101", "Bob"),
+                                paimonRow(5, "20240101", "Carol"))));
+        PaimonKeyEncoder keyEncoder =
+                new PaimonKeyEncoder(schema.getRowType(), Collections.singletonList("id"));
+        LakeTableLookuper.LookupContext context = lookupContext(schema, "20240101", 0, SCHEMA_ID);
+
+        try (LakeTableLookuper lookuper =
+                createLookuper(LakeLookupMode.SCAN, tablePath, KvFormat.COMPACTED)) {
+            // Matching rows follow non-matching rows, and reading crosses batch boundaries.
+            byte[] middleValue =
+                    lookuper.lookup(keyEncoder.encodeKey(row(3, "20240101", "")), context);
+            byte[] lastValue =
+                    lookuper.lookup(keyEncoder.encodeKey(row(5, "20240101", "")), context);
+            assertRow(decodeValue(middleValue, SCHEMA_ID, schema).row, 3, "20240101", "Bob");
+            assertRow(decodeValue(lastValue, SCHEMA_ID, schema).row, 5, "20240101", "Carol");
+            // The absent key lies inside the file's min/max range.
+            assertThat(lookuper.lookup(keyEncoder.encodeKey(row(2, "20240101", "")), context))
+                    .isNull();
+        }
+    }
+
+    @Test
     void testConcurrentFirstLookupsForDifferentPartitions() throws Exception {
         TablePath tablePath = TablePath.of(DB, "concurrent_first_lookups");
         Schema schema = pkSchema();
@@ -645,6 +685,23 @@ class PaimonLakeTableLookuperTest {
                     "20240101",
                     "Alice");
 
+            BinaryRow partition = BinaryRow.singleColumn(BinaryString.fromString("20240101"));
+            Path dataFilePath =
+                    table.store()
+                            .pathFactory()
+                            .createDataFilePathFactory(partition, 0)
+                            .toPath(dataFiles(table, partition, 0).get(0));
+            IOException readFailure = new IOException("Injected data file read failure");
+            doThrow(readFailure).doCallRealMethod().when(fileIO).newInputStream(dataFilePath);
+            assertThatThrownBy(() -> lookuper.lookup(key, context))
+                    .isInstanceOf(KvStorageException.class)
+                    .hasRootCauseMessage(readFailure.getMessage());
+            assertRow(
+                    decodeValue(lookuper.lookup(key, context), SCHEMA_ID, schema).row,
+                    1,
+                    "20240101",
+                    "Alice");
+
             RuntimeException nonIoFailure =
                     new RuntimeException(new IllegalStateException("Injected non-I/O failure"));
             doThrow(nonIoFailure).doCallRealMethod().when(fileIO).exists(nextSnapshotPath);
@@ -730,17 +787,26 @@ class PaimonLakeTableLookuperTest {
         ExecutorService executor = Executors.newFixedThreadPool(2);
         try (LakeTableLookuper lookuper =
                 createLookuper(lookupMode, tablePath, KvFormat.COMPACTED)) {
-            Future<byte[]> firstLookup =
-                    executor.submit(
-                            () -> lookuper.lookup(paimonKey(schema, 1, "20240101"), firstContext));
-            assertThat(firstLookupAtRecorder.await(30, TimeUnit.SECONDS)).isTrue();
+            Future<byte[]> firstLookup;
+            Future<byte[]> secondLookup;
+            try {
+                firstLookup =
+                        executor.submit(
+                                () ->
+                                        lookuper.lookup(
+                                                paimonKey(schema, 1, "20240101"), firstContext));
+                assertThat(firstLookupAtRecorder.await(30, TimeUnit.SECONDS)).isTrue();
 
-            Future<byte[]> secondLookup =
-                    executor.submit(
-                            () -> lookuper.lookup(paimonKey(schema, 2, "20240101"), secondContext));
-            assertThat(secondLookupAtRecorder.await(30, TimeUnit.SECONDS)).isTrue();
+                secondLookup =
+                        executor.submit(
+                                () ->
+                                        lookuper.lookup(
+                                                paimonKey(schema, 2, "20240101"), secondContext));
+                assertThat(secondLookupAtRecorder.await(30, TimeUnit.SECONDS)).isTrue();
+            } finally {
+                releaseFirstLookup.countDown();
+            }
 
-            releaseFirstLookup.countDown();
             BinaryValue firstValue =
                     decodeValue(firstLookup.get(30, TimeUnit.SECONDS), SCHEMA_ID, schema);
             BinaryValue secondValue =
@@ -748,7 +814,6 @@ class PaimonLakeTableLookuperTest {
             assertRow(firstValue.row, 1, "20240101", "Alice");
             assertRow(secondValue.row, 2, "20240101", "Bob");
         } finally {
-            releaseFirstLookup.countDown();
             ExecutorUtils.gracefulShutdown(30, TimeUnit.SECONDS, executor);
         }
     }

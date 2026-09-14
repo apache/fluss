@@ -314,14 +314,16 @@ ALTER TABLE customer_partitioned_with_bucket_key SET (
 );
 ```
 
-The lookup mode can be configured only when the table is created and cannot be altered later.
-`SST`, the default, creates and caches local lookup files. `SCAN` applies primary-key filters while
-scanning Paimon and does not create local lookup files.
+The `table.datalake.historical-partition.enabled` option is disabled by default and currently
+supports only Paimon primary-key tables with auto partitioning enabled and exactly one partition key.
+When enabled, the Coordinator creates and retains the `__historical__` system partition used to
+route lookups to Paimon. Disabling the option removes that system partition.
 
-This option is disabled by default and currently supports only Paimon primary-key tables with auto
-partitioning enabled and exactly one partition key. When enabled, the Coordinator creates and
-retains the `__historical__` system partition used to route lookups to Paimon. Disabling the option
-removes that system partition.
+For these tables, `table.datalake.historical-partition.lookup-mode` selects how historical partition
+lookups read Paimon when `table.datalake.historical-partition.enabled` is `true`.
+`SST`, the default, creates and caches local lookup files. `SCAN` applies primary-key filters while
+scanning Paimon and does not create local lookup files. The lookup mode can be configured only when
+the table is created and cannot be altered later.
 
 Lookup clients use the table configuration captured when the lookuper is created to decide whether
 to fall back after an original partition is missing. After changing

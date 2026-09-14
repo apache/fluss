@@ -383,15 +383,8 @@ public class PaimonLakeTableLookuper implements LakeTableLookuper {
         if (paimonRow == null) {
             return null;
         }
-        try {
-            return toFlussValue(
-                    paimonRow,
-                    context.schemaId(),
-                    context.valueRowType(),
-                    tableConfig.getKvFormat());
-        } catch (Exception e) {
-            throw new RuntimeException("Failed to encode Paimon lookup row as Fluss value.", e);
-        }
+        return toFlussValue(
+                paimonRow, context.schemaId(), context.valueRowType(), tableConfig.getKvFormat());
     }
 
     /**
