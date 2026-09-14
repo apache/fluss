@@ -40,6 +40,7 @@ import org.apache.fluss.metadata.DatabaseDescriptor;
 import org.apache.fluss.metadata.DatabaseInfo;
 import org.apache.fluss.metadata.DatabaseSummary;
 import org.apache.fluss.metadata.LakeTableUtil;
+import org.apache.fluss.metadata.MergeEngineType;
 import org.apache.fluss.metadata.ResolvedPartitionSpec;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.SchemaInfo;
@@ -569,9 +570,10 @@ public class MetadataManager {
     }
 
     /**
-     * Validates an ALTER bucket.num request: only partitioned tables are supported and the new
-     * value must fall within [1, maxBucketNum]. Runs before the lake-side propagation so an invalid
-     * ALTER never mutates lake metadata.
+     * Validates an ALTER bucket.num request: only partitioned tables are supported, and only when
+     * neither the historical partition nor the aggregation merge engine is in use. The new value
+     * must fall within [1, maxBucketNum]. Runs before the lake-side propagation so an invalid ALTER
+     * never mutates lake metadata.
      */
     private void validateBucketNumRescale(
             TablePath tablePath, TableInfo tableInfo, int newBucketNum) {
@@ -593,6 +595,19 @@ public class MetadataManager {
                             "Cannot alter 'bucket.num' on table %s with historical partition "
                                     + "enabled. Altering 'bucket.num' on such tables is not "
                                     + "supported yet.",
+                            tablePath));
+        }
+        // The aggregation merge engine restores from checkpoints via undo recovery, which
+        // relies on the Flink sink's bucket shuffle keeping "one bucket, one writer". A
+        // rescaled table shards records with a stale table-level count and breaks sink
+        // recovery; supporting the combination is left to future work.
+        if (tableInfo.getTableConfig().getMergeEngineType().orElse(null)
+                == MergeEngineType.AGGREGATION) {
+            throw new InvalidAlterTableException(
+                    String.format(
+                            "Cannot alter 'bucket.num' on table %s with merge engine "
+                                    + "'aggregation'. Altering 'bucket.num' on such tables is "
+                                    + "not supported yet.",
                             tablePath));
         }
         if (newBucketNum < 1) {

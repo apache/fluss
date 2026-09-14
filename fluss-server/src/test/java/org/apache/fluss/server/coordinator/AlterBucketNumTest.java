@@ -31,6 +31,7 @@ import org.apache.fluss.lake.lakestorage.LakeStorage;
 import org.apache.fluss.lake.lakestorage.LakeStoragePlugin;
 import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.DatabaseDescriptor;
+import org.apache.fluss.metadata.MergeEngineType;
 import org.apache.fluss.metadata.ResolvedPartitionSpec;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableChange;
@@ -466,6 +467,95 @@ class AlterBucketNumTest {
         // A never-rescaled table (epoch 0) can still enable the historical partition.
         alterHistoricalPartition(mm, tablePath, true);
         assertThat(mm.getTable(tablePath).getTableConfig().isHistoricalPartitionEnabled()).isTrue();
+    }
+
+    @Test
+    void testAlterBucketNumRejectedOnAggregationTable() throws Exception {
+        TablePath tablePath = TablePath.of(DEFAULT_DB, "test_reject_rescale_on_aggregation");
+        int originalBucketCount = 4;
+        TableAssignment tableAssignment =
+                generateAssignment(originalBucketCount, 3, getTabletServers());
+        metadataManager.createTable(
+                tablePath,
+                remoteDataDir,
+                partitionedPrimaryKeyTable(originalBucketCount, MergeEngineType.AGGREGATION.name()),
+                tableAssignment,
+                false);
+        TableInfo tableInfo = metadataManager.getTable(tablePath);
+        metadataManager.createPartition(
+                tablePath,
+                tableInfo.getTableId(),
+                remoteDataDir,
+                new PartitionAssignment(
+                        tableInfo.getTableId(), tableAssignment.getBucketAssignments()),
+                fromPartitionName(tableInfo.getPartitionKeys(), "2024-01"),
+                false,
+                originalBucketCount);
+
+        // The rejection happens during validation, before the lake propagation, so the default
+        // manager without a lake catalog never reaches the propagation step.
+        assertThatThrownBy(() -> alterBucketNum(metadataManager, tablePath, 8))
+                .isInstanceOf(InvalidAlterTableException.class)
+                .hasMessageContaining("with merge engine 'aggregation'")
+                .hasMessageContaining("not supported yet");
+
+        // The bucket layout is untouched: neither the count nor the epoch moved.
+        TableInfo afterTableInfo = metadataManager.getTable(tablePath);
+        assertThat(afterTableInfo.getNumBuckets()).isEqualTo(originalBucketCount);
+        assertThat(afterTableInfo.getBucketCountEpoch()).isEqualTo(0L);
+        Optional<PartitionRegistration> partition =
+                zookeeperClient.getPartition(tablePath, "2024-01");
+        assertThat(partition).isPresent();
+        assertThat(partition.get().getBucketCount()).isEqualTo(originalBucketCount);
+    }
+
+    @Test
+    void testAlterMergeEngineToAggregationRejectedAfterRescale() throws Exception {
+        // The reverse direction of the mutual exclusion: 'table.merge-engine' is not alterable,
+        // so a rescaled table can never switch to the aggregation merge engine afterwards. If
+        // altering the merge engine ever becomes supported, this test reminds that change to
+        // keep rejecting the switch to aggregation on rescaled tables (epoch > 0).
+        TablePath tablePath = TablePath.of(DEFAULT_DB, "test_reject_aggregation_after_rescale");
+        int originalBucketCount = 4;
+        TableAssignment tableAssignment =
+                generateAssignment(originalBucketCount, 3, getTabletServers());
+        metadataManager.createTable(
+                tablePath,
+                remoteDataDir,
+                partitionedPrimaryKeyTable(originalBucketCount, null),
+                tableAssignment,
+                false);
+        TableInfo tableInfo = metadataManager.getTable(tablePath);
+        metadataManager.createPartition(
+                tablePath,
+                tableInfo.getTableId(),
+                remoteDataDir,
+                new PartitionAssignment(
+                        tableInfo.getTableId(), tableAssignment.getBucketAssignments()),
+                fromPartitionName(tableInfo.getPartitionKeys(), "2024-01"),
+                false,
+                originalBucketCount);
+
+        // Rescale the default-engine table first, which advances the bucketCountEpoch.
+        alterBucketNum(metadataManager, tablePath, 8);
+        assertThat(metadataManager.getTable(tablePath).getBucketCountEpoch()).isEqualTo(1L);
+
+        // Switching the rescaled table to the aggregation merge engine must be rejected.
+        assertThatThrownBy(
+                        () ->
+                                alterMergeEngine(
+                                        metadataManager,
+                                        tablePath,
+                                        MergeEngineType.AGGREGATION.name()))
+                .isInstanceOf(InvalidAlterTableException.class)
+                .hasMessageContaining("'table.merge-engine'")
+                .hasMessageContaining("not supported to alter yet");
+
+        // The merge engine is untouched and the bucket layout stays at the rescaled state.
+        assertThat(metadataManager.getTable(tablePath).getTableConfig().getMergeEngineType())
+                .isEmpty();
+        assertThat(metadataManager.getTable(tablePath).getNumBuckets()).isEqualTo(8);
+        assertThat(metadataManager.getTable(tablePath).getBucketCountEpoch()).isEqualTo(1L);
     }
 
     // ========================== Success Tests ==========================
@@ -956,6 +1046,43 @@ class AlterBucketNumTest {
                 .partitionedBy("dt")
                 .build()
                 .withReplicationFactor(3);
+    }
+
+    /**
+     * A partitioned primary key table: INT key "a", STRING partition key "b" (also part of the
+     * primary key); the merge engine property is set only when the given value is not null.
+     */
+    private static TableDescriptor partitionedPrimaryKeyTable(int bucketCount, String mergeEngine) {
+        TableDescriptor.Builder builder =
+                TableDescriptor.builder()
+                        .schema(
+                                Schema.newBuilder()
+                                        .column("a", DataTypes.INT())
+                                        .column("b", DataTypes.STRING())
+                                        .primaryKey("a", "b")
+                                        .build())
+                        .distributedBy(bucketCount)
+                        .partitionedBy("b");
+        if (mergeEngine != null) {
+            builder.property(ConfigOptions.TABLE_MERGE_ENGINE.key(), mergeEngine);
+        }
+        return builder.build().withReplicationFactor(3);
+    }
+
+    private static void alterMergeEngine(
+            MetadataManager manager, TablePath tablePath, String mergeEngine) {
+        String key = ConfigOptions.TABLE_MERGE_ENGINE.key();
+        TablePropertyChanges.Builder builder = TablePropertyChanges.builder();
+        builder.setTableProperty(key, mergeEngine);
+        manager.alterTableProperties(
+                tablePath,
+                Collections.singletonList(TableChange.set(key, mergeEngine)),
+                builder.build(),
+                false,
+                null,
+                (currentTable, updatedTable) -> {},
+                (currentTable, updatedTable) -> {},
+                ZkVersion.MATCH_ANY_VERSION.getVersion());
     }
 
     private static void alterBucketNum(
