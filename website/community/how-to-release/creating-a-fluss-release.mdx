@@ -600,9 +600,9 @@ The Rust, Python, and C++ clients live in `fluss-rust/` and release from this re
 Pushing the **RC tag** (`v${RELEASE_VERSION}-rc${RC_NUM}`) triggers the client workflows:
 
 - `python-release.yml` builds the wheels + sdist and publishes them to **TestPyPI**.
-- `rust-release.yml` runs `cargo publish --dry-run` to validate the crate. The generated protobuf code and the proto it came from are checked in under `fluss-rust/crates/fluss/`, so the crate publishes standalone with no extra preparation.
+- `rust-release.yml` runs `cargo publish --dry-run` to validate the crate, and authenticates against crates.io without publishing. The dry run alone never contacts the registry, so the RC is what proves the Trusted Publishing config is right; a wrong repository or a renamed workflow file fails here instead of on release day. The generated protobuf code and the proto it came from are checked in under `fluss-rust/crates/fluss/`, so the crate publishes standalone with no extra preparation.
 
-The final publish to **crates.io** and **PyPI** happens when the release tag is pushed (see the **Git tag** step under [Finalize the release](#finalize-the-release)). Publishing uses the CI secrets `CARGO_REGISTRY_TOKEN`, `PYPI_API_TOKEN`, and `TEST_PYPI_API_TOKEN`.
+The final publish to **crates.io** and **PyPI** happens when the release tag is pushed (see the **Git tag** step under [Finalize the release](#finalize-the-release)). Both workflows authenticate with Trusted Publishing, so there is no API token to supply; the registry-side setup is described under [Release Manager Preparation](release-manager-preparation.md#trusted-publishing).
 
 -------------
 
