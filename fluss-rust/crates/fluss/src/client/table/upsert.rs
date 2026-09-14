@@ -225,8 +225,6 @@ impl UpsertWriterFactory {
             target_column_set.set(target_index, true);
         }
 
-        let mut pk_column_set = bitvec![0; field_count];
-
         // check the target columns contains the primary key
         for primary_key in primary_keys {
             let pk_index = row_type.get_field_index(primary_key.as_str());
@@ -241,7 +239,6 @@ impl UpsertWriterFactory {
                             ),
                         });
                     }
-                    pk_column_set.set(pk_index, true);
                 }
                 None => {
                     return Err(IllegalArgument {
@@ -267,21 +264,43 @@ impl UpsertWriterFactory {
                         ),
                     });
                 }
-
                 auto_increment_column_set.set(index, true);
             }
         }
 
-        // check the columns not in targetColumns should be nullable
-        for i in 0..field_count {
-            // column not in primary key and not in auto increment column
-            if !pk_column_set[i] && !auto_increment_column_set[i] {
-                // the column should be nullable
-                if !row_type.fields().get(i).unwrap().data_type.is_nullable() {
+        // an omitted column is written as null, so it must be nullable. auto increment columns
+        // are always omitted and only get their value on the server.
+        for (i, field) in row_type.fields().iter().enumerate() {
+            if !target_column_set[i] && !field.data_type.is_nullable() {
+                if auto_increment_column_set[i] {
                     return Err(IllegalArgument {
                         message: format!(
-                            "Partial Update requires all columns except primary key to be nullable, but column {} is NOT NULL.",
-                            row_type.fields().get(i).unwrap().name()
+                            "Partial Update requires the auto increment column {} to be nullable, since it is always omitted from the target columns and assigned by the server.",
+                            field.name()
+                        ),
+                    });
+                }
+                return Err(IllegalArgument {
+                    message: format!(
+                        "Partial Update requires all columns omitted from the target columns to be nullable, but omitted column {} is NOT NULL.",
+                        field.name()
+                    ),
+                });
+            }
+        }
+
+        // the auto increment column is always set, so a partial delete could never collapse
+        // the row and would always fail on a NOT NULL non-primary-key target column.
+        if auto_increment_column_set.any() {
+            for (i, field) in row_type.fields().iter().enumerate() {
+                if target_column_set[i]
+                    && !primary_keys.iter().any(|key| key.as_str() == field.name())
+                    && !field.data_type.is_nullable()
+                {
+                    return Err(IllegalArgument {
+                        message: format!(
+                            "Partial Update on a table with an auto increment column requires all target columns except the primary key to be nullable, but target column {} is NOT NULL, since the auto increment column is always set and a partial delete could therefore never succeed.",
+                            field.name()
                         ),
                     });
                 }
@@ -534,8 +553,110 @@ mod tests {
         );
 
         assert!(result.unwrap_err().to_string().contains(
-            "Partial Update requires all columns except primary key to be nullable, but column required_field is NOT NULL."
+            "Partial Update requires all columns omitted from the target columns to be nullable, but omitted column required_field is NOT NULL."
         ));
+    }
+
+    #[test]
+    fn not_null_column_in_target_columns_is_accepted() {
+        let row_type = RowType::new(vec![
+            DataField::new("id", DataTypes::int().as_non_nullable(), None),
+            DataField::new(
+                "required_field",
+                DataTypes::string().as_non_nullable(),
+                None,
+            ),
+            DataField::new("optional_field", DataTypes::int(), None),
+        ]);
+        let primary_keys = vec!["id".to_string()];
+        let auto_increment_col_names = vec![];
+
+        // `required_field` is NOT NULL but listed as a target column, so it is always written
+        let target_columns = Some(Arc::new(vec![0usize, 1]));
+        let result = UpsertWriterFactory::sanity_check(
+            &row_type,
+            &primary_keys,
+            &auto_increment_col_names,
+            &target_columns,
+        );
+        assert!(result.is_ok());
+
+        // Listing every column is equally valid.
+        let target_columns = Some(Arc::new(vec![0usize, 1, 2]));
+        let result = UpsertWriterFactory::sanity_check(
+            &row_type,
+            &primary_keys,
+            &auto_increment_col_names,
+            &target_columns,
+        );
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn omitted_not_null_auto_increment_column_is_rejected() {
+        let row_type = RowType::new(vec![
+            DataField::new("id", DataTypes::int().as_non_nullable(), None),
+            DataField::new("name", DataTypes::string(), None),
+            DataField::new("seq", DataTypes::bigint().as_non_nullable(), None),
+        ]);
+        let primary_keys = vec!["id".to_string()];
+        let auto_increment_col_names = vec!["seq".to_string()];
+        let target_columns = Some(Arc::new(vec![0usize, 1]));
+
+        let result = UpsertWriterFactory::sanity_check(
+            &row_type,
+            &primary_keys,
+            &auto_increment_col_names,
+            &target_columns,
+        );
+
+        assert!(result.unwrap_err().to_string().contains(
+            "Partial Update requires the auto increment column seq to be nullable, since it is always omitted from the target columns and assigned by the server."
+        ));
+
+        // The same table with a nullable auto increment column is fine.
+        let row_type = RowType::new(vec![
+            DataField::new("id", DataTypes::int().as_non_nullable(), None),
+            DataField::new("name", DataTypes::string(), None),
+            DataField::new("seq", DataTypes::bigint(), None),
+        ]);
+        let result = UpsertWriterFactory::sanity_check(
+            &row_type,
+            &primary_keys,
+            &auto_increment_col_names,
+            &target_columns,
+        );
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn auto_increment_table_rejects_not_null_target_column() {
+        // the auto increment column is always set, so a partial delete could never collapse
+        // the row and would always fail on the NOT NULL target column
+        let row_type = RowType::new(vec![
+            DataField::new("id", DataTypes::int().as_non_nullable(), None),
+            DataField::new("name", DataTypes::string().as_non_nullable(), None),
+            DataField::new("seq", DataTypes::bigint(), None),
+        ]);
+        let primary_keys = vec!["id".to_string()];
+        let auto_increment_col_names = vec!["seq".to_string()];
+        let target_columns = Some(Arc::new(vec![0usize, 1]));
+
+        let result = UpsertWriterFactory::sanity_check(
+            &row_type,
+            &primary_keys,
+            &auto_increment_col_names,
+            &target_columns,
+        );
+
+        assert!(result.unwrap_err().to_string().contains(
+            "Partial Update on a table with an auto increment column requires all target columns except the primary key to be nullable, but target column name is NOT NULL, since the auto increment column is always set and a partial delete could therefore never succeed."
+        ));
+
+        // the same target columns without an auto increment column are fine
+        let result =
+            UpsertWriterFactory::sanity_check(&row_type, &primary_keys, &vec![], &target_columns);
+        assert!(result.is_ok());
     }
 }
 
