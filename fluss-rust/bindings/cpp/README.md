@@ -65,7 +65,7 @@ not apply to `CreateBucketBatchScanner()`.
 
 ## Examples and Documentation
 
-- [examples/example.cpp](examples/example.cpp) demonstrates log-table writes, continuous scans,
+- [examples/example.cpp](examples/example.cpp) demonstrates log-table writes with Wait and bounded callbacks, continuous scans,
   bounded Arrow record-batch scans, projections, and offset queries.
 - [examples/admin_example.cpp](examples/admin_example.cpp) demonstrates database, table,
   partition, and cluster administration.
@@ -75,6 +75,8 @@ not apply to `CreateBucketBatchScanner()`.
 - The website documentation includes the
   [C++ API reference](../../website/docs/user-guide/cpp/api-reference.md) and
   [log-table examples](../../website/docs/user-guide/cpp/example/log-tables.md).
+
+The callback section reserves capacity before submission, handles submission and completion errors separately, and drains callbacks after Flush. Its waits have no deadline; production applications need a recovery policy for operations that never complete. A local timeout does not cancel writes or callbacks.
 
 For a bounded log scan, pass the per-bucket offset ranges directly to `TableScan`. The returned
 reader yields one Arrow batch at a time until every `[starting_offset, stopping_offset)` range
