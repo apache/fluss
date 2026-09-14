@@ -1178,12 +1178,14 @@ public class ZooKeeperClient implements AutoCloseable {
         List<CuratorOp> fencedOps =
                 wrapRequestsWithEpochCheck(ops, expectedCoordinatorEpochZkVersion);
         zkClient.transaction().forOperations(fencedOps);
-        LOG.info(
-                "Atomically backfilled bucket count for {} partition(s) and updated table {} in one "
-                        + "transaction (CAS + epoch fence {}).",
-                partitionBackfills.size(),
-                tablePath,
-                expectedCoordinatorEpochZkVersion);
+        if (!partitionBackfills.isEmpty()) {
+            LOG.info(
+                    "Atomically backfilled bucket count for {} partition(s) and updated table {} in "
+                            + "one transaction (CAS + epoch fence {}).",
+                    partitionBackfills.size(),
+                    tablePath,
+                    expectedCoordinatorEpochZkVersion);
+        }
     }
 
     /** Get partition id and table id for each partition in a batch async way. */
