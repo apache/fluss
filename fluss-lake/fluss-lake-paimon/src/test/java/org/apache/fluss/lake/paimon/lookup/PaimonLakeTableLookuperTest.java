@@ -23,6 +23,8 @@ import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.MemorySize;
 import org.apache.fluss.config.TableConfig;
 import org.apache.fluss.exception.DiskWriteLockedException;
+import org.apache.fluss.exception.KvStorageException;
+import org.apache.fluss.exception.RetriableException;
 import org.apache.fluss.lake.lakestorage.LakeStorage.LookuperContext;
 import org.apache.fluss.lake.lakestorage.LakeTableLookuper;
 import org.apache.fluss.lake.lakestorage.TestingLakeCatalogContext;
@@ -41,6 +43,7 @@ import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.encode.CompactedKeyEncoder;
 import org.apache.fluss.row.encode.ValueDecoder;
 import org.apache.fluss.row.encode.paimon.PaimonKeyEncoder;
+import org.apache.fluss.rpc.protocol.ApiError;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.utils.ExecutorUtils;
 
@@ -51,11 +54,14 @@ import org.apache.paimon.catalog.CatalogFactory;
 import org.apache.paimon.data.BinaryRow;
 import org.apache.paimon.data.BinaryString;
 import org.apache.paimon.data.Timestamp;
+import org.apache.paimon.fs.FileIO;
 import org.apache.paimon.fs.Path;
 import org.apache.paimon.io.DataFileMeta;
 import org.apache.paimon.io.DataFilePathFactory;
 import org.apache.paimon.options.Options;
+import org.apache.paimon.table.CatalogEnvironment;
 import org.apache.paimon.table.FileStoreTable;
+import org.apache.paimon.table.PrimaryKeyFileStoreTable;
 import org.apache.paimon.table.sink.TableCommitImpl;
 import org.apache.paimon.table.source.DataSplit;
 import org.apache.paimon.table.source.Split;
@@ -67,6 +73,8 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
 
 import java.io.File;
+import java.io.IOException;
+import java.lang.reflect.Field;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -85,6 +93,9 @@ import static org.apache.fluss.lake.paimon.utils.PaimonTestUtils.writeAndCommitD
 import static org.apache.fluss.testutils.DataTestUtils.row;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.catchThrowable;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.spy;
 
 /** Tests for the Paimon {@link LakeTableLookuper} implementations. */
 class PaimonLakeTableLookuperTest {
@@ -587,6 +598,62 @@ class PaimonLakeTableLookuperTest {
             assertThat(value).isNotNull();
             BinaryValue decodedValue = decodeValue(value, SCHEMA_ID, schema);
             assertRow(decodedValue.row, 1, "sub-1", "20240101", "Alice");
+        }
+    }
+
+    @Test
+    void testScanLookupRetriesOnlyIoFailures() throws Exception {
+        TablePath tablePath = TablePath.of(DB, "scan_io_failure");
+        Schema schema = pkSchema();
+        FileStoreTable table = createPaimonTable(tablePath, partitionedPkDescriptor(schema));
+        long snapshotId =
+                writeAndCommitData(
+                        table,
+                        Collections.singletonMap(
+                                0, Collections.singletonList(paimonRow(1, "20240101", "Alice"))));
+        FileIO fileIO = spy(table.fileIO());
+        Path nextSnapshotPath = table.snapshotManager().snapshotPath(snapshotId + 1);
+        byte[] key =
+                new PaimonKeyEncoder(schema.getRowType(), Collections.singletonList("id"))
+                        .encodeKey(row(1, "20240101", "Alice"));
+        LakeTableLookuper.LookupContext context = lookupContext(schema, "20240101", 0, SCHEMA_ID);
+
+        try (LakeTableLookuper lookuper =
+                createLookuper(LakeLookupMode.SCAN, tablePath, KvFormat.COMPACTED)) {
+            // Keep Paimon's real scan and snapshot planning, injecting only the filesystem.
+            Field tableField =
+                    PaimonScanBasedTableLookuper.class.getDeclaredField("fileStoreTable");
+            tableField.setAccessible(true);
+            tableField.set(
+                    lookuper,
+                    new PrimaryKeyFileStoreTable(
+                            fileIO, table.location(), table.schema(), CatalogEnvironment.empty()));
+
+            IOException ioFailure = new IOException("Injected snapshot probe failure");
+            doThrow(ioFailure).doCallRealMethod().when(fileIO).exists(nextSnapshotPath);
+
+            Throwable failure = catchThrowable(() -> lookuper.lookup(key, context));
+            assertThat(failure).isInstanceOf(KvStorageException.class);
+            assertThat(failure.getCause())
+                    .isExactlyInstanceOf(RuntimeException.class)
+                    .hasCause(ioFailure);
+            assertThat(ApiError.fromThrowable(failure).exception())
+                    .isInstanceOf(RetriableException.class);
+            assertRow(
+                    decodeValue(lookuper.lookup(key, context), SCHEMA_ID, schema).row,
+                    1,
+                    "20240101",
+                    "Alice");
+
+            RuntimeException nonIoFailure =
+                    new RuntimeException(new IllegalStateException("Injected non-I/O failure"));
+            doThrow(nonIoFailure).doCallRealMethod().when(fileIO).exists(nextSnapshotPath);
+            assertThatThrownBy(() -> lookuper.lookup(key, context)).isSameAs(nonIoFailure);
+            assertRow(
+                    decodeValue(lookuper.lookup(key, context), SCHEMA_ID, schema).row,
+                    1,
+                    "20240101",
+                    "Alice");
         }
     }
 
