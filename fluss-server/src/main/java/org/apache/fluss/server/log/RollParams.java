@@ -24,11 +24,20 @@ import org.apache.fluss.annotation.Internal;
 public final class RollParams {
 
     public final int maxSegmentBytes;
+    public final long maxSegmentTimeMs;
+    public final long firstTimestampInMessages;
     public final long maxOffsetInMessages;
     public final int messagesSize;
 
-    public RollParams(int maxSegmentBytes, long maxOffsetInMessages, int messagesSize) {
+    public RollParams(
+            int maxSegmentBytes,
+            long maxSegmentTimeMs,
+            long firstTimestampInMessages,
+            long maxOffsetInMessages,
+            int messagesSize) {
         this.maxSegmentBytes = maxSegmentBytes;
+        this.maxSegmentTimeMs = maxSegmentTimeMs;
+        this.firstTimestampInMessages = firstTimestampInMessages;
         this.maxOffsetInMessages = maxOffsetInMessages;
         this.messagesSize = messagesSize;
     }
@@ -36,8 +45,12 @@ public final class RollParams {
     @Override
     public String toString() {
         return "RollParams("
-                + ", maxSegmentBytes="
+                + "maxSegmentBytes="
                 + maxSegmentBytes
+                + ", maxSegmentTimeMs="
+                + maxSegmentTimeMs
+                + ", firstTimestampInMessages="
+                + firstTimestampInMessages
                 + ", maxOffsetInMessages="
                 + maxOffsetInMessages
                 + ", messagesSize="
