@@ -90,8 +90,7 @@ tablet:
     #         secretName: fluss-readiness-probe-auth
     #         key: auth
     # The exec probe inherits the container environment, so readiness-check.sh
-    # picks the value up unchanged. Setting both forms is rejected at render
-    # time, because the probe command would silently override the Secret.
+    # picks the value up unchanged.
     #
     # When the authorizer is enabled, the principal in this credential needs
     # DESCRIBE on the cluster resource, otherwise the health call is denied and
