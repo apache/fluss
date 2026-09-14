@@ -67,18 +67,20 @@ public class SeekableLakeSnapshotSplitScanner implements BatchScanner {
     @Nullable
     @Override
     public CloseableIterator<InternalRow> pollBatch(Duration timeout) throws IOException {
-        if (currentLakeRecordIterator == null) {
-            updateCurrentIterator();
-        }
+        while (true) {
+            if (currentLakeRecordIterator == null) {
+                updateCurrentIterator();
+            }
 
-        // has no next record in currentIterator, update currentIterator
-        if (currentLakeRecordIterator != null && !currentLakeRecordIterator.hasNext()) {
-            updateCurrentIterator();
-        }
+            if (currentLakeRecordIterator == null || currentLakeRecordIterator.hasNext()) {
+                return currentLakeRecordIterator;
+            }
 
-        return currentLakeRecordIterator != null && currentLakeRecordIterator.hasNext()
-                ? currentLakeRecordIterator
-                : null;
+            // An inner lake split may become empty after deletes or filtering. Keep looking for
+            // data instead of reporting the end of the whole bounded split.
+            currentLakeRecordIterator.close();
+            currentLakeRecordIterator = null;
+        }
     }
 
     private void updateCurrentIterator() throws IOException {
