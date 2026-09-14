@@ -233,8 +233,9 @@ if (!submitted.Ok()) {
 ```
 
 The immediate return value reports submission status, not acknowledgment. An
-empty callback is rejected before submission. Each successfully submitted
-operation invokes its callback exactly once with its final success or failure;
+empty callback is rejected before submission. During normal operation, each
+successfully submitted operation invokes its callback exactly once with its
+final success or failure, subject to the lifetime and shutdown requirements below;
 `AppendArrowBatch` invokes one callback for the batch, not one per row or bucket.
 Submission does not wait for acknowledgment, but may still wait for buffer
 space under backpressure.
@@ -269,7 +270,52 @@ SDK falls back to its runtime blocking pool to preserve callback delivery.
 
 `Flush()` still waits for pending writes, **not** for user callbacks to finish.
 Applications that need to drain callbacks must track their completion separately.
-The existing fire-and-forget and `WriteResult::Wait()` APIs are unchanged.
+
+### Compatibility and operational limits
+
+- Existing fire-and-forget and `WriteResult::Wait()` overloads retain their
+  result semantics. Rust callers can still `.await` a `WriteResultFuture`.
+  Completion follows the configured acknowledgment policy; a callback does not
+  add a stronger durability guarantee or change retries, request ordering,
+  wire formats, or storage formats.
+- The shared Rust completion path also changes for callers that do not register
+  callbacks: results are stored behind an `Arc`, callback registration state is
+  added per batch, and waiters are notified after releasing the result lock.
+  This changes allocation and scheduling costs, not the reported write outcome.
+  The boxed waiting future is now allocated on first poll rather than at
+  construction. Callback workers are initialized only when callbacks are used.
+- For an `AppendArrowBatch` spanning multiple internal batches, success requires
+  all their results to succeed. As with `Wait()`, errors are selected in internal
+  handle order, not completion order; an error may be reported while later
+  batches remain pending. This is not an atomic multi-bucket write, and an error
+  does not imply that no rows were written. A submission error can also follow
+  partial acceptance of a multi-bucket batch; in that case no callback is
+  registered, so handle the returned error and do not assume an all-or-nothing retry.
+- The four-worker count and 64-callback job size are implementation details,
+  not ordering or latency guarantees. A slow callback delays other callbacks in
+  its job, and slow callbacks from one connection can delay another connection.
+  The blocking-pool fallback is not limited to four callback threads.
+- Callback delivery is in memory only. There is no end-to-end callback deadline,
+  public callback-drain API, or durable recovery of pending notifications.
+  Connection or writer destruction is not a callback-drain barrier; process exit,
+  crashes, or fatal resource exhaustion can prevent pending callbacks from running.
+  The process-wide executor is not automatically drained at exit.
+- Before releasing callback state or the connection, stop and join submitting
+  threads, flush pending writes, and wait separately for tracked callbacks.
+  Reserve tracking capacity before submission because callbacks may run before
+  it returns; release that capacity yourself if submission fails. Bound outstanding
+  operations through callback completion, not just through server acknowledgment.
+  An application-side wait timeout does not cancel the write or its callback.
+  Keep referenced state alive if abandoning a wait; use durable application
+  tracking and a duplicate-safe retry policy when recovery is required.
+- C++ exceptions thrown by user callbacks are contained. If copying error text
+  fails, the callback still receives the error code, but the message may be empty.
+  Allocation failures while constructing the callback before submission can still
+  throw a C++ exception rather than return a `Result`.
+
+The new overloads keep ordinary existing calls source-compatible. Code that
+selects an overload by taking a member-function address should specify the
+intended function type explicitly.
 
 ## `Lookuper`
 
