@@ -388,6 +388,119 @@
                                     <include>*:*</include>
                                 </includes>
                             </artifactSet>
+                            <relocations>
+                                <!-- relocate the packages that are internal to Hadoop/AWS SDK
+                                     and not used / exposed downstream, mirroring the pattern
+                                     of fluss-fs-hadoop-shaded -->
+                                <relocation>
+                                    <pattern>com.google.common</pattern>
+                                    <shadedPattern>
+                                        org.apache.fluss.shaded.com.google.common
+                                    </shadedPattern>
+                                </relocation>
+                                <relocation>
+                                    <pattern>com.google.re2j</pattern>
+                                    <shadedPattern>
+                                        org.apache.fluss.shaded.com.google.re2j
+                                    </shadedPattern>
+                                </relocation>
+                                <relocation>
+                                    <pattern>com.google.j2objc</pattern>
+                                    <shadedPattern>
+                                        org.apache.fluss.shaded.com.google.j2objc
+                                    </shadedPattern>
+                                </relocation>
+                                <relocation>
+                                    <pattern>com.google.thirdparty</pattern>
+                                    <shadedPattern>
+                                        org.apache.fluss.shaded.com.google.thirdparty
+                                    </shadedPattern>
+                                </relocation>
+                                <relocation>
+                                    <pattern>org.apache.htrace</pattern>
+                                    <shadedPattern>
+                                        org.apache.fluss.shaded.org.apache.htrace
+                                    </shadedPattern>
+                                </relocation>
+                                <relocation>
+                                    <pattern>com.fasterxml</pattern>
+                                    <shadedPattern>
+                                        org.apache.fluss.shaded.com.fasterxml
+                                    </shadedPattern>
+                                </relocation>
+                                <relocation>
+                                    <pattern>org.codehaus.stax2</pattern>
+                                    <shadedPattern>
+                                        org.apache.fluss.shaded.org.codehaus.stax2
+                                    </shadedPattern>
+                                </relocation>
+                                <relocation>
+                                    <pattern>org.codehaus.mojo</pattern>
+                                    <shadedPattern>
+                                        org.apache.fluss.shaded.org.codehaus.mojo
+                                    </shadedPattern>
+                                </relocation>
+                                <relocation>
+                                    <pattern>com.ctc</pattern>
+                                    <shadedPattern>
+                                        org.apache.fluss.shaded.com.ctc
+                                    </shadedPattern>
+                                </relocation>
+                                <relocation>
+                                    <pattern>org.apache.commons.beanutils</pattern>
+                                    <shadedPattern>
+                                        org.apache.fluss.shaded.org.apache.commons.beanutils
+                                    </shadedPattern>
+                                </relocation>
+                                <relocation>
+                                    <pattern>org.apache.commons.codec</pattern>
+                                    <shadedPattern>
+                                        org.apache.fluss.shaded.org.apache.commons.codec
+                                    </shadedPattern>
+                                </relocation>
+                                <relocation>
+                                    <pattern>org.apache.commons.collections</pattern>
+                                    <shadedPattern>
+                                        org.apache.fluss.shaded.org.apache.commons.collections
+                                    </shadedPattern>
+                                </relocation>
+                                <relocation>
+                                    <pattern>org.apache.commons.compress</pattern>
+                                    <shadedPattern>
+                                        org.apache.fluss.shaded.org.apache.commons.compress
+                                    </shadedPattern>
+                                </relocation>
+                                <relocation>
+                                    <pattern>org.apache.commons.configuration2</pattern>
+                                    <shadedPattern>
+                                        org.apache.fluss.shaded.org.apache.commons.configuration2
+                                    </shadedPattern>
+                                </relocation>
+                                <relocation>
+                                    <pattern>org.apache.commons.io</pattern>
+                                    <shadedPattern>
+                                        org.apache.fluss.shaded.org.apache.commons.io
+                                    </shadedPattern>
+                                </relocation>
+                                <relocation>
+                                    <pattern>org.apache.commons.lang3</pattern>
+                                    <shadedPattern>
+                                        org.apache.fluss.shaded.org.apache.commons.lang3
+                                    </shadedPattern>
+                                </relocation>
+                                <relocation>
+                                    <pattern>org.apache.commons.logging</pattern>
+                                    <shadedPattern>
+                                        org.apache.fluss.shaded.org.apache.commons.logging
+                                    </shadedPattern>
+                                </relocation>
+                                <relocation>
+                                    <pattern>org.apache.commons.text</pattern>
+                                    <shadedPattern>
+                                        org.apache.fluss.shaded.org.apache.commons.text
+                                    </shadedPattern>
+                                </relocation>
+                            </relocations>
                             <filters>
                                 <filter>
                                     <artifact>*</artifact>
@@ -397,6 +510,10 @@
                                         <exclude>mozilla/**</exclude>
                                         <exclude>META-INF/maven/**</exclude>
                                         <exclude>META-INF/LICENSE.txt</exclude>
+                                        <!-- the shade plugin relocates base-path classes but not
+                                             Multi-Release JAR entries under META-INF/versions,
+                                             so exclude them to avoid unshaded jackson leaking -->
+                                        <exclude>META-INF/versions/**/com/fasterxml/**</exclude>
                                     </excludes>
                                 </filter>
                                 <filter>
@@ -425,12 +542,6 @@
                                     </excludes>
                                 </filter>
                             </filters>
-                            <relocations>
-                                <relocation>
-                                    <pattern>org.apache.commons</pattern>
-                                    <shadedPattern>org.apache.fluss.shaded.org.apache.commons</shadedPattern>
-                                </relocation>
-                            </relocations>
                         </configuration>
                     </execution>
                 </executions>
