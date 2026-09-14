@@ -1103,7 +1103,30 @@ pub struct GetClusterHealthResponse {
     #[prost(int32, required, tag = "5")]
     pub status: i32,
 }
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct DescribeTabletServersRequest {}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct DescribeTabletServersResponse {
+    #[prost(message, repeated, tag = "1")]
+    pub tablet_servers: ::prost::alloc::vec::Vec<PbTabletServerLoad>,
+}
 /// --------------- Inner classes ----------------
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct PbTabletServerLoad {
+    #[prost(int32, required, tag = "1")]
+    pub server_id: i32,
+    #[prost(int32, required, tag = "2")]
+    pub num_replicas: i32,
+    #[prost(int32, required, tag = "3")]
+    pub in_sync_replicas: i32,
+    #[prost(int32, required, tag = "4")]
+    pub num_leader_replicas: i32,
+    #[prost(int32, required, tag = "5")]
+    pub active_leader_replicas: i32,
+    /// ServerTag: PERMANENT_OFFLINE=0, TEMPORARY_OFFLINE=1
+    #[prost(int32, optional, tag = "6")]
+    pub server_tag: ::core::option::Option<i32>,
+}
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct PbApiVersion {
     #[prost(int32, required, tag = "1")]
