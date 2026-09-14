@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+#[cfg(test)]
 use std::future::Future;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::{Arc, LazyLock, Mutex, mpsc};
@@ -23,6 +24,7 @@ use std::thread::{self, JoinHandle};
 use crate::{RUNTIME, WriteResult, client_err, err_from_core_error, ffi, ok_result};
 
 const CALLBACK_WORKERS: usize = 4;
+const COMPLETION_BATCH_SIZE: usize = 64;
 type Completion = Box<dyn FnOnce() + Send + 'static>;
 
 // Like RUNTIME, the executor is process-wide and lives until process exit.
@@ -60,8 +62,9 @@ impl CallbackExecutor {
                     .spawn(move || {
                         loop {
                             let completion = {
-                                // Take one completion, then release the queue lock
-                                // before running user code.
+                                // Each job already contains up to 64 callbacks.
+                                // Do not prefetch 64 jobs here: that would let a
+                                // worker hoard up to 4096 callbacks.
                                 let receiver = receiver.lock().unwrap();
                                 let Ok(completion) = receiver.recv() else {
                                     break;
@@ -105,7 +108,7 @@ impl Drop for CallbackExecutor {
 }
 
 // SAFETY: The C++ wrapper is transferred by UniquePtr and accessed exclusively
-// by one write task, then one callback worker. It is never shared concurrently.
+// by one batch registration, then one callback worker. It is never shared concurrently.
 // The public C++ contract requires captures to support background execution.
 unsafe impl Send for ffi::WriteCallback {}
 
@@ -120,12 +123,39 @@ impl WriteResult {
         let Some(future) = self.inner.take() else {
             return client_err("WriteResult already consumed".to_string());
         };
-        dispatch(future, move |result| {
+        dispatch_write(future, move |result| {
             callback
                 .pin_mut()
                 .complete(result.error_code, &result.error_message);
         });
         ok_result()
+    }
+}
+
+fn dispatch_write(
+    future: fluss::client::WriteResultFuture,
+    callback: impl FnOnce(ffi::FfiResult) + Send + 'static,
+) {
+    // Force worker initialization before registering with an in-flight batch.
+    let _ = CALLBACK_EXECUTOR.as_ref();
+    let callback = move |result| callback(to_ffi_result(result));
+    if let Err((future, callback)) = future.try_on_complete(callback, dispatch_batch) {
+        // Only futures already polled before registration need this path.
+        // Normal C++ Append/Upsert/Delete never poll before registering.
+        RUNTIME.spawn(async move {
+            let result = future.await;
+            deliver(
+                CALLBACK_EXECUTOR.as_ref(),
+                Box::new(move || callback(result)),
+            );
+        });
+    }
+}
+
+fn dispatch_batch(batch: fluss::client::WriteCallbackBatch) {
+    let executor = CALLBACK_EXECUTOR.as_ref();
+    for chunk in batch.into_chunks(COMPLETION_BATCH_SIZE) {
+        deliver(executor, Box::new(move || chunk.run()));
     }
 }
 
@@ -136,6 +166,7 @@ fn to_ffi_result(result: Result<(), fluss::error::Error>) -> ffi::FfiResult {
     }
 }
 
+#[cfg(test)]
 fn dispatch(
     future: impl Future<Output = Result<(), fluss::error::Error>> + Send + 'static,
     callback: impl FnOnce(ffi::FfiResult) + Send + 'static,
@@ -168,16 +199,16 @@ mod tests {
     use std::thread;
     use std::time::Duration;
 
-    use super::{CallbackExecutor, deliver, dispatch};
+    use super::{CallbackExecutor, deliver, dispatch, dispatch_write};
     use crate::{CLIENT_ERROR_CODE, RUNTIME};
 
     #[test]
-    fn test_completed_future_runs_off_runtime_and_releases_capture() {
+    fn test_direct_batch_completion_runs_off_runtime_and_releases_capture() {
         let (tx, rx) = mpsc::channel();
         let capture = Arc::new(());
         let weak = Arc::downgrade(&capture);
         RUNTIME.block_on(async {
-            dispatch(
+            dispatch_write(
                 fluss::client::WriteResultFuture::join(Vec::new()),
                 move |r| {
                     // Empty/previously completed batches must still use the executor.

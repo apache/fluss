@@ -250,9 +250,14 @@ application state. Keep the connection alive until outstanding operations
 complete. Exceptions thrown by callbacks are caught and reported to stderr;
 they do not change the write outcome.
 
-The binding asynchronously awaits each write's result, then dispatches its
-callback to one of four process-wide callback workers. User callbacks run
-outside the runtime's async I/O workers.
+Callbacks register directly with their internal write batch, rather than
+creating an asynchronous ACK-waiting task for each row. When a batch completes,
+its callbacks are dispatched to four process-wide callback workers in jobs of
+at most 64 callbacks. Each worker takes one job at a time; every registered
+callback still runs individually. Registrations arriving after batch completion
+are dispatched separately, without waiting to fill a job. Both Arrow log and KV
+write batches use this path. An `AppendArrowBatch` spanning multiple internal
+batches aggregates their results into the operation's single callback.
 
 The completion queue is unbounded, so limit outstanding
 callbacks when callback processing is slower than writing; writer buffer limits
