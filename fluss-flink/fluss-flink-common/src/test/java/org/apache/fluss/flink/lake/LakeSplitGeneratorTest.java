@@ -29,12 +29,15 @@ import org.apache.fluss.lake.source.TestingLakeSplit;
 import org.apache.fluss.metadata.PartitionInfo;
 import org.apache.fluss.metadata.ResolvedPartitionSpec;
 import org.apache.fluss.metadata.Schema;
+import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.types.DataTypes;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.util.Collection;
 import java.util.Collections;
@@ -43,15 +46,11 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 
+import static org.apache.fluss.client.table.scanner.log.LogScanner.EARLIEST_OFFSET;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-/**
- * Unit test for the fail-loud guard in {@link LakeSplitGenerator}: for a primary-key table, if the
- * lake snapshot of a partition contains a bucket id outside the partition's enumerated bucket range
- * (which can only happen if the per-partition bucket count is inconsistent with the tiered data),
- * union-read split generation must refuse rather than silently drop the out-of-range lake data.
- */
+/** Tests lake and log split planning for partitioned tables. */
 class LakeSplitGeneratorTest {
 
     /** Table-level bucket count, kept different from the per-partition counts used below. */
@@ -112,8 +111,7 @@ class LakeSplitGeneratorTest {
                 () -> Collections.singleton(partitionInfo));
     }
 
-    private static final class ZeroOffsetsRetriever
-            implements OffsetsInitializer.BucketOffsetsRetriever {
+    private static class ZeroOffsetsRetriever implements OffsetsInitializer.BucketOffsetsRetriever {
 
         @Override
         public Map<Integer, Long> latestOffsets(String partitionName, Collection<Integer> buckets) {
@@ -169,5 +167,85 @@ class LakeSplitGeneratorTest {
             assertThat(split.getTableBucket().getPartitionId()).isEqualTo(7L);
             assertThat(split.getTableBucket().getBucket()).isEqualTo(bucket);
         }
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void testPrunedLakePartitionRetainsCommittedLogOffsets(boolean primaryKey) throws Exception {
+        TablePath path = TablePath.of("db", "pruned_partition");
+        Schema.Builder schema =
+                Schema.newBuilder().column("id", DataTypes.INT()).column("day", DataTypes.STRING());
+        if (primaryKey) {
+            schema.primaryKey("id", "day");
+        }
+        TableDescriptor descriptor =
+                TableDescriptor.builder()
+                        .schema(schema.build())
+                        .partitionedBy("day")
+                        .distributedBy(2, "id")
+                        .build();
+        TableInfo info = TableInfo.of(path, 1L, 1, descriptor, null, 1L, 1L);
+        PartitionInfo partition =
+                new PartitionInfo(
+                        7L,
+                        ResolvedPartitionSpec.fromPartitionName(info.getPartitionKeys(), "p"),
+                        null,
+                        2);
+        TestAdminAdapter admin =
+                new TestAdminAdapter() {
+                    @Override
+                    public CompletableFuture<LakeSnapshot> getReadableLakeSnapshot(
+                            TablePath ignored) {
+                        // Bucket 0 is tiered through offset 100. Bucket 1 has not been tiered.
+                        return CompletableFuture.completedFuture(
+                                new LakeSnapshot(
+                                        1L,
+                                        Collections.singletonMap(
+                                                new TableBucket(1L, 7L, 0), 100L)));
+                    }
+                };
+        OffsetsInitializer.BucketOffsetsRetriever retriever =
+                new ZeroOffsetsRetriever() {
+                    @Override
+                    public Map<Integer, Long> latestOffsets(
+                            String partitionName, Collection<Integer> buckets) {
+                        Map<Integer, Long> offsets = new HashMap<>();
+                        offsets.put(0, 110L);
+                        offsets.put(1, 20L);
+                        return offsets;
+                    }
+                };
+        LakeSplitGenerator generator =
+                new LakeSplitGenerator(
+                        info,
+                        admin,
+                        // A pushed-down predicate has pruned every lake split of this partition.
+                        TestingLakeSource.fromSplits(Collections.emptyList()),
+                        retriever,
+                        OffsetsInitializer.latest(),
+                        2,
+                        () -> Collections.singleton(partition));
+
+        List<SourceSplitBase> splits = generator.generateHybridLakeFlussSplits();
+
+        assertThat(splits).hasSize(2);
+        assertThat(splits.get(0).getTableBucket()).isEqualTo(new TableBucket(1L, 7L, 0));
+        assertThat(splits.get(1).getTableBucket()).isEqualTo(new TableBucket(1L, 7L, 1));
+        assertThat(splits)
+                .extracting(
+                        split ->
+                                primaryKey
+                                        ? ((LakeSnapshotAndFlussLogSplit) split).getStartingOffset()
+                                        : split.asLogSplit().getStartingOffset())
+                .containsExactly(100L, EARLIEST_OFFSET);
+        assertThat(splits)
+                .extracting(
+                        split ->
+                                primaryKey
+                                        ? ((LakeSnapshotAndFlussLogSplit) split)
+                                                .getStoppingOffset()
+                                                .get()
+                                        : split.asLogSplit().getStoppingOffset().get())
+                .containsExactly(110L, 20L);
     }
 }
