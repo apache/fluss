@@ -17,3 +17,4 @@
 #
 org.apache.fluss.security.auth.PlainTextAuthenticationPlugin
 org.apache.fluss.security.auth.sasl.authenticator.SaslAuthenticationPlugin
+org.apache.fluss.security.auth.impersonation.ImpersonationAuthenticationPlugin
