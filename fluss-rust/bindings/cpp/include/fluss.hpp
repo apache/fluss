@@ -49,6 +49,7 @@ struct Table;
 struct AppendWriter;
 struct WriteResult;
 class WriteCallback;
+class WriteCallbackCapacity;
 struct LogScanner;
 struct RecordBatchLogReader;
 struct BatchScanner;
@@ -546,12 +547,24 @@ struct Result {
 ///
 /// Callback threads are shared across connections. Do not wait for another
 /// callback from a callback: it can exhaust the worker pool. Synchronous SDK
-/// calls are supported with exclusive writer access. Limit outstanding callbacks
-/// if they are slow: completed callbacks queue in memory, outside writer buffers.
+/// calls require exclusive writer access. Callback submissions to a full writer
+/// fail immediately when called from a callback, instead of blocking the workers.
+/// WriteCallbackOptions bounds outstanding callback operations per writer.
 ///
 /// Exceptions thrown by callbacks are caught and reported to stderr; they do not
 /// change the write outcome. Flush() waits for writes, not for callbacks to finish.
 using WriteCallback = std::function<void(Result)>;
+
+/// Admission limits for callback overloads only; Wait and fire-and-forget are unchanged.
+struct WriteCallbackOptions {
+    /// Maximum operations reserved for submission or awaiting callback completion.
+    /// Must be positive. One AppendArrowBatch call counts as one operation, not its rows.
+    size_t max_pending_operations = 65536;
+
+    /// Maximum wait for callback capacity; zero rejects immediately when full.
+    /// Must be nonnegative. Does not bound buffer waits, ACKs, retries, or callback duration.
+    std::chrono::milliseconds enqueue_timeout{30000};
+};
 
 struct TablePath {
     std::string database_name;
@@ -1758,6 +1771,8 @@ class TableAppend {
     TableAppend& operator=(TableAppend&&) noexcept = default;
 
     Result CreateWriter(AppendWriter& out);
+    /// Create a writer with per-writer callback admission limits.
+    Result CreateWriter(AppendWriter& out, const WriteCallbackOptions& options);
 
    private:
     friend class Table;
@@ -1777,6 +1792,8 @@ class TableUpsert {
     TableUpsert& PartialUpdateByName(std::vector<std::string> column_names);
 
     Result CreateWriter(UpsertWriter& out);
+    /// Create a writer with per-writer callback admission limits shared by Upsert and Delete.
+    Result CreateWriter(UpsertWriter& out, const WriteCallbackOptions& options);
 
    private:
     friend class Table;
@@ -1916,21 +1933,24 @@ class AppendWriter {
     Result Append(const GenericRow& row, WriteResult& out);
     /// Submit a row and notify callback of its final outcome without waiting for
     /// acknowledgment. Returns submission status; on failure no callback runs.
-    /// Submission can still block on buffer backpressure. See WriteCallback.
+    /// Submission can block on callback capacity and buffer backpressure. See WriteCallbackOptions.
     Result Append(const GenericRow& row, WriteCallback callback);
     Result AppendArrowBatch(const std::shared_ptr<arrow::RecordBatch>& batch);
     Result AppendArrowBatch(const std::shared_ptr<arrow::RecordBatch>& batch, WriteResult& out);
     /// Like the callback Append overload, but notifies once for the entire batch.
-    Result AppendArrowBatch(const std::shared_ptr<arrow::RecordBatch>& batch, WriteCallback callback);
+    Result AppendArrowBatch(const std::shared_ptr<arrow::RecordBatch>& batch,
+                            WriteCallback callback);
     Result Flush();
 
    private:
     friend class Table;
     friend class TableAppend;
-    AppendWriter(ffi::AppendWriter* writer) noexcept;
+    AppendWriter(ffi::AppendWriter* writer,
+                 std::shared_ptr<ffi::WriteCallbackCapacity> callback_capacity) noexcept;
 
     void Destroy() noexcept;
     ffi::AppendWriter* writer_{nullptr};
+    std::shared_ptr<ffi::WriteCallbackCapacity> callback_capacity_;
 };
 
 class UpsertWriter {
@@ -1949,7 +1969,7 @@ class UpsertWriter {
     Result Upsert(const GenericRow& row, WriteResult& out);
     /// Submit an upsert and notify callback of its final outcome. Returns
     /// submission status; on failure no callback runs. Submission may block on
-    /// buffer backpressure, but does not wait for acknowledgment. See WriteCallback.
+    /// callback capacity and buffer backpressure, but not acknowledgment. See WriteCallbackOptions.
     Result Upsert(const GenericRow& row, WriteCallback callback);
     Result Delete(const GenericRow& row);
     Result Delete(const GenericRow& row, WriteResult& out);
@@ -1960,9 +1980,11 @@ class UpsertWriter {
    private:
     friend class Table;
     friend class TableUpsert;
-    UpsertWriter(ffi::UpsertWriter* writer) noexcept;
+    UpsertWriter(ffi::UpsertWriter* writer,
+                 std::shared_ptr<ffi::WriteCallbackCapacity> callback_capacity) noexcept;
     void Destroy() noexcept;
     ffi::UpsertWriter* writer_{nullptr};
+    std::shared_ptr<ffi::WriteCallbackCapacity> callback_capacity_;
 };
 
 class Lookuper {

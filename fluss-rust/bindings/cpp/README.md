@@ -76,7 +76,7 @@ not apply to `CreateBucketBatchScanner()`.
   [C++ API reference](../../website/docs/user-guide/cpp/api-reference.md) and
   [log-table examples](../../website/docs/user-guide/cpp/example/log-tables.md).
 
-The callback section reserves capacity before submission, handles submission and completion errors separately, and drains callbacks after Flush. Its waits have no deadline; production applications need a recovery policy for operations that never complete. A local timeout does not cancel writes or callbacks.
+The callback section configures `WriteCallbackOptions` so the SDK bounds outstanding callback operations, handles submission and completion errors separately, and waits for result handling after Flush. `max_pending_operations` defaults to 65536 and `enqueue_timeout` to 30 seconds; the example uses a limit of 2 and a 5-second admission timeout. That timeout only covers waiting for callback capacity. Flush and application completion waits still have no deadline; production applications need a recovery policy for operations that never complete. A local timeout does not cancel accepted writes or callbacks.
 
 For a bounded log scan, pass the per-bucket offset ranges directly to `TableScan`. The returned
 reader yields one Arrow batch at a time until every `[starting_offset, stopping_offset)` range

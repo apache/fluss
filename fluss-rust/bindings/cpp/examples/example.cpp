@@ -90,7 +90,12 @@ int main() {
 
     // 5) Write rows with scalar and temporal values
     fluss::AppendWriter writer;
-    check("new_append_writer", table.NewAppend().CreateWriter(writer));
+    fluss::WriteCallbackOptions callback_options;
+    // A small limit demonstrates SDK backpressure in the callback section below.
+    // These options do not affect fire-and-forget or WriteResult::Wait().
+    callback_options.max_pending_operations = 2;
+    callback_options.enqueue_timeout = std::chrono::seconds(5);
+    check("new_append_writer", table.NewAppend().CreateWriter(writer, callback_options));
 
     struct RowData {
         int id;
@@ -153,14 +158,11 @@ int main() {
         struct PendingWrites {
             std::mutex mutex;
             std::condition_variable changed;
-            size_t outstanding = 0;
             size_t succeeded = 0;
             size_t failed = 0;
             int32_t first_failed_id = -1;
             fluss::Result first_error;
         };
-        // Use a small limit to demonstrate backpressure with only three rows.
-        constexpr size_t max_outstanding = 2;
         auto pending = std::make_shared<PendingWrites>();
         size_t accepted = 0;
         bool submission_failed = false;
@@ -176,7 +178,9 @@ int main() {
                 row.SetTime(5, r.time);
                 row.SetTimestampNtz(6, r.ts_ntz);
                 row.SetTimestampLtz(7, r.ts_ltz);
-                fluss::WriteCallback callback = [pending, id](fluss::Result result) {
+                // The SDK waits for callback capacity before submitting. Do not
+                // hold the tracking mutex here: callbacks need it to finish.
+                auto submitted = writer.Append(row, [pending, id](fluss::Result result) {
                     {
                         std::lock_guard<std::mutex> lock(pending->mutex);
                         if (result.Ok()) {
@@ -188,34 +192,11 @@ int main() {
                             }
                             ++pending->failed;
                         }
-                        --pending->outstanding;
                     }
-                    pending->changed.notify_all();
-                };
-
-                // Reserve before Append: the callback may run before Append returns.
-                {
-                    std::unique_lock<std::mutex> lock(pending->mutex);
-                    pending->changed.wait(lock,
-                                          [&] { return pending->outstanding < max_outstanding; });
-                    ++pending->outstanding;
-                }
-                fluss::Result submitted;
-                try {
-                    // Never hold the tracking mutex while calling the SDK.
-                    submitted = writer.Append(row, std::move(callback));
-                } catch (...) {
-                    // Callback-wrapper allocation can throw before submission.
-                    std::lock_guard<std::mutex> lock(pending->mutex);
-                    --pending->outstanding;
-                    throw;
-                }
+                    pending->changed.notify_one();
+                });
                 if (!submitted.Ok()) {
-                    // Rejected submissions have no callback; release their slot here.
-                    {
-                        std::lock_guard<std::mutex> lock(pending->mutex);
-                        --pending->outstanding;
-                    }
+                    // Rejected submissions have no callback. The SDK returns their capacity.
                     std::cerr << "Submission failed for id=" << id
                               << ": code=" << submitted.error_code
                               << " message=" << submitted.error_message << '\n';
@@ -240,7 +221,9 @@ int main() {
         std::unique_lock<std::mutex> lock(pending->mutex);
         // This demonstration waits without a deadline. A timeout would not cancel
         // accepted writes or callbacks; production code needs its own recovery policy.
-        pending->changed.wait(lock, [&] { return pending->outstanding == 0; });
+        // Read accepted only after submission stops, so early callbacks are safe.
+        pending->changed.wait(lock,
+                              [&] { return pending->succeeded + pending->failed == accepted; });
         std::cout << "Callback writes: accepted=" << accepted << " succeeded=" << pending->succeeded
                   << " failed=" << pending->failed << '\n';
         if (pending->failed != 0) {
@@ -249,7 +232,8 @@ int main() {
                       << " message=" << pending->first_error.error_message << '\n';
         }
         // Do not blindly retry failures: an error need not mean nothing was written.
-        // Shared captures and the connection/writer stay alive through the drain.
+        // This wait observes result handling, not SDK callback return. Shared captures
+        // keep state alive through callback return; the connection stays alive too.
         if (submission_failed || !flushed.Ok() || pending->failed != 0) {
             return 1;
         }

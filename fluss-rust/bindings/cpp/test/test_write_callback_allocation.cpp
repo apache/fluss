@@ -52,6 +52,9 @@ TEST(WriteCallbackBridgeTest, ErrorTextAllocationFailureStillCompletesAndRelease
         ++calls;
         observed = std::move(result);
     });
+    auto capacity = std::make_shared<fluss::ffi::WriteCallbackCapacity>(
+        fluss::WriteCallbackOptions{1, std::chrono::milliseconds(0)});
+    ASSERT_TRUE(callback.Reserve(capacity).Ok());
     const rust::Str text(message);
     fail_next_allocation = true;
     callback.Complete(fluss::ErrorCode::DELETION_DISABLED_EXCEPTION, text);
@@ -62,4 +65,6 @@ TEST(WriteCallbackBridgeTest, ErrorTextAllocationFailureStillCompletesAndRelease
     EXPECT_EQ(observed.error_code, fluss::ErrorCode::DELETION_DISABLED_EXCEPTION);
     EXPECT_TRUE(observed.error_message.empty());
     EXPECT_TRUE(weak.expired());
+    ASSERT_TRUE(capacity->Acquire().Ok());
+    capacity->Release();
 }
