@@ -723,7 +723,7 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
     </tr>
     <tr>
       <td>errorsPerSecond</td>
-      <td>The total number of error requests processed per second for each request type.</td>
+      <td>The total number of failed RPC responses processed per second for each request type. Errors carried by successful response buckets are excluded.</td>
       <td>Meter</td>
     </tr>
     <tr>
@@ -754,7 +754,7 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
     <tr>
       <td rowspan="1">request_error</td>
       <td>errorsPerSecond</td>
-      <td>The number of failed RPC responses processed per second for each request type and <code>error</code> name. One event is recorded for each failed RPC response; <code>NONE</code> and errors in successful response buckets are excluded. A series appears only after its request/error first occurs.</td>
+      <td>The number of errors processed per second for each request type and <code>error</code> name. It includes failed RPC responses and non-<code>NONE</code> error codes in successful response buckets. Because one successful response can contain multiple bucket errors, this metric does not necessarily sum to the request type's total <code>errorsPerSecond</code>. A series appears only after its request/error first occurs.</td>
       <td>Meter</td>
     </tr>
      <tr>
