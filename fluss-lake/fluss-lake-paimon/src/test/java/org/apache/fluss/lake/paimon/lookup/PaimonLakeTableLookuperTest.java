@@ -175,13 +175,11 @@ class PaimonLakeTableLookuperTest {
         FileStoreTable table = createPaimonTable(tablePath, partitionedPkDescriptor(schema));
         PaimonKeyEncoder bucketKeyEncoder =
                 new PaimonKeyEncoder(schema.getRowType(), Collections.singletonList("id"));
+        byte[] firstKey = bucketKeyEncoder.encodeKey(row(1, "20240101", "Alice"));
+        byte[] secondKey = bucketKeyEncoder.encodeKey(row(3, "20240101", "Bob"));
         PaimonBucketingFunction bucketingFunction = new PaimonBucketingFunction();
-        int firstBucket =
-                bucketingFunction.bucketing(
-                        bucketKeyEncoder.encodeKey(row(1, "20240101", "Alice")), 2);
-        int secondBucket =
-                bucketingFunction.bucketing(
-                        bucketKeyEncoder.encodeKey(row(3, "20240101", "Bob")), 2);
+        int firstBucket = bucketingFunction.bucketing(firstKey, 2);
+        int secondBucket = bucketingFunction.bucketing(secondKey, 2);
         assertThat(firstBucket).isNotEqualTo(secondBucket);
 
         writeAndCommitData(
@@ -198,20 +196,46 @@ class PaimonLakeTableLookuperTest {
             BinaryValue firstValue =
                     decodeValue(
                             lookuper.lookup(
-                                    paimonKey(schema, 1, "20240101"),
+                                    firstKey,
                                     lookupContext(schema, "20240101", firstBucket, SCHEMA_ID)),
                             SCHEMA_ID,
                             schema);
             BinaryValue secondValue =
                     decodeValue(
                             lookuper.lookup(
-                                    paimonKey(schema, 3, "20240101"),
+                                    secondKey,
                                     lookupContext(schema, "20240101", secondBucket, SCHEMA_ID)),
                             SCHEMA_ID,
                             schema);
 
             assertRow(firstValue.row, 1, "20240101", "Alice");
             assertRow(secondValue.row, 3, "20240101", "Bob");
+
+            // A missing bucket id delegates routing to the lake table's bucket layout.
+            LakeTableLookuper.LookupContext context =
+                    lookupContext(schema, "20240101", null, SCHEMA_ID);
+            assertRow(
+                    decodeValue(lookuper.lookup(firstKey, context), SCHEMA_ID, schema).row,
+                    1,
+                    "20240101",
+                    "Alice");
+            assertRow(
+                    decodeValue(lookuper.lookup(secondKey, context), SCHEMA_ID, schema).row,
+                    3,
+                    "20240101",
+                    "Bob");
+
+            writeAndCommitData(
+                    table,
+                    Collections.singletonMap(
+                            firstBucket,
+                            Collections.singletonList(paimonRow(1, "20240101", "Updated Alice"))));
+            lookuper.requestRefresh();
+            assertRow(
+                    decodeValue(lookuper.lookup(firstKey, context), SCHEMA_ID, schema).row,
+                    1,
+                    "20240101",
+                    "Updated Alice");
         }
     }
 
@@ -296,13 +320,7 @@ class PaimonLakeTableLookuperTest {
                                 paimonRow(2, "20240102", "Bob"))));
 
         try (LakeTableLookuper lookuper =
-                new PaimonLakeTableLookuper(
-                        paimonConfig,
-                        tablePath,
-                        tempWarehouseDir.getAbsolutePath(),
-                        tableConfig(KvFormat.COMPACTED),
-                        LOOKUP_CACHE_MAX_DISK_BYTES,
-                        NO_OP_DISK_WRITE_GUARD)) {
+                createLookuper(LakeLookupMode.SST, tablePath, KvFormat.COMPACTED)) {
             LakeTableLookuper.LookupContext firstPartition =
                     lookupContext(schema, "20240101", 0, SCHEMA_ID);
             LakeTableLookuper.LookupContext secondPartition =
@@ -936,7 +954,7 @@ class PaimonLakeTableLookuperTest {
     }
 
     private static LakeTableLookuper.LookupContext lookupContext(
-            Schema schema, String partitionName, int bucket, short schemaId) {
+            Schema schema, String partitionName, Integer bucket, short schemaId) {
         return new LakeTableLookuper.LookupContext(
                 ResolvedPartitionSpec.fromPartitionName(
                         Collections.singletonList("dt"), partitionName),

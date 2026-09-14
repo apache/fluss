@@ -114,6 +114,11 @@ public class PaimonScanBasedTableLookuper implements LakeTableLookuper {
     }
 
     @Override
+    public void requestRefresh() {
+        // Each lookup already plans a fresh scan of the latest snapshot.
+    }
+
+    @Override
     public void close() {
         inWriteLock(
                 lifecycleLock,
@@ -189,9 +194,11 @@ public class PaimonScanBasedTableLookuper implements LakeTableLookuper {
                                 PartitionPredicate.fromMultiple(
                                         rowType.project(table.partitionKeys()),
                                         Collections.singletonList(partition)))
-                        .withBucket(context.bucketId())
                         .withReadType(rowType.project(context.valueRowType().getFieldNames()))
                         .withLimit(1);
+        if (context.bucketId() != null) {
+            readBuilder.withBucket(context.bucketId());
+        }
         // Pushdown alone may only prune files. Filter each row before applying the limit.
         try (RecordReader<org.apache.paimon.data.InternalRow> reader =
                 readBuilder.newRead().executeFilter().createReader(readBuilder.newScan().plan())) {
