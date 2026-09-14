@@ -20,7 +20,9 @@ package org.apache.fluss.rpc.netty.server;
 import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.exception.TableNotExistException;
 import org.apache.fluss.metrics.Meter;
+import org.apache.fluss.metrics.Metric;
 import org.apache.fluss.metrics.MetricNames;
+import org.apache.fluss.metrics.groups.AbstractMetricGroup;
 import org.apache.fluss.metrics.groups.GenericMetricGroup;
 import org.apache.fluss.metrics.groups.MetricGroup;
 import org.apache.fluss.metrics.util.NOPMetricsGroup;
@@ -30,15 +32,18 @@ import org.apache.fluss.record.bytesview.MemorySegmentBytesView;
 import org.apache.fluss.rpc.TestingTabletGatewayService;
 import org.apache.fluss.rpc.messages.ApiVersionsRequest;
 import org.apache.fluss.rpc.messages.ApiVersionsResponse;
+import org.apache.fluss.rpc.messages.FetchLogResponse;
 import org.apache.fluss.rpc.messages.LookupRequest;
 import org.apache.fluss.rpc.messages.LookupResponse;
 import org.apache.fluss.rpc.messages.PbApiVersion;
+import org.apache.fluss.rpc.messages.PbFetchLogRespForTable;
 import org.apache.fluss.rpc.messages.PbLookupReqForBucket;
 import org.apache.fluss.rpc.messages.PbLookupRespForBucket;
 import org.apache.fluss.rpc.messages.PbProduceLogReqForBucket;
 import org.apache.fluss.rpc.messages.PbValue;
 import org.apache.fluss.rpc.messages.ProduceLogRequest;
 import org.apache.fluss.rpc.messages.ProduceLogResponse;
+import org.apache.fluss.rpc.messages.PutKvResponse;
 import org.apache.fluss.rpc.protocol.ApiKeys;
 import org.apache.fluss.rpc.protocol.ApiManager;
 import org.apache.fluss.rpc.protocol.Errors;
@@ -65,7 +70,9 @@ import java.nio.file.Path;
 import java.time.Duration;
 import java.util.Collections;
 import java.util.Deque;
+import java.util.HashMap;
 import java.util.HashSet;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
@@ -79,7 +86,10 @@ import static org.apache.fluss.record.TestData.DATA1;
 import static org.apache.fluss.testutils.DataTestUtils.genMemoryLogRecordsByObject;
 import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /** Test for {@link NettyServerHandler}. */
@@ -286,6 +296,210 @@ final class NettyServerHandlerTest {
                         registered ->
                                 assertThat(registered.group.getAllVariables())
                                         .containsEntry("error", Errors.TABLE_NOT_EXIST.name()));
+    }
+
+    @Test
+    void testSuccessfulResponseMarksBucketErrorsWithoutAggregate() throws Exception {
+        RequestsMetricsTest.RecordingMetricRegistry metricRegistry =
+                new RequestsMetricsTest.RecordingMetricRegistry();
+        MetricGroup metricGroup = new GenericMetricGroup(metricRegistry, null, "tabletserver");
+        TestingRequestChannel tabletRequestChannel = new TestingRequestChannel(100);
+        NettyServerHandler tabletServerHandler =
+                new NettyServerHandler(
+                        tabletRequestChannel,
+                        new ApiManager(ServerType.TABLET_SERVER),
+                        "FLUSS",
+                        true,
+                        RequestsMetrics.createTabletServerRequestMetrics(metricGroup),
+                        new PlainTextAuthenticationPlugin.PlainTextServerAuthenticator());
+        ChannelHandlerContext tabletContext = mockImmediateChannelHandlerContext();
+        tabletServerHandler.channelActive(tabletContext);
+
+        LookupRequest lookupRequest = new LookupRequest().setTableId(1);
+        PbLookupReqForBucket bucketRequest =
+                new PbLookupReqForBucket().setPartitionId(1).setBucketId(1);
+        bucketRequest.addKey("key".getBytes());
+        lookupRequest.addAllBucketsReqs(Collections.singleton(bucketRequest));
+        tabletServerHandler.channelRead(
+                tabletContext,
+                MessageCodec.encodeRequest(
+                        ByteBufAllocator.DEFAULT,
+                        ApiKeys.LOOKUP.id,
+                        ApiKeys.LOOKUP.highestSupportedVersion,
+                        1001,
+                        lookupRequest));
+
+        LookupResponse response = new LookupResponse();
+        response.addBucketsResp().setBucketId(1).setErrorCode(Errors.TABLE_NOT_EXIST.code());
+        response.addBucketsResp().setBucketId(2).setErrorCode(Errors.TABLE_NOT_EXIST.code());
+        response.addBucketsResp().setBucketId(3).setErrorCode(Integer.MAX_VALUE);
+        response.addBucketsResp().setBucketId(4);
+        response.addBucketsResp().setBucketId(5).setErrorCode(Errors.NONE.code());
+        FlussRequest request = (FlussRequest) tabletRequestChannel.getAndRemoveRequest(0);
+        request.complete(response);
+
+        assertThat(metricRegistry.metrics(MetricNames.ERRORS_RATE, "lookup"))
+                .hasSize(3)
+                .anySatisfy(
+                        registered ->
+                                assertThat(registered.group.getAllVariables())
+                                        .doesNotContainKey("error")
+                                        .isEqualTo(Collections.singletonMap("request", "lookup")));
+        assertThat(metricRegistry.metrics(MetricNames.ERRORS_RATE, "lookup"))
+                .filteredOn(registered -> registered.group.getAllVariables().containsKey("error"))
+                .anySatisfy(
+                        registered -> {
+                            assertThat(registered.group.getAllVariables())
+                                    .containsEntry("error", Errors.TABLE_NOT_EXIST.name());
+                            assertThat(((Meter) registered.metric).getCount()).isEqualTo(2);
+                        })
+                .anySatisfy(
+                        registered -> {
+                            assertThat(registered.group.getAllVariables())
+                                    .containsEntry("error", Errors.UNKNOWN_SERVER_ERROR.name());
+                            assertThat(((Meter) registered.metric).getCount()).isEqualTo(1);
+                        });
+        assertThat(metricRegistry.metrics(MetricNames.ERRORS_RATE, "lookup"))
+                .filteredOn(registered -> !registered.group.getAllVariables().containsKey("error"))
+                .allSatisfy(
+                        registered -> assertThat(((Meter) registered.metric).getCount()).isZero());
+    }
+
+    @Test
+    void testEncodingFailureMarksOnlyWholeRpcError() throws Exception {
+        RequestsMetricsTest.RecordingMetricRegistry metricRegistry =
+                new RequestsMetricsTest.RecordingMetricRegistry();
+        MetricGroup metricGroup = new GenericMetricGroup(metricRegistry, null, "tabletserver");
+        TestingRequestChannel tabletRequestChannel = new TestingRequestChannel(100);
+        NettyServerHandler tabletServerHandler =
+                new NettyServerHandler(
+                        tabletRequestChannel,
+                        new ApiManager(ServerType.TABLET_SERVER),
+                        "FLUSS",
+                        true,
+                        RequestsMetrics.createTabletServerRequestMetrics(metricGroup),
+                        new PlainTextAuthenticationPlugin.PlainTextServerAuthenticator());
+        ChannelHandlerContext tabletContext = mockImmediateChannelHandlerContext();
+        tabletServerHandler.channelActive(tabletContext);
+
+        LookupRequest lookupRequest = new LookupRequest().setTableId(1);
+        PbLookupReqForBucket bucketRequest =
+                new PbLookupReqForBucket().setPartitionId(1).setBucketId(1);
+        bucketRequest.addKey("key".getBytes());
+        lookupRequest.addAllBucketsReqs(Collections.singleton(bucketRequest));
+        tabletServerHandler.channelRead(
+                tabletContext,
+                MessageCodec.encodeRequest(
+                        ByteBufAllocator.DEFAULT,
+                        ApiKeys.LOOKUP.id,
+                        ApiKeys.LOOKUP.highestSupportedVersion,
+                        1001,
+                        lookupRequest));
+
+        LookupResponse response = new LookupResponse();
+        response.addBucketsResp().setErrorCode(Errors.TABLE_NOT_EXIST.code());
+        FlussRequest request = (FlussRequest) tabletRequestChannel.getAndRemoveRequest(0);
+        request.complete(response);
+
+        verify(tabletContext).writeAndFlush(any(ByteBuf.class));
+        assertThat(metricRegistry.metrics(MetricNames.ERRORS_RATE, "lookup"))
+                .hasSize(2)
+                .allSatisfy(
+                        registered ->
+                                assertThat(((Meter) registered.metric).getCount()).isEqualTo(1))
+                .anySatisfy(
+                        registered ->
+                                assertThat(registered.group.getAllVariables())
+                                        .doesNotContainKey("error"))
+                .anySatisfy(
+                        registered ->
+                                assertThat(registered.group.getAllVariables())
+                                        .containsEntry(
+                                                "error", Errors.UNKNOWN_SERVER_ERROR.name()));
+        assertThat(metricRegistry.metrics(MetricNames.ERRORS_RATE, "lookup"))
+                .filteredOn(registered -> registered.group.getAllVariables().containsKey("error"))
+                .noneSatisfy(
+                        registered ->
+                                assertThat(registered.group.getAllVariables())
+                                        .containsEntry("error", Errors.TABLE_NOT_EXIST.name()));
+    }
+
+    @Test
+    void testBatchResponsesCollectErrorCounts() {
+        Map<Integer, Integer> errorCounts = new HashMap<>();
+
+        ProduceLogResponse produceLogResponse = new ProduceLogResponse();
+        produceLogResponse.addBucketsResp().setBucketId(1).setErrorCode(1);
+        PutKvResponse putKvResponse = new PutKvResponse();
+        putKvResponse.addBucketsResp().setBucketId(1).setErrorCode(2);
+        LookupResponse lookupResponse = new LookupResponse();
+        lookupResponse.addBucketsResp().setBucketId(1).setErrorCode(3);
+        FetchLogResponse fetchLogResponse = new FetchLogResponse();
+        PbFetchLogRespForTable tableResponse = fetchLogResponse.addTablesResp().setTableId(1);
+        tableResponse.addBucketsResp().setBucketId(1).setErrorCode(4);
+
+        produceLogResponse.collectErrorCounts(errorCounts);
+        putKvResponse.collectErrorCounts(errorCounts);
+        lookupResponse.collectErrorCounts(errorCounts);
+        fetchLogResponse.collectErrorCounts(errorCounts);
+
+        assertThat(errorCounts)
+                .containsEntry(1, 1)
+                .containsEntry(2, 1)
+                .containsEntry(3, 1)
+                .containsEntry(4, 1);
+    }
+
+    @Test
+    void testResponseMetricsFailureDoesNotSendErrorResponse() throws Exception {
+        MetricGroup metricGroup =
+                new GenericMetricGroup(
+                        new ErrorMetricRegistrationFailureRegistry(), null, "tabletserver");
+        TestingRequestChannel tabletRequestChannel = new TestingRequestChannel(100);
+        NettyServerHandler tabletServerHandler =
+                new NettyServerHandler(
+                        tabletRequestChannel,
+                        new ApiManager(ServerType.TABLET_SERVER),
+                        "FLUSS",
+                        true,
+                        RequestsMetrics.createTabletServerRequestMetrics(metricGroup),
+                        new PlainTextAuthenticationPlugin.PlainTextServerAuthenticator());
+        ChannelHandlerContext tabletContext = mockImmediateChannelHandlerContext();
+        tabletServerHandler.channelActive(tabletContext);
+
+        LookupRequest lookupRequest = new LookupRequest().setTableId(1);
+        PbLookupReqForBucket bucketRequest =
+                new PbLookupReqForBucket().setPartitionId(1).setBucketId(1);
+        bucketRequest.addKey("key".getBytes());
+        lookupRequest.addAllBucketsReqs(Collections.singleton(bucketRequest));
+        tabletServerHandler.channelRead(
+                tabletContext,
+                MessageCodec.encodeRequest(
+                        ByteBufAllocator.DEFAULT,
+                        ApiKeys.LOOKUP.id,
+                        ApiKeys.LOOKUP.highestSupportedVersion,
+                        1001,
+                        lookupRequest));
+
+        LookupResponse response = new LookupResponse();
+        response.addBucketsResp().setBucketId(1).setErrorCode(Errors.TABLE_NOT_EXIST.code());
+        FlussRequest request = (FlussRequest) tabletRequestChannel.getAndRemoveRequest(0);
+        request.complete(response);
+
+        verify(tabletContext).flush();
+        verify(tabletContext, never()).writeAndFlush(any(ByteBuf.class));
+    }
+
+    private static class ErrorMetricRegistrationFailureRegistry
+            extends RequestsMetricsTest.RecordingMetricRegistry {
+
+        @Override
+        public void register(Metric metric, String metricName, AbstractMetricGroup group) {
+            if (group.getAllVariables().containsKey("error")) {
+                throw new Error("metric registration failed");
+            }
+            super.register(metric, metricName, group);
+        }
     }
 
     @Test

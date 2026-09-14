@@ -182,7 +182,11 @@ public class RequestsMetrics {
 
         void markError(Errors error) {
             errorsCount.inc();
-            errorsCountByError.computeIfAbsent(error, this::registerErrorMeter).inc();
+            markErrorCount(error, 1);
+        }
+
+        void markErrorCount(Errors error, int count) {
+            errorsCountByError.computeIfAbsent(error, this::registerErrorMeter).inc(count);
         }
 
         private Counter registerErrorMeter(Errors error) {
