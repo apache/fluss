@@ -83,8 +83,9 @@ tablet:
     # This value is inlined into the StatefulSet's probe command, so it is
     # readable by anyone who can read the rendered manifest. To keep the
     # credential in a Secret instead, leave this empty and set
-    # `security.readinessProbe.existingSecret`. Setting both is rejected at
-    # render time, because the probe command would silently override the Secret.
+    # `security.readinessProbe.existingSecret`.
+    # Setting both is rejected at render time, because the probe command
+    # would silently override the Secret.
     healthCheckAuth: ""
   extraVolumes: []
   extraVolumeMounts: []

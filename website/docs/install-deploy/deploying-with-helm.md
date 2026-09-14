@@ -911,7 +911,7 @@ container, and the exec probe inherits the container environment, so the value r
 check unchanged. The setting sits under `security` rather than under a component because every
 component's probe authenticates with the same credential.
 
-Setting the credential more than once fails the render — the inline form would silently
+Setting the credential more than once fails the render. The inline form would silently
 override the Secret, and a second `READINESS_HEALTH_CHECK_AUTH` entry under
 [`secrets.env`](#secrets-in-configuration-overrides) would make the StatefulSet invalid.
 

@@ -306,9 +306,7 @@ Usage:
 
 {{/*
 Validates the readiness probe credential. It has three possible sources, and
-setting more than one is an error: the probe command would export the literal
-over the Secret-sourced env var, and two env entries of the same name make the
-StatefulSet invalid.
+setting more than one is an error.
 Returns an error message if invalid, empty string otherwise.
 Usage:
   include "fluss.security.readinessProbe.validateAuth" .
