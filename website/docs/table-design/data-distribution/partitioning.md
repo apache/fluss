@@ -15,6 +15,10 @@ For partitioned tables, Fluss supports three strategies of managing partitions.
    
 These three strategies are orthogonal and can coexist on the same table.
 
+:::note
+Each partition's bucket count is fixed at the moment the partition is created: no matter which of the three strategies above creates the partition, it takes the table's current `bucket.num` as its own bucket count and keeps it for its entire lifetime. Changing `bucket.num` with `ALTER TABLE ... SET ('bucket.num' = ...)` only affects partitions created afterwards — existing partitions, including partitions pre-created for future dates, keep their original bucket count. See [Rescaling Bucket Count for Future Partitions](bucketing.md#rescaling-bucket-count-for-future-partitions).
+:::
+
 ### Multi-Field Partitioned Tables
 
 Partitioned tables (either primary-key table or log table) support configuring partition keys based on multiple fields. This allows users to segment data using combinations of field values, enabling more granular data organization, management, and query optimization.

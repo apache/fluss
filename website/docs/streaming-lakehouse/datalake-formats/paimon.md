@@ -232,6 +232,10 @@ No data is lost or corrupted, and the records that could not be tiered remain re
 To recover, make the two schemas consistent again. To keep the externally added column, run a matching `ALTER TABLE ... ADD` statement on the Fluss table. When the Paimon table already contains the column in the expected position, Fluss completes the change without touching the Paimon table. If Fluss rejects the statement because the schemas cannot be reconciled, drop the externally added column from the Paimon table and, if you still need it, add it through Fluss afterwards. Once the schemas match, the tiering job recovers on its next automatic restart and the pending records are tiered completely. If you cancelled the tiering job in the meantime, resubmit it.
 :::
 
+## Rescaling Bucket Count
+
+For a datalake-enabled Fluss table with Paimon as the lake format, `ALTER TABLE ... SET ('bucket.num' = N)` is also propagated to the Paimon table: the `bucket` option of the Paimon table is updated as part of the same statement, before the Fluss-side metadata is committed (if the propagation fails, the whole `ALTER TABLE` fails and neither side is changed). As on the Fluss side, the new count applies only to partitions created afterwards — existing partitions keep their original bucket count, and no existing data or lake files are rewritten. See [Rescaling Bucket Count for Future Partitions](../../table-design/data-distribution/bucketing.md#rescaling-bucket-count-for-future-partitions) for the full semantics and constraints.
+
 ## Data Type Mapping
 
 When integrating with Paimon, Fluss automatically converts between Fluss data types and Paimon data types.  
