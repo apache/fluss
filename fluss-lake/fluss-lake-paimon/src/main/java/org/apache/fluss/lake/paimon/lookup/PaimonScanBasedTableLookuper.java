@@ -32,12 +32,12 @@ import org.apache.paimon.catalog.Catalog;
 import org.apache.paimon.catalog.CatalogContext;
 import org.apache.paimon.catalog.CatalogFactory;
 import org.apache.paimon.data.BinaryRow;
+import org.apache.paimon.data.InternalRow;
 import org.apache.paimon.options.Options;
 import org.apache.paimon.partition.PartitionPredicate;
 import org.apache.paimon.predicate.Predicate;
 import org.apache.paimon.predicate.PredicateBuilder;
-import org.apache.paimon.reader.RecordReader;
-import org.apache.paimon.reader.RecordReader.RecordIterator;
+import org.apache.paimon.reader.RecordReaderIterator;
 import org.apache.paimon.table.FileStoreTable;
 import org.apache.paimon.table.sink.RowPartitionKeyExtractor;
 import org.apache.paimon.table.source.ReadBuilder;
@@ -99,7 +99,7 @@ public class PaimonScanBasedTableLookuper implements LakeTableLookuper {
                     long lookupStartNanos = System.nanoTime();
                     try {
                         FileStoreTable table = table();
-                        // Paimon tables contain mutable lazy store state; isolate it per lookup.
+                        // Isolate mutable lazy store state while sharing Paimon's metadata caches.
                         return scanLookup(table.copy(table.schema()), key, context);
                     } catch (Exception e) {
                         // Paimon also wraps I/O failures in plain RuntimeExceptions.
@@ -161,6 +161,37 @@ public class PaimonScanBasedTableLookuper implements LakeTableLookuper {
 
     private @Nullable byte[] scanLookup(FileStoreTable table, byte[] key, LookupContext context)
             throws Exception {
+        ReadBuilder readBuilder =
+                table.newReadBuilder()
+                        .withFilter(createKeyPredicates(table, key, context))
+                        .withPartitionFilter(createPartitionPredicate(table, context))
+                        .withReadType(
+                                table.rowType().project(context.valueRowType().getFieldNames()))
+                        .withLimit(1);
+        if (context.bucketId() != null) {
+            readBuilder.withBucket(context.bucketId());
+        }
+        // Pushdown alone may only prune files. Filter each row before applying the limit.
+        try (RecordReaderIterator<InternalRow> rows =
+                new RecordReaderIterator<>(
+                        readBuilder
+                                .newRead()
+                                .executeFilter()
+                                .createReader(readBuilder.newScan().plan()))) {
+            if (!rows.hasNext()) {
+                return null;
+            }
+            // Encode before advancing or closing the iterator releases the backing storage.
+            return toFlussValue(
+                    rows.next(),
+                    context.schemaId(),
+                    context.valueRowType(),
+                    tableConfig.getKvFormat());
+        }
+    }
+
+    private List<Predicate> createKeyPredicates(
+            FileStoreTable table, byte[] key, LookupContext context) {
         RowType rowType = table.rowType();
         List<String> primaryKeys = table.schema().trimmedPrimaryKeys();
         KeyDecoder keyDecoder =
@@ -177,12 +208,16 @@ public class PaimonScanBasedTableLookuper implements LakeTableLookuper {
         for (int i = 0; i < primaryKeys.size(); i++) {
             int fieldIndex = predicateBuilder.indexOf(primaryKeys.get(i));
             Object value =
-                    org.apache.paimon.data.InternalRow.createFieldGetter(
-                                    rowType.getTypeAt(fieldIndex), i)
+                    InternalRow.createFieldGetter(rowType.getTypeAt(fieldIndex), i)
                             .getFieldOrNull(keyRow);
             predicates.add(predicateBuilder.equal(fieldIndex, value));
         }
+        return predicates;
+    }
 
+    private PartitionPredicate createPartitionPredicate(
+            FileStoreTable table, LookupContext context) {
+        RowType rowType = table.rowType();
         RowPartitionKeyExtractor partitionKeyExtractor =
                 new RowPartitionKeyExtractor(table.schema());
         BinaryRow partition =
@@ -191,38 +226,7 @@ public class PaimonScanBasedTableLookuper implements LakeTableLookuper {
                         context.valueRowType(),
                         rowType,
                         partitionKeyExtractor::partition);
-        ReadBuilder readBuilder =
-                table.newReadBuilder()
-                        .withFilter(predicates)
-                        .withPartitionFilter(
-                                PartitionPredicate.fromMultiple(
-                                        rowType.project(table.partitionKeys()),
-                                        Collections.singletonList(partition)))
-                        .withReadType(rowType.project(context.valueRowType().getFieldNames()))
-                        .withLimit(1);
-        if (context.bucketId() != null) {
-            readBuilder.withBucket(context.bucketId());
-        }
-        // Pushdown alone may only prune files. Filter each row before applying the limit.
-        try (RecordReader<org.apache.paimon.data.InternalRow> reader =
-                readBuilder.newRead().executeFilter().createReader(readBuilder.newScan().plan())) {
-            RecordIterator<org.apache.paimon.data.InternalRow> batch;
-            while ((batch = reader.readBatch()) != null) {
-                try {
-                    org.apache.paimon.data.InternalRow row = batch.next();
-                    if (row != null) {
-                        // Encode while the batch still owns the row's backing storage.
-                        return toFlussValue(
-                                row,
-                                context.schemaId(),
-                                context.valueRowType(),
-                                tableConfig.getKvFormat());
-                    }
-                } finally {
-                    batch.releaseBatch();
-                }
-            }
-        }
-        return null;
+        return PartitionPredicate.fromMultiple(
+                rowType.project(table.partitionKeys()), Collections.singletonList(partition));
     }
 }
