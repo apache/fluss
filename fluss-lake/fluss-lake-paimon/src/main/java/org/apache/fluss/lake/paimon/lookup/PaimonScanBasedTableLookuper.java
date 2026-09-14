@@ -25,6 +25,7 @@ import org.apache.fluss.lake.paimon.source.FlussRowAsPaimonRow;
 import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.row.decode.KeyDecoder;
+import org.apache.fluss.utils.ExceptionUtils;
 import org.apache.fluss.utils.IOUtils;
 
 import org.apache.paimon.catalog.Catalog;
@@ -45,7 +46,6 @@ import org.apache.paimon.types.RowType;
 import javax.annotation.Nullable;
 
 import java.io.IOException;
-import java.io.UncheckedIOException;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -101,7 +101,11 @@ public class PaimonScanBasedTableLookuper implements LakeTableLookuper {
                         FileStoreTable table = table();
                         // Paimon tables contain mutable lazy store state; isolate it per lookup.
                         return scanLookup(table.copy(table.schema()), key, context);
-                    } catch (IOException | UncheckedIOException e) {
+                    } catch (Exception e) {
+                        // Paimon also wraps I/O failures in plain RuntimeExceptions.
+                        if (!ExceptionUtils.findThrowable(e, IOException.class).isPresent()) {
+                            throw e;
+                        }
                         // The next RPC retry plans a fresh scan after compaction or expiration.
                         throw new KvStorageException(
                                 "Failed to scan historical data from Paimon for " + tablePath + ".",
