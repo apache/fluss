@@ -375,4 +375,16 @@ public class DataTypes {
     public static RowType ROW(DataType... fieldTypes) {
         return RowType.builder().fields(fieldTypes).build();
     }
+
+    /**
+     * Data type of a fixed-dimension dense vector {@code VECTOR(n)} where {@code n} is the number
+     * of elements. {@code n} must be between 1 and {@link Integer#MAX_VALUE}.
+     *
+     * <p>Internally represented as an Arrow {@code FixedSizeList<Float32>}.
+     *
+     * @see VectorType
+     */
+    public static VectorType VECTOR(int dimension) {
+        return new VectorType(dimension);
+    }
 }

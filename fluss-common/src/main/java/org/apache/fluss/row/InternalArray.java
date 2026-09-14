@@ -143,6 +143,10 @@ public interface InternalArray extends DataGetters {
                 final int rowFieldCount = ((RowType) fieldType).getFieldCount();
                 elementGetter = (array, pos) -> array.getRow(pos, rowFieldCount);
                 break;
+            case VECTOR:
+                // VECTOR values are represented as InternalArray of FLOAT32 elements.
+                elementGetter = InternalArray::getArray;
+                break;
             default:
                 String msg =
                         String.format(
@@ -224,9 +228,17 @@ public interface InternalArray extends DataGetters {
                             return genericRow;
                         };
                 break;
+            case VECTOR:
+                elementGetter =
+                        (array, pos) -> {
+                            InternalArray inner = array.getArray(pos);
+                            return new GenericArray(inner.toFloatArray());
+                        };
+                break;
             default:
                 // for primitive types, we can directly return the element getter
                 elementGetter = createElementGetter(fieldType);
+                break;
         }
         if (!fieldType.isNullable()) {
             return elementGetter;

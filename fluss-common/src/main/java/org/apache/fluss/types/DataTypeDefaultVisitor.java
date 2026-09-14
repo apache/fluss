@@ -122,5 +122,10 @@ public abstract class DataTypeDefaultVisitor<R> implements DataTypeVisitor<R> {
         return defaultMethod(rowType);
     }
 
+    @Override
+    public R visit(VectorType vectorType) {
+        return defaultMethod(vectorType);
+    }
+
     protected abstract R defaultMethod(DataType dataType);
 }
