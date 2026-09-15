@@ -81,7 +81,7 @@ public final class KvSnapshotFileRule implements FileRule {
             return Decision.KEEP_ACTIVE;
         }
 
-        return file.modificationTime() < cutoffMillis ? Decision.DELETE : Decision.DEFER;
+        return MtimePolicy.evaluateInactiveFile(file.modificationTime(), cutoffMillis);
     }
 
     private static boolean isKnownSnapshotFile(String fileName) {
