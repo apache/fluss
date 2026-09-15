@@ -277,17 +277,24 @@ public class DefaultLogRecordBatch implements LogRecordBatch {
                 "Arrow batch loading requires context to implement ArrowRecordBatchContext, but is %s.",
                 context.getClass().getName());
         ArrowRecordBatchContext arrowRecordBatchContext = (ArrowRecordBatchContext) context;
-        checkArgument(isAppendOnly(), "Arrow batch loading only supports append-only batches.");
         ArrowRecordBatchContext.UnshadedArrowBatchAccess batchAccess =
                 arrowRecordBatchContext.createUnshadedArrowBatchAccess(schemaId);
 
         try {
             int recordsDataOffset = recordsDataOffset();
-            int arrowOffset = position + recordsDataOffset;
-            int arrowLength = sizeInBytes() - recordsDataOffset;
+            boolean appendOnly = isAppendOnly();
+            int changeTypesLength = appendOnly ? 0 : getRecordCount();
+            int arrowOffset = position + recordsDataOffset + changeTypesLength;
+            byte[] changeTypes = null;
+            if (!appendOnly) {
+                changeTypes = new byte[changeTypesLength];
+                segment.get(position + recordsDataOffset, changeTypes);
+            }
+            int arrowLength = sizeInBytes() - recordsDataOffset - changeTypesLength;
             batchAccess.loadArrowBatch(segment, arrowOffset, arrowLength);
             ArrowBatchData arrowBatchData =
-                    batchAccess.createArrowBatchData(baseLogOffset(), commitTimestamp(), schemaId);
+                    batchAccess.createArrowBatchData(
+                            baseLogOffset(), commitTimestamp(), schemaId, changeTypes);
             batchAccess = null;
             return arrowBatchData;
         } catch (Throwable t) {

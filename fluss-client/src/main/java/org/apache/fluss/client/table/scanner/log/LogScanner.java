@@ -57,6 +57,24 @@ public interface LogScanner extends AutoCloseable {
     ScanRecords poll(Duration timeout);
 
     /**
+     * Polls Arrow record batches from the tablet server without materializing individual rows.
+     *
+     * <p>This method is supported for tables whose log format is {@code ARROW}. Each returned batch
+     * owns its Arrow memory and, for primary-key tables, carries the stored per-row changelog
+     * types. Callers must close the returned {@link ArrowScanRecords} after processing it.
+     *
+     * @param timeout the timeout to poll
+     * @return the Arrow batches returned by this poll
+     * @throws UnsupportedOperationException if the table does not use the {@code ARROW} log format
+     *     or the scanner implementation does not support Arrow record batch polling
+     * @throws IllegalStateException if the scanner is not subscribed to any buckets
+     */
+    default ArrowScanRecords pollRecordBatch(Duration timeout) {
+        throw new UnsupportedOperationException(
+                "This LogScanner implementation does not support Arrow record batch polling");
+    }
+
+    /**
      * Subscribe to the given table bucket in given offset dynamically. If the table bucket is
      * already subscribed, the offset will be updated.
      *

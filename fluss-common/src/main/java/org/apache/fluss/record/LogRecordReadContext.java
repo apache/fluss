@@ -443,7 +443,7 @@ public class LogRecordReadContext
 
         @Override
         public ArrowBatchData createArrowBatchData(
-                long baseLogOffset, long timestamp, int schemaId) {
+                long baseLogOffset, long timestamp, int schemaId, @Nullable byte[] changeTypes) {
             int[] schemaMapping = getSchemaEvolutionMapping(schemaId);
             if (schemaMapping != null) {
                 outputRoot =
@@ -453,7 +453,7 @@ public class LogRecordReadContext
                 readRoot = null;
             }
             ArrowBatchData arrowBatchData =
-                    new ArrowBatchData(outputRoot, baseLogOffset, timestamp, schemaId);
+                    new ArrowBatchData(outputRoot, baseLogOffset, timestamp, schemaId, changeTypes);
             outputRoot = null;
             readRoot = null;
             return arrowBatchData;
