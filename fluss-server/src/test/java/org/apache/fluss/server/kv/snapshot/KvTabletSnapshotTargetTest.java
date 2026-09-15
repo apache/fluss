@@ -627,7 +627,8 @@ class KvTabletSnapshotTargetTest {
                     rocksDBResourceGuard,
                     kvSnapshotDataUploader,
                     instanceBasePath,
-                    lastCompletedSnapshotId);
+                    lastCompletedSnapshotId,
+                    false);
             this.snapshotFailType = snapshotFailType;
         }
 

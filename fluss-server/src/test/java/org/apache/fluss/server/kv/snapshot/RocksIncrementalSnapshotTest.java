@@ -76,19 +76,39 @@ class RocksIncrementalSnapshotTest {
                         snapshotShareDir,
                         1024);
         try (CloseableRegistry closeableRegistry = new CloseableRegistry();
-                RocksIncrementalSnapshot incrementalSnapshot = createIncrementalSnapshot()) {
+                RocksIncrementalSnapshot incrementalSnapshot = createIncrementalSnapshot(true)) {
             RocksDB rocksDB = rocksDBExtension.getRocksDb();
             rocksDB.put("key1".getBytes(), "val1".getBytes());
 
             // make and notify snapshot with id 1
             KvSnapshotHandle kvSnapshotHandle1 =
                     snapshot(1L, incrementalSnapshot, snapshotLocation, closeableRegistry);
+            assertThat(
+                            LocalKvSnapshotUtils.getSnapshotDirectory(
+                                    rocksDBExtension.getRockDbDir(), 1L))
+                    .isDirectory();
             incrementalSnapshot.notifySnapshotComplete(1L);
 
             // make and notify snapshot with id 2
             KvSnapshotHandle kvSnapshotHandle2 =
                     snapshot(2L, incrementalSnapshot, snapshotLocation, closeableRegistry);
+            assertThat(
+                            LocalKvSnapshotUtils.getSnapshotDirectory(
+                                    rocksDBExtension.getRockDbDir(), 1L))
+                    .isDirectory();
+            assertThat(
+                            LocalKvSnapshotUtils.getSnapshotDirectory(
+                                    rocksDBExtension.getRockDbDir(), 2L))
+                    .isDirectory();
             incrementalSnapshot.notifySnapshotComplete(2L);
+            assertThat(
+                            LocalKvSnapshotUtils.getSnapshotDirectory(
+                                    rocksDBExtension.getRockDbDir(), 1L))
+                    .doesNotExist();
+            assertThat(
+                            LocalKvSnapshotUtils.getSnapshotDirectory(
+                                    rocksDBExtension.getRockDbDir(), 2L))
+                    .isDirectory();
             // the share kv file handles for cp2 should be equal to the handles for cp1
             verifyShareFileEqual(kvSnapshotHandle2, kvSnapshotHandle1);
             // all file handles should be PlaceHolderHandle
@@ -103,6 +123,14 @@ class RocksIncrementalSnapshotTest {
             snapshot(3L, incrementalSnapshot, snapshotLocation, closeableRegistry);
             // assume it's fail
             incrementalSnapshot.notifySnapshotAbort(3L);
+            assertThat(
+                            LocalKvSnapshotUtils.getSnapshotDirectory(
+                                    rocksDBExtension.getRockDbDir(), 3L))
+                    .doesNotExist();
+            assertThat(
+                            LocalKvSnapshotUtils.getSnapshotDirectory(
+                                    rocksDBExtension.getRockDbDir(), 2L))
+                    .isDirectory();
 
             // write some data again
             rocksDB.put("key3".getBytes(), "val3".getBytes());
@@ -111,6 +139,15 @@ class RocksIncrementalSnapshotTest {
             // make sure the uploaded files contains the files in snapshot 3 and snapshot 4
             // there're two newly uploaded files, one for cp3, one for cp4
             checkSnapshotIncrementWithNewlyFiles(kvSnapshotHandle4, kvSnapshotHandle1, 2);
+            incrementalSnapshot.notifySnapshotComplete(4L);
+            assertThat(
+                            LocalKvSnapshotUtils.getSnapshotDirectory(
+                                    rocksDBExtension.getRockDbDir(), 2L))
+                    .doesNotExist();
+            assertThat(
+                            LocalKvSnapshotUtils.getSnapshotDirectory(
+                                    rocksDBExtension.getRockDbDir(), 4L))
+                    .isDirectory();
 
             // now, let try to rebuild from cp2 and cp4
             // test restore from cp2
@@ -136,6 +173,7 @@ class RocksIncrementalSnapshotTest {
                     snapshot(5L, incrementalSnapshot, snapshotLocation, closeableRegistry);
             // discard the snapshot handle
             kvSnapshotHandle5.discard();
+            incrementalSnapshot.notifySnapshotAbort(5L);
 
             // we can still restore from cp4
             Path dest3 = snapshotDownDir.resolve("restore3");
@@ -145,6 +183,27 @@ class RocksIncrementalSnapshotTest {
                 assertThat(rocksDBKv.get("key2".getBytes())).isEqualTo("val2".getBytes());
                 assertThat(rocksDBKv.get("key3".getBytes())).isEqualTo("val3".getBytes());
             }
+        }
+    }
+
+    @Test
+    void testSnapshotDirectoryIsNotRetainedWhenLocalRecoveryDisabled(@TempDir Path snapshotBaseDir)
+            throws Exception {
+        FsPath testingTabletDir = FsPath.fromLocalFile(snapshotBaseDir.toFile());
+        SnapshotLocation snapshotLocation =
+                new SnapshotLocation(
+                        LocalFileSystem.getSharedInstance(),
+                        FlussPaths.remoteKvSnapshotDir(testingTabletDir, 1L),
+                        FlussPaths.remoteKvSharedDir(testingTabletDir),
+                        1024);
+        try (CloseableRegistry closeableRegistry = new CloseableRegistry();
+                RocksIncrementalSnapshot incrementalSnapshot = createIncrementalSnapshot(false)) {
+            snapshot(1L, incrementalSnapshot, snapshotLocation, closeableRegistry);
+
+            assertThat(
+                            LocalKvSnapshotUtils.getSnapshotDirectory(
+                                    rocksDBExtension.getRockDbDir(), 1L))
+                    .doesNotExist();
         }
     }
 
@@ -162,7 +221,7 @@ class RocksIncrementalSnapshotTest {
         }
     }
 
-    private RocksIncrementalSnapshot createIncrementalSnapshot() {
+    private RocksIncrementalSnapshot createIncrementalSnapshot(boolean localRecoveryEnabled) {
         long lastCompletedSnapshotId = -1L;
         Map<Long, Collection<KvFileHandleAndLocalPath>> uploadedSstFiles = new HashMap<>();
         ResourceGuard rocksDBResourceGuard = new ResourceGuard();
@@ -177,7 +236,8 @@ class RocksIncrementalSnapshotTest {
                 rocksDBResourceGuard,
                 snapshotDataUploader,
                 rocksDBExtension.getRockDbDir(),
-                lastCompletedSnapshotId);
+                lastCompletedSnapshotId,
+                localRecoveryEnabled);
     }
 
     public KvSnapshotHandle snapshot(
@@ -189,13 +249,18 @@ class RocksIncrementalSnapshotTest {
         RocksIncrementalSnapshot.NativeRocksDBSnapshotResources nativeRocksDBSnapshotResources =
                 incrementalSnapshot.syncPrepareResources(snapshotId);
 
-        return incrementalSnapshot
-                .asyncSnapshot(
-                        nativeRocksDBSnapshotResources,
-                        snapshotId,
-                        new TabletState(0L, null, null),
-                        snapshotLocation)
-                .get(closeableRegistry)
-                .getKvSnapshotHandle();
+        try {
+            return incrementalSnapshot
+                    .asyncSnapshot(
+                            nativeRocksDBSnapshotResources,
+                            snapshotId,
+                            new TabletState(0L, null, null),
+                            snapshotLocation)
+                    .get(closeableRegistry)
+                    .getKvSnapshotHandle();
+        } finally {
+            // Release or retain the local checkpoint according to the local-recovery setting.
+            nativeRocksDBSnapshotResources.release();
+        }
     }
 }

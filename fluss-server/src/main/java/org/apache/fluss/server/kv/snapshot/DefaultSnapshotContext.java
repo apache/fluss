@@ -50,6 +50,9 @@ public class DefaultSnapshotContext implements SnapshotContext, ServerReconfigur
 
     private volatile long kvSnapshotIntervalMs;
 
+    /** Whether to retain and recover from the latest completed local KV snapshot. */
+    private final boolean localRecoveryEnabled;
+
     /** The write buffer size for writing the kv snapshot file to remote filesystem. */
     private final int writeBufferSizeInBytes;
 
@@ -71,6 +74,7 @@ public class DefaultSnapshotContext implements SnapshotContext, ServerReconfigur
             KvSnapshotDataUploader kvSnapshotDataUploader,
             KvSnapshotDataDownloader kvSnapshotDataDownloader,
             long kvSnapshotIntervalMs,
+            boolean localRecoveryEnabled,
             int writeBufferSizeInBytes,
             FsPath remoteKvDir,
             CompletedSnapshotHandleStore completedSnapshotHandleStore,
@@ -84,6 +88,7 @@ public class DefaultSnapshotContext implements SnapshotContext, ServerReconfigur
         this.kvSnapshotDataUploader = kvSnapshotDataUploader;
         this.kvSnapshotDataDownloader = kvSnapshotDataDownloader;
         this.kvSnapshotIntervalMs = kvSnapshotIntervalMs;
+        this.localRecoveryEnabled = localRecoveryEnabled;
         this.writeBufferSizeInBytes = writeBufferSizeInBytes;
         this.remoteKvDir = remoteKvDir;
 
@@ -106,6 +111,7 @@ public class DefaultSnapshotContext implements SnapshotContext, ServerReconfigur
                 kvSnapshotResource.getKvSnapshotDataUploader(),
                 kvSnapshotResource.getKvSnapshotDataDownloader(),
                 conf.get(ConfigOptions.KV_SNAPSHOT_INTERVAL).toMillis(),
+                conf.get(ConfigOptions.KV_SNAPSHOT_LOCAL_RECOVERY_ENABLED),
                 (int) conf.get(ConfigOptions.REMOTE_FS_WRITE_BUFFER_SIZE).getBytes(),
                 FlussPaths.remoteKvDir(conf),
                 new ZooKeeperCompletedSnapshotHandleStore(zkClient),
@@ -143,6 +149,11 @@ public class DefaultSnapshotContext implements SnapshotContext, ServerReconfigur
     @Override
     public long getSnapshotIntervalMs() {
         return kvSnapshotIntervalMs;
+    }
+
+    @Override
+    public boolean isLocalRecoveryEnabled() {
+        return localRecoveryEnabled;
     }
 
     @Override
