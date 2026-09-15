@@ -57,9 +57,9 @@ public enum OperatingSystem {
     }
 
     /**
-     * Checks whether the operating system this JVM runs on is Windows.
+     * Checks whether the operating system this JVM runs on is Mac OS.
      *
-     * @return <code>true</code> if the operating system this JVM runs on is Windows, <code>false
+     * @return <code>true</code> if the operating system this JVM runs on is Mac OS, <code>false
      *     </code> otherwise
      */
     public static boolean isMac() {
