@@ -53,8 +53,17 @@ public interface RpcClient extends AutoCloseable {
     boolean connect(ServerNode node);
 
     /**
-     * Disconnects the connection to the given server node, if there is one. Any in-flight/pending
-     * requests for this connection will receive disconnections.
+     * Disconnects the connection to the given server endpoint, if there is one. Any in-flight or
+     * pending requests for this connection will receive disconnections.
+     *
+     * @param node The server node to disconnect
+     * @return A future that is completed when the disconnection is complete
+     */
+    CompletableFuture<Void> disconnect(ServerNode node);
+
+    /**
+     * Disconnects all connections associated with the given logical server uid. Any in-flight or
+     * pending requests for these connections will receive disconnections.
      *
      * @param serverUid The uid of the server node
      * @return A future that is completed when the disconnection is complete
@@ -62,12 +71,13 @@ public interface RpcClient extends AutoCloseable {
     CompletableFuture<Void> disconnect(String serverUid);
 
     /**
-     * Check if we are currently ready to send another request to the given server but don't attempt
-     * to connect if we aren't.
+     * Check if we are currently ready to send another request to the given server endpoint but
+     * don't attempt to connect if we aren't.
      *
-     * @return true if the node is ready
+     * @param node The server node to check
+     * @return true if the connection to the node is ready
      */
-    boolean isReady(String serverUid);
+    boolean isReady(ServerNode node);
 
     /**
      * Send an RPC request to the given server and return a future for the response. If the
