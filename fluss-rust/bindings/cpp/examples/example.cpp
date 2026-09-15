@@ -20,9 +20,15 @@
 #include <arrow/record_batch.h>
 #include <arrow/type.h>
 
+#include <atomic>
 #include <chrono>
+#include <condition_variable>
+#include <exception>
 #include <iostream>
+#include <memory>
+#include <mutex>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 #include "fluss.hpp"
@@ -85,7 +91,12 @@ int main() {
 
     // 5) Write rows with scalar and temporal values
     fluss::AppendWriter writer;
-    check("new_append_writer", table.NewAppend().CreateWriter(writer));
+    fluss::WriteCallbackOptions callback_options;
+    // A small limit demonstrates SDK backpressure in the callback section below.
+    // These options do not affect fire-and-forget or WriteResult::Wait().
+    callback_options.max_pending_operations = 2;
+    callback_options.enqueue_timeout = std::chrono::seconds(5);
+    check("new_append_writer", table.NewAppend().CreateWriter(writer, callback_options));
 
     struct RowData {
         int id;
@@ -141,6 +152,44 @@ int main() {
         check("append", writer.Append(row, wr));
         check("wait", wr.Wait());
         std::cout << "Row acknowledged by server" << std::endl;
+    }
+
+    // Callback acknowledgment
+    {
+        std::atomic<size_t> succeeded{0};
+        std::atomic<size_t> failed{0};
+        for (const auto& r : rows) {
+            const int32_t id = 1000 + r.id;
+            fluss::GenericRow row;
+            row.SetInt32(0, id);
+            row.SetString(1, r.name);
+            row.SetFloat32(2, r.score);
+            row.SetInt32(3, r.age);
+            row.SetDate(4, r.date);
+            row.SetTime(5, r.time);
+            row.SetTimestampNtz(6, r.ts_ntz);
+            row.SetTimestampLtz(7, r.ts_ltz);
+            auto submitted = writer.Append(row, [id, &succeeded, &failed](fluss::Result result) {
+                if (result.Ok()) {
+                    ++succeeded;
+                } else {
+                    if (failed.fetch_add(1) == 0) {
+                        std::cerr << "Write failed for id=" << id << ": " << result.error_message
+                                  << '\n';
+                    }
+                }
+            });
+            if (!submitted.Ok()) {
+                std::cerr << "Submission failed for id=" << id << ": " << submitted.error_message
+                          << '\n';
+                break;
+            }
+        }
+        check("flush", writer.Flush());
+        std::cout << "Callback writes: succeeded=" << succeeded << " failed=" << failed << '\n';
+        if (failed != 0) {
+            return 1;
+        }
     }
 
     // Append a row with all fields null (matches Rust log_table.rs all_supported_datatypes)

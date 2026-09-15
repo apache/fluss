@@ -17,8 +17,12 @@
 
 fn main() {
     cxx_build::bridge("src/lib.rs")
+        .include("include")
+        .include("src")
         .std("c++17")
         .compile("fluss-cpp-bridge");
 
     println!("cargo:rerun-if-changed=src/lib.rs");
+    println!("cargo:rerun-if-changed=src/write_callback.hpp");
+    println!("cargo:rerun-if-changed=include/fluss.hpp");
 }
