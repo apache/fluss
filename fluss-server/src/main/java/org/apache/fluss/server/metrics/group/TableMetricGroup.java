@@ -705,7 +705,8 @@ public class TableMetricGroup extends AbstractMetricGroup {
             lakeLookupTimeMs =
                     histogram(
                             MetricNames.LAKE_LOOKUP_TIME_MS,
-                            new DescriptiveStatisticsHistogram(WINDOW_SIZE));
+                            new DescriptiveStatisticsHistogram(
+                                    WINDOW_SIZE, DescriptiveStatisticsHistogram.DEFAULT_MAX_AGE));
         }
 
         private void recordLookup(long lookupTimeNanos) {
