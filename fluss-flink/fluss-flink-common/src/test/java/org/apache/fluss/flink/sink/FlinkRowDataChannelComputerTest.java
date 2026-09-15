@@ -52,12 +52,13 @@ class FlinkRowDataChannelComputerTest {
                         Collections.singletonList("a"),
                         Collections.emptyList(),
                         null,
+                        null,
+                        null,
                         10,
                         serializationSchema);
 
         for (int numChannel = 1; numChannel <= 10; numChannel++) {
             channelComputer.setup(numChannel);
-            assertThat(channelComputer.isCombineShuffleWithPartitionName()).isFalse();
             for (int i = 0; i < 100; i++) {
                 int expectedChannel = -1;
                 for (int retry = 0; retry < 5; retry++) {
@@ -82,16 +83,13 @@ class FlinkRowDataChannelComputerTest {
                         Collections.singletonList("a"),
                         Collections.singletonList("b"),
                         null,
+                        null,
+                        null,
                         10,
                         serializationSchema);
 
         for (int numChannel = 1; numChannel <= 10; numChannel++) {
             channelComputer.setup(numChannel);
-            if (10 % numChannel != 0) {
-                assertThat(channelComputer.isCombineShuffleWithPartitionName()).isTrue();
-            } else {
-                assertThat(channelComputer.isCombineShuffleWithPartitionName()).isFalse();
-            }
             for (int i = 0; i < 100; i++) {
                 int expectedChannel = -1;
                 for (int retry = 0; retry < 5; retry++) {
