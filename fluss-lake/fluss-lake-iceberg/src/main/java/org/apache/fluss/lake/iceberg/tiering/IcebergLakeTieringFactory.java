@@ -58,7 +58,7 @@ public class IcebergLakeTieringFactory
     public void validateTable(TableInfo tableInfo) throws IOException {
         Catalog icebergCatalog = icebergCatalogProvider.get();
         try {
-            Table icebergTable = icebergCatalog.loadTable(toIceberg(tableInfo.getTablePath()));
+            Table icebergTable = icebergCatalog.loadTable(toIceberg(tableInfo.getLakeTablePath()));
             IcebergPartitionSpecValidator.validate(icebergTable, tableInfo);
         } finally {
             if (icebergCatalog instanceof AutoCloseable) {
@@ -76,7 +76,8 @@ public class IcebergLakeTieringFactory
     @Override
     public LakeCommitter<IcebergWriteResult, IcebergCommittable> createLakeCommitter(
             CommitterInitContext committerInitContext) throws IOException {
-        return new IcebergLakeCommitter(icebergCatalogProvider, committerInitContext.tablePath());
+        return new IcebergLakeCommitter(
+                icebergCatalogProvider, committerInitContext.tableInfo().getLakeTablePath());
     }
 
     @Override

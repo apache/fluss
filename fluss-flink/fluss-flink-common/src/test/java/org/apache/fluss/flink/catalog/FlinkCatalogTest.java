@@ -382,7 +382,12 @@ class FlinkCatalogTest {
                 lakeTable);
         CatalogBaseTable gottenLakeTable =
                 catalog.getTable(new ObjectPath(DEFAULT_DB, flussTableName + "$lake"));
-        assertThat(gottenLakeTable).isEqualTo(lakeTable);
+        assertThat(gottenLakeTable.getOptions())
+                .containsAllEntriesOf(lakeTable.getOptions())
+                .containsEntry(
+                        FlinkCatalog.LAKE_TABLE_DATABASE_NAME_OPTION,
+                        lakeTablePath.getDatabaseName())
+                .containsEntry(FlinkCatalog.LAKE_TABLE_NAME_OPTION, lakeTablePath.getTableName());
 
         CatalogTable snapshotsTable = newCatalogTable(Collections.emptyMap());
         mockLakeCatalog.registerLakeTable(
@@ -392,7 +397,12 @@ class FlinkCatalogTest {
                 snapshotsTable);
         CatalogBaseTable gottenSnapshotsTable =
                 catalog.getTable(new ObjectPath(DEFAULT_DB, flussTableName + "$lake$snapshots"));
-        assertThat(gottenSnapshotsTable).isEqualTo(snapshotsTable);
+        assertThat(gottenSnapshotsTable.getOptions())
+                .containsAllEntriesOf(snapshotsTable.getOptions())
+                .containsEntry(
+                        FlinkCatalog.LAKE_TABLE_DATABASE_NAME_OPTION,
+                        lakeTablePath.getDatabaseName())
+                .containsEntry(FlinkCatalog.LAKE_TABLE_NAME_OPTION, lakeTablePath.getTableName());
     }
 
     @Test
