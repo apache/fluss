@@ -43,6 +43,8 @@ public class RebalanceTaskJsonSerde
     private static final String REBALANCE_ID = "rebalance_id";
     private static final String REBALANCE_STATUS = "rebalance_status";
     private static final String REBALANCE_PLAN = "rebalance_plan";
+    private static final String STARTED_AT_MS = "started_at_ms";
+    private static final String COMPLETED_AT_MS = "completed_at_ms";
 
     private static final String TABLE_ID = "table_id";
     private static final String PARTITION_ID = "partition_id";
@@ -54,7 +56,7 @@ public class RebalanceTaskJsonSerde
     private static final String ORIGIN_REPLICAS = "origin_replicas";
     private static final String NEW_REPLICAS = "new_replicas";
 
-    private static final int VERSION = 1;
+    private static final int VERSION = 2;
 
     @Override
     public void serialize(RebalanceTask rebalanceTask, JsonGenerator generator) throws IOException {
@@ -62,6 +64,8 @@ public class RebalanceTaskJsonSerde
         generator.writeNumberField(VERSION_KEY, VERSION);
         generator.writeStringField(REBALANCE_ID, rebalanceTask.getRebalanceId());
         generator.writeNumberField(REBALANCE_STATUS, rebalanceTask.getRebalanceStatus().getCode());
+        generator.writeNumberField(STARTED_AT_MS, rebalanceTask.getStartedAtMs());
+        generator.writeNumberField(COMPLETED_AT_MS, rebalanceTask.getCompletedAtMs());
 
         generator.writeArrayFieldStart(REBALANCE_PLAN);
         // first to write none-partitioned tables.
@@ -102,6 +106,8 @@ public class RebalanceTaskJsonSerde
 
         String rebalanceId = node.get(REBALANCE_ID).asText();
         RebalanceStatus rebalanceStatus = RebalanceStatus.of(node.get(REBALANCE_STATUS).asInt());
+        long startedAtMs = node.has(STARTED_AT_MS) ? node.get(STARTED_AT_MS).asLong() : -1L;
+        long completedAtMs = node.has(COMPLETED_AT_MS) ? node.get(COMPLETED_AT_MS).asLong() : -1L;
 
         Map<TableBucket, RebalancePlanForBucket> planForBuckets = new HashMap<>();
         for (JsonNode tablePartitionPlanNode : rebalancePlanNode) {
@@ -140,7 +146,8 @@ public class RebalanceTaskJsonSerde
             }
         }
 
-        return new RebalanceTask(rebalanceId, rebalanceStatus, planForBuckets);
+        return new RebalanceTask(
+                rebalanceId, rebalanceStatus, planForBuckets, startedAtMs, completedAtMs);
     }
 
     private void serializeRebalancePlanForBucket(
