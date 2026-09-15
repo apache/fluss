@@ -457,11 +457,12 @@ pub fn core_database_info_to_ffi(info: &fcore::metadata::DatabaseInfo) -> ffi::F
 
 /// Resolve types in a GenericRow using schema metadata.
 /// Narrows Int32 → Int8/Int16, parses decimal strings, etc.
-/// Used by both AppendWriter and UpsertWriter.
-pub fn resolve_row_types(
-    row: &fcore::row::GenericRow<'_>,
+/// Unchanged STRING and BYTES values borrow the input row's storage.
+/// Used by append, upsert, delete, lookup, and prefix lookup.
+pub fn resolve_row_types<'a>(
+    row: &'a fcore::row::GenericRow<'_>,
     schema: Option<&fcore::metadata::Schema>,
-) -> Result<fcore::row::GenericRow<'static>> {
+) -> Result<fcore::row::GenericRow<'a>> {
     let mut out = fcore::row::GenericRow::new(row.values.len());
 
     for (idx, datum) in row.values.iter().enumerate() {
@@ -477,11 +478,11 @@ pub fn resolve_row_types(
 /// Resolve a single datum against its (optional) target column type, recursing
 /// into nested ROW values. Narrows Int32 → Int8/Int16, parses decimal strings,
 /// and leaves already-typed ARRAY/MAP binaries (built by the writers) untouched.
-fn resolve_datum(
-    datum: &fcore::row::Datum<'_>,
+fn resolve_datum<'a>(
+    datum: &'a fcore::row::Datum<'_>,
     target: Option<&fcore::metadata::DataType>,
     idx: usize,
-) -> Result<fcore::row::Datum<'static>> {
+) -> Result<fcore::row::Datum<'a>> {
     Ok(match datum {
         Datum::Null => Datum::Null,
         Datum::Bool(v) => Datum::Bool(*v),
@@ -509,9 +510,9 @@ fn resolve_datum(
                     .map_err(|e| anyhow!("Column {idx}: {e}"))?;
                 Datum::Decimal(decimal)
             }
-            _ => Datum::String(Cow::Owned(cow.to_string())),
+            _ => Datum::String(Cow::Borrowed(cow.as_ref())),
         },
-        Datum::Blob(cow) => Datum::Blob(Cow::Owned(cow.to_vec())),
+        Datum::Blob(cow) => Datum::Blob(Cow::Borrowed(cow.as_ref())),
         Datum::Decimal(d) => Datum::Decimal(d.clone()),
         Datum::Date(d) => Datum::Date(*d),
         Datum::Time(t) => Datum::Time(*t),
@@ -663,4 +664,153 @@ pub fn core_scan_batches_to_ffi(
     Ok(ffi::FfiArrowRecordBatches {
         batches: ffi_batches,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::resolve_row_types;
+    use fluss::metadata::{DataField, DataType, DataTypes, DecimalType, RowType, Schema};
+    use fluss::row::{Datum, Decimal, GenericRow};
+    use std::borrow::Cow;
+
+    fn assert_borrowed_values(input: &[Datum<'_>], resolved: &[Datum<'_>]) {
+        assert_eq!(resolved, input);
+        for (input, resolved) in input.iter().zip(resolved) {
+            match (input, resolved) {
+                (Datum::String(input), Datum::String(Cow::Borrowed(resolved))) => {
+                    assert_eq!(input.as_ptr(), resolved.as_ptr());
+                }
+                (Datum::Blob(input), Datum::Blob(Cow::Borrowed(resolved))) => {
+                    assert_eq!(input.as_ptr(), resolved.as_ptr());
+                }
+                _ => panic!("expected borrowed STRING or BYTES, got {resolved:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn test_resolve_row_types_borrows_strings_and_bytes() {
+        // Include both setter-owned values and values already borrowing external storage.
+        let string = String::from("borrowed string");
+        let bytes = vec![0, 1, 255];
+        let row = GenericRow {
+            values: vec![
+                Datum::String(Cow::Owned(String::from("owned string"))),
+                Datum::Blob(Cow::Owned(vec![2, 3, 255])),
+                Datum::String(Cow::Borrowed(&string)),
+                Datum::Blob(Cow::Borrowed(&bytes)),
+                Datum::String(Cow::Owned(String::new())),
+                Datum::Blob(Cow::Owned(Vec::new())),
+            ],
+        };
+        let schema = Schema::builder()
+            .column("owned_string", DataTypes::string())
+            .column("owned_bytes", DataTypes::bytes())
+            .column("borrowed_string", DataTypes::string())
+            .column("borrowed_bytes", DataTypes::bytes())
+            .column("empty_string", DataTypes::string())
+            .column("empty_bytes", DataTypes::bytes())
+            .build()
+            .unwrap();
+
+        for schema in [Some(&schema), None] {
+            let resolved = resolve_row_types(&row, schema).unwrap();
+            assert_borrowed_values(&row.values, &resolved.values);
+        }
+    }
+
+    #[test]
+    fn test_resolve_row_types_preserves_conversions() {
+        let schema = Schema::builder()
+            .column("tiny", DataTypes::tinyint())
+            .column("small", DataTypes::smallint())
+            .column(
+                "decimal",
+                DataType::Decimal(DecimalType::new(5, 2).unwrap()),
+            )
+            .column("string", DataTypes::string())
+            .column("bytes", DataTypes::bytes())
+            .column("nullable", DataTypes::string())
+            .build()
+            .unwrap();
+        let row = GenericRow {
+            values: vec![
+                Datum::Int32(127),
+                Datum::Int32(-32768),
+                Datum::String(Cow::Owned(String::from("123.45"))),
+                Datum::String(Cow::Owned(String::from("unchanged"))),
+                Datum::Blob(Cow::Owned(vec![1, 2, 3])),
+                Datum::Null,
+            ],
+        };
+        let resolved = resolve_row_types(&row, Some(&schema)).unwrap();
+        assert_eq!(resolved.values[0], Datum::Int8(127));
+        assert_eq!(resolved.values[1], Datum::Int16(-32768));
+        assert_eq!(
+            resolved.values[2],
+            Datum::Decimal(Decimal::from_unscaled_long(12345, 5, 2).unwrap())
+        );
+        assert_borrowed_values(&row.values[3..5], &resolved.values[3..5]);
+        assert_eq!(resolved.values[5], Datum::Null);
+    }
+
+    #[test]
+    fn test_resolve_row_types_borrows_nested_values() {
+        let schema = Schema::builder()
+            .column(
+                "nested",
+                DataType::Row(RowType::new(vec![
+                    DataField::new("string", DataTypes::string(), None),
+                    DataField::new("bytes", DataTypes::bytes(), None),
+                ])),
+            )
+            .build()
+            .unwrap();
+        let row = GenericRow {
+            values: vec![Datum::Row(Box::new(GenericRow {
+                values: vec![
+                    Datum::String(Cow::Owned(String::from("nested string"))),
+                    Datum::Blob(Cow::Owned(vec![1, 2, 3])),
+                ],
+            }))],
+        };
+        let resolved = resolve_row_types(&row, Some(&schema)).unwrap();
+        let (Datum::Row(input), Datum::Row(nested)) = (&row.values[0], &resolved.values[0]) else {
+            panic!("expected nested rows");
+        };
+        assert_borrowed_values(&input.values, &nested.values);
+    }
+
+    #[test]
+    fn test_resolve_row_types_preserves_validation() {
+        let cases = [
+            (DataTypes::tinyint(), Datum::Int32(128), "overflows TinyInt"),
+            (
+                DataTypes::smallint(),
+                Datum::Int32(32768),
+                "overflows SmallInt",
+            ),
+            (
+                DataType::Decimal(DecimalType::new(5, 2).unwrap()),
+                Datum::String(Cow::Borrowed("invalid")),
+                "invalid decimal string",
+            ),
+            (
+                DataType::Decimal(DecimalType::new(5, 2).unwrap()),
+                Datum::String(Cow::Borrowed("1234.56")),
+                "Decimal precision overflow",
+            ),
+        ];
+        for (data_type, datum, expected_error) in cases {
+            let schema = Schema::builder()
+                .column("value", data_type)
+                .build()
+                .unwrap();
+            let row = GenericRow {
+                values: vec![datum],
+            };
+            let error = resolve_row_types(&row, Some(&schema)).unwrap_err();
+            assert!(error.to_string().contains(expected_error), "{error}");
+        }
+    }
 }
