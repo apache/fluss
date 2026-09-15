@@ -77,6 +77,7 @@ public class CoordinatorLeaderElection implements AutoCloseable {
     private static final long DEFAULT_CLOSE_TIMEOUT_MS = 10000L;
 
     private final String serverId;
+    private final ZooKeeperClient zkClient;
     private final LeaderLatch leaderLatch;
     // Single-threaded executor to run leader init/cleanup callbacks outside Curator's EventThread.
     // Curator's LeaderLatchListener callbacks run on its internal EventThread; performing
@@ -100,6 +101,7 @@ public class CoordinatorLeaderElection implements AutoCloseable {
     CoordinatorLeaderElection(ZooKeeperClient zkClient, String serverId, long closeTimeoutMs) {
         checkArgument(closeTimeoutMs > 0, "Close timeout must be positive.");
         this.serverId = serverId;
+        this.zkClient = zkClient;
         this.closeTimeoutMs = closeTimeoutMs;
         this.leaderLatch =
                 new LeaderLatch(
@@ -188,6 +190,44 @@ public class CoordinatorLeaderElection implements AutoCloseable {
 
     public boolean isLeader() {
         return !closing.get() && state == State.LEADER;
+    }
+
+    /**
+     * Returns whether the coordinator group currently has an elected leader, this server or any
+     * other participant. Completes with {@code false} when the state cannot be determined (e.g.
+     * ZooKeeper unreachable), because an unknown leader must not be reported as present to a
+     * readiness probe.
+     *
+     * <p>"Elected" means the leader has registered its address in ZooKeeper, which happens early in
+     * leader initialization, right after fencing. The node is ephemeral, so a leader whose session
+     * expired or whose initialization failed and was cleaned up no longer counts. A node naming
+     * this server while it is not {@code LEADER} does not count either: it is this server's own
+     * initialization, still running or failed without the cleanup removing the node, and neither is
+     * a functioning leader. This is deliberately not the {@link LeaderLatch} view: the latch marks
+     * a participant as leader before initialization has run, and keeps doing so when initialization
+     * fails.
+     *
+     * <p>On a standby the answer is a ZooKeeper read issued on Curator's background thread, so the
+     * calling RPC worker is never blocked while ZooKeeper is unreachable: the read and its retries
+     * run off-thread and the future completes once Curator gets an answer or gives up.
+     */
+    public CompletableFuture<Boolean> isLeaderElected() {
+        if (closing.get()) {
+            return CompletableFuture.completedFuture(false);
+        }
+        if (state == State.LEADER) {
+            return CompletableFuture.completedFuture(true);
+        }
+        return zkClient.getCoordinatorLeaderAddressAsync()
+                .thenApply(leader -> leader.isPresent() && !leader.get().getId().equals(serverId))
+                .exceptionally(
+                        e -> {
+                            LOG.debug(
+                                    "Failed to read leader election state for server {}",
+                                    serverId,
+                                    e);
+                            return false;
+                        });
     }
 
     private void submitLeadershipEvent(Runnable leadershipEvent) {

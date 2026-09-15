@@ -24,32 +24,40 @@
 #
 # Two-step readiness probe for Kubernetes StatefulSet rolling upgrades:
 #
-#   Step 1 — Local TCP port check: verify this TabletServer process is alive
+#   Step 1 — Local TCP port check: verify this server process is alive
 #            and has bound its RPC port. Fast, no external dependency.
 #
-#   Step 2 — Cluster health check: call the LOCAL TabletServer's Cluster
-#            Health API (which forwards to the Coordinator over the internal
-#            listener) and pass only if status is GREEN.
-#            YELLOW/RED/UNKNOWN means recovery is incomplete — block the upgrade.
+#   Step 2 — Cluster health check, role-dependent (READINESS_ROLE):
+#            * tablet (default) — call the LOCAL TabletServer's Cluster Health
+#            API, which forwards to the Coordinator over the internal
+#            listener, and pass only if status is GREEN. The YELLOW/RED/UNKNOWN
+#            status means recovery is incomplete.
+#            * coordinator — call the LOCAL CoordinatorServer's Cluster Health
+#            API. A leader passes with any status. A standby passes only
+#            when the coordinator group has an elected leader.
 #
 # Both steps must pass for the pod to be marked Ready.
 #
 # Exit codes (from ClusterHealthReadinessCheck.java):
-#   0 = Ready (status GREEN)
-#   1 = Not ready (status YELLOW, RED, UNKNOWN, or TabletServer unreachable)
+#   0 = Ready (tablet: status GREEN; coordinator: leader, or standby with an
+#       elected leader)
+#   1 = Not ready (tablet: status YELLOW, RED, UNKNOWN; coordinator: standby
+#       without an elected leader; both: local server unreachable)
 #   2 = API unsupported (older server) → immediate TCP fallback (latched)
 #
 # Environment variables (set by helm template or container spec):
 #   FLUSS_HOME                    - Fluss installation directory
+#   READINESS_ROLE                - Role of the local server the probe talks to:
+#       "tablet" (default) or "coordinator".
 #   READINESS_TIMEOUT_MS          - Timeout for Health API call (default: 5000)
-#   READINESS_TCP_HOST            - TabletServer host the probe talks to. Defaults
-#       to ${POD_IP} when set (the typical Kubernetes case where bind.listeners
-#       binds the tablet's CLIENT endpoint to the pod IP rather than 0.0.0.0),
-#       falling back to 127.0.0.1 otherwise. The probe always talks to the local
-#       sidecar tablet, which forwards getClusterHealth to the Coordinator over
-#       the internal listener — so the probe never needs to know the
-#       Coordinator's address.
-#   READINESS_TCP_PORT            - TabletServer client port (default: 9124).
+#   READINESS_TCP_HOST            - Host of the local server the probe talks to.
+#       Defaults to ${POD_IP} when set (the typical Kubernetes case where
+#       bind.listeners binds the CLIENT endpoint to the pod IP rather than
+#       0.0.0.0), falling back to 127.0.0.1 otherwise. In the tablet role the
+#       local tablet forwards getClusterHealth to the Coordinator over the
+#       internal listener — so the probe never needs to know the Coordinator's
+#       address.
+#   READINESS_TCP_PORT            - Client port of the local server (default: 9124).
 #   READINESS_HEALTH_CHECK_AUTH   - Optional client auth configuration as
 #       semicolon-separated key:value pairs (e.g.
 #       client.security.protocol:SASL;client.sasl.mechanism:PLAIN). Required only
@@ -66,10 +74,11 @@ set -o pipefail
 # ---- Configuration ----
 
 FLUSS_HOME="${FLUSS_HOME:-/opt/fluss}"
+ROLE="${READINESS_ROLE:-tablet}"
 TIMEOUT_MS="${READINESS_TIMEOUT_MS:-5000}"
-# Probe the local sidecar tablet inside the same pod — it forwards the request
-# to the Coordinator internally, so the probe never has to know the
-# Coordinator's address. Prefer ${POD_IP} when set (typical K8s case where
+# Probe the local server inside the same pod (in the tablet role it forwards
+# the request to the Coordinator internally, so the probe never has to know
+# the Coordinator's address). Prefer ${POD_IP} when set (typical K8s case where
 # bind.listeners binds the CLIENT endpoint to the pod IP, not 0.0.0.0); fall
 # back to 127.0.0.1 for local/non-K8s invocations.
 TCP_HOST="${READINESS_TCP_HOST:-${POD_IP:-127.0.0.1}}"
@@ -145,6 +154,7 @@ run_recovery_check() {
         -Xmx64m \
         -classpath "${classpath}" \
         org.apache.fluss.server.tools.ClusterHealthReadinessCheck \
+        --role "${ROLE}" \
         --host "${TCP_HOST}" \
         --port "${TCP_PORT}" \
         --timeoutMs "${timeout_ms}" 2>&1)
@@ -172,7 +182,7 @@ log_to_main() {
 }
 
 # ---- Step 1: Local TCP port check ----
-# If the local TS process hasn't bound its port yet, fail immediately.
+# If the local server process hasn't bound its port yet, fail immediately.
 # No need to query the Coordinator for cluster state.
 if ! check_tcp; then
     exit 1
@@ -211,8 +221,8 @@ fi
 # ---- Step 2: Cluster health check (first boot of this pod only) ----
 #
 # We reach here only if this pod has never been ready in its lifetime. Block
-# traffic until the cluster reports GREEN. Once we latch the marker,
-# subsequent probes take the fast path above.
+# traffic until the role's gate passes (see Step 2 in the header). Once we
+# latch the marker, subsequent probes take the fast path above.
 
 # Record the epoch of the first probe attempt so we can enforce the recovery
 # budget across subsequent (forked-fresh) Java CLI invocations.
@@ -238,8 +248,8 @@ local_exit=$?
 
 case $local_exit in
     0)
-        # Recovery completed — latch fast path for the rest of this pod's life.
-        log_to_main "[readiness-check] Cluster health GREEN; latching fast path — next probe will switch to TCP-only port check"
+        # Check passed — latch fast path for the rest of this pod's life.
+        log_to_main "[readiness-check] Health check passed (${ROLE} role); latching fast path — next probe will switch to TCP-only port check"
         touch "${FIRST_READY_MARKER}"
         exit 0
         ;;

@@ -58,16 +58,21 @@ pub struct ClusterHealth {
     pub num_leader_replicas: i32,
     pub active_leader_replicas: i32,
     pub status: ClusterHealthStatus,
+    pub served_by_leader: bool,
+    pub leader_elected: bool,
 }
 
 impl ClusterHealth {
     pub fn from_pb(pb: &GetClusterHealthResponse) -> Result<Self> {
+        let served_by_leader = pb.is_leader.unwrap_or(true);
         Ok(Self {
             num_replicas: pb.num_replicas,
             in_sync_replicas: pb.in_sync_replicas,
             num_leader_replicas: pb.num_leader_replicas,
             active_leader_replicas: pb.active_leader_replicas,
             status: ClusterHealthStatus::try_from_i32(pb.status)?,
+            served_by_leader,
+            leader_elected: served_by_leader || pb.leader_elected.unwrap_or(false),
         })
     }
 }
@@ -101,9 +106,38 @@ mod tests {
             num_leader_replicas: 3,
             active_leader_replicas: 3,
             status: 1,
+            ..Default::default()
         };
         let h = ClusterHealth::from_pb(&pb).unwrap();
         assert_eq!(h.num_replicas, 5);
         assert_eq!(h.status, ClusterHealthStatus::Yellow);
+        // no role fields: a leader that predates them
+        assert!(h.served_by_leader);
+        assert!(h.leader_elected);
+    }
+
+    #[test]
+    fn test_cluster_health_from_pb_role_fields() {
+        // a standby answer
+        let pb = GetClusterHealthResponse {
+            status: 3,
+            is_leader: Some(false),
+            leader_elected: Some(true),
+            ..Default::default()
+        };
+        let h = ClusterHealth::from_pb(&pb).unwrap();
+        assert_eq!(h.status, ClusterHealthStatus::Unknown);
+        assert!(!h.served_by_leader);
+        assert!(h.leader_elected);
+
+        // a leader-served response always means an elected leader
+        let pb = GetClusterHealthResponse {
+            is_leader: Some(true),
+            leader_elected: Some(false),
+            ..Default::default()
+        };
+        let h = ClusterHealth::from_pb(&pb).unwrap();
+        assert!(h.served_by_leader);
+        assert!(h.leader_elected);
     }
 }

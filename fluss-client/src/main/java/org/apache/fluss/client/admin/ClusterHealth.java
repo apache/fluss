@@ -24,6 +24,10 @@ import java.util.Objects;
 /**
  * Cluster health information returned by {@link Admin#getClusterHealth()}.
  *
+ * <p>A {@code standby} coordinator answers this request instead of rejecting it, so callers that
+ * monitor cluster health should check {@link #isServedByLeader()} before interpreting the replica
+ * counts.
+ *
  * @since 1.0
  */
 @PublicEvolving
@@ -34,18 +38,24 @@ public final class ClusterHealth {
     private final int numLeaderReplicas;
     private final int activeLeaderReplicas;
     private final ClusterHealthStatus status;
+    private final boolean servedByLeader;
+    private final boolean leaderElected;
 
     public ClusterHealth(
             int numReplicas,
             int inSyncReplicas,
             int numLeaderReplicas,
             int activeLeaderReplicas,
-            ClusterHealthStatus status) {
+            ClusterHealthStatus status,
+            boolean servedByLeader,
+            boolean leaderElected) {
         this.numReplicas = numReplicas;
         this.inSyncReplicas = inSyncReplicas;
         this.numLeaderReplicas = numLeaderReplicas;
         this.activeLeaderReplicas = activeLeaderReplicas;
         this.status = Objects.requireNonNull(status, "status");
+        this.servedByLeader = servedByLeader;
+        this.leaderElected = leaderElected;
     }
 
     public int getNumReplicas() {
@@ -68,6 +78,14 @@ public final class ClusterHealth {
         return status;
     }
 
+    public boolean isServedByLeader() {
+        return servedByLeader;
+    }
+
+    public boolean isLeaderElected() {
+        return leaderElected;
+    }
+
     @Override
     public boolean equals(Object o) {
         if (this == o) {
@@ -81,13 +99,21 @@ public final class ClusterHealth {
                 && inSyncReplicas == that.inSyncReplicas
                 && numLeaderReplicas == that.numLeaderReplicas
                 && activeLeaderReplicas == that.activeLeaderReplicas
-                && status == that.status;
+                && status == that.status
+                && servedByLeader == that.servedByLeader
+                && leaderElected == that.leaderElected;
     }
 
     @Override
     public int hashCode() {
         return Objects.hash(
-                numReplicas, inSyncReplicas, numLeaderReplicas, activeLeaderReplicas, status);
+                numReplicas,
+                inSyncReplicas,
+                numLeaderReplicas,
+                activeLeaderReplicas,
+                status,
+                servedByLeader,
+                leaderElected);
     }
 
     @Override
@@ -103,6 +129,10 @@ public final class ClusterHealth {
                 + activeLeaderReplicas
                 + ", status="
                 + status
+                + ", servedByLeader="
+                + servedByLeader
+                + ", leaderElected="
+                + leaderElected
                 + '}';
     }
 }
