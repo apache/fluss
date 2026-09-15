@@ -32,12 +32,13 @@ data:
 
     {{- $internalProtocol := include "fluss.security.listener.protocol" (dict "context" .Values "listener" "internal") | trim -}}
     {{- $clientProtocol := include "fluss.security.listener.protocol" (dict "context" .Values "listener" "client") | trim -}}
+    {{- $externalProtocol := include "fluss.security.external.protocol" . | trim -}}
     {{- $enabledMechanisms := include "fluss.security.sasl.enabledMechanisms" . | trim -}}
     {{- $internalMechanism := include "fluss.security.listener.mechanism" (dict "context" .Values "listener" "internal") -}}
     {{- if (include "fluss.security.sasl.enabled" .) }}
     {{- $protocolEntries := list (printf "INTERNAL:%s" $internalProtocol) (printf "CLIENT:%s" $clientProtocol) -}}
     {{- if (include "fluss.listeners.external.enabled" .) -}}
-    {{- $protocolEntries = append $protocolEntries (printf "%s:%s" (include "fluss.listeners.external.name" .) (include "fluss.listeners.external.protocol" . | trim)) -}}
+    {{- $protocolEntries = append $protocolEntries (printf "%s:%s" (include "fluss.listeners.external.name" .) $externalProtocol) -}}
     {{- end }}
     security.protocol.map: {{ join "," $protocolEntries }}
     security.sasl.enabled.mechanisms: {{ $enabledMechanisms }}

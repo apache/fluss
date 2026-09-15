@@ -180,15 +180,19 @@ The following table lists the configurable parameters of the Fluss chart, and th
 
 | Parameter | Description | Default |
 |-----------|-------------|---------|
+| `clusterDomain` | Kubernetes cluster domain used in chart-owned CLIENT advertised FQDNs | `cluster.local` |
 | `listeners.internal.port` | Internal communication port | `9123` |
-| `listeners.client.port` | Client port (in-cluster advertised address by default) | `9124` |
-| `listeners.client.advertisedHost` | Override CLIENT advertised host (shell-expanded; empty = in-cluster headless DNS) | `""` |
-| `listeners.client.advertisedPort` | Override CLIENT advertised port (empty = `listeners.client.port`) | `""` |
+| `listeners.client.port` | Client port (in-cluster advertised address) | `9124` |
 | `listeners.external.enabled` | Bind an extra EXTERNAL listener so out-of-cluster clients can be advertised separately from in-cluster CLIENT | `false` |
-| `listeners.external.name` | Fluss listener name for the extra listener | `EXTERNAL` |
-| `listeners.external.port` | Bind port for the extra listener (must differ from internal and client) | `9125` |
-| `listeners.external.advertisedHost` | Advertised host for EXTERNAL (required when enabled; use `$POD_NAME` so each pod is unique) | `""` |
-| `listeners.external.advertisedPort` | Advertised port for EXTERNAL (empty = `listeners.external.port`) | `""` |
+| `listeners.external.port` | Bind port for the extra listener (must differ from internal, client, and metrics ports) | `9125` |
+| `listeners.external.advertisedHost` | Shared advertised host for EXTERNAL (`hostname`/`IP` or `${NODE_IP}`; required when enabled unless overridden per component) | `""` |
+| `listeners.external.advertisedPort` | Shared advertised port for EXTERNAL (empty = `listeners.external.port`) | `""` |
+| `coordinator.listeners.external.advertisedHost` | Coordinator EXTERNAL advertised host (overrides the shared host) | `""` |
+| `coordinator.listeners.external.advertisedPort` | Coordinator EXTERNAL advertised port | `""` |
+| `tablet.listeners.external.advertisedHost` | Shared EXTERNAL host for every tablet (overrides the shared host) | `""` |
+| `tablet.listeners.external.advertisedHosts` | Per-ordinal EXTERNAL hosts; length must equal `tablet.numberOfReplicas` | `[]` |
+| `tablet.listeners.external.advertisedPort` | Shared EXTERNAL port for every tablet | `""` |
+| `tablet.listeners.external.advertisedPorts` | Per-ordinal EXTERNAL ports; length must equal `tablet.numberOfReplicas` | `[]` |
 
 ### Security Configuration
 
@@ -196,12 +200,14 @@ The following table lists the configurable parameters of the Fluss chart, and th
 |-----------|-------------|---------|
 | `security.client.sasl.mechanism` | Client listener SASL mechanism (`""`, `plain`) | `""` |
 | `security.internal.sasl.mechanism` | Internal listener SASL mechanism (`""`, `plain`) | `""` |
+| `security.external.sasl.mechanism` | EXTERNAL listener SASL mechanism (`""`, `plain`, `client`). `client` reuses CLIENT SASL. Empty is PLAINTEXT (warns when EXTERNAL is enabled) | `""` |
 | `security.client.sasl.plain.users` | Client listener username and password pairs for PLAIN | `[]` |
+| `security.external.sasl.plain.users` | EXTERNAL listener username and password pairs for PLAIN (ignored when mechanism is `client`) | `[]` |
 | `security.internal.sasl.plain.username` | Internal listener PLAIN username | `""` |
 | `security.internal.sasl.plain.password` | Internal listener PLAIN password | `""` |
 | `security.internal.sasl.plain.existingSecret` | Reference to a pre-existing Secret for internal SASL credentials | `{}` |
 
-Only `plain` mechanism is supported for now. An empty string disables the SASL authentication, and maps to the `PLAINTEXT` protocol.
+Only `plain` mechanism is supported for now (EXTERNAL also accepts `client`, which reuses CLIENT SASL). An empty string disables SASL and maps to the `PLAINTEXT` protocol.
 
 If the internal SASL username or password is left empty, the chart automatically generates credentials based on the Helm release name:
 
@@ -576,13 +582,15 @@ By default the chart supports **in-cluster clients only**.
 Each server binds `INTERNAL` (inter-broker) and `CLIENT` on the pod IP, and advertises `CLIENT` as the StatefulSet pod FQDN:
 
 ```
-CLIENT://<pod>.tablet-server-hs.<ns>.svc.cluster.local:9124
+CLIENT://<pod>.tablet-server-hs.<ns>.svc.<clusterDomain>:9124
 ```
+
+`clusterDomain` defaults to `cluster.local`. Set it if your cluster uses a different DNS domain.
 
 A Fluss client bootstraps against the coordinator, then `MetadataResponse` redirects produce/fetch/lookup to each tablet's advertised `CLIENT` address. Those FQDNs resolve only inside the cluster. Port-forwarding (or exposing) **only** the coordinator therefore lets bootstrap succeed and writes fail. A shared LoadBalancer/NodePort in front of the headless Service has the same problem: the port is reachable, but metadata still hands the client in-cluster addresses.
 
 - **Internal port (9123)**: server-to-server communication
-- **Client port (9124)**: in-cluster client connections (default advertised address)
+- **Client port (9124)**: in-cluster client connections (chart-owned advertised FQDN)
 - **External port (9125)**: optional extra listener for out-of-cluster clients (disabled by default)
 
 `bind.listeners` and `advertised.listeners` are always written by the StatefulSet startup command. Do not set them in `configurationOverrides`.
@@ -592,7 +600,9 @@ If an existing deployment still sets either key there, upgrade will fail with `V
 
 Keep the default `CLIENT` advertised FQDN for in-cluster workloads (Flink, Spark, other pods) and enable a second listener. External clients must bootstrap against the **EXTERNAL** advertised address, not the in-cluster CLIENT DNS.
 
-Each tablet (and the coordinator) must advertise a **unique** host or port. A single hostname for every replica cannot work: the client connects directly to the bucket leader.
+Each tablet (and the coordinator) must advertise a **unique** host or port. A single hostname for every replica cannot work: the client connects directly to the bucket leader. Uniqueness is configured with per-ordinal arrays (`advertisedHosts` / `advertisedPorts`), not shell formulas.
+
+The chart does **not** create NodePort or LoadBalancer Services per pod; that topology is the same problem [FIP-41](https://cwiki.apache.org/confluence/display/FLUSS/FIP-41%3A+Fluss+Kubernetes+Operator) deferred for the Kubernetes operator. You still have to make the advertised addresses resolve and route to the right pod.
 
 Per-pod DNS (recommended):
 
@@ -601,12 +611,20 @@ listeners:
   external:
     enabled: true
     port: 9125
-    advertisedHost: "${POD_NAME}.fluss.example.com"
+coordinator:
+  listeners:
+    external:
+      advertisedHost: coordinator-server-0.fluss.example.com
+tablet:
+  listeners:
+    external:
+      advertisedHosts:
+        - tablet-server-0.fluss.example.com
+        - tablet-server-1.fluss.example.com
+        - tablet-server-2.fluss.example.com
 ```
 
-You still have to make `${POD_NAME}.fluss.example.com` resolve and route to that pod (per-pod Service, ExternalDNS, etc.). The chart does **not** create NodePort or LoadBalancer Services per pod; that topology is the same problem [FIP-41](https://cwiki.apache.org/confluence/display/FLUSS/FIP-41%3A+Fluss+Kubernetes+Operator) deferred for the Kubernetes operator.
-
-Host IP + unique port (for example when you create per-pod NodePorts yourself):
+Host IP + unique port (for example when you create per-pod NodePorts yourself). `${NODE_IP}` is the only runtime token accepted in `advertisedHost`; `$NODE_IP` is injected on the coordinator always, and on tablets when referenced:
 
 ```yaml
 listeners:
@@ -614,32 +632,34 @@ listeners:
     enabled: true
     port: 9125
     advertisedHost: "${NODE_IP}"
-    advertisedPort: "3${POD_NAME##*-}125"   # example; use the NodePort you assigned
+tablet:
+  listeners:
+    external:
+      advertisedPorts: [30001, 30002, 30003]
 ```
 
-`$POD_NAME`, `$POD_NAMESPACE`, and `$POD_IP` are always injected. `$NODE_IP` is injected for coordinator and for tablet when a listener formula references it. Values are also run through Helm `tpl` (for example `Release.Namespace`).
-
-Coordinator and tablet can override host/port independently (`coordinator.listeners.external.*` / `tablet.listeners.external.*`) when they must not share a formula. Example for `kubectl port-forward` from a laptop (unique localhost ports; coordinator-server-0 and tablet-server-0 both have ordinal 0):
+Coordinator and tablet can override host/port independently when they must not share a value. Example for `kubectl port-forward` from a laptop (unique localhost ports; coordinator-server-0 and tablet-server-0 both have ordinal 0):
 
 ```yaml
 listeners:
   external:
     enabled: true
     port: 9125
-    advertisedHost: "127.0.0.1"
 coordinator:
   listeners:
     external:
+      advertisedHost: "127.0.0.1"
       advertisedPort: "9125"
 tablet:
   listeners:
     external:
-      advertisedPort: "$((9126 + ${POD_NAME##*-}))"
+      advertisedHost: "127.0.0.1"
+      advertisedPorts: [9126, 9127, 9128]
 ```
 
 Then forward every pod to the advertised localhost port (`coordinator-server-0:9125`, `tablet-server-0:9126`, `tablet-server-1:9127`, ...). Bootstrap the client at `127.0.0.1:9125`.
 
-Overriding `listeners.client.advertisedHost` instead of enabling EXTERNAL makes **all** clients, including in-cluster ones, use the external address. Prefer EXTERNAL unless you have split-horizon DNS.
+EXTERNAL security is independent of CLIENT. Default is PLAINTEXT, which prints a `VALUES WARNING` when EXTERNAL is enabled. Set `security.external.sasl.mechanism` to `plain` (own users) or `client` (reuse CLIENT SASL). Setting `security.external.sasl.*` without `listeners.external.enabled: true` has no effect and also prints a `VALUES WARNING`. SASL/PLAIN without TLS sends credentials in cleartext; until TLS lands ([FIP-29](https://cwiki.apache.org/confluence/display/FLUSS/FIP-29%3A+Support+TLS+and+mTLS+Authentication)), keep EXTERNAL on a trusted network.
 
 Custom bind ports:
 

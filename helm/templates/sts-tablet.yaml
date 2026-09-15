@@ -131,6 +131,10 @@ spec:
               cp /opt/conf/server.yaml $FLUSS_HOME/conf && \
 
               BIND_LISTENERS="{{ include "fluss.listeners.bind" . }}" && \
+              {{- $tabletOrdinal := include "fluss.listeners.external.ordinalSetup" (dict "ctx" . "component" "tablet") | trim }}
+              {{- if $tabletOrdinal }}
+              {{ $tabletOrdinal }} && \
+              {{- end }}
               ADVERTISED_LISTENERS="{{ include "fluss.listeners.advertised" (dict "ctx" . "component" "tablet") }}" && \
 
               echo "" >> $FLUSS_HOME/conf/server.yaml && \

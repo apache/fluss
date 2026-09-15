@@ -46,14 +46,23 @@ data:
        user_${FLUSS_JAAS_CLIENT_USERNAME_{{ $idx }}}="${FLUSS_JAAS_CLIENT_PASSWORD_{{ $idx }}}"
 {{- end }};
     };
-{{- if (include "fluss.listeners.external.enabled" .) }}
-    {{ include "fluss.listeners.external.name" . | lower | trim }}.FlussServer {
+{{- end }}
+{{- if eq (include "fluss.security.external.resolvedMechanism" . | trim) "plain" }}
+    external.FlussServer {
        org.apache.fluss.security.auth.sasl.plain.PlainLoginModule required
+{{- if (include "fluss.security.external.usesClientUsers" .) }}
 {{- range $idx, $user := .Values.security.client.sasl.plain.users | default (list) }}
        user_${FLUSS_JAAS_CLIENT_USERNAME_{{ $idx }}}="${FLUSS_JAAS_CLIENT_PASSWORD_{{ $idx }}}"
 {{- end }};
-    };
+{{- else }}
+{{- $ext := .Values.security.external | default dict }}
+{{- $sasl := $ext.sasl | default dict }}
+{{- $plain := $sasl.plain | default dict }}
+{{- range $idx, $user := $plain.users | default (list) }}
+       user_${FLUSS_JAAS_EXTERNAL_USERNAME_{{ $idx }}}="${FLUSS_JAAS_EXTERNAL_PASSWORD_{{ $idx }}}"
+{{- end }};
 {{- end }}
+    };
 {{- end }}
 {{- end }}
 {{- if (include "fluss.security.zookeeper.sasl.enabled" .) }}
