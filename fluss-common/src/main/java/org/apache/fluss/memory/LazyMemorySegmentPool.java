@@ -22,6 +22,8 @@ import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.FlussRuntimeException;
+import org.apache.fluss.exception.RecordTooLargeException;
+import org.apache.fluss.exception.TimeoutException;
 
 import javax.annotation.concurrent.GuardedBy;
 import javax.annotation.concurrent.ThreadSafe;
@@ -33,7 +35,9 @@ import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Deque;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.Condition;
 import java.util.concurrent.locks.ReentrantLock;
@@ -65,6 +69,14 @@ public class LazyMemorySegmentPool implements MemorySegmentPool, Closeable {
     private boolean closed;
 
     private volatile int pageUsage;
+
+    @GuardedBy("lock")
+    private final Set<Allocation> allocations = new LinkedHashSet<>();
+
+    private final Condition allocationChanged = lock.newCondition();
+
+    @GuardedBy("lock")
+    private int waitingAllocations;
 
     @VisibleForTesting
     LazyMemorySegmentPool(
@@ -231,6 +243,7 @@ public class LazyMemorySegmentPool implements MemorySegmentPool, Closeable {
                     }
                     pageUsage = newPageUsage;
                     cachePages.addAll(memory);
+                    allocationChanged.signalAll();
                     for (int i = 0; i < memory.size() && !waiters.isEmpty(); i++) {
                         waiters.peekFirst().signal();
                     }
@@ -260,6 +273,7 @@ public class LazyMemorySegmentPool implements MemorySegmentPool, Closeable {
                     closed = true;
                     cachePages.clear();
                     waiters.forEach(Condition::signal);
+                    allocationChanged.signalAll();
                 });
     }
 
@@ -270,11 +284,144 @@ public class LazyMemorySegmentPool implements MemorySegmentPool, Closeable {
     }
 
     public int queued() {
-        return inLock(lock, waiters::size);
+        return inLock(lock, () -> waiters.size() + waitingAllocations);
     }
 
     @VisibleForTesting
     public List<MemorySegment> getAllCachePages() {
         return cachePages;
+    }
+
+    @Override
+    public MemoryAllocation newAllocation() {
+        return inLock(
+                lock,
+                () -> {
+                    checkClosed();
+                    Allocation allocation = new Allocation();
+                    allocations.add(allocation);
+                    return allocation;
+                });
+    }
+
+    /** Called only under memory pressure, with the pool lock held. */
+    private void resolveAllocationDeadlock() {
+        int heldPages = 0;
+        Allocation victim = null;
+        for (Allocation allocation : allocations) {
+            int held = allocation.pages.size();
+            heldPages += held;
+            if (held > 0) {
+                // An active owner can still finish, or an aborted owner is already unwinding.
+                if (allocation.pendingPages == 0 || allocation.aborted) {
+                    return;
+                }
+                victim = allocation;
+            }
+            if (allocation.pendingPages > 0 && allocation.pendingPages <= maxPages - pageUsage) {
+                return;
+            }
+        }
+        // Pages outside allocation scopes may be returned independently.
+        if (heldPages == pageUsage && victim != null) {
+            // Registration order keeps older operations alive when holders block each other.
+            victim.aborted = true;
+            allocationChanged.signalAll();
+        }
+    }
+
+    private final class Allocation extends MemoryAllocation {
+        private int pendingPages;
+        private boolean aborted;
+
+        private Allocation() {
+            super(LazyMemorySegmentPool.this);
+        }
+
+        @Override
+        public List<MemorySegment> allocatePages(int required) throws IOException {
+            checkArgument(required > 0, "Requested pages must be positive.");
+            lock.lock();
+            try {
+                checkAllocationOpen();
+                if (required > maxPages - pages.size()) {
+                    aborted = true;
+                    throw new RecordTooLargeException(
+                            "Memory allocation exceeds the memory pool capacity of "
+                                    + totalSize()
+                                    + " bytes: held pages="
+                                    + pages.size()
+                                    + ", requested pages="
+                                    + required
+                                    + ", page size="
+                                    + pageSize);
+                }
+                if (required > maxPages - pageUsage) {
+                    awaitPages(required);
+                }
+                lazilyAllocatePages(required);
+                List<MemorySegment> allocated = drain(required);
+                if (required == 1) {
+                    pages.add(allocated.get(0));
+                } else {
+                    pages.addAll(allocated);
+                }
+                return allocated;
+            } finally {
+                lock.unlock();
+            }
+        }
+
+        private void awaitPages(int required) {
+            pendingPages = required;
+            waitingAllocations++;
+            long remaining = TimeUnit.MILLISECONDS.toNanos(maxTimeToBlockMs);
+            try {
+                while (required > maxPages - pageUsage) {
+                    resolveAllocationDeadlock();
+                    checkAllocationOpen();
+                    if (remaining <= 0) {
+                        throw new TimeoutException("Timed out waiting for memory allocation.");
+                    }
+                    remaining = allocationChanged.awaitNanos(remaining);
+                    checkAllocationOpen();
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new FlussRuntimeException(e);
+            } finally {
+                pendingPages = 0;
+                waitingAllocations--;
+            }
+        }
+
+        private void checkAllocationOpen() {
+            checkClosed();
+            if (closed) {
+                throw new IllegalStateException("Memory allocation is closed.");
+            }
+            if (aborted) {
+                // Use the existing retryable wire error so older clients can retry as well.
+                throw new TimeoutException(
+                        "Memory allocation aborted because blocked allocations cannot make progress. "
+                                + "Release the allocation and retry the operation.");
+            }
+        }
+
+        @Override
+        public void returnAll(List<MemorySegment> memory) {
+            inLock(lock, () -> super.returnAll(memory));
+        }
+
+        @Override
+        public void close() {
+            inLock(
+                    lock,
+                    () -> {
+                        super.close();
+                        allocations.remove(this);
+                        allocationChanged.signalAll();
+                    });
+        }
     }
 }
