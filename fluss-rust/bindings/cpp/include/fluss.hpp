@@ -1548,6 +1548,8 @@ struct Configuration {
     int32_t scanner_log_fetch_wait_max_time_ms{500};
     // Maximum bytes per fetch response per bucket for LogScanner (1 MB)
     int32_t scanner_log_fetch_max_bytes_for_bucket{1024 * 1024};
+    // Maximum bytes per fetch response per bucket for a full KV scan (4 MB)
+    int32_t scanner_kv_fetch_max_bytes{4 * 1024 * 1024};
     int64_t writer_batch_timeout_ms{100};
     // Whether to enable idempotent writes
     bool writer_enable_idempotence{true};
