@@ -37,12 +37,10 @@ import org.apache.fluss.server.entity.LookupDataForBucket;
 import org.apache.fluss.server.entity.PutKvDataForBucket;
 import org.apache.fluss.server.kv.KvStateLookupResult;
 import org.apache.fluss.server.kv.KvStateLookupResult.Status;
-import org.apache.fluss.server.kv.historical.HistoricalValueLookup;
 import org.apache.fluss.server.log.LogAppendInfo;
 import org.apache.fluss.server.replica.Replica;
 import org.apache.fluss.server.storage.LocalDiskManager;
 import org.apache.fluss.utils.ByteArraySlice;
-import org.apache.fluss.utils.ByteArrayWrapper;
 import org.apache.fluss.utils.concurrent.Scheduler;
 
 import javax.annotation.Nullable;
@@ -50,10 +48,8 @@ import javax.annotation.Nullable;
 import java.io.File;
 import java.util.ArrayList;
 import java.util.Collections;
-import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
-import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
@@ -190,6 +186,16 @@ public final class HistoricalPartitionManager implements AutoCloseable {
         lakeLookupManager.requireLakeSnapshot(tableId, lakeSnapshotId);
     }
 
+    /** Publishes lake coverage used by natural RocksDB compaction for a historical leader. */
+    public void onLakeProgress(Replica replica, long lakeSnapshotId, long lakeLogEndOffset) {
+        replica.tryUpdateHistoricalCleanupOffset(
+                lakeLogEndOffset,
+                () ->
+                        // Future fallback lookups must require the covering snapshot before local
+                        // entries become eligible for physical removal.
+                        requireLakeSnapshot(replica.getTableBucket().getTableId(), lakeSnapshotId));
+    }
+
     /** Returns the number of accepted historical operations that have not completed. */
     public int numInflightRequests() {
         return taskExecutor.numInflightRequests();
@@ -226,56 +232,23 @@ public final class HistoricalPartitionManager implements AutoCloseable {
                 ResolvedPartitionSpec.fromPartitionName(
                         tableInfo.getPartitionKeys(), originalPartitionName);
         // The public put path holds the TableBucket ordering slot until processPut returns, so
-        // local state cannot be changed by a later historical write between resolve and apply.
+        // local state cannot be changed by a later historical write between lookup and apply.
         int expectedLeaderEpoch = replica.getLeaderEpoch();
-        List<byte[]> keysRequiringLakeLookup =
-                replica.findKeysRequiringLakeLookup(
-                        putData.records(),
-                        targetColumns,
-                        mergeMode,
-                        originalPartitionName,
-                        expectedLeaderEpoch,
-                        requiredAcks);
-
-        Map<ByteArrayWrapper, KvStateLookupResult> lakeResults = new HashMap<>();
-        if (!keysRequiringLakeLookup.isEmpty()) {
-            List<byte[]> lakeValues =
-                    lakeLookupManager.lookup(
-                            new LookupDataForBucket(
-                                    putData.tableBucket(),
-                                    keysRequiringLakeLookup,
-                                    originalPartitionName),
-                            tableInfo,
-                            replica.getLatestSchemaInfo(),
-                            originalPartitionSpec,
-                            replica.tableMetrics()::recordHistoricalLakeLookup);
-            for (int i = 0; i < keysRequiringLakeLookup.size(); i++) {
-                byte[] lakeValue = lakeValues.get(i);
-                lakeResults.put(
-                        new ByteArrayWrapper(keysRequiringLakeLookup.get(i)),
-                        lakeValue == null
-                                ? KvStateLookupResult.notFound()
-                                : KvStateLookupResult.present(lakeValue));
-            }
-        }
-
-        HistoricalValueLookup memoizedLakeLookup =
-                primaryKey -> {
-                    KvStateLookupResult result =
-                            checkNotNull(
-                                    lakeResults.get(new ByteArrayWrapper(primaryKey)),
-                                    "No resolved lake value for a historical write key");
-                    return result.value();
-                };
-
-        // TODO: Tag historical values and tombstones with WAL offsets for incremental cleanup; see
-        //  https://github.com/apache/fluss/issues/4159.
         return replica.putHistoricalRecordsToLeader(
                 putData.records(),
                 targetColumns,
                 mergeMode,
                 originalPartitionName,
-                memoizedLakeLookup,
+                lakeLookupKeys ->
+                        lakeLookupManager.lookup(
+                                new LookupDataForBucket(
+                                        putData.tableBucket(),
+                                        lakeLookupKeys,
+                                        originalPartitionName),
+                                tableInfo,
+                                replica.getLatestSchemaInfo(),
+                                originalPartitionSpec,
+                                replica.tableMetrics()::recordHistoricalLakeLookup),
                 expectedLeaderEpoch,
                 requiredAcks);
     }
@@ -343,15 +316,13 @@ public final class HistoricalPartitionManager implements AutoCloseable {
 
             Iterator<byte[]> lakeValueIterator = lakeValues.iterator();
             List<ByteArraySlice> values = new ArrayList<>(localResults.size());
-            KvValueLayout localValueLayout =
-                    KvValueLayout.fromTableConfig(tableInfo.getTableConfig());
             for (KvStateLookupResult localResult : localResults) {
                 // Consume one lake value for each NOT_FOUND result; local values and tombstones
                 // keep their original positions without advancing the lake iterator.
                 if (localResult.status() == Status.NOT_FOUND) {
                     values.add(KvValueLayout.PLAIN.toValueBodySlice(lakeValueIterator.next()));
                 } else {
-                    values.add(localValueLayout.toValueBodySlice(localResult.value()));
+                    values.add(KvValueLayout.TAGGED.toValueBodySlice(localResult.value()));
                 }
             }
             return new LookupResultForBucket(tableBucket, values, originalPartitionName);
