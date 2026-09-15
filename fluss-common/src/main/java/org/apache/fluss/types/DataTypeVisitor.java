@@ -66,4 +66,8 @@ public interface DataTypeVisitor<R> {
     R visit(MapType mapType);
 
     R visit(RowType rowType);
+
+    R visit(TimestampNanoType timestampNanoType);
+
+    R visit(LocalZonedTimestampNanoType localZonedTimestampNanoType);
 }
