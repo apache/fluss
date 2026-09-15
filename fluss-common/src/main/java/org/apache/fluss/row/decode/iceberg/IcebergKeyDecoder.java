@@ -92,12 +92,7 @@ public class IcebergKeyDecoder implements KeyDecoder {
                 return MemorySegment::getLong;
 
             case TIMESTAMP_WITHOUT_TIME_ZONE:
-                return (segment, offset) -> {
-                    long micros = segment.getLong(offset);
-                    long millis = micros / 1000L;
-                    int nanoOfMillis = (int) ((micros % 1000L) * 1000L);
-                    return TimestampNtz.fromMillis(millis, nanoOfMillis);
-                };
+                return (segment, offset) -> TimestampNtz.fromMicros(segment.getLong(offset));
 
             case DECIMAL:
                 final int decimalPrecision = getPrecision(fieldType);
