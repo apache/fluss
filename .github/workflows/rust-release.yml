@@ -41,7 +41,7 @@ jobs:
       contents: read
       id-token: write  # mint the short-lived crates.io publish token
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - uses: ./.github/actions/verify-tag-version
 
