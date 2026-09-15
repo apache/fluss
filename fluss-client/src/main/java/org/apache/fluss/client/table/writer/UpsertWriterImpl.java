@@ -45,6 +45,7 @@ class UpsertWriterImpl extends AbstractTableWriter implements UpsertWriter {
     private final TableInfo tableInfo;
     private final KeyEncoder primaryKeyEncoder;
     private final @Nullable int[] targetColumns;
+    private final int[] primaryKeyIndexes;
 
     // same to primaryKeyEncoder if the bucket key is the same to the primary key
     private final KeyEncoder bucketKeyEncoder;
@@ -80,6 +81,7 @@ class UpsertWriterImpl extends AbstractTableWriter implements UpsertWriter {
                 partialUpdateColumns);
 
         this.targetColumns = partialUpdateColumns;
+        this.primaryKeyIndexes = tableInfo.getSchema().getPrimaryKeyIndexes();
         // encode primary key using physical primary key
         this.primaryKeyEncoder =
                 KeyEncoder.ofPrimaryKeyEncoder(
@@ -176,6 +178,7 @@ class UpsertWriterImpl extends AbstractTableWriter implements UpsertWriter {
     @Override
     public CompletableFuture<UpsertResult> upsert(InternalRow row) {
         checkFieldCount(row);
+        checkNotNullConstraints(row, tableInfo, targetColumns);
         byte[] key = primaryKeyEncoder.encodeKey(row);
         byte[] bucketKey =
                 bucketKeyEncoder == primaryKeyEncoder ? key : bucketKeyEncoder.encodeKey(row);
@@ -202,6 +205,7 @@ class UpsertWriterImpl extends AbstractTableWriter implements UpsertWriter {
     @Override
     public CompletableFuture<DeleteResult> delete(InternalRow row) {
         checkFieldCount(row);
+        checkNotNullConstraints(row, tableInfo, primaryKeyIndexes);
         byte[] key = primaryKeyEncoder.encodeKey(row);
         byte[] bucketKey =
                 bucketKeyEncoder == primaryKeyEncoder ? key : bucketKeyEncoder.encodeKey(row);
