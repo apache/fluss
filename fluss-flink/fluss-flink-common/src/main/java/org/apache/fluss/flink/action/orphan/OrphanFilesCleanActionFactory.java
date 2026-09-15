@@ -65,6 +65,8 @@ public class OrphanFilesCleanActionFactory implements ActionFactory {
                 + "  --table also disables the orphan-table scan (no sibling orphan-table scan in\n"
                 + "    the db).\n"
                 + "  --conf passes filesystem configuration for remote storage authentication.\n"
+                + "  --conf audit.run-id=<id> identifies one cleanup run in versioned result logs.\n"
+                + "  --conf audit.cluster-id=<id> adds a stable cluster identifier to result logs.\n"
                 + "    Keys use the same format as server.yaml (e.g. fs.oss.accessKeyId,\n"
                 + "    fs.oss.accessKeySecret, fs.oss.endpoint, fs.oss.region). Repeatable.\n"
                 + "\n"
