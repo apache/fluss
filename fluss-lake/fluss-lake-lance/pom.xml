@@ -208,6 +208,34 @@
                                     <include>*:*</include>
                                 </includes>
                             </artifactSet>
+                            <relocations>
+                                <!-- jackson is bundled whole here: every package referenced
+                                     (annotation, core, databind, datatype) is also present. -->
+                                <relocation>
+                                    <pattern>com.fasterxml.jackson</pattern>
+                                    <shadedPattern>org.apache.fluss.shaded.com.fasterxml.jackson</shadedPattern>
+                                </relocation>
+                                <!-- commons named individually: only codec and lang3 are
+                                     bundled. commons-logging is referenced but supplied from
+                                     elsewhere, so relocating org.apache.commons wholesale would
+                                     leave links that resolve nowhere. -->
+                                <relocation>
+                                    <pattern>org.apache.commons.codec</pattern>
+                                    <shadedPattern>org.apache.fluss.shaded.org.apache.commons.codec</shadedPattern>
+                                </relocation>
+                                <relocation>
+                                    <pattern>org.apache.commons.lang3</pattern>
+                                    <shadedPattern>org.apache.fluss.shaded.org.apache.commons.lang3</shadedPattern>
+                                </relocation>
+                                <!-- org.apache.arrow is deliberately NOT relocated. The bundled
+                                     libarrow_cdata_jni native exports JNI symbols that embed the
+                                     Java package name, e.g.
+                                     Java_org_apache_arrow_c_jni_JniWrapper_exportArray. Renaming
+                                     the package would make the JVM look for a symbol the library
+                                     does not export, failing with UnsatisfiedLinkError at
+                                     runtime. io.netty is left alone for the same reason in
+                                     spirit: it is Arrow's allocator layer, tied to Arrow. -->
+                            </relocations>
                             <filters>
                                 <filter>
                                     <artifact>*</artifact>
