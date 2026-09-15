@@ -550,6 +550,7 @@ public class TableDescriptorValidation {
         if (mergeEngine != MergeEngineType.AGGREGATION) {
             validateNoAggregationFunctions(schema);
         }
+        validateSequenceGroups(mergeEngine, hasPrimaryKey, schema);
         if (mergeEngine != null) {
             if (!hasPrimaryKey) {
                 throw new InvalidConfigException(
@@ -601,6 +602,33 @@ public class TableDescriptorValidation {
                 // Validate aggregation function parameters for aggregation merge engine
                 validateAggregationFunctionParameters(schema);
             }
+        }
+    }
+
+    /**
+     * Validates the sequence groups declared on the schema.
+     *
+     * <p>A sequence group puts one or more columns under the order of a sequence column, so that
+     * each group decides on its own whether an incoming write is newer than the stored row. This
+     * lets several writers update disjoint column groups of the same row without overwriting each
+     * other with stale values.
+     */
+    private static void validateSequenceGroups(
+            @Nullable MergeEngineType mergeEngine, boolean hasPrimaryKey, Schema schema) {
+        if (schema.getSequenceGroups().isEmpty()) {
+            return;
+        }
+
+        // only a primary key table without merge engine, or with the aggregation one, consults
+        // the sequence groups when merging; schema-level invariants already ran at build time
+        if (!hasPrimaryKey) {
+            throw new InvalidConfigException(
+                    "Sequence group is only supported in primary key table.");
+        }
+        if (mergeEngine != null && mergeEngine != MergeEngineType.AGGREGATION) {
+            throw new InvalidConfigException(
+                    String.format(
+                            "Sequence group is not supported for '%s' merge engine.", mergeEngine));
         }
     }
 
