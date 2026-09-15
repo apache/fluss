@@ -59,7 +59,16 @@ class SparkCatalogTest extends FlussSparkTestBase {
     }
   }
 
-  test("Catalog: add nested column is not supported") {
+  test("Catalog: add column with unsupported feature is rejected") {
+    // Creating a table with a column default value is rejected by Spark, because Fluss does not
+    // implement SupportsColumnDefaultValue.
+    val createException = intercept[AnalysisException] {
+      sql("CREATE TABLE t (id int, name string DEFAULT 'abc')")
+    }
+    assertThat(createException)
+      .hasMessageContaining(
+        "Table `fluss_catalog`.`fluss`.`t` does not support column default value")
+
     withTable("t") {
       sql("CREATE TABLE t (id int, s struct<a:int,b:string>)")
 
@@ -69,15 +78,6 @@ class SparkCatalogTest extends FlussSparkTestBase {
       }
       assertThat(nestedException).hasMessageContaining(
         "Adding nested columns is not supported: s.c")
-
-      val table = admin.getTableInfo(createTablePath("t")).get()
-      assertThatList(table.getRowType.getFieldNames).containsExactly("id", "s")
-    }
-  }
-
-  test("Catalog: add columns with unsupported position") {
-    withTable("t") {
-      sql("CREATE TABLE t (id int, name string)")
 
       // only the last position is supported, FIRST/AFTER are rejected by the conversion layer
       val firstException = intercept[UnsupportedOperationException] {
@@ -91,15 +91,6 @@ class SparkCatalogTest extends FlussSparkTestBase {
       assertThat(afterException).hasMessageContaining(
         "Adding column with position is not supported")
 
-      val table = admin.getTableInfo(createTablePath("t")).get()
-      assertThatList(table.getRowType.getFieldNames).containsExactly("id", "name")
-    }
-  }
-
-  test("Catalog: add non-nullable column is not supported") {
-    withTable("t") {
-      sql("CREATE TABLE t (id int, name string)")
-
       // fluss only supports adding nullable columns, rejected by the conversion layer
       val notNullException = intercept[UnsupportedOperationException] {
         sql("ALTER TABLE t ADD COLUMN age bigint NOT NULL")
@@ -107,33 +98,16 @@ class SparkCatalogTest extends FlussSparkTestBase {
       assertThat(notNullException).hasMessageContaining(
         "Adding non-nullable column is not supported")
 
-      val table = admin.getTableInfo(createTablePath("t")).get()
-      assertThatList(table.getRowType.getFieldNames).containsExactly("id", "name")
-    }
-  }
-
-  test("Catalog: column default value is not supported") {
-    // Creating a table with a column default value is rejected by Spark, because Fluss does not
-    // implement SupportsColumnDefaultValue.
-    val createException = intercept[AnalysisException] {
-      sql("CREATE TABLE t (id int, name string DEFAULT 'abc')")
-    }
-    assertThat(createException)
-      .hasMessageContaining(
-        "Table `fluss_catalog`.`fluss`.`t` does not support column default value")
-
-    withTable("t") {
-      sql("CREATE TABLE t (id int, name string)")
-
-      // Adding a column with a default value is rejected by the conversion layer.
-      val alterException = intercept[UnsupportedOperationException] {
+      // adding a column with a default value is rejected by the conversion layer
+      val defaultException = intercept[UnsupportedOperationException] {
         sql("ALTER TABLE t ADD COLUMN age bigint DEFAULT 18")
       }
-      assertThat(alterException)
+      assertThat(defaultException)
         .hasMessageContaining("Adding column with default value is not supported")
 
+      // none of the rejected ALTERs should have modified the table
       val table = admin.getTableInfo(createTablePath("t")).get()
-      assertThatList(table.getRowType.getFieldNames).containsExactly("id", "name")
+      assertThatList(table.getRowType.getFieldNames).containsExactly("id", "s")
     }
   }
 
