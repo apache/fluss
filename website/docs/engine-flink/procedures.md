@@ -646,6 +646,55 @@ CALL sys.cancel_rebalance();
 CALL sys.cancel_rebalance('rebalance-12345');
 ```
 
+## Partition Procedures
+
+Fluss provides procedures to inspect partition-level metadata of partitioned tables.
+
+### list_partition_infos
+
+List the partition id, partition name and bucket count of every partition of a partitioned table.
+
+For a partitioned table, `ALTER TABLE ... SET ('bucket.num' = N)` only changes the bucket count for newly created partitions; existing partitions keep their original bucket counts. The table-level `'bucket.num'` shown by `SHOW CREATE TABLE` is only the default for new partitions, so use this procedure to see the actual bucket count of each partition.
+
+**Syntax:**
+
+```sql
+-- List the partition id, partition name and bucket count of each partition
+CALL [catalog_name.]sys.list_partition_infos(
+  db => 'STRING',
+  table_name => 'STRING'
+)
+```
+
+**Parameters:**
+
+- `db` (required): The database name of the table.
+- `table_name` (required): The table name.
+
+**Returns:** One row per partition, containing:
+
+- `partition_id`: The unique identifier of the partition in the cluster.
+- `partition_name`: The partition name, e.g. `2024-01` for a daily partition.
+- `bucket_count`: The bucket count of the partition.
+
+**Example:**
+
+```sql title="Flink SQL"
+-- Use the Fluss catalog (replace 'fluss_catalog' with your catalog name if different)
+USE fluss_catalog;
+
+-- List the partitions of my_db.orders with their bucket counts
+CALL sys.list_partition_infos('my_db', 'orders');
+```
+
+An example result after `ALTER TABLE my_db.orders SET ('bucket.num' = '8')` on a table created with 4 buckets:
+
+```sql
++I[1001, 2024-01, 4]
++I[1002, 2024-02, 4]
++I[1003, 2024-03, 8]
+```
+
 ## kv snapshot lease
 
 Fluss provides procedures to manage KV snapshot leases, allowing you to drop leased kv snapshots.
