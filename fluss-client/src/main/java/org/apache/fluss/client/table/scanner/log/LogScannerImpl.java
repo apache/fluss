@@ -19,6 +19,7 @@ package org.apache.fluss.client.table.scanner.log;
 
 import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.annotation.PublicEvolving;
+import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.client.metadata.MetadataUpdater;
 import org.apache.fluss.client.metrics.ScannerMetricGroup;
 import org.apache.fluss.client.table.scanner.RemoteFileDownloader;
@@ -34,6 +35,7 @@ import org.apache.fluss.predicate.Predicate;
 import org.apache.fluss.record.LogRecordReadContext;
 import org.apache.fluss.rpc.metrics.ClientMetricGroup;
 import org.apache.fluss.types.RowType;
+import org.apache.fluss.utils.IOUtils;
 import org.apache.fluss.utils.Projection;
 
 import javax.annotation.Nullable;
@@ -204,7 +206,7 @@ public class LogScannerImpl extends AbstractLogScanner<ScanRecords> implements L
                         return scanRecords;
                     }
                 } else {
-                    logFetcher.sendFetches();
+                    sendFetchesOrRelease(logFetcher::sendFetches, scanRecords);
                     return scanRecords;
                 }
             } while (System.nanoTime() - startNanos < timeoutNanos);
@@ -225,6 +227,20 @@ public class LogScannerImpl extends AbstractLogScanner<ScanRecords> implements L
         // send any new fetches (won't resend pending fetches).
         logFetcher.sendFetches();
         return logFetcher.collectArrowFetch();
+    }
+
+    /**
+     * Prefetches the next fetch after a successful poll. If sending the next fetch fails, the
+     * already materialized Arrow batches are released so they are not leaked.
+     */
+    @VisibleForTesting
+    static void sendFetchesOrRelease(Runnable sendFetches, ArrowScanRecords scanRecords) {
+        try {
+            sendFetches.run();
+        } catch (Throwable t) {
+            IOUtils.closeQuietly(scanRecords);
+            throw t;
+        }
     }
 
     @Override

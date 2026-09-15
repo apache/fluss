@@ -34,6 +34,7 @@ import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.VectorSchemaRoot;
 import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.RowType;
 import org.apache.fluss.utils.ArrowUtils;
+import org.apache.fluss.utils.ExceptionUtils;
 import org.apache.fluss.utils.IOUtils;
 import org.apache.fluss.utils.Projection;
 import org.apache.fluss.utils.UnshadedArrowReadUtils;
@@ -41,6 +42,7 @@ import org.apache.fluss.utils.UnshadedArrowReadUtils;
 import javax.annotation.Nullable;
 import javax.annotation.concurrent.ThreadSafe;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.IntStream;
@@ -382,24 +384,41 @@ public class LogRecordReadContext
         return ProjectedRow.from(originSchema, expectedSchema);
     }
 
+    /**
+     * Closes Arrow resources owned by this context.
+     *
+     * <p>Every allocator and vector schema root is closed even if an earlier close fails, so a
+     * failure in the shaded allocator cannot leak the unshaded allocator used by {@code
+     * pollRecordBatch()}.
+     */
     public void close() {
-        vectorSchemaRootMap.values().forEach(VectorSchemaRoot::close);
-        vectorSchemaRootMap.clear();
-        if (bufferAllocator != null) {
-            bufferAllocator.close();
-        }
-
+        List<AutoCloseable> closeables = new ArrayList<>();
+        closeables.addAll(vectorSchemaRootMap.values());
+        closeables.add(bufferAllocator);
         synchronized (unshadedArrowResourceLock) {
             if (unshadedBufferAllocator != null) {
-                try {
-                    unshadedBufferAllocator.close();
-                } catch (Exception e) {
-                    throw new RuntimeException(
-                            "Failed to close Arrow buffer allocator. "
-                                    + "Arrow batches returned by pollRecordBatch() must be closed "
-                                    + "before closing the scanner.",
-                            e);
-                }
+                final AutoCloseable unshaded = unshadedBufferAllocator;
+                closeables.add(
+                        () -> {
+                            try {
+                                unshaded.close();
+                            } catch (Exception e) {
+                                throw new RuntimeException(
+                                        "Failed to close Arrow buffer allocator. "
+                                                + "Arrow batches returned by pollRecordBatch() must be closed "
+                                                + "before closing the scanner.",
+                                        e);
+                            }
+                        });
+            }
+        }
+        try {
+            IOUtils.closeAll(closeables);
+        } catch (Exception e) {
+            ExceptionUtils.rethrow(e);
+        } finally {
+            vectorSchemaRootMap.clear();
+            synchronized (unshadedArrowResourceLock) {
                 unshadedBufferAllocator = null;
             }
         }
