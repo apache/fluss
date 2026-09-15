@@ -287,6 +287,49 @@ Usage:
 {{- end -}}
 
 {{/*
+secretKeyRef env entry for the readiness probe credential, or empty when no
+Secret is referenced. Rendered on every server container, so the exec probe
+inherits it whichever component runs the cluster-health check.
+Usage:
+  include "fluss.security.readinessProbe.env" .
+*/}}
+{{- define "fluss.security.readinessProbe.env" -}}
+{{- $ref := .Values.security.readinessProbe.existingSecret | default (dict) -}}
+{{- if $ref.name }}
+- name: READINESS_HEALTH_CHECK_AUTH
+  valueFrom:
+    secretKeyRef:
+      name: {{ $ref.name }}
+      key: {{ $ref.key | default "auth" }}
+{{- end }}
+{{- end -}}
+
+{{/*
+Validates the readiness probe credential. It has three possible sources, and
+setting more than one is an error.
+Returns an error message if invalid, empty string otherwise.
+Usage:
+  include "fluss.security.readinessProbe.validateAuth" .
+*/}}
+{{- define "fluss.security.readinessProbe.validateAuth" -}}
+{{- $sources := list -}}
+{{- if .Values.tablet.readinessProbe.healthCheckAuth -}}
+  {{- $sources = append $sources "tablet.readinessProbe.healthCheckAuth" -}}
+{{- end -}}
+{{- if (.Values.security.readinessProbe.existingSecret | default (dict)).name -}}
+  {{- $sources = append $sources "security.readinessProbe.existingSecret" -}}
+{{- end -}}
+{{- range .Values.secrets.env -}}
+  {{- if eq .name "READINESS_HEALTH_CHECK_AUTH" -}}
+    {{- $sources = append $sources "the secrets.env entry named READINESS_HEALTH_CHECK_AUTH" -}}
+  {{- end -}}
+{{- end -}}
+{{- if gt (len $sources) 1 -}}
+  {{- printf "the readiness probe credential is set more than once (%s); set only one" (join ", " $sources) -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
 Collects security error messages.
 Usage:
   include "fluss.security.validateError" .
@@ -299,6 +342,7 @@ Usage:
 {{- $errMessages = append $errMessages (include "fluss.security.zookeeper.sasl.validateLoginModuleClass" .) -}}
 {{- $errMessages = append $errMessages (include "fluss.security.zookeeper.sasl.validateUsername" .) -}}
 {{- $errMessages = append $errMessages (include "fluss.security.zookeeper.sasl.validatePassword" .) -}}
+{{- $errMessages = append $errMessages (include "fluss.security.readinessProbe.validateAuth" .) -}}
 {{- $errMessages = without $errMessages "" -}}
 {{- join "\n" $errMessages -}}
 {{- end -}}
