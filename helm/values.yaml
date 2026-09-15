@@ -79,6 +79,22 @@ tablet:
     # or escaping needed). Required only when the local client listener
     # enforces SASL. Example:
     #   healthCheckAuth: "client.security.protocol:SASL;client.sasl.mechanism:PLAIN;client.security.sasl.username:admin;client.security.sasl.password:admin-pass"
+    #
+    # This value is inlined into the StatefulSet's probe command, so it is
+    # readable by anyone who can read the rendered manifest. To keep the
+    # credential in a Secret instead, leave this empty and declare the
+    # environment variable the probe reads under `secrets.env`:
+    #   secrets:
+    #     env:
+    #       - name: READINESS_HEALTH_CHECK_AUTH
+    #         secretName: fluss-readiness-probe-auth
+    #         key: auth
+    # The exec probe inherits the container environment, so readiness-check.sh
+    # picks the value up unchanged.
+    #
+    # When the authorizer is enabled, the principal in this credential needs
+    # DESCRIBE on the cluster resource, otherwise the health call is denied and
+    # the pod never becomes Ready.
     healthCheckAuth: ""
   extraVolumes: []
   extraVolumeMounts: []

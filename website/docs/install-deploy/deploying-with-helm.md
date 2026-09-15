@@ -873,6 +873,38 @@ tablet:
 | `failureThreshold` | `200`   | Max consecutive probe failures before marking the pod as unready. With `periodSeconds=5`, this allows up to ~16 minutes for recovery.          |
 | `periodSeconds`    | `5`     | How often the probe runs.                                                                                                                      |
 
+##### Probe credentials on a SASL cluster
+
+The probe connects to the pod's own client listener as a regular Fluss client. When that
+listener enforces SASL, the probe needs credentials or no TabletServer ever becomes Ready.
+With the authorizer enabled, the principal also needs `DESCRIBE` on the cluster resource.
+
+The credential is a single-line string of semicolon-separated `key:value` pairs. Supply it in
+one of two ways.
+
+Inline, which is simplest but puts the credential in plain text in the rendered StatefulSet:
+
+```yaml
+tablet:
+  readinessProbe:
+    healthCheckAuth: "client.security.protocol:SASL;client.security.sasl.mechanism:PLAIN;client.security.sasl.username:probe;client.security.sasl.password:probe-pass"
+```
+
+Or from a Secret, which keeps it out of the manifest. Leave `healthCheckAuth` empty and
+declare the environment variable the probe reads:
+
+```yaml
+secrets:
+  env:
+    - name: READINESS_HEALTH_CHECK_AUTH
+      secretName: fluss-readiness-probe-auth
+      key: auth
+```
+
+The exec probe inherits the container environment, so the value reaches the check unchanged.
+Setting both forms fails the render, because the inline form would silently override the
+Secret.
+
 :::note
 The CoordinatorServer does not need the Cluster Health API probe — it does not host data replicas, so a simple TCP check is sufficient.
 The Coordinator should be upgraded **after** all TabletServers are fully upgraded and recovered.
