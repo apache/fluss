@@ -552,7 +552,8 @@ struct Result {
 /// WriteCallbackOptions bounds outstanding callback operations per writer.
 ///
 /// Exceptions thrown by callbacks are caught and reported to stderr; they do not
-/// change the write outcome. Flush() waits for writes, not for callbacks to finish.
+/// change the write outcome. Flush() waits for server acknowledgment and then for
+/// pending callbacks to finish; it returns immediately when called from a callback.
 using WriteCallback = std::function<void(Result)>;
 
 /// Admission limits for callback overloads only; Wait and fire-and-forget are unchanged.

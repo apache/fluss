@@ -316,8 +316,9 @@ remove Rust buffer waits or make arbitrary blocking SDK calls deadlock-free.
 Exclusive writer access is still required. If dedicated workers cannot be
 initialized, the SDK falls back to its runtime blocking pool to preserve delivery.
 
-`Flush()` still waits for pending writes, **not** for user callbacks to finish.
-Applications that need to drain callbacks must track their completion separately.
+`Flush()` waits for server acknowledgment and then for all pending callbacks to
+finish. It returns immediately when called from within a callback to avoid
+deadlock.
 
 ### Compatibility and operational limits
 
@@ -352,9 +353,10 @@ Applications that need to drain callbacks must track their completion separately
   The process-wide executor is not automatically drained at exit.
 - Before releasing callback state or the connection, stop and join submitting
   threads, flush pending writes, and wait separately for tracked callbacks.
-  Application tracking must allow callbacks before submission returns and must
-  exclude rejected submissions, which have no callback. SDK admission does not
-  wait for work that a callback delegates to application threads or retry queues.
+  Application tracking must allow callbacks before submission returns and
+  exclude rejected submissions, which have no callback. Flush() waits for
+  accepted callbacks; it does not wait for work that a callback delegates to
+  application threads or retry queues.
   An application-side wait timeout does not cancel the write or its callback.
   Keep referenced state alive if abandoning a wait; use durable application
   tracking and a duplicate-safe retry policy when recovery is required.

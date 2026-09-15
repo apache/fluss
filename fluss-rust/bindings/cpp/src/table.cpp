@@ -1766,7 +1766,9 @@ Result AppendWriter::Flush() {
     }
 
     auto ffi_result = writer_->flush();
-    return utils::from_ffi_result(ffi_result);
+    auto result = utils::from_ffi_result(ffi_result);
+    if (!result.Ok()) return result;
+    return callback_capacity_->AwaitAll(std::chrono::seconds(60));
 }
 
 // ============================================================================
@@ -1887,7 +1889,9 @@ Result UpsertWriter::Flush() {
     }
 
     auto ffi_result = writer_->upsert_flush();
-    return utils::from_ffi_result(ffi_result);
+    auto result = utils::from_ffi_result(ffi_result);
+    if (!result.Ok()) return result;
+    return callback_capacity_->AwaitAll(std::chrono::seconds(60));
 }
 
 // ============================================================================

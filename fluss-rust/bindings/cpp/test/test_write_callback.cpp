@@ -140,7 +140,7 @@ TEST_F(WriteCallbackTest, AppendAcceptsFunctionPointer) {
     ASSERT_OK(writer.Flush());
 }
 
-TEST_F(WriteCallbackTest, CallbackOwnsCapturesAndDoesNotDelayFlush) {
+TEST_F(WriteCallbackTest, FlushWaitsForPendingCallbacks) {
     CreateTable();
     fluss::AppendWriter writer;
     ASSERT_OK(table_.NewAppend().CreateWriter(writer));
@@ -164,13 +164,12 @@ TEST_F(WriteCallbackTest, CallbackOwnsCapturesAndDoesNotDelayFlush) {
     }
     ASSERT_TRUE(started->Await());
     EXPECT_FALSE(weak_lifetime.expired());
-    ASSERT_OK(writer.Flush());
-    // Flush must not wait for a user callback that is waiting for us.
-    EXPECT_TRUE(finished->Results().empty());
-    writer = fluss::AppendWriter{};
-    EXPECT_FALSE(weak_lifetime.expired());
+    // Flush now waits for pending callbacks, not just for server ACK.
+    // The callback is blocked on the gate, so Flush must not return yet.
     gate->set_value();
-    ASSERT_TRUE(finished->Await());
+    ASSERT_OK(writer.Flush());
+    // After Flush returns, the callback has finished and captures are released.
+    EXPECT_FALSE(finished->Results().empty());
     EXPECT_EQ(released.wait_for(std::chrono::seconds(10)), std::future_status::ready);
     EXPECT_TRUE(weak_lifetime.expired());
     EXPECT_OK(finished->Results().front());
@@ -341,12 +340,12 @@ TEST_F(WriteCallbackTest, ArrowBatchCapacitySurvivesMovesAndDoesNotAffectWaitOrF
     ASSERT_OK(writer.Append(Row(6), pending));
     ASSERT_OK(pending.Wait());
     ASSERT_OK(writer.Append(Row(7)));
-    ASSERT_OK(writer.Flush());  // ACK completion does not return callback capacity.
-    EXPECT_TRUE(rejected->Results().empty());
-    EXPECT_NE(writer.Append(Row(8), callback).error_message.find("Timed out"), std::string::npos);
+    // Release the gate so the first callback finishes and returns capacity.
     gate->set_value();
-    // Admission waits for the previous callback to return, not merely to signal started.
-    ASSERT_OK(writer.Append(Row(9), callback));
+    ASSERT_OK(writer.Flush());
+    EXPECT_TRUE(rejected->Results().empty());
+    // Capacity is now available after the first callback completed.
+    ASSERT_OK(writer.Append(Row(8), callback));
     ASSERT_TRUE(rejected->Await());
     ASSERT_OK(writer.Flush());
     EXPECT_EQ(rejected->Results().size(), 1u);
@@ -378,8 +377,8 @@ TEST_F(WriteCallbackTest, UpsertAndDeleteShareCapacityAndReturnItOnSubmissionErr
     EXPECT_FALSE(moved.Available());
     EXPECT_NE(writer.Upsert(Row(2), callback).error_message.find("Timed out"), std::string::npos);
     EXPECT_NE(writer.Delete(Row(), callback).error_message.find("Timed out"), std::string::npos);
-    ASSERT_OK(writer.Flush());
     gate->set_value();
+    ASSERT_OK(writer.Flush());
     ASSERT_OK(writer.Delete(Row(), callback));
     ASSERT_TRUE(completion->Await(2));
     ASSERT_OK(writer.Flush());

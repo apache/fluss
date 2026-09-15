@@ -69,6 +69,17 @@ class WriteCallbackCapacity {
         available_.notify_one();
     }
 
+    /// Wait for all reserved operations to finish their callbacks.
+    /// When called from within a callback this returns immediately to avoid deadlock.
+    Result AwaitAll(std::chrono::milliseconds timeout) {
+        std::unique_lock<std::mutex> lock(mutex_);
+        if (in_callback_) return {};
+        if (!available_.wait_for(lock, timeout, [&] { return pending_ == 0; })) {
+            return {ErrorCode::CLIENT_ERROR, "Timed out waiting for pending callbacks"};
+        }
+        return {};
+    }
+
    private:
     friend class WriteCallback;
     inline static thread_local bool in_callback_ = false;

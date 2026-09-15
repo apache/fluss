@@ -20,6 +20,7 @@
 #include <arrow/record_batch.h>
 #include <arrow/type.h>
 
+#include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <exception>
@@ -153,88 +154,40 @@ int main() {
         std::cout << "Row acknowledged by server" << std::endl;
     }
 
-    // Callback acknowledgment with bounded outstanding operations.
+    // Callback acknowledgment
     {
-        struct PendingWrites {
-            std::mutex mutex;
-            std::condition_variable changed;
-            size_t succeeded = 0;
-            size_t failed = 0;
-            int32_t first_failed_id = -1;
-            fluss::Result first_error;
-        };
-        auto pending = std::make_shared<PendingWrites>();
-        size_t accepted = 0;
-        bool submission_failed = false;
-        try {
-            for (const auto& r : rows) {
-                const int32_t id = 1000 + r.id;
-                fluss::GenericRow row;
-                row.SetInt32(0, id);
-                row.SetString(1, r.name);
-                row.SetFloat32(2, r.score);
-                row.SetInt32(3, r.age);
-                row.SetDate(4, r.date);
-                row.SetTime(5, r.time);
-                row.SetTimestampNtz(6, r.ts_ntz);
-                row.SetTimestampLtz(7, r.ts_ltz);
-                // The SDK waits for callback capacity before submitting. Do not
-                // hold the tracking mutex here: callbacks need it to finish.
-                auto submitted = writer.Append(row, [pending, id](fluss::Result result) {
-                    {
-                        std::lock_guard<std::mutex> lock(pending->mutex);
-                        if (result.Ok()) {
-                            ++pending->succeeded;
-                        } else {
-                            if (pending->failed == 0) {
-                                pending->first_failed_id = id;
-                                pending->first_error = std::move(result);
-                            }
-                            ++pending->failed;
-                        }
+        std::atomic<size_t> succeeded{0};
+        std::atomic<size_t> failed{0};
+        for (const auto& r : rows) {
+            const int32_t id = 1000 + r.id;
+            fluss::GenericRow row;
+            row.SetInt32(0, id);
+            row.SetString(1, r.name);
+            row.SetFloat32(2, r.score);
+            row.SetInt32(3, r.age);
+            row.SetDate(4, r.date);
+            row.SetTime(5, r.time);
+            row.SetTimestampNtz(6, r.ts_ntz);
+            row.SetTimestampLtz(7, r.ts_ltz);
+            auto submitted = writer.Append(row, [id, &succeeded, &failed](fluss::Result result) {
+                if (result.Ok()) {
+                    ++succeeded;
+                } else {
+                    if (failed.fetch_add(1) == 0) {
+                        std::cerr << "Write failed for id=" << id << ": " << result.error_message
+                                  << '\n';
                     }
-                    pending->changed.notify_one();
-                });
-                if (!submitted.Ok()) {
-                    // Rejected submissions have no callback. The SDK returns their capacity.
-                    std::cerr << "Submission failed for id=" << id
-                              << ": code=" << submitted.error_code
-                              << " message=" << submitted.error_message << '\n';
-                    submission_failed = true;
-                    break;
                 }
-                ++accepted;
+            });
+            if (!submitted.Ok()) {
+                std::cerr << "Submission failed for id=" << id << ": " << submitted.error_message
+                          << '\n';
+                break;
             }
-        } catch (const std::exception& error) {
-            std::cerr << "Submission stopped: " << error.what() << '\n';
-            submission_failed = true;
-        } catch (...) {
-            std::cerr << "Submission stopped by an unknown exception\n";
-            submission_failed = true;
         }
-
-        // Submission has stopped. Flush is not a callback barrier; drain even on error.
-        auto flushed = writer.Flush();
-        if (!flushed.Ok()) {
-            std::cerr << "Callback write flush failed: " << flushed.error_message << '\n';
-        }
-        std::unique_lock<std::mutex> lock(pending->mutex);
-        // This demonstration waits without a deadline. A timeout would not cancel
-        // accepted writes or callbacks; production code needs its own recovery policy.
-        // Read accepted only after submission stops, so early callbacks are safe.
-        pending->changed.wait(lock,
-                              [&] { return pending->succeeded + pending->failed == accepted; });
-        std::cout << "Callback writes: accepted=" << accepted << " succeeded=" << pending->succeeded
-                  << " failed=" << pending->failed << '\n';
-        if (pending->failed != 0) {
-            std::cerr << "First completion failure: id=" << pending->first_failed_id
-                      << " code=" << pending->first_error.error_code
-                      << " message=" << pending->first_error.error_message << '\n';
-        }
-        // Do not blindly retry failures: an error need not mean nothing was written.
-        // This wait observes result handling, not SDK callback return. Shared captures
-        // keep state alive through callback return; the connection stays alive too.
-        if (submission_failed || !flushed.Ok() || pending->failed != 0) {
+        check("flush", writer.Flush());
+        std::cout << "Callback writes: succeeded=" << succeeded << " failed=" << failed << '\n';
+        if (failed != 0) {
             return 1;
         }
     }
