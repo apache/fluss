@@ -26,14 +26,24 @@ import java.util.Objects;
 public class ReplicaModel {
     private final TableBucket tableBucket;
     private final ServerModel originalServer;
+    private final boolean isLeaderEligible;
     private ServerModel server;
     private boolean isLeader;
 
     public ReplicaModel(TableBucket tableBucket, ServerModel server, boolean isLeader) {
+        this(tableBucket, server, isLeader, true);
+    }
+
+    public ReplicaModel(
+            TableBucket tableBucket,
+            ServerModel server,
+            boolean isLeader,
+            boolean isLeaderEligible) {
         this.tableBucket = tableBucket;
         this.server = server;
         this.isLeader = isLeader;
         this.originalServer = server;
+        this.isLeaderEligible = isLeaderEligible;
     }
 
     public TableBucket tableBucket() {
@@ -54,6 +64,10 @@ public class ReplicaModel {
 
     public boolean isLeader() {
         return isLeader;
+    }
+
+    public boolean isLeaderEligible() {
+        return isLeaderEligible;
     }
 
     public void makeFollower() {

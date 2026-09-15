@@ -38,6 +38,7 @@ public class GoalOptimizer {
 
     public List<RebalancePlanForBucket> doOptimizeOnce(
             ClusterModel clusterModel, List<Goal> goalsByPriority) {
+        isPreferredLeaderElection(goalsByPriority);
         LOG.trace("Cluster before optimization is {}", clusterModel);
         Map<TableBucket, List<Integer>> initReplicaDistribution =
                 clusterModel.getReplicaDistribution();
@@ -76,5 +77,18 @@ public class GoalOptimizer {
         }
 
         return getDiff(initReplicaDistribution, initLeaderDistribution, clusterModel);
+    }
+
+    /** Validate the goal combination and return whether it is preferred leader election. */
+    public static boolean isPreferredLeaderElection(List<Goal> goalsByPriority) {
+        long preferredLeaderGoals =
+                goalsByPriority.stream()
+                        .filter(PreferredLeaderElectionGoal.class::isInstance)
+                        .count();
+        if (preferredLeaderGoals > 0 && goalsByPriority.size() != 1) {
+            throw new IllegalArgumentException(
+                    "PREFERRED_LEADER_ELECTION must be used as a standalone rebalance goal.");
+        }
+        return preferredLeaderGoals == 1;
     }
 }
