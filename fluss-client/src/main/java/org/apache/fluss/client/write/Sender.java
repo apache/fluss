@@ -49,6 +49,7 @@ import javax.annotation.Nullable;
 import javax.annotation.concurrent.GuardedBy;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -748,6 +749,25 @@ public class Sender implements Runnable {
         } else if (canRetry(readyWriteBatch, error.error())) {
             // if batch failed because of retrievable exception, we need to retry send all those
             // batches.
+            if (error.exception() instanceof InvalidMetadataException) {
+                if (error.exception() instanceof UnknownTableOrBucketException) {
+                    LOG.warn(
+                            "Received unknown table or bucket error in write request on bucket {}. The table-bucket may not exist.",
+                            readyWriteBatch.tableBucket());
+                } else {
+                    LOG.warn(
+                            "Received invalid metadata error in write request on bucket {}. "
+                                    + "Going to request metadata update.",
+                            readyWriteBatch.tableBucket(),
+                            error.exception());
+                }
+                // Re-enqueuing publishes the retry to the sender and wakes it up. Invalidate the
+                // actual RPC target first so the retry cannot race ahead using stale metadata. A
+                // historical batch remains keyed by its original partition path in the
+                // accumulator, while its RPC is sent to the internal historical partition.
+                metadataUpdater.invalidPhysicalTableBucketMeta(
+                        Collections.singleton(writeTargetPath));
+            }
             if (!idempotenceManager.idempotenceEnabled()) {
                 prepareWriteRetry(readyWriteBatch, error);
                 reEnqueueBatch(readyWriteBatch);
@@ -768,24 +788,6 @@ public class Sender implements Runnable {
                                                 + "to %s in the mean time. This batch will be dropped.",
                                         writeBatch.writerId(), idempotenceManager.writerId()));
                 failBatch(readyWriteBatch, exception, false);
-            }
-
-            if (error.exception() instanceof InvalidMetadataException) {
-                if (error.exception() instanceof UnknownTableOrBucketException) {
-                    LOG.warn(
-                            "Received unknown table or bucket error in write request on bucket {}. The table-bucket may not exist.",
-                            readyWriteBatch.tableBucket());
-                } else {
-                    LOG.warn(
-                            "Received invalid metadata error in write request on bucket {}. "
-                                    + "Going to request metadata update.",
-                            readyWriteBatch.tableBucket(),
-                            error.exception());
-                }
-                // A historical batch remains keyed by its original partition path in the
-                // accumulator, but its RPC is sent to the internal historical partition. Invalidate
-                // the actual RPC target so the retry refreshes the historical bucket metadata.
-                invalidMetadataTables.add(writeTargetPath);
             }
         } else {
             LOG.warn(
