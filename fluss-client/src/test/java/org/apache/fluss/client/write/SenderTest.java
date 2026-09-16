@@ -244,6 +244,43 @@ final class SenderTest {
     }
 
     @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void testInvalidatesMetadataBeforePublishingRetry(boolean kv) throws Exception {
+        sender.destroyResources();
+        Map<TablePath, TableInfo> tableInfos = new HashMap<>();
+        tableInfos.put(DATA1_TABLE_PATH, DATA1_TABLE_INFO);
+        tableInfos.put(DATA1_TABLE_PATH_PK, DATA1_TABLE_INFO_PK);
+        AtomicReference<Boolean> retryQueuedAtInvalidation = new AtomicReference<>();
+        metadataUpdater =
+                new TestingMetadataUpdater(tableInfos) {
+                    @Override
+                    public void invalidPhysicalTableBucketMeta(
+                            Set<PhysicalTablePath> physicalTablesToInvalid) {
+                        if (!physicalTablesToInvalid.isEmpty()) {
+                            retryQueuedAtInvalidation.set(accumulator.hasUnDrained());
+                        }
+                        super.invalidPhysicalTableBucketMeta(physicalTablesToInvalid);
+                    }
+                };
+        sender = setupWithIdempotenceState();
+        TableBucket bucket = kv ? new TableBucket(DATA1_TABLE_ID_PK, 0) : tb1;
+        CompletableFuture<Exception> result = appendDiskTestRecord(kv, bucket, 1);
+        sender.runOnce();
+
+        finishRequest(
+                tb1,
+                0,
+                kv
+                        ? createPutKvResponse(bucket, Errors.NOT_LEADER_OR_FOLLOWER)
+                        : createProduceLogResponse(bucket, Errors.NOT_LEADER_OR_FOLLOWER));
+
+        assertThat(retryQueuedAtInvalidation.get()).isFalse();
+        assertThat(result).isNotDone();
+        assertThat(accumulator.hasUnDrained()).isTrue();
+        accumulator.abortAllBatches(new RuntimeException("test cleanup"));
+    }
+
+    @ParameterizedTest
     @CsvSource({"2, 4", "4, 2"})
     void testServerValidatesResolvedBucketCount(int initialCount, int updatedCount)
             throws Exception {
