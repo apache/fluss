@@ -42,6 +42,7 @@ import org.apache.fluss.row.arrow.ArrowWriterPool;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.BufferAllocator;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.ChunkedAllocationManager;
 import org.apache.fluss.utils.CopyOnWriteMap;
+import org.apache.fluss.utils.ExponentialBackoff;
 import org.apache.fluss.utils.MathUtils;
 import org.apache.fluss.utils.clock.Clock;
 
@@ -52,6 +53,7 @@ import javax.annotation.Nullable;
 import javax.annotation.concurrent.GuardedBy;
 
 import java.io.IOException;
+import java.time.Duration;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -64,12 +66,14 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.apache.fluss.record.LogRecordBatchFormat.NO_BATCH_SEQUENCE;
 import static org.apache.fluss.record.LogRecordBatchFormat.NO_WRITER_ID;
 import static org.apache.fluss.shaded.arrow.org.apache.arrow.memory.BufferAllocatorUtil.createBufferAllocator;
 import static org.apache.fluss.utils.PartitionUtils.HISTORICAL_PARTITION_VALUE;
+import static org.apache.fluss.utils.Preconditions.checkArgument;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
 /* This file is based on source code of Apache Kafka Project (https://kafka.apache.org/), licensed by the Apache
@@ -113,7 +117,7 @@ public final class RecordAccumulator {
     private final Object resourcesLock = new Object();
 
     @GuardedBy("resourcesLock")
-    private boolean resourcesDestroyed;
+    private final AtomicBoolean resourcesDestroyed = new AtomicBoolean(false);
 
     /** The pool of lazily created arrow {@link ArrowWriter}s for arrow log write batch. */
     private final ArrowWriterPool arrowWriterPool;
@@ -133,17 +137,10 @@ public final class RecordAccumulator {
     private final Clock clock;
     private final DynamicWriteBatchSizeEstimator batchSizeEstimator;
 
-    // Per-bucket backpressure throttle expiry timestamp. Accessed strictly by key on
-    // hot paths (get / put / remove); writes happen on every backpressure signal and
-    // every eviction, so the container is sized for lock-striped O(1) updates without
-    // any whole-map snapshot cost.
-    private final ConcurrentMap<TableBucket, Long> throttleExpiryMs = new ConcurrentHashMap<>();
-    private final long maxThrottleMs;
-
-    // Latest Cluster snapshot fed to the metadata-driven throttle sweep. Identity
-    // equality against this reference short-circuits the sweep when metadata hasn't
-    // changed.
-    private volatile Cluster lastClusterRef = Cluster.empty();
+    // Unifies the per-bucket write-throttling gates (KV backpressure and disk-write backoff):
+    // both paths that decide sendability, ready() and drain(), consult it for the effective
+    // remaining delay so no single gate can be dropped.
+    private final WriteThrottleController throttle;
 
     // TODO add retryBackoffMs to retry the produce request upon receiving an error.
     // TODO add deliveryTimeoutMs to report success or failure on record delivery.
@@ -159,6 +156,7 @@ public final class RecordAccumulator {
                 idempotenceManager,
                 writerMetricGroup,
                 clock,
+                createDiskWriteBackoff(conf),
                 BucketAssignerFactory.defaultFactory(conf));
     }
 
@@ -168,6 +166,39 @@ public final class RecordAccumulator {
             IdempotenceManager idempotenceManager,
             WriterMetricGroup writerMetricGroup,
             Clock clock,
+            ExponentialBackoff diskWriteBackoff) {
+        this(
+                conf,
+                idempotenceManager,
+                writerMetricGroup,
+                clock,
+                diskWriteBackoff,
+                BucketAssignerFactory.defaultFactory(conf));
+    }
+
+    @VisibleForTesting
+    RecordAccumulator(
+            Configuration conf,
+            IdempotenceManager idempotenceManager,
+            WriterMetricGroup writerMetricGroup,
+            Clock clock,
+            BucketAssignerFactory bucketAssignerFactory) {
+        this(
+                conf,
+                idempotenceManager,
+                writerMetricGroup,
+                clock,
+                createDiskWriteBackoff(conf),
+                bucketAssignerFactory);
+    }
+
+    @VisibleForTesting
+    RecordAccumulator(
+            Configuration conf,
+            IdempotenceManager idempotenceManager,
+            WriterMetricGroup writerMetricGroup,
+            Clock clock,
+            ExponentialBackoff diskWriteBackoff,
             BucketAssignerFactory bucketAssignerFactory) {
         this.bucketAssignerFactory = checkNotNull(bucketAssignerFactory);
         this.closed = false;
@@ -193,9 +224,28 @@ public final class RecordAccumulator {
                         (int) conf.get(ConfigOptions.CLIENT_WRITER_BUFFER_PAGE_SIZE).getBytes());
         this.idempotenceManager = idempotenceManager;
         this.clock = clock;
-        this.maxThrottleMs =
-                conf.get(ConfigOptions.CLIENT_WRITER_KV_BACKPRESSURE_MAX_THROTTLE).toMillis();
+        this.throttle =
+                new WriteThrottleController(
+                        conf.get(ConfigOptions.CLIENT_WRITER_KV_BACKPRESSURE_MAX_THROTTLE)
+                                .toMillis(),
+                        checkNotNull(diskWriteBackoff),
+                        clock,
+                        resourcesDestroyed);
         registerMetrics(writerMetricGroup);
+    }
+
+    private static ExponentialBackoff createDiskWriteBackoff(Configuration conf) {
+        Duration initial = conf.get(ConfigOptions.CLIENT_WRITER_DISK_WRITE_LOCKED_BACKOFF);
+        Duration maximum = conf.get(ConfigOptions.CLIENT_WRITER_DISK_WRITE_LOCKED_BACKOFF_MAX);
+        checkArgument(
+                initial.compareTo(Duration.ofMillis(1)) >= 0
+                        && initial.compareTo(maximum) <= 0
+                        && maximum.compareTo(Duration.ofMillis(Integer.MAX_VALUE)) <= 0,
+                "%s and %s must satisfy 1ms <= initial <= maximum <= %sms.",
+                ConfigOptions.CLIENT_WRITER_DISK_WRITE_LOCKED_BACKOFF.key(),
+                ConfigOptions.CLIENT_WRITER_DISK_WRITE_LOCKED_BACKOFF_MAX.key(),
+                Integer.MAX_VALUE);
+        return new ExponentialBackoff(initial.toMillis(), 2, maximum.toMillis(), 0.2);
     }
 
     private void registerMetrics(WriterMetricGroup writerMetricGroup) {
@@ -297,7 +347,7 @@ public final class RecordAccumulator {
      */
     public ReadyCheckResult ready(Cluster cluster) {
         Set<Integer> readyNodes = new HashSet<>();
-        long nextReadyCheckDelayMs = batchTimeoutMs;
+        long nextReadyCheckDelayMs = Long.MAX_VALUE;
         Set<PhysicalTablePath> unknownLeaderTables = new HashSet<>();
         // Go table by table so that we can get queue sizes for buckets in a table and calculate
         // cumulative frequency table (used in bucket assigner).
@@ -312,7 +362,14 @@ public final class RecordAccumulator {
                             nextReadyCheckDelayMs);
         }
 
-        // TODO and the earliest time at which any non-send-able bucket will be ready;
+        // When all queued buckets are backing off, wait for the earliest effective deadline.
+        // In particular, a zero batch timeout must not turn this wait into a busy loop.
+        // Keep the normal polling cadence for idle writers and unresolved metadata.
+        if (!readyNodes.isEmpty()
+                || !unknownLeaderTables.isEmpty()
+                || nextReadyCheckDelayMs == Long.MAX_VALUE) {
+            nextReadyCheckDelayMs = Math.min(nextReadyCheckDelayMs, batchTimeoutMs);
+        }
 
         return new ReadyCheckResult(readyNodes, nextReadyCheckDelayMs, unknownLeaderTables);
     }
@@ -620,7 +677,7 @@ public final class RecordAccumulator {
      */
     public void deallocate(WriteBatch batch) {
         synchronized (resourcesLock) {
-            if (incomplete.removeIfPresent(batch) && !resourcesDestroyed) {
+            if (incomplete.removeIfPresent(batch) && !resourcesDestroyed.get()) {
                 writerBufferPool.returnAll(batch.pooledMemorySegments());
             }
         }
@@ -754,36 +811,35 @@ public final class RecordAccumulator {
             int bucketId = entry.getKey();
             TableBucket tableBucket = cluster.getTableBucket(tableId, targetPath, bucketId);
 
-            // If this bucket is throttled, don't mark its node as ready.
-            // Instead, factor the remaining throttle time into the next check delay.
-            Long throttleExpiry = throttleExpiryMs.get(tableBucket);
-            if (throttleExpiry != null) {
-                long now = clock.milliseconds();
-                if (now < throttleExpiry) {
-                    nextReadyCheckDelayMs = Math.min(nextReadyCheckDelayMs, throttleExpiry - now);
-                    continue;
-                }
-                // Expired — evict here to reclaim entries for buckets whose deque
-                // has gone empty and won't reach the drain-time throttle check.
-                throttleExpiryMs.remove(tableBucket);
-            }
-
             Integer leader = cluster.leaderFor(tableBucket);
             if (leader == null) {
                 // This is a bucket for which leader is not known, but messages are
                 // available to send. Note that entries are currently not removed from
-                // batches when deque is empty.
+                // batches when deque is empty. Reported regardless of any pending throttle gate:
+                // a metadata refresh is orthogonal to the gate (it sends no data), and refreshing
+                // now means the leader is ready to receive once the gate clears.
                 unknownLeaderTables.add(targetPath);
-            } else {
-                nextReadyCheckDelayMs =
-                        batchReady(
-                                exhausted,
-                                leader,
-                                waitedTimeMs,
-                                full,
-                                readyNodes,
-                                nextReadyCheckDelayMs);
+                continue;
             }
+
+            // A bucket blocked by any throttle gate (KV backpressure and/or disk-write backoff)
+            // cannot become ready until every gate clears, so wake no earlier than the latest of
+            // them. remainingDelayMs() already folds the reasons into a single per-bucket deadline
+            // via max(); across buckets we keep the earliest wake-up via min().
+            long gateMs = throttle.remainingDelayMs(tableBucket);
+            if (gateMs > 0) {
+                nextReadyCheckDelayMs = Math.min(nextReadyCheckDelayMs, gateMs);
+                continue;
+            }
+
+            nextReadyCheckDelayMs =
+                    batchReady(
+                            exhausted,
+                            leader,
+                            waitedTimeMs,
+                            full,
+                            readyNodes,
+                            nextReadyCheckDelayMs);
         }
 
         return nextReadyCheckDelayMs;
@@ -1248,8 +1304,8 @@ public final class RecordAccumulator {
     }
 
     private boolean shouldSkipBucket(WriteBatch first, TableBucket tableBucket) {
-        // Backpressure throttle check: skip this bucket if still under throttle
-        if (isThrottled(tableBucket)) {
+        // Skip this bucket while any write-throttling gate still blocks it.
+        if (throttle.isGated(tableBucket)) {
             return true;
         }
         if (idempotenceManager.idempotenceEnabled()) {
@@ -1289,80 +1345,38 @@ public final class RecordAccumulator {
         return false;
     }
 
-    // ---- Backpressure throttle methods ----
+    // ---- Write-throttling delegates (see WriteThrottleController) ----
 
-    /**
-     * Check if a bucket is currently under backpressure throttle.
-     *
-     * <p>Performs lazy eviction: if the throttle has expired, the entry is removed from the map to
-     * prevent unbounded growth.
-     *
-     * @return true if the bucket should be skipped during drain
-     */
     boolean isThrottled(TableBucket tableBucket) {
-        Long expiry = throttleExpiryMs.get(tableBucket);
-        if (expiry == null) {
-            return false;
-        }
-        if (clock.milliseconds() < expiry) {
-            return true;
-        }
-        // Expired — evict to prevent map leak
-        throttleExpiryMs.remove(tableBucket);
-        return false;
+        return throttle.isKvThrottled(tableBucket);
     }
 
-    /**
-     * Update the throttle state for a bucket based on the received pressure signal.
-     *
-     * <p>The delay grows quadratically with pressure: {@code delay = maxThrottleMs * p^2}, where
-     * {@code p ∈ [0, 1)}. This provides meaningful throttling across the full ramp-up window while
-     * remaining gentle at low pressure.
-     *
-     * @param tableBucket the bucket to update
-     * @param pressure value in {@code [0, 1)} on the wire; {@code 0} means recovered, positive
-     *     values trigger a throttle window. {@code 1.0f} is reserved as the internal hard-rejection
-     *     value (never sent by the server): the Sender passes it when the server rejected the write
-     *     outright, and it installs the full {@link #maxThrottleMs} window directly.
-     */
+    /** Installs disk backoff before the batch retry count is increased by re-enqueueing. */
+    long backoffAfterDiskWriteLocked(ReadyWriteBatch batch) {
+        return throttle.backoffAfterDiskWrite(batch.tableBucket(), batch.writeBatch().attempts());
+    }
+
+    /** Returns the remaining disk backoff without changing its deadline. */
+    long diskWriteBackoffRemainingMs(TableBucket tableBucket) {
+        return throttle.diskRemainingMs(tableBucket);
+    }
+
+    /** Reclaims expired entries even when their queues no longer contain any batches. */
+    void maybeEvictExpiredDiskWriteBackoffs() {
+        throttle.maybeEvictExpiredDiskBackoffs();
+    }
+
+    @VisibleForTesting
+    int diskWriteBackoffCount() {
+        return throttle.diskBackoffCount();
+    }
+
     void updateThrottle(TableBucket tableBucket, float pressure) {
-        if (pressure >= 1f) {
-            // Hard rejection: stall the bucket for the full max throttle window, bypassing the
-            // quadratic curve to avoid long-to-float rounding.
-            throttleExpiryMs.put(tableBucket, clock.milliseconds() + maxThrottleMs);
-            return;
-        }
-        if (pressure > 0f) {
-            long delay = (long) (maxThrottleMs * pressure * pressure);
-            if (delay > 0) {
-                throttleExpiryMs.put(tableBucket, clock.milliseconds() + delay);
-                return;
-            }
-        }
-        // Recovered or below the meaningful resolution: remove throttle.
-        // Note: in production, recovery relies on the last throttle window expiring naturally
-        // (server stops sending the pressure field once p reaches 0). This branch exists as
-        // defensive completeness and is exercised by unit tests.
-        throttleExpiryMs.remove(tableBucket);
+        throttle.updateKvPressure(tableBucket, pressure);
     }
 
-    /**
-     * Evict throttle entries whose buckets no longer exist in the given cluster (leader unknown,
-     * partition dropped, table dropped).
-     *
-     * <p>Invoked on every Sender loop with the current cluster snapshot. The identity short-circuit
-     * makes this an O(1) no-op when metadata hasn't changed, so the actual O(N) walk only runs once
-     * per real metadata refresh.
-     */
     void maybeEvictStaleThrottles(Cluster cluster) {
-        if (cluster == lastClusterRef) {
-            return;
-        }
-        lastClusterRef = cluster;
-        if (throttleExpiryMs.isEmpty()) {
-            return;
-        }
-        throttleExpiryMs.keySet().removeIf(tb -> cluster.leaderFor(tb) == null);
+        throttle.maybeEvictStaleThrottles(cluster);
     }
 
     private int getDrainIndex(int id) {
@@ -1577,15 +1591,16 @@ public final class RecordAccumulator {
     @VisibleForTesting
     public void destroyResources() {
         synchronized (resourcesLock) {
-            if (resourcesDestroyed) {
+            if (resourcesDestroyed.get()) {
                 return;
             }
-            resourcesDestroyed = true;
+            resourcesDestroyed.compareAndSet(false, true);
             writerBufferPool.close();
             arrowWriterPool.close();
             bufferAllocator.close();
             chunkedFactory.close();
         }
+        throttle.clearDiskBackoffs();
     }
 
     /** Per table bucket and write batches. */
