@@ -135,6 +135,8 @@ public class MetricNames {
     public static final String FAILED_PRODUCE_FETCH_LOG_REQUESTS_RATE =
             "failedProduceLogRequestsPerSecond";
 
+    public static final String REMOTE_KV_COPY_BYTES_RATE = "remoteKvCopyBytesPerSecond";
+
     public static final String REMOTE_LOG_COPY_BYTES_RATE = "remoteLogCopyBytesPerSecond";
     public static final String REMOTE_LOG_COPY_REQUESTS_RATE = "remoteLogCopyRequestsPerSecond";
     public static final String REMOTE_LOG_COPY_ERROR_RATE = "remoteLogCopyErrorPerSecond";

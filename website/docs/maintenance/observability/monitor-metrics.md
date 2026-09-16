@@ -806,8 +806,8 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
   </thead>
   <tbody>
     <tr>
-      <th rowspan="39"><strong>tabletserver</strong></th>
-      <td rowspan="20">table</td>
+      <th rowspan="41"><strong>tabletserver</strong></th>
+      <td rowspan="22">table</td>
       <td>messagesInPerSecond</td>
       <td>The number of messages written per second to this table.</td>
       <td>Meter</td>
@@ -905,6 +905,11 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
     <tr>
       <td>remoteLogDeleteErrorPerSecond</td>
       <td>The number of failed delete remote log requests to delete remote log after log ttl per second.</td>
+      <td>Meter</td>
+    </tr>
+    <tr>
+      <td>remoteKvCopyBytesPerSecond</td>
+      <td>The bytes of kv snapshot data uploaded to remote per second for this table. Only available for primary key tables.</td>
       <td>Meter</td>
     </tr>
     <tr>

@@ -1131,7 +1131,8 @@ public final class Replica {
                     kvTablet.createIncrementalSnapshot(
                             uploadedSstFiles,
                             snapshotContext.getSnapshotDataUploader(),
-                            lastCompletedSnapshotId);
+                            lastCompletedSnapshotId,
+                            tableMetrics().remoteKvCopyBytes());
 
             // create snapshot ID counter
             SequenceIDCounter snapshotIDCounter =

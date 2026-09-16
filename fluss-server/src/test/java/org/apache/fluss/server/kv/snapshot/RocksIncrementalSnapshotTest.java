@@ -19,6 +19,8 @@ package org.apache.fluss.server.kv.snapshot;
 
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.fs.local.LocalFileSystem;
+import org.apache.fluss.metrics.Counter;
+import org.apache.fluss.metrics.ThreadSafeSimpleCounter;
 import org.apache.fluss.server.kv.rocksdb.RocksDBExtension;
 import org.apache.fluss.server.kv.rocksdb.RocksDBKv;
 import org.apache.fluss.server.testutils.KvTestUtils;
@@ -40,6 +42,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.stream.Stream;
 
 import static org.apache.fluss.server.testutils.KvTestUtils.checkSnapshotIncrementWithNewlyFiles;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -50,6 +53,8 @@ class RocksIncrementalSnapshotTest {
     @RegisterExtension public RocksDBExtension rocksDBExtension = new RocksDBExtension();
 
     private static ExecutorService dataTransferThreadPool;
+
+    private final Counter remoteKvCopyBytes = new ThreadSafeSimpleCounter();
 
     @BeforeAll
     static void beforeAll() {
@@ -102,7 +107,9 @@ class RocksIncrementalSnapshotTest {
             rocksDB.put("key2".getBytes(), "val2".getBytes());
             snapshot(3L, incrementalSnapshot, snapshotLocation, closeableRegistry);
             // assume it's fail
+            long bytesBeforeAbort = remoteKvCopyBytes.getCount();
             incrementalSnapshot.notifySnapshotAbort(3L);
+            assertThat(remoteKvCopyBytes.getCount()).isEqualTo(bytesBeforeAbort);
 
             // write some data again
             rocksDB.put("key3".getBytes(), "val3".getBytes());
@@ -177,9 +184,11 @@ class RocksIncrementalSnapshotTest {
                 rocksDBResourceGuard,
                 snapshotDataUploader,
                 rocksDBExtension.getRockDbDir(),
-                lastCompletedSnapshotId);
+                lastCompletedSnapshotId,
+                remoteKvCopyBytes);
     }
 
+    /** Takes a snapshot and verifies that only newly uploaded files increase the counter. */
     public KvSnapshotHandle snapshot(
             long snapshotId,
             RocksIncrementalSnapshot incrementalSnapshot,
@@ -189,13 +198,27 @@ class RocksIncrementalSnapshotTest {
         RocksIncrementalSnapshot.NativeRocksDBSnapshotResources nativeRocksDBSnapshotResources =
                 incrementalSnapshot.syncPrepareResources(snapshotId);
 
-        return incrementalSnapshot
-                .asyncSnapshot(
-                        nativeRocksDBSnapshotResources,
-                        snapshotId,
-                        new TabletState(0L, null, null),
-                        snapshotLocation)
-                .get(closeableRegistry)
-                .getKvSnapshotHandle();
+        long bytesBefore = remoteKvCopyBytes.getCount();
+        KvSnapshotHandle handle =
+                incrementalSnapshot
+                        .asyncSnapshot(
+                                nativeRocksDBSnapshotResources,
+                                snapshotId,
+                                new TabletState(0L, null, null),
+                                snapshotLocation)
+                        .get(closeableRegistry)
+                        .getKvSnapshotHandle();
+        long uploadedBytes =
+                Stream.concat(
+                                handle.getSharedKvFileHandles().stream(),
+                                handle.getPrivateFileHandles().stream())
+                        .filter(
+                                file ->
+                                        !(file.getKvFileHandle()
+                                                instanceof PlaceholderKvFileHandler))
+                        .mapToLong(file -> file.getKvFileHandle().getSize())
+                        .sum();
+        assertThat(remoteKvCopyBytes.getCount()).isEqualTo(bytesBefore + uploadedBytes);
+        return handle;
     }
 }

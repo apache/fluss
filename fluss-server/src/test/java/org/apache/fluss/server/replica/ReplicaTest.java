@@ -612,6 +612,7 @@ final class ReplicaTest extends ReplicaTestBase {
                         Tuple2.of("k2", new Object[] {3, "b1"}));
         putRecordsToLeader(kvReplica, kvRecords);
 
+        long uploadedBytesBefore = kvReplica.tableMetrics().remoteKvCopyBytes().getCount();
         // trigger one snapshot (task has been scheduled after becoming leader)
         scheduledExecutorService.triggerAllNonPeriodicTasks();
 
@@ -627,6 +628,10 @@ final class ReplicaTest extends ReplicaTestBase {
                                 Tuple2.of("k1", new Object[] {2, "b"}),
                                 Tuple2.of("k2", new Object[] {3, "b1"})));
         KvTestUtils.checkSnapshot(completedSnapshot0, expectedKeyValues, expectedLogOffset);
+        assertThat(kvReplica.tableMetrics().remoteKvCopyBytes().getCount())
+                .isEqualTo(
+                        uploadedBytesBefore
+                                + completedSnapshot0.getKvSnapshotHandle().getIncrementalSize());
 
         // put some data again
         kvRecords =
@@ -644,6 +649,11 @@ final class ReplicaTest extends ReplicaTestBase {
         expectedKeyValues =
                 getKeyValuePairs(genKvRecords(Tuple2.of("k2", new Object[] {4, "bk2"})));
         KvTestUtils.checkSnapshot(completedSnapshot1, expectedKeyValues, expectedLogOffset);
+        assertThat(kvReplica.tableMetrics().remoteKvCopyBytes().getCount())
+                .isEqualTo(
+                        uploadedBytesBefore
+                                + completedSnapshot0.getKvSnapshotHandle().getIncrementalSize()
+                                + completedSnapshot1.getKvSnapshotHandle().getIncrementalSize());
 
         // check the snapshot should be incremental, with only one newly file
         KvTestUtils.checkSnapshotIncrementWithNewlyFiles(

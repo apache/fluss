@@ -32,6 +32,7 @@ import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.SchemaGetter;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.metrics.Counter;
 import org.apache.fluss.record.ChangeType;
 import org.apache.fluss.record.KvRecordBatch;
 import org.apache.fluss.row.arrow.ArrowWriterPool;
@@ -1369,17 +1370,20 @@ public final class KvTablet {
                 });
     }
 
+    /** Creates an incremental snapshot with the table's thread-safe upload byte counter. */
     public RocksIncrementalSnapshot createIncrementalSnapshot(
             Map<Long, Collection<KvFileHandleAndLocalPath>> uploadedSstFiles,
             KvSnapshotDataUploader kvSnapshotDataUploader,
-            long lastCompletedSnapshotId) {
+            long lastCompletedSnapshotId,
+            Counter remoteKvCopyBytes) {
         return new RocksIncrementalSnapshot(
                 uploadedSstFiles,
                 rocksDBKv.getDb(),
                 rocksDBKv.getResourceGuard(),
                 kvSnapshotDataUploader,
                 kvTabletDir,
-                lastCompletedSnapshotId);
+                lastCompletedSnapshotId,
+                remoteKvCopyBytes);
     }
 
     // only for testing.
