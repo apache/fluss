@@ -27,6 +27,7 @@ import org.apache.fluss.client.metadata.RemoteLogManifestInfo;
 import org.apache.fluss.client.utils.ClientRpcMessageUtils;
 import org.apache.fluss.client.utils.ClientUtils;
 import org.apache.fluss.cluster.Cluster;
+import org.apache.fluss.cluster.CoordinatorServerInfo;
 import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.cluster.rebalance.GoalType;
 import org.apache.fluss.cluster.rebalance.RebalanceProgress;
@@ -199,9 +200,57 @@ public class FlussAdmin implements Admin {
                                         null,
                                         null,
                                         null);
+                        // Add all coordinator servers (leader + standbys)
+                        //                        List<CoordinatorServerInfo> coordinatorServerInfos
+                        // =
+                        //                                cluster.getCoordinatorServerInfos();
+                        //                        if (coordinatorServerInfos != null &&
+                        // !coordinatorServerInfos.isEmpty()) {
+                        //                            for (CoordinatorServerInfo
+                        // coordinatorServerInfo :
+                        //                                    coordinatorServerInfos) {
+                        //
+                        // serverNodeList.add(coordinatorServerInfo.getNode());
+                        //                            }
+                        //                        } else {
+                        //                            // Fallback to single coordinator for backward
+                        // compatibility
+                        //                            ServerNode singleCoordinator =
+                        // cluster.getCoordinatorServer();
+                        //                            if (singleCoordinator != null) {
+                        //                                serverNodeList.add(singleCoordinator);
+                        //                            }
+                        //                        }
                         serverNodeList.add(cluster.getCoordinatorServer());
                         serverNodeList.addAll(cluster.getAliveTabletServerList());
                         future.complete(serverNodeList);
+                    } catch (Throwable t) {
+                        future.completeExceptionally(t);
+                    }
+                });
+        return future;
+    }
+
+    @Override
+    public CompletableFuture<List<CoordinatorServerInfo>> describeCoordinators() {
+        CompletableFuture<List<CoordinatorServerInfo>> future = new CompletableFuture<>();
+        CompletableFuture.runAsync(
+                () -> {
+                    try {
+                        Cluster cluster =
+                                sendMetadataRequestAndRebuildCluster(
+                                        readOnlyGateway,
+                                        false,
+                                        metadataUpdater.getCluster(),
+                                        null,
+                                        null,
+                                        null);
+                        List<CoordinatorServerInfo> coordinatorServerInfos =
+                                cluster.getCoordinatorServerInfos();
+                        future.complete(
+                                coordinatorServerInfos != null
+                                        ? coordinatorServerInfos
+                                        : new ArrayList<>());
                     } catch (Throwable t) {
                         future.completeExceptionally(t);
                     }

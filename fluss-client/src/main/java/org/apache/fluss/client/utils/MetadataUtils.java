@@ -19,6 +19,8 @@ package org.apache.fluss.client.utils;
 
 import org.apache.fluss.cluster.BucketLocation;
 import org.apache.fluss.cluster.Cluster;
+import org.apache.fluss.cluster.CoordinatorRole;
+import org.apache.fluss.cluster.CoordinatorServerInfo;
 import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.exception.StaleMetadataException;
@@ -32,6 +34,7 @@ import org.apache.fluss.rpc.gateway.AdminReadOnlyGateway;
 import org.apache.fluss.rpc.messages.MetadataRequest;
 import org.apache.fluss.rpc.messages.MetadataResponse;
 import org.apache.fluss.rpc.messages.PbBucketMetadata;
+import org.apache.fluss.rpc.messages.PbCoordinatorServerInfo;
 import org.apache.fluss.rpc.messages.PbPartitionMetadata;
 import org.apache.fluss.rpc.messages.PbServerNode;
 import org.apache.fluss.rpc.messages.PbTableMetadata;
@@ -118,6 +121,8 @@ public class MetadataUtils {
                                 throw new StaleMetadataException("Alive tablet server is empty.");
                             }
                             ServerNode coordinatorServer = getCoordinatorServer(response);
+                            List<CoordinatorServerInfo> coordinatorServerInfos =
+                                    getCoordinatorServerInfos(response);
 
                             Map<TablePath, Long> newTablePathToTableId;
                             Map<PhysicalTablePath, List<BucketLocation>> newBucketLocations;
@@ -159,6 +164,7 @@ public class MetadataUtils {
                             return new Cluster(
                                     newAliveTabletServers,
                                     coordinatorServer,
+                                    coordinatorServerInfos,
                                     newBucketLocations,
                                     newTablePathToTableId,
                                     newPartitionIdByPath,
@@ -297,6 +303,33 @@ public class MetadataUtils {
                     protoServerNode.getPort(),
                     ServerType.COORDINATOR);
         }
+    }
+
+    @Nullable
+    private static List<CoordinatorServerInfo> getCoordinatorServerInfos(
+            MetadataResponse response) {
+        List<PbCoordinatorServerInfo> pbCoordinatorServerInfos =
+                response.getCoordinatorServersList();
+        if (pbCoordinatorServerInfos.isEmpty()) {
+            return null;
+        }
+
+        List<CoordinatorServerInfo> coordinatorServerInfos = new ArrayList<>();
+        for (PbCoordinatorServerInfo pbCoordinatorServerInfo : pbCoordinatorServerInfos) {
+            int nodeId = pbCoordinatorServerInfo.getId();
+            ServerNode node =
+                    new ServerNode(
+                            nodeId,
+                            pbCoordinatorServerInfo.getCoordinatorServer().getHost(),
+                            pbCoordinatorServerInfo.getCoordinatorServer().getPort(),
+                            ServerType.COORDINATOR);
+            CoordinatorRole role = CoordinatorRole.fromRoleId(pbCoordinatorServerInfo.getRole());
+            boolean isAlive = pbCoordinatorServerInfo.isIsAlive();
+            String coordinatorId = node.uid();
+            coordinatorServerInfos.add(
+                    new CoordinatorServerInfo(coordinatorId, node, role, isAlive));
+        }
+        return coordinatorServerInfos;
     }
 
     private static Map<Integer, ServerNode> getAliveTabletServers(MetadataResponse response) {
