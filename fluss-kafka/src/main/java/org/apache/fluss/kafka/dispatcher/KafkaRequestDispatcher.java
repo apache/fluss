@@ -43,7 +43,7 @@ public final class KafkaRequestDispatcher {
         this.errorMapper = checkNotNull(errorMapper);
     }
 
-    /** Dispatches a request and always completes with a Kafka protocol response. */
+    /** Dispatches a request and maps handler failures to Kafka protocol responses. */
     public CompletableFuture<AbstractResponse> dispatch(KafkaRequest request) {
         AbstractRequest abstractRequest = request.request();
         KafkaApiHandler<?> handler = registry.lookup(request.apiKey());
@@ -81,15 +81,22 @@ public final class KafkaRequestDispatcher {
         CompletableFuture<AbstractResponse> result = new CompletableFuture<>();
         responseFuture.whenComplete(
                 (response, failure) -> {
-                    if (failure == null && response != null) {
-                        result.complete(response);
-                    } else {
-                        Throwable responseFailure =
-                                failure == null
-                                        ? new NullPointerException(
-                                                "Kafka API handler returned a null response.")
-                                        : failure;
-                        result.complete(errorMapper.toResponse(abstractRequest, responseFailure));
+                    try {
+                        if (failure == null && response != null) {
+                            result.complete(response);
+                        } else {
+                            Throwable responseFailure =
+                                    failure == null
+                                            ? new NullPointerException(
+                                                    "Kafka API handler returned a null response.")
+                                            : failure;
+                            result.complete(
+                                    errorMapper.toResponse(abstractRequest, responseFailure));
+                        }
+                    } catch (Throwable completionFailure) {
+                        // Completion callbacks must never leave the ordered Kafka response queue
+                        // waiting on a future that can no longer become terminal.
+                        result.completeExceptionally(completionFailure);
                     }
                 });
         return result;

@@ -40,6 +40,8 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BiFunction;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -129,6 +131,32 @@ class KafkaRequestDispatcherTest {
         AbstractResponse response = dispatcher.dispatch(request((short) 0)).join();
 
         assertThat(response.errorCounts()).containsEntry(Errors.UNKNOWN_SERVER_ERROR, 1);
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void testErrorMappingFailureCompletesDispatcherFutureExceptionally(
+            boolean handlerAlreadyCompleted) {
+        CompletableFuture<AbstractResponse> handlerResult = new CompletableFuture<>();
+        KafkaRequestDispatcher dispatcher = dispatcher((context, request) -> handlerResult);
+        KafkaRequest request = request((short) 0);
+        ApiVersionsRequest requestBody = mock(ApiVersionsRequest.class);
+        IllegalStateException mappingFailure = new IllegalStateException("error mapping failure");
+        when(requestBody.getErrorResponse(any(Throwable.class))).thenThrow(mappingFailure);
+        when(request.request()).thenReturn(requestBody);
+        InvalidRequestException handlerFailure = new InvalidRequestException("invalid request");
+        if (handlerAlreadyCompleted) {
+            handlerResult.completeExceptionally(handlerFailure);
+        }
+
+        CompletableFuture<AbstractResponse> result = dispatcher.dispatch(request);
+        if (!handlerAlreadyCompleted) {
+            assertThat(result).isNotDone();
+            handlerResult.completeExceptionally(handlerFailure);
+        }
+
+        assertThat(result).isCompletedExceptionally();
+        assertThatThrownBy(result::join).hasCause(mappingFailure);
     }
 
     private static KafkaRequestDispatcher dispatcher(
