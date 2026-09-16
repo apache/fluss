@@ -31,6 +31,7 @@ import org.apache.fluss.client.metadata.KvSnapshotMetadata;
 import org.apache.fluss.client.metadata.KvSnapshots;
 import org.apache.fluss.client.metadata.LakeSnapshot;
 import org.apache.fluss.client.metadata.RemoteLogManifestInfo;
+import org.apache.fluss.cluster.CoordinatorServerInfo;
 import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.cluster.rebalance.GoalType;
 import org.apache.fluss.cluster.rebalance.RebalanceProgress;
@@ -86,6 +87,11 @@ public class TestAdminAdapter implements Admin {
 
     @Override
     public CompletableFuture<List<ServerNode>> getServerNodes() {
+        throw new UnsupportedOperationException("Not implemented in TestAdminAdapter");
+    }
+
+    @Override
+    public CompletableFuture<List<CoordinatorServerInfo>> describeCoordinators() {
         throw new UnsupportedOperationException("Not implemented in TestAdminAdapter");
     }
 

@@ -129,6 +129,7 @@ pub(crate) fn build_cluster_with_port(
 
     Cluster::new(
         None,
+        Vec::new(),
         servers,
         locations_by_path,
         locations_by_bucket,
