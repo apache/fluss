@@ -277,7 +277,11 @@ public class CoordinatorEventProcessor implements EventProcessor {
         this.internalListenerName = conf.getString(ConfigOptions.INTERNAL_LISTENER_NAME);
         this.rebalanceManager =
                 new RebalanceManager(
-                        this, zooKeeperClient, coordinatorEventManager, SystemClock.getInstance());
+                        this,
+                        zooKeeperClient,
+                        coordinatorEventManager,
+                        SystemClock.getInstance(),
+                        coordinatorMetricGroup);
         this.offlineLeaderRetryDelayMs =
                 conf.get(ConfigOptions.COORDINATOR_OFFLINE_LEADER_RETRY_DELAY).toMillis();
         if (offlineLeaderRetryDelayMs <= 0) {
