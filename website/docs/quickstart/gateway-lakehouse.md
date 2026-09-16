@@ -23,18 +23,15 @@ In this quickstart, you will:
     dark="gateway-lakehouse-dark.png"
 />
 
-:::caution Developer Preview - Fluss 1.0 (unreleased)
-Fluss Gateway is a preview feature in Fluss 1.0, which has not yet been
-released. This quickstart uses its unauthenticated `trust` mode and is
+:::caution Preview
+Fluss Gateway is a preview feature introduced in Fluss 1.0.
+This quickstart uses its unauthenticated `trust` mode and is
 intended only for local development. See
 [Fluss Gateway security](/docs/gateway/index.md#security) before planning
 a production deployment.
 
-No pre-built Docker Hub image is available yet – this guide requires
-building the Gateway image from source (see
-[Build the Gateway image](#build-the-gateway-image) below). The Gateway
-does not yet support reading records; this guide reads data back through
-Flink SQL.
+The Gateway does not yet support reading records; this guide reads data
+back through Flink SQL.
 :::
 
 ## Environment Setup
@@ -49,24 +46,6 @@ installed on your machine.
 We encourage you to use a recent version of Docker and [Compose v2](https://docs.docker.com/compose/releases/migrate/)
 (however, Compose v1 might work with a few adaptions).
 :::
-
-### Build the Gateway image
-
-:::note Fluss v1.0 developer preview 
-This guide covers a feature shipping in the upcoming Fluss 1.0 release.
-A pre-built Docker Hub image will be available at GA - until then,
-building it locally takes one extra step: run the script below from the
-root of your [Fluss source repository](https://github.com/apache/fluss)
-:::
-Run this from the root of your Fluss source checkout:
-```shell
-docker/fluss-gateway/build.sh
-```
-
-This compiles the Gateway inside a `rust:1.88-bookworm` builder container
-(no local Rust toolchain needed) and produces a local image tagged
-`fluss-gateway:dev`, which the Compose file below references directly. The
-first build may take several minutes.
 
 ### Starting required components
 
@@ -110,16 +89,16 @@ services:
       - rustfs-data:/data
     command: /data
   rustfs-init:
-    image: minio/mc
+    image: rustfs/rc:v0.1.36
     depends_on:
       - rustfs
     entrypoint: >
       /bin/sh -c "
-      until mc alias set rustfs http://rustfs:9000 rustfsadmin rustfsadmin; do
+      until rc alias set rustfs http://rustfs:9000 rustfsadmin rustfsadmin; do
         echo 'Waiting for RustFS...';
         sleep 1;
       done;
-      mc mb --ignore-existing rustfs/fluss;
+      rc mb --ignore-existing rustfs/fluss;
       "
   #end
   coordinator-server:
@@ -187,7 +166,7 @@ services:
     image: zookeeper:3.9.2
   #begin Fluss Gateway
   gateway:
-    image: fluss-gateway:dev
+    image: apache/fluss-gateway:$FLUSS_DOCKER_VERSION$
     depends_on:
       - coordinator-server
     ports:
@@ -411,7 +390,9 @@ and combines them with any data already tiered:
 
 ## Start the Lakehouse Tiering Service
 
-Submit the Lakehouse Tiering Service as a detached Flink job:
+Keep the SQL client open. In another terminal, change to the directory
+containing `docker-compose.yml` and submit the Lakehouse Tiering Service
+as a detached Flink job:
 
 ```shell
 docker compose exec jobmanager \
@@ -431,7 +412,8 @@ The [Flink Web UI](http://localhost:8083/) should show one running tiering job.
 
 ## Verify Data in Paimon
 
-After approximately 30 seconds, inspect the Paimon snapshots:
+Return to the SQL client opened earlier. After approximately 30 seconds,
+inspect the Paimon snapshots:
 
 ```sql title="Flink SQL"
 SELECT snapshot_id, total_record_count
