@@ -892,16 +892,6 @@ public final class KvTablet {
         return inReadLock(kvLock, () -> flushState);
     }
 
-    /** Returns an instantaneous estimate of this kv tablet's pre-write buffer memory usage. */
-    public long kvPreWriteBufferMemoryUsageBytes() {
-        return kvPreWriteBuffer.memoryUsageBytes();
-    }
-
-    /** Returns the number of entries held in this kv tablet's pre-write buffer. */
-    public int kvPreWriteBufferEntryCount() {
-        return kvPreWriteBuffer.entryCount();
-    }
-
     @VisibleForTesting
     void setFlushState(FlushState state) {
         inWriteLock(kvLock, () -> flushState = state);
@@ -1397,6 +1387,9 @@ public final class KvTablet {
                             // Terminal transition: closing forces IDLE regardless of the current
                             // state, see the FlushState state graph.
                             flushState = FlushState.IDLE;
+                            // Release the remaining pre-write buffer accounting to the shared
+                            // ledger while the local accounting values are still exact.
+                            kvPreWriteBuffer.close();
                             return true;
                         });
         if (shouldClose && closeFlushScheduler) {
