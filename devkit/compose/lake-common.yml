@@ -36,7 +36,7 @@ services:
       start_period: 5s
 
   rustfs-init:
-    image: minio/mc:RELEASE.2025-08-13T08-35-41Z
+    image: rustfs/rc:v0.1.36
     depends_on:
       rustfs:
         condition: service_healthy
@@ -44,8 +44,8 @@ services:
       - /bin/sh
       - -c
       - |
-        until mc alias set rustfs http://rustfs:9000 rustfsadmin rustfsadmin; do sleep 2; done
-        mc mb --ignore-existing rustfs/fluss
+        until rc alias set rustfs http://rustfs:9000 rustfsadmin rustfsadmin; do sleep 2; done
+        rc mb --ignore-existing rustfs/fluss
 
   coordinator-server:
     depends_on:
