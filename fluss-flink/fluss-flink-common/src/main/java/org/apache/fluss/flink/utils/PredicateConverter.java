@@ -130,8 +130,12 @@ public class PredicateConverter implements ExpressionVisitor<Predicate> {
         } else if (func == BuiltInFunctionDefinitions.BETWEEN) {
             FieldReferenceExpression fieldRefExpr =
                     extractFieldReference(children.get(0)).orElseThrow(UnsupportedExpression::new);
+            Object lowerBound =
+                    extractLiteral(fieldRefExpr.getOutputDataType(), children.get(1));
+            Object upperBound =
+                    extractLiteral(fieldRefExpr.getOutputDataType(), children.get(2));
             return builder.between(
-                    builder.indexOf(fieldRefExpr.getName()), children.get(1), children.get(2));
+                    builder.indexOf(fieldRefExpr.getName()), lowerBound, upperBound);
         } else if (func == BuiltInFunctionDefinitions.LIKE) {
             FieldReferenceExpression fieldRefExpr =
                     extractFieldReference(children.get(0)).orElseThrow(UnsupportedExpression::new);
