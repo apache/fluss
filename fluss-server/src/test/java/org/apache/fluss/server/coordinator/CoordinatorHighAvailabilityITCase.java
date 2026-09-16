@@ -43,6 +43,7 @@ import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.ZooKeeperExtension;
 import org.apache.fluss.server.zk.data.CoordinatorAddress;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
+import org.apache.fluss.server.zk.data.ZkData;
 import org.apache.fluss.shaded.curator5.org.apache.curator.framework.CuratorFramework;
 import org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.KeeperException;
 import org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.Watcher;
@@ -223,6 +224,65 @@ class CoordinatorHighAvailabilityITCase {
 
         verifyServerIsLeader(leader, "test_reentrant_db_3");
         createGatewayForServer(leader).metadata(new MetadataRequest()).get();
+    }
+
+    /**
+     * Regression test for #4362: a single-coordinator cluster must regain leadership without a
+     * restart after a ZooKeeper session expiration, even when the now-empty election parent node
+     * has been deleted.
+     *
+     * <p>The LeaderLatch creates the election parent {@code /coordinators/election} as a container
+     * znode. When the session expires, ZooKeeper deletes the ephemeral latch node, and the empty
+     * container parent can then be garbage-collected by ZooKeeper while the coordinator is still
+     * recovering. This is simulated here by deleting the parent right after the session expiration.
+     * The coordinator must reconnect, re-create its election node, and become leader again without
+     * a restart.
+     */
+    @Test
+    void testRegainsLeadershipAfterSessionExpirationWithElectionParentDeleted() throws Exception {
+        // single coordinator: no standby can take over, matching the #4362 scenario
+        coordinatorServer1 = new CoordinatorServer(createConfiguration());
+        coordinatorServer1.start();
+        waitUntilCoordinatorServerElected();
+
+        String electionPath = ZkData.CoordinatorElectionZNode.path();
+        assertThat(zookeeperClient.getStat(electionPath))
+                .as("election parent should exist while the latch node exists")
+                .isPresent();
+
+        // kill the coordinator's ZK session: ZooKeeper deletes the ephemeral latch node
+        killZkSession(coordinatorServer1);
+
+        // wait until the latch node is gone, then simulate ZooKeeper's container GC by
+        // deleting the now-empty election parent
+        waitUntil(
+                () -> {
+                    try {
+                        return zookeeperClient.getChildren(electionPath).isEmpty();
+                    } catch (Exception e) {
+                        return false;
+                    }
+                },
+                Duration.ofSeconds(30),
+                "latch node was not deleted after session expiration");
+        zookeeperClient.deletePath(electionPath);
+
+        // the coordinator reconnects with a new session and registers itself again
+        waitUntilServerRegistered(coordinatorServer1);
+
+        // regression assertion for #4362: leadership must be regained without a restart
+        waitUntil(
+                () -> coordinatorServer1.getCoordinatorService().isLeader(),
+                Duration.ofSeconds(30),
+                "Coordinator did not regain leadership after session expiration and election "
+                        + "parent deletion (#4362)");
+        createGatewayForServer(coordinatorServer1).metadata(new MetadataRequest()).get();
+
+        // the recovered leader must actually participate in the election again: its latch
+        // node must exist under the election parent
+        assertThat(zookeeperClient.getChildren(electionPath))
+                .as("recovered leader should have its election latch node")
+                .isNotEmpty();
     }
 
     /**

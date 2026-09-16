@@ -22,8 +22,11 @@ import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.exception.CoordinatorEpochFencedException;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.ZkData;
+import org.apache.fluss.shaded.curator5.org.apache.curator.framework.CuratorFramework;
 import org.apache.fluss.shaded.curator5.org.apache.curator.framework.recipes.leader.LeaderLatch;
 import org.apache.fluss.shaded.curator5.org.apache.curator.framework.recipes.leader.LeaderLatchListener;
+import org.apache.fluss.shaded.curator5.org.apache.curator.framework.state.ConnectionState;
+import org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.CreateMode;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -77,6 +80,7 @@ public class CoordinatorLeaderElection implements AutoCloseable {
     private static final long DEFAULT_CLOSE_TIMEOUT_MS = 10000L;
 
     private final String serverId;
+    private final CuratorFramework curatorClient;
     private final LeaderLatch leaderLatch;
     // Single-threaded executor to run leader init/cleanup callbacks outside Curator's EventThread.
     // Curator's LeaderLatchListener callbacks run on its internal EventThread; performing
@@ -101,9 +105,10 @@ public class CoordinatorLeaderElection implements AutoCloseable {
         checkArgument(closeTimeoutMs > 0, "Close timeout must be positive.");
         this.serverId = serverId;
         this.closeTimeoutMs = closeTimeoutMs;
+        this.curatorClient = zkClient.getCuratorClient();
         this.leaderLatch =
-                new LeaderLatch(
-                        zkClient.getCuratorClient(),
+                new RecoveringLeaderLatch(
+                        curatorClient,
                         ZkData.CoordinatorElectionZNode.path(),
                         String.valueOf(serverId));
         this.leaderCallbackExecutor =
@@ -312,5 +317,67 @@ public class CoordinatorLeaderElection implements AutoCloseable {
         LEADER,
         STANDBY,
         CLOSED
+    }
+
+    /**
+     * A {@link LeaderLatch} that recreates the election parent znode if it has disappeared.
+     *
+     * <p>The election parent is created as a container znode and is garbage-collected by ZooKeeper
+     * once the session expires and the ephemeral latch node is deleted. On reconnect, the
+     * LeaderLatch ignores the NONODE result of listing the election path and stays permanently
+     * idle. Recreating the parent before the latch's own reconnection handling lets the latch
+     * re-create its election node and regain leadership without a restart.
+     *
+     * <p>The recovery piggybacks on {@code handleStateChange} so that it strictly precedes the
+     * latch's reconnection handling: registering a separate connection-state listener would not
+     * guarantee this order, as listeners are notified in {@code ConcurrentHashMap} iteration order,
+     * which does not follow registration order.
+     */
+    private class RecoveringLeaderLatch extends LeaderLatch {
+
+        RecoveringLeaderLatch(CuratorFramework client, String latchPath, String id) {
+            super(client, latchPath, id);
+        }
+
+        @Override
+        protected void handleStateChange(ConnectionState newState) {
+            if (newState == ConnectionState.RECONNECTED) {
+                recoverElectionParentIfNeeded();
+            }
+            super.handleStateChange(newState);
+        }
+
+        /**
+         * Recreates the election parent znode if it no longer exists.
+         *
+         * <p>The znode is recreated as PERSISTENT: unlike a container znode, a persistent znode is
+         * never garbage-collected when empty, so a future session expiration cannot remove the
+         * election parent again.
+         */
+        private void recoverElectionParentIfNeeded() {
+            String electionPath = ZkData.CoordinatorElectionZNode.path();
+            try {
+                if (curatorClient.checkExists().forPath(electionPath) == null) {
+                    curatorClient
+                            .create()
+                            .creatingParentsIfNeeded()
+                            .withMode(CreateMode.PERSISTENT)
+                            .forPath(electionPath);
+                    LOG.warn(
+                            "Coordinator server {}: election parent {} was missing, recreate it "
+                                    + "to recover the leader election.",
+                            serverId,
+                            electionPath);
+                }
+            } catch (Exception e) {
+                // Ignore the failure and keep the latch's own reconnection handling unchanged: a
+                // later reconnection event retries the recovery.
+                LOG.error(
+                        "Coordinator server {}: failed to recover the election parent {}.",
+                        serverId,
+                        electionPath,
+                        e);
+            }
+        }
     }
 }
