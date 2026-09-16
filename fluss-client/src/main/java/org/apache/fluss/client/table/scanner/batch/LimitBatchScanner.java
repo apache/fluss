@@ -193,16 +193,22 @@ public class LimitBatchScanner implements BatchScanner {
                             null,
                             schemaGetter,
                             chunkedFactory);
-            LogRecords records = MemoryLogRecords.pointToByteBuffer(recordsBuffer);
-            for (LogRecordBatch logRecordBatch : records.batches()) {
-                // A batch of log record maybe little more than limit, thus we need slice the
-                // last limit number.
-                try (CloseableIterator<LogRecord> logRecordIterator =
-                        logRecordBatch.records(readContext)) {
-                    while (logRecordIterator.hasNext()) {
-                        scanRows.add(maybeProject(logRecordIterator.next().getRow()));
+            try {
+                LogRecords records = MemoryLogRecords.pointToByteBuffer(recordsBuffer);
+                for (LogRecordBatch logRecordBatch : records.batches()) {
+                    // A batch of log record maybe little more than limit, thus we need slice the
+                    // last limit number.
+                    try (CloseableIterator<LogRecord> logRecordIterator =
+                            logRecordBatch.records(readContext)) {
+                        while (logRecordIterator.hasNext()) {
+                            scanRows.add(maybeProject(logRecordIterator.next().getRow()));
+                        }
                     }
                 }
+            } finally {
+                // Release the Arrow allocator created for this parse; closing the
+                // record iterator alone does not close LogRecordReadContext.
+                readContext.close();
             }
         }
         if (scanRows.size() > limit) {
