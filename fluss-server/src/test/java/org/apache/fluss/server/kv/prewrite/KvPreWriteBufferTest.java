@@ -17,8 +17,10 @@
 
 package org.apache.fluss.server.kv.prewrite;
 
+import org.apache.fluss.metrics.registry.NOPMetricRegistry;
 import org.apache.fluss.server.kv.prewrite.KvPreWriteBuffer.PreparedFlush;
 import org.apache.fluss.server.kv.prewrite.KvPreWriteBuffer.TruncateReason;
+import org.apache.fluss.server.metrics.group.TabletServerMetricGroup;
 import org.apache.fluss.server.metrics.group.TestingMetricGroups;
 
 import org.junit.jupiter.api.Test;
@@ -470,10 +472,14 @@ class KvPreWriteBufferTest {
 
     @Test
     void testEstimatedMemoryUsage() {
-        KvPreWriteBuffer buffer = new KvPreWriteBuffer(TestingMetricGroups.TABLET_SERVER_METRICS);
+        TabletServerMetricGroup metricGroup =
+                new TabletServerMetricGroup(NOPMetricRegistry.INSTANCE, "fluss", "rack", "host", 0);
+        KvPreWriteBuffer buffer = new KvPreWriteBuffer(metricGroup);
 
         assertThat(buffer.memoryUsageBytes()).isEqualTo(0L);
         assertThat(buffer.entryCount()).isEqualTo(0);
+        assertThat(metricGroup.kvPreWriteBufferMemoryLedger().memoryUsageBytes()).isEqualTo(0L);
+        assertThat(metricGroup.kvPreWriteBufferMemoryLedger().entryCount()).isEqualTo(0L);
 
         // +key1(10 bytes), +key2(11 bytes), -key3(4 bytes): 25 payload bytes in total
         bufferInsert(buffer, "key1", "value1", 1);
@@ -484,11 +490,17 @@ class KvPreWriteBufferTest {
         // the estimation covers the payload bytes plus the per-entry object overhead
         assertThat(buffer.memoryUsageBytes()).isGreaterThan(payloadBytes);
         assertThat(buffer.entryCount()).isEqualTo(3);
+        // the shared ledger mirrors the local accounting of the buffer
+        assertThat(metricGroup.kvPreWriteBufferMemoryLedger().memoryUsageBytes())
+                .isEqualTo(buffer.memoryUsageBytes());
+        assertThat(metricGroup.kvPreWriteBufferMemoryLedger().entryCount()).isEqualTo(3L);
 
         // flushing all entries releases the whole accounted usage
         flushBuffer(buffer, Long.MAX_VALUE);
         assertThat(buffer.memoryUsageBytes()).isEqualTo(0L);
         assertThat(buffer.entryCount()).isEqualTo(0);
+        assertThat(metricGroup.kvPreWriteBufferMemoryLedger().memoryUsageBytes()).isEqualTo(0L);
+        assertThat(metricGroup.kvPreWriteBufferMemoryLedger().entryCount()).isEqualTo(0L);
 
         // truncating entries also releases their accounted usage
         bufferInsert(buffer, "key1", "value1", 4);
@@ -496,6 +508,31 @@ class KvPreWriteBufferTest {
         buffer.truncateTo(4, TruncateReason.ERROR);
         assertThat(buffer.memoryUsageBytes()).isEqualTo(0L);
         assertThat(buffer.entryCount()).isEqualTo(0);
+        assertThat(metricGroup.kvPreWriteBufferMemoryLedger().memoryUsageBytes()).isEqualTo(0L);
+        assertThat(metricGroup.kvPreWriteBufferMemoryLedger().entryCount()).isEqualTo(0L);
+    }
+
+    @Test
+    void testCloseReleasesAccounting() {
+        TabletServerMetricGroup metricGroup =
+                new TabletServerMetricGroup(NOPMetricRegistry.INSTANCE, "fluss", "rack", "host", 0);
+        KvPreWriteBuffer buffer = new KvPreWriteBuffer(metricGroup);
+        bufferInsert(buffer, "key1", "value1", 0);
+        bufferInsert(buffer, "key2", "value2", 1);
+        assertThat(metricGroup.kvPreWriteBufferMemoryLedger().memoryUsageBytes()).isPositive();
+        assertThat(metricGroup.kvPreWriteBufferMemoryLedger().entryCount()).isEqualTo(2L);
+
+        // closing releases the remaining accounting to the shared ledger exactly once
+        buffer.close();
+        assertThat(buffer.memoryUsageBytes()).isEqualTo(0L);
+        assertThat(buffer.entryCount()).isEqualTo(0);
+        assertThat(metricGroup.kvPreWriteBufferMemoryLedger().memoryUsageBytes()).isEqualTo(0L);
+        assertThat(metricGroup.kvPreWriteBufferMemoryLedger().entryCount()).isEqualTo(0L);
+
+        // closing again is idempotent and must not over-release the ledger
+        buffer.close();
+        assertThat(metricGroup.kvPreWriteBufferMemoryLedger().memoryUsageBytes()).isEqualTo(0L);
+        assertThat(metricGroup.kvPreWriteBufferMemoryLedger().entryCount()).isEqualTo(0L);
     }
 
     @Test

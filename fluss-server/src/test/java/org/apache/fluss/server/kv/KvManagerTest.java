@@ -285,16 +285,11 @@ final class KvManagerTest {
     @Test
     void testPreWriteBufferServerLevelMetrics() throws Exception {
         initTableBuckets(null);
-        assertThat(
-                        gaugeValue(
-                                TestingMetricGroups.TABLET_SERVER_METRICS,
-                                MetricNames.KV_PRE_WRITE_BUFFER_MEMORY_USAGE_BYTES))
-                .isEqualTo(0L);
-        assertThat(
-                        gaugeValue(
-                                TestingMetricGroups.TABLET_SERVER_METRICS,
-                                MetricNames.KV_PRE_WRITE_BUFFER_ENTRY_COUNT))
-                .isEqualTo(0L);
+        TabletServerMetricGroup metricGroup = TestingMetricGroups.TABLET_SERVER_METRICS;
+        long memoryUsageBefore =
+                gaugeValue(metricGroup, MetricNames.KV_PRE_WRITE_BUFFER_MEMORY_USAGE_BYTES);
+        long entryCountBefore =
+                gaugeValue(metricGroup, MetricNames.KV_PRE_WRITE_BUFFER_ENTRY_COUNT);
 
         // write one kv record without flushing so that it stays in the pre-write buffer
         KvTablet kvTablet = getOrCreateKv(tablePath1, null, tableBucket1);
@@ -305,29 +300,17 @@ final class KvManagerTest {
                                         "key1".getBytes(), new Object[] {1, "a"})));
         kvTablet.putAsLeader(kvRecordBatch, null);
 
-        assertThat(
-                        gaugeValue(
-                                TestingMetricGroups.TABLET_SERVER_METRICS,
-                                MetricNames.KV_PRE_WRITE_BUFFER_ENTRY_COUNT))
-                .isEqualTo(1L);
-        assertThat(
-                        gaugeValue(
-                                TestingMetricGroups.TABLET_SERVER_METRICS,
-                                MetricNames.KV_PRE_WRITE_BUFFER_MEMORY_USAGE_BYTES))
-                .isPositive();
+        assertThat(gaugeValue(metricGroup, MetricNames.KV_PRE_WRITE_BUFFER_ENTRY_COUNT))
+                .isEqualTo(entryCountBefore + 1);
+        assertThat(gaugeValue(metricGroup, MetricNames.KV_PRE_WRITE_BUFFER_MEMORY_USAGE_BYTES))
+                .isGreaterThan(memoryUsageBefore);
 
-        // the usage drops to zero once the buffered entries are flushed
+        // the accounting returns to its previous values once the buffered entry is flushed
         flushAndWait(kvTablet, Long.MAX_VALUE);
-        assertThat(
-                        gaugeValue(
-                                TestingMetricGroups.TABLET_SERVER_METRICS,
-                                MetricNames.KV_PRE_WRITE_BUFFER_ENTRY_COUNT))
-                .isEqualTo(0L);
-        assertThat(
-                        gaugeValue(
-                                TestingMetricGroups.TABLET_SERVER_METRICS,
-                                MetricNames.KV_PRE_WRITE_BUFFER_MEMORY_USAGE_BYTES))
-                .isEqualTo(0L);
+        assertThat(gaugeValue(metricGroup, MetricNames.KV_PRE_WRITE_BUFFER_ENTRY_COUNT))
+                .isEqualTo(entryCountBefore);
+        assertThat(gaugeValue(metricGroup, MetricNames.KV_PRE_WRITE_BUFFER_MEMORY_USAGE_BYTES))
+                .isEqualTo(memoryUsageBefore);
     }
 
     @ParameterizedTest

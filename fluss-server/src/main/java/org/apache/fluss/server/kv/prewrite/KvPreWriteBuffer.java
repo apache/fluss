@@ -87,7 +87,7 @@ import static org.apache.fluss.utils.UnsafeUtils.BYTE_ARRAY_BASE_OFFSET;
  * head to tail, it will stop flush.
  */
 @NotThreadSafe
-public class KvPreWriteBuffer {
+public class KvPreWriteBuffer implements AutoCloseable {
 
     /**
      * Estimated JVM heap overhead of a single buffered entry besides its key/value payload bytes,
@@ -112,22 +112,29 @@ public class KvPreWriteBuffer {
     private final Counter truncateAsDuplicatedCount;
     private final Counter truncateAsErrorCount;
 
+    // The TabletServer-wide ledger shared by all pre-write buffers, updated atomically on the
+    // write path and serving as the single source of truth for metrics and backpressure.
+    private final KvPreWriteBufferMemoryLedger memoryLedger;
+
     // the max LSN in the buffer
     private long maxLogSequenceNumber = -1;
 
     // Accumulated byte size of entries not yet completed by a flush.
     private long pendingFlushBytes = 0;
 
-    // Estimated total memory footprint of the held entries, updated incrementally on the write
-    // path.
-    private volatile long memoryUsageBytes = 0;
+    // Local accounting of this buffer, released to the shared ledger on close. Must be read
+    // under the kv write lock (or in single-threaded tests) to be exact.
+    private long memoryUsageBytes = 0;
 
-    // Number of held entries.
-    private volatile int entryCount = 0;
+    // Number of held entries, maintained together with the local memory accounting.
+    private int entryCount = 0;
+
+    private boolean closed;
 
     public KvPreWriteBuffer(TabletServerMetricGroup serverMetricGroup) {
         truncateAsDuplicatedCount = serverMetricGroup.kvTruncateAsDuplicatedCount();
         truncateAsErrorCount = serverMetricGroup.kvTruncateAsErrorCount();
+        memoryLedger = serverMetricGroup.kvPreWriteBufferMemoryLedger();
     }
 
     /**
@@ -362,11 +369,13 @@ public class KvPreWriteBuffer {
     private void addToAccounting(KvEntry entry) {
         long bytes = entryBytes(entry.getKey(), entry.getValue());
         pendingFlushBytes += bytes;
-        memoryUsageBytes +=
+        long accountedBytes =
                 bytes
                         + PER_ENTRY_OVERHEAD_BYTES
                         + (entry.previousEntry == null ? PER_MAP_NODE_OVERHEAD_BYTES : 0L);
+        memoryUsageBytes += accountedBytes;
         entryCount++;
+        memoryLedger.add(accountedBytes, 1);
     }
 
     /**
@@ -378,12 +387,32 @@ public class KvPreWriteBuffer {
         long bytes = entryBytes(entry.getKey(), entry.getValue());
         pendingFlushBytes -= bytes;
         boolean removedFromMap = kvEntryMap.remove(entry.getKey(), entry);
-        memoryUsageBytes -=
+        long accountedBytes =
                 bytes
                         + PER_ENTRY_OVERHEAD_BYTES
                         + (removedFromMap ? PER_MAP_NODE_OVERHEAD_BYTES : 0L);
+        memoryUsageBytes -= accountedBytes;
         entryCount--;
+        memoryLedger.subtract(accountedBytes, 1);
         return removedFromMap;
+    }
+
+    /**
+     * Closes the buffer and releases its remaining accounting to the shared ledger. Must be called
+     * under the kv write lock so the local accounting values are exact. Idempotent.
+     */
+    @Override
+    public void close() {
+        if (closed) {
+            return;
+        }
+        closed = true;
+        memoryLedger.subtract(memoryUsageBytes, entryCount);
+        memoryUsageBytes = 0;
+        entryCount = 0;
+        allKvEntries.clear();
+        kvEntryMap.clear();
+        maxLogSequenceNumber = -1;
     }
 
     private static long entryBytes(Key key, Value value) {
