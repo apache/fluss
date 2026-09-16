@@ -51,16 +51,16 @@ services:
       - rustfs-data:/data
     command: /data
   rustfs-init:
-    image: minio/mc
+    image: rustfs/rc:v0.1.36
     depends_on:
       - rustfs
     entrypoint: >
       /bin/sh -c "
-      until mc alias set rustfs http://rustfs:9000 rustfsadmin rustfsadmin; do
+      until rc alias set rustfs http://rustfs:9000 rustfsadmin rustfsadmin; do
         echo 'Waiting for RustFS...';
         sleep 1;
       done;
-      mc mb --ignore-existing rustfs/fluss;
+      rc mb --ignore-existing rustfs/fluss;
       "
   #end
   #begin Fluss cluster
