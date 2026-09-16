@@ -9,6 +9,15 @@
     "released": false
   },
   {
+    "versionName": "version-1.0",
+    "fullVersion": "1.0.0",
+    "shortVersion": "1.0",
+    "dockerVersion": "1.0.0-rc1",
+    "paimonVersion": "2.0.0",
+    "paimonVersionShort": "2.0",
+    "released": false
+  },
+  {
     "versionName": "version-0.9",
     "fullVersion": "0.9.1-incubating",
     "shortVersion": "0.9",
