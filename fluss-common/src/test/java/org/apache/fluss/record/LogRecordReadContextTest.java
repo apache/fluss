@@ -65,4 +65,37 @@ class LogRecordReadContextTest {
             }
         }
     }
+
+    @Test
+    void testCloseKeepsUnshadedAllocatorWhenUnshadedCloseFails() throws Exception {
+        TestingSchemaGetter schemaGetter = new TestingSchemaGetter(DEFAULT_SCHEMA_ID, DATA1_SCHEMA);
+        LogRecordReadContext readContext =
+                LogRecordReadContext.createArrowReadContext(
+                        DATA1_ROW_TYPE, DEFAULT_SCHEMA_ID, schemaGetter);
+        UnshadedArrowBatchAccess unshadedAccess =
+                readContext.createUnshadedArrowBatchAccess(DEFAULT_SCHEMA_ID);
+        unshadedAccess.close();
+
+        Field unshadedField =
+                LogRecordReadContext.class.getDeclaredField("unshadedBufferAllocator");
+        unshadedField.setAccessible(true);
+        BufferAllocator unshadedAllocator = (BufferAllocator) unshadedField.get(readContext);
+        org.apache.arrow.memory.ArrowBuf outstanding = unshadedAllocator.buffer(64);
+
+        try {
+            assertThatThrownBy(readContext::close)
+                    .isInstanceOf(RuntimeException.class)
+                    .hasMessageContaining("pollRecordBatch()");
+            assertThat(unshadedField.get(readContext)).isSameAs(unshadedAllocator);
+        } finally {
+            try {
+                outstanding.close();
+            } catch (IllegalStateException ignored) {
+                // Arrow may mark the allocator closed even when close() throws.
+            }
+        }
+
+        readContext.close();
+        assertThat(unshadedField.get(readContext)).isNull();
+    }
 }
