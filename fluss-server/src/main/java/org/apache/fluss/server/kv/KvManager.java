@@ -377,14 +377,10 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
                 .join();
         IOUtils.closeQuietly(sharedWriteBufferManager);
         IOUtils.closeQuietly(sharedWriteBufferAccountingCache);
-        arrowBufferAllocator.close();
-        memorySegmentPool.close();
-        if (sharedRocksDBRateLimiter != null) {
-            sharedRocksDBRateLimiter.close();
-        }
-        if (sharedBlockCache != null) {
-            sharedBlockCache.close();
-        }
+        IOUtils.closeQuietly(arrowBufferAllocator);
+        IOUtils.closeQuietly(memorySegmentPool);
+        IOUtils.closeQuietly(sharedRocksDBRateLimiter);
+        IOUtils.closeQuietly(sharedBlockCache);
         LOG.info("Shut down KvManager complete.");
     }
 
