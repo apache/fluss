@@ -23,6 +23,6 @@ package org.apache.fluss.server.kv.snapshot;
  */
 public interface SnapshotResources {
 
-    /** Cleans up the resources after the asynchronous part is done. */
+    /** Releases resources that are not retained for local recovery after the asynchronous part. */
     void release();
 }
