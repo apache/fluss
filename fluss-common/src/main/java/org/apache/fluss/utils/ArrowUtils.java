@@ -41,6 +41,7 @@ import org.apache.fluss.row.arrow.vectors.ArrowTimestampNtzColumnVector;
 import org.apache.fluss.row.arrow.vectors.ArrowTinyIntColumnVector;
 import org.apache.fluss.row.arrow.vectors.ArrowVarBinaryColumnVector;
 import org.apache.fluss.row.arrow.vectors.ArrowVarCharColumnVector;
+import org.apache.fluss.row.arrow.vectors.ArrowVectorColumnVector;
 import org.apache.fluss.row.arrow.writers.ArrowArrayWriter;
 import org.apache.fluss.row.arrow.writers.ArrowBigIntWriter;
 import org.apache.fluss.row.arrow.writers.ArrowBinaryWriter;
@@ -60,6 +61,7 @@ import org.apache.fluss.row.arrow.writers.ArrowTimestampNtzWriter;
 import org.apache.fluss.row.arrow.writers.ArrowTinyIntWriter;
 import org.apache.fluss.row.arrow.writers.ArrowVarBinaryWriter;
 import org.apache.fluss.row.arrow.writers.ArrowVarCharWriter;
+import org.apache.fluss.row.arrow.writers.ArrowVectorWriter;
 import org.apache.fluss.row.columnar.ColumnVector;
 import org.apache.fluss.row.columnar.VectorizedColumnBatch;
 import org.apache.fluss.shaded.arrow.com.google.flatbuffers.FlatBufferBuilder;
@@ -88,6 +90,7 @@ import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.ValueVector;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.VarBinaryVector;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.VarCharVector;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.VectorSchemaRoot;
+import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.complex.FixedSizeListVector;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.complex.ListVector;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.complex.MapVector;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.complex.StructVector;
@@ -132,6 +135,7 @@ import org.apache.fluss.types.StringType;
 import org.apache.fluss.types.TimeType;
 import org.apache.fluss.types.TimestampType;
 import org.apache.fluss.types.TinyIntType;
+import org.apache.fluss.types.VectorType;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -342,6 +346,11 @@ public class ArrowUtils {
             FieldVector elementFieldVector = ((ListVector) vector).getDataVector();
             return new ArrowArrayWriter(
                     vector, ArrowUtils.createArrowFieldWriter(elementFieldVector, elementType));
+        } else if (vector instanceof FixedSizeListVector && dataType instanceof VectorType) {
+            FieldVector childVector = ((FixedSizeListVector) vector).getDataVector();
+            ArrowFieldWriter elementWriter =
+                    ArrowUtils.createArrowFieldWriter(childVector, new FloatType(false));
+            return new ArrowVectorWriter((FixedSizeListVector) vector, elementWriter);
         } else if (vector instanceof MapVector && dataType instanceof MapType) {
             MapType mapType = (MapType) dataType;
             MapVector mapVector = (MapVector) vector;
@@ -412,6 +421,10 @@ public class ArrowUtils {
             return new ArrowArrayColumnVector(
                     listVector,
                     ArrowUtils.createArrowColumnVector(listVector.getDataVector(), elementType));
+        } else if (vector instanceof FixedSizeListVector && dataType instanceof VectorType) {
+            VectorType vectorType = (VectorType) dataType;
+            return new ArrowVectorColumnVector(
+                    (FixedSizeListVector) vector, vectorType.getDimension());
         } else if (vector instanceof MapVector && dataType instanceof MapType) {
             MapType mapType = (MapType) dataType;
             return new ArrowMapColumnVector(
@@ -444,6 +457,9 @@ public class ArrowUtils {
             children =
                     Collections.singletonList(
                             toArrowField("element", ((ArrayType) logicalType).getElementType()));
+        } else if (logicalType instanceof VectorType) {
+            // Child field: Float32 element, non-nullable (dense vector — no missing elements)
+            children = Collections.singletonList(toArrowField("element", new FloatType(false)));
         } else if (logicalType instanceof RowType) {
             RowType rowType = (RowType) logicalType;
             children = new ArrayList<>(rowType.getFieldCount());
@@ -580,6 +596,12 @@ public class ArrowUtils {
         @Override
         public ArrowType visit(ArrayType arrayType) {
             return Types.MinorType.LIST.getType();
+        }
+
+        @Override
+        public ArrowType visit(VectorType vectorType) {
+            // VECTOR(n) maps to Arrow FixedSizeList<Float32> with listSize = dimension
+            return new ArrowType.FixedSizeList(vectorType.getDimension());
         }
 
         @Override
