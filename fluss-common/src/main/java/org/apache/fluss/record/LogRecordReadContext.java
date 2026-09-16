@@ -320,19 +320,28 @@ public class LogRecordReadContext
     }
 
     /**
-     * Returns the column index mapping for schema evolution, or {@code null} if the batch schema
-     * matches the current schema and no remapping is needed.
+     * Returns the column index mapping for schema evolution and field selection, or {@code null} if
+     * no remapping is needed.
      *
      * <p>Each entry maps an output column to its position in the batch's schema. A value of {@code
      * -1} means the column does not exist in the batch's schema and should be filled with nulls.
      */
     @Nullable
-    private int[] getSchemaEvolutionMapping(int schemaId) {
-        ProjectedRow projectedRow = getOutputProjectedRow(schemaId);
-        if (projectedRow == null) {
+    private int[] getArrowProjectionMapping(int schemaId) {
+        if (target == null) {
             return null;
         }
-        return projectedRow.getIndexMapping();
+        ProjectedRow projectedRow = getOutputProjectedRow(schemaId);
+        int[] schemaMapping = projectedRow == null ? null : projectedRow.getIndexMapping();
+        int[] mapping = new int[target.selectedFields.length];
+        boolean projectionNeeded =
+                schemaMapping != null || mapping.length != getRowType(schemaId).getFieldCount();
+        for (int i = 0; i < mapping.length; i++) {
+            int selectedField = target.selectedFields[i];
+            mapping[i] = schemaMapping == null ? selectedField : schemaMapping[selectedField];
+            projectionNeeded |= mapping[i] != i;
+        }
+        return projectionNeeded ? mapping : null;
     }
 
     @Override
@@ -444,11 +453,14 @@ public class LogRecordReadContext
         @Override
         public ArrowBatchData createArrowBatchData(
                 long baseLogOffset, long timestamp, int schemaId, @Nullable byte[] changeTypes) {
-            int[] schemaMapping = getSchemaEvolutionMapping(schemaId);
-            if (schemaMapping != null) {
+            int[] projectionMapping = getArrowProjectionMapping(schemaId);
+            if (projectionMapping != null) {
                 outputRoot =
                         UnshadedArrowReadUtils.projectVectorSchemaRoot(
-                                readRoot, target.dataRowType, schemaMapping, allocator);
+                                readRoot,
+                                target.dataRowType.project(target.selectedFields),
+                                projectionMapping,
+                                allocator);
                 readRoot.close();
                 readRoot = null;
             }

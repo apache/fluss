@@ -49,10 +49,14 @@ public interface LogScanner extends AutoCloseable {
      * cached in memory, scanner will start either from the earliest offset or from the latest
      * offset for each bucket according to the policy.
      *
+     * <p>The first poll fixes the polling mode for this scanner, even if it returns no data. Calls
+     * to this method cannot be mixed with {@link #pollRecordBatch(Duration)}. Create a new scanner
+     * to change the polling mode.
+     *
      * @param timeout the timeout to poll.
      * @return the result of poll.
      * @throws java.lang.IllegalStateException if the scanner is not subscribed to any buckets to
-     *     read from.
+     *     read from, or Arrow record batch polling has already been selected.
      */
     ScanRecords poll(Duration timeout);
 
@@ -63,11 +67,20 @@ public interface LogScanner extends AutoCloseable {
      * owns its Arrow memory and, for primary-key tables, carries the stored per-row changelog
      * types. Callers must close the returned {@link ArrowScanRecords} after processing it.
      *
+     * <p>Non-empty top-level column projections are supported, preserving the requested column
+     * order. Columns are pruned on the tablet server for local log reads and in the client for
+     * remote log reads.
+     *
+     * <p>The first poll fixes the polling mode for this scanner, even if it returns no data. Calls
+     * to this method cannot be mixed with {@link #poll(Duration)}. Create a new scanner to change
+     * the polling mode.
+     *
      * @param timeout the timeout to poll
      * @return the Arrow batches returned by this poll
      * @throws UnsupportedOperationException if the table does not use the {@code ARROW} log format
      *     or the scanner implementation does not support Arrow record batch polling
-     * @throws IllegalStateException if the scanner is not subscribed to any buckets
+     * @throws IllegalStateException if the scanner is not subscribed to any buckets, or row polling
+     *     has already been selected
      */
     default ArrowScanRecords pollRecordBatch(Duration timeout) {
         throw new UnsupportedOperationException(

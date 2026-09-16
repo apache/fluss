@@ -17,11 +17,14 @@
 
 package org.apache.fluss.client.table.scanner.log;
 
+import org.apache.fluss.client.Connection;
+import org.apache.fluss.client.ConnectionFactory;
 import org.apache.fluss.client.admin.ClientToServerITCaseBase;
 import org.apache.fluss.client.table.Table;
 import org.apache.fluss.client.table.scanner.ScanRecord;
 import org.apache.fluss.client.table.writer.AppendWriter;
 import org.apache.fluss.client.table.writer.UpsertWriter;
+import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.exception.FetchException;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.Schema;
@@ -41,6 +44,7 @@ import org.apache.arrow.vector.IntVector;
 import org.apache.arrow.vector.VarCharVector;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import java.nio.ByteBuffer;
@@ -504,6 +508,176 @@ public class LogScannerITCase extends ClientToServerITCaseBase {
                                 String.format(
                                         "The fetching offset %s is out of range", Long.MIN_VALUE));
             }
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void testPollArrowBatchesWithReorderedProjection(boolean primaryKey) throws Exception {
+        TablePath tablePath = TablePath.of("test_db_1", "test_arrow_projection_" + primaryKey);
+        Schema.Builder schema =
+                Schema.newBuilder()
+                        .column("a", DataTypes.INT())
+                        .column("b", DataTypes.STRING())
+                        .column("c", DataTypes.STRING());
+        if (primaryKey) {
+            schema.primaryKey("a");
+        }
+        createTable(
+                tablePath,
+                TableDescriptor.builder()
+                        .schema(schema.build())
+                        .distributedBy(1)
+                        .logFormat(LogFormat.ARROW)
+                        .build(),
+                false);
+
+        try (Table table = conn.getTable(tablePath)) {
+            if (primaryKey) {
+                UpsertWriter writer = table.newUpsert().createWriter();
+                for (int i = 0; i < 3; i++) {
+                    writer.upsert(row(i, "b-" + i, "c-" + i)).get();
+                }
+                writer.flush();
+            } else {
+                AppendWriter writer = table.newAppend().createWriter();
+                for (int i = 0; i < 3; i++) {
+                    writer.append(row(i, "b-" + i, "c-" + i));
+                }
+                writer.flush();
+            }
+
+            try (LogScanner scanner =
+                    table.newScan().project(new int[] {2, 1}).createLogScanner()) {
+                scanner.subscribeFromBeginning(0);
+                int count = 0;
+                long deadline = System.nanoTime() + Duration.ofSeconds(30).toNanos();
+                while (count < 3) {
+                    assertThat(System.nanoTime())
+                            .as("Waiting for projected Arrow batches")
+                            .isLessThan(deadline);
+                    try (ArrowScanRecords records =
+                            scanner.pollRecordBatch(Duration.ofSeconds(1))) {
+                        for (ArrowBatchData batch : records) {
+                            assertThat(batch.getVectorSchemaRoot().getSchema().getFields())
+                                    .extracting(field -> field.getName())
+                                    .containsExactly("c", "b");
+                            VarCharVector c =
+                                    (VarCharVector) batch.getVectorSchemaRoot().getVector(0);
+                            VarCharVector b =
+                                    (VarCharVector) batch.getVectorSchemaRoot().getVector(1);
+                            for (int rowId = 0; rowId < batch.getRecordCount(); rowId++) {
+                                assertThat(batch.getBaseLogOffset() + rowId).isEqualTo(count);
+                                assertThat(batch.getChangeType(rowId))
+                                        .isEqualTo(
+                                                primaryKey
+                                                        ? ChangeType.INSERT
+                                                        : ChangeType.APPEND_ONLY);
+                                assertThat(c.getObject(rowId).toString()).isEqualTo("c-" + count);
+                                assertThat(b.getObject(rowId).toString()).isEqualTo("b-" + count);
+                                count++;
+                            }
+                        }
+                    }
+                }
+                assertThat(count).isEqualTo(3);
+            }
+        }
+    }
+
+    @ParameterizedTest
+    @CsvSource({"false, false", "true, false", "false, true", "true, true"})
+    void testCannotSwitchArrowPollingMode(boolean arrowFirst, boolean pollEmptyFirst)
+            throws Exception {
+        TablePath tablePath =
+                TablePath.of(
+                        "test_db_1",
+                        "test_arrow_polling_mode_" + arrowFirst + "_" + pollEmptyFirst);
+        createTable(
+                tablePath,
+                TableDescriptor.builder()
+                        .schema(DATA1_SCHEMA)
+                        .distributedBy(1)
+                        .logFormat(LogFormat.ARROW)
+                        .build(),
+                false);
+        clientConf.set(ConfigOptions.CLIENT_SCANNER_LOG_MAX_POLL_RECORDS, 1);
+        try (Connection connection = ConnectionFactory.createConnection(clientConf);
+                Table table = connection.getTable(tablePath);
+                LogScanner scanner = table.newScan().createLogScanner()) {
+            scanner.subscribeFromBeginning(0);
+            int count = 0;
+            if (pollEmptyFirst) {
+                if (arrowFirst) {
+                    try (ArrowScanRecords records = scanner.pollRecordBatch(Duration.ZERO)) {
+                        assertThat(records.isEmpty()).isTrue();
+                    }
+                } else {
+                    assertThat(scanner.poll(Duration.ZERO).isEmpty()).isTrue();
+                }
+            }
+            AppendWriter writer = table.newAppend().createWriter();
+            for (int i = 0; i < 3; i++) {
+                writer.append(row(i, "value-" + i));
+            }
+            writer.flush();
+
+            long deadline = System.nanoTime() + Duration.ofSeconds(30).toNanos();
+            if (!pollEmptyFirst) {
+                while (count == 0) {
+                    assertThat(System.nanoTime())
+                            .as("Waiting for the first poll result")
+                            .isLessThan(deadline);
+                    if (arrowFirst) {
+                        try (ArrowScanRecords records =
+                                scanner.pollRecordBatch(Duration.ofSeconds(1))) {
+                            count += records.count();
+                        }
+                    } else {
+                        count += scanner.poll(Duration.ofSeconds(1)).count();
+                    }
+                }
+                if (!arrowFirst) {
+                    assertThat(count).isEqualTo(1);
+                }
+            }
+
+            assertThatThrownBy(
+                            () -> {
+                                if (arrowFirst) {
+                                    scanner.poll(Duration.ZERO);
+                                } else {
+                                    try (ArrowScanRecords ignored =
+                                            scanner.pollRecordBatch(Duration.ZERO)) {
+                                        // Close any unexpected result if the mode guard regresses.
+                                    }
+                                }
+                            })
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("Cannot switch between poll() and pollRecordBatch()");
+
+            // Rejection must preserve unread rows, including a partially consumed row batch.
+            while (count < 3) {
+                assertThat(System.nanoTime())
+                        .as("Waiting for unread rows after rejecting a mode switch")
+                        .isLessThan(deadline);
+                if (arrowFirst) {
+                    try (ArrowScanRecords records =
+                            scanner.pollRecordBatch(Duration.ofSeconds(1))) {
+                        for (ArrowBatchData batch : records) {
+                            assertThat(batch.getBaseLogOffset()).isEqualTo(count);
+                            count += batch.getRecordCount();
+                        }
+                    }
+                } else {
+                    for (ScanRecord record : scanner.poll(Duration.ofSeconds(1))) {
+                        assertThat(record.logOffset()).isEqualTo(count);
+                        assertThat(record.getRow().getInt(0)).isEqualTo(count);
+                        count++;
+                    }
+                }
+            }
+            assertThat(count).isEqualTo(3);
         }
     }
 

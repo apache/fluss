@@ -78,6 +78,7 @@ import java.util.Set;
 
 import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.getFetchLogResultForBucket;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
+import static org.apache.fluss.utils.Preconditions.checkState;
 
 /* This file is based on source code of Apache Kafka Project (https://kafka.apache.org/), licensed by the Apache
  * Software Foundation (ASF) under the Apache License, Version 2.0. See the NOTICE file distributed with this work for
@@ -102,6 +103,8 @@ public class LogFetcher implements Closeable {
     private final LogFetchBuffer logFetchBuffer;
     private final LogFetchCollector logFetchCollector;
     private final ArrowLogFetchCollector arrowLogFetchCollector;
+    // Accessed by the polling thread under the scanner's single-thread guard.
+    @Nullable private Boolean arrowBatchPolling;
     private final RemoteLogDownloader remoteLogDownloader;
     private final FetchLogReadPreference readPreference;
 
@@ -196,12 +199,24 @@ public class LogFetcher implements Closeable {
         return !logFetchBuffer.isEmpty();
     }
 
+    /** Collects rows, fixing the polling mode on the first collection attempt. */
     public ScanRecords collectFetch() {
+        ensurePollingMode(false);
         return logFetchCollector.collectFetch(logFetchBuffer);
     }
 
+    /** Collects Arrow batches, fixing the polling mode on the first collection attempt. */
     public ArrowScanRecords collectArrowFetch() {
+        ensurePollingMode(true);
         return arrowLogFetchCollector.collectFetch(logFetchBuffer);
+    }
+
+    private void ensurePollingMode(boolean arrowBatches) {
+        checkState(
+                arrowBatchPolling == null || arrowBatchPolling == arrowBatches,
+                "Cannot switch between poll() and pollRecordBatch() on the same scanner. "
+                        + "Create a new scanner to change the polling mode.");
+        arrowBatchPolling = arrowBatches;
     }
 
     /**
