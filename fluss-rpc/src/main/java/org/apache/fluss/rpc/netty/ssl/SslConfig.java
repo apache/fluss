@@ -30,6 +30,9 @@ import javax.net.ssl.SSLContext;
 import javax.net.ssl.SSLEngine;
 
 import java.security.GeneralSecurityException;
+import java.security.KeyStore;
+import java.security.KeyStoreException;
+import java.security.Security;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashSet;
@@ -38,6 +41,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.TreeSet;
 import java.util.stream.Collectors;
 
 /**
@@ -179,6 +183,11 @@ public final class SslConfig {
                 cipherSuites,
                 ConfigOptions.SERVER_SSL_CIPHER_SUITES);
 
+        String keystoreType = conf.getString(ConfigOptions.SERVER_SSL_KEYSTORE_TYPE);
+        String truststoreType = conf.getString(ConfigOptions.SERVER_SSL_TRUSTSTORE_TYPE);
+        validateStoreType(keystorePath, keystoreType, ConfigOptions.SERVER_SSL_KEYSTORE_TYPE);
+        validateStoreType(truststorePath, truststoreType, ConfigOptions.SERVER_SSL_TRUSTSTORE_TYPE);
+
         return Optional.of(
                 new SslConfig(
                         enabledListeners,
@@ -187,11 +196,11 @@ public final class SslConfig {
                         cipherSuites,
                         keystorePath,
                         password(conf.get(ConfigOptions.SERVER_SSL_KEYSTORE_PASSWORD)),
-                        conf.getString(ConfigOptions.SERVER_SSL_KEYSTORE_TYPE),
+                        keystoreType,
                         password(conf.get(ConfigOptions.SERVER_SSL_KEY_PASSWORD)),
                         truststorePath,
                         password(conf.get(ConfigOptions.SERVER_SSL_TRUSTSTORE_PASSWORD)),
-                        conf.getString(ConfigOptions.SERVER_SSL_TRUSTSTORE_TYPE),
+                        truststoreType,
                         ""));
     }
 
@@ -213,19 +222,26 @@ public final class SslConfig {
                 cipherSuites,
                 ConfigOptions.CLIENT_SSL_CIPHER_SUITES);
 
+        String keystorePath = conf.getString(ConfigOptions.CLIENT_SSL_KEYSTORE_PATH);
+        String keystoreType = conf.getString(ConfigOptions.CLIENT_SSL_KEYSTORE_TYPE);
+        String truststorePath = conf.getString(ConfigOptions.CLIENT_SSL_TRUSTSTORE_PATH);
+        String truststoreType = conf.getString(ConfigOptions.CLIENT_SSL_TRUSTSTORE_TYPE);
+        validateStoreType(keystorePath, keystoreType, ConfigOptions.CLIENT_SSL_KEYSTORE_TYPE);
+        validateStoreType(truststorePath, truststoreType, ConfigOptions.CLIENT_SSL_TRUSTSTORE_TYPE);
+
         return Optional.of(
                 new SslConfig(
                         Collections.emptyList(),
                         Collections.emptySet(),
                         enabledProtocols,
                         cipherSuites,
-                        conf.getString(ConfigOptions.CLIENT_SSL_KEYSTORE_PATH),
+                        keystorePath,
                         conf.getString(ConfigOptions.CLIENT_SSL_KEYSTORE_PASSWORD),
-                        conf.getString(ConfigOptions.CLIENT_SSL_KEYSTORE_TYPE),
+                        keystoreType,
                         conf.getString(ConfigOptions.CLIENT_SSL_KEY_PASSWORD),
-                        conf.getString(ConfigOptions.CLIENT_SSL_TRUSTSTORE_PATH),
+                        truststorePath,
                         conf.getString(ConfigOptions.CLIENT_SSL_TRUSTSTORE_PASSWORD),
-                        conf.getString(ConfigOptions.CLIENT_SSL_TRUSTSTORE_TYPE),
+                        truststoreType,
                         conf.getString(
                                 ConfigOptions.CLIENT_SSL_ENDPOINT_IDENTIFICATION_ALGORITHM)));
     }
@@ -272,6 +288,28 @@ public final class SslConfig {
                     cipherSuitesOption.key(),
                     unsupportedCipherSuites,
                     Arrays.asList(probe.getSupportedCipherSuites()));
+        }
+    }
+
+    /**
+     * Reject a keystore or truststore type this JVM has no provider for. Only the type of a store
+     * that is actually configured is checked, since the type of an absent store is never used.
+     * Without this the typo surfaces as a {@code KeyStoreException} while the SSL context is built,
+     * which does not name the option at fault.
+     */
+    private static void validateStoreType(
+            @Nullable String storePath, String storeType, ConfigOption<String> storeTypeOption) {
+        if (storePath == null) {
+            return;
+        }
+        try {
+            KeyStore.getInstance(storeType);
+        } catch (KeyStoreException e) {
+            throw new IllegalConfigurationException(
+                    "'%s' is set to '%s', which is not a keystore type supported by this JVM. Supported: %s.",
+                    storeTypeOption.key(),
+                    storeType,
+                    new TreeSet<>(Security.getAlgorithms("KeyStore")));
         }
     }
 
