@@ -24,7 +24,6 @@ import org.apache.fluss.client.table.Table;
 import org.apache.fluss.client.table.scanner.ScanRecord;
 import org.apache.fluss.client.table.scanner.log.ArrowScanRecords;
 import org.apache.fluss.client.table.scanner.log.LogScanner;
-import org.apache.fluss.client.table.scanner.log.LogScannerImpl;
 import org.apache.fluss.client.table.scanner.log.ScanRecords;
 import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.flink.source.reader.BoundedSplitReader;
@@ -215,7 +214,7 @@ public class TieringSplitReader<WriteResult>
                 }
                 if (useRecordBatchPath()) {
                     try (ArrowScanRecords arrowScanRecords =
-                            ((LogScannerImpl) currentLogScanner).pollRecordBatch(pollTimeout)) {
+                            currentLogScanner.pollRecordBatch(pollTimeout)) {
                         return processLogRecords(
                                 arrowScanRecords.buckets(),
                                 arrowScanRecords::records,

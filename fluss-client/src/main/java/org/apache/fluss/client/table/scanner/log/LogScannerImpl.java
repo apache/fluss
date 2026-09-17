@@ -17,12 +17,10 @@
 
 package org.apache.fluss.client.table.scanner.log;
 
-import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.annotation.PublicEvolving;
 import org.apache.fluss.client.metadata.MetadataUpdater;
 import org.apache.fluss.client.metrics.ScannerMetricGroup;
 import org.apache.fluss.client.table.scanner.RemoteFileDownloader;
-import org.apache.fluss.client.table.scanner.Scan;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.WakeupException;
 import org.apache.fluss.metadata.LogFormat;
@@ -59,8 +57,6 @@ public class LogScannerImpl extends AbstractLogScanner<ScanRecords> implements L
     private final long tableId;
     private final boolean isPartitionedTable;
     private final boolean isArrowLogFormat;
-    private final boolean isLogTable;
-    private final boolean hasProjection;
 
     private final TableInfo tableInfo;
     private final @Nullable Projection projection;
@@ -114,8 +110,6 @@ public class LogScannerImpl extends AbstractLogScanner<ScanRecords> implements L
         this.tableId = tableInfo.getTableId();
         this.isPartitionedTable = tableInfo.isPartitioned();
         this.isArrowLogFormat = tableInfo.getTableConfig().getLogFormat() == LogFormat.ARROW;
-        this.isLogTable = !tableInfo.hasPrimaryKey();
-        this.hasProjection = projectedFields != null;
         // add this table to metadata updater.
         metadataUpdater.checkAndUpdateTableMetadata(Collections.singleton(tablePath));
         this.metadataUpdater = metadataUpdater;
@@ -164,26 +158,12 @@ public class LogScannerImpl extends AbstractLogScanner<ScanRecords> implements L
         return "LogScanner is not subscribed any buckets.";
     }
 
-    /**
-     * Polls Arrow record batches for internal callers.
-     *
-     * <p>This method is intentionally kept off the public {@link Scan} API surface for now.
-     */
-    @Internal
+    @Override
     public ArrowScanRecords pollRecordBatch(Duration timeout) {
         if (!isArrowLogFormat) {
             throw new UnsupportedOperationException(
                     "Arrow record batch polling is only supported for tables whose log format is ARROW.");
         }
-        if (!isLogTable) {
-            throw new UnsupportedOperationException(
-                    "Arrow record batch polling is only supported for log tables. CDC scanning is not supported.");
-        }
-        if (hasProjection) {
-            throw new UnsupportedOperationException(
-                    "Arrow record batch polling does not support projection. Please create the scanner without projection.");
-        }
-
         acquireAndEnsureOpen();
         try {
             if (!logScannerStatus.prepareToPoll()) {

@@ -20,6 +20,8 @@ package org.apache.fluss.record;
 import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.memory.MemorySegment;
 
+import javax.annotation.Nullable;
+
 /** Internal context for loading Arrow record batches with unshaded Arrow resources. */
 @Internal
 interface ArrowRecordBatchContext extends LogRecordBatch.ReadContext {
@@ -38,6 +40,7 @@ interface ArrowRecordBatchContext extends LogRecordBatch.ReadContext {
          * Applies schema-evolution projection (if needed) internally and builds the final {@link
          * ArrowBatchData}, transferring ownership to the caller.
          */
-        ArrowBatchData createArrowBatchData(long baseLogOffset, long timestamp, int schemaId);
+        ArrowBatchData createArrowBatchData(
+                long baseLogOffset, long timestamp, int schemaId, @Nullable byte[] changeTypes);
     }
 }
