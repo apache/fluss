@@ -67,6 +67,6 @@ public class KafkaProtocolPlugin implements NetworkProtocolPlugin {
                             + service.getClass().getSimpleName());
         }
         TabletServerGateway gateway = (TabletServerGateway) service;
-        return new KafkaRequestHandler(service, gateway, conf.get(ConfigOptions.KAFKA_DATABASE));
+        return new KafkaRequestHandler(service, gateway);
     }
 }

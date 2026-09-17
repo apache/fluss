@@ -28,6 +28,7 @@ import org.apache.fluss.kafka.backend.metadata.KafkaMetadataQuery;
 import org.apache.fluss.kafka.backend.metadata.KafkaMetadataQuery.TopicReference;
 import org.apache.fluss.kafka.dispatcher.KafkaApiHandler;
 import org.apache.fluss.kafka.dispatcher.KafkaApiSpec;
+import org.apache.fluss.kafka.mapping.KafkaTopicMapper;
 
 import org.apache.kafka.common.Uuid;
 import org.apache.kafka.common.errors.InvalidRequestException;
@@ -85,7 +86,7 @@ public final class MetadataHandler implements KafkaApiHandler<MetadataRequest> {
                     throw new InvalidRequestException(
                             "Topic name must be set because topic ID lookup is not supported by "
                                     + "Metadata versions 10 and 11.");
-                } else if (!Topic.isValid(topic.name())) {
+                } else if (!KafkaTopicMapper.isValidTopic(topic.name())) {
                     invalidTopics.add(
                             new KafkaClusterMetadata.Topic(
                                     topic.name(),

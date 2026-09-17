@@ -18,6 +18,7 @@
 package org.apache.fluss.kafka.backend.metadata;
 
 import org.apache.fluss.annotation.Internal;
+import org.apache.fluss.exception.DatabaseNotExistException;
 import org.apache.fluss.kafka.backend.metadata.KafkaClusterMetadata.Broker;
 import org.apache.fluss.kafka.backend.metadata.KafkaClusterMetadata.Partition;
 import org.apache.fluss.kafka.backend.metadata.KafkaClusterMetadata.Topic;
@@ -29,7 +30,9 @@ import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.rpc.RpcGatewayService;
 import org.apache.fluss.rpc.gateway.TabletServerGateway;
+import org.apache.fluss.rpc.messages.ListDatabasesRequest;
 import org.apache.fluss.rpc.messages.ListTablesRequest;
+import org.apache.fluss.rpc.messages.ListTablesResponse;
 import org.apache.fluss.rpc.messages.MetadataRequest;
 import org.apache.fluss.rpc.messages.MetadataResponse;
 import org.apache.fluss.rpc.messages.PbBucketMetadata;
@@ -38,6 +41,7 @@ import org.apache.fluss.rpc.messages.PbTableMetadata;
 import org.apache.fluss.rpc.messages.PbTablePath;
 import org.apache.fluss.rpc.netty.server.Session;
 import org.apache.fluss.security.acl.FlussPrincipal;
+import org.apache.fluss.utils.concurrent.FutureUtils;
 
 import org.apache.kafka.common.Uuid;
 import org.slf4j.Logger;
@@ -65,29 +69,20 @@ public final class GatewayKafkaMetadataBackend implements KafkaMetadataBackend {
 
     private final RpcGatewayService service;
     private final TabletServerGateway gateway;
-    private final String databaseName;
-    private final KafkaTopicMapper topicMapper;
+    private final KafkaTopicMapper topicMapper = new KafkaTopicMapper();
     private final KafkaTopicSchemaResolver schemaResolver = new KafkaTopicSchemaResolver();
 
     /** Creates a metadata backend backed by the local TabletServer gateway. */
-    public GatewayKafkaMetadataBackend(
-            RpcGatewayService service, TabletServerGateway gateway, String databaseName) {
+    public GatewayKafkaMetadataBackend(RpcGatewayService service, TabletServerGateway gateway) {
         this.service = checkNotNull(service);
         this.gateway = checkNotNull(gateway);
-        this.databaseName = checkNotNull(databaseName);
-        this.topicMapper = new KafkaTopicMapper(databaseName);
     }
 
     @Override
     public CompletableFuture<KafkaClusterMetadata> getMetadata(KafkaMetadataQuery query) {
         if (query.allTopics() || containsTopicId(query.topics())) {
-            setCurrentSession(query);
-            return gateway.listTables(new ListTablesRequest().setDatabaseName(databaseName))
-                    .thenCompose(
-                            response ->
-                                    requestFlussMetadata(
-                                            query,
-                                            new LinkedHashSet<>(response.getTableNamesList())));
+            return currentTopicNames(query)
+                    .thenCompose(topicNames -> requestFlussMetadata(query, topicNames));
         }
 
         Set<String> topicNames = new LinkedHashSet<>();
@@ -108,11 +103,7 @@ public final class GatewayKafkaMetadataBackend implements KafkaMetadataBackend {
             KafkaMetadataQuery query, Set<String> topicNames, boolean refreshAndRetry) {
         MetadataRequest request = new MetadataRequest();
         for (String topicName : topicNames) {
-            TablePath tablePath = TablePath.of(databaseName, topicName);
-            if (!topicMapper.isMappedTable(tablePath)) {
-                continue;
-            }
-            tablePath = topicMapper.toTablePath(topicName);
+            TablePath tablePath = topicMapper.toTablePath(topicName);
             request.addAllTablePaths(
                     Collections.singletonList(
                             new PbTablePath()
@@ -148,12 +139,27 @@ public final class GatewayKafkaMetadataBackend implements KafkaMetadataBackend {
     }
 
     private CompletableFuture<Set<String>> currentTopicNames(KafkaMetadataQuery query) {
-        setCurrentSession(query);
-        return gateway.listTables(new ListTablesRequest().setDatabaseName(databaseName))
+        CompletableFuture<Set<String>> databasesFuture;
+        if (query.allTopics() || containsTopicId(query.topics())) {
+            setCurrentSession(query);
+            databasesFuture =
+                    gateway.listDatabases(new ListDatabasesRequest())
+                            .thenApply(
+                                    response ->
+                                            new LinkedHashSet<>(response.getDatabaseNamesList()));
+        } else {
+            Set<String> databases = new LinkedHashSet<>();
+            for (TopicReference topic : query.topics()) {
+                if (topic.topicName() != null) {
+                    databases.add(topicMapper.toTablePath(topic.topicName()).getDatabaseName());
+                }
+            }
+            databasesFuture = CompletableFuture.completedFuture(databases);
+        }
+        return databasesFuture
+                .thenCompose(databases -> listTopicNames(query, databases))
                 .thenApply(
-                        response -> {
-                            Set<String> currentNames =
-                                    new LinkedHashSet<>(response.getTableNamesList());
+                        currentNames -> {
                             if (!query.allTopics() && !containsTopicId(query.topics())) {
                                 Set<String> requestedNames = new HashSet<>();
                                 for (TopicReference topic : query.topics()) {
@@ -165,6 +171,56 @@ public final class GatewayKafkaMetadataBackend implements KafkaMetadataBackend {
                             }
                             return currentNames;
                         });
+    }
+
+    private CompletableFuture<Set<String>> listTopicNames(
+            KafkaMetadataQuery query, Set<String> databases) {
+        CompletableFuture<Set<String>> topicsFuture =
+                CompletableFuture.completedFuture(new LinkedHashSet<>());
+        for (String database : databases) {
+            topicsFuture =
+                    topicsFuture.thenCompose(
+                            topicNames ->
+                                    listTables(query, database)
+                                            .thenApply(
+                                                    response -> {
+                                                        for (String tableName :
+                                                                response.getTableNamesList()) {
+                                                            TablePath tablePath =
+                                                                    TablePath.of(
+                                                                            database, tableName);
+                                                            if (topicMapper.isMappedTable(
+                                                                    tablePath)) {
+                                                                topicNames.add(
+                                                                        topicMapper.toTopicName(
+                                                                                tablePath));
+                                                            }
+                                                        }
+                                                        return topicNames;
+                                                    }));
+        }
+        return topicsFuture;
+    }
+
+    private CompletableFuture<ListTablesResponse> listTables(
+            KafkaMetadataQuery query, String database) {
+        setCurrentSession(query);
+        CompletableFuture<ListTablesResponse> tablesFuture;
+        try {
+            tablesFuture = gateway.listTables(new ListTablesRequest().setDatabaseName(database));
+        } catch (Exception failure) {
+            tablesFuture = FutureUtils.completedExceptionally(failure);
+        }
+        return tablesFuture.exceptionally(
+                failure -> {
+                    Throwable cause = unwrap(failure);
+                    if (cause instanceof DatabaseNotExistException) {
+                        // A database may be missing or deleted after listDatabases. Keep loading
+                        // the remaining topics and brokers through the normal metadata request.
+                        return new ListTablesResponse();
+                    }
+                    throw new CompletionException(cause);
+                });
     }
 
     private KafkaClusterMetadata toKafkaMetadata(
@@ -192,7 +248,7 @@ public final class GatewayKafkaMetadataBackend implements KafkaMetadataBackend {
             if (!topicMapper.isMappedTable(tablePath)) {
                 continue;
             }
-            Topic topic = toKafkaTopic(table, aliveBrokerIds);
+            Topic topic = toKafkaTopic(table, topicMapper.toTopicName(tablePath), aliveBrokerIds);
             topicsByName.put(topic.name(), topic);
             topicsById.put(topic.topicId(), topic);
         }
@@ -221,16 +277,17 @@ public final class GatewayKafkaMetadataBackend implements KafkaMetadataBackend {
         return new KafkaClusterMetadata(brokers, topics);
     }
 
-    private Topic toKafkaTopic(PbTableMetadata table, Set<Integer> aliveBrokerIds) {
+    private Topic toKafkaTopic(
+            PbTableMetadata table, String topicName, Set<Integer> aliveBrokerIds) {
         try {
             schemaResolver.resolve(TableDescriptor.fromJsonBytes(table.getTableJson()));
         } catch (IllegalArgumentException e) {
             LOG.debug(
                     "Table {} does not define a supported Kafka mapping: {}",
-                    table.getTablePath().getTableName(),
+                    topicName,
                     e.getMessage());
             return new Topic(
-                    table.getTablePath().getTableName(),
+                    topicName,
                     topicMapper.toTopicId(table.getTableId()),
                     TopicError.INVALID_TOPIC,
                     Collections.emptyList());
@@ -273,10 +330,7 @@ public final class GatewayKafkaMetadataBackend implements KafkaMetadataBackend {
         }
         Collections.sort(partitions, Comparator.comparingInt(Partition::partitionId));
         return new Topic(
-                table.getTablePath().getTableName(),
-                topicMapper.toTopicId(table.getTableId()),
-                TopicError.NONE,
-                partitions);
+                topicName, topicMapper.toTopicId(table.getTableId()), TopicError.NONE, partitions);
     }
 
     private static Topic missingTopic(TopicReference reference) {

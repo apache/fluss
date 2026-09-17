@@ -36,16 +36,12 @@ public class KafkaRequestHandler implements RequestHandler<KafkaRequest> {
     private final KafkaRequestDispatcher dispatcher;
 
     /** Creates a Kafka request handler with the capabilities provided by a TabletServer. */
-    public KafkaRequestHandler(
-            RpcGatewayService service, TabletServerGateway gateway, String kafkaDatabase) {
+    public KafkaRequestHandler(RpcGatewayService service, TabletServerGateway gateway) {
         checkNotNull(service);
         checkNotNull(gateway);
-        checkNotNull(kafkaDatabase);
         KafkaApiRegistry registry = new KafkaApiRegistry();
         registry.register(new ApiVersionsHandler(registry));
-        registry.register(
-                new MetadataHandler(
-                        new GatewayKafkaMetadataBackend(service, gateway, kafkaDatabase)));
+        registry.register(new MetadataHandler(new GatewayKafkaMetadataBackend(service, gateway)));
         registry.freeze();
         this.dispatcher = new KafkaRequestDispatcher(registry, new KafkaErrorMapper());
     }
