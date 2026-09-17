@@ -37,6 +37,7 @@ import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.concurrent.atomic.AtomicLong;
 
 import static org.apache.fluss.utils.Preconditions.checkArgument;
 import static org.apache.fluss.utils.UnsafeUtils.BYTE_ARRAY_BASE_OFFSET;
@@ -112,9 +113,9 @@ public class KvPreWriteBuffer implements AutoCloseable {
     private final Counter truncateAsDuplicatedCount;
     private final Counter truncateAsErrorCount;
 
-    // The TabletServer-wide ledger shared by all pre-write buffers, updated atomically on the
-    // write path and serving as the single source of truth for metrics and backpressure.
-    private final KvPreWriteBufferMemoryLedger memoryLedger;
+    // The server-wide counter shared by all pre-write buffers, updated atomically on the write
+    // path and serving as the single source of truth for the memory usage metric.
+    private final AtomicLong memoryUsageBytesCounter;
 
     // the max LSN in the buffer
     private long maxLogSequenceNumber = -1;
@@ -122,19 +123,17 @@ public class KvPreWriteBuffer implements AutoCloseable {
     // Accumulated byte size of entries not yet completed by a flush.
     private long pendingFlushBytes = 0;
 
-    // Local accounting of this buffer, released to the shared ledger on close. Must be read
+    // Local accounting of this buffer, released to the shared counter on close. Must be read
     // under the kv write lock (or in single-threaded tests) to be exact.
     private long memoryUsageBytes = 0;
 
-    // Number of held entries, maintained together with the local memory accounting.
-    private int entryCount = 0;
-
     private boolean closed;
 
-    public KvPreWriteBuffer(TabletServerMetricGroup serverMetricGroup) {
+    public KvPreWriteBuffer(
+            TabletServerMetricGroup serverMetricGroup, AtomicLong memoryUsageBytesCounter) {
         truncateAsDuplicatedCount = serverMetricGroup.kvTruncateAsDuplicatedCount();
         truncateAsErrorCount = serverMetricGroup.kvTruncateAsErrorCount();
-        memoryLedger = serverMetricGroup.kvPreWriteBufferMemoryLedger();
+        this.memoryUsageBytesCounter = memoryUsageBytesCounter;
     }
 
     /**
@@ -228,6 +227,10 @@ public class KvPreWriteBuffer implements AutoCloseable {
      * Truncate the buffer to the given log sequence number so that it only contains key-value pairs
      * whose log sequence number is less than the given log sequence number.
      *
+     * <p>The bytes released by the truncated entries are applied to the shared counter in one
+     * update, so a truncation that fails partway (e.g. on a prepared entry) still releases the
+     * accounting of the entries removed before the failure.
+     *
      * @param targetLogSequenceNumber the lower bound of the log sequence number truncated to.
      * @param truncateReason the reason to truncate
      */
@@ -238,48 +241,59 @@ public class KvPreWriteBuffer implements AutoCloseable {
             truncateAsErrorCount.inc();
         }
 
-        Iterator<KvEntry> descIter = allKvEntries.descendingIterator();
-        while (descIter.hasNext()) {
-            KvEntry entry = descIter.next();
-            if (entry.getLogSequenceNumber() < targetLogSequenceNumber) {
-                maxLogSequenceNumber = entry.logSequenceNumber;
-                break;
-            }
-            descIter.remove();
-            if (entry.state == EntryState.PREPARED) {
-                throw new IllegalStateException(
-                        "Cannot truncate prepared pre-write entry. logSequenceNumber="
-                                + entry.getLogSequenceNumber()
-                                + ", targetLogSequenceNumber="
-                                + targetLogSequenceNumber);
-            }
-            boolean removed = removeFromMapAndAccounting(entry);
-            // the removed entry is no longer the successor of its previous version; clear the
-            // forward link so the truncated entry does not stay reachable through it
-            if (entry.previousEntry != null) {
-                entry.previousEntry.nextEntry = null;
-            }
-            // if the latest entry is removed, we need to rollback the previous entry to the map
-            if (removed) {
-                KvEntry previousEntry = previousEntryInBuffer(entry.previousEntry);
-                if (previousEntry != null) {
-                    kvEntryMap.put(entry.getKey(), previousEntry);
+        // Net bytes released by the entries this call actually removes; applied to the shared
+        // counter in one update below.
+        long netReleasedBytes = 0;
+        try {
+            Iterator<KvEntry> descIter = allKvEntries.descendingIterator();
+            while (descIter.hasNext()) {
+                KvEntry entry = descIter.next();
+                if (entry.getLogSequenceNumber() < targetLogSequenceNumber) {
+                    maxLogSequenceNumber = entry.logSequenceNumber;
+                    break;
+                }
+                descIter.remove();
+                if (entry.state == EntryState.PREPARED) {
+                    throw new IllegalStateException(
+                            "Cannot truncate prepared pre-write entry. logSequenceNumber="
+                                    + entry.getLogSequenceNumber()
+                                    + ", targetLogSequenceNumber="
+                                    + targetLogSequenceNumber);
+                }
+                boolean removedFromMap = removeFromMapAndAccounting(entry);
+                netReleasedBytes += entryAccountedBytes(entry, removedFromMap);
+                // the removed entry is no longer the successor of its previous version; clear
+                // the forward link so the truncated entry does not stay reachable through it
+                if (entry.previousEntry != null) {
+                    entry.previousEntry.nextEntry = null;
+                }
+                // if the latest entry is removed, we need to rollback the previous entry to
+                // the map
+                if (removedFromMap) {
+                    KvEntry previousEntry = previousEntryInBuffer(entry.previousEntry);
+                    if (previousEntry != null) {
+                        kvEntryMap.put(entry.getKey(), previousEntry);
+                        // reinstating the older version re-occupies the key's map node, so
+                        // restore its accounting as a negative release in the same batched
+                        // update
+                        memoryUsageBytes += PER_MAP_NODE_OVERHEAD_BYTES;
+                        netReleasedBytes -= PER_MAP_NODE_OVERHEAD_BYTES;
+                    }
                 }
             }
-        }
-        if (!descIter.hasNext()) {
-            maxLogSequenceNumber = -1;
+            if (!descIter.hasNext()) {
+                maxLogSequenceNumber = -1;
+            }
+        } finally {
+            if (netReleasedBytes != 0) {
+                memoryUsageBytesCounter.addAndGet(-netReleasedBytes);
+            }
         }
     }
 
     /** Returns the accumulated byte size of all entries waiting to be flushed. */
     public long pendingFlushBytes() {
         return pendingFlushBytes;
-    }
-
-    /** Returns the number of entries currently held in this buffer. */
-    public int entryCount() {
-        return entryCount;
     }
 
     /**
@@ -316,23 +330,38 @@ public class KvPreWriteBuffer implements AutoCloseable {
         return new PreparedFlush(exclusiveUpToLogSequenceNumber, entries, rowCountDiff);
     }
 
-    /** Completes a prepared async flush and removes flushed entries from the buffer. */
+    /**
+     * Completes a prepared async flush and removes flushed entries from the buffer. The bytes
+     * released by the removed entries are applied to the shared counter in one update, so a partial
+     * failure still releases the accounting of the entries removed before the failure.
+     */
     public int completeFlush(PreparedFlush preparedFlush) {
-        for (KvEntry entry : preparedFlush.entries) {
-            KvEntry first = allKvEntries.removeFirst();
-            if (first != entry) {
-                throw new IllegalStateException("Prepared flush entries are no longer a prefix.");
+        long releasedBytes = 0;
+        try {
+            for (KvEntry entry : preparedFlush.entries) {
+                KvEntry first = allKvEntries.removeFirst();
+                if (first != entry) {
+                    throw new IllegalStateException(
+                            "Prepared flush entries are no longer a prefix.");
+                }
+                if (entry.state != EntryState.PREPARED) {
+                    throw new IllegalStateException(
+                            "Prepared flush entry is not in PREPARED state.");
+                }
+                entry.state = EntryState.FLUSHED;
+                boolean removedFromMap = removeFromMapAndAccounting(entry);
+                releasedBytes += entryAccountedBytes(entry, removedFromMap);
+                // the immediate successor is the only live referencer of a flushed entry;
+                // clearing its reference makes the flushed entry (and, transitively, its older
+                // versions) unreachable instead of being retained while no longer counted by
+                // pendingFlushBytes
+                if (entry.nextEntry != null) {
+                    entry.nextEntry.previousEntry = null;
+                }
             }
-            if (entry.state != EntryState.PREPARED) {
-                throw new IllegalStateException("Prepared flush entry is not in PREPARED state.");
-            }
-            entry.state = EntryState.FLUSHED;
-            removeFromMapAndAccounting(entry);
-            // the immediate successor is the only live referencer of a flushed entry; clearing
-            // its reference makes the flushed entry (and, transitively, its older versions)
-            // unreachable instead of being retained while no longer counted by pendingFlushBytes
-            if (entry.nextEntry != null) {
-                entry.nextEntry.previousEntry = null;
+        } finally {
+            if (releasedBytes != 0) {
+                memoryUsageBytesCounter.addAndGet(-releasedBytes);
             }
         }
         if (allKvEntries.isEmpty()) {
@@ -363,43 +392,43 @@ public class KvPreWriteBuffer implements AutoCloseable {
     }
 
     /**
-     * Adds an entry to the incrementally maintained memory estimate and entry count. An entry
-     * without a previous version is the latest version of a new key and thus adds one map node.
+     * Adds an entry to the incrementally maintained memory accounting. An entry without a previous
+     * version is the latest version of a new key and thus adds one map node. The put path appends
+     * entries one by one, so each accounted entry is published to the shared counter directly.
      */
     private void addToAccounting(KvEntry entry) {
-        long bytes = entryBytes(entry.getKey(), entry.getValue());
-        pendingFlushBytes += bytes;
-        long accountedBytes =
-                bytes
-                        + PER_ENTRY_OVERHEAD_BYTES
-                        + (entry.previousEntry == null ? PER_MAP_NODE_OVERHEAD_BYTES : 0L);
+        pendingFlushBytes += entryBytes(entry.getKey(), entry.getValue());
+        long accountedBytes = entryAccountedBytes(entry, entry.previousEntry == null);
         memoryUsageBytes += accountedBytes;
-        entryCount++;
-        memoryLedger.add(accountedBytes, 1);
+        memoryUsageBytesCounter.addAndGet(accountedBytes);
     }
 
     /**
-     * Removes an entry from the key map and deducts it from the incrementally maintained memory
-     * estimate and entry count. Returns whether the entry was the latest version of its key and
-     * thus removed from the map.
+     * Removes an entry from the key map and deducts it from the local accounting only. The shared
+     * counter is not updated here: callers accumulate the bytes released by the whole flush or
+     * truncate operation and apply them to the shared counter in one update. Returns whether the
+     * entry was the latest version of its key and thus removed from the map.
      */
     private boolean removeFromMapAndAccounting(KvEntry entry) {
-        long bytes = entryBytes(entry.getKey(), entry.getValue());
-        pendingFlushBytes -= bytes;
+        pendingFlushBytes -= entryBytes(entry.getKey(), entry.getValue());
         boolean removedFromMap = kvEntryMap.remove(entry.getKey(), entry);
-        long accountedBytes =
-                bytes
-                        + PER_ENTRY_OVERHEAD_BYTES
-                        + (removedFromMap ? PER_MAP_NODE_OVERHEAD_BYTES : 0L);
-        memoryUsageBytes -= accountedBytes;
-        entryCount--;
-        memoryLedger.subtract(accountedBytes, 1);
+        memoryUsageBytes -= entryAccountedBytes(entry, removedFromMap);
         return removedFromMap;
     }
 
     /**
-     * Closes the buffer and releases its remaining accounting to the shared ledger. Must be called
-     * under the kv write lock so the local accounting values are exact. Idempotent.
+     * Returns the accounting of one entry: its key/value payload bytes, the per-entry object
+     * overhead, and the map-node overhead if the entry holds the key's map node.
+     */
+    private static long entryAccountedBytes(KvEntry entry, boolean holdsMapNode) {
+        return entryBytes(entry.getKey(), entry.getValue())
+                + PER_ENTRY_OVERHEAD_BYTES
+                + (holdsMapNode ? PER_MAP_NODE_OVERHEAD_BYTES : 0L);
+    }
+
+    /**
+     * Closes the buffer and releases its remaining accounting to the shared counter. Must be called
+     * under the kv write lock so the local accounting value is exact. Idempotent.
      */
     @Override
     public void close() {
@@ -407,9 +436,8 @@ public class KvPreWriteBuffer implements AutoCloseable {
             return;
         }
         closed = true;
-        memoryLedger.subtract(memoryUsageBytes, entryCount);
+        memoryUsageBytesCounter.addAndGet(-memoryUsageBytes);
         memoryUsageBytes = 0;
-        entryCount = 0;
         allKvEntries.clear();
         kvEntryMap.clear();
         maxLogSequenceNumber = -1;

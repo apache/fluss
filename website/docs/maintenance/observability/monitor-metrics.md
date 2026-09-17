@@ -463,8 +463,8 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
   </thead>
   <tbody>
     <tr>
-      <th rowspan="39"><strong>tabletserver</strong></th>
-      <td style={{textAlign: 'center', verticalAlign: 'middle' }} rowspan="27">-</td>
+      <th rowspan="40"><strong>tabletserver</strong></th>
+      <td style={{textAlign: 'center', verticalAlign: 'middle' }} rowspan="28">-</td>
       <td>messagesInPerSecond</td>
       <td>The number of messages written per second to this server.</td>
       <td>Meter</td>
@@ -592,11 +592,6 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
      <tr>
       <td>kvPreWriteBufferMemoryUsageBytes</td>
       <td>Estimated total memory usage of the KV pre-write buffers across all KV tablets in this server (in bytes), including the key/value payload bytes and the per-entry object overhead. It is an approximation for observability, not an exact measurement.</td>
-      <td>Gauge</td>
-    </tr>
-     <tr>
-      <td>kvPreWriteBufferEntryCount</td>
-      <td>The number of entries buffered in the KV pre-write buffers across all KV tablets in this server.</td>
       <td>Gauge</td>
     </tr>
     <tr>
