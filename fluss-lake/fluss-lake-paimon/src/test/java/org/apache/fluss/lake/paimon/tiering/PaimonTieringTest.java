@@ -19,19 +19,26 @@ package org.apache.fluss.lake.paimon.tiering;
 
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.lake.batch.ArrowRecordBatch;
 import org.apache.fluss.lake.committer.CommittedLakeSnapshot;
 import org.apache.fluss.lake.committer.CommitterInitContext;
 import org.apache.fluss.lake.committer.LakeCommitter;
 import org.apache.fluss.lake.serializer.SimpleVersionedSerializer;
 import org.apache.fluss.lake.writer.LakeWriter;
+import org.apache.fluss.lake.writer.SupportsRecordBatchWrite;
 import org.apache.fluss.lake.writer.WriterInitContext;
+import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.record.ArrowIpcBatch;
 import org.apache.fluss.record.ChangeType;
 import org.apache.fluss.record.GenericRecord;
 import org.apache.fluss.record.LogRecord;
+import org.apache.fluss.record.LogRecordReadContext;
+import org.apache.fluss.record.MemoryLogRecords;
+import org.apache.fluss.record.TestingSchemaGetter;
 import org.apache.fluss.row.BinaryString;
 import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.utils.types.Tuple2;
@@ -81,7 +88,10 @@ import static org.apache.fluss.record.ChangeType.DELETE;
 import static org.apache.fluss.record.ChangeType.INSERT;
 import static org.apache.fluss.record.ChangeType.UPDATE_AFTER;
 import static org.apache.fluss.record.ChangeType.UPDATE_BEFORE;
+import static org.apache.fluss.record.LogRecordBatchFormat.LOG_MAGIC_VALUE_V1;
 import static org.apache.fluss.record.TestData.DEFAULT_REMOTE_DATA_DIR;
+import static org.apache.fluss.testutils.DataTestUtils.createRecordsWithoutBaseLogOffset;
+import static org.apache.fluss.testutils.DataTestUtils.row;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** The UT for tiering to Paimon via {@link PaimonLakeTieringFactory}. */
@@ -99,6 +109,79 @@ class PaimonTieringTest {
         paimonCatalog =
                 CatalogFactory.createCatalog(
                         CatalogContext.create(Options.fromMap(configuration.toMap())));
+    }
+
+    @Test
+    void testTieringWritesSerializedArrowSlices() throws Exception {
+        TablePath tablePath = TablePath.of("paimon", "arrow_ipc_slices");
+        createTable(
+                tablePath,
+                false,
+                false,
+                null,
+                Collections.singletonMap(CoreOptions.FILE_FORMAT.key(), "parquet"));
+        org.apache.fluss.metadata.Schema schema =
+                org.apache.fluss.metadata.Schema.newBuilder()
+                        .column("c1", org.apache.fluss.types.DataTypes.INT())
+                        .column("c2", org.apache.fluss.types.DataTypes.STRING())
+                        .column("c3", org.apache.fluss.types.DataTypes.STRING())
+                        .build();
+        TableInfo tableInfo =
+                TableInfo.of(
+                        tablePath,
+                        0,
+                        1,
+                        TableDescriptor.builder()
+                                .schema(schema)
+                                .distributedBy(1)
+                                .property(ConfigOptions.TABLE_DATALAKE_ENABLED, true)
+                                .build(),
+                        DEFAULT_REMOTE_DATA_DIR,
+                        1L,
+                        1L);
+        List<Object[]> objects =
+                Arrays.asList(
+                        new Object[] {0, "zero", "tail"},
+                        new Object[] {1, "one", "tail"},
+                        new Object[] {2, "two", "tail"},
+                        new Object[] {3, "three", "tail"});
+        ArrowIpcBatch ipc;
+        try (LogRecordReadContext context =
+                LogRecordReadContext.createArrowReadContext(
+                        schema.getRowType(), 1, new TestingSchemaGetter(1, schema))) {
+            MemoryLogRecords records =
+                    createRecordsWithoutBaseLogOffset(
+                            schema.getRowType(),
+                            1,
+                            100L,
+                            12345L,
+                            LOG_MAGIC_VALUE_V1,
+                            objects,
+                            LogFormat.ARROW,
+                            true);
+            ipc = records.batches().iterator().next().readArrowIpcBatch(context);
+        }
+        PaimonWriteResult result;
+        try (LakeWriter<PaimonWriteResult> writer =
+                createLakeWriter(tablePath, 0, null, null, tableInfo)) {
+            SupportsRecordBatchWrite batchWriter = (SupportsRecordBatchWrite) writer;
+            batchWriter.write(new ArrowRecordBatch(ipc.slice(1, 1)));
+            batchWriter.write(new ArrowRecordBatch(ipc.slice(2, 1)));
+            result = writer.complete();
+        }
+        try (LakeCommitter<PaimonWriteResult, PaimonCommittable> committer =
+                createLakeCommitter(tablePath, tableInfo, new Configuration())) {
+            committer.commit(
+                    committer.toCommittable(Collections.singletonList(result)),
+                    Collections.singletonMap(FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY, "offsets"));
+        }
+        List<LogRecord> expected =
+                Arrays.asList(
+                        new GenericRecord(
+                                101L, 12345L, ChangeType.APPEND_ONLY, row(1, "one", "tail")),
+                        new GenericRecord(
+                                102L, 12345L, ChangeType.APPEND_ONLY, row(2, "two", "tail")));
+        verifyTableRecords(getPaimonRows(tablePath, null, false, 0), expected, 0, null);
     }
 
     private static Stream<Arguments> tieringWriteArgs() {

@@ -19,15 +19,16 @@ package org.apache.fluss.client.table.scanner.log;
 
 import org.apache.fluss.annotation.PublicEvolving;
 import org.apache.fluss.metadata.TableBucket;
-import org.apache.fluss.record.ArrowBatchData;
+import org.apache.fluss.record.ArrowIpcBatch;
 import org.apache.fluss.utils.AbstractIterator;
-import org.apache.fluss.utils.IOUtils;
 
 import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
 
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Iterator;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -35,39 +36,47 @@ import java.util.Set;
 /**
  * A container that holds the scanned Arrow batches per bucket for a particular table.
  *
- * <p>Each {@link ArrowBatchData} holds off-heap Arrow memory. Callers should use try-with-resources
- * on this container to ensure all batches are released if processing fails mid-iteration.
+ * <p>Batches own immutable heap-backed IPC bytes and remain valid after the scanner closes. This
+ * container does not require closing.
  */
 @PublicEvolving
-public class ArrowScanRecords implements Iterable<ArrowBatchData>, AutoCloseable {
+public class ArrowScanRecords implements Iterable<ArrowIpcBatch> {
     public static final ArrowScanRecords EMPTY = new ArrowScanRecords(Collections.emptyMap());
 
-    private final Map<TableBucket, List<ArrowBatchData>> records;
+    private final Map<TableBucket, List<ArrowIpcBatch>> records;
 
     /** The exclusive upper bound of consumed offsets per polled bucket in this round. */
     private final Map<TableBucket, Long> consumedUpToOffsets;
 
-    public ArrowScanRecords(Map<TableBucket, List<ArrowBatchData>> records) {
+    public ArrowScanRecords(Map<TableBucket, List<ArrowIpcBatch>> records) {
         this(records, Collections.emptyMap());
     }
 
     public ArrowScanRecords(
-            Map<TableBucket, List<ArrowBatchData>> records,
+            Map<TableBucket, List<ArrowIpcBatch>> records,
             Map<TableBucket, Long> consumedUpToOffsets) {
-        this.records = records;
-        this.consumedUpToOffsets = consumedUpToOffsets;
+        Map<TableBucket, List<ArrowIpcBatch>> batches = new LinkedHashMap<>();
+        records.forEach(
+                (bucket, values) ->
+                        batches.put(bucket, Collections.unmodifiableList(new ArrayList<>(values))));
+        consumedUpToOffsets
+                .keySet()
+                .forEach(bucket -> batches.putIfAbsent(bucket, Collections.emptyList()));
+        this.records = Collections.unmodifiableMap(batches);
+        this.consumedUpToOffsets =
+                Collections.unmodifiableMap(new LinkedHashMap<>(consumedUpToOffsets));
     }
 
     /** Get just the Arrow batches for the given bucket. */
-    public List<ArrowBatchData> records(TableBucket scanBucket) {
-        List<ArrowBatchData> recs = records.get(scanBucket);
+    public List<ArrowIpcBatch> records(TableBucket scanBucket) {
+        List<ArrowIpcBatch> recs = records.get(scanBucket);
         if (recs == null) {
             return Collections.emptyList();
         }
         return Collections.unmodifiableList(recs);
     }
 
-    /** Returns the buckets that were polled in this round. */
+    /** Returns the polled buckets, including buckets carrying only offset progress. */
     public Set<TableBucket> buckets() {
         return Collections.unmodifiableSet(records.keySet());
     }
@@ -87,50 +96,48 @@ public class ArrowScanRecords implements Iterable<ArrowBatchData>, AutoCloseable
     /** Returns the total number of rows in all batches. */
     public int count() {
         int count = 0;
-        for (List<ArrowBatchData> recs : records.values()) {
-            for (ArrowBatchData rec : recs) {
+        for (List<ArrowIpcBatch> recs : records.values()) {
+            for (ArrowIpcBatch rec : recs) {
                 count += rec.getRecordCount();
             }
         }
         return count;
     }
 
+    /** Returns whether this result contains no rows, even if it carries offset progress. */
     public boolean isEmpty() {
-        return records.isEmpty();
+        return count() == 0;
     }
 
-    /** Closes all Arrow batches held by this container, releasing off-heap memory. */
-    @Override
-    public void close() {
-        for (List<ArrowBatchData> recs : records.values()) {
-            for (ArrowBatchData rec : recs) {
-                IOUtils.closeQuietly(rec);
-            }
-        }
+    /**
+     * Returns whether this result contains rows or consumed offsets, including empty log batches.
+     */
+    public boolean hasProgress() {
+        return !isEmpty() || !consumedUpToOffsets.isEmpty();
     }
 
     @Override
     @Nonnull
-    public Iterator<ArrowBatchData> iterator() {
+    public Iterator<ArrowIpcBatch> iterator() {
         return new ConcatenatedIterable(records.values()).iterator();
     }
 
-    private static class ConcatenatedIterable implements Iterable<ArrowBatchData> {
+    private static class ConcatenatedIterable implements Iterable<ArrowIpcBatch> {
 
-        private final Iterable<? extends Iterable<ArrowBatchData>> iterables;
+        private final Iterable<? extends Iterable<ArrowIpcBatch>> iterables;
 
-        private ConcatenatedIterable(Iterable<? extends Iterable<ArrowBatchData>> iterables) {
+        private ConcatenatedIterable(Iterable<? extends Iterable<ArrowIpcBatch>> iterables) {
             this.iterables = iterables;
         }
 
         @Override
         @Nonnull
-        public Iterator<ArrowBatchData> iterator() {
-            return new AbstractIterator<ArrowBatchData>() {
-                final Iterator<? extends Iterable<ArrowBatchData>> iters = iterables.iterator();
-                Iterator<ArrowBatchData> current;
+        public Iterator<ArrowIpcBatch> iterator() {
+            return new AbstractIterator<ArrowIpcBatch>() {
+                final Iterator<? extends Iterable<ArrowIpcBatch>> iters = iterables.iterator();
+                Iterator<ArrowIpcBatch> current;
 
-                public ArrowBatchData makeNext() {
+                public ArrowIpcBatch makeNext() {
                     while (current == null || !current.hasNext()) {
                         if (iters.hasNext()) {
                             current = iters.next().iterator();

@@ -243,6 +243,75 @@ while (true) {
 }
 ```
 
+### Arrow Log Batches
+
+For tables using the `ARROW` log format, `LogScanner.pollRecordBatch(Duration)` returns
+`ArrowScanRecords` containing `ArrowIpcBatch` objects. Both append-only and primary-key log
+scans are supported. Primary-key batches retain the per-row `INSERT`, `UPDATE_BEFORE`,
+`UPDATE_AFTER`, and `DELETE` change types. This API does not read primary-key snapshots.
+
+The core `fluss-client` API has no dependency on unshaded Arrow Java classes. Each batch owns
+immutable, heap-backed bytes that remain valid after another poll or after the scanner closes;
+neither the batch nor `ArrowScanRecords` needs closing. The first call to `poll` or
+`pollRecordBatch` selects the scanner's polling mode, including when that call returns no data.
+Use a separate scanner to switch modes.
+
+For Arrow Java vectors, add the optional adapter:
+
+```xml
+<dependency>
+    <groupId>org.apache.fluss</groupId>
+    <artifactId>fluss-client-arrow</artifactId>
+    <version>$FLUSS_VERSION$</version>
+</dependency>
+```
+
+This module brings Arrow Java **15.0.0**, including `arrow-vector` and the Netty memory backend.
+That is the supported version for this adapter; overriding Arrow dependencies requires testing
+compatibility with your application's classpath. On Java 9 and later, enable Arrow's access to
+NIO buffers with `--add-opens=java.base/java.nio=ALL-UNNAMED`.
+
+```java
+import org.apache.fluss.client.arrow.ArrowBatch;
+import org.apache.fluss.client.arrow.ArrowBatchReader;
+import org.apache.fluss.client.table.scanner.log.ArrowScanRecords;
+import org.apache.fluss.client.table.scanner.log.LogScanner;
+import org.apache.fluss.record.ArrowIpcBatch;
+import org.apache.arrow.memory.BufferAllocator;
+import org.apache.arrow.memory.RootAllocator;
+
+try (BufferAllocator allocator = new RootAllocator(256L * 1024 * 1024);
+        LogScanner scanner = table.newScan().project(new int[] {2, 1}).createLogScanner()) {
+    scanner.subscribeFromBeginning(0);
+    ArrowScanRecords records = scanner.pollRecordBatch(Duration.ofSeconds(1));
+    for (ArrowIpcBatch ipcBatch : records) {
+        try (ArrowBatch batch = ArrowBatchReader.read(ipcBatch, allocator)) {
+            // batch.getVectorSchemaRoot() contains the selected columns in order [2, 1].
+            // batch.getChangeType(i) describes row i; its log offset is baseLogOffset + i.
+        }
+    }
+}
+```
+
+The caller owns the allocator. Close decoded `ArrowBatch` objects before closing it. Closing a
+scanner does not close that allocator or invalidate decoded batches. A failed decode releases
+its allocations without closing the caller's allocator.
+
+Non-empty top-level projections are supported. For local log reads, the tablet server prunes
+columns; for remote reads, the adapter applies projection after decoding. The adapter also
+handles column ordering, schema evolution (including missing columns), and scans starting in
+the middle of a stored batch.
+
+Consumers decoding IPC directly must use `getSchema()` for the physical payload returned by
+`getRecordBatch()`. These are separate encapsulated Arrow IPC messages, not a complete stream.
+Use `getRowOffset()` and `getRecordCount()` to select the logical row range, and
+`getColumnMapping()` with `getOutputSchema()` to produce the requested columns. A mapping entry
+of `-1` represents a missing column filled with nulls; a null mapping means identity. The
+change-type sidecar is already aligned with the logical row range. The payload may use LZ4 or
+Zstd compression. Direct Arrow Java readers need a compatible compression factory, such as
+`CommonsCompressionFactory` from Arrow's `arrow-compression` module. `ArrowBatchReader`
+applies all of this metadata and handles compression automatically.
+
 ### Batch Scan — Full Primary Key Table
 
 For Primary Key tables, `BatchScanner` reads every live row in the table once

@@ -97,7 +97,7 @@ public class PaimonLakeWriter implements LakeWriter<PaimonWriteResult>, Supports
         }
         try {
             ((AppendOnlyWriter) recordWriter)
-                    .writeArrowBatch(((ArrowRecordBatch) recordBatch).getArrowBatchData());
+                    .writeArrowBatch(((ArrowRecordBatch) recordBatch).getArrowIpcBatch());
         } catch (Exception e) {
             throw new IOException("Failed to write Arrow record batch to Paimon.", e);
         }

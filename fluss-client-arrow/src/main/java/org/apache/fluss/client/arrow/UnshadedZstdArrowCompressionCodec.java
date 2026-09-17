@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-package org.apache.fluss.compression;
+package org.apache.fluss.client.arrow;
 
 import com.github.luben.zstd.Zstd;
 import org.apache.arrow.memory.ArrowBuf;
@@ -26,7 +26,7 @@ import org.apache.arrow.vector.compression.CompressionUtil;
 import java.nio.ByteBuffer;
 
 /** Unshaded Arrow compression codec for the Zstd algorithm. */
-public class UnshadedZstdArrowCompressionCodec extends AbstractCompressionCodec {
+class UnshadedZstdArrowCompressionCodec extends AbstractCompressionCodec {
     private static final int DEFAULT_COMPRESSION_LEVEL = 3;
     private final int compressionLevel;
 

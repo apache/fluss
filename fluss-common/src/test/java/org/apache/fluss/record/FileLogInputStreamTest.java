@@ -17,11 +17,17 @@
 
 package org.apache.fluss.record;
 
+import org.apache.fluss.compression.ArrowCompressionFactory;
 import org.apache.fluss.metadata.LogFormat;
+import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.IntVector;
+import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.VarCharVector;
+import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.VectorSchemaRoot;
+import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.ipc.ReadChannel;
+import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.ipc.message.ArrowRecordBatch;
+import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.ipc.message.MessageSerializer;
+import org.apache.fluss.utils.ByteBufferReadableChannel;
 import org.apache.fluss.utils.CloseableIterator;
 
-import org.apache.arrow.vector.IntVector;
-import org.apache.arrow.vector.VarCharVector;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -290,13 +296,26 @@ public class FileLogInputStreamTest extends LogTestBase {
             try (LogRecordReadContext readContext =
                     LogRecordReadContext.createArrowReadContext(
                             DATA1_ROW_TYPE, DEFAULT_SCHEMA_ID, schemaGetter)) {
-                try (ArrowBatchData arrowBatchData = batch.loadArrowBatch(readContext)) {
+                ArrowIpcBatch arrowBatchData = batch.readArrowIpcBatch(readContext);
+                try (ReadChannel schemaChannel =
+                                new ReadChannel(
+                                        new ByteBufferReadableChannel(arrowBatchData.getSchema()));
+                        VectorSchemaRoot root =
+                                VectorSchemaRoot.create(
+                                        MessageSerializer.deserializeSchema(schemaChannel),
+                                        readContext.getBufferAllocator());
+                        ReadChannel dataChannel =
+                                new ReadChannel(
+                                        new ByteBufferReadableChannel(
+                                                arrowBatchData.getRecordBatch()));
+                        ArrowRecordBatch message =
+                                MessageSerializer.deserializeRecordBatch(
+                                        dataChannel, readContext.getBufferAllocator())) {
+                    new FlussVectorLoader(root, ArrowCompressionFactory.INSTANCE).load(message);
                     assertThat(arrowBatchData.getRecordCount()).isEqualTo(data.size());
                     assertThat(arrowBatchData.getBaseLogOffset()).isEqualTo(0L);
                     assertThat(arrowBatchData.getSchemaId()).isEqualTo(DEFAULT_SCHEMA_ID);
 
-                    org.apache.arrow.vector.VectorSchemaRoot root =
-                            arrowBatchData.getVectorSchemaRoot();
                     IntVector intVector = (IntVector) root.getVector(0);
                     VarCharVector stringVector = (VarCharVector) root.getVector(1);
                     for (int i = 0; i < data.size(); i++) {

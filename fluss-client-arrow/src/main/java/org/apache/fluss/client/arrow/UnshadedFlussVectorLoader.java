@@ -17,7 +17,7 @@
  * under the License.
  */
 
-package org.apache.fluss.record;
+package org.apache.fluss.client.arrow;
 
 import org.apache.arrow.memory.ArrowBuf;
 import org.apache.arrow.util.Collections2;
@@ -37,8 +37,8 @@ import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.List;
 
-/** Unshaded variant of {@link FlussVectorLoader} for scanner/read path. */
-public class UnshadedFlussVectorLoader {
+/** Arrow vector loader that releases decompressed buffers when loading fails. */
+class UnshadedFlussVectorLoader {
     private final VectorSchemaRoot root;
     private final CompressionCodec.Factory factory;
     private boolean decompressionNeeded;

@@ -174,13 +174,13 @@ public interface LogRecordBatch {
     CloseableIterator<LogRecord> records(ReadContext context);
 
     /**
-     * Loads the underlying Arrow batch directly.
+     * Copies the underlying Arrow IPC payload and resolves its schema and projection metadata.
      *
      * <p>This method is only supported for Arrow log batches.
      */
-    default ArrowBatchData loadArrowBatch(ReadContext context) {
+    default ArrowIpcBatch readArrowIpcBatch(ReadContext context) {
         throw new UnsupportedOperationException(
-                "loadArrowBatch is only supported for ARROW log format.");
+                "readArrowIpcBatch is only supported for ARROW log format.");
     }
 
     /** The read context of a {@link LogRecordBatch} to read records. */

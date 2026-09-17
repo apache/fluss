@@ -64,12 +64,15 @@ public interface LogScanner extends AutoCloseable {
      * Polls Arrow record batches from the tablet server without materializing individual rows.
      *
      * <p>This method is supported for tables whose log format is {@code ARROW}. Each returned batch
-     * owns its Arrow memory and, for primary-key tables, carries the stored per-row changelog
-     * types. Callers must close the returned {@link ArrowScanRecords} after processing it.
+     * owns immutable heap-backed IPC bytes and, for primary-key tables, carries the stored per-row
+     * changelog types. The result remains valid after this scanner closes and does not require
+     * closing. Arrow Java users can decode it using the optional fluss-client-arrow module with
+     * their own allocator.
      *
      * <p>Non-empty top-level column projections are supported, preserving the requested column
-     * order. Columns are pruned on the tablet server for local log reads and in the client for
-     * remote log reads.
+     * order through the batch's column mapping. Columns are pruned on the tablet server for local
+     * log reads. Remote payloads retain their physical schema; consumers apply the supplied
+     * projection and row-range metadata, as the Arrow Java adapter does automatically.
      *
      * <p>The first poll fixes the polling mode for this scanner, even if it returns no data. Calls
      * to this method cannot be mixed with {@link #poll(Duration)}. Create a new scanner to change

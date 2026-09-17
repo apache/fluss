@@ -17,10 +17,13 @@
 
 package org.apache.fluss.lake.paimon.tiering.append;
 
+import org.apache.fluss.client.arrow.ArrowBatch;
+import org.apache.fluss.client.arrow.ArrowBatchReader;
 import org.apache.fluss.metadata.TableDescriptor;
-import org.apache.fluss.record.ArrowBatchData;
+import org.apache.fluss.record.ArrowIpcBatch;
 
 import org.apache.arrow.memory.BufferAllocator;
+import org.apache.arrow.memory.RootAllocator;
 import org.apache.arrow.vector.BigIntVector;
 import org.apache.arrow.vector.FieldVector;
 import org.apache.arrow.vector.IntVector;
@@ -57,6 +60,7 @@ class AppendOnlyArrowBatchHelper implements AutoCloseable {
     private final TableWriteImpl<InternalRow> tableWrite;
     private final RowType tableRowType;
     private final int bucket;
+    private final BufferAllocator allocator = new RootAllocator(Long.MAX_VALUE);
 
     private static final Field BUCKET_FIELD =
             new Field(
@@ -100,7 +104,14 @@ class AppendOnlyArrowBatchHelper implements AutoCloseable {
      * system columns (__bucket, __offset, __timestamp) and uses Paimon's {@link ArrowBundleRecords}
      * for efficient batch writing.
      */
-    void writeArrowBatch(ArrowBatchData arrowBatchData, BinaryRow partition) throws Exception {
+    void writeArrowBatch(ArrowIpcBatch ipcBatch, BinaryRow partition) throws Exception {
+        try (ArrowBatch batch = ArrowBatchReader.read(ipcBatch, allocator)) {
+            writeDecodedBatch(batch, partition);
+        }
+    }
+
+    private void writeDecodedBatch(ArrowBatch arrowBatchData, BinaryRow partition)
+            throws Exception {
         int writtenBucket = bucket;
         if (fileStoreTable.store().bucketMode() == BucketMode.BUCKET_UNAWARE) {
             writtenBucket = 0;
@@ -125,10 +136,7 @@ class AppendOnlyArrowBatchHelper implements AutoCloseable {
      * system column vectors when the root allocator has not changed. The enrichedRoot references
      * the current originalRoot's data vectors plus the system column vectors.
      *
-     * <p>System column vectors must share the same root allocator as the data vectors. Batches from
-     * different poll rounds may use different root allocators (each {@code CompletedFetch} creates
-     * its own {@code LogRecordReadContext} with a fresh {@code RootAllocator}), so the system
-     * column vectors are recreated when the root allocator changes.
+     * <p>System columns and decoded batches share this writer's allocator.
      */
     private void ensureEnrichedRootInitialized(
             VectorSchemaRoot originalRoot, BufferAllocator batchAllocator) {
@@ -226,5 +234,6 @@ class AppendOnlyArrowBatchHelper implements AutoCloseable {
         closeSystemColumns();
         enrichedRoot = null;
         enrichedSchema = null;
+        allocator.close();
     }
 }

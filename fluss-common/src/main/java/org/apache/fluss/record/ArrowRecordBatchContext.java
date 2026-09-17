@@ -17,30 +17,19 @@
 
 package org.apache.fluss.record;
 
-import org.apache.fluss.annotation.Internal;
-import org.apache.fluss.memory.MemorySegment;
-
 import javax.annotation.Nullable;
 
-/** Internal context for loading Arrow record batches with unshaded Arrow resources. */
-@Internal
+/** Read context that resolves schemas and projection metadata for serialized Arrow batches. */
 interface ArrowRecordBatchContext extends LogRecordBatch.ReadContext {
-
-    /** Creates a batch-scoped access wrapper for unshaded Arrow resources. */
-    UnshadedArrowBatchAccess createUnshadedArrowBatchAccess(int schemaId);
-
-    /** Internal wrapper that hides unshaded Arrow types from shared signatures. */
-    @Internal
-    interface UnshadedArrowBatchAccess extends AutoCloseable {
-
-        /** Loads one Arrow batch from the given memory segment into the internal read root. */
-        void loadArrowBatch(MemorySegment segment, int arrowOffset, int arrowLength);
-
-        /**
-         * Applies schema-evolution projection (if needed) internally and builds the final {@link
-         * ArrowBatchData}, transferring ownership to the caller.
-         */
-        ArrowBatchData createArrowBatchData(
-                long baseLogOffset, long timestamp, int schemaId, @Nullable byte[] changeTypes);
-    }
+    /**
+     * Creates an owned IPC batch from the payload and Fluss log metadata. Takes ownership of the
+     * supplied arrays; the caller must not modify them after this method returns.
+     */
+    ArrowIpcBatch createArrowIpcBatch(
+            byte[] recordBatch,
+            long baseLogOffset,
+            long timestamp,
+            int schemaId,
+            int recordCount,
+            @Nullable byte[] changeTypes);
 }

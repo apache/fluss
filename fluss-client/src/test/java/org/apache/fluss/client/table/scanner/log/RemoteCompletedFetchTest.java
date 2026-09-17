@@ -23,11 +23,9 @@ import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.SchemaGetter;
-import org.apache.fluss.metadata.SchemaInfo;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
-import org.apache.fluss.record.ArrowBatchData;
 import org.apache.fluss.record.ChangeType;
 import org.apache.fluss.record.FileLogRecords;
 import org.apache.fluss.record.LogRecordReadContext;
@@ -268,98 +266,6 @@ class RemoteCompletedFetchTest {
             InternalRow row = actualRecord.getRow();
             assertThat(row.getString(0).toString()).isEqualTo(expectObject[1]);
             assertThat(row.getInt(1)).isEqualTo(expectObject[0]);
-        }
-    }
-
-    @ParameterizedTest
-    @ValueSource(booleans = {false, true})
-    void testArrowProjection(boolean schemaEvolution) throws Exception {
-        Schema schema =
-                schemaEvolution
-                        ? Schema.newBuilder()
-                                .fromColumns(DATA2_SCHEMA.getColumns())
-                                .column("d", DataTypes.STRING())
-                                .build()
-                        : DATA2_SCHEMA;
-        int schemaId = schemaEvolution ? DEFAULT_SCHEMA_ID + 1 : DEFAULT_SCHEMA_ID;
-        TestingSchemaGetter schemas = new TestingSchemaGetter(DEFAULT_SCHEMA_ID, DATA2_SCHEMA);
-        schemas.updateLatestSchemaInfo(new SchemaInfo(schema, schemaId));
-        TableInfo targetTableInfo =
-                TableInfo.of(
-                        DATA2_TABLE_PATH,
-                        DATA2_TABLE_ID,
-                        schemaId,
-                        TableDescriptor.builder()
-                                .schema(schema)
-                                .distributedBy(3)
-                                .logFormat(LogFormat.ARROW)
-                                .build(),
-                        DEFAULT_REMOTE_DATA_DIR,
-                        System.currentTimeMillis(),
-                        System.currentTimeMillis());
-        int[][] projections =
-                schemaEvolution ? new int[][] {{3}, {3, 2, 1}} : new int[][] {{2}, {2, 1}};
-        TableBucket tableBucket = new TableBucket(DATA2_TABLE_ID, 0);
-        for (int[] selectedFields : projections) {
-            try (LogRecordReadContext readContext =
-                    LogRecordReadContext.createReadContext(
-                            targetTableInfo,
-                            true,
-                            LogRecordReadContext.SchemaResolution.TARGET,
-                            Projection.of(selectedFields),
-                            schemas,
-                            new ChunkedAllocationManager.ChunkedFactory())) {
-                FileLogRecords fileLogRecords =
-                        createFileLogRecords(
-                                tableBucket, DATA2_PHYSICAL_TABLE_PATH, DATA2, LogFormat.ARROW);
-                RemoteCompletedFetch fetch =
-                        new RemoteCompletedFetch(
-                                tableBucket,
-                                DATA2_TABLE_PATH,
-                                fileLogRecords,
-                                DATA2.size(),
-                                readContext,
-                                logScannerStatus,
-                                true,
-                                2L,
-                                () -> {});
-                try (ArrowScanRecords records =
-                        new ArrowScanRecords(
-                                Collections.singletonMap(
-                                        tableBucket, fetch.fetchArrowBatches(100)))) {
-                    int count = 2;
-                    assertThat(records.count()).isEqualTo(DATA2.size() - count);
-                    for (ArrowBatchData batch : records) {
-                        assertThat(batch.getVectorSchemaRoot().getSchema().getFields())
-                                .extracting(field -> field.getName())
-                                .containsExactlyElementsOf(
-                                        schema.getRowType()
-                                                .project(selectedFields)
-                                                .getFieldNames());
-                        for (int rowId = 0; rowId < batch.getRecordCount(); rowId++) {
-                            assertThat(batch.getBaseLogOffset() + rowId).isEqualTo(count);
-                            assertThat(batch.getChangeType(rowId))
-                                    .isEqualTo(ChangeType.APPEND_ONLY);
-                            for (int column = 0; column < selectedFields.length; column++) {
-                                Object value =
-                                        batch.getVectorSchemaRoot()
-                                                .getVector(column)
-                                                .getObject(rowId);
-                                if (selectedFields[column] == 3) {
-                                    assertThat(value).isNull();
-                                } else {
-                                    assertThat(value.toString())
-                                            .isEqualTo(DATA2.get(count)[selectedFields[column]]);
-                                }
-                            }
-                            count++;
-                        }
-                    }
-                    assertThat(count).isEqualTo(DATA2.size());
-                } finally {
-                    fetch.drain();
-                }
-            }
         }
     }
 

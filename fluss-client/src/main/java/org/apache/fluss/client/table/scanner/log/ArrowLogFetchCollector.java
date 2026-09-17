@@ -21,7 +21,7 @@ import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.client.metadata.MetadataUpdater;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.metadata.TableBucket;
-import org.apache.fluss.record.ArrowBatchData;
+import org.apache.fluss.record.ArrowIpcBatch;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -35,7 +35,7 @@ import java.util.Map;
 @ThreadSafe
 @Internal
 public class ArrowLogFetchCollector
-        extends AbstractLogFetchCollector<ArrowBatchData, ArrowScanRecords> {
+        extends AbstractLogFetchCollector<ArrowIpcBatch, ArrowScanRecords> {
     private static final Logger LOG = LoggerFactory.getLogger(ArrowLogFetchCollector.class);
 
     public ArrowLogFetchCollector(
@@ -46,14 +46,14 @@ public class ArrowLogFetchCollector
     }
 
     @Override
-    protected List<ArrowBatchData> doFetchRecords(CompletedFetch nextInLineFetch, int maxRecords) {
+    protected List<ArrowIpcBatch> doFetchRecords(CompletedFetch nextInLineFetch, int maxRecords) {
         return nextInLineFetch.fetchArrowBatches(maxRecords);
     }
 
     @Override
-    protected int recordCount(List<ArrowBatchData> fetchedRecords) {
+    protected int recordCount(List<ArrowIpcBatch> fetchedRecords) {
         int count = 0;
-        for (ArrowBatchData fetchedRecord : fetchedRecords) {
+        for (ArrowIpcBatch fetchedRecord : fetchedRecords) {
             count += fetchedRecord.getRecordCount();
         }
         return count;
@@ -61,25 +61,8 @@ public class ArrowLogFetchCollector
 
     @Override
     protected ArrowScanRecords toResult(
-            Map<TableBucket, List<ArrowBatchData>> fetchedRecords,
+            Map<TableBucket, List<ArrowIpcBatch>> fetchedRecords,
             Map<TableBucket, Long> consumedUpToOffsets) {
         return new ArrowScanRecords(fetchedRecords, consumedUpToOffsets);
-    }
-
-    @Override
-    protected void closeFetchedRecords(Map<TableBucket, List<ArrowBatchData>> fetched) {
-        for (Map.Entry<TableBucket, List<ArrowBatchData>> entry : fetched.entrySet()) {
-
-            for (ArrowBatchData batch : entry.getValue()) {
-                try {
-                    batch.close();
-                } catch (Exception e) {
-                    LOG.warn(
-                            "Failed to close Arrow batch during cleanup for bucket {}",
-                            entry.getKey(),
-                            e);
-                }
-            }
-        }
     }
 }

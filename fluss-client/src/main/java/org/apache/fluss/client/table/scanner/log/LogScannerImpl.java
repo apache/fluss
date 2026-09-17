@@ -175,7 +175,7 @@ public class LogScannerImpl extends AbstractLogScanner<ScanRecords> implements L
             long startNanos = System.nanoTime();
             do {
                 ArrowScanRecords scanRecords = pollForRecordBatches();
-                if (scanRecords.isEmpty()) {
+                if (!scanRecords.hasProgress()) {
                     try {
                         if (!logFetcher.awaitNotEmpty(startNanos + timeoutNanos)) {
                             return scanRecords;
@@ -198,7 +198,7 @@ public class LogScannerImpl extends AbstractLogScanner<ScanRecords> implements L
 
     private ArrowScanRecords pollForRecordBatches() {
         ArrowScanRecords scanRecords = logFetcher.collectArrowFetch();
-        if (!scanRecords.isEmpty()) {
+        if (scanRecords.hasProgress()) {
             return scanRecords;
         }
 

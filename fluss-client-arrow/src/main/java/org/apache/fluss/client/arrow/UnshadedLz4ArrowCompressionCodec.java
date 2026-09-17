@@ -15,8 +15,10 @@
  * limitations under the License.
  */
 
-package org.apache.fluss.compression;
+package org.apache.fluss.client.arrow;
 
+import org.apache.fluss.compression.FlussLZ4BlockInputStream;
+import org.apache.fluss.compression.FlussLZ4BlockOutputStream;
 import org.apache.fluss.utils.IOUtils;
 
 import org.apache.arrow.memory.ArrowBuf;
@@ -34,7 +36,7 @@ import java.nio.ByteBuffer;
 import static org.apache.fluss.utils.Preconditions.checkArgument;
 
 /** Unshaded Arrow compression codec for the LZ4 algorithm. */
-public class UnshadedLz4ArrowCompressionCodec extends AbstractCompressionCodec {
+class UnshadedLz4ArrowCompressionCodec extends AbstractCompressionCodec {
     @Override
     protected ArrowBuf doCompress(BufferAllocator allocator, ArrowBuf uncompressedBuffer) {
         checkArgument(

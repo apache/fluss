@@ -39,7 +39,7 @@ import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
-import org.apache.fluss.record.ArrowBatchData;
+import org.apache.fluss.record.ArrowIpcBatch;
 import org.apache.fluss.utils.CloseableIterator;
 import org.apache.fluss.utils.IOUtils;
 import org.apache.fluss.utils.function.SupplierWithException;
@@ -207,14 +207,13 @@ public class TieringSplitReader<WriteResult>
                     return forceCompleteTieringLogRecords();
                 }
                 if (useRecordBatchPath()) {
-                    try (ArrowScanRecords arrowScanRecords =
-                            currentLogScanner.pollRecordBatch(pollTimeout)) {
-                        return processLogRecords(
-                                arrowScanRecords.buckets(),
-                                arrowScanRecords::records,
-                                this::handleArrowBatchRecords,
-                                arrowScanRecords::consumedUpToOffset);
-                    }
+                    ArrowScanRecords arrowScanRecords =
+                            currentLogScanner.pollRecordBatch(pollTimeout);
+                    return processLogRecords(
+                            arrowScanRecords.buckets(),
+                            arrowScanRecords::records,
+                            this::handleArrowBatchRecords,
+                            arrowScanRecords::consumedUpToOffset);
                 } else {
                     ScanRecords scanRecords = currentLogScanner.poll(pollTimeout);
                     return processLogRecords(
@@ -563,25 +562,23 @@ public class TieringSplitReader<WriteResult>
      * @return the timestamp of the last written batch, or -1 if no batches were written
      */
     private long handleArrowBatchRecords(
-            List<ArrowBatchData> batches,
+            List<ArrowIpcBatch> batches,
             SupplierWithException<LakeWriter<?>, IOException> lakeWriterSupplier,
             long stoppingOffset)
             throws IOException {
         SupportsRecordBatchWrite batchWriter = null;
         long lastWrittenTimestamp = UNKNOWN_BUCKET_TIMESTAMP;
-        for (ArrowBatchData batch : batches) {
+        for (ArrowIpcBatch batch : batches) {
             long batchBaseOffset = batch.getBaseLogOffset();
             long batchRecordCount = batch.getRecordCount();
             long batchTimestamp = batch.getTimestamp();
             if (batchBaseOffset >= stoppingOffset) {
-                batch.close();
                 continue;
             }
 
             long writableRowCount = stoppingOffset - batchBaseOffset;
             int writableRows = (int) Math.min(batchRecordCount, writableRowCount);
             if (writableRows <= 0) {
-                batch.close();
                 continue;
             }
 
@@ -595,14 +592,12 @@ public class TieringSplitReader<WriteResult>
                 batchWriter = (SupportsRecordBatchWrite) lakeWriter;
             }
 
-            ArrowBatchData batchToWrite = batch;
+            ArrowIpcBatch batchToWrite = batch;
             if (writableRows < batchRecordCount) {
-                batchToWrite = batch.truncateAndTransferOwnership(writableRows);
+                batchToWrite = batch.slice(0, writableRows);
             }
             long batchSizeInBytes = batchToWrite.getSizeInBytes();
-            try (ArrowRecordBatch arrowRecordBatch = new ArrowRecordBatch(batchToWrite)) {
-                batchWriter.write(arrowRecordBatch);
-            }
+            batchWriter.write(new ArrowRecordBatch(batchToWrite));
             if (batchSizeInBytes > 0) {
                 tieringMetrics.recordBytesRead(batchSizeInBytes);
             }
@@ -944,9 +939,9 @@ public class TieringSplitReader<WriteResult>
     /**
      * Callback interface for processing records within a single bucket. Encapsulates the
      * differences in write strategy between the row-based (ScanRecord) and Arrow batch
-     * (ArrowBatchData) paths.
+     * (ArrowIpcBatch) paths.
      *
-     * @param <R> the record type (ScanRecord or ArrowBatchData)
+     * @param <R> the record type (ScanRecord or ArrowIpcBatch)
      */
     @FunctionalInterface
     private interface BucketRecordsHandler<R> {

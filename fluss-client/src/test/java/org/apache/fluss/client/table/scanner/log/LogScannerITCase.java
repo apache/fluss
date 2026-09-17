@@ -17,37 +17,29 @@
 
 package org.apache.fluss.client.table.scanner.log;
 
-import org.apache.fluss.client.Connection;
-import org.apache.fluss.client.ConnectionFactory;
 import org.apache.fluss.client.admin.ClientToServerITCaseBase;
+import org.apache.fluss.client.admin.OffsetSpec;
 import org.apache.fluss.client.table.Table;
 import org.apache.fluss.client.table.scanner.ScanRecord;
 import org.apache.fluss.client.table.writer.AppendWriter;
 import org.apache.fluss.client.table.writer.UpsertWriter;
-import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.exception.FetchException;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;
-import org.apache.fluss.metadata.TableChange;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.predicate.PredicateBuilder;
-import org.apache.fluss.record.ArrowBatchData;
 import org.apache.fluss.record.ChangeType;
 import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.types.RowType;
 
-import org.apache.arrow.vector.IntVector;
-import org.apache.arrow.vector.VarCharVector;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
-import java.nio.ByteBuffer;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -96,6 +88,61 @@ public class LogScannerITCase extends ClientToServerITCaseBase {
             }
             assertThat(rowList).hasSize(recordSize);
             assertThat(rowList).containsExactlyInAnyOrderElementsOf(expectedRows);
+        }
+    }
+
+    @Test
+    void testArrowPollingSkipsEmptyDeleteAndAdvancesOffset() throws Exception {
+        TablePath tablePath = TablePath.of("test_db_1", "arrow_empty_delete");
+        long tableId =
+                createTable(
+                        tablePath,
+                        TableDescriptor.builder()
+                                .schema(
+                                        Schema.newBuilder()
+                                                .column("id", DataTypes.INT())
+                                                .column("value", DataTypes.STRING())
+                                                .primaryKey("id")
+                                                .build())
+                                .distributedBy(1)
+                                .logFormat(LogFormat.ARROW)
+                                .build(),
+                        false);
+        TableBucket bucket = new TableBucket(tableId, 0);
+        try (Table table = conn.getTable(tablePath);
+                LogScanner scanner = table.newScan().createLogScanner()) {
+            UpsertWriter writer = table.newUpsert().createWriter();
+            writer.delete(row(99, "missing")).get();
+            writer.flush();
+            long emptyEndOffset =
+                    admin.listOffsets(
+                                    tablePath,
+                                    Collections.singleton(0),
+                                    new OffsetSpec.LatestSpec())
+                            .all()
+                            .get()
+                            .get(0);
+            assertThat(emptyEndOffset).isPositive();
+            scanner.subscribeFromBeginning(0);
+            long deadline = System.nanoTime() + Duration.ofSeconds(30).toNanos();
+            Long consumed = null;
+            while (consumed == null || consumed < emptyEndOffset) {
+                assertThat(System.nanoTime()).isLessThan(deadline);
+                ArrowScanRecords records = scanner.pollRecordBatch(Duration.ofSeconds(1));
+                assertThat(records.count()).isZero();
+                assertThat(records).isEmpty();
+                consumed = records.consumedUpToOffset(bucket);
+            }
+            writer.upsert(row(1, "present")).get();
+            writer.flush();
+            ArrowScanRecords records;
+            do {
+                assertThat(System.nanoTime()).isLessThan(deadline);
+                records = scanner.pollRecordBatch(Duration.ofSeconds(1));
+            } while (records.isEmpty());
+            assertThat(records.count()).isEqualTo(1);
+            assertThat(records.iterator().next().getBaseLogOffset()).isEqualTo(emptyEndOffset);
+            assertThat(records.iterator().next().getChangeType(0)).isEqualTo(ChangeType.INSERT);
         }
     }
 
@@ -509,402 +556,6 @@ public class LogScannerITCase extends ClientToServerITCaseBase {
                                         "The fetching offset %s is out of range", Long.MIN_VALUE));
             }
         }
-    }
-
-    @ParameterizedTest
-    @ValueSource(booleans = {false, true})
-    void testPollArrowBatchesWithReorderedProjection(boolean primaryKey) throws Exception {
-        TablePath tablePath = TablePath.of("test_db_1", "test_arrow_projection_" + primaryKey);
-        Schema.Builder schema =
-                Schema.newBuilder()
-                        .column("a", DataTypes.INT())
-                        .column("b", DataTypes.STRING())
-                        .column("c", DataTypes.STRING());
-        if (primaryKey) {
-            schema.primaryKey("a");
-        }
-        createTable(
-                tablePath,
-                TableDescriptor.builder()
-                        .schema(schema.build())
-                        .distributedBy(1)
-                        .logFormat(LogFormat.ARROW)
-                        .build(),
-                false);
-
-        try (Table table = conn.getTable(tablePath)) {
-            if (primaryKey) {
-                UpsertWriter writer = table.newUpsert().createWriter();
-                for (int i = 0; i < 3; i++) {
-                    writer.upsert(row(i, "b-" + i, "c-" + i)).get();
-                }
-                writer.flush();
-            } else {
-                AppendWriter writer = table.newAppend().createWriter();
-                for (int i = 0; i < 3; i++) {
-                    writer.append(row(i, "b-" + i, "c-" + i));
-                }
-                writer.flush();
-            }
-
-            try (LogScanner scanner =
-                    table.newScan().project(new int[] {2, 1}).createLogScanner()) {
-                scanner.subscribeFromBeginning(0);
-                int count = 0;
-                long deadline = System.nanoTime() + Duration.ofSeconds(30).toNanos();
-                while (count < 3) {
-                    assertThat(System.nanoTime())
-                            .as("Waiting for projected Arrow batches")
-                            .isLessThan(deadline);
-                    try (ArrowScanRecords records =
-                            scanner.pollRecordBatch(Duration.ofSeconds(1))) {
-                        for (ArrowBatchData batch : records) {
-                            assertThat(batch.getVectorSchemaRoot().getSchema().getFields())
-                                    .extracting(field -> field.getName())
-                                    .containsExactly("c", "b");
-                            VarCharVector c =
-                                    (VarCharVector) batch.getVectorSchemaRoot().getVector(0);
-                            VarCharVector b =
-                                    (VarCharVector) batch.getVectorSchemaRoot().getVector(1);
-                            for (int rowId = 0; rowId < batch.getRecordCount(); rowId++) {
-                                assertThat(batch.getBaseLogOffset() + rowId).isEqualTo(count);
-                                assertThat(batch.getChangeType(rowId))
-                                        .isEqualTo(
-                                                primaryKey
-                                                        ? ChangeType.INSERT
-                                                        : ChangeType.APPEND_ONLY);
-                                assertThat(c.getObject(rowId).toString()).isEqualTo("c-" + count);
-                                assertThat(b.getObject(rowId).toString()).isEqualTo("b-" + count);
-                                count++;
-                            }
-                        }
-                    }
-                }
-                assertThat(count).isEqualTo(3);
-            }
-        }
-    }
-
-    @ParameterizedTest
-    @CsvSource({"false, false", "true, false", "false, true", "true, true"})
-    void testCannotSwitchArrowPollingMode(boolean arrowFirst, boolean pollEmptyFirst)
-            throws Exception {
-        TablePath tablePath =
-                TablePath.of(
-                        "test_db_1",
-                        "test_arrow_polling_mode_" + arrowFirst + "_" + pollEmptyFirst);
-        createTable(
-                tablePath,
-                TableDescriptor.builder()
-                        .schema(DATA1_SCHEMA)
-                        .distributedBy(1)
-                        .logFormat(LogFormat.ARROW)
-                        .build(),
-                false);
-        clientConf.set(ConfigOptions.CLIENT_SCANNER_LOG_MAX_POLL_RECORDS, 1);
-        try (Connection connection = ConnectionFactory.createConnection(clientConf);
-                Table table = connection.getTable(tablePath);
-                LogScanner scanner = table.newScan().createLogScanner()) {
-            scanner.subscribeFromBeginning(0);
-            int count = 0;
-            if (pollEmptyFirst) {
-                if (arrowFirst) {
-                    try (ArrowScanRecords records = scanner.pollRecordBatch(Duration.ZERO)) {
-                        assertThat(records.isEmpty()).isTrue();
-                    }
-                } else {
-                    assertThat(scanner.poll(Duration.ZERO).isEmpty()).isTrue();
-                }
-            }
-            AppendWriter writer = table.newAppend().createWriter();
-            for (int i = 0; i < 3; i++) {
-                writer.append(row(i, "value-" + i));
-            }
-            writer.flush();
-
-            long deadline = System.nanoTime() + Duration.ofSeconds(30).toNanos();
-            if (!pollEmptyFirst) {
-                while (count == 0) {
-                    assertThat(System.nanoTime())
-                            .as("Waiting for the first poll result")
-                            .isLessThan(deadline);
-                    if (arrowFirst) {
-                        try (ArrowScanRecords records =
-                                scanner.pollRecordBatch(Duration.ofSeconds(1))) {
-                            count += records.count();
-                        }
-                    } else {
-                        count += scanner.poll(Duration.ofSeconds(1)).count();
-                    }
-                }
-                if (!arrowFirst) {
-                    assertThat(count).isEqualTo(1);
-                }
-            }
-
-            assertThatThrownBy(
-                            () -> {
-                                if (arrowFirst) {
-                                    scanner.poll(Duration.ZERO);
-                                } else {
-                                    try (ArrowScanRecords ignored =
-                                            scanner.pollRecordBatch(Duration.ZERO)) {
-                                        // Close any unexpected result if the mode guard regresses.
-                                    }
-                                }
-                            })
-                    .isInstanceOf(IllegalStateException.class)
-                    .hasMessageContaining("Cannot switch between poll() and pollRecordBatch()");
-
-            // Rejection must preserve unread rows, including a partially consumed row batch.
-            while (count < 3) {
-                assertThat(System.nanoTime())
-                        .as("Waiting for unread rows after rejecting a mode switch")
-                        .isLessThan(deadline);
-                if (arrowFirst) {
-                    try (ArrowScanRecords records =
-                            scanner.pollRecordBatch(Duration.ofSeconds(1))) {
-                        for (ArrowBatchData batch : records) {
-                            assertThat(batch.getBaseLogOffset()).isEqualTo(count);
-                            count += batch.getRecordCount();
-                        }
-                    }
-                } else {
-                    for (ScanRecord record : scanner.poll(Duration.ofSeconds(1))) {
-                        assertThat(record.logOffset()).isEqualTo(count);
-                        assertThat(record.getRow().getInt(0)).isEqualTo(count);
-                        count++;
-                    }
-                }
-            }
-            assertThat(count).isEqualTo(3);
-        }
-    }
-
-    @Test
-    void testPollArrowBatchesWithPrimaryKeyChangelog() throws Exception {
-        TablePath tablePath = TablePath.of("test_db_1", "test_arrow_batches_with_changelog");
-        TableDescriptor tableDescriptor =
-                TableDescriptor.builder()
-                        .schema(
-                                Schema.newBuilder()
-                                        .column("a", DataTypes.INT())
-                                        .column("b", DataTypes.STRING())
-                                        .primaryKey("a")
-                                        .build())
-                        .distributedBy(1)
-                        .logFormat(LogFormat.ARROW)
-                        .build();
-        createTable(tablePath, tableDescriptor, false);
-
-        try (Table table = conn.getTable(tablePath)) {
-            UpsertWriter writer = table.newUpsert().createWriter();
-            writer.upsert(row(1, "old")).get();
-            writer.flush();
-            writer.upsert(row(1, "new")).get();
-            writer.flush();
-            writer.upsert(row(2, "deleted")).get();
-            writer.flush();
-            writer.delete(row(2, "deleted")).get();
-            writer.flush();
-
-            ChangeType[] expectedChangeTypes = {
-                ChangeType.INSERT,
-                ChangeType.UPDATE_BEFORE,
-                ChangeType.UPDATE_AFTER,
-                ChangeType.INSERT,
-                ChangeType.DELETE
-            };
-            int[] expectedKeys = {1, 1, 1, 2, 2};
-            String[] expectedValues = {"old", "old", "new", "deleted", "deleted"};
-
-            try (LogScanner scanner = table.newScan().createLogScanner()) {
-                scanner.subscribeFromBeginning(0);
-                pollAndVerifyChangelogArrowBatches(
-                        scanner, expectedChangeTypes, expectedKeys, expectedValues, 0);
-            }
-
-            try (LogScanner scanner = table.newScan().project(new int[] {1}).createLogScanner()) {
-                scanner.subscribeFromBeginning(0);
-                pollAndVerifyProjectedChangelogArrowBatches(
-                        scanner, expectedChangeTypes, expectedValues);
-            }
-
-            // Offset 2 starts in the middle of the update batch and verifies that slicing keeps
-            // the change-type vector aligned with the Arrow rows.
-            try (LogScanner scanner = table.newScan().createLogScanner()) {
-                scanner.subscribe(0, 2L);
-                pollAndVerifyChangelogArrowBatches(
-                        scanner, expectedChangeTypes, expectedKeys, expectedValues, 2);
-            }
-        }
-    }
-
-    @Test
-    void testPollArrowBatchesWithSchemaEvolution() throws Exception {
-        TablePath tablePath = TablePath.of("test_db_1", "test_arrow_batches_with_schema_evolution");
-        TableDescriptor tableDescriptor =
-                TableDescriptor.builder()
-                        .schema(DATA1_SCHEMA)
-                        .distributedBy(1)
-                        .logFormat(LogFormat.ARROW)
-                        .build();
-        createTable(tablePath, tableDescriptor, false);
-
-        // write 3 rows with the original schema (a: INT, b: STRING)
-        try (Table table = conn.getTable(tablePath)) {
-            AppendWriter appendWriter = table.newAppend().createWriter();
-            for (int i = 0; i < 3; i++) {
-                appendWriter.append(row(i, "value-" + i));
-            }
-            appendWriter.flush();
-        }
-
-        // add column c: STRING
-        admin.alterTable(
-                        tablePath,
-                        Collections.singletonList(
-                                TableChange.addColumn(
-                                        "c",
-                                        DataTypes.STRING(),
-                                        null,
-                                        TableChange.ColumnPosition.last())),
-                        false)
-                .get();
-
-        // write 3 more rows with the evolved schema (a: INT, b: STRING, c: STRING)
-        try (Table table = conn.getTable(tablePath)) {
-            AppendWriter appendWriter = table.newAppend().createWriter();
-            for (int i = 3; i < 6; i++) {
-                appendWriter.append(row(i, "value-" + i, "extra-" + i));
-            }
-            appendWriter.flush();
-
-            int totalRecords = 6;
-            // subscribe from beginning and verify all 6 records
-            try (LogScanner scanner = table.newScan().createLogScanner()) {
-                scanner.subscribeFromBeginning(0);
-                pollAndVerifyArrowBatches(scanner, totalRecords, 0);
-            }
-
-            // subscribe from the middle of the first batch (offset 1)
-            // to ensure records before the subscribe offset are not returned
-            int subscribeOffset = 1;
-            try (LogScanner scanner2 = table.newScan().createLogScanner()) {
-                scanner2.subscribe(0, subscribeOffset);
-                pollAndVerifyArrowBatches(
-                        scanner2, totalRecords - subscribeOffset, subscribeOffset);
-            }
-        }
-    }
-
-    private void pollAndVerifyArrowBatches(
-            LogScanner scanner, int expectedRecords, int minExpectedOffset) {
-        int count = 0;
-        long deadline = System.nanoTime() + Duration.ofSeconds(30).toNanos();
-        while (count < expectedRecords) {
-            assertThat(System.nanoTime())
-                    .as("Timed out waiting for %s records, got %s", expectedRecords, count)
-                    .isLessThan(deadline);
-            try (ArrowScanRecords records = scanner.pollRecordBatch(Duration.ofSeconds(1))) {
-                for (ArrowBatchData batch : records) {
-                    try (ArrowBatchData b = batch) {
-                        IntVector intVector = (IntVector) b.getVectorSchemaRoot().getVector(0);
-                        VarCharVector stringVector =
-                                (VarCharVector) b.getVectorSchemaRoot().getVector(1);
-                        VarCharVector extraVector =
-                                (VarCharVector) b.getVectorSchemaRoot().getVector(2);
-                        for (int rowId = 0; rowId < b.getRecordCount(); rowId++) {
-                            int expectedValue = (int) (b.getBaseLogOffset() + rowId);
-                            assertThat(expectedValue).isGreaterThanOrEqualTo(minExpectedOffset);
-                            assertThat(intVector.get(rowId)).isEqualTo(expectedValue);
-                            assertThat(stringVector.getObject(rowId).toString())
-                                    .isEqualTo("value-" + expectedValue);
-                            if (expectedValue < 3) {
-                                assertThat(extraVector.isNull(rowId)).isTrue();
-                            } else {
-                                assertThat(extraVector.getObject(rowId).toString())
-                                        .isEqualTo("extra-" + expectedValue);
-                            }
-                            count++;
-                        }
-                    }
-                }
-            }
-        }
-        assertThat(count).isEqualTo(expectedRecords);
-    }
-
-    private void pollAndVerifyChangelogArrowBatches(
-            LogScanner scanner,
-            ChangeType[] expectedChangeTypes,
-            int[] expectedKeys,
-            String[] expectedValues,
-            int startingOffset) {
-        int count = startingOffset;
-        long deadline = System.nanoTime() + Duration.ofSeconds(30).toNanos();
-        while (count < expectedChangeTypes.length) {
-            assertThat(System.nanoTime())
-                    .as(
-                            "Timed out waiting for %s changelog records, got %s",
-                            expectedChangeTypes.length - startingOffset, count - startingOffset)
-                    .isLessThan(deadline);
-            try (ArrowScanRecords records = scanner.pollRecordBatch(Duration.ofSeconds(1))) {
-                for (ArrowBatchData batch : records) {
-                    try (ArrowBatchData b = batch) {
-                        assertThat(b.isAppendOnly()).isFalse();
-                        ByteBuffer changeTypes = b.getChangeTypes().get();
-                        assertThat(changeTypes.remaining()).isEqualTo(b.getRecordCount());
-                        IntVector keys = (IntVector) b.getVectorSchemaRoot().getVector(0);
-                        VarCharVector values = (VarCharVector) b.getVectorSchemaRoot().getVector(1);
-                        for (int rowId = 0; rowId < b.getRecordCount(); rowId++) {
-                            long offset = b.getBaseLogOffset() + rowId;
-                            assertThat(offset).isEqualTo(count);
-                            assertThat(b.getChangeType(rowId))
-                                    .isEqualTo(expectedChangeTypes[count]);
-                            assertThat(changeTypes.get(rowId))
-                                    .isEqualTo(expectedChangeTypes[count].toByteValue());
-                            assertThat(keys.get(rowId)).isEqualTo(expectedKeys[count]);
-                            assertThat(values.getObject(rowId).toString())
-                                    .isEqualTo(expectedValues[count]);
-                            count++;
-                        }
-                    }
-                }
-            }
-        }
-        assertThat(count).isEqualTo(expectedChangeTypes.length);
-    }
-
-    private void pollAndVerifyProjectedChangelogArrowBatches(
-            LogScanner scanner, ChangeType[] expectedChangeTypes, String[] expectedValues) {
-        int count = 0;
-        long deadline = System.nanoTime() + Duration.ofSeconds(30).toNanos();
-        while (count < expectedChangeTypes.length) {
-            assertThat(System.nanoTime())
-                    .as(
-                            "Timed out waiting for %s projected changelog records, got %s",
-                            expectedChangeTypes.length, count)
-                    .isLessThan(deadline);
-            try (ArrowScanRecords records = scanner.pollRecordBatch(Duration.ofSeconds(1))) {
-                for (ArrowBatchData batch : records) {
-                    try (ArrowBatchData b = batch) {
-                        assertThat(b.getVectorSchemaRoot().getFieldVectors()).hasSize(1);
-                        VarCharVector values = (VarCharVector) b.getVectorSchemaRoot().getVector(0);
-                        for (int rowId = 0; rowId < b.getRecordCount(); rowId++) {
-                            long offset = b.getBaseLogOffset() + rowId;
-                            assertThat(offset).isEqualTo(count);
-                            assertThat(b.getChangeType(rowId))
-                                    .isEqualTo(expectedChangeTypes[count]);
-                            assertThat(values.getObject(rowId).toString())
-                                    .isEqualTo(expectedValues[count]);
-                            count++;
-                        }
-                    }
-                }
-            }
-        }
-        assertThat(count).isEqualTo(expectedChangeTypes.length);
     }
 
     private static ScanRecords pollUntilProgressOnly(

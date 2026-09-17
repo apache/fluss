@@ -31,6 +31,13 @@
     <packaging>jar</packaging>
 
     <dependencies>
+        <dependency>
+            <groupId>org.apache.fluss</groupId>
+            <artifactId>fluss-client-arrow</artifactId>
+            <version>${project.version}</version>
+            <scope>provided</scope>
+        </dependency>
+
         <!-- Add Fluss dependencies to make fluss-dist compiled after all modules -->
         <dependency>
             <groupId>org.apache.fluss</groupId>

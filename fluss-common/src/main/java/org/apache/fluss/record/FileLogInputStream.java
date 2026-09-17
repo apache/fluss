@@ -180,8 +180,8 @@ public class FileLogInputStream
         }
 
         @Override
-        public ArrowBatchData loadArrowBatch(ReadContext context) {
-            return loadFullBatch().loadArrowBatch(context);
+        public ArrowIpcBatch readArrowIpcBatch(ReadContext context) {
+            return loadFullBatch().readArrowIpcBatch(context);
         }
 
         @Override

@@ -31,7 +31,6 @@ import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.RowType;
 import org.apache.fluss.utils.ArrowUtils;
 import org.apache.fluss.utils.CloseableIterator;
-import org.apache.fluss.utils.IOUtils;
 import org.apache.fluss.utils.MurmurHashUtils;
 import org.apache.fluss.utils.crc.Crc32C;
 
@@ -265,42 +264,32 @@ public class DefaultLogRecordBatch implements LogRecordBatch {
     }
 
     @Override
-    public ArrowBatchData loadArrowBatch(ReadContext context) {
+    public ArrowIpcBatch readArrowIpcBatch(ReadContext context) {
         if (context.getLogFormat() != LogFormat.ARROW) {
             throw new UnsupportedOperationException(
-                    "loadArrowBatch is only supported for ARROW log format.");
+                    "readArrowIpcBatch is only supported for ARROW log format.");
         }
-
-        int schemaId = schemaId();
+        checkArgument(getRecordCount() > 0, "Empty log batches have no Arrow IPC payload.");
         checkArgument(
                 context instanceof ArrowRecordBatchContext,
-                "Arrow batch loading requires context to implement ArrowRecordBatchContext, but is %s.",
-                context.getClass().getName());
-        ArrowRecordBatchContext arrowRecordBatchContext = (ArrowRecordBatchContext) context;
-        ArrowRecordBatchContext.UnshadedArrowBatchAccess batchAccess =
-                arrowRecordBatchContext.createUnshadedArrowBatchAccess(schemaId);
-
-        try {
-            int recordsDataOffset = recordsDataOffset();
-            boolean appendOnly = isAppendOnly();
-            int changeTypesLength = appendOnly ? 0 : getRecordCount();
-            int arrowOffset = position + recordsDataOffset + changeTypesLength;
-            byte[] changeTypes = null;
-            if (!appendOnly) {
-                changeTypes = new byte[changeTypesLength];
-                segment.get(position + recordsDataOffset, changeTypes);
-            }
-            int arrowLength = sizeInBytes() - recordsDataOffset - changeTypesLength;
-            batchAccess.loadArrowBatch(segment, arrowOffset, arrowLength);
-            ArrowBatchData arrowBatchData =
-                    batchAccess.createArrowBatchData(
-                            baseLogOffset(), commitTimestamp(), schemaId, changeTypes);
-            batchAccess = null;
-            return arrowBatchData;
-        } catch (Throwable t) {
-            IOUtils.closeQuietly(batchAccess);
-            throw t;
+                "Arrow batch reading requires an ArrowRecordBatchContext.");
+        int dataOffset = recordsDataOffset();
+        int changeTypesLength = isAppendOnly() ? 0 : getRecordCount();
+        byte[] changeTypes = null;
+        if (!isAppendOnly()) {
+            changeTypes = new byte[changeTypesLength];
+            segment.get(position + dataOffset, changeTypes);
         }
+        byte[] payload = new byte[sizeInBytes() - dataOffset - changeTypesLength];
+        segment.get(position + dataOffset + changeTypesLength, payload);
+        return ((ArrowRecordBatchContext) context)
+                .createArrowIpcBatch(
+                        payload,
+                        baseLogOffset(),
+                        commitTimestamp(),
+                        schemaId(),
+                        getRecordCount(),
+                        changeTypes);
     }
 
     @Override

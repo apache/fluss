@@ -57,6 +57,7 @@
         <module>fluss-common</module>
         <module>fluss-metrics</module>
         <module>fluss-client</module>
+        <module>fluss-client-arrow</module>
         <module>fluss-rpc</module>
         <module>fluss-dist</module>
         <module>fluss-filesystems</module>

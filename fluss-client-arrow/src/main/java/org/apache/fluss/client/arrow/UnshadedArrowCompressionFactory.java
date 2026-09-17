@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-package org.apache.fluss.compression;
+package org.apache.fluss.client.arrow;
 
 import org.apache.fluss.annotation.Internal;
 
@@ -25,7 +25,7 @@ import org.apache.arrow.vector.compression.NoCompressionCodec;
 
 /** Unshaded Arrow compression factory for scanner/read path. */
 @Internal
-public class UnshadedArrowCompressionFactory implements CompressionCodec.Factory {
+class UnshadedArrowCompressionFactory implements CompressionCodec.Factory {
 
     public static final UnshadedArrowCompressionFactory INSTANCE =
             new UnshadedArrowCompressionFactory();

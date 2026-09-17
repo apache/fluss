@@ -23,7 +23,7 @@ import org.apache.fluss.exception.CorruptRecordException;
 import org.apache.fluss.exception.FetchException;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TablePath;
-import org.apache.fluss.record.ArrowBatchData;
+import org.apache.fluss.record.ArrowIpcBatch;
 import org.apache.fluss.record.ChangeType;
 import org.apache.fluss.record.CompactedLogRecord;
 import org.apache.fluss.record.IndexedLogRecord;
@@ -275,15 +275,15 @@ public abstract class CompletedFetch {
     }
 
     /**
-     * The {@link LogRecordBatch batches} are loaded as {@link ArrowBatchData Arrow batches} and
+     * The {@link LogRecordBatch batches} are loaded as {@link ArrowIpcBatch Arrow batches} and
      * returned.
      *
      * @param maxRecords A soft upper bound on the number of records to return. Because batches are
      *     returned whole (never split), the actual number of records may exceed this value. At
      *     least one batch is always returned if available, even if it alone exceeds the limit.
-     * @return {@link ArrowBatchData Arrow batches}
+     * @return {@link ArrowIpcBatch Arrow batches}
      */
-    List<ArrowBatchData> fetchArrowBatches(int maxRecords) {
+    List<ArrowIpcBatch> fetchArrowBatches(int maxRecords) {
         if (cachedRecordException != null) {
             throw new FetchException(
                     "Received exception when fetching the next Arrow batch from "
@@ -296,7 +296,7 @@ public abstract class CompletedFetch {
             return Collections.emptyList();
         }
 
-        List<ArrowBatchData> arrowBatches = new ArrayList<>();
+        List<ArrowIpcBatch> arrowBatches = new ArrayList<>();
         int recordsFetched = 0;
         try {
             while (recordsFetched < maxRecords || arrowBatches.isEmpty()) {
@@ -305,11 +305,11 @@ public abstract class CompletedFetch {
                     break;
                 }
 
-                ArrowBatchData arrowBatchData = batch.loadArrowBatch(readContext);
-                if (arrowBatchData.getRecordCount() == 0) {
-                    arrowBatchData.close();
+                if (batch.getRecordCount() == 0) {
+                    nextFetchOffset = Math.max(nextFetchOffset, batch.nextLogOffset());
                     continue;
                 }
+                ArrowIpcBatch arrowBatchData = batch.readArrowIpcBatch(readContext);
 
                 // Skip records that are before nextFetchOffset, analogous to the
                 // record-level filtering in nextFetchedRecord() for the row-based path.
@@ -317,10 +317,11 @@ public abstract class CompletedFetch {
                 if (batchBaseOffset < nextFetchOffset) {
                     int skipRows = (int) (nextFetchOffset - batchBaseOffset);
                     if (skipRows >= arrowBatchData.getRecordCount()) {
-                        arrowBatchData.close();
                         continue;
                     }
-                    arrowBatchData = arrowBatchData.sliceAndTransferOwnership(skipRows);
+                    arrowBatchData =
+                            arrowBatchData.slice(
+                                    skipRows, arrowBatchData.getRecordCount() - skipRows);
                 }
 
                 arrowBatches.add(arrowBatchData);

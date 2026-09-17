@@ -19,7 +19,7 @@ package org.apache.fluss.lake.paimon.tiering.append;
 
 import org.apache.fluss.lake.paimon.tiering.RecordWriter;
 import org.apache.fluss.metadata.TableBucket;
-import org.apache.fluss.record.ArrowBatchData;
+import org.apache.fluss.record.ArrowIpcBatch;
 import org.apache.fluss.record.LogRecord;
 import org.apache.fluss.types.RowType;
 
@@ -85,7 +85,7 @@ public class AppendOnlyWriter extends RecordWriter<InternalRow> {
      * AppendOnlyArrowBatchHelper} which is lazily loaded to avoid class loading issues when Arrow
      * is not on the classpath.
      */
-    public void writeArrowBatch(ArrowBatchData arrowBatchData) throws Exception {
+    public void writeArrowBatch(ArrowIpcBatch arrowBatchData) throws Exception {
         AppendOnlyArrowBatchHelper helper;
         if (arrowBatchHelper == null) {
             helper =
