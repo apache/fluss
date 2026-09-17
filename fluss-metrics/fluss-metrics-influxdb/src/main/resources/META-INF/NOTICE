@@ -13,8 +13,6 @@ This project bundles the following dependencies under the Apache Software Licens
 - com.google.guava:failureaccess:1.0.3
 - com.google.guava:guava:33.5.0-jre
 - com.google.guava:listenablefuture:9999.0-empty-to-avoid-conflict-with-guava
-- com.google.protobuf:protobuf-java-util:4.30.2
-- com.google.protobuf:protobuf-java:4.33.5
 - io.grpc:grpc-api:1.71.0
 - io.grpc:grpc-context:1.71.0
 - io.grpc:grpc-core:1.71.0
@@ -58,3 +56,9 @@ This project bundles the following dependencies under the MIT License.
 See META-INF/licenses/LICENSE.influxdb3-java for the license text.
 
 - com.influxdb:influxdb3-java:1.8.0
+
+This project bundles the following dependencies under the BSD 3-Clause license.
+See META-INF/licenses/LICENSE.protobuf-java for the license text.
+
+- com.google.protobuf:protobuf-java-util:4.30.2
+- com.google.protobuf:protobuf-java:4.33.5
