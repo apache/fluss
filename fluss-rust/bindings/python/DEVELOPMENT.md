@@ -133,3 +133,22 @@ bindings/python/
 ## License
 
 Apache 2.0 License
+
+## Binary license files
+
+The wheel statically links Rust dependencies, so `LICENSE-bin` and `NOTICE-bin`
+are generated separately from the source `LICENSE` and `NOTICE`. From the
+repository checkout, regenerate the union of supported release targets with:
+
+```bash
+python3 generate_binary_license.py
+python3 generate_binary_license.py --check
+```
+
+After updating `Cargo.lock`, review these generated files, including licenses of
+native code and data incorporated into crates. The generator excludes build,
+development and procedural-macro dependencies and uses the shared Rust license
+collector in `tools/releasing/generate_rust_license.py`. For a wheel for one
+platform, use `--target <Rust target triple>` before `maturin build --locked`;
+the release workflow does this for each platform and verifies the wheel contents.
+All four legal files are included in both wheels and the source distribution.
