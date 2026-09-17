@@ -19,7 +19,8 @@
 # Trigger: push tag only (e.g. v0.1.0).
 # Pre-release tags (containing '-') publish to TestPyPI; release tags publish to PyPI.
 #
-# Token auth: add secrets PYPI_API_TOKEN / TEST_PYPI_API_TOKEN for publishing.
+# Auth: PyPI/TestPyPI Trusted Publishing (OIDC). The pyfluss publisher config on both
+# indexes must name this repository and this workflow file; no secret is involved.
 
 name: Release Python
 
@@ -145,6 +146,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      id-token: write  # mint the short-lived PyPI/TestPyPI publish token
     needs: [version-check, sdist, wheels, verify-license]
     if: startsWith(github.ref, 'refs/tags/')
     steps:
@@ -161,7 +163,6 @@ jobs:
           repository-url: https://test.pypi.org/legacy/
           skip-existing: true
           packages-dir: fluss-rust/bindings/python/dist
-          password: ${{ secrets.TEST_PYPI_API_TOKEN }}
 
       - name: Publish to PyPI
         if: ${{ !contains(github.ref, '-') }}
@@ -169,4 +170,3 @@ jobs:
         with:
           skip-existing: true
           packages-dir: fluss-rust/bindings/python/dist
-          password: ${{ secrets.PYPI_API_TOKEN }}

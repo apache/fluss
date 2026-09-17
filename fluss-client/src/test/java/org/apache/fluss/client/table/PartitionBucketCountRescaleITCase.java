@@ -28,8 +28,8 @@ import org.apache.fluss.client.table.writer.AppendWriter;
 import org.apache.fluss.client.table.writer.UpsertResult;
 import org.apache.fluss.client.table.writer.UpsertWriter;
 import org.apache.fluss.config.ConfigOptions;
+import org.apache.fluss.exception.BucketRescaleException;
 import org.apache.fluss.exception.InvalidAlterTableException;
-import org.apache.fluss.exception.InvalidBucketRoutingException;
 import org.apache.fluss.metadata.PartitionInfo;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;
@@ -43,6 +43,8 @@ import org.apache.fluss.types.RowType;
 import org.apache.fluss.utils.CloseableIterator;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.time.Duration;
 import java.util.ArrayList;
@@ -280,8 +282,10 @@ class PartitionBucketCountRescaleITCase extends ClientToServerITCaseBase {
         assertRowsPerPartition(schema.getRowType(), actualByPartitionId, expectedByPartitionId);
     }
 
-    @Test
-    void testStaleTableHandleWritesToDynamicallyCreatedPartitionAfterAlter() throws Exception {
+    @ParameterizedTest
+    @ValueSource(ints = {1, NEW_BUCKET_NUM})
+    void testStaleTableHandleWritesToDynamicallyCreatedPartitionAfterAlter(int newBucketCount)
+            throws Exception {
         // Old writers hold a stale table-level bucket count; new partitions must route by
         // their actual (post-ALTER) count, otherwise lookups miss.
         clientConf.set(ConfigOptions.CLIENT_WRITER_DYNAMIC_CREATE_PARTITION_ENABLED, true);
@@ -296,50 +300,34 @@ class PartitionBucketCountRescaleITCase extends ClientToServerITCaseBase {
         // open the handle BEFORE the ALTER, then rescale on the server side
         Table staleTable = conn.getTable(tablePath);
         UpsertWriter upsertWriter = staleTable.newUpsert().createWriter();
-        alterBucketNum(tablePath, NEW_BUCKET_NUM);
+        alterBucketNum(tablePath, newBucketCount);
 
-        // The stale handle initially routes by the old table-level count. Dynamic creation stays
-        // asynchronous; once the new partition metadata arrives, affected batches fail instead of
-        // being sent with a bucket id computed from the wrong count.
-        List<InternalRow> rows = new ArrayList<>();
-        List<CompletableFuture<UpsertResult>> initialFutures = new ArrayList<>();
-        for (int j = 0; j < RECORDS_PER_PARTITION; j++) {
-            InternalRow record = row(j, "v" + j, "auto");
-            rows.add(record);
-            initialFutures.add(upsertWriter.upsert(record));
-        }
-        upsertWriter.flush();
-
-        List<InternalRow> failedRows = new ArrayList<>();
-        for (int i = 0; i < initialFutures.size(); i++) {
-            try {
-                initialFutures.get(i).get();
-            } catch (ExecutionException e) {
-                assertThat(e.getCause()).isInstanceOf(InvalidBucketRoutingException.class);
-                failedRows.add(rows.get(i));
+        // Retry failed records with the same writer before sending the next version, so
+        // application-level retries preserve each key's update order.
+        for (int version = 1; version <= 2; version++) {
+            List<CompletableFuture<UpsertResult>> futures = new ArrayList<>();
+            for (int key = 0; key < RECORDS_PER_PARTITION; key++) {
+                futures.add(upsertWriter.upsert(row(key, "v" + version, "auto")));
             }
-        }
-        assertThat(failedRows).isNotEmpty();
-
-        // Retry only failed records. The first rejection invalidated stale routing metadata and the
-        // assigner, so the same stale table handle now resolves the partition's actual count.
-        List<CompletableFuture<UpsertResult>> retryFutures = new ArrayList<>();
-        for (InternalRow failedRow : failedRows) {
-            retryFutures.add(upsertWriter.upsert(failedRow));
-        }
-        upsertWriter.flush();
-        for (CompletableFuture<UpsertResult> retryFuture : retryFutures) {
-            retryFuture.get();
+            upsertWriter.flush();
+            for (int key = 0; key < RECORDS_PER_PARTITION; key++) {
+                try {
+                    futures.get(key).get();
+                } catch (ExecutionException e) {
+                    assertThat(e.getCause()).isInstanceOf(BucketRescaleException.class);
+                    upsertWriter.upsert(row(key, "v" + version, "auto")).get();
+                }
+            }
         }
 
         // the dynamically created partition carries the post-ALTER bucket count
         List<PartitionInfo> partitionInfos = admin.listPartitionInfos(tablePath).get();
-        assertThat(bucketCountByName(partitionInfos)).containsEntry("auto", NEW_BUCKET_NUM);
+        assertThat(bucketCountByName(partitionInfos)).containsEntry("auto", newBucketCount);
 
-        // every key must be found after retrying the batches rejected during the rescale window
+        // Every key retains its latest version after application-level retries.
         Lookuper lookuper = staleTable.newLookup().createLookuper();
         for (int j = 0; j < RECORDS_PER_PARTITION; j++) {
-            InternalRow expected = row(j, "v" + j, "auto");
+            InternalRow expected = row(j, "v2", "auto");
             InternalRow looked = lookuper.lookup(row(j, "auto")).get().getSingletonRow();
             assertThatRow(looked).withSchema(schema.getRowType()).isEqualTo(expected);
         }

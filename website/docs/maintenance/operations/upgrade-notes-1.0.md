@@ -1,6 +1,7 @@
 ---
 title: Upgrade Notes
 sidebar_position: 4
+sidebar_class_name: hidden
 ---
 
 # Upgrade Notes from v0.9 to v1.0
@@ -32,6 +33,31 @@ If `s3.aws.credentials.provider`, `s3a.aws.credentials.provider`, or `fs.s3a.aws
 Custom credentials providers must now implement `software.amazon.awssdk.auth.credentials.AwsCredentialsProvider` instead of `com.amazonaws.auth.AWSCredentialsProvider`. Implementations should provide credentials through `resolveCredentials()` rather than the SDK v1 `getCredentials()` and `refresh()` methods.
 
 Deployments using static access keys or the default AWS credentials provider chain do not require configuration changes.
+
+### Active Segment Retention Rollout
+
+When upgrading a cluster from v0.9, keep
+`log.retention.roll-active-segment.enabled` disabled for the entire upgrade. This is the default, so
+no configuration change is required before or during the rolling upgrade.
+
+After every CoordinatorServer and TabletServer has been upgraded to v1.0 and the upgrade is
+complete, enable the option with a dynamic cluster configuration update:
+
+```sql
+CALL sys.set_cluster_configs(
+  config_pairs => 'log.retention.roll-active-segment.enabled', 'true'
+);
+```
+
+Enabling the option allows a non-empty active local log segment to be rolled after its effective
+local cleanup TTL expires and all records are committed. For tiered logs, the effective TTL is
+`table.log.local-ttl`, or `table.log.ttl` when the local option is not configured. The rolled
+segment can then be uploaded to remote storage and cleaned up locally. This avoids indefinitely
+retaining an expired active segment on low-traffic tables.
+
+See [TTL](../../table-design/data-distribution/ttl.md) for the segment lifecycle,
+[remote storage](../tiered-storage/remote-storage.md) for tiered-log retention, and
+[updating configs](updating-configs.md#updating-cluster-configs) for other dynamic update methods.
 
 ### New `datalake.enabled` Cluster Configuration
 

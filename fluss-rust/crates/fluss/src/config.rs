@@ -42,7 +42,7 @@ const DEFAULT_WRITER_KV_BACKPRESSURE_MAX_THROTTLE_MS: u64 = 3000;
 
 const MAX_IN_FLIGHT_REQUESTS_PER_BUCKET_FOR_IDEMPOTENCE: usize = 5;
 const DEFAULT_ACKS: &str = "all";
-const DEFAULT_CONNECT_TIMEOUT_MS: u64 = 120_000;
+const DEFAULT_CONNECT_TIMEOUT_MS: u64 = 15_000;
 const DEFAULT_SECURITY_PROTOCOL: &str = "PLAINTEXT";
 const DEFAULT_SASL_MECHANISM: &str = "PLAIN";
 
@@ -170,7 +170,7 @@ pub struct Config {
     pub writer_kv_backpressure_max_throttle_ms: u64,
 
     /// Connect timeout in milliseconds for TCP transport connect.
-    /// Default: 120000 (120 seconds).
+    /// Default: 15000 (15 seconds), matching Java `client.connect-timeout`.
     #[arg(long, default_value_t = DEFAULT_CONNECT_TIMEOUT_MS)]
     pub connect_timeout_ms: u64,
 

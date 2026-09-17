@@ -45,8 +45,22 @@ copy_jar() {
 
     log_info "Copying $description..."
 
-    # Find matching files
-    local matches=($src_pattern)
+    # Find runtime JARs, excluding artifacts attached by release and test builds.
+    local src_dir="${src_pattern%/*}"
+    local file_pattern="${src_pattern##*/}"
+    local matches=()
+    local jar
+    for jar in "$src_dir"/$file_pattern; do
+        if [ ! -f "$jar" ]; then
+            continue
+        fi
+        case "$jar" in
+            *-sources.jar|*-javadoc.jar|*-tests.jar)
+                continue
+                ;;
+        esac
+        matches+=("$jar")
+    done
     local count=${#matches[@]}
 
     # No files matched

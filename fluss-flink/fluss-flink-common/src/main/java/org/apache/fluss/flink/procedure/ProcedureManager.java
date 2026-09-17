@@ -78,9 +78,13 @@ public class ProcedureManager {
                 "sys.subtract_cluster_configs", SubtractClusterConfigsProcedure.class),
         ADD_SERVER_TAG("sys.add_server_tag", AddServerTagProcedure.class),
         REMOVE_SERVER_TAG("sys.remove_server_tag", RemoveServerTagProcedure.class),
+        ADD_SERVER_TAG_BY_RACK("sys.add_server_tag_by_rack", AddServerTagByRackProcedure.class),
+        REMOVE_SERVER_TAG_BY_RACK(
+                "sys.remove_server_tag_by_rack", RemoveServerTagByRackProcedure.class),
         REBALANCE("sys.rebalance", RebalanceProcedure.class),
         CANCEL_REBALANCE("sys.cancel_rebalance", CancelRebalanceProcedure.class),
         LIST_REBALANCE_PROGRESS("sys.list_rebalance", ListRebalanceProcessProcedure.class),
+        LIST_PARTITION_INFOS("sys.list_partition_infos", ListPartitionInfosProcedure.class),
         DROP_KV_SNAPSHOT_LEASE("sys.drop_kv_snapshot_lease", DropKvSnapshotLeaseProcedure.class);
 
         private final String path;

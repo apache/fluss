@@ -37,6 +37,7 @@ import org.apache.fluss.config.cluster.ConfigEntry;
 import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.exception.LeaderNotAvailableException;
 import org.apache.fluss.exception.PartitionNotExistException;
+import org.apache.fluss.metadata.BucketInfo;
 import org.apache.fluss.metadata.DatabaseChange;
 import org.apache.fluss.metadata.DatabaseDescriptor;
 import org.apache.fluss.metadata.DatabaseInfo;
@@ -59,6 +60,7 @@ import org.apache.fluss.rpc.RpcClient;
 import org.apache.fluss.rpc.gateway.AdminGateway;
 import org.apache.fluss.rpc.gateway.AdminReadOnlyGateway;
 import org.apache.fluss.rpc.gateway.TabletServerGateway;
+import org.apache.fluss.rpc.messages.AddServerTagByRackRequest;
 import org.apache.fluss.rpc.messages.AddServerTagRequest;
 import org.apache.fluss.rpc.messages.AlterClusterConfigsRequest;
 import org.apache.fluss.rpc.messages.AlterDatabaseRequest;
@@ -70,6 +72,7 @@ import org.apache.fluss.rpc.messages.CreateTableRequest;
 import org.apache.fluss.rpc.messages.DatabaseExistsRequest;
 import org.apache.fluss.rpc.messages.DatabaseExistsResponse;
 import org.apache.fluss.rpc.messages.DeleteProducerOffsetsRequest;
+import org.apache.fluss.rpc.messages.DescribeBucketsRequest;
 import org.apache.fluss.rpc.messages.DescribeClusterConfigsRequest;
 import org.apache.fluss.rpc.messages.DropAclsRequest;
 import org.apache.fluss.rpc.messages.DropDatabaseRequest;
@@ -103,6 +106,7 @@ import org.apache.fluss.rpc.messages.PbTablePath;
 import org.apache.fluss.rpc.messages.PbTableStatsRespForBucket;
 import org.apache.fluss.rpc.messages.RebalanceRequest;
 import org.apache.fluss.rpc.messages.RebalanceResponse;
+import org.apache.fluss.rpc.messages.RemoveServerTagByRackRequest;
 import org.apache.fluss.rpc.messages.RemoveServerTagRequest;
 import org.apache.fluss.rpc.messages.TableExistsRequest;
 import org.apache.fluss.rpc.messages.TableExistsResponse;
@@ -142,7 +146,9 @@ import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.toPbAclBindingFilt
 import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.toPbAclFilter;
 import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.toPbAclInfos;
 import static org.apache.fluss.utils.PartitionUtils.HISTORICAL_PARTITION_VALUE;
+import static org.apache.fluss.utils.Preconditions.checkArgument;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
+import static org.apache.fluss.utils.StringUtils.isNullOrWhitespaceOnly;
 
 /**
  * The default implementation of {@link Admin}.
@@ -380,6 +386,33 @@ public class FlussAdmin implements Admin {
                                         r.getCreatedTime(),
                                         r.getModifiedTime(),
                                         r.hasBucketCountEpoch() ? r.getBucketCountEpoch() : 0L));
+    }
+
+    @Override
+    public CompletableFuture<List<BucketInfo>> describeBuckets(TablePath tablePath) {
+        tablePath.validate();
+        DescribeBucketsRequest request = new DescribeBucketsRequest();
+        request.setTablePath()
+                .setDatabaseName(tablePath.getDatabaseName())
+                .setTableName(tablePath.getTableName());
+        return readOnlyGateway
+                .describeBuckets(request)
+                .thenApply(ClientRpcMessageUtils::toBucketInfos);
+    }
+
+    @Override
+    public CompletableFuture<List<BucketInfo>> describeBuckets(
+            TablePath tablePath, PartitionSpec partitionSpec) {
+        tablePath.validate();
+        checkNotNull(partitionSpec, "partitionSpec must not be null");
+        DescribeBucketsRequest request = new DescribeBucketsRequest();
+        request.setTablePath()
+                .setDatabaseName(tablePath.getDatabaseName())
+                .setTableName(tablePath.getTableName());
+        request.setPartitionSpec(makePbPartitionSpec(partitionSpec));
+        return readOnlyGateway
+                .describeBuckets(request)
+                .thenApply(ClientRpcMessageUtils::toBucketInfos);
     }
 
     @Override
@@ -879,6 +912,22 @@ public class FlussAdmin implements Admin {
     }
 
     @Override
+    public CompletableFuture<Void> addServerTagByRack(List<String> racks, ServerTag serverTag) {
+        validateRackRequest(racks, serverTag);
+        AddServerTagByRackRequest request =
+                new AddServerTagByRackRequest().addAllRacks(racks).setServerTag(serverTag.value);
+        return gateway.addServerTagByRack(request).thenApply(r -> null);
+    }
+
+    @Override
+    public CompletableFuture<Void> removeServerTagByRack(List<String> racks, ServerTag serverTag) {
+        validateRackRequest(racks, serverTag);
+        RemoveServerTagByRackRequest request =
+                new RemoveServerTagByRackRequest().addAllRacks(racks).setServerTag(serverTag.value);
+        return gateway.removeServerTagByRack(request).thenApply(r -> null);
+    }
+
+    @Override
     public CompletableFuture<String> rebalance(List<GoalType> priorityGoals) {
         RebalanceRequest request = new RebalanceRequest();
         priorityGoals.forEach(goal -> request.addGoal(goal.value));
@@ -1109,5 +1158,16 @@ public class FlussAdmin implements Admin {
     @VisibleForTesting
     public AdminReadOnlyGateway getAdminReadOnlyGateway() {
         return readOnlyGateway;
+    }
+
+    private static void validateRackRequest(List<String> racks, ServerTag serverTag) {
+        checkNotNull(serverTag, "serverTag must not be null");
+        checkNotNull(racks, "racks must not be null");
+        checkArgument(!racks.isEmpty(), "racks must not be empty");
+        for (String rack : racks) {
+            checkArgument(
+                    !isNullOrWhitespaceOnly(rack),
+                    "rack element must not be null, empty, or whitespace-only");
+        }
     }
 }

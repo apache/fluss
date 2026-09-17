@@ -1560,7 +1560,7 @@ struct Configuration {
     // Maximum KV backpressure throttle in milliseconds
     uint64_t writer_kv_backpressure_max_throttle_ms{3000};
     // Connect timeout in milliseconds for TCP transport connect
-    uint64_t connect_timeout_ms{120000};
+    uint64_t connect_timeout_ms{15000};
     // Security protocol: "PLAINTEXT" (default, no auth) or "sasl" (SASL auth)
     std::string security_protocol{"PLAINTEXT"};
     // SASL mechanism (only "PLAIN" is supported)

@@ -30,6 +30,7 @@ import org.apache.fluss.exception.AuthorizationException;
 import org.apache.fluss.exception.NoRebalanceInProgressException;
 import org.apache.fluss.exception.SecurityDisabledException;
 import org.apache.fluss.metadata.DataLakeFormat;
+import org.apache.fluss.metadata.PartitionInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
@@ -52,6 +53,8 @@ import org.junit.jupiter.params.provider.ValueSource;
 
 import java.time.Duration;
 import java.util.Arrays;
+import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -78,6 +81,7 @@ public abstract class FlinkProcedureITCase {
                     .setCoordinatorServerListeners("FLUSS://localhost:0, CLIENT://localhost:0")
                     .setTabletServerListeners("FLUSS://localhost:0, CLIENT://localhost:0")
                     .setClusterConf(initConfig())
+                    .setRacks(new String[] {"rack-0", "rack-1", "rack-2", "rack-0"})
                     .build();
 
     static final String CATALOG_NAME = "testcatalog";
@@ -147,9 +151,12 @@ public abstract class FlinkProcedureITCase {
                             "+I[sys.subtract_cluster_configs]",
                             "+I[sys.add_server_tag]",
                             "+I[sys.remove_server_tag]",
+                            "+I[sys.add_server_tag_by_rack]",
+                            "+I[sys.remove_server_tag_by_rack]",
                             "+I[sys.rebalance]",
                             "+I[sys.cancel_rebalance]",
                             "+I[sys.list_rebalance]",
+                            "+I[sys.list_partition_infos]",
                             "+I[sys.drop_kv_snapshot_lease]");
             // make sure no more results is unread.
             assertResultsIgnoreOrder(showProceduresIterator, expectedShowProceduresResult, true);
@@ -173,6 +180,47 @@ public abstract class FlinkProcedureITCase {
         assertThatThrownBy(() -> tEnv.executeSql("CALL `system`.generate_n(4)").collect())
                 .rootCause()
                 .hasMessageContaining("No match found for function signature generate_n");
+    }
+
+    @Test
+    void testListPartitionInfos() throws Exception {
+        String tableName = "partition_infos_table";
+        tEnv.executeSql(
+                String.format(
+                        "create table %s (a int, b varchar) partitioned by (b) "
+                                + "with ('connector' = 'fluss', 'bucket.num' = '2')",
+                        tableName));
+        TablePath tablePath = TablePath.of(DEFAULT_DB, tableName);
+
+        // partitions created before the rescale keep the old bucket count
+        writeRows(conn, tablePath, Arrays.asList(row(1, "p1"), row(2, "p2")), true);
+
+        // rescale the table-level bucket count, only affecting newly created partitions
+        tEnv.executeSql(String.format("alter table %s set ('bucket.num' = '4')", tableName));
+
+        // partitions created after the rescale use the new bucket count
+        writeRows(conn, tablePath, Collections.singletonList(row(3, "p3")), true);
+
+        // fetch the partition ids assigned by the cluster to build the expected rows
+        Map<String, Long> partitionIds = new HashMap<>();
+        for (PartitionInfo partitionInfo : admin.listPartitionInfos(tablePath).get()) {
+            partitionIds.put(partitionInfo.getPartitionName(), partitionInfo.getPartitionId());
+        }
+
+        try (CloseableIterator<Row> rows =
+                tEnv.executeSql(
+                                String.format(
+                                        "call %s.sys.list_partition_infos('%s', '%s')",
+                                        CATALOG_NAME, DEFAULT_DB, tableName))
+                        .collect()) {
+            assertCallResult(
+                    rows,
+                    new String[] {
+                        String.format("+I[%d, p1, 2]", partitionIds.get("p1")),
+                        String.format("+I[%d, p2, 2]", partitionIds.get("p2")),
+                        String.format("+I[%d, p3, 4]", partitionIds.get("p3"))
+                    });
+        }
     }
 
     @MultiVersionTest
@@ -660,6 +708,121 @@ public abstract class FlinkProcedureITCase {
                 tEnv.executeSql(removeServerTag).collect()) {
             assertCallResult(listProceduresIterator, new String[] {"+I[success]"});
         }
+    }
+
+    @Test
+    void testAddAndRemoveServerTagByRack() throws Exception {
+        // Cluster racks: server-0 -> rack-0, server-1 -> rack-1,
+        //                server-2 -> rack-2, server-3 -> rack-0
+        ZooKeeperClient zkClient = FLUSS_CLUSTER_EXTENSION.getZooKeeperClient();
+
+        // 1. Add a server tag by a single rack (rack-0: server-0 and server-3).
+        try (CloseableIterator<Row> resultIterator =
+                tEnv.executeSql(
+                                String.format(
+                                        "Call %s.sys.add_server_tag_by_rack('rack-0', 'TEMPORARY_OFFLINE')",
+                                        CATALOG_NAME))
+                        .collect()) {
+            assertCallResult(resultIterator, new String[] {"+I[success]"});
+        }
+        assertThat(zkClient.getServerTags()).isPresent();
+        assertThat(zkClient.getServerTags().get().getServerTags())
+                .containsEntry(0, ServerTag.TEMPORARY_OFFLINE)
+                .containsEntry(3, ServerTag.TEMPORARY_OFFLINE)
+                .doesNotContainKey(1)
+                .doesNotContainKey(2);
+
+        // 2. Remove a server tag by a single rack.
+        try (CloseableIterator<Row> resultIterator =
+                tEnv.executeSql(
+                                String.format(
+                                        "Call %s.sys.remove_server_tag_by_rack('rack-0', 'TEMPORARY_OFFLINE')",
+                                        CATALOG_NAME))
+                        .collect()) {
+            assertCallResult(resultIterator, new String[] {"+I[success]"});
+        }
+        assertThat(zkClient.getServerTags()).isNotPresent();
+
+        // 3. Add a server tag by multiple racks (rack-0, rack-1: server-0, server-1,
+        // server-3).
+        try (CloseableIterator<Row> resultIterator =
+                tEnv.executeSql(
+                                String.format(
+                                        "Call %s.sys.add_server_tag_by_rack('rack-0,rack-1', 'PERMANENT_OFFLINE')",
+                                        CATALOG_NAME))
+                        .collect()) {
+            assertCallResult(resultIterator, new String[] {"+I[success]"});
+        }
+        assertThat(zkClient.getServerTags().get().getServerTags())
+                .containsEntry(0, ServerTag.PERMANENT_OFFLINE)
+                .containsEntry(1, ServerTag.PERMANENT_OFFLINE)
+                .containsEntry(3, ServerTag.PERMANENT_OFFLINE)
+                .doesNotContainKey(2);
+
+        // cleanup
+        try (CloseableIterator<Row> resultIterator =
+                tEnv.executeSql(
+                                String.format(
+                                        "Call %s.sys.remove_server_tag_by_rack('rack-0,rack-1', 'PERMANENT_OFFLINE')",
+                                        CATALOG_NAME))
+                        .collect()) {
+            assertCallResult(resultIterator, new String[] {"+I[success]"});
+        }
+        assertThat(zkClient.getServerTags()).isNotPresent();
+
+        // 4. A rack with no currently registered TabletServer is a no-op.
+        try (CloseableIterator<Row> resultIterator =
+                tEnv.executeSql(
+                                String.format(
+                                        "Call %s.sys.add_server_tag_by_rack('rack-999', 'PERMANENT_OFFLINE')",
+                                        CATALOG_NAME))
+                        .collect()) {
+            assertCallResult(resultIterator, new String[] {"+I[success]"});
+        }
+        assertThat(zkClient.getServerTags()).isNotPresent();
+
+        try (CloseableIterator<Row> resultIterator =
+                tEnv.executeSql(
+                                String.format(
+                                        "Call %s.sys.remove_server_tag_by_rack('rack-999', 'PERMANENT_OFFLINE')",
+                                        CATALOG_NAME))
+                        .collect()) {
+            assertCallResult(resultIterator, new String[] {"+I[success]"});
+        }
+
+        // 5. empty racks — IllegalArgumentException with clear message.
+        assertThatThrownBy(
+                        () ->
+                                tEnv.executeSql(
+                                                String.format(
+                                                        "Call %s.sys.add_server_tag_by_rack('', 'PERMANENT_OFFLINE')",
+                                                        CATALOG_NAME))
+                                        .await())
+                .rootCause()
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("racks cannot be null or empty");
+
+        assertThatThrownBy(
+                        () ->
+                                tEnv.executeSql(
+                                                String.format(
+                                                        "Call %s.sys.add_server_tag_by_rack(',', 'PERMANENT_OFFLINE')",
+                                                        CATALOG_NAME))
+                                        .await())
+                .rootCause()
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("racks cannot be empty");
+
+        // 6. The serverTag remains case-insensitive even when no rack matches.
+        try (CloseableIterator<Row> resultIterator =
+                tEnv.executeSql(
+                                String.format(
+                                        "Call %s.sys.add_server_tag_by_rack('rack-999', 'permanent_offline')",
+                                        CATALOG_NAME))
+                        .collect()) {
+            assertCallResult(resultIterator, new String[] {"+I[success]"});
+        }
+        assertThat(zkClient.getServerTags()).isNotPresent();
     }
 
     @ParameterizedTest

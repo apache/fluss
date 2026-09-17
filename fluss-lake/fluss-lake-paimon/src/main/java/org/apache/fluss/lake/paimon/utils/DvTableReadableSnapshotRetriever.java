@@ -32,7 +32,6 @@ import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.utils.ExceptionUtils;
 import org.apache.fluss.utils.types.Tuple2;
 
-import org.apache.paimon.CoreOptions;
 import org.apache.paimon.Snapshot;
 import org.apache.paimon.data.BinaryRow;
 import org.apache.paimon.manifest.FileKind;
@@ -95,8 +94,8 @@ public class DvTableReadableSnapshotRetriever implements AutoCloseable {
      * incremental advancement of readable_snapshot per bucket:
      *
      * <ul>
-     *   <li>For buckets without L0 files: use offsets from the latest tiered snapshot. These
-     *       buckets can advance their readable offsets since all their data is in base files (L1+).
+     *   <li>For buckets without L0 files: use offsets from the APPEND snapshot immediately before
+     *       the compacted snapshot, since all data for these buckets is in base files (L1+).
      *   <li>For buckets with L0 files: traverse backwards through compacted snapshots to find the
      *       latest one that flushed this bucket's L0 files. Then find the latest snapshot that
      *       exactly holds those flushed L0 files, and use the previous APPEND snapshot's offset for
@@ -112,8 +111,8 @@ public class DvTableReadableSnapshotRetriever implements AutoCloseable {
      *       needed). This avoids redundant work when many APPEND snapshots follow a single COMPACT.
      *   <li>Otherwise, check which buckets have no L0 files and which have L0 files in the
      *       compacted snapshot
-     *   <li>For buckets without L0 files: use offsets from the latest tiered snapshot (all data is
-     *       in base files, safe to advance)
+     *   <li>For buckets without L0 files: use offsets from the APPEND snapshot immediately before
+     *       the compacted snapshot
      *   <li>For buckets with L0 files:
      *       <ol>
      *         <li>Traverse backwards through compacted snapshots starting from the latest one
@@ -210,60 +209,50 @@ public class DvTableReadableSnapshotRetriever implements AutoCloseable {
         // get all the bucket without l0 files and with l0 files
         Tuple2<Set<PaimonPartitionBucket>, Set<PaimonPartitionBucket>> bucketsWithoutL0AndWithL0 =
                 getBucketsWithoutL0AndWithL0(latestCompactedSnapshot);
-        Set<PaimonPartitionBucket> bucketsWithoutL0 = bucketsWithoutL0AndWithL0.f0;
         Set<PaimonPartitionBucket> bucketsWithL0 = bucketsWithoutL0AndWithL0.f1;
 
         // Track the earliest previousAppendSnapshot ID that was accessed
         // This represents the oldest snapshot that might still be needed
         long earliestSnapshotIdToKeep = LakeCommitResult.KEEP_ALL_PREVIOUS;
 
-        if (!bucketsWithoutL0.isEmpty()) {
-            // Get latest tiered offsets
-            LakeSnapshot latestTieredSnapshot;
-            try {
-                latestTieredSnapshot = flussAdmin.getLatestLakeSnapshot(tablePath).get();
-            } catch (Exception e) {
-                LOG.warn(
-                        "Failed to get latest lake snapshot from Fluss server for compacted snapshot {}; "
-                                + "skipping readable snapshot update.",
-                        latestCompactedSnapshot.id(),
-                        e);
-                return null;
-            }
-            checkTableConsistent(latestTieredSnapshot);
-            // for all buckets without l0, we can use the latest tiered offsets
-            for (PaimonPartitionBucket bucket : bucketsWithoutL0) {
-                TableBucket tableBucket = flussTableBucketMapper.toTableBucket(bucket);
-                if (tableBucket == null) {
-                    // can't map such paimon bucket to fluss, just ignore
-                    continue;
-                }
-                readableOffsets.put(
-                        tableBucket, latestTieredSnapshot.getTableBucketsOffset().get(tableBucket));
-            }
-        }
-
         Snapshot compactedSnapshotPreviousAppendSnapshot =
                 findPreviousSnapshot(latestCompactedSnapshot.id(), Snapshot.CommitKind.APPEND);
         if (compactedSnapshotPreviousAppendSnapshot == null) {
             LOG.warn(
                     "Failed to find a previous APPEND snapshot before compacted snapshot {} for table {}. "
-                            + "This prevents retrieving baseline offsets from Fluss.",
+                            + "This prevents retrieving offsets for the compacted snapshot from Fluss.",
                     latestCompactedSnapshot.id(),
                     tablePath);
             return null;
         }
 
-        // We keep snapshots because for a compacted snapshot, if a bucket has L0, we find the
-        // snapshot that exactly holds those L0, then use that snapshot's previous APPEND's tiered
-        // offset as the readable offset (that offset is safe to read). When the current compacted
-        // snapshot has no L0 in any bucket, we do not traverse; for any later compact we would
-        // traverse to (going backwards in time), if some bucket has L0, the snapshot that exactly
-        // holds that L0 must be after the current compacted snapshot on the timeline. So that
-        // snapshot's previous APPEND cannot be earlier than the current compacted snapshot's
-        // previous APPEND. Therefore the minimum snapshot we need to keep is the current compact's
-        // previous APPEND; set earliestSnapshotIdToKeep to it so it is not deleted. Earlier
-        // snapshots may be safely deleted.
+        // Cache LakeSnapshot by snapshot ID to avoid repeated getLakeSnapshot RPCs when many
+        // buckets share the same snapshot.
+        Map<Long, LakeSnapshot> lakeSnapshotBySnapshotId = new HashMap<>();
+
+        // The COMPACT contains data from its preceding APPEND. The latest Fluss snapshot may
+        // already be a newer APPEND after recovery, with offsets beyond this COMPACT's data.
+        LakeSnapshot tieredLakeSnapshot =
+                getOrFetchLakeSnapshot(
+                        compactedSnapshotPreviousAppendSnapshot.id(), lakeSnapshotBySnapshotId);
+        if (tieredLakeSnapshot == null) {
+            return null;
+        }
+        Map<TableBucket, Long> tieredOffsets = tieredLakeSnapshot.getTableBucketsOffset();
+
+        // Start with all offsets, including buckets whose files were removed by compaction.
+        // Buckets with L0 are resolved separately below; no-L0 buckets keep the APPEND offsets.
+        readableOffsets.putAll(tieredOffsets);
+        for (PaimonPartitionBucket bucket : bucketsWithL0) {
+            TableBucket tableBucket = flussTableBucketMapper.toTableBucket(bucket);
+            if (tableBucket != null) {
+                readableOffsets.remove(tableBucket);
+            }
+        }
+
+        // When all buckets have no L0, retain the preceding APPEND used for these offsets.
+        // This does not retain older flush history for idle buckets. If they receive new L0,
+        // a later lookup may pause until those buckets are flushed again.
         if (bucketsWithL0.isEmpty()) {
             earliestSnapshotIdToKeep = compactedSnapshotPreviousAppendSnapshot.id();
         }
@@ -272,10 +261,6 @@ public class DvTableReadableSnapshotRetriever implements AutoCloseable {
         // the buckets, the per-bucket offset should be updated to the corresponding compacted
         // snapshot offsets
         Set<PaimonPartitionBucket> allBucketsToAdvance = new HashSet<>(bucketsWithL0);
-
-        // Cache LakeSnapshot by snapshot ID to avoid repeated getLakeSnapshot RPCs when many
-        // buckets share the same snapshot.
-        Map<Long, LakeSnapshot> lakeSnapshotBySnapshotId = new HashMap<>();
 
         long earliestSnapshotId = checkNotNull(snapshotManager.earliestSnapshotId());
         // From latestCompacted forward traverse compacted snapshots
@@ -402,16 +387,6 @@ public class DvTableReadableSnapshotRetriever implements AutoCloseable {
             return null;
         }
 
-        // we use the previous append snapshot tiered offset of the compacted snapshot as the
-        // compacted snapshot tiered offsets
-        LakeSnapshot tieredLakeSnapshot =
-                getOrFetchLakeSnapshot(
-                        compactedSnapshotPreviousAppendSnapshot.id(), lakeSnapshotBySnapshotId);
-        if (tieredLakeSnapshot == null) {
-            return null;
-        }
-        Map<TableBucket, Long> tieredOffsets = tieredLakeSnapshot.getTableBucketsOffset();
-
         // Return the latest compacted snapshot ID as the unified readable snapshot
         // All buckets can read from this snapshot's base files, then continue from their
         // respective readable offsets
@@ -493,16 +468,10 @@ public class DvTableReadableSnapshotRetriever implements AutoCloseable {
         Set<PaimonPartitionBucket> bucketsWithoutL0 = new HashSet<>();
         Set<PaimonPartitionBucket> bucketsWithL0 = new HashSet<>();
 
-        // Scan the snapshot to get all splits including level0
-        Map<String, String> scanOptions = new HashMap<>();
-        scanOptions.put(CoreOptions.SCAN_SNAPSHOT_ID.key(), String.valueOf(snapshot.id()));
-        // hacky: set batch scan mode to compact to make sure we can get l0 level files
-        scanOptions.put(
-                CoreOptions.BATCH_SCAN_MODE.key(), CoreOptions.BatchScanMode.COMPACT.getValue());
-
+        // Scan the specified snapshot for all data files, including L0 files.
         Map<BinaryRow, Map<Integer, List<ManifestEntry>>> manifestsByBucket =
                 FileStoreScan.Plan.groupByPartFiles(
-                        fileStoreTable.copy(scanOptions).store().newScan().plan().files());
+                        fileStoreTable.store().newScan().withSnapshot(snapshot).plan().files());
 
         for (Map.Entry<BinaryRow, Map<Integer, List<ManifestEntry>>> manifestsByBucketEntry :
                 manifestsByBucket.entrySet()) {

@@ -195,6 +195,23 @@ pub struct GetTableInfoResponse {
     #[prost(int64, optional, tag = "7")]
     pub bucket_count_epoch: ::core::option::Option<i64>,
 }
+/// describe buckets request and response
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct DescribeBucketsRequest {
+    #[prost(message, required, tag = "1")]
+    pub table_path: PbTablePath,
+    #[prost(message, optional, tag = "2")]
+    pub partition_spec: ::core::option::Option<PbPartitionSpec>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct DescribeBucketsResponse {
+    #[prost(message, required, tag = "1")]
+    pub table_path: PbTablePath,
+    #[prost(int64, required, tag = "2")]
+    pub table_id: i64,
+    #[prost(message, repeated, tag = "3")]
+    pub bucket_info: ::prost::alloc::vec::Vec<PbBucketInfo>,
+}
 /// list tables request and response
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ListTablesRequest {
@@ -991,6 +1008,15 @@ pub struct AddServerTagRequest {
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct AddServerTagResponse {}
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct AddServerTagByRackRequest {
+    #[prost(string, repeated, tag = "1")]
+    pub racks: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    #[prost(int32, required, tag = "2")]
+    pub server_tag: i32,
+}
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct AddServerTagByRackResponse {}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct RemoveServerTagRequest {
     #[prost(int32, repeated, tag = "1")]
     pub server_ids: ::prost::alloc::vec::Vec<i32>,
@@ -999,6 +1025,15 @@ pub struct RemoveServerTagRequest {
 }
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct RemoveServerTagResponse {}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct RemoveServerTagByRackRequest {
+    #[prost(string, repeated, tag = "1")]
+    pub racks: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    #[prost(int32, required, tag = "2")]
+    pub server_tag: i32,
+}
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct RemoveServerTagByRackResponse {}
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct RebalanceRequest {
     #[prost(int32, repeated, tag = "1")]
@@ -1185,6 +1220,28 @@ pub struct PbBucketMetadata {
     #[prost(int32, optional, tag = "5")]
     pub bucket_epoch: ::core::option::Option<i32>,
     #[prost(int32, repeated, tag = "6")]
+    pub isr: ::prost::alloc::vec::Vec<i32>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct PbBucketInfo {
+    #[prost(int64, optional, tag = "1")]
+    pub partition_id: ::core::option::Option<i64>,
+    #[prost(string, optional, tag = "2")]
+    pub partition_name: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(int32, required, tag = "3")]
+    pub bucket_id: i32,
+    /// optional as the leader may not be elected yet
+    #[prost(int32, optional, tag = "4")]
+    pub leader_id: ::core::option::Option<i32>,
+    #[prost(int32, repeated, tag = "5")]
+    pub replica_id: ::prost::alloc::vec::Vec<i32>,
+    #[prost(int32, optional, tag = "6")]
+    pub leader_epoch: ::core::option::Option<i32>,
+    /// Generation of the complete leader/ISR state.
+    /// Absence indicates legacy metadata; -1 indicates no leader/ISR state exists.
+    #[prost(int32, optional, tag = "7")]
+    pub bucket_epoch: ::core::option::Option<i32>,
+    #[prost(int32, repeated, tag = "8")]
     pub isr: ::prost::alloc::vec::Vec<i32>,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]

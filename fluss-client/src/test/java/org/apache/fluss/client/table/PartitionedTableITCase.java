@@ -41,6 +41,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.TimeUnit;
 
 import static org.apache.fluss.record.TestData.DATA1_TABLE_PATH_PK;
 import static org.apache.fluss.testutils.DataTestUtils.row;
@@ -164,8 +165,10 @@ class PartitionedTableITCase extends ClientToServerITCaseBase {
 
     @Test
     void testWriteToNonExistsPartitionWhenEnabledDynamicPartition() throws Exception {
-        Schema schema = createPartitionedTable(DATA1_TABLE_PATH_PK, false);
-        Table table = conn.getTable(DATA1_TABLE_PATH_PK);
+        // Keep this case independent of other tests that delete and recreate their tables.
+        TablePath tablePath = TablePath.of("test_db_1", "test_dynamic_created_partitions");
+        Schema schema = createPartitionedTable(tablePath, false);
+        Table table = conn.getTable(tablePath);
         AppendWriter appendWriter = table.newAppend().createWriter();
         int partitionSize = 5;
 
@@ -185,7 +188,7 @@ class PartitionedTableITCase extends ClientToServerITCaseBase {
                 waitValue(
                         () -> {
                             List<PartitionInfo> partitionInfos =
-                                    admin.listPartitionInfos(DATA1_TABLE_PATH_PK).get();
+                                    admin.listPartitionInfos(tablePath).get();
                             if (partitionInfos.size() == partitionSize) {
                                 return Optional.of(partitionInfos);
                             } else {
@@ -220,14 +223,22 @@ class PartitionedTableITCase extends ClientToServerITCaseBase {
             upsertWriter.upsert(row).get();
         }
 
-        // Dynamic partition creation is synchronous (the bucket id needs the partition's own
-        // bucket count), so a partition that cannot be created fails the record right away.
-        assertThatThrownBy(() -> upsertWriter.upsert(row(10, "a" + 10, "10")).get())
+        // Asynchronous creation may fail before or after the batch is registered. Both paths
+        // must preserve the creation error and stop accepting writes to unresolved partitions.
+        assertThatThrownBy(
+                        () ->
+                                upsertWriter
+                                        .upsert(row(10, "a" + 10, "10"))
+                                        .get(10, TimeUnit.SECONDS))
                 .rootCause()
                 .isInstanceOf(TooManyPartitionsException.class)
                 .hasMessageContaining(
                         "Exceed the maximum number of partitions for table "
                                 + "test_db_1.test_pk_table_1, only allow 10 partitions.");
+        assertThatThrownBy(() -> upsertWriter.upsert(row(11, "late", "11")).get())
+                .rootCause()
+                .isInstanceOf(TooManyPartitionsException.class);
+        upsertWriter.flush();
     }
 
     private Schema createPartitionedTable(TablePath tablePath, boolean isPrimaryTable)
