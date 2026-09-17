@@ -55,11 +55,12 @@ import java.util.stream.Collectors;
  * as an engine-level error on every connection.
  *
  * <p>The per-listener client-certificate requirement <b>is</b> held here: a TLS listener whose
- * {@code security.protocol.map} entry is {@code mTLS} requires a client certificate, which the
- * server can only validate against an explicitly configured truststore — so such a listener without
- * {@code security.ssl.truststore.path} is rejected here rather than silently falling back to the
- * JVM default truststore. The server pipeline reads the requirement per listener via {@link
- * #requiresClientAuth(String)} instead of re-deriving it from the raw configuration.
+ * {@code security.protocol.map} entry is {@code mTLS} (matched by an exact listener name) requires
+ * a client certificate, which the server can only validate against an explicitly configured
+ * truststore — so such a listener without {@code security.ssl.truststore.path} is rejected here
+ * rather than silently falling back to the JVM default truststore. The server pipeline reads the
+ * requirement per listener via {@link #requiresClientAuth(String)} instead of re-deriving it from
+ * the raw configuration.
  */
 @Internal
 public final class SslConfig {
@@ -143,6 +144,13 @@ public final class SslConfig {
                     ConfigOptions.SERVER_SSL_ENABLED_LISTENERS.key());
         }
 
+        // The listener name is looked up exactly and the protocol name compared ignoring case,
+        // because that is how each is resolved at runtime: FlussProtocolPlugin selects a listener's
+        // authenticator with a plain map lookup on security.protocol.map, while
+        // AuthenticationFactory
+        // matches a plugin to a protocol name with equalsIgnoreCase. Matching listener names
+        // loosely
+        // here would classify a listener as mTLS that the server then authenticates as PLAINTEXT.
         Map<String, String> protocolMap = conf.get(ConfigOptions.SERVER_SECURITY_PROTOCOL_MAP);
         Set<String> clientAuthListeners =
                 enabledListeners.stream()
