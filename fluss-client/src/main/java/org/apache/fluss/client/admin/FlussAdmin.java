@@ -200,27 +200,6 @@ public class FlussAdmin implements Admin {
                                         null,
                                         null,
                                         null);
-                        // Add all coordinator servers (leader + standbys)
-                        //                        List<CoordinatorServerInfo> coordinatorServerInfos
-                        // =
-                        //                                cluster.getCoordinatorServerInfos();
-                        //                        if (coordinatorServerInfos != null &&
-                        // !coordinatorServerInfos.isEmpty()) {
-                        //                            for (CoordinatorServerInfo
-                        // coordinatorServerInfo :
-                        //                                    coordinatorServerInfos) {
-                        //
-                        // serverNodeList.add(coordinatorServerInfo.getNode());
-                        //                            }
-                        //                        } else {
-                        //                            // Fallback to single coordinator for backward
-                        // compatibility
-                        //                            ServerNode singleCoordinator =
-                        // cluster.getCoordinatorServer();
-                        //                            if (singleCoordinator != null) {
-                        //                                serverNodeList.add(singleCoordinator);
-                        //                            }
-                        //                        }
                         serverNodeList.add(cluster.getCoordinatorServer());
                         serverNodeList.addAll(cluster.getAliveTabletServerList());
                         future.complete(serverNodeList);
