@@ -35,6 +35,14 @@ TARGETS = (
 LOCAL_PACKAGES = {"fluss-gateway", "fluss-rs"}
 SEPARATOR = "-" * 80
 
+# These licenses cover incorporated code or data, independently of the crate's
+# top-level SPDX choice. Keep the reviewed paths explicit: a renamed or removed
+# file after a dependency update must trigger a fresh review, not silent omission.
+INCORPORATED_LICENSE_FILES = {
+    "regex-syntax": ("src/unicode_tables/LICENSE-UNICODE",),
+    "zstd-sys": ("LICENSE.BSD-3-Clause", "zstd/LICENSE"),
+}
+
 
 def cargo_metadata(gateway_dir: Path, target: str) -> dict:
     command = [
@@ -126,6 +134,20 @@ def license_terms(expression: str) -> Tuple[str, ...]:
 
 
 def license_files(package: dict, selected_terms: Tuple[str, ...]) -> List[Path]:
+    package_dir = Path(package["manifest_path"]).parent
+    incorporated = []
+    for relative_path in INCORPORATED_LICENSE_FILES.get(package["name"], ()):
+        path = package_dir / relative_path
+        if not path.is_file():
+            raise RuntimeError(
+                f"Missing incorporated license {relative_path} for "
+                f"{package['name']}@{package['version']}; review the updated crate."
+            )
+        incorporated.append(path)
+    return sorted(set(crate_license_files(package, selected_terms) + incorporated))
+
+
+def crate_license_files(package: dict, selected_terms: Tuple[str, ...]) -> List[Path]:
     package_dir = Path(package["manifest_path"]).parent
     candidates = sorted(
         path
@@ -275,7 +297,7 @@ def generate_license(repository_root: Path, packages: Iterable[dict]) -> str:
             f"The supported Linux Gateway binaries use the Rust crate {package_name}.",
             f"Project URL: {homepage}",
             f"Declared license: {expression}",
-            f"Selected license obligations: {' AND '.join(selected_terms)}",
+            f"Selected crate license: {' AND '.join(selected_terms)}",
         ]
         reproduction = tuple(
             (
@@ -310,7 +332,8 @@ def generate_license(repository_root: Path, packages: Iterable[dict]) -> str:
             "",
             "The supported Linux Gateway binaries include the following Rust crates",
             "under the Apache License, Version 2.0. Crates with additional conjunctive",
-            "license obligations are also reproduced in the sections below.",
+            "license obligations or incorporated components with separate licenses",
+            "are also reproduced in the sections below.",
             "",
             "\n".join(apache_dependencies),
         ]
