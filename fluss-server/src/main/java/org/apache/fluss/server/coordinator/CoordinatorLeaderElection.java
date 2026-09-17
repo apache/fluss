@@ -55,12 +55,10 @@ import static org.apache.fluss.utils.Preconditions.checkArgument;
  *   <li>Can be re-elected as leader multiple times
  * </ul>
  *
- * <p>When the ZooKeeper session is lost, ZooKeeper deletes the ephemeral election node of this
- * coordinator, so the previous election participation becomes stale. After the connection returns,
- * the election is restarted with a fresh latch: the fresh latch registers a new election node
- * belonging to the current session and determines leadership through the normal election. A short
- * connection suspension that keeps the session does not restart the election; the existing latch
- * revalidates leadership on reconnection instead.
+ * <p>A lost ZooKeeper session deletes the election node of the latch, so its participation is
+ * stale. The election is then restarted with a fresh latch that registers a new election node for
+ * the next session. A connection suspension that keeps the session does not restart the election,
+ * because the election node of the latch is still valid.
  *
  * <p>Leadership callbacks and state transitions are serialized by {@code leaderCallbackExecutor}.
  * The state machine is:
@@ -89,17 +87,13 @@ public class CoordinatorLeaderElection implements AutoCloseable {
     private final String serverId;
     private final CuratorFramework curatorClient;
 
-    /**
-     * The latch currently participating in the election. Replaced with a fresh latch when the
-     * ZooKeeper session was lost and the connection returns, see {@link #restartElection()}.
-     */
+    /** The latch participating in the election, replaced when the ZooKeeper session was lost. */
     private volatile LeaderLatch leaderLatch;
-
     // Single-threaded executor to run leader init/cleanup callbacks outside Curator's EventThread.
     // Curator's LeaderLatchListener callbacks run on its internal EventThread; performing
     // synchronous ZK operations there causes deadlock because ZK response dispatch also
     // needs that same thread. Serial execution also guarantees that leader initialization,
-    // cleanup, state transitions, and election restarts never overlap.
+    // cleanup, and state transitions never overlap.
     private final ExecutorService leaderCallbackExecutor;
     private final CompletableFuture<Void> closeFuture = new CompletableFuture<>();
     private final long closeTimeoutMs;
@@ -107,25 +101,17 @@ public class CoordinatorLeaderElection implements AutoCloseable {
     private final AtomicBoolean closing = new AtomicBoolean(false);
     private volatile State state = State.INITIAL;
 
-    private volatile Runnable initLeaderServices;
+    private volatile LeaderLatchListener latchListener;
     private volatile Consumer<Throwable> cleanupLeaderServices;
 
     /**
-     * Marks that the ZooKeeper session was lost; the election restarts on the next reconnection.
-     */
-    private final AtomicBoolean sessionLost = new AtomicBoolean(false);
-
-    /**
-     * Watches for a lost ZooKeeper session and schedules the election restart for the first
-     * reconnection after it. A reconnection without a preceding session loss keeps the current
-     * latch, whose election node still belongs to the alive session.
+     * Restarts the election when the ZooKeeper session is lost. A suspended connection that keeps
+     * the session is not handled here: the latch keeps its election node and revalidates leadership
+     * on reconnection.
      */
     private final ConnectionStateListener sessionLossListener =
             (client, newState) -> {
                 if (newState == ConnectionState.LOST) {
-                    sessionLost.set(true);
-                } else if (newState == ConnectionState.RECONNECTED
-                        && sessionLost.compareAndSet(true, false)) {
                     submitLeadershipEvent(this::restartElection);
                 }
             };
@@ -155,33 +141,16 @@ public class CoordinatorLeaderElection implements AutoCloseable {
      * Starts the leader election process asynchronously.
      *
      * <p>After the first election, the server will continue to participate in future elections.
-     * When re-elected as leader, the initLeaderServices callback will be invoked again. If the
-     * ZooKeeper session is lost, the election is restarted with a fresh latch once the connection
-     * returns.
+     * When re-elected as leader, the initLeaderServices callback will be invoked again. When the
+     * ZooKeeper session is lost, the election is restarted with a fresh latch.
      *
      * @param initLeaderServices the callback to initialize leader services once elected
      * @param cleanupLeaderServices the callback to clean up leader services when losing leadership
      */
     public void startElectLeaderAsync(
             Runnable initLeaderServices, Consumer<Throwable> cleanupLeaderServices) {
-        this.initLeaderServices = initLeaderServices;
         this.cleanupLeaderServices = cleanupLeaderServices;
-        curatorClient.getConnectionStateListenable().addListener(sessionLossListener);
-        startLatch();
-    }
-
-    /** Creates a latch, subscribes to its leadership notifications, and starts it. */
-    private void startLatch() {
-        if (closing.get()) {
-            return;
-        }
-
-        LeaderLatch latch =
-                new LeaderLatch(
-                        curatorClient,
-                        ZkData.CoordinatorElectionZNode.path(),
-                        String.valueOf(serverId));
-        latch.addListener(
+        this.latchListener =
                 new LeaderLatchListener() {
                     @Override
                     public void isLeader() {
@@ -192,39 +161,67 @@ public class CoordinatorLeaderElection implements AutoCloseable {
                     public void notLeader() {
                         submitLeadershipEvent(CoordinatorLeaderElection.this::becomeStandby);
                     }
-                });
-        this.leaderLatch = latch;
+                };
+        curatorClient.getConnectionStateListenable().addListener(sessionLossListener);
+        startLatch();
+    }
+
+    /** Starts a latch that participates in the election on behalf of the current session. */
+    private void startLatch() {
+        if (closing.get()) {
+            return;
+        }
+
+        LeaderLatch latch =
+                new LeaderLatch(
+                        curatorClient,
+                        ZkData.CoordinatorElectionZNode.path(),
+                        String.valueOf(serverId));
+        latch.addListener(latchListener);
+        leaderLatch = latch;
         try {
+            // The latch waits for the connection before it registers its election node, so
+            // starting it while disconnected does not need a later reconnection event.
             latch.start();
             LOG.info("Coordinator server {} started leader election.", serverId);
         } catch (Exception e) {
             LOG.error("Failed to start LeaderLatch for server {}", serverId, e);
         }
+
+        // A close() running concurrently may not have seen this latch yet.
+        if (closing.get()) {
+            closeLatch(latch);
+        }
     }
 
     /**
-     * Restarts the election after the ZooKeeper session was lost and the connection has returned.
+     * Restarts the election with a fresh latch after the ZooKeeper session was lost.
      *
-     * <p>The session loss deletes the ephemeral election node of this coordinator, so the old latch
-     * no longer represents a valid participation: its election node is gone and any leadership it
-     * held was already revoked when the session was lost. The old latch is abandoned and a fresh
-     * latch is started instead, which registers a new election node for the current session and
-     * determines leadership through the normal election, including the epoch fencing in the leader
-     * initialization. Creating the new election node also recreates the election parent if it was
-     * garbage-collected while empty, so the restart recovers even when the election parent is
-     * missing.
+     * <p>The lost session deletes the election node of the latch, so its participation is stale.
+     * Local leadership is revoked before the stale latch is abandoned, because the leadership of a
+     * lost session must never survive into the election of the next session. The fresh latch
+     * registers a new election node with parents created as needed, which also recreates an
+     * election parent that was garbage-collected while empty.
      */
     private void restartElection() {
         LOG.info(
-                "Coordinator server {}: ZooKeeper session was lost, restarting the leader "
-                        + "election.",
+                "Coordinator server {}: ZooKeeper session was lost, restarting leader election.",
                 serverId);
-        try {
-            leaderLatch.close();
-        } catch (Exception e) {
-            LOG.warn("Failed to close the stale LeaderLatch for server {}.", serverId, e);
-        }
+        becomeStandby();
+        closeLatch(leaderLatch);
         startLatch();
+    }
+
+    /** Closes a latch that is still participating in the election. */
+    private void closeLatch(LeaderLatch latch) {
+        if (latch == null || latch.getState() != LeaderLatch.State.STARTED) {
+            return;
+        }
+        try {
+            latch.close();
+        } catch (Exception e) {
+            LOG.error("Failed to close LeaderLatch for server {}.", serverId, e);
+        }
     }
 
     @Override
@@ -233,11 +230,7 @@ public class CoordinatorLeaderElection implements AutoCloseable {
 
         if (closing.compareAndSet(false, true)) {
             curatorClient.getConnectionStateListenable().removeListener(sessionLossListener);
-            try {
-                leaderLatch.close();
-            } catch (Exception e) {
-                LOG.error("Failed to close LeaderLatch for server {}.", serverId, e);
-            }
+            closeLatch(leaderLatch);
 
             // Events submitted after closing starts are ignored by their executor-side check.
             // Since the executor is single-threaded, this task runs after all leadership work

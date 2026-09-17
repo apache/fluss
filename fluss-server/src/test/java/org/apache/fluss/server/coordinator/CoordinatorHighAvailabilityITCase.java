@@ -227,16 +227,13 @@ class CoordinatorHighAvailabilityITCase {
     }
 
     /**
-     * Regression test: a single-coordinator cluster must regain leadership without a restart after
-     * a ZooKeeper session expiration, even when the now-empty election parent node has been
-     * deleted.
+     * A single-coordinator cluster must regain leadership without a restart of the process after a
+     * ZooKeeper session expiration, even when the now-empty election parent node has been deleted.
      *
-     * <p>The LeaderLatch creates the election parent {@code /coordinators/election} as a container
-     * znode. When the session expires, ZooKeeper deletes the ephemeral latch node, and the empty
-     * container parent can then be garbage-collected by ZooKeeper while the coordinator is still
-     * recovering. This is simulated here by deleting the parent right after the session expiration.
-     * The coordinator must restart the election and become leader again without a restart of the
-     * process, registering a fresh election node under the recreated parent.
+     * <p>The election parent {@code /coordinators/election} is created as a container znode. When
+     * the session expires, ZooKeeper deletes the ephemeral election node, and the empty container
+     * parent can then be garbage-collected by ZooKeeper while the coordinator is still recovering.
+     * This is simulated here by deleting the parent right after the session expiration.
      */
     @Test
     void testRegainsLeadershipAfterSessionExpirationWithElectionParentDeleted() throws Exception {
@@ -249,10 +246,10 @@ class CoordinatorHighAvailabilityITCase {
         List<String> electionNodesBefore = zookeeperClient.getChildren(electionPath);
         assertThat(electionNodesBefore).hasSize(1);
 
-        // kill the coordinator's ZK session: ZooKeeper deletes the ephemeral latch node
+        // kill the coordinator's ZK session: ZooKeeper deletes the ephemeral election node
         killZkSession(coordinatorServer1);
 
-        // wait until the latch node is gone, then simulate ZooKeeper's container GC by
+        // wait until the election node is gone, then simulate ZooKeeper's container GC by
         // deleting the now-empty election parent
         waitUntil(
                 () -> {
@@ -263,13 +260,9 @@ class CoordinatorHighAvailabilityITCase {
                     }
                 },
                 Duration.ofSeconds(30),
-                "latch node was not deleted after session expiration");
+                "election node was not deleted after session expiration");
         zookeeperClient.deletePath(electionPath);
 
-        // the coordinator reconnects with a new session and registers itself again
-        waitUntilServerRegistered(coordinatorServer1);
-
-        // leadership must be regained without a restart
         waitUntil(
                 () -> coordinatorServer1.getCoordinatorService().isLeader(),
                 Duration.ofSeconds(30),
@@ -277,23 +270,23 @@ class CoordinatorHighAvailabilityITCase {
                         + "parent deletion");
         createGatewayForServer(coordinatorServer1).metadata(new MetadataRequest()).get();
 
-        // the recovered leader must actually participate in the election again with a fresh
-        // election node: the old node is gone with the lost session, and since the election
-        // parent was deleted, the new node can only be created by the restarted election
+        // the restarted election registers a fresh election node: the old node is gone with the
+        // lost session, and since the parent was deleted, the new node can only come from the
+        // restarted election
         assertThat(zookeeperClient.getChildren(electionPath))
                 .hasSize(1)
                 .isNotEqualTo(electionNodesBefore);
     }
 
     /**
-     * A short ZooKeeper outage that suspends the connection but keeps the session must not restart
-     * the election: the existing latch revalidates leadership on reconnection with the same
-     * election node, which still belongs to the alive session.
+     * A ZooKeeper outage that suspends the connection but keeps the session must not restart the
+     * election: the latch keeps its election node, which still belongs to the alive session, and
+     * revalidates leadership on reconnection.
      */
     @Test
     void testSuspensionKeepsElectionNodeWithoutRestart() throws Exception {
-        // a session timeout well above the outage, so the outage suspends the connection but
-        // keeps the session alive
+        // a session timeout well above the outage keeps the session alive while the connection
+        // is suspended
         Configuration conf = createConfiguration();
         conf.set(ConfigOptions.ZOOKEEPER_SESSION_TIMEOUT, Duration.ofSeconds(30));
         coordinatorServer1 = new CoordinatorServer(conf);
@@ -301,11 +294,9 @@ class CoordinatorHighAvailabilityITCase {
         waitUntilCoordinatorServerElected();
 
         String electionPath = ZkData.CoordinatorElectionZNode.path();
-        List<String> childrenBefore = zookeeperClient.getChildren(electionPath);
-        assertThat(childrenBefore).hasSize(1);
+        List<String> electionNodesBefore = zookeeperClient.getChildren(electionPath);
+        assertThat(electionNodesBefore).hasSize(1);
 
-        // stop the ZK server long enough to suspend the connection, but shorter than the session
-        // timeout, then restart it
         ZOO_KEEPER_EXTENSION_WRAPPER.getCustomExtension().stop();
         try {
             Thread.sleep(8000);
@@ -313,7 +304,6 @@ class CoordinatorHighAvailabilityITCase {
             ZOO_KEEPER_EXTENSION_WRAPPER.getCustomExtension().restart();
         }
 
-        // the existing latch revalidates leadership on reconnection, with the same election node
         waitUntil(
                 () -> coordinatorServer1.getCoordinatorService().isLeader(),
                 Duration.ofSeconds(30),
@@ -321,7 +311,9 @@ class CoordinatorHighAvailabilityITCase {
         waitUntil(
                 () -> {
                     try {
-                        return zookeeperClient.getChildren(electionPath).equals(childrenBefore);
+                        return zookeeperClient
+                                .getChildren(electionPath)
+                                .equals(electionNodesBefore);
                     } catch (Exception e) {
                         return false;
                     }
