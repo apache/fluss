@@ -30,7 +30,6 @@ import org.apache.fluss.metrics.SimpleCounter;
 import org.apache.fluss.metrics.ThreadSafeSimpleCounter;
 import org.apache.fluss.metrics.groups.AbstractMetricGroup;
 import org.apache.fluss.metrics.registry.MetricRegistry;
-import org.apache.fluss.server.kv.prewrite.KvPreWriteBufferMemoryLedger;
 import org.apache.fluss.server.kv.rocksdb.RocksDBStatistics;
 
 import java.util.Map;
@@ -91,9 +90,8 @@ public class TabletServerMetricGroup extends AbstractMetricGroup {
 
     private volatile long sharedWriteBufferCapacity;
 
-    /** Ledger shared by all KV pre-write buffers, serving as the single accounting source. */
-    private final KvPreWriteBufferMemoryLedger kvPreWriteBufferMemoryLedger =
-            new KvPreWriteBufferMemoryLedger();
+    /** Supplier for the server-wide pre-write buffer memory usage, set by KvManager. */
+    private volatile LongSupplier kvPreWriteBufferMemoryUsageSupplier = () -> 0L;
 
     public TabletServerMetricGroup(
             MetricRegistry registry, String clusterId, String rack, String hostname, int serverId) {
@@ -157,8 +155,9 @@ public class TabletServerMetricGroup extends AbstractMetricGroup {
         // Register server-level RocksDB aggregated metrics
         registerServerRocksDBMetrics();
 
-        // Register server-level pre-write buffer aggregated metrics
-        registerServerKvPreWriteBufferMetrics();
+        gauge(
+                MetricNames.KV_PRE_WRITE_BUFFER_MEMORY_USAGE_BYTES,
+                () -> kvPreWriteBufferMemoryUsageSupplier.getAsLong());
     }
 
     /**
@@ -224,21 +223,15 @@ public class TabletServerMetricGroup extends AbstractMetricGroup {
     }
 
     /**
-     * Register server-level pre-write buffer aggregated metrics. These metrics aggregate the memory
-     * usage of the pre-write buffers of all KV tablets in this server.
+     * Sets the supplier for the server-wide pre-write buffer memory usage gauge. Called by
+     * KvManager, which owns the shared accounting counter.
+     *
+     * @param usageSupplier supplier for the current total estimated memory usage of all KV
+     *     pre-write buffers in bytes
      */
-    private void registerServerKvPreWriteBufferMetrics() {
-        gauge(
-                MetricNames.KV_PRE_WRITE_BUFFER_MEMORY_USAGE_BYTES,
-                kvPreWriteBufferMemoryLedger::memoryUsageBytes);
-        gauge(
-                MetricNames.KV_PRE_WRITE_BUFFER_ENTRY_COUNT,
-                kvPreWriteBufferMemoryLedger::entryCount);
-    }
-
-    /** Returns the memory ledger shared by all KV pre-write buffers of this server. */
-    public KvPreWriteBufferMemoryLedger kvPreWriteBufferMemoryLedger() {
-        return kvPreWriteBufferMemoryLedger;
+    public void setKvPreWriteBufferMemoryUsageMetrics(LongSupplier usageSupplier) {
+        this.kvPreWriteBufferMemoryUsageSupplier =
+                checkNotNull(usageSupplier, "usageSupplier must not be null");
     }
 
     /**

@@ -114,6 +114,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
@@ -331,6 +332,11 @@ class KvTabletTest {
                     schemaGetter,
                     tableConf.getChangelogImage(),
                     KvManager.getDefaultRateLimiter(),
+                    null,
+                    null,
+                    new AtomicLong(),
+                    new KvFlushScheduler(conf),
+                    null,
                     autoIncrementManager,
                     clock,
                     tableConf);
@@ -351,6 +357,8 @@ class KvTabletTest {
                 tableConf.getChangelogImage(),
                 KvManager.getDefaultRateLimiter(),
                 null,
+                null,
+                new AtomicLong(),
                 kvFlushScheduler,
                 null,
                 autoIncrementManager,
