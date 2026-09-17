@@ -165,6 +165,59 @@ class SslContextFactoryTest {
     }
 
     @Test
+    void testHostnameVerificationRejectsCertificateForAnotherHost() throws Exception {
+        SelfSignedCertificate otherHost = TestSslUtils.generateCertificate("other.example.com");
+        Path otherKeyStore = TestSslUtils.createKeyStore(tempDir, "other-keystore.jks", otherHost);
+        Path otherTrustStore =
+                TestSslUtils.createTrustStore(tempDir, "other-truststore.jks", otherHost);
+
+        Configuration serverConf = new Configuration();
+        TestSslUtils.setServerSslConfig(serverConf, otherKeyStore, null);
+        Configuration clientConf = new Configuration();
+        // the certificate is trusted; only the name it was issued for does not match the host.
+        TestSslUtils.setClientSslConfig(clientConf, otherTrustStore, null);
+
+        HandshakeResult result = handshake(serverConf, clientConf, false, "localhost", "https");
+
+        assertThat(result.clientHandshake.isSuccess()).isFalse();
+        assertThat(result.clientHandshake.cause()).hasMessageContaining("localhost");
+    }
+
+    @Test
+    void testHostnameVerificationAcceptsMatchingCertificate() throws Exception {
+        Configuration serverConf = new Configuration();
+        TestSslUtils.setServerSslConfig(serverConf, keyStore, null);
+        Configuration clientConf = new Configuration();
+        TestSslUtils.setClientSslConfig(clientConf, trustStore, null);
+
+        // same setup as the rejection above, with a certificate issued for the host dialled.
+        HandshakeResult result = handshake(serverConf, clientConf, false, "localhost", "https");
+
+        assertThat(result.clientHandshake.isSuccess()).isTrue();
+    }
+
+    @Test
+    void testClientRejectsServerCertificateOutsideItsTruststore() throws Exception {
+        SelfSignedCertificate untrusted = TestSslUtils.generateCertificate("localhost");
+        Path untrustedTrustStore =
+                TestSslUtils.createTrustStore(tempDir, "untrusted-truststore.jks", untrusted);
+
+        Configuration serverConf = new Configuration();
+        TestSslUtils.setServerSslConfig(serverConf, keyStore, null);
+        Configuration clientConf = new Configuration();
+        // trusts a different self-signed certificate than the one the server presents.
+        TestSslUtils.setClientSslConfig(clientConf, untrustedTrustStore, null);
+
+        HandshakeResult result = handshake(serverConf, clientConf, false);
+
+        assertThat(result.clientHandshake.isSuccess()).isFalse();
+        // both certificates are issued for localhost, so the JDK finds a trust anchor by name and
+        // then rejects it on the signature: trust is decided by key, not by subject.
+        assertThat(result.clientHandshake.cause())
+                .hasMessageContaining("PKIX path validation failed");
+    }
+
+    @Test
     void testClientAuthRejectsClientWithoutCertificate() throws Exception {
         Configuration serverConf = new Configuration();
         TestSslUtils.setServerSslConfig(serverConf, keyStore, trustStore);
@@ -242,19 +295,32 @@ class SslContextFactoryTest {
      */
     private static HandshakeResult handshake(
             Configuration serverConf, Configuration clientConf, boolean requireClientAuth) {
+        // endpoint identification disabled: these tests are about the certificate exchange.
+        return handshake(serverConf, clientConf, requireClientAuth, "localhost", "");
+    }
+
+    /**
+     * Pump a TLS handshake, with the client dialling {@code host} and applying {@code
+     * endpointIdentificationAlgorithm} to the server certificate it receives.
+     */
+    private static HandshakeResult handshake(
+            Configuration serverConf,
+            Configuration clientConf,
+            boolean requireClientAuth,
+            String host,
+            String endpointIdentificationAlgorithm) {
         SslHandler serverHandler =
                 SslContextFactory.createServerSslHandler(
                         SslContextFactory.createServerSslContext(serverConf).get(),
                         ByteBufAllocator.DEFAULT,
                         requireClientAuth);
-        // endpoint identification disabled: these tests are about the certificate exchange.
         SslHandler clientHandler =
                 SslContextFactory.createClientSslHandler(
                         SslContextFactory.createClientSslContext(clientConf).get(),
                         ByteBufAllocator.DEFAULT,
-                        "localhost",
+                        host,
                         9123,
-                        "");
+                        endpointIdentificationAlgorithm);
 
         EmbeddedChannel serverChannel = new EmbeddedChannel(serverHandler);
         EmbeddedChannel clientChannel = new EmbeddedChannel(clientHandler);
