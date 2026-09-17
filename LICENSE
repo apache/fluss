@@ -233,6 +233,8 @@ Apache Flink
 ./fluss-common/src/main/java/org/apache/fluss/memory/MemorySegment.java
 ./fluss-common/src/main/java/org/apache/fluss/memory/MemoryUtils.java
 ./fluss-common/src/main/java/org/apache/fluss/metrics/MeterView.java
+./fluss-common/src/main/java/org/apache/fluss/metrics/filter/DefaultMetricFilter.java
+./fluss-common/src/main/java/org/apache/fluss/metrics/filter/MetricFilter.java
 ./fluss-common/src/main/java/org/apache/fluss/metrics/groups/AbstractMetricGroup.java
 ./fluss-common/src/main/java/org/apache/fluss/metrics/groups/MetricGroup.java
 ./fluss-common/src/main/java/org/apache/fluss/metrics/registry/MetricRegistryImpl.java
@@ -265,18 +267,22 @@ Apache Flink
 ./fluss-common/src/main/java/org/apache/fluss/utils/types/Either.java
 ./fluss-common/src/main/java/org/apache/fluss/utils/types/Tuple.java
 ./fluss-common/src/main/java/org/apache/fluss/utils/types/Tuple2.java
+./fluss-common/src/test/java/org/apache/fluss/metrics/filter/DefaultMetricFilterTest.java
 ./fluss-filesystems/fluss-fs-hadoop/src/main/java/org/apache/fluss/fs/hdfs/HadoopDataInputStream.java
 ./fluss-filesystems/fluss-fs-hadoop/src/main/java/org/apache/fluss/fs/hdfs/HadoopDataOutputStream.java
 ./fluss-filesystems/fluss-fs-hadoop/src/main/java/org/apache/fluss/fs/hdfs/HadoopFileSystem.java
-./fluss-filesystems/fluss-fs-hadoop/src/main/java/org/apache/fluss/fs/hdfs/HadoopFsPlugin.java
-./fluss-filesystems/fluss-fs-hadoop/src/main/java/org/apache/fluss/fs/hdfs/utils/HadoopUtils.java
+./fluss-filesystems/fluss-fs-hdfs/src/main/java/org/apache/fluss/fs/hdfs/HdfsPlugin.java
+./fluss-filesystems/fluss-fs-hdfs/src/main/java/org/apache/fluss/fs/hdfs/utils/HadoopUtils.java
 ./fluss-filesystems/fluss-fs-oss/src/main/java/org/apache/fluss/fs/oss/OSSFileSystem.java
 ./fluss-filesystems/fluss-fs-oss/src/main/java/org/apache/fluss/fs/oss/OSSFileSystemPlugin.java
 ./fluss-filesystems/fluss-fs-s3/src/main/java/org/apache/fluss/fs/s3/token/S3DelegationTokenReceiver.java
 ./fluss-flink/fluss-flink-common/src/main/java/org/apache/fluss/flink/utils/CatalogPropertiesUtils.java
 ./fluss-metrics/fluss-metrics-jmx/src/main/java/org/apache/fluss/metrics/jmx/JMXService.java
+./fluss-metrics/fluss-metrics-prometheus/src/main/java/org/apache/fluss/metrics/prometheus/AbstractPrometheusReporter.java
 ./fluss-metrics/fluss-metrics-prometheus/src/main/java/org/apache/fluss/metrics/prometheus/PrometheusReporter.java
 ./fluss-metrics/fluss-metrics-prometheus/src/main/java/org/apache/fluss/metrics/prometheus/PrometheusReporterPlugin.java
+./fluss-metrics/fluss-metrics-prometheus/src/test/java/org/apache/fluss/metrics/prometheus/PrometheusPushGatewayReporterPluginTest.java
+./fluss-rust/crates/fluss/src/util/murmur_hash.rs
 ./fluss-server/src/main/java/org/apache/fluss/server/kv/rocksdb/RocksDBKvBuilder.java
 ./fluss-server/src/main/java/org/apache/fluss/server/kv/rocksdb/RocksDBResourceContainer.java
 ./fluss-server/src/main/java/org/apache/fluss/server/kv/rocksdb/RocksDBWriteBatchWrapper.java
@@ -290,6 +296,7 @@ Apache Flink
 ./fluss-server/src/main/java/org/apache/fluss/server/metrics/ServerMetricUtils.java
 ./fluss-server/src/main/java/org/apache/fluss/server/utils/ResourceGuard.java
 ./fluss-server/src/main/java/org/apache/fluss/server/utils/ShutdownHookUtil.java
+./fluss-server/src/main/java/org/apache/fluss/server/utils/SignalHandler.java
 ./fluss-test-utils/src/main/java/org/apache/fluss/testutils/common/TestLoggerExtension.java
 
 Apache Kafka
@@ -361,7 +368,6 @@ Apache Kafka
 ./fluss-server/src/main/java/org/apache/fluss/server/utils/timer/TimingWheel.java
 
 Apache Paimon
-./fluss-common/src/main/java/org/apache/fluss/flink/utils/PredicateConverter.java
 ./fluss-common/src/main/java/org/apache/fluss/predicate/And.java
 ./fluss-common/src/main/java/org/apache/fluss/predicate/CompareUtils.java
 ./fluss-common/src/main/java/org/apache/fluss/predicate/CompoundPredicate.java
@@ -389,8 +395,40 @@ Apache Paimon
 ./fluss-common/src/main/java/org/apache/fluss/predicate/PredicateBuilder.java
 ./fluss-common/src/main/java/org/apache/fluss/predicate/PredicateVisitor.java
 ./fluss-common/src/main/java/org/apache/fluss/predicate/StartsWith.java
+./fluss-common/src/main/java/org/apache/fluss/row/decode/paimon/PaimonKeyDecoder.java
 ./fluss-common/src/main/java/org/apache/fluss/row/encode/paimon/PaimonBinaryRowWriter.java
-./fluss-flink/fluss-flink-common/src/main/java/org/apache/fluss/flink/lakehouse/paimon/reader/PaimonSnapshotScanner.java
+./fluss-common/src/main/java/org/apache/fluss/utils/InternalRowUtils.java
+./fluss-flink/fluss-flink-common/src/main/java/org/apache/fluss/flink/utils/PredicateConverter.java
+./fluss-lake/fluss-lake-paimon/src/main/java/org/apache/paimon/arrow/converter/Arrow2PaimonVectorConverter.java
+./fluss-server/src/main/java/org/apache/fluss/server/kv/rowmerger/aggregate/factory/FieldAggregatorFactory.java
+./fluss-server/src/main/java/org/apache/fluss/server/kv/rowmerger/aggregate/factory/FieldBoolAndAggFactory.java
+./fluss-server/src/main/java/org/apache/fluss/server/kv/rowmerger/aggregate/factory/FieldBoolOrAggFactory.java
+./fluss-server/src/main/java/org/apache/fluss/server/kv/rowmerger/aggregate/factory/FieldFirstNonNullValueAggFactory.java
+./fluss-server/src/main/java/org/apache/fluss/server/kv/rowmerger/aggregate/factory/FieldFirstValueAggFactory.java
+./fluss-server/src/main/java/org/apache/fluss/server/kv/rowmerger/aggregate/factory/FieldLastNonNullValueAggFactory.java
+./fluss-server/src/main/java/org/apache/fluss/server/kv/rowmerger/aggregate/factory/FieldLastValueAggFactory.java
+./fluss-server/src/main/java/org/apache/fluss/server/kv/rowmerger/aggregate/factory/FieldListaggAggFactory.java
+./fluss-server/src/main/java/org/apache/fluss/server/kv/rowmerger/aggregate/factory/FieldMaxAggFactory.java
+./fluss-server/src/main/java/org/apache/fluss/server/kv/rowmerger/aggregate/factory/FieldMinAggFactory.java
+./fluss-server/src/main/java/org/apache/fluss/server/kv/rowmerger/aggregate/factory/FieldProductAggFactory.java
+./fluss-server/src/main/java/org/apache/fluss/server/kv/rowmerger/aggregate/factory/FieldRoaringBitmap32AggFactory.java
+./fluss-server/src/main/java/org/apache/fluss/server/kv/rowmerger/aggregate/factory/FieldRoaringBitmap64AggFactory.java
+./fluss-server/src/main/java/org/apache/fluss/server/kv/rowmerger/aggregate/factory/FieldStringAggFactory.java
+./fluss-server/src/main/java/org/apache/fluss/server/kv/rowmerger/aggregate/factory/FieldSumAggFactory.java
+./fluss-server/src/main/java/org/apache/fluss/server/kv/rowmerger/aggregate/functions/FieldAggregator.java
+./fluss-server/src/main/java/org/apache/fluss/server/kv/rowmerger/aggregate/functions/FieldBoolAndAgg.java
+./fluss-server/src/main/java/org/apache/fluss/server/kv/rowmerger/aggregate/functions/FieldBoolOrAgg.java
+./fluss-server/src/main/java/org/apache/fluss/server/kv/rowmerger/aggregate/functions/FieldFirstNonNullValueAgg.java
+./fluss-server/src/main/java/org/apache/fluss/server/kv/rowmerger/aggregate/functions/FieldFirstValueAgg.java
+./fluss-server/src/main/java/org/apache/fluss/server/kv/rowmerger/aggregate/functions/FieldLastNonNullValueAgg.java
+./fluss-server/src/main/java/org/apache/fluss/server/kv/rowmerger/aggregate/functions/FieldLastValueAgg.java
+./fluss-server/src/main/java/org/apache/fluss/server/kv/rowmerger/aggregate/functions/FieldListaggAgg.java
+./fluss-server/src/main/java/org/apache/fluss/server/kv/rowmerger/aggregate/functions/FieldMaxAgg.java
+./fluss-server/src/main/java/org/apache/fluss/server/kv/rowmerger/aggregate/functions/FieldMinAgg.java
+./fluss-server/src/main/java/org/apache/fluss/server/kv/rowmerger/aggregate/functions/FieldProductAgg.java
+./fluss-server/src/main/java/org/apache/fluss/server/kv/rowmerger/aggregate/functions/FieldRoaringBitmap32Agg.java
+./fluss-server/src/main/java/org/apache/fluss/server/kv/rowmerger/aggregate/functions/FieldRoaringBitmap64Agg.java
+./fluss-server/src/main/java/org/apache/fluss/server/kv/rowmerger/aggregate/functions/FieldSumAgg.java
 
 Apache Spark
 ./fluss-rpc/src/main/java/org/apache/fluss/rpc/netty/NettyLogger.java
