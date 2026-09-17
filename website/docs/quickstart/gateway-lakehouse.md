@@ -364,8 +364,17 @@ CREATE CATALOG fluss_catalog WITH (
 
 ```sql title="Flink SQL"
 USE CATALOG fluss_catalog;
+```
+
+```sql title="Flink SQL"
 USE gateway_demo;
+```
+
+```sql title="Flink SQL"
 SET 'sql-client.execution.result-mode' = 'tableau';
+```
+
+```sql title="Flink SQL"
 SET 'execution.runtime-mode' = 'batch';
 ```
 Query the table immediately after writing – no need to wait for tiering:
