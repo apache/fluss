@@ -395,6 +395,9 @@ Apache Paimon
 Apache Spark
 ./fluss-rpc/src/main/java/org/apache/fluss/rpc/netty/NettyLogger.java
 
+Netty
+./fluss-rpc/src/main/java/org/apache/fluss/rpc/netty/NettyChannelInitializer.java
+
 LightProto
  ./fluss-common/src/main/java/org/apache/fluss/utils/ProtoCodecUtils.java
  ./fluss-protogen/fluss-protogen-maven-plugin/src/main/java/org/apache/fluss/protogen/maven/plugin/ProtoGenMojo.java
