@@ -375,6 +375,63 @@ class SslContextFactoryTest {
     }
 
     @Test
+    void testServerConfigRejectsUnsupportedKeystoreType() {
+        Configuration conf = new Configuration();
+        TestSslUtils.setServerSslConfig(conf, keyStore, null);
+        conf.setString(ConfigOptions.SERVER_SSL_KEYSTORE_TYPE.key(), "JKS2");
+
+        // caught here rather than as a KeyStoreException while the SSL context is built.
+        assertThatThrownBy(() -> SslConfig.fromServerConfig(conf))
+                .isInstanceOf(IllegalConfigurationException.class)
+                .hasMessageContaining(ConfigOptions.SERVER_SSL_KEYSTORE_TYPE.key())
+                .hasMessageContaining("JKS2");
+    }
+
+    @Test
+    void testServerConfigRejectsUnsupportedTruststoreType() {
+        Configuration conf = new Configuration();
+        TestSslUtils.setServerSslConfig(conf, keyStore, trustStore);
+        conf.setString(ConfigOptions.SERVER_SSL_TRUSTSTORE_TYPE.key(), "NOPE");
+
+        assertThatThrownBy(() -> SslConfig.fromServerConfig(conf))
+                .isInstanceOf(IllegalConfigurationException.class)
+                .hasMessageContaining(ConfigOptions.SERVER_SSL_TRUSTSTORE_TYPE.key())
+                .hasMessageContaining("NOPE");
+    }
+
+    @Test
+    void testStoreTypeOfAbsentStoreIsNotValidated() {
+        Configuration conf = new Configuration();
+        TestSslUtils.setServerSslConfig(conf, keyStore, null);
+        // no truststore is configured, so its type is never used to load anything.
+        conf.setString(ConfigOptions.SERVER_SSL_TRUSTSTORE_TYPE.key(), "NOPE");
+
+        assertThat(SslConfig.fromServerConfig(conf)).isPresent();
+    }
+
+    @Test
+    void testStoreTypeIsCaseInsensitive() {
+        Configuration conf = new Configuration();
+        TestSslUtils.setServerSslConfig(conf, keyStore, null);
+        // JCA looks providers up case-insensitively, so accept what it accepts.
+        conf.setString(ConfigOptions.SERVER_SSL_KEYSTORE_TYPE.key(), "jks");
+
+        assertThat(SslConfig.fromServerConfig(conf)).isPresent();
+    }
+
+    @Test
+    void testClientConfigRejectsUnsupportedTruststoreType() {
+        Configuration conf = new Configuration();
+        TestSslUtils.setClientSslConfig(conf, trustStore, null);
+        conf.setString(ConfigOptions.CLIENT_SSL_TRUSTSTORE_TYPE.key(), "NOPE");
+
+        assertThatThrownBy(() -> SslConfig.fromClientConfig(conf))
+                .isInstanceOf(IllegalConfigurationException.class)
+                .hasMessageContaining(ConfigOptions.CLIENT_SSL_TRUSTSTORE_TYPE.key())
+                .hasMessageContaining("NOPE");
+    }
+
+    @Test
     void testServerConfigRejectsUnsupportedProtocol() {
         Configuration conf = new Configuration();
         TestSslUtils.setServerSslConfig(conf, keyStore, null);
