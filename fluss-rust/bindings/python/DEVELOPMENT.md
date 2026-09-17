@@ -92,6 +92,13 @@ uv run pdoc fluss
 
 ## Release
 
+The tag-triggered Python release workflow publishes each release candidate to
+TestPyPI with its own PEP 440 version: `v1.0.0-rc3` builds `pyfluss==1.0.0rc3`.
+Before building both the sdist and wheels, it sets the Python package version in
+`pyproject.toml`; Rust workspace versions and lockfiles remain unchanged. The
+sdist retains this version when rebuilt. Final tags such as `v1.0.0` keep the
+Cargo-derived `1.0.0` version and publish to PyPI.
+
 ```bash
 # Build wheel
 uv run maturin build --release
