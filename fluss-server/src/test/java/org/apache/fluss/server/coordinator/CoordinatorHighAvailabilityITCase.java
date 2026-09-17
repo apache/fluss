@@ -227,28 +227,27 @@ class CoordinatorHighAvailabilityITCase {
     }
 
     /**
-     * Regression test for #4362: a single-coordinator cluster must regain leadership without a
-     * restart after a ZooKeeper session expiration, even when the now-empty election parent node
-     * has been deleted.
+     * Regression test: a single-coordinator cluster must regain leadership without a restart after
+     * a ZooKeeper session expiration, even when the now-empty election parent node has been
+     * deleted.
      *
      * <p>The LeaderLatch creates the election parent {@code /coordinators/election} as a container
      * znode. When the session expires, ZooKeeper deletes the ephemeral latch node, and the empty
      * container parent can then be garbage-collected by ZooKeeper while the coordinator is still
      * recovering. This is simulated here by deleting the parent right after the session expiration.
-     * The coordinator must reconnect, re-create its election node, and become leader again without
-     * a restart.
+     * The coordinator must restart the election and become leader again without a restart of the
+     * process, registering a fresh election node under the recreated parent.
      */
     @Test
     void testRegainsLeadershipAfterSessionExpirationWithElectionParentDeleted() throws Exception {
-        // single coordinator: no standby can take over, matching the #4362 scenario
+        // single coordinator: no standby can take over
         coordinatorServer1 = new CoordinatorServer(createConfiguration());
         coordinatorServer1.start();
         waitUntilCoordinatorServerElected();
 
         String electionPath = ZkData.CoordinatorElectionZNode.path();
-        assertThat(zookeeperClient.getStat(electionPath))
-                .as("election parent should exist while the latch node exists")
-                .isPresent();
+        List<String> electionNodesBefore = zookeeperClient.getChildren(electionPath);
+        assertThat(electionNodesBefore).hasSize(1);
 
         // kill the coordinator's ZK session: ZooKeeper deletes the ephemeral latch node
         killZkSession(coordinatorServer1);
@@ -270,19 +269,65 @@ class CoordinatorHighAvailabilityITCase {
         // the coordinator reconnects with a new session and registers itself again
         waitUntilServerRegistered(coordinatorServer1);
 
-        // regression assertion for #4362: leadership must be regained without a restart
+        // leadership must be regained without a restart
         waitUntil(
                 () -> coordinatorServer1.getCoordinatorService().isLeader(),
                 Duration.ofSeconds(30),
                 "Coordinator did not regain leadership after session expiration and election "
-                        + "parent deletion (#4362)");
+                        + "parent deletion");
         createGatewayForServer(coordinatorServer1).metadata(new MetadataRequest()).get();
 
-        // the recovered leader must actually participate in the election again: its latch
-        // node must exist under the election parent
+        // the recovered leader must actually participate in the election again with a fresh
+        // election node: the old node is gone with the lost session, and since the election
+        // parent was deleted, the new node can only be created by the restarted election
         assertThat(zookeeperClient.getChildren(electionPath))
-                .as("recovered leader should have its election latch node")
-                .isNotEmpty();
+                .hasSize(1)
+                .isNotEqualTo(electionNodesBefore);
+    }
+
+    /**
+     * A short ZooKeeper outage that suspends the connection but keeps the session must not restart
+     * the election: the existing latch revalidates leadership on reconnection with the same
+     * election node, which still belongs to the alive session.
+     */
+    @Test
+    void testSuspensionKeepsElectionNodeWithoutRestart() throws Exception {
+        // a session timeout well above the outage, so the outage suspends the connection but
+        // keeps the session alive
+        Configuration conf = createConfiguration();
+        conf.set(ConfigOptions.ZOOKEEPER_SESSION_TIMEOUT, Duration.ofSeconds(30));
+        coordinatorServer1 = new CoordinatorServer(conf);
+        coordinatorServer1.start();
+        waitUntilCoordinatorServerElected();
+
+        String electionPath = ZkData.CoordinatorElectionZNode.path();
+        List<String> childrenBefore = zookeeperClient.getChildren(electionPath);
+        assertThat(childrenBefore).hasSize(1);
+
+        // stop the ZK server long enough to suspend the connection, but shorter than the session
+        // timeout, then restart it
+        ZOO_KEEPER_EXTENSION_WRAPPER.getCustomExtension().stop();
+        try {
+            Thread.sleep(8000);
+        } finally {
+            ZOO_KEEPER_EXTENSION_WRAPPER.getCustomExtension().restart();
+        }
+
+        // the existing latch revalidates leadership on reconnection, with the same election node
+        waitUntil(
+                () -> coordinatorServer1.getCoordinatorService().isLeader(),
+                Duration.ofSeconds(30),
+                "Coordinator did not revalidate leadership after a suspension");
+        waitUntil(
+                () -> {
+                    try {
+                        return zookeeperClient.getChildren(electionPath).equals(childrenBefore);
+                    } catch (Exception e) {
+                        return false;
+                    }
+                },
+                Duration.ofSeconds(30),
+                "Election node changed during a suspension");
     }
 
     /**

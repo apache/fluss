@@ -26,7 +26,7 @@ import org.apache.fluss.shaded.curator5.org.apache.curator.framework.CuratorFram
 import org.apache.fluss.shaded.curator5.org.apache.curator.framework.recipes.leader.LeaderLatch;
 import org.apache.fluss.shaded.curator5.org.apache.curator.framework.recipes.leader.LeaderLatchListener;
 import org.apache.fluss.shaded.curator5.org.apache.curator.framework.state.ConnectionState;
-import org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.CreateMode;
+import org.apache.fluss.shaded.curator5.org.apache.curator.framework.state.ConnectionStateListener;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -55,6 +55,13 @@ import static org.apache.fluss.utils.Preconditions.checkArgument;
  *   <li>Can be re-elected as leader multiple times
  * </ul>
  *
+ * <p>When the ZooKeeper session is lost, ZooKeeper deletes the ephemeral election node of this
+ * coordinator, so the previous election participation becomes stale. After the connection returns,
+ * the election is restarted with a fresh latch: the fresh latch registers a new election node
+ * belonging to the current session and determines leadership through the normal election. A short
+ * connection suspension that keeps the session does not restart the election; the existing latch
+ * revalidates leadership on reconnection instead.
+ *
  * <p>Leadership callbacks and state transitions are serialized by {@code leaderCallbackExecutor}.
  * The state machine is:
  *
@@ -81,12 +88,18 @@ public class CoordinatorLeaderElection implements AutoCloseable {
 
     private final String serverId;
     private final CuratorFramework curatorClient;
-    private final LeaderLatch leaderLatch;
+
+    /**
+     * The latch currently participating in the election. Replaced with a fresh latch when the
+     * ZooKeeper session was lost and the connection returns, see {@link #restartElection()}.
+     */
+    private volatile LeaderLatch leaderLatch;
+
     // Single-threaded executor to run leader init/cleanup callbacks outside Curator's EventThread.
     // Curator's LeaderLatchListener callbacks run on its internal EventThread; performing
     // synchronous ZK operations there causes deadlock because ZK response dispatch also
     // needs that same thread. Serial execution also guarantees that leader initialization,
-    // cleanup, and state transitions never overlap.
+    // cleanup, state transitions, and election restarts never overlap.
     private final ExecutorService leaderCallbackExecutor;
     private final CompletableFuture<Void> closeFuture = new CompletableFuture<>();
     private final long closeTimeoutMs;
@@ -94,7 +107,28 @@ public class CoordinatorLeaderElection implements AutoCloseable {
     private final AtomicBoolean closing = new AtomicBoolean(false);
     private volatile State state = State.INITIAL;
 
+    private volatile Runnable initLeaderServices;
     private volatile Consumer<Throwable> cleanupLeaderServices;
+
+    /**
+     * Marks that the ZooKeeper session was lost; the election restarts on the next reconnection.
+     */
+    private final AtomicBoolean sessionLost = new AtomicBoolean(false);
+
+    /**
+     * Watches for a lost ZooKeeper session and schedules the election restart for the first
+     * reconnection after it. A reconnection without a preceding session loss keeps the current
+     * latch, whose election node still belongs to the alive session.
+     */
+    private final ConnectionStateListener sessionLossListener =
+            (client, newState) -> {
+                if (newState == ConnectionState.LOST) {
+                    sessionLost.set(true);
+                } else if (newState == ConnectionState.RECONNECTED
+                        && sessionLost.compareAndSet(true, false)) {
+                    submitLeadershipEvent(this::restartElection);
+                }
+            };
 
     public CoordinatorLeaderElection(ZooKeeperClient zkClient, String serverId) {
         this(zkClient, serverId, DEFAULT_CLOSE_TIMEOUT_MS);
@@ -106,11 +140,6 @@ public class CoordinatorLeaderElection implements AutoCloseable {
         this.serverId = serverId;
         this.closeTimeoutMs = closeTimeoutMs;
         this.curatorClient = zkClient.getCuratorClient();
-        this.leaderLatch =
-                new RecoveringLeaderLatch(
-                        curatorClient,
-                        ZkData.CoordinatorElectionZNode.path(),
-                        String.valueOf(serverId));
         this.leaderCallbackExecutor =
                 Executors.newSingleThreadExecutor(
                         r -> {
@@ -126,15 +155,33 @@ public class CoordinatorLeaderElection implements AutoCloseable {
      * Starts the leader election process asynchronously.
      *
      * <p>After the first election, the server will continue to participate in future elections.
-     * When re-elected as leader, the initLeaderServices callback will be invoked again.
+     * When re-elected as leader, the initLeaderServices callback will be invoked again. If the
+     * ZooKeeper session is lost, the election is restarted with a fresh latch once the connection
+     * returns.
      *
      * @param initLeaderServices the callback to initialize leader services once elected
      * @param cleanupLeaderServices the callback to clean up leader services when losing leadership
      */
     public void startElectLeaderAsync(
             Runnable initLeaderServices, Consumer<Throwable> cleanupLeaderServices) {
+        this.initLeaderServices = initLeaderServices;
         this.cleanupLeaderServices = cleanupLeaderServices;
-        leaderLatch.addListener(
+        curatorClient.getConnectionStateListenable().addListener(sessionLossListener);
+        startLatch();
+    }
+
+    /** Creates a latch, subscribes to its leadership notifications, and starts it. */
+    private void startLatch() {
+        if (closing.get()) {
+            return;
+        }
+
+        LeaderLatch latch =
+                new LeaderLatch(
+                        curatorClient,
+                        ZkData.CoordinatorElectionZNode.path(),
+                        String.valueOf(serverId));
+        latch.addListener(
                 new LeaderLatchListener() {
                     @Override
                     public void isLeader() {
@@ -146,13 +193,38 @@ public class CoordinatorLeaderElection implements AutoCloseable {
                         submitLeadershipEvent(CoordinatorLeaderElection.this::becomeStandby);
                     }
                 });
-
+        this.leaderLatch = latch;
         try {
-            leaderLatch.start();
+            latch.start();
             LOG.info("Coordinator server {} started leader election.", serverId);
         } catch (Exception e) {
             LOG.error("Failed to start LeaderLatch for server {}", serverId, e);
         }
+    }
+
+    /**
+     * Restarts the election after the ZooKeeper session was lost and the connection has returned.
+     *
+     * <p>The session loss deletes the ephemeral election node of this coordinator, so the old latch
+     * no longer represents a valid participation: its election node is gone and any leadership it
+     * held was already revoked when the session was lost. The old latch is abandoned and a fresh
+     * latch is started instead, which registers a new election node for the current session and
+     * determines leadership through the normal election, including the epoch fencing in the leader
+     * initialization. Creating the new election node also recreates the election parent if it was
+     * garbage-collected while empty, so the restart recovers even when the election parent is
+     * missing.
+     */
+    private void restartElection() {
+        LOG.info(
+                "Coordinator server {}: ZooKeeper session was lost, restarting the leader "
+                        + "election.",
+                serverId);
+        try {
+            leaderLatch.close();
+        } catch (Exception e) {
+            LOG.warn("Failed to close the stale LeaderLatch for server {}.", serverId, e);
+        }
+        startLatch();
     }
 
     @Override
@@ -160,6 +232,7 @@ public class CoordinatorLeaderElection implements AutoCloseable {
         LOG.info("Closing LeaderLatch for server {}.", serverId);
 
         if (closing.compareAndSet(false, true)) {
+            curatorClient.getConnectionStateListenable().removeListener(sessionLossListener);
             try {
                 leaderLatch.close();
             } catch (Exception e) {
@@ -317,67 +390,5 @@ public class CoordinatorLeaderElection implements AutoCloseable {
         LEADER,
         STANDBY,
         CLOSED
-    }
-
-    /**
-     * A {@link LeaderLatch} that recreates the election parent znode if it has disappeared.
-     *
-     * <p>The election parent is created as a container znode and is garbage-collected by ZooKeeper
-     * once the session expires and the ephemeral latch node is deleted. On reconnect, the
-     * LeaderLatch ignores the NONODE result of listing the election path and stays permanently
-     * idle. Recreating the parent before the latch's own reconnection handling lets the latch
-     * re-create its election node and regain leadership without a restart.
-     *
-     * <p>The recovery piggybacks on {@code handleStateChange} so that it strictly precedes the
-     * latch's reconnection handling: registering a separate connection-state listener would not
-     * guarantee this order, as listeners are notified in {@code ConcurrentHashMap} iteration order,
-     * which does not follow registration order.
-     */
-    private class RecoveringLeaderLatch extends LeaderLatch {
-
-        RecoveringLeaderLatch(CuratorFramework client, String latchPath, String id) {
-            super(client, latchPath, id);
-        }
-
-        @Override
-        protected void handleStateChange(ConnectionState newState) {
-            if (newState == ConnectionState.RECONNECTED) {
-                recoverElectionParentIfNeeded();
-            }
-            super.handleStateChange(newState);
-        }
-
-        /**
-         * Recreates the election parent znode if it no longer exists.
-         *
-         * <p>The znode is recreated as PERSISTENT: unlike a container znode, a persistent znode is
-         * never garbage-collected when empty, so a future session expiration cannot remove the
-         * election parent again.
-         */
-        private void recoverElectionParentIfNeeded() {
-            String electionPath = ZkData.CoordinatorElectionZNode.path();
-            try {
-                if (curatorClient.checkExists().forPath(electionPath) == null) {
-                    curatorClient
-                            .create()
-                            .creatingParentsIfNeeded()
-                            .withMode(CreateMode.PERSISTENT)
-                            .forPath(electionPath);
-                    LOG.warn(
-                            "Coordinator server {}: election parent {} was missing, recreate it "
-                                    + "to recover the leader election.",
-                            serverId,
-                            electionPath);
-                }
-            } catch (Exception e) {
-                // Ignore the failure and keep the latch's own reconnection handling unchanged: a
-                // later reconnection event retries the recovery.
-                LOG.error(
-                        "Coordinator server {}: failed to recover the election parent {}.",
-                        serverId,
-                        electionPath,
-                        e);
-            }
-        }
     }
 }
