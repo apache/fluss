@@ -30,6 +30,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
@@ -49,9 +50,21 @@ public class TestingValuesLake {
     private static final Map<String, TestingValuesTable> globalTables = new ConcurrentHashMap<>();
     private static final Map<String, TableFailureController> FAILURE_CONTROLLERS =
             new ConcurrentHashMap<>();
+    private static final Map<String, CountDownLatch> WRITE_LATCHES = new ConcurrentHashMap<>();
 
     public static TableFailureController failWhen(String tableId) {
         return FAILURE_CONTROLLERS.computeIfAbsent(tableId, k -> new TableFailureController());
+    }
+
+    /**
+     * Returns a latch that counts down when the first write to the given table occurs. Useful for
+     * tests that need to wait until a writer is actively writing before taking an action (e.g.,
+     * dropping the table).
+     */
+    public static CountDownLatch awaitFirstWrite(String tableId) {
+        CountDownLatch latch = new CountDownLatch(1);
+        WRITE_LATCHES.put(tableId, latch);
+        return latch;
     }
 
     public static List<InternalRow> getResults(String tableId) {
@@ -69,6 +82,10 @@ public class TestingValuesLake {
             controller.checkWriteShouldFail(tableId);
         }
         table.writeRecord(stageId, record);
+        CountDownLatch latch = WRITE_LATCHES.remove(tableId);
+        if (latch != null) {
+            latch.countDown();
+        }
         LOG.info("Write record to stage {}: {}", stageId, record);
     }
 

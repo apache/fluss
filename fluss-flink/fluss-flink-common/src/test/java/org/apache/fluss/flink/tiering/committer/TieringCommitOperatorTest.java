@@ -435,7 +435,8 @@ class TieringCommitOperatorTest extends FlinkTestBase {
                 writeResult,
                 logEndOffset,
                 maxTimestamp,
-                numberOfWriteResults);
+                numberOfWriteResults,
+                false);
     }
 
     private StreamRecord<TableBucketWriteResult<TestingWriteResult>>
@@ -447,6 +448,27 @@ class TieringCommitOperatorTest extends FlinkTestBase {
                     long logEndOffset,
                     long maxTimestamp,
                     int numberOfWriteResults) {
+        return createTableBucketWriteResultStreamRecord(
+                tablePath,
+                tableBucket,
+                partitionName,
+                writeResult,
+                logEndOffset,
+                maxTimestamp,
+                numberOfWriteResults,
+                false);
+    }
+
+    private StreamRecord<TableBucketWriteResult<TestingWriteResult>>
+            createTableBucketWriteResultStreamRecord(
+                    TablePath tablePath,
+                    TableBucket tableBucket,
+                    @Nullable String partitionName,
+                    @Nullable Integer writeResult,
+                    long logEndOffset,
+                    long maxTimestamp,
+                    int numberOfWriteResults,
+                    boolean cancelled) {
         TableBucketWriteResult<TestingWriteResult> tableBucketWriteResult =
                 new TableBucketWriteResult<>(
                         tablePath,
@@ -455,7 +477,8 @@ class TieringCommitOperatorTest extends FlinkTestBase {
                         writeResult == null ? null : new TestingWriteResult(writeResult),
                         logEndOffset,
                         maxTimestamp,
-                        numberOfWriteResults);
+                        numberOfWriteResults,
+                        cancelled);
         return new StreamRecord<>(tableBucketWriteResult);
     }
 
@@ -502,7 +525,7 @@ class TieringCommitOperatorTest extends FlinkTestBase {
         FailedTieringEvent failedTieringEvent =
                 (FailedTieringEvent) sourceEventWrapper.getSourceEvent();
         assertThat(failedTieringEvent.getTableId()).isEqualTo(tableId);
-        assertThat(failedTieringEvent.failReason()).contains(failedReason);
+        assertThat(failedTieringEvent.getFailureMessage()).contains(failedReason);
     }
 
     @Test
@@ -544,9 +567,45 @@ class TieringCommitOperatorTest extends FlinkTestBase {
         FailedTieringEvent failedTieringEvent =
                 (FailedTieringEvent) sourceEventWrapper.getSourceEvent();
         assertThat(failedTieringEvent.getTableId()).isEqualTo(originalTableId);
-        assertThat(failedTieringEvent.failReason())
+        assertThat(failedTieringEvent.getFailureMessage())
                 .contains("different from the table id")
                 .contains("dropped and recreated during tiering");
+    }
+
+    @Test
+    void testCommitSkippedWhenTableDropped() throws Exception {
+        TablePath tablePath = TablePath.of("fluss", "test_commit_skipped_when_table_dropped");
+        long tableId = createTable(tablePath, DEFAULT_PK_TABLE_DESCRIPTOR);
+        int numberOfWriteResults = 3;
+
+        // Send all write results with cancelled=true
+        for (int bucket = 0; bucket < numberOfWriteResults; bucket++) {
+            TableBucket tableBucket = new TableBucket(tableId, bucket);
+            committerOperator.processElement(
+                    createTableBucketWriteResultStreamRecord(
+                            tablePath,
+                            tableBucket,
+                            null, // partitionName
+                            bucket, // writeResult
+                            bucket, // logEndOffset
+                            (long) bucket, // maxTimestamp
+                            numberOfWriteResults,
+                            true)); // cancelled=true
+        }
+
+        // Verify no lake snapshot was created
+        verifyNoLakeSnapshot(tablePath);
+
+        // Verify that a FailedTieringEvent with TABLE_DROPPED type was sent to notify the
+        // enumerator that the table's tiering was cancelled
+        List<OperatorEvent> operatorEvents = mockOperatorEventGateway.getEventsSent();
+        assertThat(operatorEvents).hasSize(1);
+        SourceEventWrapper sourceEventWrapper = (SourceEventWrapper) operatorEvents.get(0);
+        FailedTieringEvent failedTieringEvent =
+                (FailedTieringEvent) sourceEventWrapper.getSourceEvent();
+        assertThat(failedTieringEvent.getTableId()).isEqualTo(tableId);
+        assertThat(failedTieringEvent.isTableDropped()).isTrue();
+        assertThat(failedTieringEvent.getFailureMessage()).contains("was dropped during tiering");
     }
 
     private CommittedLakeSnapshot mockCommittedLakeSnapshot(

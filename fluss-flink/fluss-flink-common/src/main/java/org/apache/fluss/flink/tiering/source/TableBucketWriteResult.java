@@ -57,6 +57,9 @@ public class TableBucketWriteResult<WriteResult> implements Serializable {
     // for the round of tiering is finished
     private final int numberOfWriteResults;
 
+    // indicates whether the table was dropped during tiering
+    private final boolean tableDropped;
+
     public TableBucketWriteResult(
             TablePath tablePath,
             TableBucket tableBucket,
@@ -64,7 +67,8 @@ public class TableBucketWriteResult<WriteResult> implements Serializable {
             @Nullable WriteResult writeResult,
             long logEndOffset,
             long maxTimestamp,
-            int numberOfWriteResults) {
+            int numberOfWriteResults,
+            boolean tableDropped) {
         this.tablePath = tablePath;
         this.tableBucket = tableBucket;
         this.partitionName = partitionName;
@@ -72,6 +76,7 @@ public class TableBucketWriteResult<WriteResult> implements Serializable {
         this.logEndOffset = logEndOffset;
         this.maxTimestamp = maxTimestamp;
         this.numberOfWriteResults = numberOfWriteResults;
+        this.tableDropped = tableDropped;
     }
 
     public TablePath tablePath() {
@@ -102,5 +107,9 @@ public class TableBucketWriteResult<WriteResult> implements Serializable {
 
     public long maxTimestamp() {
         return maxTimestamp;
+    }
+
+    public boolean isTableDropped() {
+        return tableDropped;
     }
 }

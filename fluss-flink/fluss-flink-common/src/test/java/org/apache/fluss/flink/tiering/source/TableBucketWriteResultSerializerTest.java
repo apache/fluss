@@ -42,37 +42,38 @@ class TableBucketWriteResultSerializerTest {
         TableBucket tableBucket =
                 isPartitioned ? new TableBucket(1, 1000L, 2) : new TableBucket(1, 2);
         String partitionName = isPartitioned ? "partition1" : null;
-        TableBucketWriteResult<TestingWriteResult> tableBucketWriteResult =
-                new TableBucketWriteResult<>(
-                        tablePath, tableBucket, partitionName, testingWriteResult, 10, 30L, 20);
 
-        // test serialize and deserialize
-        byte[] serialized = tableBucketWriteResultSerializer.serialize(tableBucketWriteResult);
-        TableBucketWriteResult<TestingWriteResult> deserialized =
-                tableBucketWriteResultSerializer.deserialize(
-                        tableBucketWriteResultSerializer.getVersion(), serialized);
-
-        assertThat(deserialized.tablePath()).isEqualTo(tablePath);
-        assertThat(deserialized.tableBucket()).isEqualTo(tableBucket);
-        assertThat(deserialized.partitionName()).isEqualTo(partitionName);
-        TestingWriteResult deserializedWriteResult = deserialized.writeResult();
-        assertThat(deserializedWriteResult).isNotNull();
-        assertThat(deserializedWriteResult.getWriteResult())
+        TableBucketWriteResult<TestingWriteResult> result =
+                serializeAndDeserialize(
+                        new TableBucketWriteResult<>(
+                                tablePath,
+                                tableBucket,
+                                partitionName,
+                                testingWriteResult,
+                                10,
+                                30L,
+                                20,
+                                false));
+        assertThat(result.tablePath()).isEqualTo(tablePath);
+        assertThat(result.tableBucket()).isEqualTo(tableBucket);
+        assertThat(result.partitionName()).isEqualTo(partitionName);
+        assertThat(result.writeResult().getWriteResult())
                 .isEqualTo(testingWriteResult.getWriteResult());
-        assertThat(deserialized.numberOfWriteResults()).isEqualTo(20);
+        assertThat(result.isTableDropped()).isFalse();
 
-        // verify when writeResult is null
-        tableBucketWriteResult =
-                new TableBucketWriteResult<>(
-                        tablePath, tableBucket, partitionName, null, 20, 30L, 30);
-        serialized = tableBucketWriteResultSerializer.serialize(tableBucketWriteResult);
-        deserialized =
-                tableBucketWriteResultSerializer.deserialize(
-                        tableBucketWriteResultSerializer.getVersion(), serialized);
-        assertThat(deserialized.tablePath()).isEqualTo(tablePath);
-        assertThat(deserialized.tableBucket()).isEqualTo(tableBucket);
-        assertThat(deserialized.partitionName()).isEqualTo(partitionName);
-        assertThat(deserialized.writeResult()).isNull();
-        assertThat(deserialized.numberOfWriteResults()).isEqualTo(30);
+        // verify when writeResult is null, cancelled=true
+        result =
+                serializeAndDeserialize(
+                        new TableBucketWriteResult<>(
+                                tablePath, tableBucket, partitionName, null, 20, 30L, 30, true));
+        assertThat(result.writeResult()).isNull();
+        assertThat(result.isTableDropped()).isTrue();
+    }
+
+    private TableBucketWriteResult<TestingWriteResult> serializeAndDeserialize(
+            TableBucketWriteResult<TestingWriteResult> input) throws Exception {
+        byte[] serialized = tableBucketWriteResultSerializer.serialize(input);
+        return tableBucketWriteResultSerializer.deserialize(
+                tableBucketWriteResultSerializer.getVersion(), serialized);
     }
 }
