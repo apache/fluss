@@ -18,6 +18,7 @@
 package org.apache.fluss.rpc.netty.ssl;
 
 import org.apache.fluss.annotation.Internal;
+import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.shaded.netty4.io.netty.buffer.ByteBufAllocator;
@@ -26,15 +27,20 @@ import org.apache.fluss.shaded.netty4.io.netty.handler.ssl.SslContextBuilder;
 import org.apache.fluss.shaded.netty4.io.netty.handler.ssl.SslHandler;
 import org.apache.fluss.shaded.netty4.io.netty.handler.ssl.SslProvider;
 
+import javax.annotation.Nullable;
 import javax.net.ssl.KeyManagerFactory;
 import javax.net.ssl.SSLEngine;
 import javax.net.ssl.SSLParameters;
 import javax.net.ssl.TrustManagerFactory;
 
+import java.io.IOException;
 import java.io.InputStream;
 import java.nio.file.Files;
+import java.nio.file.NoSuchFileException;
 import java.nio.file.Paths;
+import java.security.GeneralSecurityException;
 import java.security.KeyStore;
+import java.security.UnrecoverableKeyException;
 import java.util.Optional;
 
 /**
@@ -63,27 +69,29 @@ public final class SslContextFactory {
 
     /** Build a server {@link SslContext} from a parsed {@link SslConfig}. */
     public static SslContext createServerSslContext(SslConfig config) {
+        KeyManagerFactory kmf =
+                keyManagerFactory(
+                        SERVER_KEYSTORE,
+                        config.keystorePath(),
+                        config.keystoreType(),
+                        config.keystorePassword(),
+                        config.keyPassword());
+        SslContextBuilder builder =
+                SslContextBuilder.forServer(kmf)
+                        .sslProvider(SslProvider.JDK)
+                        .protocols(config.enabledProtocols());
+        if (!config.cipherSuites().isEmpty()) {
+            builder.ciphers(config.cipherSuites());
+        }
+        if (config.truststorePath() != null) {
+            builder.trustManager(
+                    trustManagerFactory(
+                            SERVER_TRUSTSTORE,
+                            config.truststorePath(),
+                            config.truststoreType(),
+                            config.truststorePassword()));
+        }
         try {
-            KeyManagerFactory kmf =
-                    keyManagerFactory(
-                            config.keystorePath(),
-                            config.keystoreType(),
-                            config.keystorePassword(),
-                            config.keyPassword());
-            SslContextBuilder builder =
-                    SslContextBuilder.forServer(kmf)
-                            .sslProvider(SslProvider.JDK)
-                            .protocols(config.enabledProtocols());
-            if (!config.cipherSuites().isEmpty()) {
-                builder.ciphers(config.cipherSuites());
-            }
-            if (config.truststorePath() != null) {
-                builder.trustManager(
-                        trustManagerFactory(
-                                config.truststorePath(),
-                                config.truststoreType(),
-                                config.truststorePassword()));
-            }
             return builder.build();
         } catch (Exception e) {
             throw new FlussRuntimeException("Failed to build the server SSL context.", e);
@@ -100,30 +108,32 @@ public final class SslContextFactory {
 
     /** Build a client {@link SslContext} from a parsed {@link SslConfig}. */
     public static SslContext createClientSslContext(SslConfig config) {
+        SslContextBuilder builder =
+                SslContextBuilder.forClient()
+                        .sslProvider(SslProvider.JDK)
+                        .protocols(config.enabledProtocols());
+        if (!config.cipherSuites().isEmpty()) {
+            builder.ciphers(config.cipherSuites());
+        }
+        if (config.truststorePath() != null) {
+            builder.trustManager(
+                    trustManagerFactory(
+                            CLIENT_TRUSTSTORE,
+                            config.truststorePath(),
+                            config.truststoreType(),
+                            config.truststorePassword()));
+        }
+        // Present a client certificate when a keystore is configured (required for mutual TLS).
+        if (config.keystorePath() != null) {
+            builder.keyManager(
+                    keyManagerFactory(
+                            CLIENT_KEYSTORE,
+                            config.keystorePath(),
+                            config.keystoreType(),
+                            config.keystorePassword(),
+                            config.keyPassword()));
+        }
         try {
-            SslContextBuilder builder =
-                    SslContextBuilder.forClient()
-                            .sslProvider(SslProvider.JDK)
-                            .protocols(config.enabledProtocols());
-            if (!config.cipherSuites().isEmpty()) {
-                builder.ciphers(config.cipherSuites());
-            }
-            if (config.truststorePath() != null) {
-                builder.trustManager(
-                        trustManagerFactory(
-                                config.truststorePath(),
-                                config.truststoreType(),
-                                config.truststorePassword()));
-            }
-            // Present a client certificate when a keystore is configured (required for mutual TLS).
-            if (config.keystorePath() != null) {
-                builder.keyManager(
-                        keyManagerFactory(
-                                config.keystorePath(),
-                                config.keystoreType(),
-                                config.keystorePassword(),
-                                config.keyPassword()));
-            }
             return builder.build();
         } catch (Exception e) {
             throw new FlussRuntimeException("Failed to build the client SSL context.", e);
@@ -169,29 +179,142 @@ public final class SslContextFactory {
     }
 
     private static KeyManagerFactory keyManagerFactory(
-            String path, String type, String storePassword, String keyPassword) throws Exception {
-        KeyStore keyStore = loadKeyStore(path, type, storePassword);
-        KeyManagerFactory kmf =
-                KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm());
-        kmf.init(keyStore, keyPassword == null ? null : keyPassword.toCharArray());
-        return kmf;
+            Store store,
+            String path,
+            String type,
+            @Nullable String storePassword,
+            @Nullable String keyPassword) {
+        KeyStore keyStore = loadKeyStore(store, path, type, storePassword);
+        try {
+            KeyManagerFactory kmf =
+                    KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm());
+            kmf.init(keyStore, keyPassword == null ? null : keyPassword.toCharArray());
+            return kmf;
+        } catch (UnrecoverableKeyException e) {
+            throw new FlussRuntimeException(
+                    String.format(
+                            "Cannot recover the private key from the %s at '%s'. Check '%s', which "
+                                    + "defaults to '%s' when not set.",
+                            store.what, path, store.keyPasswordKey, store.passwordKey),
+                    e);
+        } catch (GeneralSecurityException e) {
+            throw new FlussRuntimeException(
+                    String.format(
+                            "Failed to build a key manager from the %s at '%s'.", store.what, path),
+                    e);
+        }
     }
 
     private static TrustManagerFactory trustManagerFactory(
-            String path, String type, String storePassword) throws Exception {
-        KeyStore trustStore = loadKeyStore(path, type, storePassword);
-        TrustManagerFactory tmf =
-                TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm());
-        tmf.init(trustStore);
-        return tmf;
+            Store store, String path, String type, @Nullable String storePassword) {
+        KeyStore trustStore = loadKeyStore(store, path, type, storePassword);
+        try {
+            TrustManagerFactory tmf =
+                    TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm());
+            tmf.init(trustStore);
+            return tmf;
+        } catch (GeneralSecurityException e) {
+            throw new FlussRuntimeException(
+                    String.format(
+                            "Failed to build a trust manager from the %s at '%s'.",
+                            store.what, path),
+                    e);
+        }
     }
 
-    private static KeyStore loadKeyStore(String path, String type, String password)
-            throws Exception {
-        KeyStore keyStore = KeyStore.getInstance(type);
+    /**
+     * Load a keystore or truststore, reporting the failures an operator can actually cause - a path
+     * that is not there, and a store password that does not open the file - with the file and the
+     * option that configures it, rather than letting the bare JCA exception surface.
+     */
+    private static KeyStore loadKeyStore(
+            Store store, String path, String type, @Nullable String password) {
+        KeyStore keyStore;
+        try {
+            keyStore = KeyStore.getInstance(type);
+        } catch (GeneralSecurityException e) {
+            // unreachable for a config parsed by SslConfig, which validates the type up front.
+            throw new FlussRuntimeException(
+                    String.format(
+                            "'%s' is set to the unsupported store type '%s'.", store.typeKey, type),
+                    e);
+        }
         try (InputStream in = Files.newInputStream(Paths.get(path))) {
             keyStore.load(in, password == null ? null : password.toCharArray());
+            return keyStore;
+        } catch (NoSuchFileException e) {
+            throw new FlussRuntimeException(
+                    String.format(
+                            "No %s at '%s', configured by '%s'.", store.what, path, store.pathKey),
+                    e);
+        } catch (IOException e) {
+            throw new FlussRuntimeException(
+                    String.format(
+                            "Failed to read the %s at '%s' as a '%s' store. A wrong '%s' is the "
+                                    + "usual cause; the file may also be unreadable or not a "
+                                    + "keystore at all.",
+                            store.what, path, type, store.passwordKey),
+                    e);
+        } catch (GeneralSecurityException e) {
+            throw new FlussRuntimeException(
+                    String.format(
+                            "Failed to load the %s at '%s' as a '%s' store.",
+                            store.what, path, type),
+                    e);
         }
-        return keyStore;
     }
+
+    /** The options that configure one keystore or truststore, so failures can name them. */
+    private static final class Store {
+        private final String what;
+        private final String pathKey;
+        private final String passwordKey;
+        private final String typeKey;
+        @Nullable private final String keyPasswordKey;
+
+        private Store(
+                String what,
+                String pathKey,
+                String passwordKey,
+                String typeKey,
+                @Nullable String keyPasswordKey) {
+            this.what = what;
+            this.pathKey = pathKey;
+            this.passwordKey = passwordKey;
+            this.typeKey = typeKey;
+            this.keyPasswordKey = keyPasswordKey;
+        }
+    }
+
+    private static final Store SERVER_KEYSTORE =
+            new Store(
+                    "server keystore",
+                    ConfigOptions.SERVER_SSL_KEYSTORE_PATH.key(),
+                    ConfigOptions.SERVER_SSL_KEYSTORE_PASSWORD.key(),
+                    ConfigOptions.SERVER_SSL_KEYSTORE_TYPE.key(),
+                    ConfigOptions.SERVER_SSL_KEY_PASSWORD.key());
+
+    private static final Store SERVER_TRUSTSTORE =
+            new Store(
+                    "server truststore",
+                    ConfigOptions.SERVER_SSL_TRUSTSTORE_PATH.key(),
+                    ConfigOptions.SERVER_SSL_TRUSTSTORE_PASSWORD.key(),
+                    ConfigOptions.SERVER_SSL_TRUSTSTORE_TYPE.key(),
+                    null);
+
+    private static final Store CLIENT_KEYSTORE =
+            new Store(
+                    "client keystore",
+                    ConfigOptions.CLIENT_SSL_KEYSTORE_PATH.key(),
+                    ConfigOptions.CLIENT_SSL_KEYSTORE_PASSWORD.key(),
+                    ConfigOptions.CLIENT_SSL_KEYSTORE_TYPE.key(),
+                    ConfigOptions.CLIENT_SSL_KEY_PASSWORD.key());
+
+    private static final Store CLIENT_TRUSTSTORE =
+            new Store(
+                    "client truststore",
+                    ConfigOptions.CLIENT_SSL_TRUSTSTORE_PATH.key(),
+                    ConfigOptions.CLIENT_SSL_TRUSTSTORE_PASSWORD.key(),
+                    ConfigOptions.CLIENT_SSL_TRUSTSTORE_TYPE.key(),
+                    null);
 }

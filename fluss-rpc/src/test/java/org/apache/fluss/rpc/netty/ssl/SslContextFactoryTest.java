@@ -19,6 +19,7 @@ package org.apache.fluss.rpc.netty.ssl;
 
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.exception.IllegalConfigurationException;
 import org.apache.fluss.shaded.netty4.io.netty.buffer.ByteBufAllocator;
 import org.apache.fluss.shaded.netty4.io.netty.channel.Channel;
@@ -372,6 +373,56 @@ class SslContextFactoryTest {
                                 .get()
                                 .requiresClientAuth(TestSslUtils.TLS_LISTENER))
                 .isTrue();
+    }
+
+    @Test
+    void testMissingKeystoreNamesTheFileAndTheOption() {
+        Configuration conf = new Configuration();
+        Path missing = tempDir.resolve("absent.jks");
+        TestSslUtils.setServerSslConfig(conf, missing, null);
+
+        assertThatThrownBy(() -> SslContextFactory.createServerSslContext(conf))
+                .isInstanceOf(FlussRuntimeException.class)
+                .hasMessageContaining("server keystore")
+                .hasMessageContaining(missing.toString())
+                .hasMessageContaining(ConfigOptions.SERVER_SSL_KEYSTORE_PATH.key());
+    }
+
+    @Test
+    void testWrongKeystorePasswordNamesThePasswordOption() {
+        Configuration conf = new Configuration();
+        TestSslUtils.setServerSslConfig(conf, keyStore, null);
+        conf.setString(ConfigOptions.SERVER_SSL_KEYSTORE_PASSWORD.key(), "not-the-password");
+
+        assertThatThrownBy(() -> SslContextFactory.createServerSslContext(conf))
+                .isInstanceOf(FlussRuntimeException.class)
+                .hasMessageContaining(keyStore.toString())
+                .hasMessageContaining(ConfigOptions.SERVER_SSL_KEYSTORE_PASSWORD.key());
+    }
+
+    @Test
+    void testWrongKeyPasswordNamesTheKeyPasswordOption() {
+        Configuration conf = new Configuration();
+        TestSslUtils.setServerSslConfig(conf, keyStore, null);
+        // the store itself opens; only the private key inside it does not.
+        conf.setString(ConfigOptions.SERVER_SSL_KEY_PASSWORD.key(), "not-the-key-password");
+
+        assertThatThrownBy(() -> SslContextFactory.createServerSslContext(conf))
+                .isInstanceOf(FlussRuntimeException.class)
+                .hasMessageContaining(ConfigOptions.SERVER_SSL_KEY_PASSWORD.key())
+                .hasMessageContaining(ConfigOptions.SERVER_SSL_KEYSTORE_PASSWORD.key());
+    }
+
+    @Test
+    void testClientStoreFailureNamesTheClientOption() {
+        Configuration conf = new Configuration();
+        Path missing = tempDir.resolve("absent-truststore.jks");
+        TestSslUtils.setClientSslConfig(conf, missing, null);
+
+        assertThatThrownBy(() -> SslContextFactory.createClientSslContext(conf))
+                .isInstanceOf(FlussRuntimeException.class)
+                .hasMessageContaining("client truststore")
+                .hasMessageContaining(ConfigOptions.CLIENT_SSL_TRUSTSTORE_PATH.key());
     }
 
     @Test
