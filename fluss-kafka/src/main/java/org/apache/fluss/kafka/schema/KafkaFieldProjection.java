@@ -50,7 +50,7 @@ public final class KafkaFieldProjection {
                     "Invalid Kafka field projection position %s.",
                     position);
             positionCopy.add(position);
-            projectedNames.add(rowType.getFieldNames().get(position));
+            projectedNames.add(rowType.getFields().get(position).getName());
             projectedTypes.add(rowType.getTypeAt(position));
         }
         this.positions = Collections.unmodifiableList(positionCopy);

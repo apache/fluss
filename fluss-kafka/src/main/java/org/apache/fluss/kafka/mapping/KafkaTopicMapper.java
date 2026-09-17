@@ -21,35 +21,57 @@ import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.metadata.TablePath;
 
 import org.apache.kafka.common.Uuid;
+import org.apache.kafka.common.errors.InvalidTopicException;
 import org.apache.kafka.common.internals.Topic;
 
 import static org.apache.fluss.utils.Preconditions.checkArgument;
-import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
-/** Maps Kafka topic identities to tables in the configured Fluss Kafka database. */
+/** Maps fully qualified Kafka topic identities to Fluss tables. */
 @Internal
 public final class KafkaTopicMapper {
 
     // ASCII "Fluss" followed by zero bytes. A dedicated namespace avoids Kafka-reserved UUIDs.
     private static final long TOPIC_ID_NAMESPACE = 0x466c757373000000L;
 
-    private final String databaseName;
-
-    /** Creates a topic mapper for one Fluss database. */
-    public KafkaTopicMapper(String databaseName) {
-        this.databaseName = checkNotNull(databaseName);
-    }
-
-    /** Maps a Kafka topic name to its Fluss table path. */
+    /** Maps a Kafka topic in database.table form to its Fluss table path. */
     public TablePath toTablePath(String topicName) {
-        Topic.validate(topicName);
-        return TablePath.of(databaseName, topicName);
+        if (!isValidTopic(topicName)) {
+            throw new InvalidTopicException(
+                    "Kafka topic must be a valid database.table name: " + topicName);
+        }
+        int separator = topicName.indexOf('.');
+        return TablePath.of(topicName.substring(0, separator), topicName.substring(separator + 1));
     }
 
-    /** Returns whether a table belongs to this database and has a valid Kafka topic name. */
+    /** Returns the fully qualified Kafka name of a representable Fluss table. */
+    public String toTopicName(TablePath tablePath) {
+        if (!isMappedTable(tablePath)) {
+            throw new InvalidTopicException(
+                    "Fluss table cannot be represented as a Kafka database.table name: "
+                            + tablePath);
+        }
+        return tablePath.toString();
+    }
+
+    /** Returns whether a Fluss user table has a valid, fully qualified Kafka topic name. */
     public boolean isMappedTable(TablePath tablePath) {
-        return databaseName.equals(tablePath.getDatabaseName())
-                && Topic.isValid(tablePath.getTableName());
+        return tablePath != null && tablePath.isValid() && isValidTopic(tablePath.toString());
+    }
+
+    /** Returns whether a name uniquely represents a user table in a Fluss database. */
+    public static boolean isValidTopic(String topicName) {
+        if (topicName == null || !Topic.isValid(topicName)) {
+            return false;
+        }
+        int separator = topicName.indexOf('.');
+        if (separator <= 0 || separator != topicName.lastIndexOf('.')) {
+            return false;
+        }
+        String database = topicName.substring(0, separator);
+        String table = topicName.substring(separator + 1);
+        return TablePath.of(database, table).isValid()
+                && TablePath.validatePrefix(database) == null
+                && TablePath.validatePrefix(table) == null;
     }
 
     /** Maps a Fluss table ID to a stable Kafka topic ID. */

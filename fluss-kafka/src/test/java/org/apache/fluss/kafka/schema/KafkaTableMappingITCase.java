@@ -31,6 +31,11 @@ import org.apache.fluss.types.DataTypes;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 
+import java.util.Arrays;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+
 import static org.apache.fluss.server.testutils.RpcMessageTestUtils.createTable;
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -42,7 +47,7 @@ public class KafkaTableMappingITCase {
             FlussClusterExtension.builder().setNumOfTabletServers(1).build();
 
     @Test
-    public void testResolveMappingFromCreatedTableMetadata() throws Exception {
+    public void testResolveMappingsFromQualifiedTopicsAcrossDatabases() throws Exception {
         TableDescriptor descriptor =
                 TableDescriptor.builder()
                         .schema(
@@ -57,32 +62,49 @@ public class KafkaTableMappingITCase {
                         .customProperty(KafkaDataFormat.VALUE_FORMAT_CONFIG, "raw")
                         .customProperty(KafkaDataFormat.VALUE_FIELDS_INCLUDE_CONFIG, "EXCEPT_KEY")
                         .build();
-        KafkaTopicMapper mapper = new KafkaTopicMapper("kafka_ddl");
-        TablePath tablePath = mapper.toTablePath("events");
-        long tableId = createTable(FLUSS_CLUSTER_EXTENSION, tablePath, descriptor);
-        FLUSS_CLUSTER_EXTENSION.waitUntilAllGatewayHasSameMetadata();
+        KafkaTopicMapper mapper = new KafkaTopicMapper();
+        Map<TablePath, Long> tableIds = new LinkedHashMap<>();
         MetadataRequest request = new MetadataRequest();
-        request.addTablePath()
-                .setDatabaseName(tablePath.getDatabaseName())
-                .setTableName(tablePath.getTableName());
-        PbTableMetadata metadata =
+        for (String database : Arrays.asList("kafka_ddl", "kafka_ddl_archive")) {
+            TablePath tablePath = mapper.toTablePath(database + ".events");
+            assertThat(tablePath).isEqualTo(TablePath.of(database, "events"));
+            tableIds.put(tablePath, createTable(FLUSS_CLUSTER_EXTENSION, tablePath, descriptor));
+            request.addTablePath()
+                    .setDatabaseName(tablePath.getDatabaseName())
+                    .setTableName(tablePath.getTableName());
+        }
+        FLUSS_CLUSTER_EXTENSION.waitUntilAllGatewayHasSameMetadata();
+        List<PbTableMetadata> metadatas =
                 FLUSS_CLUSTER_EXTENSION
                         .newCoordinatorClient()
                         .metadata(request)
                         .get()
-                        .getTableMetadatasList()
-                        .get(0);
-        TableDescriptor persisted = TableDescriptor.fromJsonBytes(metadata.getTableJson());
-        KafkaTopicSchema mapping = new KafkaTopicSchemaResolver().resolve(persisted);
+                        .getTableMetadatasList();
+        assertThat(metadatas).hasSize(2);
+        assertThat(metadatas)
+                .extracting(PbTableMetadata::getTableId)
+                .containsExactlyInAnyOrderElementsOf(tableIds.values())
+                .doesNotHaveDuplicates();
+        for (PbTableMetadata metadata : metadatas) {
+            TablePath tablePath =
+                    TablePath.of(
+                            metadata.getTablePath().getDatabaseName(),
+                            metadata.getTablePath().getTableName());
+            TableDescriptor persisted = TableDescriptor.fromJsonBytes(metadata.getTableJson());
+            KafkaTopicSchema mapping = new KafkaTopicSchemaResolver().resolve(persisted);
 
-        assertThat(metadata.getTableId()).isEqualTo(tableId);
-        assertThat(mapper.toTableId(mapper.toTopicId(metadata.getTableId()))).isEqualTo(tableId);
-        assertThat(metadata.getBucketMetadatasList()).hasSize(2);
-        assertThat(persisted.getCustomProperties())
-                .containsAllEntriesOf(descriptor.getCustomProperties());
-        assertThat(mapping.keyProjection().positions()).containsExactly(0);
-        assertThat(mapping.keyFormat()).isEqualTo(KafkaDataFormat.STRING);
-        assertThat(mapping.valueProjection().positions()).containsExactly(1);
-        assertThat(mapping.valueFormat()).isEqualTo(KafkaDataFormat.RAW);
+            assertThat(metadata.getTableId()).isEqualTo(tableIds.get(tablePath));
+            assertThat(mapper.toTopicName(tablePath))
+                    .isIn("kafka_ddl.events", "kafka_ddl_archive.events");
+            assertThat(mapper.toTableId(mapper.toTopicId(metadata.getTableId())))
+                    .isEqualTo(tableIds.get(tablePath));
+            assertThat(metadata.getBucketMetadatasList()).hasSize(2);
+            assertThat(persisted.getCustomProperties())
+                    .containsAllEntriesOf(descriptor.getCustomProperties());
+            assertThat(mapping.keyProjection().positions()).containsExactly(0);
+            assertThat(mapping.keyFormat()).isEqualTo(KafkaDataFormat.STRING);
+            assertThat(mapping.valueProjection().positions()).containsExactly(1);
+            assertThat(mapping.valueFormat()).isEqualTo(KafkaDataFormat.RAW);
+        }
     }
 }
