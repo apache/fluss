@@ -462,18 +462,67 @@ Counters accumulate across rebalances within a coordinator leader term and reset
 Recovering a previously finished rebalance does not increment the counters; a recovered unfinished
 rebalance is counted when it finishes in the new leader term.
 
-| Metrics | Description | Type |
-| --- | --- | --- |
-| `rebalanceInProgress` | 1 while a rebalance is running; otherwise 0. | Gauge |
-| `rebalanceBucketsPending` | Number of unfinished buckets, including the currently running bucket. | Gauge |
-| `rebalanceBucketsCompleted` | Number of buckets observed to complete successfully by this leader in the most recently registered rebalance. | Gauge |
-| `rebalanceBucketsFailed` | Number of buckets observed to fail by this leader in the most recently registered rebalance, excluding timeouts. | Gauge |
-| `rebalanceBucketsTimedOut` | Number of buckets observed to time out by this leader in the most recently registered rebalance. | Gauge |
-| `rebalanceDurationMs` | Elapsed milliseconds since the running rebalance was registered on this leader; 0 when idle. | Gauge |
-| `inflightBucketDurationMs` | Elapsed milliseconds for the currently running bucket; 0 when no bucket is running. | Gauge |
-| `rebalancesCompletedTotal` | Number of rebalances that finished without failed or timed-out buckets, including empty plans. | Counter |
-| `rebalancesFailedTotal` | Number of rebalances that finished with at least one failed or timed-out bucket. This is an outcome metric; the existing Admin API can still report the rebalance status as `COMPLETED` because execution has finished. | Counter |
-| `rebalancesCanceledTotal` | Number of running rebalances canceled on this leader. Repeated cancellation and cancellation when idle do not increment it. | Counter |
+<table class="table table-bordered">
+  <thead>
+    <tr>
+      <th class="text-left" style={{width: '80pt'}}>Metrics</th>
+      <th class="text-left" style={{width: '300pt'}}>Description</th>
+      <th class="text-left" style={{width: '40pt'}}>Type</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>rebalanceInProgress</td>
+      <td>1 while a rebalance is running; otherwise 0.</td>
+      <td>Gauge</td>
+    </tr>
+    <tr>
+      <td>rebalanceBucketsPending</td>
+      <td>Number of unfinished buckets, including the currently running bucket.</td>
+      <td>Gauge</td>
+    </tr>
+    <tr>
+      <td>rebalanceBucketsCompleted</td>
+      <td>Number of buckets observed to complete successfully by this leader in the most recently registered rebalance.</td>
+      <td>Gauge</td>
+    </tr>
+    <tr>
+      <td>rebalanceBucketsFailed</td>
+      <td>Number of buckets observed to fail by this leader in the most recently registered rebalance, excluding timeouts.</td>
+      <td>Gauge</td>
+    </tr>
+    <tr>
+      <td>rebalanceBucketsTimedOut</td>
+      <td>Number of buckets observed to time out by this leader in the most recently registered rebalance.</td>
+      <td>Gauge</td>
+    </tr>
+    <tr>
+      <td>rebalanceDurationMs</td>
+      <td>Elapsed milliseconds since the running rebalance was registered on this leader; 0 when idle.</td>
+      <td>Gauge</td>
+    </tr>
+    <tr>
+      <td>inflightBucketDurationMs</td>
+      <td>Elapsed milliseconds for the currently running bucket; 0 when no bucket is running.</td>
+      <td>Gauge</td>
+    </tr>
+    <tr>
+      <td>rebalancesCompletedTotal</td>
+      <td>Number of rebalances that finished without failed or timed-out buckets, including empty plans.</td>
+      <td>Counter</td>
+    </tr>
+    <tr>
+      <td>rebalancesFailedTotal</td>
+      <td>Number of rebalances that finished with at least one failed or timed-out bucket. This is an outcome metric; the existing Admin API can still report the rebalance status as <code>COMPLETED</code> because execution has finished.</td>
+      <td>Counter</td>
+    </tr>
+    <tr>
+      <td>rebalancesCanceledTotal</td>
+      <td>Number of running rebalances canceled on this leader. Repeated cancellation and cancellation when idle do not increment it.</td>
+      <td>Counter</td>
+    </tr>
+  </tbody>
+</table>
 
 ### Tablet Server
 

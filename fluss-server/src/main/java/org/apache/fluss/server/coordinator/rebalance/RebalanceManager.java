@@ -206,6 +206,11 @@ public class RebalanceManager {
                 .count();
     }
 
+    private boolean hasFinishedBucket(RebalanceStatus status) {
+        return finishedRebalanceTasks.values().stream()
+                .anyMatch(result -> result.status() == status);
+    }
+
     private long inflightBucketDurationMs() {
         TableBucket bucket = inflightTaskBucket;
         long startMs = inflightTaskStartMs;
@@ -406,20 +411,20 @@ public class RebalanceManager {
         String rebalanceId = UUID.randomUUID().toString();
         try {
             // Generate the latest cluster model.
-            long startTime = System.currentTimeMillis();
+            long startTime = clock.milliseconds();
             ClusterModel clusterModel = buildClusterModel(eventProcessor.getCoordinatorContext());
             LOG.info(
                     "Build cluster model for rebalance id {} with {} ms.",
                     rebalanceId,
-                    System.currentTimeMillis() - startTime);
+                    clock.milliseconds() - startTime);
 
             // do optimize.
-            startTime = System.currentTimeMillis();
+            startTime = clock.milliseconds();
             rebalancePlanForBuckets = goalOptimizer.doOptimizeOnce(clusterModel, goalsByPriority);
             LOG.info(
                     "Do optimize for rebalance id {} with {} ms.",
                     rebalanceId,
-                    System.currentTimeMillis() - startTime);
+                    clock.milliseconds() - startTime);
         } catch (Exception e) {
             LOG.error("Failed to generate rebalance plan.", e);
             throw e;
@@ -471,7 +476,7 @@ public class RebalanceManager {
         }
 
         if (bucketResultsAvailable) {
-            if (finishedBucketCount(FAILED) > 0 || finishedBucketCount(TIMEOUT) > 0) {
+            if (hasFinishedBucket(FAILED) || hasFinishedBucket(TIMEOUT)) {
                 rebalancesFailed.inc();
             } else {
                 rebalancesCompleted.inc();
