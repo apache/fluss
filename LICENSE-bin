@@ -444,9 +444,12 @@ License: Apache License, Version 2.0 - http://www.apache.org/licenses/LICENSE-2.
 
 ------------------------------------------------------------------------------------
 
-This product bundles Protobuf Java.
-Project URL: http://code.google.com/p/protobuf
-License: Apache License, Version 2.0 - http://www.apache.org/licenses/LICENSE-2.0.txt
+This product bundles Protobuf Java 3.19.6, 3.25.5 and 4.33.5.
+Project URL: https://github.com/protocolbuffers/protobuf
+License: BSD 3-Clause
+See META-INF/licenses/LICENSE.protobuf-java in plugins/hdfs/fluss-fs-hdfs-*.jar
+and plugins/influxdb/fluss-metrics-influxdb-*.jar, and
+META-INF/licenses/LICENSE.protobuf in plugins/paimon/paimon-bundle-2.0.0.jar.
 
 ------------------------------------------------------------------------------------
 
