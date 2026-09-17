@@ -1628,10 +1628,11 @@ public class ConfigOptions {
             key("client.security.ssl.cipher.suites")
                     .stringType()
                     .asList()
-                    .noDefaultValue()
+                    .defaultValues()
                     .withDescription(
                             "A comma-separated list of cipher suites enabled for client TLS "
-                                    + "connections. If not set, JDK/provider defaults are used.");
+                                    + "connections. Empty by default, which uses the JDK/provider "
+                                    + "defaults for the negotiated protocol.");
 
     public static final ConfigOption<String> CLIENT_SSL_TRUSTSTORE_PATH =
             key("client.security.ssl.truststore.path")
@@ -1642,9 +1643,9 @@ public class ConfigOptions {
                                     + "uses to verify the server certificate. If unset, the JVM "
                                     + "default trust store is used.");
 
-    public static final ConfigOption<Password> CLIENT_SSL_TRUSTSTORE_PASSWORD =
+    public static final ConfigOption<String> CLIENT_SSL_TRUSTSTORE_PASSWORD =
             key("client.security.ssl.truststore.password")
-                    .passwordType()
+                    .stringType()
                     .noDefaultValue()
                     .withDescription("The password to access the client truststore.");
 
@@ -1665,9 +1666,9 @@ public class ConfigOptions {
                                     + "private key. Only needed for mutual TLS, where the client "
                                     + "presents a certificate to the server.");
 
-    public static final ConfigOption<Password> CLIENT_SSL_KEYSTORE_PASSWORD =
+    public static final ConfigOption<String> CLIENT_SSL_KEYSTORE_PASSWORD =
             key("client.security.ssl.keystore.password")
-                    .passwordType()
+                    .stringType()
                     .noDefaultValue()
                     .withDescription("The password to access the client keystore.");
 
@@ -1679,9 +1680,9 @@ public class ConfigOptions {
                             "The format of the client keystore file. Supported values are `JKS` and "
                                     + "`PKCS12`. The default is `JKS`.");
 
-    public static final ConfigOption<Password> CLIENT_SSL_KEY_PASSWORD =
+    public static final ConfigOption<String> CLIENT_SSL_KEY_PASSWORD =
             key("client.security.ssl.key.password")
-                    .passwordType()
+                    .stringType()
                     .noDefaultValue()
                     .withDescription(
                             "The password of the private key in the client keystore. If not set, the "

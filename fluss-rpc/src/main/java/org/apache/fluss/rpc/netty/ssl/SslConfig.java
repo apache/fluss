@@ -212,11 +212,11 @@ public final class SslConfig {
                         enabledProtocols,
                         cipherSuites,
                         conf.getString(ConfigOptions.CLIENT_SSL_KEYSTORE_PATH),
-                        password(conf.get(ConfigOptions.CLIENT_SSL_KEYSTORE_PASSWORD)),
+                        conf.getString(ConfigOptions.CLIENT_SSL_KEYSTORE_PASSWORD),
                         conf.getString(ConfigOptions.CLIENT_SSL_KEYSTORE_TYPE),
-                        password(conf.get(ConfigOptions.CLIENT_SSL_KEY_PASSWORD)),
+                        conf.getString(ConfigOptions.CLIENT_SSL_KEY_PASSWORD),
                         conf.getString(ConfigOptions.CLIENT_SSL_TRUSTSTORE_PATH),
-                        password(conf.get(ConfigOptions.CLIENT_SSL_TRUSTSTORE_PASSWORD)),
+                        conf.getString(ConfigOptions.CLIENT_SSL_TRUSTSTORE_PASSWORD),
                         conf.getString(ConfigOptions.CLIENT_SSL_TRUSTSTORE_TYPE),
                         conf.getString(
                                 ConfigOptions.CLIENT_SSL_ENDPOINT_IDENTIFICATION_ALGORITHM)));
