@@ -48,7 +48,9 @@ jobs:
     needs: [version-check]
     steps:
       - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+        with:
+          toolchain: stable
 
       - name: Check generated binary licenses
         run: python fluss-rust/bindings/python/generate_binary_license.py --check
@@ -78,7 +80,9 @@ jobs:
           - { os: ubuntu-latest, target: "aarch64", manylinux: "manylinux_2_28", license-target: "aarch64-unknown-linux-gnu" }
     steps:
       - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+        with:
+          toolchain: stable
 
       - name: Generate licenses for this wheel target
         run: python fluss-rust/bindings/python/generate_binary_license.py --target "${{ matrix.license-target }}"
