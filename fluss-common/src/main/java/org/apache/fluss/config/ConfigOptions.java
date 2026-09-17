@@ -624,7 +624,11 @@ public class ConfigOptions {
                                     + "(`security.ssl.keystore.path`) must be configured when any "
                                     + "listener is listed here. Listeners not listed accept plaintext "
                                     + "connections. TLS is orthogonal to the authentication protocol "
-                                    + "configured via `security.protocol.map`.");
+                                    + "configured via `security.protocol.map`. Listener names are "
+                                    + "matched exactly, as everywhere else in Fluss: a name here must "
+                                    + "be spelled the same way, including case, as in `bind.listeners` "
+                                    + "and in `security.protocol.map`, otherwise it silently selects "
+                                    + "no listener.");
 
     public static final ConfigOption<List<String>> SERVER_SSL_ENABLED_PROTOCOLS =
             key("security.ssl.enabled.protocols")
