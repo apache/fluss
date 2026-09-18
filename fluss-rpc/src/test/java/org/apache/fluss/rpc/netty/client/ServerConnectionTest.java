@@ -40,6 +40,7 @@ import org.apache.fluss.rpc.messages.ApiVersionsResponse;
 import org.apache.fluss.rpc.messages.GetTableSchemaRequest;
 import org.apache.fluss.rpc.messages.ListDatabasesRequest;
 import org.apache.fluss.rpc.messages.LookupRequest;
+import org.apache.fluss.rpc.messages.LookupResponse;
 import org.apache.fluss.rpc.messages.PbApiVersion;
 import org.apache.fluss.rpc.messages.PbLookupReqForBucket;
 import org.apache.fluss.rpc.messages.PbTablePath;
@@ -368,6 +369,45 @@ public class ServerConnectionTest {
         }
     }
 
+    @Test
+    void testRejectHistoricalLookupsForOldServer() throws Exception {
+        nettyServer.close();
+        buildNettyServer(new OldLookupGatewayService());
+
+        ServerConnection connection =
+                new ServerConnection(
+                        bootstrap,
+                        serverNode,
+                        TestingClientMetricGroup.newInstance(),
+                        clientAuthenticator,
+                        (con, ignore) -> {});
+        try {
+            assertThat(connection.send(ApiKeys.LOOKUP, lookupRequest(null)).get())
+                    .isInstanceOf(LookupResponse.class);
+
+            assertThatThrownBy(
+                            () ->
+                                    connection
+                                            .send(ApiKeys.LOOKUP, lookupRequest("dt=20260823"))
+                                            .get())
+                    .rootCause()
+                    .isInstanceOf(UnsupportedVersionException.class)
+                    .hasMessageContaining("require LOOKUP version 2 or newer")
+                    .hasMessageContaining("negotiated version 1");
+        } finally {
+            connection.close().get();
+        }
+    }
+
+    private static LookupRequest lookupRequest(String originalPartitionName) {
+        LookupRequest request = new LookupRequest().setTableId(1L);
+        request.addBucketsReq().setBucketId(0).addKey(new byte[] {1});
+        if (originalPartitionName != null) {
+            request.getBucketsReqAt(0).setOriginalPartitionName(originalPartitionName);
+        }
+        return request;
+    }
+
     private static PutKvRequest putKvRequest(String originalPartitionName) {
         PutKvRequest request = new PutKvRequest().setTableId(1L).setAcks(1).setTimeoutMs(10_000);
         request.addBucketsReq().setBucketId(0).setRecords(new byte[0]);
@@ -440,6 +480,27 @@ public class ServerConnectionTest {
         @Override
         public CompletableFuture<ProduceLogResponse> produceLog(ProduceLogRequest request) {
             return CompletableFuture.completedFuture(new ProduceLogResponse());
+        }
+    }
+
+    private static class OldLookupGatewayService extends TestingTabletGatewayService {
+        @Override
+        public CompletableFuture<ApiVersionsResponse> apiVersions(ApiVersionsRequest request) {
+            return super.apiVersions(request)
+                    .thenApply(
+                            response -> {
+                                for (PbApiVersion apiVersion : response.getApiVersionsList()) {
+                                    if (apiVersion.getApiKey() == ApiKeys.LOOKUP.id) {
+                                        apiVersion.setMaxVersion(1);
+                                    }
+                                }
+                                return response;
+                            });
+        }
+
+        @Override
+        public CompletableFuture<LookupResponse> lookup(LookupRequest request) {
+            return CompletableFuture.completedFuture(new LookupResponse());
         }
     }
 
