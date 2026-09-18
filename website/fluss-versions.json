@@ -12,7 +12,7 @@
     "versionName": "version-1.0",
     "fullVersion": "1.0.0",
     "shortVersion": "1.0",
-    "dockerVersion": "1.0.0-rc1",
+    "dockerVersion": "1.0.0-rc3",
     "paimonVersion": "2.0.0",
     "paimonVersionShort": "2.0",
     "released": false
