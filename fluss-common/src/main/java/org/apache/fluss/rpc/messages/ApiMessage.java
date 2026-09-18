@@ -21,12 +21,21 @@ import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.record.send.WritableOutput;
 import org.apache.fluss.shaded.netty4.io.netty.buffer.ByteBuf;
 
+import java.util.Map;
+
 /**
  * An object that can serialize itself. The serialization protocol is versioned. Messages also
  * implement toString, equals, and hashCode.
  */
 @Internal
 public interface ApiMessage {
+
+    /**
+     * Accumulates this message's recursively set {@code error_code} values, including explicit zero
+     * values, into the supplied map without clearing its existing entries. Callers filter codes
+     * that are not errors.
+     */
+    default void collectErrorCounts(Map<Integer, Integer> errorCounts) {}
 
     /** Gets the total serialized byte array size of the message. */
     int totalSize();
