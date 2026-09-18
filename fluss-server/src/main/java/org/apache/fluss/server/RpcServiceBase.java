@@ -18,6 +18,9 @@
 package org.apache.fluss.server;
 
 import org.apache.fluss.annotation.VisibleForTesting;
+import org.apache.fluss.cluster.CoordinatorRole;
+import org.apache.fluss.cluster.CoordinatorServerInfo;
+import org.apache.fluss.cluster.Endpoint;
 import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.config.cluster.ConfigEntry;
@@ -100,6 +103,7 @@ import org.apache.fluss.server.tablet.TabletService;
 import org.apache.fluss.server.utils.ServerRpcMessageUtils;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.BucketSnapshot;
+import org.apache.fluss.server.zk.data.CoordinatorAddress;
 import org.apache.fluss.server.zk.data.PartitionRegistration;
 import org.apache.fluss.server.zk.data.lake.LakeTableSnapshot;
 
@@ -111,7 +115,6 @@ import javax.annotation.Nullable;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
-import java.util.Comparator;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -864,8 +867,80 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
         ServerNode coordinatorServer = metadataCache.getCoordinatorServer(listenerName);
         Set<ServerNode> aliveTabletServers =
                 new HashSet<>(metadataCache.getAllAliveTabletServers(listenerName).values());
+
+        // Collect all coordinator servers with role and liveness information
+        List<CoordinatorServerInfo> coordinatorServerInfos = new ArrayList<>();
+        try {
+            // Get all registered coordinators from ZK
+            List<CoordinatorAddress> allCoordinators = zkClient.getCoordinatorServers();
+            Collections.sort(
+                    allCoordinators,
+                    (left, right) -> {
+                        Endpoint leftEndpoint = getCoordinatorEndpoint(left, listenerName);
+                        Endpoint rightEndpoint = getCoordinatorEndpoint(right, listenerName);
+                        String leftHost = leftEndpoint == null ? "" : leftEndpoint.getHost();
+                        String rightHost = rightEndpoint == null ? "" : rightEndpoint.getHost();
+                        int hostCompare = leftHost.compareTo(rightHost);
+                        if (hostCompare != 0) {
+                            return hostCompare;
+                        }
+                        int leftPort = leftEndpoint == null ? -1 : leftEndpoint.getPort();
+                        int rightPort = rightEndpoint == null ? -1 : rightEndpoint.getPort();
+                        int portCompare = Integer.compare(leftPort, rightPort);
+                        if (portCompare != 0) {
+                            return portCompare;
+                        }
+                        return left.getId().compareTo(right.getId());
+                    });
+            Set<String> aliveCoordinatorIds = zkClient.getAliveCoordinatorServerIds();
+            Optional<CoordinatorAddress> leaderCoordinator = zkClient.getCoordinatorLeaderAddress();
+
+            for (int i = 0; i < allCoordinators.size(); i++) {
+                CoordinatorAddress coordinator = allCoordinators.get(i);
+                boolean isAlive = aliveCoordinatorIds.contains(coordinator.getId());
+                CoordinatorRole role =
+                        leaderCoordinator.isPresent()
+                                        && coordinator
+                                                .getId()
+                                                .equals(leaderCoordinator.get().getId())
+                                ? CoordinatorRole.LEADER
+                                : CoordinatorRole.STANDBY;
+                Endpoint endpoint = getCoordinatorEndpoint(coordinator, listenerName);
+                if (endpoint != null) {
+                    ServerNode node =
+                            new ServerNode(
+                                    i,
+                                    endpoint.getHost(),
+                                    endpoint.getPort(),
+                                    ServerType.COORDINATOR);
+                    coordinatorServerInfos.add(
+                            new CoordinatorServerInfo(coordinator.getId(), node, role, isAlive));
+                }
+            }
+        } catch (Exception e) {
+            LOG.warn("Failed to collect all coordinator servers from ZK", e);
+        }
+
         return buildMetadataResponse(
-                coordinatorServer, aliveTabletServers, tablesMetadata, partitionsMetadata);
+                coordinatorServer,
+                coordinatorServerInfos,
+                aliveTabletServers,
+                tablesMetadata,
+                partitionsMetadata);
+    }
+
+    @Nullable
+    private static Endpoint getCoordinatorEndpoint(
+            CoordinatorAddress coordinator, String listenerName) {
+        for (Endpoint endpoint : coordinator.getEndpoints()) {
+            if (listenerName.equals(endpoint.getListenerName())) {
+                return endpoint;
+            }
+        }
+        if (!coordinator.getEndpoints().isEmpty()) {
+            return coordinator.getEndpoints().get(0);
+        }
+        return null;
     }
 
     private boolean isPartitionAssignmentMissingFromZk(long partitionId) {
