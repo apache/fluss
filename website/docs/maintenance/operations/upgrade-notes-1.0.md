@@ -9,17 +9,23 @@ These notes describe configuration, behavior, and compatibility changes to revie
 
 Fluss v1.0 is the first release after graduation to an Apache Top-Level Project. Release artifacts no longer carry the `-incubating` suffix; update download scripts and dependency versions accordingly.
 
-## Upgrade Order and Compatibility
+## Upgrade Plan
 
-Use the following sequence when planning the upgrade:
+### Suggested Upgrade Order
 
-1. **For lakehouse deployments, upgrade the tiering service first.** These components must be ready for clean lake schemas before upgrading the Fluss cluster. See [Lake Table Schema Changes (FIP-27)](#lake-table-schema-changes-fip-27) for the compatibility matrix and rollback limitations.
-2. **Upgrade the Fluss cluster:** upgrade TabletServers one by one, waiting for the cluster to recover after each restart, then upgrade the CoordinatorServer. See [Upgrading the Fluss Server Version](upgrading.md#upgrading-the-fluss-server-version) for the rolling-upgrade procedure.
-3. **Upgrade the remaining clients and connectors** before enabling v1.0 features or table options on the tables they access.
+Use the following sequence. Deployments without lakehouse tables can skip the second step.
+
+1. **Upgrade all clients and connectors.** This prepares applications to use v1.0 features and ensures that lake readers can handle both legacy and clean lake table schemas before any clean table can be created.
+2. **Upgrade the tiering service.** The new tiering service continues to write the legacy schema for existing tables and writes the clean schema for newly created tables.
+3. **Upgrade the Fluss cluster.** Upgrade TabletServers one by one, waiting for the cluster to recover after each restart, then upgrade the CoordinatorServer. See [Upgrading the Fluss Server Version](upgrading.md#upgrading-the-fluss-server-version) for the rolling-upgrade procedure.
+
+For lakehouse deployments, upgrading lake-reading connectors and storage plugins, followed by the tiering service, before the Fluss cluster is required by the lake table schema change in FIP-27. See [Lake Table Schema Changes (FIP-27)](#lake-table-schema-changes-fip-27) for the compatibility matrix and rollback limitations.
+
+### Compatibility During the Upgrade
 
 Clients at v0.9 can continue to run existing workloads against a v1.0 cluster, subject to the authorization and format changes described on this page. This compatibility does not extend to new features: full KV scan, multi-table subscription, log filter pushdown, column statistics, and KV snapshot leases require both v1.0 servers and v1.0 clients. In particular, keep `table.statistics.columns` unset until all servers and all clients reading the affected table have been upgraded; see [Column Statistics and the V1 Log Batch Format](#column-statistics-and-the-v1-log-batch-format).
 
-### CoordinatorServer High Availability
+### CoordinatorServer HA After the Upgrade
 
 After completing the cluster upgrade, you can add v1.0 standby CoordinatorServers. Configure them with the same `zookeeper.address` and `zookeeper.path.root` as the existing coordinator. They participate in ZooKeeper leader election automatically; no additional HA feature flag is required.
 
@@ -111,11 +117,46 @@ See [TTL](../../table-design/data-distribution/ttl.md) for the segment lifecycle
 [remote storage](../tiered-storage/remote-storage.md) for tiered-log retention, and
 [updating configs](updating-configs.md#updating-cluster-configs) for other dynamic update methods.
 
+## Flink Connector Changes
+
+### Newly Discovered Partitions Start from Earliest
+
+In v0.9, partitions discovered while a streaming job was running followed `scan.startup.mode`. With `latest`, this could skip records written between partition creation and discovery.
+
+In v1.0, partitions present at the initial discovery follow `scan.startup.mode`, while partitions discovered later start from the earliest offset for log reads, including when `scan.startup.mode` is `latest`. Primary-key tables in `full` mode retain their snapshot-based initialization, falling back to earliest when no snapshot is available.
+
+Jobs that relied on `latest` to skip records already written to newly discovered partitions will now read those records. Review any downstream assumptions about skipping backfilled data. See [Start Reading Position](../../engine-flink/reads.md#start-reading-position).
+
+### Bucket-Level Source Reader Metrics Removed
+
+The per-bucket `currentOffset` gauges in the `fluss.reader` metric group are no longer registered, including `fluss.reader.bucket.<n>.currentOffset` for non-partitioned tables and `fluss.reader.partition.<id>.bucket.<n>.currentOffset` for partitioned tables. Update dashboards and alerts that reference these gauges. The standard `currentFetchEventTimeLag` metric remains available for monitoring read lag; see [Flink Source Metrics](../observability/monitor-metrics.md#source-metrics).
+
+## Client and Log Format Changes
+
+### JAAS Configuration Restricted to `PlainLoginModule`
+
+The compatibility option `client.security.sasl.jaas.config` now accepts only `org.apache.fluss.security.auth.sasl.plain.PlainLoginModule`. A configuration referencing another login module fails with `AuthenticationException` when the client initializes SASL authentication.
+
+Prefer setting `client.security.sasl.username` and `client.security.sasl.password` together instead of embedding a JAAS string, and remove the old JAAS option when migrating to these dedicated options. See [SASL Client-Side Configuration](../../security/authentication.md#sasl-client-side-configuration).
+
+### Column Statistics and the V1 Log Batch Format
+
+Setting `table.statistics.columns` on a log table enables column statistics in newly written Arrow log batches and uses the extended **V1** log batch format. Clients at v0.9 or earlier cannot decode these batches. By default, the option is unset, no statistics are collected, and batches retain the v0.9-compatible **V0** format.
+
+:::warning
+Upgrade all Fluss servers and all clients reading the affected table to v1.0 before enabling `table.statistics.columns`. Upgrading the cluster alone is not sufficient. Disabling the option later does not convert already-written V1 batches back to V0.
+:::
+
+Only batches written with statistics can benefit from this optimization; existing batches are not rewritten. See [Filter Pushdown](../../engine-flink/reads.md#filter-pushdown) for configuration examples and supported predicates.
+
+## Lakehouse Changes
+
 ### New `datalake.enabled` Cluster Configuration
 
 Starting in v1.0, Fluss introduces the cluster-level configuration `datalake.enabled` to control whether the cluster is ready to create and manage lakehouse tables.
 
 #### Behavior Changes
+
 The behavior of Fluss regarding lakehouse table configuration is determined by the combination of `datalake.enabled` and `datalake.format`. The specific rules are as follows:
 
 - If `datalake.enabled` is unset, Fluss defaults to legacy behavior: In this state, configuring `datalake.format` alone automatically enables lakehouse tables.
@@ -147,49 +188,17 @@ If your existing deployment or internal scripts only set `datalake.format`, they
 
 For new configuration examples and operational guidance, we recommend explicitly configuring `datalake.enabled` together with `datalake.format`.
 
-## Flink Connector Changes
-
-### Newly Discovered Partitions Start from Earliest
-
-In v0.9, partitions discovered while a streaming job was running followed `scan.startup.mode`. With `latest`, this could skip records written between partition creation and discovery.
-
-In v1.0, partitions present at the initial discovery follow `scan.startup.mode`, while partitions discovered later start from the earliest offset for log reads, including when `scan.startup.mode` is `latest`. Primary-key tables in `full` mode retain their snapshot-based initialization, falling back to earliest when no snapshot is available.
-
-Jobs that relied on `latest` to skip records already written to newly discovered partitions will now read those records. Review any downstream assumptions about skipping backfilled data. See [Start Reading Position](../../engine-flink/reads.md#start-reading-position).
-
-### Bucket-Level Source Reader Metrics Removed
-
-The per-bucket `currentOffset` gauges in the `fluss.reader` metric group are no longer registered, including `fluss.reader.bucket.<n>.currentOffset` for non-partitioned tables and `fluss.reader.partition.<id>.bucket.<n>.currentOffset` for partitioned tables. Update dashboards and alerts that reference these gauges. The standard `currentFetchEventTimeLag` metric remains available for monitoring read lag; see [Flink Source Metrics](../observability/monitor-metrics.md#source-metrics).
-
-## Client Changes
-
-### JAAS Configuration Restricted to `PlainLoginModule`
-
-The compatibility option `client.security.sasl.jaas.config` now accepts only `org.apache.fluss.security.auth.sasl.plain.PlainLoginModule`. A configuration referencing another login module fails with `AuthenticationException` when the client initializes SASL authentication.
-
-Prefer setting `client.security.sasl.username` and `client.security.sasl.password` together instead of embedding a JAAS string, and remove the old JAAS option when migrating to these dedicated options. See [SASL Client-Side Configuration](../../security/authentication.md#sasl-client-side-configuration).
-
-### Column Statistics and the V1 Log Batch Format
-
-Setting `table.statistics.columns` on a log table enables column statistics in newly written Arrow log batches and uses the extended **V1** log batch format. Clients at v0.9 or earlier cannot decode these batches. By default, the option is unset, no statistics are collected, and batches retain the v0.9-compatible **V0** format.
-
-:::warning
-Upgrade all Fluss servers and all clients reading the affected table to v1.0 before enabling `table.statistics.columns`. Upgrading the cluster alone is not sufficient. Disabling the option later does not convert already-written V1 batches back to V0.
-:::
-
-Only batches written with statistics can benefit from this optimization; existing batches are not rewritten. See [Filter Pushdown](../../engine-flink/reads.md#filter-pushdown) for configuration examples and supported predicates.
-
-## Historical Partition Lookup
+### Historical Partition Lookup
 
 Historical partition lookup through `table.datalake.historical-partition.enabled` is disabled by default and supports only **auto-partitioned Paimon primary-key tables with a single partition key**. After changing this option, restart existing lookup jobs that need access to historical partition data so their clients load the updated table configuration. See [Modifying Table Properties](../../engine-flink/ddl.md#set-properties).
 
-## Lake Table Schema Changes (FIP-27)
+### Lake Table Schema Changes (FIP-27)
 
 Starting from this version, Fluss creates lake tables with a **clean** physical schema that contains only the user-defined columns. Earlier versions appended three trailing system columns (`__bucket`, `__offset`, `__timestamp`) to every lake table; these are no longer added to newly created tables.
 
 This applies to the Paimon and Iceberg lake formats. The Hudi lake storage was never exposed in a publicly released version, so it only ever uses the clean layout and the compatibility considerations below do not apply to it.
 
-### Clean and Legacy Layouts
+#### Clean and Legacy Layouts
 
 - **Clean layout**: newly created lake tables contain only user columns.
 - **Legacy layout**: lake tables created by earlier Fluss versions still carry the three trailing system columns.
@@ -198,7 +207,7 @@ Existing legacy tables are **not** migrated and remain fully readable and writab
 
 The names `__bucket`, `__offset`, and `__timestamp` remain reserved for Fluss internal use. System columns are disabled by default; any future opt-in behavior to re-enable them is outside the scope of FIP-27.
 
-### Compatibility Matrix
+#### Compatibility Matrix
 
 | Component | Legacy tables | Clean tables |
 |-----------|---------------|--------------|
@@ -209,16 +218,8 @@ The names `__bucket`, `__offset`, and `__timestamp` remain reserved for Fluss in
 
 Old Flink connectors that use `FULL` startup mode assume the presence of the system columns and therefore cannot read newly created clean lake tables. Note that `FULL` is the **default** value of `scan.startup.mode`, so an old connector that does not explicitly set a startup mode is also affected — when auditing jobs before an upgrade, do not look only for jobs that explicitly configure `FULL`. A lake-reading Flink connector must be upgraded together with its matching lake storage plugin.
 
-### Required Upgrade Order
+This compatibility matrix is why the lake-reading connectors and storage plugins, followed by the tiering service, must be upgraded before the Fluss cluster. Follow the [suggested upgrade order](#suggested-upgrade-order) to prevent an old reader or tiering service from encountering a clean table it cannot handle.
 
-To move to a version that creates clean lake tables safely, upgrade the components in this order:
-
-1. **Lake-reading Flink connectors and lake storage plugins** — so that readers can handle both the legacy and clean layouts before any clean table exists.
-2. **Tiering service** — so that it starts producing clean tables only after the readers can consume them.
-3. **Fluss cluster** — upgrade TabletServers one by one, waiting for recovery between servers, then upgrade the CoordinatorServer. Upgrade any remaining clients before enabling new v1.0 features, as described in [Upgrade Order and Compatibility](#upgrade-order-and-compatibility).
-
-Upgrading in a different order can leave an old reader or an old tiering service facing a clean table it cannot handle.
-
-### Rollback Limitations
+#### Rollback Limitations
 
 Once a clean lake table has been created, rolling back to an older tiering service or older lake-reading connectors is **not** safe: those components assume the system columns are present and cannot correctly read or write the clean table. Plan the upgrade with this in mind, since a clean table cannot be transparently rolled back to the legacy layout.
