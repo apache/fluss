@@ -78,6 +78,7 @@ import static org.apache.fluss.config.FlussConfigUtils.isTableStorageConfig;
 import static org.apache.fluss.flink.FlinkConnectorOptions.AUTO_INCREMENT_FIELDS;
 import static org.apache.fluss.flink.FlinkConnectorOptions.BUCKET_KEY;
 import static org.apache.fluss.flink.FlinkConnectorOptions.BUCKET_NUMBER;
+import static org.apache.fluss.flink.FlinkConnectorOptions.INTERNAL_IMPLICIT_PARTITIONED_TABLE;
 import static org.apache.fluss.flink.FlinkConnectorOptions.MATERIALIZED_TABLE_DEFINITION_QUERY;
 import static org.apache.fluss.flink.FlinkConnectorOptions.MATERIALIZED_TABLE_EXPANDED_QUERY;
 import static org.apache.fluss.flink.FlinkConnectorOptions.MATERIALIZED_TABLE_INTERVAL_FRESHNESS;
@@ -125,6 +126,9 @@ public class FlinkConversions {
     /** Convert Fluss's table to Flink's table. */
     public static CatalogBaseTable toFlinkTable(TableInfo tableInfo) {
         Map<String, String> newOptions = new HashMap<>(tableInfo.getCustomProperties().toMap());
+        if (tableInfo.hasPartitionExpressions()) {
+            newOptions.put(INTERNAL_IMPLICIT_PARTITIONED_TABLE.key(), Boolean.TRUE.toString());
+        }
 
         // put fluss table properties into flink options, to make the properties visible to users
         convertFlussTablePropertiesToFlinkOptions(tableInfo.getProperties().toMap(), newOptions);
@@ -180,14 +184,14 @@ public class FlinkConversions {
             return toFlinkMaterializedTable(
                     schemaBuilder.build(),
                     tableInfo.getComment().orElse(null),
-                    tableInfo.getPartitionKeys(),
+                    tableInfo.getPhysicalPartitionKeys(),
                     newOptions);
         }
 
         return toCatalogTable(
                 schemaBuilder.build(),
                 tableInfo.getComment().orElse(null),
-                tableInfo.getPartitionKeys(),
+                tableInfo.getPhysicalPartitionKeys(),
                 CatalogPropertiesUtils.deserializeOptions(newOptions));
     }
 
@@ -786,6 +790,7 @@ public class FlinkConversions {
         // properties.
         customProperties.remove(BUCKET_KEY.key());
         customProperties.remove(BUCKET_NUMBER.key());
+        customProperties.remove(INTERNAL_IMPLICIT_PARTITIONED_TABLE.key());
         return customProperties;
     }
 }

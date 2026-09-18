@@ -18,8 +18,8 @@
 package org.apache.fluss.spark
 
 import org.apache.fluss.client.table.writer.{AppendResult, TableWriter}
-import org.apache.fluss.config.Configuration
-import org.apache.fluss.metadata.{Schema, TableDescriptor, TablePath}
+import org.apache.fluss.config.{AutoPartitionTimeUnit, Configuration}
+import org.apache.fluss.metadata.{DateTruncPartitionTransform, PartitionExpression, PartitionKey, Schema, TableDescriptor, TablePath}
 import org.apache.fluss.row.{BinaryString, GenericRow, InternalRow}
 import org.apache.fluss.spark.row.SparkAsFlussRow
 import org.apache.fluss.spark.util.TestUtils.{createGenericRow, FLUSS_ROWTYPE}
@@ -32,6 +32,7 @@ import org.assertj.core.api.Assertions.{assertThat, assertThatThrownBy}
 
 import java.io.IOException
 import java.sql.Timestamp
+import java.time.LocalDateTime
 import java.util.concurrent.CompletableFuture
 
 import scala.collection.JavaConverters._
@@ -114,6 +115,36 @@ class SparkWriteTest extends FlussSparkTestBase {
     )
     assertThat(flussRows.length).isEqualTo(5)
     assertThat(flussRows).containsAll(expectRows.toIterable.asJava)
+  }
+
+  test("Fluss Catalog: read and write implicit partition table") {
+    val tableName = "implicit_partition_table"
+    val tablePath = createTablePath(tableName)
+    val schema = Schema
+      .newBuilder()
+      .column("event_time", DataTypes.TIMESTAMP.copy(false))
+      .column("payload", DataTypes.STRING)
+      .build()
+    val tableDescriptor = TableDescriptor
+      .builder()
+      .schema(schema)
+      .partitionedByKeys(PartitionKey.expression(PartitionExpression
+        .of("event_day", DateTruncPartitionTransform.of("event_time", AutoPartitionTimeUnit.DAY))))
+      .distributedBy(1)
+      .build()
+    createFlussTable(tablePath, tableDescriptor)
+
+    val now = LocalDateTime.now().withNano(0)
+    val currentTimestamp = now.toString.replace('T', ' ')
+    val previousTimestamp = now.minusDays(1).toString.replace('T', ' ')
+    sql(s"""
+           |INSERT INTO $DEFAULT_DATABASE.$tableName VALUES
+           |(TIMESTAMP '$currentTimestamp', 'a'), (TIMESTAMP '$previousTimestamp', 'b')
+           |""".stripMargin)
+
+    checkAnswer(
+      sql(s"SELECT payload FROM $DEFAULT_DATABASE.$tableName ORDER BY payload"),
+      org.apache.spark.sql.Row("a") :: org.apache.spark.sql.Row("b") :: Nil)
   }
 
   test("Fluss Write: upsert table") {

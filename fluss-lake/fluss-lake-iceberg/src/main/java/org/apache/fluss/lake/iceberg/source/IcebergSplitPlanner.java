@@ -27,6 +27,7 @@ import org.apache.fluss.metadata.TablePath;
 
 import org.apache.iceberg.FileScanTask;
 import org.apache.iceberg.PartitionField;
+import org.apache.iceberg.PartitionSpec;
 import org.apache.iceberg.Table;
 import org.apache.iceberg.TableScan;
 import org.apache.iceberg.catalog.Catalog;
@@ -48,6 +49,7 @@ import java.util.function.Function;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
+import static org.apache.fluss.lake.iceberg.utils.IcebergConversions.toFlussPartitionValue;
 import static org.apache.fluss.lake.iceberg.utils.IcebergConversions.toIceberg;
 
 /** Iceberg split planner. */
@@ -158,6 +160,7 @@ public class IcebergSplitPlanner implements Planner<IcebergSplit> {
     }
 
     private Function<FileScanTask, List<String>> createPartitionExtractor(Table table) {
+        PartitionSpec partitionSpec = table.spec();
         List<PartitionField> partitionFields = table.spec().fields();
         if (partitionFields.isEmpty()) {
             return task -> Collections.emptyList();
@@ -178,8 +181,19 @@ public class IcebergSplitPlanner implements Planner<IcebergSplit> {
                 IntStream.range(0, partitionColCount).boxed().collect(Collectors.toList());
         return task ->
                 partitionFieldIndices.stream()
-                        // since currently, only string partition is supported
-                        .map(index -> task.partition().get(index, String.class))
+                        .map(
+                                index -> {
+                                    Class<?> javaClass =
+                                            partitionSpec
+                                                    .partitionType()
+                                                    .fields()
+                                                    .get(index)
+                                                    .type()
+                                                    .typeId()
+                                                    .javaClass();
+                                    Object value = task.partition().get(index, javaClass);
+                                    return toFlussPartitionValue(partitionFields.get(index), value);
+                                })
                         .collect(Collectors.toList());
     }
 }

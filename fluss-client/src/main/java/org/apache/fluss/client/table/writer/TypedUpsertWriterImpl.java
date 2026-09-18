@@ -34,7 +34,6 @@ import java.util.concurrent.CompletableFuture;
 class TypedUpsertWriterImpl<T> implements TypedUpsertWriter<T> {
 
     private final UpsertWriter delegate;
-    private final TableInfo tableInfo;
     private final RowType tableSchema;
     @Nullable private final int[] targetColumns;
 
@@ -48,12 +47,11 @@ class TypedUpsertWriterImpl<T> implements TypedUpsertWriter<T> {
     TypedUpsertWriterImpl(
             UpsertWriter delegate, Class<T> pojoClass, TableInfo tableInfo, int[] targetColumns) {
         this.delegate = delegate;
-        this.tableInfo = tableInfo;
         this.tableSchema = tableInfo.getRowType();
         this.targetColumns = targetColumns;
 
         // Precompute projections
-        this.pkProjection = this.tableSchema.project(tableInfo.getPhysicalPrimaryKeys());
+        this.pkProjection = this.tableSchema.project(tableInfo.getPrimaryKeys());
         this.targetProjection =
                 (targetColumns == null) ? null : this.tableSchema.project(targetColumns);
 
@@ -92,7 +90,10 @@ class TypedUpsertWriterImpl<T> implements TypedUpsertWriter<T> {
     private InternalRow convertPojo(T pojo, boolean forDelete) {
         final RowType projection;
         final PojoToRowConverter<T> converter;
-        if (forDelete) {
+        if (forDelete && pkProjection.getFieldCount() == tableSchema.getFieldCount()) {
+            projection = tableSchema;
+            converter = pojoToRowConverter;
+        } else if (forDelete) {
             projection = pkProjection;
             converter = pkConverter;
         } else if (targetProjection != null && targetConverter != null) {
@@ -104,22 +105,12 @@ class TypedUpsertWriterImpl<T> implements TypedUpsertWriter<T> {
         }
 
         GenericRow projected = converter.toRow(pojo);
-        if (projection == tableSchema) {
+        if (projection == tableSchema || forDelete) {
             return projected;
         }
         // expand projected row to full row if needed
         GenericRow full = new GenericRow(tableSchema.getFieldCount());
-        if (forDelete) {
-            // set PK fields, others null
-            for (String pk : tableInfo.getPhysicalPrimaryKeys()) {
-                int projIndex = projection.getFieldIndex(pk);
-
-                // TODO: this can be optimized by pre-computing
-                // the index mapping in the constructor?
-                int fullIndex = tableSchema.getFieldIndex(pk);
-                full.setField(fullIndex, projected.getField(projIndex));
-            }
-        } else if (targetColumns != null) {
+        if (targetColumns != null) {
             for (int i = 0; i < projection.getFieldCount(); i++) {
                 String name = projection.getFieldNames().get(i);
                 int fullIdx = tableSchema.getFieldIndex(name);

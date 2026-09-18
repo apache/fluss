@@ -233,6 +233,7 @@ public class FlussSinkBuilder<InputT> {
                             numBucket,
                             bucketKeys,
                             partitionKeys,
+                            tableInfo.getPartitionExpressions(),
                             lakeFormat,
                             distributionMode,
                             serializationSchema,
@@ -248,6 +249,7 @@ public class FlussSinkBuilder<InputT> {
                             numBucket,
                             bucketKeys,
                             partitionKeys,
+                            tableInfo.getPartitionExpressions(),
                             lakeFormat,
                             distributionMode,
                             serializationSchema);
