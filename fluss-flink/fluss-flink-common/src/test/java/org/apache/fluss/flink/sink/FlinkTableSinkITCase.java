@@ -2002,4 +2002,159 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
      * version. The Flink 2.3-specific subclass overrides it to actually flip the option off.
      */
     protected void disableSinkRequireOnConflict() {}
+
+    @Test
+    void testSequenceGroupArbitratesEachGroupOnItsOwn() throws Exception {
+        // the groups are declared on the table, so they have to survive being persisted to and read
+        // back from the server before any of this can arbitrate a write
+        tEnv.executeSql(
+                "create table seq_group ("
+                        + " k int not null primary key not enforced,"
+                        + " pay_status string, pay_time bigint,"
+                        + " ship_status string, ship_time bigint"
+                        + ") with ('fields.pay_time.sequence-group' = 'pay_status',"
+                        + "'fields.ship_time.sequence-group' = 'ship_status')");
+
+        tEnv.executeSql("insert into seq_group values (1, 'paid', 100, 'shipped', 100)").await();
+
+        CloseableIterator<Row> rowIter = tEnv.executeSql("select * from seq_group").collect();
+        assertResultsIgnoreOrder(
+                rowIter, Collections.singletonList("+I[1, paid, 100, shipped, 100]"), false);
+
+        // the pay group moves forward while the ship group falls behind, so only the pay columns
+        // take the incoming values
+        tEnv.executeSql("insert into seq_group values (1, 'refunded', 200, 'lost', 99)").await();
+        assertResultsIgnoreOrder(
+                rowIter,
+                Arrays.asList(
+                        "-U[1, paid, 100, shipped, 100]", "+U[1, refunded, 200, shipped, 100]"),
+                false);
+
+        // the ship group catches up on its own, leaving the pay columns untouched
+        tEnv.executeSql("insert into seq_group values (1, 'stale', 2, 'delivered', 300)").await();
+        assertResultsIgnoreOrder(
+                rowIter,
+                Arrays.asList(
+                        "-U[1, refunded, 200, shipped, 100]",
+                        "+U[1, refunded, 200, delivered, 300]"),
+                true);
+    }
+
+    @Test
+    void testSequenceGroupSurvivesAddColumn() throws Exception {
+        tEnv.executeSql(
+                "create table seq_group_evolving ("
+                        + " k int not null primary key not enforced, v string, ts bigint"
+                        + ") with ('fields.ts.sequence-group' = 'v')");
+
+        tEnv.executeSql("insert into seq_group_evolving values (1, 'first', 100)").await();
+        tEnv.executeSql("alter table seq_group_evolving add (extra string)");
+
+        CloseableIterator<Row> rowIter =
+                tEnv.executeSql("select * from seq_group_evolving").collect();
+        assertResultsIgnoreOrder(
+                rowIter, Collections.singletonList("+I[1, first, 100, null]"), false);
+
+        // the group keeps arbitrating across the schema change, and the row stored under the older
+        // schema is read back with the added column as null
+        tEnv.executeSql("insert into seq_group_evolving values (1, 'newer', 101, 'x')").await();
+        assertResultsIgnoreOrder(
+                rowIter, Arrays.asList("-U[1, first, 100, null]", "+U[1, newer, 101, x]"), true);
+    }
+
+    @Test
+    void testUnsupportedSequenceGroupIsRejectedByTheServer() {
+        // the client parses the declaration while only the server can judge it, so the rejection
+        // has to travel back across that boundary
+        assertThatThrownBy(
+                        () ->
+                                tEnv.executeSql(
+                                        "create table seq_group_bad_type ("
+                                                + " k int not null primary key not enforced,"
+                                                + " v string, ts string)"
+                                                + " with ('fields.ts.sequence-group' = 'v')"))
+                .rootCause()
+                .hasMessageContaining("The sequence column 'ts' must be one type of");
+    }
+
+    @Test
+    void testSequenceGroupOnAggregationMergeEngine() throws Exception {
+        // with an aggregate function a sequence group orders the records rather than filtering
+        // them: a stale record still contributes to the sum, it only must not move the sequence
+        tEnv.executeSql(
+                "create table agg_seq_group ("
+                        + " k int not null primary key not enforced,"
+                        + " total bigint,"
+                        + " ts int"
+                        + ") with ('table.merge-engine' = 'aggregation',"
+                        + "'fields.total.agg' = 'sum',"
+                        + "'fields.ts.sequence-group' = 'total')");
+
+        tEnv.executeSql("insert into agg_seq_group values (1, 30, 100)").await();
+
+        CloseableIterator<Row> rowIter = tEnv.executeSql("select * from agg_seq_group").collect();
+        assertResultsIgnoreOrder(rowIter, Collections.singletonList("+I[1, 30, 100]"), false);
+
+        // the sequence moves forward, so the total accumulates and the sequence follows
+        tEnv.executeSql("insert into agg_seq_group values (1, 20, 200)").await();
+        assertResultsIgnoreOrder(rowIter, Arrays.asList("-U[1, 30, 100]", "+U[1, 50, 200]"), false);
+
+        // an older record still accumulates, but leaves the stored sequence at 200
+        tEnv.executeSql("insert into agg_seq_group values (1, 10, 50)").await();
+        assertResultsIgnoreOrder(rowIter, Arrays.asList("-U[1, 50, 200]", "+U[1, 60, 200]"), false);
+
+        // a record without any sequence carries no order information, so it contributes nothing:
+        // the write changes nothing and produces no changelog event at all
+        tEnv.executeSql("insert into agg_seq_group values (1, 5, cast(null as int))").await();
+        assertResultsIgnoreOrder(rowIter, Collections.emptyList(), true);
+    }
+
+    @Test
+    void testSequenceGroupsAreArbitratedIndependentlyOnAggregationMergeEngine() throws Exception {
+        tEnv.executeSql(
+                "create table agg_two_groups ("
+                        + " k int not null primary key not enforced,"
+                        + " paid bigint, pay_ts int,"
+                        + " shipped bigint, ship_ts int"
+                        + ") with ('table.merge-engine' = 'aggregation',"
+                        + "'fields.paid.agg' = 'sum',"
+                        + "'fields.shipped.agg' = 'sum',"
+                        + "'fields.pay_ts.sequence-group' = 'paid',"
+                        + "'fields.ship_ts.sequence-group' = 'shipped')");
+
+        tEnv.executeSql("insert into agg_two_groups values (1, 30, 100, 30, 100)").await();
+
+        CloseableIterator<Row> rowIter = tEnv.executeSql("select * from agg_two_groups").collect();
+        assertResultsIgnoreOrder(
+                rowIter, Collections.singletonList("+I[1, 30, 100, 30, 100]"), false);
+
+        // the pay group moves forward while the ship group carries no sequence at all, so only the
+        // pay total accumulates
+        tEnv.executeSql(
+                        "insert into agg_two_groups values "
+                                + "(1, 20, 200, 20, cast(null as int))")
+                .await();
+        assertResultsIgnoreOrder(
+                rowIter, Arrays.asList("-U[1, 30, 100, 30, 100]", "+U[1, 50, 200, 30, 100]"), true);
+    }
+
+    @Test
+    void testSequenceColumnWithAggregateFunctionIsRejectedByTheServer() {
+        // the group it orders decides when it advances, so aggregating the sequence column itself
+        // would let a stale record move the sequence backwards
+        assertThatThrownBy(
+                        () ->
+                                tEnv.executeSql(
+                                        "create table agg_seq_bad ("
+                                                + " k int not null primary key not enforced,"
+                                                + " total bigint, ts int)"
+                                                + " with ('table.merge-engine' = 'aggregation',"
+                                                + "'fields.total.agg' = 'sum',"
+                                                + "'fields.ts.agg' = 'sum',"
+                                                + "'fields.ts.sequence-group' = 'total')"))
+                .rootCause()
+                .hasMessageContaining(
+                        "The sequence column 'ts' orders a sequence group, "
+                                + "so it must not have an aggregate function.");
+    }
 }

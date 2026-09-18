@@ -20,13 +20,17 @@ package org.apache.fluss.server.kv.rowmerger;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.TableConfig;
+import org.apache.fluss.metadata.AggFunctionType;
 import org.apache.fluss.metadata.AggFunctions;
 import org.apache.fluss.metadata.DeleteBehavior;
+import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.SchemaInfo;
 import org.apache.fluss.record.BinaryValue;
 import org.apache.fluss.record.TestingSchemaGetter;
 import org.apache.fluss.row.BinaryRow;
+import org.apache.fluss.server.kv.rowmerger.aggregate.AggregationContext;
+import org.apache.fluss.server.kv.rowmerger.aggregate.functions.FieldLastValueAgg;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.types.RowType;
 
@@ -997,6 +1001,258 @@ class AggregateRowMergerTest {
             // Non-target column should be kept
             assertThat(deleted.row.getString(3).toString()).isEqualTo("keep_me");
         }
+    }
+
+    // ---------------------------------------------------------------------------------------------
+    // sequence groups
+    //
+    // With aggregate functions a sequence group acts as an ordering key rather than a version
+    // filter: a stale row still aggregates, only as one that happened earlier, while a row without
+    // any sequence for the group contributes nothing at all.
+    // ---------------------------------------------------------------------------------------------
+
+    /**
+     * {@code total} accumulates under the order of {@code ts}, while {@code note} takes part in no
+     * group and keeps the plain last-value behavior.
+     */
+    private static final Schema SCHEMA_SEQUENCE_GROUP =
+            Schema.newBuilder()
+                    .column("id", DataTypes.INT())
+                    .column("total", DataTypes.BIGINT(), AggFunctions.SUM())
+                    .column("ts", DataTypes.INT())
+                    .column("note", DataTypes.STRING())
+                    .sequenceGroup(
+                            java.util.Collections.singletonList("ts"),
+                            java.util.Collections.singletonList("total"))
+                    .primaryKey("id")
+                    .build();
+
+    private BinaryValue sequenceGroupRow(Long total, Integer ts, String note) {
+        return toBinaryValue(
+                compactedRow(
+                        SCHEMA_SEQUENCE_GROUP.getRowType(), new Object[] {1, total, ts, note}));
+    }
+
+    private AggregateRowMerger sequenceGroupMerger() {
+        TableConfig tableConfig = new TableConfig(new Configuration());
+        AggregateRowMerger merger = createMerger(SCHEMA_SEQUENCE_GROUP, tableConfig);
+        merger.configureTargetColumns(null, SCHEMA_ID, SCHEMA_SEQUENCE_GROUP);
+        return merger;
+    }
+
+    @Test
+    void testForwardAdvancesTheSequenceAndAggregates() {
+        AggregateRowMerger merger = sequenceGroupMerger();
+        BinaryValue stored = sequenceGroupRow(30L, 100, "first");
+
+        BinaryValue merged = merger.merge(stored, sequenceGroupRow(20L, 200, "second"));
+        assertThat(merged.row.getLong(1)).isEqualTo(50L); // 30 + 20
+        assertThat(merged.row.getInt(2)).isEqualTo(200); // the sequence moves forward
+        assertThat(merged.row.getString(3).toString()).isEqualTo("second");
+
+        // an equal sequence advances as well, so a replayed record still refreshes the group
+        BinaryValue replayed = merger.merge(stored, sequenceGroupRow(20L, 100, "same"));
+        assertThat(replayed.row.getLong(1)).isEqualTo(50L);
+        assertThat(replayed.row.getInt(2)).isEqualTo(100);
+    }
+
+    @Test
+    void testStaleStillAggregatesButKeepsTheSequence() {
+        AggregateRowMerger merger = sequenceGroupMerger();
+        BinaryValue stored = sequenceGroupRow(30L, 100, "first");
+
+        // the incoming row is older, yet its amount is a fact that belongs in the total
+        BinaryValue merged = merger.merge(stored, sequenceGroupRow(10L, 50, "older"));
+        assertThat(merged.row.getLong(1)).isEqualTo(40L); // 30 + 10
+        assertThat(merged.row.getInt(2)).isEqualTo(100); // the sequence does not go backwards
+    }
+
+    @Test
+    void testStaleRecordTakesItsEarlierPositionForAnOrderSensitiveFunction() {
+        // a stale record is aggregated into its earlier position, so the launch price wins over the
+        // later repricing
+        Schema schema =
+                Schema.newBuilder()
+                        .column("id", DataTypes.INT())
+                        .column(
+                                "first_price",
+                                DataTypes.BIGINT(),
+                                AggFunctions.of(AggFunctionType.FIRST_VALUE))
+                        .column("ts", DataTypes.INT())
+                        .sequenceGroup(
+                                java.util.Collections.singletonList("ts"),
+                                java.util.Collections.singletonList("first_price"))
+                        .primaryKey("id")
+                        .build();
+        TableConfig tableConfig = new TableConfig(new Configuration());
+        AggregateRowMerger merger = createMerger(schema, tableConfig);
+        merger.configureTargetColumns(null, SCHEMA_ID, schema);
+
+        BinaryValue stored =
+                toBinaryValue(compactedRow(schema.getRowType(), new Object[] {1, 100L, 200}));
+        BinaryValue merged =
+                merger.merge(
+                        stored,
+                        toBinaryValue(
+                                compactedRow(schema.getRowType(), new Object[] {1, 80L, 50})));
+
+        assertThat(merged.row.getLong(1)).isEqualTo(80L); // the launch price wins
+        assertThat(merged.row.getInt(2)).isEqualTo(200); // the sequence does not go backwards
+    }
+
+    @Test
+    void testAllSkippedWriteReturnsTheStoredValueAsItIs() {
+        // every field belongs to the group, so an all-NULL sequence makes the whole write a no-op
+        Schema schema =
+                Schema.newBuilder()
+                        .column("id", DataTypes.INT())
+                        .column("total", DataTypes.BIGINT(), AggFunctions.SUM())
+                        .column("ts", DataTypes.INT())
+                        .sequenceGroup(
+                                java.util.Collections.singletonList("ts"),
+                                java.util.Collections.singletonList("total"))
+                        .primaryKey("id")
+                        .build();
+        TableConfig tableConfig = new TableConfig(new Configuration());
+        AggregateRowMerger merger = createMerger(schema, tableConfig);
+        merger.configureTargetColumns(null, SCHEMA_ID, schema);
+
+        BinaryValue stored =
+                toBinaryValue(compactedRow(schema.getRowType(), new Object[] {1, 30L, 100}));
+        BinaryValue skipped =
+                toBinaryValue(compactedRow(schema.getRowType(), new Object[] {1, 5L, null}));
+        assertThat(merger.merge(stored, skipped)).isSameAs(stored);
+    }
+
+    @Test
+    void testGroupWithoutAnySequenceContributesNothing() {
+        AggregateRowMerger merger = sequenceGroupMerger();
+        BinaryValue stored = sequenceGroupRow(30L, 100, "first");
+
+        // no sequence at all, so the group is skipped and the amount is not accumulated
+        BinaryValue merged = merger.merge(stored, sequenceGroupRow(20L, null, "dropped"));
+        assertThat(merged.row.getLong(1)).isEqualTo(30L);
+        assertThat(merged.row.getInt(2)).isEqualTo(100);
+        // the column outside the group is unaffected by the skip
+        assertThat(merged.row.getString(3).toString()).isEqualTo("dropped");
+    }
+
+    @Test
+    void testFirstRowIsArbitrated() {
+        AggregateRowMerger merger = sequenceGroupMerger();
+
+        // a first row without a sequence contributes nothing to the group, while the ungrouped
+        // field is accepted
+        assertThat(merger.merge(null, sequenceGroupRow(30L, null, "outside")))
+                .isEqualTo(sequenceGroupRow(null, null, "outside"));
+
+        // a first row carrying a sequence is fully accepted without being re-encoded
+        BinaryValue first = sequenceGroupRow(30L, 100, "first");
+        assertThat(merger.merge(null, first)).isSameAs(first);
+    }
+
+    @Test
+    void testGroupsAreArbitratedIndependently() {
+        Schema schema =
+                Schema.newBuilder()
+                        .column("id", DataTypes.INT())
+                        .column("paid", DataTypes.BIGINT(), AggFunctions.SUM())
+                        .column("pay_ts", DataTypes.INT())
+                        .column("shipped", DataTypes.BIGINT(), AggFunctions.SUM())
+                        .column("ship_ts", DataTypes.INT())
+                        .sequenceGroup(
+                                java.util.Collections.singletonList("pay_ts"),
+                                java.util.Collections.singletonList("paid"))
+                        .sequenceGroup(
+                                java.util.Collections.singletonList("ship_ts"),
+                                java.util.Collections.singletonList("shipped"))
+                        .primaryKey("id")
+                        .build();
+        TableConfig tableConfig = new TableConfig(new Configuration());
+        AggregateRowMerger merger = createMerger(schema, tableConfig);
+        merger.configureTargetColumns(null, SCHEMA_ID, schema);
+        RowType rowType = schema.getRowType();
+
+        BinaryValue stored =
+                toBinaryValue(compactedRow(rowType, new Object[] {1, 30L, 100, 30L, 100}));
+        // the pay group moves forward while the ship group carries no sequence at all
+        BinaryValue merged =
+                merger.merge(
+                        stored,
+                        toBinaryValue(
+                                compactedRow(rowType, new Object[] {1, 20L, 200, 20L, null})));
+
+        assertThat(merged.row.getLong(1)).isEqualTo(50L); // paid accumulated
+        assertThat(merged.row.getInt(2)).isEqualTo(200); // pay sequence advanced
+        assertThat(merged.row.getLong(3)).isEqualTo(30L); // shipped skipped entirely
+        assertThat(merged.row.getInt(4)).isEqualTo(100); // ship sequence unchanged
+    }
+
+    @Test
+    void testOrderIndependentFunctionGivesTheSameTotalWhateverTheArrivalOrder() {
+        BinaryValue newer = sequenceGroupRow(20L, 200, "newer");
+        BinaryValue older = sequenceGroupRow(10L, 50, "older");
+
+        // in order: the newer row lands second
+        AggregateRowMerger inOrder = sequenceGroupMerger();
+        BinaryValue inOrderResult = inOrder.merge(sequenceGroupRow(30L, 100, "first"), newer);
+        inOrderResult = inOrder.merge(inOrderResult, older);
+
+        // out of order: the older row lands second
+        AggregateRowMerger outOfOrder = sequenceGroupMerger();
+        BinaryValue outOfOrderResult = outOfOrder.merge(sequenceGroupRow(30L, 100, "first"), older);
+        outOfOrderResult = outOfOrder.merge(outOfOrderResult, newer);
+
+        // sum is order independent, so both arrive at the same total and the same sequence
+        assertThat(inOrderResult.row.getLong(1)).isEqualTo(60L);
+        assertThat(outOfOrderResult.row.getLong(1)).isEqualTo(60L);
+        assertThat(inOrderResult.row.getInt(2)).isEqualTo(200);
+        assertThat(outOfOrderResult.row.getInt(2)).isEqualTo(200);
+    }
+
+    @Test
+    void testPartialUpdateArbitratesTheWrittenColumnsOnly() {
+        TableConfig tableConfig = new TableConfig(new Configuration());
+        AggregateRowMerger merger = createMerger(SCHEMA_SEQUENCE_GROUP, tableConfig);
+        // 'note' is left out of the write, so it keeps the stored value whatever the group decides,
+        // where a full row write would have it take the incoming value
+        RowMerger partial =
+                merger.configureTargetColumns(
+                        new int[] {0, 1, 2}, SCHEMA_ID, SCHEMA_SEQUENCE_GROUP);
+
+        // the partial path applies the same first-write arbitration as the full aggregation path
+        assertThat(partial.merge(null, sequenceGroupRow(5L, null, null)))
+                .isEqualTo(sequenceGroupRow(null, null, null));
+
+        BinaryValue stored = sequenceGroupRow(30L, 100, "kept");
+
+        // the group moves forward, so the written columns aggregate and the sequence follows
+        BinaryValue forward = partial.merge(stored, sequenceGroupRow(20L, 200, null));
+        assertThat(forward.row.getLong(1)).isEqualTo(50L); // 30 + 20
+        assertThat(forward.row.getInt(2)).isEqualTo(200);
+        assertThat(forward.row.getString(3).toString()).isEqualTo("kept");
+
+        // a stale row still aggregates, only in reverse, and leaves the sequence where it was
+        BinaryValue stale = partial.merge(stored, sequenceGroupRow(10L, 50, null));
+        assertThat(stale.row.getLong(1)).isEqualTo(40L); // 30 + 10
+        assertThat(stale.row.getInt(2)).isEqualTo(100);
+        assertThat(stale.row.getString(3).toString()).isEqualTo("kept");
+
+        // no sequence at all and every written field is grouped, so the write is a no-op and the
+        // stored value is returned as is
+        assertThat(partial.merge(stored, sequenceGroupRow(5L, null, null))).isSameAs(stored);
+    }
+
+    @Test
+    void testSequenceColumnIsNotAggregated() {
+        // a sequence column must not take an aggregate function of its own, otherwise a stale row
+        // could move the sequence backwards. the merger keeps it under the order of its own group,
+        // which the stale case above already asserts, and here it is checked on the aggregators.
+        AggregationContext context =
+                AggregationContext.create(SCHEMA_SEQUENCE_GROUP, KvFormat.COMPACTED);
+        assertThat(context.getSequenceGroups()).isNotNull();
+        // index 2 is 'ts', which reports last_value rather than a sum or the default
+        assertThat(context.getAggregators()[2]).isInstanceOf(FieldLastValueAgg.class);
     }
 
     private AggregateRowMerger createMerger(Schema schema, TableConfig tableConfig) {
