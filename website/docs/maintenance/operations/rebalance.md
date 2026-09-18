@@ -107,10 +107,26 @@ Optional<RebalanceProgress> latestProgress = admin.listRebalanceProgress(null).g
 Rebalance statuses:
 - **NOT_STARTED**: The rebalance has been created but not yet started
 - **REBALANCING**: The rebalance is currently in progress
-- **COMPLETED**: The rebalance has successfully completed
-- **FAILED**: The rebalance has failed
+- **COMPLETED**: The rebalance has successfully completed, or its table/partition was deleted while the task was pending or being reconciled
+- **FAILED**: The rebalance has failed, for example because a bucket migration was given up on after its target servers stayed unavailable for too long. The affected buckets may be left with an intermediate assignment. A subsequent rebalance uses the table's configured replication factor to plan the target assignment and removes excess intermediate replicas during execution. Unavailable servers are included as sources to evacuate, not as destinations for new replicas
 - **CANCELED**: The rebalance has been canceled
-- **TIMEOUT**: The rebalance task timed out (e.g., ISR could not converge within the timeout period)
+- **TIMEOUT**: The normal execution slot was released after the timeout, but the task remains non-final. The coordinator retries the current migration phase idempotently, with a growing backoff, until the task reaches `COMPLETED` or `FAILED`. Only a bounded number of timed-out tasks is tracked at the same time, so a rebalance stops admitting new bucket migrations while too many tasks are still being reconciled
+
+#### Timeout and Recovery Settings
+
+Configure the following coordinator options in `server.yaml` to match your cluster's recovery objectives and resource capacity. The values below are the defaults. Restart the coordinator servers after changing these settings.
+
+```yaml
+coordinator.rebalance.target-unavailable-timeout: 30 min
+coordinator.rebalance.no-progress-timeout: 24 h
+coordinator.rebalance.max-tracked-timed-out-tasks: 8
+```
+
+- `target-unavailable-timeout`: A timed-out bucket migration is marked `FAILED` after its target tablet servers remain unavailable without observed bucket-state progress for this duration. Progress or all target servers becoming live resets the timer.
+- `no-progress-timeout`: A timed-out bucket migration is marked `FAILED` after this duration without observed bucket-state progress, even when its target servers are live. Progress resets the timer, so this is not a limit on the total migration duration. Either timeout can cause a migration to fail.
+- `max-tracked-timed-out-tasks`: New bucket migrations stop being admitted when this many timed-out migrations remain non-final. Admission resumes when a tracked migration reaches a final status. A higher limit allows more migrations to remain active and increases coordinator and ZooKeeper work.
+
+Both durations must be at least `1 ms` and fit in a signed 64-bit millisecond value; the task limit must be at least `1`. Invalid values prevent coordinator initialization. Timeouts are evaluated during periodic reconciliation, so the transition to `FAILED` can occur after the configured duration has elapsed.
 
 ### 4. Cancel Rebalance (If Needed)
 
@@ -127,6 +143,7 @@ admin.cancelRebalance(null).get();
 **Important Notes:**
 - Only rebalance operations in `NOT_STARTED` or `REBALANCING` status can be canceled
 - Already completed bucket migrations will not be rolled back
+- Bucket migrations that have not changed anything yet are canceled right away, migrations that are already under way are drained first so that no bucket is left half-migrated
 - After cancellation, the rebalance status will change to `CANCELED`
 
 ### 5. Remove Server Tags (After Completion)

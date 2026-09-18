@@ -42,6 +42,7 @@ public class RebalanceTaskJsonSerde
     private static final String VERSION_KEY = "version";
     private static final String REBALANCE_ID = "rebalance_id";
     private static final String REBALANCE_STATUS = "rebalance_status";
+    private static final String CANCEL_REQUESTED = "cancel_requested";
     private static final String REBALANCE_PLAN = "rebalance_plan";
 
     private static final String TABLE_ID = "table_id";
@@ -54,7 +55,7 @@ public class RebalanceTaskJsonSerde
     private static final String ORIGIN_REPLICAS = "origin_replicas";
     private static final String NEW_REPLICAS = "new_replicas";
 
-    private static final int VERSION = 1;
+    private static final int VERSION = 2;
 
     @Override
     public void serialize(RebalanceTask rebalanceTask, JsonGenerator generator) throws IOException {
@@ -62,6 +63,7 @@ public class RebalanceTaskJsonSerde
         generator.writeNumberField(VERSION_KEY, VERSION);
         generator.writeStringField(REBALANCE_ID, rebalanceTask.getRebalanceId());
         generator.writeNumberField(REBALANCE_STATUS, rebalanceTask.getRebalanceStatus().getCode());
+        generator.writeBooleanField(CANCEL_REQUESTED, rebalanceTask.isCancelRequested());
 
         generator.writeArrayFieldStart(REBALANCE_PLAN);
         // first to write none-partitioned tables.
@@ -102,6 +104,8 @@ public class RebalanceTaskJsonSerde
 
         String rebalanceId = node.get(REBALANCE_ID).asText();
         RebalanceStatus rebalanceStatus = RebalanceStatus.of(node.get(REBALANCE_STATUS).asInt());
+        boolean cancelRequested =
+                node.has(CANCEL_REQUESTED) && node.get(CANCEL_REQUESTED).asBoolean();
 
         Map<TableBucket, RebalancePlanForBucket> planForBuckets = new HashMap<>();
         for (JsonNode tablePartitionPlanNode : rebalancePlanNode) {
@@ -140,7 +144,7 @@ public class RebalanceTaskJsonSerde
             }
         }
 
-        return new RebalanceTask(rebalanceId, rebalanceStatus, planForBuckets);
+        return new RebalanceTask(rebalanceId, rebalanceStatus, planForBuckets, cancelRequested);
     }
 
     private void serializeRebalancePlanForBucket(
