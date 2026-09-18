@@ -17,12 +17,13 @@
 
 package org.apache.fluss.flink.tiering.source.state;
 
-import org.apache.fluss.flink.tiering.source.split.TieringLogSplit;
-import org.apache.fluss.flink.tiering.source.split.TieringSnapshotSplit;
-import org.apache.fluss.flink.tiering.source.split.TieringSplit;
+import org.apache.fluss.client.tiering.TieringLogSplit;
+import org.apache.fluss.client.tiering.TieringSnapshotSplit;
+import org.apache.fluss.client.tiering.TieringSplit;
+import org.apache.fluss.flink.tiering.source.split.FlinkTieringSplit;
 
 /**
- * The state of a {@link TieringSplit}.
+ * The state of a {@link FlinkTieringSplit}.
  *
  * <p>Note: The tiering service adopts a stateless design and does not store any progress
  * information in state during checkpoints. All splits are re-requested from the Fluss cluster in
@@ -30,37 +31,40 @@ import org.apache.fluss.flink.tiering.source.split.TieringSplit;
  */
 public class TieringSplitState {
 
-    protected final TieringSplit tieringSplit;
+    protected final FlinkTieringSplit flinkTieringSplit;
 
-    public TieringSplitState(TieringSplit tieringSplit) {
-        this.tieringSplit = tieringSplit;
+    public TieringSplitState(FlinkTieringSplit flinkTieringSplit) {
+        this.flinkTieringSplit = flinkTieringSplit;
     }
 
-    public TieringSplit toSourceSplit() {
+    public FlinkTieringSplit toSourceSplit() {
+        TieringSplit tieringSplit = flinkTieringSplit.unwrap();
         if (tieringSplit.isTieringSnapshotSplit()) {
-            final TieringSnapshotSplit split = (TieringSnapshotSplit) this.tieringSplit;
-            return new TieringSnapshotSplit(
-                    split.getTablePath(),
-                    split.getTableBucket(),
-                    split.getPartitionName(),
-                    split.getSnapshotId(),
-                    split.getLogOffsetOfSnapshot(),
-                    split.getNumberOfSplits(),
-                    split.shouldSkipCurrentRound(),
-                    split.getSplitIndex(),
-                    split.getTieringRoundTimestamp());
+            final TieringSnapshotSplit split = tieringSplit.asTieringSnapshotSplit();
+            return new FlinkTieringSplit(
+                    new TieringSnapshotSplit(
+                            split.getTablePath(),
+                            split.getTableBucket(),
+                            split.getPartitionName(),
+                            split.getSnapshotId(),
+                            split.getLogOffsetOfSnapshot(),
+                            split.getNumberOfSplits(),
+                            split.shouldSkipCurrentRound(),
+                            split.getSplitIndex(),
+                            split.getTieringRoundTimestamp()));
         } else {
-            final TieringLogSplit split = (TieringLogSplit) tieringSplit;
-            return new TieringLogSplit(
-                    split.getTablePath(),
-                    split.getTableBucket(),
-                    split.getPartitionName(),
-                    split.getStartingOffset(),
-                    split.getStoppingOffset(),
-                    split.getNumberOfSplits(),
-                    split.shouldSkipCurrentRound(),
-                    split.getSplitIndex(),
-                    split.getTieringRoundTimestamp());
+            final TieringLogSplit split = tieringSplit.asTieringLogSplit();
+            return new FlinkTieringSplit(
+                    new TieringLogSplit(
+                            split.getTablePath(),
+                            split.getTableBucket(),
+                            split.getPartitionName(),
+                            split.getStartingOffset(),
+                            split.getStoppingOffset(),
+                            split.getNumberOfSplits(),
+                            split.shouldSkipCurrentRound(),
+                            split.getSplitIndex(),
+                            split.getTieringRoundTimestamp()));
         }
     }
 }
