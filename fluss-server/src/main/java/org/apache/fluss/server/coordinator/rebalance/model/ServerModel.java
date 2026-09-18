@@ -28,6 +28,8 @@ import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
 
+import static org.apache.fluss.utils.Preconditions.checkState;
+
 /** A class that holds the information of the tabletServer for rebalance. */
 public class ServerModel implements Comparable<ServerModel> {
 
@@ -41,6 +43,12 @@ public class ServerModel implements Comparable<ServerModel> {
     /** A map for tracking (tableId, partitionId) -> (BucketId -> replica) for partitioned table. */
     private final Map<TablePartition, Map<Integer, ReplicaModel>> tablePartitionReplicas;
 
+    /** A map for tracking all replicas of each table, including all partitions. */
+    private final Map<Long, Set<ReplicaModel>> replicasByTable;
+
+    /** A map for tracking the number of leaders of each table. */
+    private final Map<Long, Integer> numLeaderReplicasByTable;
+
     private int numLeaderReplicas = 0;
 
     public ServerModel(int serverId, String rack, boolean isOfflineTagged) {
@@ -50,6 +58,8 @@ public class ServerModel implements Comparable<ServerModel> {
         this.replicas = new HashSet<>();
         this.tableReplicas = new HashMap<>();
         this.tablePartitionReplicas = new HashMap<>();
+        this.replicasByTable = new HashMap<>();
+        this.numLeaderReplicasByTable = new HashMap<>();
     }
 
     public int id() {
@@ -68,60 +78,89 @@ public class ServerModel implements Comparable<ServerModel> {
         return new HashSet<>(replicas);
     }
 
+    /** Returns replicas of the given table on this server, across all partitions. */
+    public Set<ReplicaModel> replicas(long tableId) {
+        Set<ReplicaModel> replicasOfTable = replicasByTable.get(tableId);
+        return replicasOfTable == null ? new HashSet<>() : new HashSet<>(replicasOfTable);
+    }
+
     public int numReplicas() {
         return replicas.size();
+    }
+
+    /** Returns the number of replicas of the given table on this server. */
+    public int numReplicas(long tableId) {
+        Set<ReplicaModel> replicasOfTable = replicasByTable.get(tableId);
+        return replicasOfTable == null ? 0 : replicasOfTable.size();
     }
 
     public Set<ReplicaModel> leaderReplicas() {
         return replicas.stream().filter(ReplicaModel::isLeader).collect(Collectors.toSet());
     }
 
+    /** Returns leaders of the given table on this server, across all partitions. */
+    public Set<ReplicaModel> leaderReplicas(long tableId) {
+        return replicas(tableId).stream()
+                .filter(ReplicaModel::isLeader)
+                .collect(Collectors.toSet());
+    }
+
     public int numLeaderReplicas() {
         return numLeaderReplicas;
     }
 
+    /** Returns the number of leader replicas of the given table on this server. */
+    public int numLeaderReplicas(long tableId) {
+        Integer numLeaders = numLeaderReplicasByTable.get(tableId);
+        return numLeaders == null ? 0 : numLeaders;
+    }
+
     public Set<Long> tables() {
-        Set<Long> tables = new HashSet<>(tableReplicas.keySet());
-        tablePartitionReplicas.keySet().forEach(t -> tables.add(t.getTableId()));
-        return tables;
+        return new HashSet<>(replicasByTable.keySet());
     }
 
     public void makeFollower(TableBucket tableBucket) {
         ReplicaModel replica = replica(tableBucket);
-        if (replica != null) {
-            if (replica.isLeader()) {
-                numLeaderReplicas--;
-            }
+        if (replica != null && replica.isLeader()) {
+            numLeaderReplicas--;
+            decrementLeaderReplica(tableBucket.getTableId());
             replica.makeFollower();
         }
     }
 
     public void makeLeader(TableBucket tableBucket) {
         ReplicaModel replica = replica(tableBucket);
-        if (replica != null) {
-            if (!replica.isLeader()) {
-                numLeaderReplicas++;
-            }
+        if (replica != null && !replica.isLeader()) {
+            numLeaderReplicas++;
+            incrementLeaderReplica(tableBucket.getTableId());
             replica.makeLeader();
         }
     }
 
     public void putReplica(TableBucket tableBucket, ReplicaModel replica) {
+        checkState(
+                replica(tableBucket) == null,
+                "Replica of bucket %s already exists on server %s.",
+                tableBucket,
+                serverId);
         replicas.add(replica);
+        replica.setServer(this);
+        long tableId = tableBucket.getTableId();
+        replicasByTable.computeIfAbsent(tableId, k -> new HashSet<>()).add(replica);
         if (replica.isLeader()) {
             numLeaderReplicas++;
+            incrementLeaderReplica(tableId);
         }
 
-        replica.setServer(this);
         if (tableBucket.getPartitionId() != null) {
             TablePartition tablePartition =
-                    new TablePartition(tableBucket.getTableId(), tableBucket.getPartitionId());
+                    new TablePartition(tableId, tableBucket.getPartitionId());
             tablePartitionReplicas
                     .computeIfAbsent(tablePartition, k -> new HashMap<>())
                     .put(tableBucket.getBucket(), replica);
         } else {
             tableReplicas
-                    .computeIfAbsent(tableBucket.getTableId(), k -> new HashMap<>())
+                    .computeIfAbsent(tableId, k -> new HashMap<>())
                     .put(tableBucket.getBucket(), replica);
         }
     }
@@ -147,39 +186,52 @@ public class ServerModel implements Comparable<ServerModel> {
 
     public @Nullable ReplicaModel removeReplica(TableBucket tableBucket) {
         ReplicaModel removedReplica = replica(tableBucket);
-        if (removedReplica != null) {
-            if (removedReplica.isLeader()) {
-                numLeaderReplicas--;
-            }
-
-            replicas.remove(removedReplica);
-
-            if (tableBucket.getPartitionId() != null) {
-                TablePartition tablePartition =
-                        new TablePartition(tableBucket.getTableId(), tableBucket.getPartitionId());
-                Map<Integer, ReplicaModel> tablePartitionReplicas =
-                        this.tablePartitionReplicas.get(tablePartition);
-                if (tablePartitionReplicas != null) {
-                    tablePartitionReplicas.remove(tableBucket.getBucket());
-
-                    if (tablePartitionReplicas.isEmpty()) {
-                        this.tablePartitionReplicas.remove(tablePartition);
-                    }
-                }
-            } else {
-                Map<Integer, ReplicaModel> tableReplicas =
-                        this.tableReplicas.get(tableBucket.getTableId());
-                if (tableReplicas != null) {
-                    tableReplicas.remove(tableBucket.getBucket());
-
-                    if (tableReplicas.isEmpty()) {
-                        this.tableReplicas.remove(tableBucket.getTableId());
-                    }
-                }
-            }
+        if (removedReplica == null) {
+            return null;
         }
 
+        long tableId = tableBucket.getTableId();
+        if (removedReplica.isLeader()) {
+            numLeaderReplicas--;
+            decrementLeaderReplica(tableId);
+        }
+        replicas.remove(removedReplica);
+        Set<ReplicaModel> tableReplicaSet = replicasByTable.get(tableId);
+        tableReplicaSet.remove(removedReplica);
+        if (tableReplicaSet.isEmpty()) {
+            replicasByTable.remove(tableId);
+        }
+
+        if (tableBucket.getPartitionId() != null) {
+            TablePartition tablePartition =
+                    new TablePartition(tableId, tableBucket.getPartitionId());
+            Map<Integer, ReplicaModel> partitionReplicas =
+                    tablePartitionReplicas.get(tablePartition);
+            partitionReplicas.remove(tableBucket.getBucket());
+            if (partitionReplicas.isEmpty()) {
+                tablePartitionReplicas.remove(tablePartition);
+            }
+        } else {
+            Map<Integer, ReplicaModel> nonPartitionedReplicas = tableReplicas.get(tableId);
+            nonPartitionedReplicas.remove(tableBucket.getBucket());
+            if (nonPartitionedReplicas.isEmpty()) {
+                tableReplicas.remove(tableId);
+            }
+        }
         return removedReplica;
+    }
+
+    private void incrementLeaderReplica(long tableId) {
+        numLeaderReplicasByTable.merge(tableId, 1, Integer::sum);
+    }
+
+    private void decrementLeaderReplica(long tableId) {
+        int numLeaders = numLeaderReplicasByTable.get(tableId) - 1;
+        if (numLeaders == 0) {
+            numLeaderReplicasByTable.remove(tableId);
+        } else {
+            numLeaderReplicasByTable.put(tableId, numLeaders);
+        }
     }
 
     @Override
