@@ -19,6 +19,7 @@ package org.apache.fluss.client.table.scanner.batch;
 
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.utils.CloseableIterator;
+import org.apache.fluss.utils.IOUtils;
 
 import java.time.Duration;
 import java.util.ArrayList;
@@ -43,6 +44,7 @@ public class BatchScanUtils {
                 }
                 rows.addAll(toList(iterator));
             } catch (Exception e) {
+                IOUtils.closeQuietly(scanner);
                 throw new RuntimeException("Failed to collect rows", e);
             }
         }
@@ -75,6 +77,8 @@ public class BatchScanUtils {
                     scanner.close();
                 }
             } catch (Exception e) {
+                IOUtils.closeQuietly(scanner);
+                IOUtils.closeAllQuietly(scannerQueue);
                 throw new RuntimeException("Failed to collect rows", e);
             }
             if (rows.size() >= limit) {
@@ -82,13 +86,7 @@ public class BatchScanUtils {
             }
         }
         // may collect enough rows before drain all scanners, close all scanners in the queue
-        for (BatchScanner scanner : scannerQueue) {
-            try {
-                scanner.close();
-            } catch (Exception e) {
-                throw new RuntimeException("Failed to close scanner", e);
-            }
-        }
+        IOUtils.closeAllQuietly(scannerQueue);
         return rows.size() > limit ? rows.subList(0, limit) : rows;
     }
 
