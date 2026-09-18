@@ -67,14 +67,10 @@ import javax.annotation.concurrent.ThreadSafe;
 
 import java.io.File;
 import java.io.IOException;
-import java.nio.file.DirectoryIteratorException;
 import java.nio.file.DirectoryNotEmptyException;
-import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
-import java.nio.file.LinkOption;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
-import java.nio.file.attribute.BasicFileAttributes;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -82,7 +78,6 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.function.Predicate;
 
 import static org.apache.fluss.utils.Preconditions.checkState;
 import static org.apache.fluss.utils.concurrent.LockUtils.inLock;
@@ -395,9 +390,7 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
                     for (File dataDir : dataDirs) {
                         try {
                             Path realDataDir = dataDir.toPath().toRealPath();
-                            List<File> staleDirs =
-                                    listTabletsToLoad(
-                                            realDataDir.toFile(), this::listCleanupDirectories);
+                            List<File> staleDirs = listTabletsToLoad(realDataDir.toFile());
                             int deletedDirectories = 0;
                             for (File tabletDir : staleDirs) {
                                 try {
@@ -447,34 +440,6 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
         FileUtils.deleteDirectory(deletedDir.toFile());
         LOG.info("Deleted stale KV tablet directory {}.", deletedDir);
         deleteEmptyParentDirectories(deletedDir.getParent(), dataDir);
-    }
-
-    private List<File> listCleanupDirectories(File parent, Predicate<String> nameFilter)
-            throws IOException {
-        List<File> directories = new ArrayList<>();
-        try (DirectoryStream<Path> entries = Files.newDirectoryStream(parent.toPath())) {
-            for (Path entry : entries) {
-                if (!nameFilter.test(entry.getFileName().toString())) {
-                    continue;
-                }
-                BasicFileAttributes attributes =
-                        Files.readAttributes(
-                                entry, BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS);
-                if (attributes.isSymbolicLink()) {
-                    LOG.warn(
-                            "Skipping symbolic link {} during stale KV cleanup; its target will "
-                                    + "not be cleaned.",
-                            entry);
-                    continue;
-                }
-                if (attributes.isDirectory()) {
-                    directories.add(entry.toFile());
-                }
-            }
-        } catch (DirectoryIteratorException e) {
-            throw e.getCause();
-        }
-        return directories;
     }
 
     private void deleteEmptyParentDirectories(Path directory, Path dataDir) throws IOException {

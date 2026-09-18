@@ -30,7 +30,6 @@ import org.apache.fluss.server.kv.KvManager;
 import org.apache.fluss.server.log.LogManager;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.TableRegistration;
-import org.apache.fluss.utils.FileUtils;
 import org.apache.fluss.utils.FlussPaths;
 import org.apache.fluss.utils.concurrent.ExecutorThreadFactory;
 
@@ -40,9 +39,9 @@ import org.slf4j.LoggerFactory;
 import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
+import java.nio.file.LinkOption;
 import java.nio.file.Path;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -55,7 +54,6 @@ import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Consumer;
 import java.util.function.Predicate;
-import java.util.stream.Collectors;
 
 import static org.apache.fluss.utils.FlussPaths.HISTORICAL_LOOKUP_CACHE_DIR_NAME;
 import static org.apache.fluss.utils.FlussPaths.KV_TABLET_DIR_PREFIX;
@@ -112,37 +110,26 @@ public abstract class TabletManagerBase {
         return tabletsToLoadByDataDir;
     }
 
-    /** Returns the tablet directories to be loaded from a single configured data directory. */
-    protected List<File> listTabletsToLoad(File dataDir) {
-        return listTabletsToLoad(
-                dataDir,
-                (directory, nameFilter) ->
-                        Arrays.stream(FileUtils.listDirectories(directory))
-                                .filter(file -> nameFilter.test(file.getName()))
-                                .collect(Collectors.toList()));
-    }
-
     /**
-     * Lists tablet directories using the common layout and cache exclusions, with a caller-supplied
-     * directory lister to control symbolic-link handling and listing failures.
+     * Returns the tablet directories from a single configured data directory, skipping caches,
+     * symbolic links, and unreadable directories.
      */
-    protected <E extends Exception> List<File> listTabletsToLoad(
-            File dataDir, DirectoryLister<E> directoryLister) throws E {
+    protected List<File> listTabletsToLoad(File dataDir) {
         List<File> tabletsToLoad = new ArrayList<>();
         for (File dbDir :
-                directoryLister.listDirectories(
+                listDirectories(
                         dataDir,
                         name ->
                                 !name.equals(HISTORICAL_LOOKUP_CACHE_DIR_NAME)
                                         && !name.equals(REMOTE_LOG_INDEX_LOCAL_CACHE))) {
-            for (File tableDir : directoryLister.listDirectories(dbDir, name -> true)) {
+            for (File tableDir : listDirectories(dbDir, name -> true)) {
                 for (File tabletOrPartitionDir :
-                        directoryLister.listDirectories(
+                        listDirectories(
                                 tableDir,
                                 name -> isPartitionDir(name) || name.startsWith(tabletDirPrefix))) {
                     if (isPartitionDir(tabletOrPartitionDir.getName())) {
                         tabletsToLoad.addAll(
-                                directoryLister.listDirectories(
+                                listDirectories(
                                         tabletOrPartitionDir,
                                         name -> name.startsWith(tabletDirPrefix)));
                     } else {
@@ -154,14 +141,22 @@ public abstract class TabletManagerBase {
         return tabletsToLoad;
     }
 
-    /**
-     * Lists child directories whose names match a filter, optionally reporting listing failures.
-     */
-    @FunctionalInterface
-    protected interface DirectoryLister<E extends Exception> {
-
-        /** Returns the matching child directories. */
-        List<File> listDirectories(File parent, Predicate<String> nameFilter) throws E;
+    private List<File> listDirectories(File parent, Predicate<String> nameFilter) {
+        List<File> directories = new ArrayList<>();
+        File[] entries = parent.listFiles();
+        if (entries == null) {
+            LOG.warn("Failed to list tablet directories in {}. Skipping this directory.", parent);
+            return directories;
+        }
+        for (File entry : entries) {
+            if (!nameFilter.test(entry.getName())) {
+                continue;
+            }
+            if (Files.isDirectory(entry.toPath(), LinkOption.NOFOLLOW_LINKS)) {
+                directories.add(entry);
+            }
+        }
+        return directories;
     }
 
     protected ExecutorService createThreadPool(String poolName) {
