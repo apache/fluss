@@ -24,7 +24,6 @@ import org.apache.fluss.record.ValueRecord;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.ProjectedRow;
 import org.apache.fluss.row.encode.KvValueLayout;
-import org.apache.fluss.types.DataType;
 import org.apache.fluss.utils.SchemaUtil;
 
 /**
@@ -48,9 +47,7 @@ public class FixedSchemaDecoder {
     private final boolean noProjection;
 
     public FixedSchemaDecoder(KvFormat kvFormat, Schema sourceSchema, Schema targetSchema) {
-        this.rowDecoder =
-                RowDecoder.create(
-                        kvFormat, sourceSchema.getRowType().getChildren().toArray(new DataType[0]));
+        this.rowDecoder = RowDecoder.create(kvFormat, sourceSchema);
         this.fieldIdMapping = SchemaUtil.getIndexMapping(sourceSchema, targetSchema);
         this.noProjection = false;
     }
@@ -60,9 +57,7 @@ public class FixedSchemaDecoder {
      * target schema.
      */
     public FixedSchemaDecoder(KvFormat kvFormat, Schema schema) {
-        this.rowDecoder =
-                RowDecoder.create(
-                        kvFormat, schema.getRowType().getChildren().toArray(new DataType[0]));
+        this.rowDecoder = RowDecoder.create(kvFormat, schema);
         this.fieldIdMapping = null;
         this.noProjection = true;
     }
