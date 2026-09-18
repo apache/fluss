@@ -18,13 +18,16 @@
 package org.apache.fluss.client.lookup;
 
 import org.apache.fluss.client.metadata.MetadataUpdater;
+import org.apache.fluss.cluster.Cluster;
 import org.apache.fluss.memory.MemorySegment;
+import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.SchemaGetter;
 import org.apache.fluss.metadata.SchemaInfo;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.decode.FixedSchemaDecoder;
+import org.apache.fluss.row.encode.KvValueLayout;
 import org.apache.fluss.utils.CopyOnWriteMap;
 import org.apache.fluss.utils.concurrent.FutureUtils;
 
@@ -75,6 +78,17 @@ abstract class AbstractLookuper implements Lookuper {
                         tableInfo.getTableConfig().getKvFormat(), tableInfo.getSchema()));
     }
 
+    protected PartitionRoutingInfo resolvePartitionRouting(String partitionName) {
+        PhysicalTablePath partitionPath =
+                PhysicalTablePath.of(tableInfo.getTablePath(), partitionName);
+        metadataUpdater.checkAndUpdatePartitionMetadata(partitionPath);
+
+        Cluster cluster = metadataUpdater.getCluster();
+        long partitionId = cluster.getPartitionIdOrElseThrow(partitionPath);
+        int bucketCount = cluster.getBucketCountOrFallback(tableInfo, partitionId);
+        return new PartitionRoutingInfo(partitionId, bucketCount);
+    }
+
     protected void handleLookupResponse(
             List<byte[]> result, CompletableFuture<LookupResult> lookupFuture) {
         List<MemorySegment> valueList = new ArrayList<>(result.size());
@@ -85,7 +99,7 @@ abstract class AbstractLookuper implements Lookuper {
                 continue;
             }
             MemorySegment memorySegment = MemorySegment.wrap(valueBytes);
-            short schemaId = memorySegment.getShort(0);
+            short schemaId = KvValueLayout.PLAIN.readSchemaId(memorySegment);
             if (targetSchemaId != schemaId) {
                 allTargetSchema = false;
                 if (!decoders.containsKey(schemaId)) {
@@ -141,7 +155,7 @@ abstract class AbstractLookuper implements Lookuper {
     protected LookupResult processSchemaMismatchedRows(List<MemorySegment> valueList) {
         List<InternalRow> rowList = new ArrayList<>(valueList.size());
         for (MemorySegment value : valueList) {
-            short schemaId = value.getShort(0);
+            short schemaId = KvValueLayout.PLAIN.readSchemaId(value);
             FixedSchemaDecoder decoder = decoders.get(schemaId);
             checkArgument(decoder != null, "Decoder for schema id %s not found", schemaId);
             InternalRow row = decoder.decode(value);
@@ -161,7 +175,7 @@ abstract class AbstractLookuper implements Lookuper {
         // process the value list to convert to target schema
         List<InternalRow> rowList = new ArrayList<>(valueList.size());
         for (MemorySegment value : valueList) {
-            short schemaId = value.getShort(0);
+            short schemaId = KvValueLayout.PLAIN.readSchemaId(value);
             FixedSchemaDecoder decoder =
                     decoders.computeIfAbsent(
                             schemaId,
@@ -176,5 +190,23 @@ abstract class AbstractLookuper implements Lookuper {
             rowList.add(row);
         }
         return new LookupResult(rowList);
+    }
+
+    static final class PartitionRoutingInfo {
+        private final long partitionId;
+        private final int bucketCount;
+
+        private PartitionRoutingInfo(long partitionId, int bucketCount) {
+            this.partitionId = partitionId;
+            this.bucketCount = bucketCount;
+        }
+
+        long getPartitionId() {
+            return partitionId;
+        }
+
+        int getBucketCount() {
+            return bucketCount;
+        }
     }
 }

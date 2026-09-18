@@ -712,4 +712,43 @@ abstract class BinlogVirtualTableITCase {
                 Duration.ofSeconds(60),
                 "Timeout waiting for checkpoint for job " + jobIdStr);
     }
+
+    @Test
+    public void testBinlogBoundedRead() throws Exception {
+        tEnv.executeSql(
+                "CREATE TABLE bounded_binlog_test ("
+                        + "  id INT NOT NULL,"
+                        + "  name STRING,"
+                        + "  PRIMARY KEY (id) NOT ENFORCED"
+                        + ") WITH ('bucket.num' = '1')");
+        TablePath tablePath = TablePath.of(DEFAULT_DB, "bounded_binlog_test");
+
+        CLOCK.advanceTime(Duration.ofMillis(1000));
+        writeRows(conn, tablePath, Arrays.asList(row(1, "Item-1"), row(2, "Item-2")), false);
+        // the update produces an update_before/update_after pair in the log
+        writeRows(conn, tablePath, Arrays.asList(row(1, "Item-1-Updated")), false);
+        CLOCK.advanceTime(Duration.ofMillis(1000));
+        long boundedTimestamp = CLOCK.milliseconds();
+        // records written at or after the bounded timestamp are not read
+        writeRows(conn, tablePath, Arrays.asList(row(2, "Item-2-Updated")), false);
+
+        // The stopping offsets are aligned to record batch boundaries, and the update_before/
+        // update_after pair of a single update is always written in one record batch, so the
+        // pair is never split apart by the stopping offset: the last update is either fully
+        // included (merged into one binlog row) or fully excluded.
+        String query =
+                "SELECT _change_type, before.id, before.name, after.id, after.name "
+                        + "FROM bounded_binlog_test$binlog "
+                        + String.format(
+                                "/*+ OPTIONS('scan.bounded.mode' = 'timestamp', "
+                                        + "'scan.bounded.timestamp' = '%d') */",
+                                boundedTimestamp);
+        try (CloseableIterator<Row> rowIter = tEnv.executeSql(query).collect()) {
+            assertThat(collectBatchRows(rowIter))
+                    .containsExactly(
+                            "+I[insert, null, null, 1, Item-1]",
+                            "+I[insert, null, null, 2, Item-2]",
+                            "+I[update, 1, Item-1, 1, Item-1-Updated]");
+        }
+    }
 }

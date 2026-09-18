@@ -62,6 +62,31 @@ auto info = table.GetTableInfo();
 bool is_nullable = info.schema.columns[0].data_type.nullable();
 ```
 
+## Writing an Arrow batch
+
+Your batch must have the table's columns, with the table's names, in the table's
+order. The same applies to the fields of a `ROW` column. Anything else is rejected
+with an error naming the column.
+
+Column types must be the table's too, because `AppendArrowBatch` writes your
+buffers as they are and readers decode them with the table's schema — a
+`timestamp[ns]` column written into a `TIMESTAMP(3)` one would read back as
+milliseconds. Types that differ only in how they store the same values are
+converted for you: `large_utf8`, `large_binary`, `large_list`, the view types,
+and dictionary encoding. Anything that would change a value, such as a different
+`TIMESTAMP` unit or `DECIMAL` scale, is rejected.
+
+`GetArrowSchema` returns the schema the table expects. Building against it avoids
+the conversion entirely:
+
+```cpp
+std::shared_ptr<arrow::Schema> expected;
+auto result = table.GetArrowSchema(expected);
+```
+
+The nullable flags on your schema do not have to match — actual nulls are checked
+against the table's NOT NULL columns separately.
+
 ## Declaring MAP and ROW columns
 
 `MAP<K,V>` and `ROW<...>` columns are declared with the `DataType::Map` and

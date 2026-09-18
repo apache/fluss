@@ -54,6 +54,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Consumer;
+import java.util.function.Predicate;
 import java.util.stream.Collectors;
 
 import static org.apache.fluss.utils.FlussPaths.HISTORICAL_LOOKUP_CACHE_DIR_NAME;
@@ -113,45 +114,54 @@ public abstract class TabletManagerBase {
 
     /** Returns the tablet directories to be loaded from a single configured data directory. */
     protected List<File> listTabletsToLoad(File dataDir) {
-        List<File> tabletsToLoad = new ArrayList<>();
-        // Get all database directory.
-        File[] dbDirs = FileUtils.listDirectories(dataDir);
-        for (File dbDir : dbDirs) {
-            if (dbDir.getName().equals(HISTORICAL_LOOKUP_CACHE_DIR_NAME)
-                    || dbDir.getName().equals(REMOTE_LOG_INDEX_LOCAL_CACHE)) {
-                continue;
-            }
-            // Get all table path directory.
-            File[] tableDirs = FileUtils.listDirectories(dbDir);
-            for (File tableDir : tableDirs) {
-                // maybe tablet directories or partition directories
-                File[] tabletOrPartitionDirs = FileUtils.listDirectories(tableDir);
+        return listTabletsToLoad(
+                dataDir,
+                (directory, nameFilter) ->
+                        Arrays.stream(FileUtils.listDirectories(directory))
+                                .filter(file -> nameFilter.test(file.getName()))
+                                .collect(Collectors.toList()));
+    }
 
-                List<File> tabletDirs = new ArrayList<>();
-                for (File tabletOrPartitionDir : tabletOrPartitionDirs) {
-                    // if not partition dir, consider it as a tablet dir
-                    if (!isPartitionDir(tabletOrPartitionDir.getName())) {
-                        tabletDirs.add(tabletOrPartitionDir);
+    /**
+     * Lists tablet directories using the common layout and cache exclusions, with a caller-supplied
+     * directory lister to control symbolic-link handling and listing failures.
+     */
+    protected <E extends Exception> List<File> listTabletsToLoad(
+            File dataDir, DirectoryLister<E> directoryLister) throws E {
+        List<File> tabletsToLoad = new ArrayList<>();
+        for (File dbDir :
+                directoryLister.listDirectories(
+                        dataDir,
+                        name ->
+                                !name.equals(HISTORICAL_LOOKUP_CACHE_DIR_NAME)
+                                        && !name.equals(REMOTE_LOG_INDEX_LOCAL_CACHE))) {
+            for (File tableDir : directoryLister.listDirectories(dbDir, name -> true)) {
+                for (File tabletOrPartitionDir :
+                        directoryLister.listDirectories(
+                                tableDir,
+                                name -> isPartitionDir(name) || name.startsWith(tabletDirPrefix))) {
+                    if (isPartitionDir(tabletOrPartitionDir.getName())) {
+                        tabletsToLoad.addAll(
+                                directoryLister.listDirectories(
+                                        tabletOrPartitionDir,
+                                        name -> name.startsWith(tabletDirPrefix)));
                     } else {
-                        // consider all dirs in partition as tablet dirs
-                        tabletDirs.addAll(
-                                Arrays.asList(FileUtils.listDirectories(tabletOrPartitionDir)));
+                        tabletsToLoad.add(tabletOrPartitionDir);
                     }
                 }
-
-                // it may contain the directory for kv tablet and log tablet
-                // filter out the directory for specific type tablet
-                // actually it identified by the prefix of the directory
-                tabletsToLoad.addAll(
-                        tabletDirs.stream()
-                                .filter(
-                                        tabletDir ->
-                                                tabletDir.getName().startsWith(tabletDirPrefix))
-                                .collect(Collectors.toList()));
             }
         }
-
         return tabletsToLoad;
+    }
+
+    /**
+     * Lists child directories whose names match a filter, optionally reporting listing failures.
+     */
+    @FunctionalInterface
+    protected interface DirectoryLister<E extends Exception> {
+
+        /** Returns the matching child directories. */
+        List<File> listDirectories(File parent, Predicate<String> nameFilter) throws E;
     }
 
     protected ExecutorService createThreadPool(String poolName) {

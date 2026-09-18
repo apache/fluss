@@ -17,6 +17,8 @@
 
 package org.apache.fluss.flink.source;
 
+import org.apache.fluss.annotation.VisibleForTesting;
+import org.apache.fluss.client.initializer.NoStoppingOffsetsInitializer;
 import org.apache.fluss.client.initializer.OffsetsInitializer;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.flink.FlinkConnectorOptions;
@@ -75,9 +77,11 @@ public class FlinkSource<OUT>
     @Nullable private final FlinkRecordEmitter.OutputProjection<OUT> outputProjection;
     @Nullable private final int[] projectedFields;
     protected final OffsetsInitializer offsetsInitializer;
+    protected final OffsetsInitializer stoppingOffsetsInitializer;
     protected final long scanPartitionDiscoveryIntervalMs;
     protected final int splitPerAssignmentBatchSize;
     private final boolean streaming;
+    private final Boundedness boundedness;
     private final FlussDeserializationSchema<OUT> deserializationSchema;
     @Nullable private final Predicate partitionFilters;
     @Nullable private final LakeSource<LakeSplit> lakeSource;
@@ -117,6 +121,50 @@ public class FlinkSource<OUT>
                 leaseContext);
     }
 
+    /**
+     * Creates a source with the legacy boundedness derived from the streaming flag.
+     *
+     * @deprecated Use the constructor that explicitly accepts stopping offsets and boundedness.
+     */
+    @Deprecated
+    public FlinkSource(
+            Configuration flussConf,
+            TablePath tablePath,
+            boolean hasPrimaryKey,
+            boolean isPartitioned,
+            RowType scanRowType,
+            @Nullable int[] projectedFields,
+            @Nullable Predicate logRecordBatchFilter,
+            OffsetsInitializer offsetsInitializer,
+            long scanPartitionDiscoveryIntervalMs,
+            int splitPerAssignmentBatchSize,
+            FlussDeserializationSchema<OUT> deserializationSchema,
+            @Nullable RowType producedRowType,
+            boolean streaming,
+            @Nullable Predicate partitionFilters,
+            @Nullable LakeSource<LakeSplit> lakeSource,
+            LeaseContext leaseContext) {
+        this(
+                flussConf,
+                tablePath,
+                hasPrimaryKey,
+                isPartitioned,
+                scanRowType,
+                projectedFields,
+                logRecordBatchFilter,
+                offsetsInitializer,
+                streaming ? new NoStoppingOffsetsInitializer() : OffsetsInitializer.latest(),
+                streaming ? Boundedness.CONTINUOUS_UNBOUNDED : Boundedness.BOUNDED,
+                scanPartitionDiscoveryIntervalMs,
+                splitPerAssignmentBatchSize,
+                deserializationSchema,
+                producedRowType,
+                streaming,
+                partitionFilters,
+                lakeSource,
+                leaseContext);
+    }
+
     public FlinkSource(
             Configuration flussConf,
             TablePath tablePath,
@@ -208,6 +256,8 @@ public class FlinkSource<OUT>
                 projectedFields,
                 logRecordBatchFilter,
                 offsetsInitializer,
+                streaming ? new NoStoppingOffsetsInitializer() : OffsetsInitializer.latest(),
+                streaming ? Boundedness.CONTINUOUS_UNBOUNDED : Boundedness.BOUNDED,
                 scanPartitionDiscoveryIntervalMs,
                 splitPerAssignmentBatchSize,
                 deserializationSchema,
@@ -243,6 +293,8 @@ public class FlinkSource<OUT>
                 projectedFields,
                 logRecordBatchFilter,
                 offsetsInitializer,
+                streaming ? new NoStoppingOffsetsInitializer() : OffsetsInitializer.latest(),
+                streaming ? Boundedness.CONTINUOUS_UNBOUNDED : Boundedness.BOUNDED,
                 scanPartitionDiscoveryIntervalMs,
                 splitPerAssignmentBatchSize,
                 deserializationSchema,
@@ -262,6 +314,8 @@ public class FlinkSource<OUT>
             @Nullable int[] projectedFields,
             @Nullable Predicate logRecordBatchFilter,
             OffsetsInitializer offsetsInitializer,
+            OffsetsInitializer stoppingOffsetsInitializer,
+            Boundedness boundedness,
             long scanPartitionDiscoveryIntervalMs,
             int splitPerAssignmentBatchSize,
             FlussDeserializationSchema<OUT> deserializationSchema,
@@ -278,6 +332,8 @@ public class FlinkSource<OUT>
         this.projectedFields = projectedFields;
         this.logRecordBatchFilter = logRecordBatchFilter;
         this.offsetsInitializer = offsetsInitializer;
+        this.stoppingOffsetsInitializer = stoppingOffsetsInitializer;
+        this.boundedness = boundedness;
         this.scanPartitionDiscoveryIntervalMs = scanPartitionDiscoveryIntervalMs;
         this.splitPerAssignmentBatchSize = splitPerAssignmentBatchSize;
         this.deserializationSchema = deserializationSchema;
@@ -291,7 +347,17 @@ public class FlinkSource<OUT>
 
     @Override
     public Boundedness getBoundedness() {
-        return streaming ? Boundedness.CONTINUOUS_UNBOUNDED : Boundedness.BOUNDED;
+        return boundedness;
+    }
+
+    @VisibleForTesting
+    boolean isStreaming() {
+        return streaming;
+    }
+
+    @VisibleForTesting
+    OffsetsInitializer getStoppingOffsetsInitializer() {
+        return stoppingOffsetsInitializer;
     }
 
     @Override
@@ -304,6 +370,8 @@ public class FlinkSource<OUT>
                 isPartitioned,
                 splitEnumeratorContext,
                 offsetsInitializer,
+                stoppingOffsetsInitializer,
+                boundedness,
                 scanPartitionDiscoveryIntervalMs,
                 splitPerAssignmentBatchSize,
                 streaming,
@@ -335,6 +403,8 @@ public class FlinkSource<OUT>
                 sourceEnumeratorState.getAssignedPartitions(),
                 remainingHybridLakeFlussSplits,
                 offsetsInitializer,
+                stoppingOffsetsInitializer,
+                boundedness,
                 scanPartitionDiscoveryIntervalMs,
                 splitPerAssignmentBatchSize,
                 streaming,

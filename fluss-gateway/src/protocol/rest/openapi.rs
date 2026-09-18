@@ -24,17 +24,18 @@
 //! the taxonomy, so the contract cannot drift from the implementation either.
 
 use crate::error::{ErrorCode, ErrorEnvelope};
+use crate::protocol::rest::datatype::{ColumnDataType, WireDataType, WireRowField};
 use crate::protocol::rest::{RestState, json_response};
 use axum::extract::State;
 use axum::response::Response;
 use serde_json::Value;
-use utoipa::{OpenApi, openapi::OpenApiBuilder};
+use utoipa::{OpenApi, ToSchema, openapi::OpenApiBuilder};
 use utoipa_axum::router::OpenApiRouter;
 use utoipa_axum::routes;
 
-/// Seeds the generated document with the shared error schemas, which no single handler owns.
+/// Registers shared schemas not collected from one handler.
 #[derive(OpenApi)]
-#[openapi(components(schemas(ErrorCode, ErrorEnvelope)))]
+#[openapi(components(schemas(ErrorCode, ErrorEnvelope, WireDataType, WireRowField)))]
 struct SharedSchemas;
 
 /// OpenAPI routes, merged into the main router by [`crate::protocol::rest::build_router`].
@@ -42,7 +43,7 @@ pub fn routes() -> OpenApiRouter<RestState> {
     OpenApiRouter::with_openapi(SharedSchemas::openapi()).routes(routes!(serve))
 }
 
-/// Applies the gateway's own metadata to the router-generated document.
+/// Applies gateway metadata and schema constraints to the router-generated document.
 ///
 /// Called once by [`crate::protocol::rest::build_router`].
 pub(crate) fn finalize(api: utoipa::openapi::OpenApi) -> Value {
@@ -69,7 +70,17 @@ pub(crate) fn finalize(api: utoipa::openapi::OpenApi) -> Value {
         // authentication capability adds securitySchemes and per-operation requirements.
         .security(Some(Vec::new()))
         .build();
-    serde_json::to_value(api).expect("generated OpenAPI is serializable")
+    let mut document = serde_json::to_value(api).expect("generated OpenAPI is serializable");
+    // utoipa does not propagate deny_unknown_fields to internally tagged enum variants.
+    for name in [ColumnDataType::name(), WireDataType::name()] {
+        for variant in document["components"]["schemas"][name.as_ref()]["oneOf"]
+            .as_array_mut()
+            .expect("data type variants are generated")
+        {
+            variant["additionalProperties"] = Value::Bool(false);
+        }
+    }
+    document
 }
 
 /// Serves the generated OpenAPI 3.1 document as JSON.
@@ -80,6 +91,7 @@ pub(crate) fn finalize(api: utoipa::openapi::OpenApi) -> Value {
     tag = "metadata",
     responses(
         (status = 200, description = "OpenAPI 3.1 document"),
+        (status = 400, description = "This operation accepts no query parameters", body = ErrorEnvelope),
         (status = 405, description = "Wrong method for this route", body = ErrorEnvelope),
         (status = 413, description = "Request body above the configured limit", body = ErrorEnvelope),
         (status = 503, description = "Gateway starting or shutting down", body = ErrorEnvelope),
@@ -122,7 +134,7 @@ mod tests {
         serde_json::from_slice(&bytes).unwrap()
     }
 
-    /// The checked-in `openapi.yaml` next to this crate's `Cargo.toml` (FIP-49).
+    /// The checked-in `openapi.yaml` next to this crate's `Cargo.toml`.
     fn checked_in_path() -> std::path::PathBuf {
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("openapi.yaml")
     }
@@ -137,7 +149,7 @@ mod tests {
     }
 
     /// The checked-in document always matches the served one, so the published specification
-    /// cannot drift from the implementation (FIP-49 schema-validation contract).
+    /// cannot drift from the implementation.
     #[tokio::test]
     async fn the_checked_in_document_matches_the_served_one() {
         let checked_in = std::fs::read_to_string(checked_in_path())
@@ -191,6 +203,170 @@ mod tests {
             "the envelope code refers to the generated vocabulary: {}",
             document["components"]["schemas"]["ErrorBody"]
         );
+
+        let schemas = &document["components"]["schemas"];
+        assert_eq!(
+            schemas["CreateDatabaseBody"]["required"],
+            serde_json::json!(["database"])
+        );
+        assert_eq!(
+            schemas["CreateTableBody"]["required"],
+            serde_json::json!(["table_name", "columns"])
+        );
+        assert!(
+            document["paths"]["/v1/clusters/{cluster}/databases/{database}"]
+                .get("get")
+                .is_none(),
+            "the API does not expose describeDatabase"
+        );
+        assert_eq!(
+            schemas["TableResponse"]["required"],
+            serde_json::json!(["database", "table", "columns"])
+        );
+        for (path, method, status) in [
+            (
+                "/v1/clusters/{cluster}/databases/{database}/tables",
+                "post",
+                "201",
+            ),
+            (
+                "/v1/clusters/{cluster}/databases/{database}/tables/{table}",
+                "patch",
+                "204",
+            ),
+        ] {
+            let response = &document["paths"][path][method]["responses"][status];
+            assert!(response.is_object(), "{method} {path}: {status}");
+            assert!(response.get("content").is_none(), "{method} {path}");
+        }
+        let table =
+            &document["paths"]["/v1/clusters/{cluster}/databases/{database}/tables/{table}"];
+        assert!(table["patch"]["responses"].get("200").is_none());
+        assert_eq!(
+            schemas["PartitionEntry"]["required"],
+            serde_json::json!(["name", "partition"])
+        );
+        assert_eq!(
+            schemas["PartitionsResponse"]["properties"]["partitions"]["items"]["$ref"],
+            "#/components/schemas/PartitionEntry"
+        );
+        for field in [
+            "primary_key",
+            "partitioned_by",
+            "distribution",
+            "configs",
+            "custom_properties",
+            "comment",
+        ] {
+            assert!(
+                !schemas["TableResponse"]["properties"][field]
+                    .to_string()
+                    .contains("\"null\""),
+                "an absent table field is omitted, not nullable: {field}"
+            );
+        }
+        for schema in ["CreateTableBody", "TableResponse"] {
+            for field in ["configs", "custom_properties"] {
+                let property = &schemas[schema]["properties"][field];
+                assert_eq!(property["type"], "object", "{schema}.{field}");
+                assert_eq!(
+                    property["additionalProperties"]["type"], "string",
+                    "{schema}.{field}"
+                );
+            }
+        }
+        for (name, has_nullable) in [("ColumnDataType", false), ("WireDataType", true)] {
+            for variant in schemas[name]["oneOf"].as_array().expect("type variants") {
+                assert_eq!(
+                    variant["properties"].get("nullable").is_some(),
+                    has_nullable,
+                    "{name}: {variant}"
+                );
+                assert_eq!(
+                    variant["additionalProperties"], false,
+                    "type variants must reject undeclared fields: {name}: {variant}"
+                );
+            }
+        }
+
+        let mut pending = vec![&document];
+        while let Some(value) = pending.pop() {
+            match value {
+                Value::Object(object) => {
+                    if let Some(reference) = object.get("$ref").and_then(Value::as_str)
+                        && let Some(pointer) = reference.strip_prefix('#')
+                    {
+                        assert!(
+                            document.pointer(pointer).is_some(),
+                            "unresolved reference: {reference}"
+                        );
+                    }
+                    pending.extend(object.values());
+                }
+                Value::Array(array) => pending.extend(array),
+                _ => {}
+            }
+        }
+
+        for (path, item) in document["paths"]
+            .as_object()
+            .expect("paths object")
+            .iter()
+            .filter(|(path, _)| path.contains("/databases"))
+        {
+            for method in ["get", "post", "patch", "delete"] {
+                let Some(operation) = item.get(method) else {
+                    continue;
+                };
+                for status in ["400", "404", "413", "429", "500", "501", "503", "504"] {
+                    assert!(
+                        operation["responses"].get(status).is_some(),
+                        "{method} {path} must declare {status}"
+                    );
+                }
+                assert!(
+                    operation["responses"].get("403").is_none(),
+                    "{method} {path} must not declare caller authorization failures"
+                );
+            }
+        }
+
+        for (path, method) in [
+            ("/v1/clusters/{cluster}/databases", "post"),
+            ("/v1/clusters/{cluster}/databases/{database}/tables", "post"),
+            (
+                "/v1/clusters/{cluster}/databases/{database}/tables/{table}/partitions",
+                "post",
+            ),
+        ] {
+            assert!(
+                document["paths"][path][method]["responses"]["201"]["headers"]["Location"]
+                    .is_object(),
+                "{method} {path} must declare its Location header"
+            );
+        }
+    }
+
+    /// The document route follows the same strict query policy as every other endpoint.
+    #[tokio::test]
+    async fn document_route_rejects_query_parameters() {
+        let state = test_support::test_state();
+        state.readiness.set_serving();
+        let app = crate::protocol::rest::build_router(state, &test_support::test_options());
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/openapi.json?format=yaml")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let bytes = response.into_body().collect().await.unwrap().to_bytes();
+        let body: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(body["error"]["code"], "invalid_argument");
     }
 
     /// The published `ErrorCode` vocabulary is generated from the taxonomy, so adding an [`ErrorKind`]

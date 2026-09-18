@@ -50,6 +50,13 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use tokio::task::JoinHandle;
 
+fn parse_table_descriptor(bytes: &[u8]) -> Result<TableDescriptor> {
+    let node = serde_json::from_slice(bytes).map_err(|e| Error::JsonSerdeError {
+        message: format!("Failed to parse table_json: {e}"),
+    })?;
+    TableDescriptor::deserialize_json(&node)
+}
+
 pub struct FlussAdmin {
     metadata: Arc<Metadata>,
     rpc_client: Arc<RpcClient>,
@@ -165,9 +172,7 @@ impl FlussAdmin {
             modified_time,
             ..
         } = response;
-        let v: &[u8] = &table_json[..];
-        let table_descriptor =
-            TableDescriptor::deserialize_json(&serde_json::from_slice(v).unwrap())?;
+        let table_descriptor = parse_table_descriptor(&table_json)?;
         Ok(TableInfo::of(
             table_path.clone(),
             table_id,
@@ -879,5 +884,22 @@ impl FlussAdmin {
             .request(DropKvSnapshotLeaseRequest::new(lease_id))
             .await?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_table_descriptor;
+    use crate::error::Error;
+
+    #[test]
+    fn test_parse_table_descriptor_rejects_malformed_json() {
+        let error = parse_table_descriptor(b"{not valid json").unwrap_err();
+
+        assert!(matches!(
+            error,
+            Error::JsonSerdeError { message }
+                if message.starts_with("Failed to parse table_json:")
+        ));
     }
 }

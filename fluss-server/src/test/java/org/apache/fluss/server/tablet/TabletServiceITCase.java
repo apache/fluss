@@ -19,7 +19,9 @@ package org.apache.fluss.server.tablet;
 
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.exception.FlussRuntimeException;
+import org.apache.fluss.exception.InvalidBucketRoutingException;
 import org.apache.fluss.exception.InvalidRequiredAcksException;
+import org.apache.fluss.exception.UnknownTableOrBucketException;
 import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.PhysicalTablePath;
@@ -32,12 +34,16 @@ import org.apache.fluss.record.DefaultValueRecordBatch;
 import org.apache.fluss.record.TestingSchemaGetter;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.encode.CompactedKeyEncoder;
+import org.apache.fluss.row.encode.KvValueLayout;
 import org.apache.fluss.row.encode.ValueDecoder;
 import org.apache.fluss.row.encode.ValueEncoder;
 import org.apache.fluss.rpc.gateway.TabletServerGateway;
 import org.apache.fluss.rpc.messages.FetchLogResponse;
+import org.apache.fluss.rpc.messages.GetTableStatsRequest;
+import org.apache.fluss.rpc.messages.GetTableStatsResponse;
 import org.apache.fluss.rpc.messages.InitWriterRequest;
 import org.apache.fluss.rpc.messages.InitWriterResponse;
+import org.apache.fluss.rpc.messages.ListOffsetsRequest;
 import org.apache.fluss.rpc.messages.ListOffsetsResponse;
 import org.apache.fluss.rpc.messages.NotifyLeaderAndIsrRequest;
 import org.apache.fluss.rpc.messages.NotifyLeaderAndIsrResponse;
@@ -48,6 +54,7 @@ import org.apache.fluss.rpc.messages.PbLookupRespForBucket;
 import org.apache.fluss.rpc.messages.PbNotifyLeaderAndIsrReqForBucket;
 import org.apache.fluss.rpc.messages.PbPrefixLookupRespForBucket;
 import org.apache.fluss.rpc.messages.PbPutKvRespForBucket;
+import org.apache.fluss.rpc.messages.PbTableStatsRespForBucket;
 import org.apache.fluss.rpc.messages.ProduceLogResponse;
 import org.apache.fluss.rpc.messages.PutKvResponse;
 import org.apache.fluss.rpc.messages.ScanKvRequest;
@@ -78,8 +85,10 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Queue;
 import java.util.Random;
 import java.util.Set;
@@ -493,7 +502,9 @@ public class TabletServiceITCase {
     void testLookup() throws Exception {
         long tableId =
                 createTable(
-                        FLUSS_CLUSTER_EXTENSION, DATA1_TABLE_PATH_PK, DATA1_TABLE_DESCRIPTOR_PK);
+                        FLUSS_CLUSTER_EXTENSION,
+                        DATA1_TABLE_PATH_PK,
+                        withRowTtl(DATA1_TABLE_DESCRIPTOR_PK));
         TableBucket tb = new TableBucket(tableId, 0);
 
         FLUSS_CLUSTER_EXTENSION.waitUntilAllReplicaReady(tb);
@@ -582,7 +593,11 @@ public class TabletServiceITCase {
                         new DataField("c", DataTypes.BIGINT()));
 
         TableDescriptor descriptor =
-                TableDescriptor.builder().schema(schema).distributedBy(3, "a", "b").build();
+                TableDescriptor.builder()
+                        .schema(schema)
+                        .distributedBy(3, "a", "b")
+                        .property(ConfigOptions.TABLE_KV_TTL.key(), "1 h")
+                        .build();
         long tableId = createTable(FLUSS_CLUSTER_EXTENSION, tablePath, descriptor);
         TableBucket tb = new TableBucket(tableId, 0);
 
@@ -683,7 +698,9 @@ public class TabletServiceITCase {
     void testLimitScanPrimaryKeyTable() throws Exception {
         long tableId =
                 createTable(
-                        FLUSS_CLUSTER_EXTENSION, DATA1_TABLE_PATH_PK, DATA1_TABLE_DESCRIPTOR_PK);
+                        FLUSS_CLUSTER_EXTENSION,
+                        DATA1_TABLE_PATH_PK,
+                        withRowTtl(DATA1_TABLE_DESCRIPTOR_PK));
         TableBucket tb = new TableBucket(tableId, 0);
 
         FLUSS_CLUSTER_EXTENSION.waitUntilAllReplicaReady(tb);
@@ -753,6 +770,138 @@ public class TabletServiceITCase {
                 DATA1_ROW_TYPE,
                 TEST_SCHEMA_GETTER,
                 expected2);
+    }
+
+    @Test
+    void testRoutingBucketCountValidationAppliesToClientRequestsOnly() throws Exception {
+        // Routing validation only applies to hash-distributed tables: a keyless table may place a
+        // record in any bucket, so a stale count is harmless there (see
+        // ReplicaManager#validateRoutingBucketCount).
+        long tableId =
+                createTable(
+                        FLUSS_CLUSTER_EXTENSION, DATA1_TABLE_PATH_PK, DATA1_TABLE_DESCRIPTOR_PK);
+        TableBucket tb = new TableBucket(tableId, 0);
+
+        FLUSS_CLUSTER_EXTENSION.waitUntilAllReplicaReady(tb);
+
+        int leader = FLUSS_CLUSTER_EXTENSION.waitAndGetLeader(tb);
+        TabletServerGateway leaderGateWay =
+                FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(leader);
+
+        // a client whose bucket count doesn't match the actual one computed its bucketId from a
+        // count the server has confirmed to be stale.
+        assertThatThrownBy(
+                        () ->
+                                leaderGateWay
+                                        .listOffsets(
+                                                newListOffsetsRequestWithRoutingBucketCount(
+                                                        -1,
+                                                        ListOffsetsParam.LATEST_OFFSET_TYPE,
+                                                        tableId,
+                                                        0,
+                                                        999))
+                                        .get())
+                .cause()
+                .isInstanceOf(InvalidBucketRoutingException.class);
+
+        // the very same count coming from a follower is not validated: a follower's bucket ids come
+        // from NotifyLeaderAndIsr, so replication must not depend on the leader's metadata cache.
+        assertListOffsetsResponse(
+                leaderGateWay
+                        .listOffsets(
+                                newListOffsetsRequestWithRoutingBucketCount(
+                                        1, ListOffsetsParam.LATEST_OFFSET_TYPE, tableId, 0, 999))
+                        .get(),
+                0L,
+                Errors.NONE.code(),
+                null);
+
+        // Request-scoped validation resolves the target immediately, so an unknown table/bucket
+        // fails the whole RPC with the standard replica lookup exception.
+        assertThatThrownBy(
+                        () ->
+                                leaderGateWay
+                                        .listOffsets(
+                                                newListOffsetsRequestWithRoutingBucketCount(
+                                                        -1,
+                                                        ListOffsetsParam.LATEST_OFFSET_TYPE,
+                                                        10005L,
+                                                        0,
+                                                        3))
+                                        .get())
+                .cause()
+                .isInstanceOf(UnknownTableOrBucketException.class)
+                .hasMessageContaining("Unknown table or bucket");
+    }
+
+    private static ListOffsetsRequest newListOffsetsRequestWithRoutingBucketCount(
+            int followerServerId,
+            int offsetType,
+            long tableId,
+            int bucketId,
+            int routingBucketCount) {
+        return newListOffsetsRequest(followerServerId, offsetType, tableId, bucketId)
+                .setRoutingBucketCount(routingBucketCount);
+    }
+
+    @Test
+    void testInvalidRoutingBucketCountOnlyFailsTheOffendingBucket() throws Exception {
+        // 9 buckets over 3 tablet servers, so at least one server necessarily leads two of them
+        // and a single request can carry two buckets hosted by the same leader.
+        int bucketCount = 9;
+        TablePath tablePath = TablePath.of("test_db_1", "test_stale_routing_per_bucket");
+        long tableId =
+                createTable(
+                        FLUSS_CLUSTER_EXTENSION,
+                        tablePath,
+                        TableDescriptor.builder()
+                                .schema(DATA1_SCHEMA)
+                                // hash-distributed: routing validation is skipped for keyless
+                                // tables
+                                .distributedBy(bucketCount, "a")
+                                .build());
+
+        Map<Integer, List<Integer>> bucketsByLeader = new HashMap<>();
+        for (int bucketId = 0; bucketId < bucketCount; bucketId++) {
+            TableBucket tb = new TableBucket(tableId, bucketId);
+            FLUSS_CLUSTER_EXTENSION.waitUntilAllReplicaReady(tb);
+            bucketsByLeader
+                    .computeIfAbsent(
+                            FLUSS_CLUSTER_EXTENSION.waitAndGetLeader(tb), k -> new ArrayList<>())
+                    .add(bucketId);
+        }
+        Map.Entry<Integer, List<Integer>> coLocated =
+                bucketsByLeader.entrySet().stream()
+                        .filter(entry -> entry.getValue().size() >= 2)
+                        .findFirst()
+                        .orElseThrow(
+                                () ->
+                                        new AssertionError(
+                                                "9 buckets over 3 servers must co-locate two leaders"));
+        int healthyBucket = coLocated.getValue().get(0);
+        int staleBucket = coLocated.getValue().get(1);
+
+        GetTableStatsRequest request = new GetTableStatsRequest().setTableId(tableId);
+        request.addBucketsReq().setBucketId(healthyBucket).setRoutingBucketCount(bucketCount);
+        request.addBucketsReq().setBucketId(staleBucket).setRoutingBucketCount(bucketCount + 1);
+
+        GetTableStatsResponse response =
+                FLUSS_CLUSTER_EXTENSION
+                        .newTabletServerClientForNode(coLocated.getKey())
+                        .getTableStats(request)
+                        .get();
+
+        assertThat(response.getBucketsRespsCount()).isEqualTo(2);
+        Map<Integer, PbTableStatsRespForBucket> respByBucket = new HashMap<>();
+        for (PbTableStatsRespForBucket bucketResp : response.getBucketsRespsList()) {
+            respByBucket.put(bucketResp.getBucketId(), bucketResp);
+        }
+
+        // the co-batched bucket whose routing is still valid is served as usual
+        assertThat(respByBucket.get(healthyBucket).hasErrorCode()).isFalse();
+        // Only the bucket routed by an invalid count is rejected without retrying the fixed route.
+        assertThat(respByBucket.get(staleBucket).getErrorCode())
+                .isEqualTo(Errors.INVALID_BUCKET_ROUTING.code());
     }
 
     @Test
@@ -977,7 +1126,12 @@ public class TabletServiceITCase {
         PbNotifyLeaderAndIsrReqForBucket reqForBucket =
                 makeNotifyBucketLeaderAndIsr(
                         new NotifyLeaderAndIsrData(
-                                physicalTablePath, tableBucket, leaderAndIsr.isr(), leaderAndIsr));
+                                physicalTablePath,
+                                tableBucket,
+                                leaderAndIsr.isr(),
+                                leaderAndIsr,
+                                3,
+                                0L));
         return ServerRpcMessageUtils.makeNotifyLeaderAndIsrRequest(
                 0, Collections.singletonList(reqForBucket));
     }
@@ -1049,7 +1203,8 @@ public class TabletServiceITCase {
         TabletServerGateway gateway = FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(leader);
         CompactedKeyEncoder keyEncoder = new CompactedKeyEncoder(rowType, new int[] {0});
         TestingSchemaGetter schemaGetter = new TestingSchemaGetter(DEFAULT_SCHEMA_ID, schema);
-        ValueDecoder valueDecoder = new ValueDecoder(schemaGetter, KvFormat.COMPACTED);
+        ValueDecoder valueDecoder =
+                new ValueDecoder(schemaGetter, KvFormat.COMPACTED, KvValueLayout.PLAIN);
 
         byte[] key1 = keyEncoder.encodeKey(row(new Object[] {100}));
         byte[] key2 = keyEncoder.encodeKey(row(new Object[] {200}));
@@ -1082,7 +1237,9 @@ public class TabletServiceITCase {
     void testScanKv_newScan_happyPath() throws Exception {
         long tableId =
                 createTable(
-                        FLUSS_CLUSTER_EXTENSION, DATA1_TABLE_PATH_PK, DATA1_TABLE_DESCRIPTOR_PK);
+                        FLUSS_CLUSTER_EXTENSION,
+                        DATA1_TABLE_PATH_PK,
+                        withRowTtl(DATA1_TABLE_DESCRIPTOR_PK));
         TableBucket tb = new TableBucket(tableId, 0);
         FLUSS_CLUSTER_EXTENSION.waitUntilAllReplicaReady(tb);
         int leader = FLUSS_CLUSTER_EXTENSION.waitAndGetLeader(tb);
@@ -1107,7 +1264,10 @@ public class TabletServiceITCase {
         assertThat(response.getLogOffset()).isGreaterThanOrEqualTo(0L);
         assertThat(response.hasRecords()).isTrue();
         DefaultValueRecordBatch batch = DefaultValueRecordBatch.pointToBytes(response.getRecords());
-        assertThat(batch.getRecordCount()).isEqualTo(2);
+        DefaultValueRecordBatch.Builder expected = DefaultValueRecordBatch.builder();
+        expected.append(DEFAULT_SCHEMA_ID, compactedRow(DATA1_ROW_TYPE, new Object[] {1, "a1"}));
+        expected.append(DEFAULT_SCHEMA_ID, compactedRow(DATA1_ROW_TYPE, new Object[] {2, "b1"}));
+        assertThat(batch).isEqualTo(expected.build());
     }
 
     @Test
@@ -1432,6 +1592,12 @@ public class TabletServiceITCase {
         req.setBatchSizeBytes(batchSize);
         req.setCallSeqId(0);
         return req;
+    }
+
+    private static TableDescriptor withRowTtl(TableDescriptor descriptor) {
+        Map<String, String> properties = new HashMap<>(descriptor.getProperties());
+        properties.put(ConfigOptions.TABLE_KV_TTL.key(), "1 h");
+        return descriptor.withProperties(properties);
     }
 
     private static ScanKvRequest newScanKvContinueRequest(

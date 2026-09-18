@@ -273,6 +273,7 @@ cc_library(
     ],
     textual_hdrs = [
         "src/ffi_converter.hpp",
+        "src/type_lowering.hpp",
         ":rust_bridge_h_unified",
         ":lib_rs_h_unified",
         ":cxx_h_unified",
@@ -392,6 +393,39 @@ cc_binary(
     name = "fluss_cpp_kv_example",
     srcs = [
         "examples/kv_example.cpp",
+    ],
+    deps = [":fluss_cpp"],
+    copts = [
+        "-std=c++17",
+    ] + select({
+        ":debug_mode": [
+            "-g3",
+            "-O0",
+            "-ggdb",
+            "-fno-omit-frame-pointer",
+            "-DDEBUG",
+        ],
+        ":fastbuild_mode": [
+            "-g",
+            "-O0",
+        ],
+        ":release_mode": [
+            "-O2",
+            "-DNDEBUG",
+        ],
+    }),
+    linkopts = select({
+        ":debug_mode": ["-g"],
+        ":fastbuild_mode": ["-g"],
+        ":release_mode": [],
+    }),
+    visibility = ["//visibility:public"],
+)
+
+cc_binary(
+    name = "fluss_cpp_auto_increment_example",
+    srcs = [
+        "examples/auto_increment_example.cpp",
     ],
     deps = [":fluss_cpp"],
     copts = [

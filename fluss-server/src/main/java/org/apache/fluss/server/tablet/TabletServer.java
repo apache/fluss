@@ -254,7 +254,12 @@ public class TabletServer extends ServerBase {
 
             this.kvManager =
                     KvManager.create(
-                            conf, zkClient, logManager, tabletServerMetricGroup, localDiskManager);
+                            conf,
+                            zkClient,
+                            logManager,
+                            tabletServerMetricGroup,
+                            localDiskManager,
+                            clock);
             kvManager.startup();
 
             this.authorizer = AuthorizerLoader.createAuthorizer(conf, zkClient, pluginManager);

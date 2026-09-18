@@ -39,7 +39,7 @@ pub async fn main() -> Result<()> {
             Schema::builder()
                 .column("id", DataTypes::int())
                 .column("name", DataTypes::string())
-                .primary_key(vec!["id"])
+                .primary_key(vec!["id"])?
                 .build()?,
         )
         .distributed_by(Some(1), vec!["id".to_string()])

@@ -29,7 +29,6 @@ import org.apache.fluss.config.cluster.AlterConfigOpType;
 import org.apache.fluss.exception.ApiException;
 import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.exception.InvalidAlterTableException;
-import org.apache.fluss.exception.InvalidConfigException;
 import org.apache.fluss.exception.InvalidCoordinatorException;
 import org.apache.fluss.exception.InvalidDatabaseException;
 import org.apache.fluss.exception.InvalidPartitionException;
@@ -51,6 +50,7 @@ import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.DatabaseChange;
 import org.apache.fluss.metadata.DatabaseDescriptor;
 import org.apache.fluss.metadata.DeleteBehavior;
+import org.apache.fluss.metadata.LakeTableUtil;
 import org.apache.fluss.metadata.MergeEngineType;
 import org.apache.fluss.metadata.PartitionSpec;
 import org.apache.fluss.metadata.ResolvedPartitionSpec;
@@ -58,10 +58,14 @@ import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableChange;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
+import org.apache.fluss.metadata.TablePartition;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.row.encode.KvValueLayout;
 import org.apache.fluss.rpc.gateway.CoordinatorGateway;
 import org.apache.fluss.rpc.messages.AcquireKvSnapshotLeaseRequest;
 import org.apache.fluss.rpc.messages.AcquireKvSnapshotLeaseResponse;
+import org.apache.fluss.rpc.messages.AddServerTagByRackRequest;
+import org.apache.fluss.rpc.messages.AddServerTagByRackResponse;
 import org.apache.fluss.rpc.messages.AddServerTagRequest;
 import org.apache.fluss.rpc.messages.AddServerTagResponse;
 import org.apache.fluss.rpc.messages.AdjustIsrRequest;
@@ -133,6 +137,8 @@ import org.apache.fluss.rpc.messages.RegisterProducerOffsetsRequest;
 import org.apache.fluss.rpc.messages.RegisterProducerOffsetsResponse;
 import org.apache.fluss.rpc.messages.ReleaseKvSnapshotLeaseRequest;
 import org.apache.fluss.rpc.messages.ReleaseKvSnapshotLeaseResponse;
+import org.apache.fluss.rpc.messages.RemoveServerTagByRackRequest;
+import org.apache.fluss.rpc.messages.RemoveServerTagByRackResponse;
 import org.apache.fluss.rpc.messages.RemoveServerTagRequest;
 import org.apache.fluss.rpc.messages.RemoveServerTagResponse;
 import org.apache.fluss.rpc.netty.server.Session;
@@ -149,6 +155,7 @@ import org.apache.fluss.server.authorizer.AclCreateResult;
 import org.apache.fluss.server.authorizer.AclDeleteResult;
 import org.apache.fluss.server.authorizer.Authorizer;
 import org.apache.fluss.server.coordinator.event.AccessContextEvent;
+import org.apache.fluss.server.coordinator.event.AddServerTagByRackEvent;
 import org.apache.fluss.server.coordinator.event.AddServerTagEvent;
 import org.apache.fluss.server.coordinator.event.AdjustIsrReceivedEvent;
 import org.apache.fluss.server.coordinator.event.CancelRebalanceEvent;
@@ -159,6 +166,7 @@ import org.apache.fluss.server.coordinator.event.ControlledShutdownEvent;
 import org.apache.fluss.server.coordinator.event.EventManager;
 import org.apache.fluss.server.coordinator.event.ListRebalanceProgressEvent;
 import org.apache.fluss.server.coordinator.event.RebalanceEvent;
+import org.apache.fluss.server.coordinator.event.RemoveServerTagByRackEvent;
 import org.apache.fluss.server.coordinator.event.RemoveServerTagEvent;
 import org.apache.fluss.server.coordinator.lease.KvSnapshotLeaseHandler;
 import org.apache.fluss.server.coordinator.lease.KvSnapshotLeaseManager;
@@ -228,6 +236,7 @@ import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeCreateAcls
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeDropAclsResponse;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeListRemoteLogManifestsResponse;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toAlterTableConfigChanges;
+import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toAlterTableDistributionChanges;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toAlterTableSchemaChanges;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toDatabaseChanges;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toTableBucketOffsets;
@@ -242,6 +251,7 @@ import static org.apache.fluss.utils.Preconditions.checkNotNull;
 public final class CoordinatorService extends RpcServiceBase implements CoordinatorGateway {
 
     private static final Logger LOG = LoggerFactory.getLogger(CoordinatorService.class);
+    private static final String SECURITY_CONFIG_KEY_PREFIX = "security.";
 
     private final int defaultBucketNumber;
     private final int defaultReplicationFactor;
@@ -249,6 +259,7 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
     private final boolean kvTableAllowCreation;
     private final Supplier<EventManager> eventManagerSupplier;
     private final Supplier<Integer> coordinatorEpochSupplier;
+    private final Supplier<Integer> coordinatorZkVersionSupplier;
     private final CoordinatorMetadataCache metadataCache;
 
     private final Supplier<CompletedSnapshotStoreManager> snapshotStoreManagerSupplier;
@@ -294,6 +305,8 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                 () -> coordinatorEventProcessorSupplier.get().getCoordinatorEventManager();
         this.coordinatorEpochSupplier =
                 () -> coordinatorEventProcessorSupplier.get().getCoordinatorEpoch();
+        this.coordinatorZkVersionSupplier =
+                () -> coordinatorEventProcessorSupplier.get().getCoordinatorZkVersion();
         this.snapshotStoreManagerSupplier =
                 () -> coordinatorEventProcessorSupplier.get().completedSnapshotStoreManager();
         this.lakeTableTieringManager = lakeTableTieringManager;
@@ -372,13 +385,20 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         return tablePath;
     }
 
-    private void validateKvTable(long tableId) {
+    @Override
+    protected TableInfo getTableInfo(long tableId) {
+        TablePath tablePath = getTablePathById(tableId);
+        return metadataManager.getTable(tablePath);
+    }
+
+    private TableInfo validateKvTable(long tableId) {
         TablePath tablePath = getTablePathById(tableId);
         TableInfo tableInfo = metadataManager.getTable(tablePath);
         if (!tableInfo.hasPrimaryKey()) {
             throw new NonPrimaryKeyTableException(
                     "Table '" + tablePath + "' is not a primary key table");
         }
+        return tableInfo;
     }
 
     @Override
@@ -511,13 +531,17 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
 
         // before create table in fluss, we may create in lake
         if (isDataLakeEnabled(tableDescriptor)) {
+            TablePath lakeTablePath =
+                    LakeTableUtil.resolveLakeTablePath(
+                            tablePath, Configuration.fromMap(tableDescriptor.getProperties()));
             try {
                 checkNotNull(lakeCatalogContainer.getLakeCatalog())
                         .createTable(
-                                tablePath,
+                                lakeTablePath,
                                 tableDescriptor,
                                 new DefaultLakeCatalogContext(
                                         true,
+                                        null,
                                         currentSession().getPrincipal(),
                                         null,
                                         tableDescriptor));
@@ -572,15 +596,20 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                 toAlterTableConfigChanges(request.getConfigChangesList());
         TablePropertyChanges tablePropertyChanges = toTablePropertyChanges(alterTableConfigChanges);
         List<TableChange> alterSchemaChanges = toAlterTableSchemaChanges(request);
+        List<TableChange.DistributionChange> alterDistributionChanges =
+                toAlterTableDistributionChanges(request);
 
-        if (!alterSchemaChanges.isEmpty() && !alterTableConfigChanges.isEmpty()) {
-            // Only support one of alterTableConfigChanges and alterSchemaChanges for atomic change.
+        boolean hasConfigChanges = !alterTableConfigChanges.isEmpty();
+        boolean hasSchemaChanges = !alterSchemaChanges.isEmpty();
+        boolean hasDistributionChanges = !alterDistributionChanges.isEmpty();
+        if ((hasConfigChanges && (hasSchemaChanges || hasDistributionChanges))
+                || (hasSchemaChanges && hasDistributionChanges)) {
             throw new InvalidAlterTableException(
                     "Table alteration can only be applied to one of the following: "
-                            + "table properties or table schema.");
+                            + "table properties, table schema, or table distribution.");
         }
 
-        if (!alterSchemaChanges.isEmpty()) {
+        if (hasSchemaChanges) {
             metadataManager.alterTableSchema(
                     tablePath,
                     alterSchemaChanges,
@@ -588,7 +617,7 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                     currentSession().getPrincipal());
         }
 
-        if (!alterTableConfigChanges.isEmpty()) {
+        if (hasConfigChanges) {
             metadataManager.alterTableProperties(
                     tablePath,
                     alterTableConfigChanges,
@@ -596,7 +625,19 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                     request.isIgnoreIfNotExists(),
                     currentSession().getPrincipal(),
                     this::beforeTablePropertiesUpdate,
-                    this::afterTablePropertiesUpdate);
+                    this::afterTablePropertiesUpdate,
+                    coordinatorZkVersionSupplier.get());
+        }
+
+        if (hasDistributionChanges) {
+            TableChange.ModifyBucketCount modifyBucketCount =
+                    (TableChange.ModifyBucketCount) alterDistributionChanges.get(0);
+            metadataManager.alterBucketCount(
+                    tablePath,
+                    modifyBucketCount.getNewBucketCount(),
+                    request.isIgnoreIfNotExists(),
+                    currentSession().getPrincipal(),
+                    coordinatorZkVersionSupplier.get());
         }
 
         return CompletableFuture.completedFuture(new AlterTableResponse());
@@ -605,13 +646,13 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
     private void beforeTablePropertiesUpdate(TableInfo currentTable, TableDescriptor updatedTable) {
         if (!currentTable.getTableConfig().isHistoricalPartitionEnabled()
                 && isHistoricalPartitionEnabled(updatedTable)) {
+            TablePath tablePath = currentTable.getTablePath();
             try {
                 replicaCapacityController.checkCanCreateKvLeaderReplicas(
                         getBucketCount(updatedTable));
-                createHistoricalPartition(
-                        currentTable.getTablePath(), currentTable.getTableId(), updatedTable);
+                createHistoricalPartition(tablePath, currentTable.getTableId(), updatedTable);
             } catch (Exception e) {
-                throw historicalPartitionEnableException(currentTable.getTablePath(), e);
+                throw historicalPartitionEnableException(tablePath, e);
             }
         }
     }
@@ -623,11 +664,11 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
             return;
         }
 
+        TablePath tablePath = currentTable.getTablePath();
         try {
-            metadataManager.dropPartition(
-                    currentTable.getTablePath(), historicalPartitionSpec(updatedTable), true);
+            metadataManager.dropPartition(tablePath, historicalPartitionSpec(updatedTable), true);
         } catch (Exception e) {
-            throw historicalPartitionDisableException(currentTable.getTablePath(), e);
+            throw historicalPartitionDisableException(tablePath, e);
         }
     }
 
@@ -635,9 +676,9 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
             TablePath tablePath, long tableId, TableDescriptor tableDescriptor) {
         int replicaFactor = tableDescriptor.getReplicationFactor();
         TabletServerInfo[] servers = metadataCache.getLiveServers();
+        int bucketCount = getBucketCount(tableDescriptor);
         Map<Integer, BucketAssignment> bucketAssignments =
-                generateAssignment(getBucketCount(tableDescriptor), replicaFactor, servers)
-                        .getBucketAssignments();
+                generateAssignment(bucketCount, replicaFactor, servers).getBucketAssignments();
         PartitionAssignment partitionAssignment =
                 new PartitionAssignment(tableId, bucketAssignments);
         String remoteDataDir = remoteDirDynamicLoader.getRemoteDirSelector().nextDataDir();
@@ -648,7 +689,8 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                 remoteDataDir,
                 partitionAssignment,
                 historicalPartitionSpec(tableDescriptor),
-                true);
+                true,
+                bucketCount);
     }
 
     private static ResolvedPartitionSpec historicalPartitionSpec(TableDescriptor tableDescriptor) {
@@ -812,27 +854,22 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
 
         if (newDescriptor.hasPrimaryKey()) {
             Map<String, String> newProperties = new HashMap<>(newDescriptor.getProperties());
-            Integer formatVersion =
-                    Configuration.fromMap(newProperties).get(ConfigOptions.TABLE_KV_FORMAT_VERSION);
+            Configuration newTableConf = Configuration.fromMap(newProperties);
+            Integer formatVersion = newTableConf.get(ConfigOptions.TABLE_KV_FORMAT_VERSION);
+            // The option has no default so that its absence continues to identify legacy tables.
             if (formatVersion == null) {
-                // set current kv format version for default
                 newProperties.put(
                         ConfigOptions.TABLE_KV_FORMAT_VERSION.key(),
                         String.valueOf(CURRENT_KV_FORMAT_VERSION));
-            } else {
-                if (formatVersion > CURRENT_KV_FORMAT_VERSION) {
-                    throw new InvalidConfigException(
-                            String.format(
-                                    "Unsupported kv format version %d. "
-                                            + "The maximum supported version is %d.",
-                                    formatVersion, CURRENT_KV_FORMAT_VERSION));
-                }
             }
 
-            // Enable standby replica for new PK tables if not explicitly configured
-            if (!newProperties.containsKey(ConfigOptions.TABLE_KV_STANDBY_REPLICA_ENABLED.key())) {
-                newProperties.put(ConfigOptions.TABLE_KV_STANDBY_REPLICA_ENABLED.key(), "true");
-            }
+            int layoutVersion =
+                    newTableConf.getOptional(ConfigOptions.TABLE_KV_TTL).isPresent()
+                            ? KvValueLayout.TAGGED.version()
+                            : KvValueLayout.PLAIN.version();
+            newProperties.put(
+                    ConfigOptions.TABLE_KV_VALUE_LAYOUT_VERSION.key(),
+                    String.valueOf(layoutVersion));
 
             newDescriptor = newDescriptor.withProperties(newProperties);
         }
@@ -863,6 +900,8 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         authorizeTable(OperationType.WRITE, tablePath);
 
         CreatePartitionResponse response = new CreatePartitionResponse();
+        // The table metadata (including bucket.num) is read fresh here, and the partition's
+        // registration persists its assignment and bucket count atomically in one ZK transaction
         TableInfo tableInfo = metadataManager.getTable(tablePath);
         if (!tableInfo.isPartitioned()) {
             throw new TableNotPartitionedException(
@@ -911,7 +950,8 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                 remoteDataDir,
                 partitionAssignment,
                 partitionToCreate,
-                request.isIgnoreIfNotExists());
+                request.isIgnoreIfNotExists(),
+                tableInfo.getNumBuckets());
         return CompletableFuture.completedFuture(response);
     }
 
@@ -1047,6 +1087,17 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         AccessContextEvent<Integer> event =
                 new AccessContextEvent<>(
                         ctx -> {
+                            if (partitionId != null) {
+                                // for partitions, the table-level bucket count may differ from the
+                                // partition's actual bucket count after ALTER bucket.num; use the
+                                // partition assignment size instead
+                                Map<Integer, List<Integer>> partitionAssignment =
+                                        ctx.getPartitionAssignment(
+                                                new TablePartition(tableId, partitionId));
+                                return partitionAssignment.isEmpty()
+                                        ? null
+                                        : partitionAssignment.size();
+                            }
                             TablePath tablePath = ctx.getTablePathById(tableId);
                             if (tablePath != null) {
                                 TableInfo tableInfo = ctx.getTableInfoById(tableId);
@@ -1455,10 +1506,6 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
             return CompletableFuture.completedFuture(new AlterClusterConfigsResponse());
         }
 
-        if (authorizer != null) {
-            authorizer.authorize(currentSession(), OperationType.ALTER, Resource.cluster());
-        }
-
         List<AlterConfig> serverConfigChanges =
                 infos.stream()
                         .map(
@@ -1470,11 +1517,27 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                                                         : null,
                                                 AlterConfigOpType.from((byte) info.getOpType())))
                         .collect(Collectors.toList());
+
+        Session session = currentSession();
+        if (authorizer != null) {
+            // altering security related configs (e.g. super user credentials) requires the full
+            // cluster permission instead of ALTER only
+            boolean alterSecurityConfigs =
+                    serverConfigChanges.stream()
+                            .anyMatch(
+                                    config -> config.key().startsWith(SECURITY_CONFIG_KEY_PREFIX));
+            authorizer.authorize(
+                    session,
+                    alterSecurityConfigs ? OperationType.ALL : OperationType.ALTER,
+                    Resource.cluster());
+        }
+        FlussPrincipal requester = session.isInternal() ? null : session.getPrincipal();
+
         AccessContextEvent<Void> accessContextEvent =
                 new AccessContextEvent<>(
                         (context) -> {
                             try {
-                                dynamicConfigManager.alterConfigs(serverConfigChanges);
+                                dynamicConfigManager.alterConfigs(serverConfigChanges, requester);
                                 future.complete(new AlterClusterConfigsResponse());
                             } catch (ApiException e) {
                                 future.completeExceptionally(e);
@@ -1523,6 +1586,42 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                                 Arrays.stream(request.getServerIds())
                                         .boxed()
                                         .collect(Collectors.toList()),
+                                ServerTag.valueOf(request.getServerTag()),
+                                response));
+        return response;
+    }
+
+    @Override
+    public CompletableFuture<AddServerTagByRackResponse> addServerTagByRack(
+            AddServerTagByRackRequest request) {
+        if (authorizer != null) {
+            authorizer.authorize(currentSession(), OperationType.ALTER, Resource.cluster());
+        }
+
+        CompletableFuture<AddServerTagByRackResponse> response = new CompletableFuture<>();
+        eventManagerSupplier
+                .get()
+                .put(
+                        new AddServerTagByRackEvent(
+                                new ArrayList<>(request.getRacksList()),
+                                ServerTag.valueOf(request.getServerTag()),
+                                response));
+        return response;
+    }
+
+    @Override
+    public CompletableFuture<RemoveServerTagByRackResponse> removeServerTagByRack(
+            RemoveServerTagByRackRequest request) {
+        if (authorizer != null) {
+            authorizer.authorize(currentSession(), OperationType.ALTER, Resource.cluster());
+        }
+
+        CompletableFuture<RemoveServerTagByRackResponse> response = new CompletableFuture<>();
+        eventManagerSupplier
+                .get()
+                .put(
+                        new RemoveServerTagByRackEvent(
+                                new ArrayList<>(request.getRacksList()),
                                 ServerTag.valueOf(request.getServerTag()),
                                 response));
         return response;
@@ -1682,16 +1781,19 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
     static class DefaultLakeCatalogContext implements LakeCatalog.Context {
 
         private final boolean isCreatingFlussTable;
+        @Nullable private final TablePath currentLakeTablePath;
         private final FlussPrincipal flussPrincipal;
         @Nullable private final TableDescriptor currentTable;
         private final TableDescriptor expectedTable;
 
         public DefaultLakeCatalogContext(
                 boolean isCreatingFlussTable,
+                @Nullable TablePath currentLakeTablePath,
                 FlussPrincipal flussPrincipal,
                 @Nullable TableDescriptor currentTable,
                 TableDescriptor expectedTable) {
             this.isCreatingFlussTable = isCreatingFlussTable;
+            this.currentLakeTablePath = currentLakeTablePath;
             this.flussPrincipal = flussPrincipal;
             if (!isCreatingFlussTable) {
                 checkNotNull(
@@ -1715,6 +1817,12 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         @Override
         public TableDescriptor getCurrentTable() {
             return currentTable;
+        }
+
+        @Nullable
+        @Override
+        public TablePath getCurrentLakeTablePath() {
+            return currentLakeTablePath;
         }
 
         @Override

@@ -35,21 +35,19 @@ import java.util.concurrent.atomic.AtomicInteger;
 public class StickyBucketAssigner extends DynamicBucketAssigner {
 
     private final PhysicalTablePath physicalTablePath;
-    private final int bucketNumber;
     private final AtomicInteger currentBucketId;
 
-    public StickyBucketAssigner(PhysicalTablePath physicalTablePath, int bucketNumber) {
+    public StickyBucketAssigner(PhysicalTablePath physicalTablePath) {
         this.physicalTablePath = physicalTablePath;
-        this.bucketNumber = bucketNumber;
         this.currentBucketId = new AtomicInteger(-1);
     }
 
     @Override
-    public int assignBucket(Cluster cluster) {
+    public int assignBucket(Cluster cluster, int bucketCount) {
         int bucketId = currentBucketId.get();
-        if (bucketId < 0) {
+        if (bucketId < 0 || bucketId >= bucketCount) {
             // initialize the currentBucketId
-            return nextBucket(cluster, bucketId);
+            return nextBucket(cluster, bucketCount, bucketId);
         }
         return bucketId;
     }
@@ -60,30 +58,32 @@ public class StickyBucketAssigner extends DynamicBucketAssigner {
     }
 
     @Override
-    public void onNewBatch(Cluster cluster, int prevBucketId) {
-        nextBucket(cluster, prevBucketId);
+    public void onNewBatch(Cluster cluster, int bucketCount, int prevBucketId) {
+        nextBucket(cluster, bucketCount, prevBucketId);
     }
 
-    private int nextBucket(Cluster cluster, int preBucketId) {
+    private int nextBucket(Cluster cluster, int bucketCount, int preBucketId) {
         int oldBucket = currentBucketId.get();
         int newBucket = oldBucket;
         // Check that the current sticky bucket for the table is either not set or that the
         // bucket that triggered the new batch matches the sticky bucket that needs to be
         // changed.
-        if (oldBucket < 0 || oldBucket == preBucketId) {
+        if (oldBucket < 0 || oldBucket >= bucketCount || oldBucket == preBucketId) {
             List<BucketLocation> availableBuckets =
                     cluster.getAvailableBucketsForPhysicalTablePath(physicalTablePath);
-            if (availableBuckets.isEmpty()) {
-                int random = MathUtils.toPositive(ThreadLocalRandom.current().nextInt());
-                newBucket = random % bucketNumber;
-            } else if (availableBuckets.size() == 1) {
-                newBucket = availableBuckets.get(0).getBucketId();
-            } else {
-                while (newBucket < 0 || newBucket == oldBucket) {
-                    int random = MathUtils.toPositive(ThreadLocalRandom.current().nextInt());
-                    newBucket =
-                            availableBuckets.get(random % availableBuckets.size()).getBucketId();
+            int random = MathUtils.toPositive(ThreadLocalRandom.current().nextInt());
+            // Use a bounded search: metadata may contain buckets outside the temporary count,
+            // or the old bucket may be the only available one within the current count.
+            for (int i = 0; i < availableBuckets.size(); i++) {
+                int index = (random % availableBuckets.size() + i) % availableBuckets.size();
+                int candidate = availableBuckets.get(index).getBucketId();
+                if (candidate < bucketCount && candidate != oldBucket) {
+                    newBucket = candidate;
+                    break;
                 }
+            }
+            if (availableBuckets.isEmpty() || newBucket < 0 || newBucket >= bucketCount) {
+                newBucket = random % bucketCount;
             }
 
             // Only change the sticky partition if it is null or prevPartition matches the current
@@ -91,7 +91,7 @@ public class StickyBucketAssigner extends DynamicBucketAssigner {
             if (oldBucket < 0) {
                 currentBucketId.set(newBucket);
             } else {
-                currentBucketId.compareAndSet(preBucketId, newBucket);
+                currentBucketId.compareAndSet(oldBucket, newBucket);
             }
             return currentBucketId.get();
         }

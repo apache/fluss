@@ -47,7 +47,7 @@
 
 use crate::error::{Error, Result};
 use crate::metadata::{DataType, RowType};
-use crate::row::aligned::AlignedRowWriter;
+use crate::row::aligned::{AlignedRowWriter, calculate_fix_part_size_in_bytes};
 use crate::row::binary::BinaryWriter;
 use crate::row::{Decimal, TimestampLtz, TimestampNtz};
 use arrow::array::{Array, RecordBatch};
@@ -61,6 +61,52 @@ use arrow::datatypes::{
 /// Version byte leading the statistics block, matching Java's
 /// `LogRecordBatchFormat.STATISTICS_VERSION`.
 const STATISTICS_VERSION: u8 = 1;
+
+/// Matches Java's `LogRecordBatchStatisticsWriter.VARIABLE_LENGTH_FIELD_ESTIMATE`.
+const VARIABLE_LENGTH_FIELD_ESTIMATE: usize = 16;
+
+/// Rough serialized statistics size for `mapping`, mirroring Java's
+/// `LogRecordBatchStatisticsWriter.estimatedSizeInBytes` with both bound rows
+/// assumed present.
+pub(crate) fn estimated_serialized_size(row_type: &RowType, mapping: &[usize]) -> usize {
+    // Version, column count, indexes and null counts, then the two
+    // length-prefixed bound rows.
+    let header = 3 + mapping.len() * (2 + 4);
+    header + 2 * (4 + estimated_row_size(row_type, mapping))
+}
+
+/// Mirrors Java's `LogRecordBatchStatisticsWriter.getRowSizeEstimate`.
+fn estimated_row_size(row_type: &RowType, mapping: &[usize]) -> usize {
+    let mut estimate = calculate_fix_part_size_in_bytes(mapping.len());
+    for &index in mapping {
+        if !is_in_fixed_length_part(row_type.fields()[index].data_type()) {
+            estimate += VARIABLE_LENGTH_FIELD_ESTIMATE;
+        }
+    }
+    estimate
+}
+
+/// Whether an aligned row stores this type inline in its 8-byte slot,
+/// mirroring Java's `AlignedRow.isInFixedLengthPart`.
+fn is_in_fixed_length_part(data_type: &DataType) -> bool {
+    match data_type {
+        DataType::Boolean(_)
+        | DataType::TinyInt(_)
+        | DataType::SmallInt(_)
+        | DataType::Int(_)
+        | DataType::BigInt(_)
+        | DataType::Float(_)
+        | DataType::Double(_)
+        | DataType::Date(_)
+        | DataType::Time(_) => true,
+        DataType::Decimal(decimal_type) => Decimal::is_compact_precision(decimal_type.precision()),
+        DataType::Timestamp(timestamp_type) => TimestampNtz::is_compact(timestamp_type.precision()),
+        DataType::TimestampLTz(timestamp_type) => {
+            TimestampLtz::is_compact(timestamp_type.precision())
+        }
+        _ => false,
+    }
+}
 
 /// Whether statistics can be collected for `data_type`, mirroring Java's
 /// `DataTypeChecks.isSupportedStatisticsType`.
@@ -254,6 +300,50 @@ fn column_bounds(column: &dyn Array, data_type: &DataType) -> Result<Option<Colu
         }};
     }
 
+    // Bounds under Java's `Float.compare`/`Double.compare` ordering, which the
+    // server's pruning uses: every NaN compares equal and sorts above
+    // +Infinity, and -0.0 sorts below 0.0. Arrow's aggregate kernels use the
+    // IEEE totalOrder instead, which would serialize a negative NaN as a
+    // minimum below -Infinity and make the server prune batches it must keep.
+    // Like Java, ties keep the first value seen, preserving that NaN's bits.
+    macro_rules! float {
+        ($arrow_ty:ty, $variant:ident) => {{
+            let array = column
+                .as_any()
+                .downcast_ref::<PrimitiveArray<$arrow_ty>>()
+                .ok_or_else(|| unexpected_array(column, data_type))?;
+            let java_cmp =
+                |a: <$arrow_ty as arrow::datatypes::ArrowPrimitiveType>::Native,
+                 b: <$arrow_ty as arrow::datatypes::ArrowPrimitiveType>::Native| {
+                    match (a.is_nan(), b.is_nan()) {
+                        (true, true) => std::cmp::Ordering::Equal,
+                        (true, false) => std::cmp::Ordering::Greater,
+                        (false, true) => std::cmp::Ordering::Less,
+                        (false, false) => a.total_cmp(&b),
+                    }
+                };
+            let mut bounds = None;
+            for value in array.iter().flatten() {
+                bounds = Some(match bounds {
+                    None => (value, value),
+                    Some((min, max)) => (
+                        if java_cmp(value, min).is_lt() {
+                            value
+                        } else {
+                            min
+                        },
+                        if java_cmp(value, max).is_gt() {
+                            value
+                        } else {
+                            max
+                        },
+                    ),
+                });
+            }
+            Ok(bounds.map(|(min, max)| ColumnBounds::$variant(min, max)))
+        }};
+    }
+
     match data_type {
         DataType::Boolean(_) => {
             let array = column
@@ -270,8 +360,8 @@ fn column_bounds(column: &dyn Array, data_type: &DataType) -> Result<Option<Colu
         DataType::Int(_) => primitive!(Int32Type, Int32),
         DataType::Date(_) => primitive!(Date32Type, Int32),
         DataType::BigInt(_) => primitive!(Int64Type, Int64),
-        DataType::Float(_) => primitive!(Float32Type, Float32),
-        DataType::Double(_) => primitive!(Float64Type, Float64),
+        DataType::Float(_) => float!(Float32Type, Float32),
+        DataType::Double(_) => float!(Float64Type, Float64),
         // Fluss stores TIME as millis of day, so every unit but millisecond
         // has to be converted back from what the Arrow array holds.
         DataType::Time(_) => match column.data_type() {
@@ -350,9 +440,11 @@ fn column_bounds(column: &dyn Array, data_type: &DataType) -> Result<Option<Colu
                 TimestampLtz::from_millis_nanos(max.0, max.1)?,
             )))
         }
-        other => Err(Error::IllegalArgument {
-            message: format!("Statistics are not supported for column type {other:?}"),
-        }),
+        // Java's collector skips unsupported types per column (null bounds,
+        // block still emitted), so a server-side whitelist that grows before
+        // this client's does degrades gracefully instead of dropping the
+        // statistics for every column.
+        _ => Ok(None),
     }
 }
 
@@ -689,6 +781,78 @@ mod tests {
     }
 
     #[test]
+    fn orders_nan_bounds_like_java() {
+        // Java's `Float.compare` treats every NaN as one largest value, so a
+        // hardware-produced negative NaN must become the maximum, not the
+        // minimum the way arrow's totalOrder aggregate would make it. The
+        // retained NaN keeps its raw bits, matching Java's keep-first ties.
+        let neg_nan = f32::from_bits(0xFFC0_0000);
+        let (min, max) = single_column_rows(
+            DataTypes::float(),
+            ArrowType::Float32,
+            Arc::new(Float32Array::from(vec![
+                Some(-0.0),
+                Some(neg_nan),
+                Some(1.0),
+            ])),
+        );
+        assert_eq!(
+            u32::from_le_bytes(min[8..12].try_into().unwrap()),
+            (-0.0_f32).to_bits(),
+            "-0.0 must stay the minimum, below 0.0 and NaN"
+        );
+        assert_eq!(
+            u32::from_le_bytes(max[8..12].try_into().unwrap()),
+            0xFFC0_0000,
+            "the NaN bound must keep the raw bits of the NaN it saw"
+        );
+
+        // An all-NaN column has NaN as both bounds.
+        let neg_nan = f64::from_bits(0xFFF8_0000_0000_0000);
+        let (min, max) = single_column_rows(
+            DataTypes::double(),
+            ArrowType::Float64,
+            Arc::new(Float64Array::from(vec![Some(neg_nan)])),
+        );
+        assert_eq!(
+            u64::from_le_bytes(min[8..16].try_into().unwrap()),
+            0xFFF8_0000_0000_0000
+        );
+        assert_eq!(
+            u64::from_le_bytes(max[8..16].try_into().unwrap()),
+            0xFFF8_0000_0000_0000
+        );
+    }
+
+    #[test]
+    fn skips_an_unsupported_column_type_with_null_bounds() {
+        // Mirrors Java's per-column degradation: the block is still emitted
+        // and the unsupported column just carries null bounds, so a server
+        // whitelist that grows before this client's degrades gracefully.
+        let rt = RowType::new(vec![DataField::new("v", DataTypes::bytes(), None)]);
+        let schema = Schema::new(vec![Field::new("v", ArrowType::Binary, true)]);
+        let batch = RecordBatch::try_new(
+            Arc::new(schema),
+            vec![Arc::new(arrow::array::BinaryArray::from(vec![Some(
+                &b"ab"[..],
+            )]))],
+        )
+        .expect("batch");
+        let bytes = serialize_statistics(&batch, &rt, &[0])
+            .expect("an unsupported column type must not fail the block")
+            .expect("statistics");
+        let (_, _, _, nulls) = parse_prefix(&bytes, 1);
+        assert_eq!(nulls, vec![0]);
+        let min_len = i32::from_le_bytes(bytes[9..13].try_into().unwrap()) as usize;
+        let min_row = &bytes[13..13 + min_len];
+        assert_eq!(
+            min_row[1] & 0x01,
+            0x01,
+            "the unsupported column must carry a null bound"
+        );
+    }
+
+    #[test]
     fn collects_bounds_for_char_like_a_string() {
         let (min, max) = single_column_rows(
             DataTypes::char(2),
@@ -920,5 +1084,145 @@ mod tests {
         );
         assert_eq!(i64::from_le_bytes(min[8..16].try_into().unwrap()), 1_000);
         assert_eq!(i64::from_le_bytes(max[8..16].try_into().unwrap()), 2_000);
+    }
+
+    /// The Java reference block, a copy of fluss-common's checked-in
+    /// `encoding/statistics_block.hex` fixture that
+    /// `LogRecordBatchStatisticsCompatibilityTest` generates and asserts, so
+    /// both languages pin to one set of bytes. Embedded so the test also runs
+    /// outside the monorepo; in the monorepo the copies are asserted identical.
+    fn java_statistics_block_hex() -> String {
+        let embedded = include_str!("testdata/statistics_block.hex").trim();
+        let java_path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../../fluss-common/src/test/resources/encoding/statistics_block.hex"
+        );
+        if let Ok(java_fixture) = std::fs::read_to_string(java_path) {
+            assert_eq!(
+                java_fixture.trim(),
+                embedded,
+                "testdata/statistics_block.hex is out of sync with fluss-common's fixture"
+            );
+        }
+        embedded.to_string()
+    }
+
+    #[test]
+    fn matches_the_java_writer_byte_for_byte() {
+        // CHAR is excluded because Java's collector records no CHAR bounds.
+        let row_type = RowType::new(vec![
+            DataField::new("bool", DataTypes::boolean(), None),
+            DataField::new("i8", DataTypes::tinyint(), None),
+            DataField::new("i16", DataTypes::smallint(), None),
+            DataField::new("i32", DataTypes::int(), None),
+            DataField::new("i64", DataTypes::bigint(), None),
+            DataField::new("f32", DataTypes::float(), None),
+            DataField::new("f64", DataTypes::double(), None),
+            DataField::new("str", DataTypes::string(), None),
+            DataField::new("dec5", DataTypes::decimal(5, 2), None),
+            DataField::new("dec20", DataTypes::decimal(20, 3), None),
+            DataField::new("date", DataTypes::date(), None),
+            DataField::new("time", DataTypes::time(), None),
+            DataField::new("ts3", DataTypes::timestamp_with_precision(3), None),
+            DataField::new("ts6", DataTypes::timestamp_with_precision(6), None),
+            DataField::new("ltz3", DataTypes::timestamp_ltz_with_precision(3), None),
+            DataField::new("ltz6", DataTypes::timestamp_ltz_with_precision(6), None),
+            DataField::new("strnull", DataTypes::string(), None),
+            DataField::new("f32x", DataTypes::float(), None),
+            DataField::new("f64x", DataTypes::double(), None),
+        ]);
+        let millis = ArrowType::Timestamp(arrow::datatypes::TimeUnit::Millisecond, None);
+        let micros = ArrowType::Timestamp(arrow::datatypes::TimeUnit::Microsecond, None);
+        let schema = Schema::new(vec![
+            Field::new("bool", ArrowType::Boolean, true),
+            Field::new("i8", ArrowType::Int8, true),
+            Field::new("i16", ArrowType::Int16, true),
+            Field::new("i32", ArrowType::Int32, true),
+            Field::new("i64", ArrowType::Int64, true),
+            Field::new("f32", ArrowType::Float32, true),
+            Field::new("f64", ArrowType::Float64, true),
+            Field::new("str", ArrowType::Utf8, true),
+            Field::new("dec5", ArrowType::Decimal128(5, 2), true),
+            Field::new("dec20", ArrowType::Decimal128(20, 3), true),
+            Field::new("date", ArrowType::Date32, true),
+            Field::new(
+                "time",
+                ArrowType::Time32(arrow::datatypes::TimeUnit::Millisecond),
+                true,
+            ),
+            Field::new("ts3", millis.clone(), true),
+            Field::new("ts6", micros.clone(), true),
+            Field::new("ltz3", millis, true),
+            Field::new("ltz6", micros, true),
+            Field::new("strnull", ArrowType::Utf8, true),
+            Field::new("f32x", ArrowType::Float32, true),
+            Field::new("f64x", ArrowType::Float64, true),
+        ]);
+        let batch = RecordBatch::try_new(
+            Arc::new(schema),
+            vec![
+                Arc::new(BooleanArray::from(vec![true, false, true])),
+                Arc::new(Int8Array::from(vec![1, -3, 7])),
+                Arc::new(Int16Array::from(vec![100, 200, -50])),
+                Arc::new(Int32Array::from(vec![Some(10), None, Some(30)])),
+                Arc::new(Int64Array::from(vec![1000, -2000, 3000])),
+                Arc::new(Float32Array::from(vec![1.5, -2.5, 0.5])),
+                Arc::new(Float64Array::from(vec![3.25, 1.25, 9.75])),
+                Arc::new(StringArray::from(vec!["banana", "apple", "cherry"])),
+                Arc::new(
+                    Decimal128Array::from(vec![12345_i128, 6789, 50000])
+                        .with_precision_and_scale(5, 2)
+                        .expect("dec5"),
+                ),
+                Arc::new(
+                    Decimal128Array::from(vec![12345678901_i128, 1234, 99999999999999999])
+                        .with_precision_and_scale(20, 3)
+                        .expect("dec20"),
+                ),
+                Arc::new(Date32Array::from(vec![19000, 18000, 20000])),
+                Arc::new(Time32MillisecondArray::from(vec![
+                    3600000, 7200000, 1800000,
+                ])),
+                Arc::new(TimestampMillisecondArray::from(vec![
+                    1700000000123,
+                    1600000000000,
+                    1800000000999,
+                ])),
+                Arc::new(TimestampMicrosecondArray::from(vec![
+                    1700000000123456,
+                    1600000000000001,
+                    1800000000999999,
+                ])),
+                Arc::new(TimestampMillisecondArray::from(vec![
+                    1700000000123,
+                    1600000000000,
+                    1800000000999,
+                ])),
+                Arc::new(TimestampMicrosecondArray::from(vec![
+                    1700000000123456,
+                    1600000000000001,
+                    1800000000999999,
+                ])),
+                Arc::new(StringArray::from(vec![None::<&str>, None, None])),
+                Arc::new(Float32Array::from(vec![
+                    -0.0,
+                    f32::from_bits(0xFFC0_0000),
+                    0.0,
+                ])),
+                Arc::new(Float64Array::from(vec![
+                    0.0,
+                    -0.0,
+                    f64::from_bits(0xFFF8_0000_0000_0000),
+                ])),
+            ],
+        )
+        .expect("batch");
+
+        let mapping: Vec<usize> = (0..19).collect();
+        let bytes = serialize_statistics(&batch, &row_type, &mapping)
+            .expect("serialize")
+            .expect("statistics");
+        let hex: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
+        assert_eq!(hex, java_statistics_block_hex());
     }
 }

@@ -77,7 +77,8 @@ async fn a_native_client_override_fails_before_binding_without_leaking_credentia
     let path = dir.path().join("gateway.yaml");
     std::fs::write(
         &path,
-        "gateway.cluster.default.connection.service.account: gateway-user\n\
+        "gateway.cluster.default.connection.security.protocol: sasl\n\
+         gateway.cluster.default.connection.service.account: gateway-user\n\
          gateway.cluster.default.connection.service.secret: canonical-secret\n\
          gateway.security.authentication: token\n\
          gateway.security.tokens: token-secret:alice\n\
@@ -111,6 +112,7 @@ async fn canonical_credentials_are_redacted_from_startup_diagnostics() {
         format!(
             "gateway.rest.listen: 127.0.0.1:{port}\n\
              gateway.metrics.enabled: false\n\
+             gateway.cluster.default.connection.security.protocol: sasl\n\
              gateway.cluster.default.connection.service.account: canonical-user\n\
              gateway.cluster.default.connection.service.secret: canonical-secret\n\
              gateway.security.authentication: token\n\
@@ -148,6 +150,7 @@ async fn canonical_credentials_are_redacted_from_startup_diagnostics() {
         .read_to_string(&mut stderr)
         .expect("read stderr");
     assert!(stderr.contains("effective configuration"), "{stderr}");
+    assert!(stderr.contains("method=GET route=/health"), "{stderr}");
     assert!(stderr.contains("canonical-user"), "{stderr}");
     for credential in ["canonical-secret", "token-secret"] {
         assert!(

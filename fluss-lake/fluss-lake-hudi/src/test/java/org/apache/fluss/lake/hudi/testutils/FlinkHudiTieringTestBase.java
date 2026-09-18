@@ -73,7 +73,6 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.HashSet;
-import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -443,22 +442,13 @@ public abstract class FlinkHudiTieringTestBase {
     }
 
     protected void checkDataInHudiCOWTable(
-            TablePath tablePath,
-            String partition,
-            List<InternalRow> expectedRows,
-            long startingOffset,
-            int bucket)
+            TablePath tablePath, String partition, List<InternalRow> expectedRows, int bucket)
             throws Exception {
+        // FIP-27: a clean table carries only user columns, so compare business columns only. The
+        // physical __offset system column is no longer present on clean tables.
         List<String> expectedRecords = new ArrayList<>();
-        Iterator<InternalRow> flussRowIterator = expectedRows.iterator();
-        while (flussRowIterator.hasNext()) {
-            InternalRow flussRow = flussRowIterator.next();
-            expectedRecords.add(
-                    flussRow.getInt(0)
-                            + ","
-                            + flussRow.getString(1).toString()
-                            + ","
-                            + startingOffset++);
+        for (InternalRow flussRow : expectedRows) {
+            expectedRecords.add(flussRow.getInt(0) + "," + flussRow.getString(1).toString());
         }
 
         List<String> actualRecords =
@@ -466,15 +456,9 @@ public abstract class FlinkHudiTieringTestBase {
                         tablePath,
                         partition,
                         bucket,
-                        record ->
-                                record.getInt(5)
-                                        + ","
-                                        + record.getString(6).toString()
-                                        + ","
-                                        + record.getLong(8));
+                        record -> record.getInt(5) + "," + record.getString(6).toString());
 
         assertThat(actualRecords).containsExactlyInAnyOrderElementsOf(expectedRecords);
-        assertThat(flussRowIterator.hasNext()).isFalse();
     }
 
     protected void checkFlussOffsetsInSnapshot(

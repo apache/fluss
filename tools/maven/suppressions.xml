@@ -24,13 +24,14 @@
 <suppressions>
     <suppress files="DataTypes.java" checks="MethodNameCheck"/>
 
+    <!-- TODO: Refactor CoordinatorEventProcessor and split its tests by responsibility,
+         then remove these FileLength suppressions. Track: https://github.com/apache/fluss/issues/4312 -->
+    <suppress files="[\\/]CoordinatorEventProcessor\.java$" checks="FileLength"/>
+    <suppress files="[\\/]CoordinatorEventProcessorTest\.java$" checks="FileLength"/>
+
     <!-- target directory is not relevant for checkstyle -->
     <suppress
         files="[\\/]target[\\/]"
         checks=".*"/>
 
-    <!-- Classes copied from AWS -->
-    <suppress
-            files="com[\\/]amazonaws[\\/]services[\\/]s3[\\/]model[\\/]transform[\\/]XmlResponsesSaxParser.java"
-            checks=".*"/>
 </suppressions>

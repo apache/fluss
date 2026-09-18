@@ -88,6 +88,16 @@ Unzip the source release archive and verify that:
 
 The project uses [cargo-deny](https://embarkstudios.github.io/cargo-deny/) for license checks; see [Creating a Fluss Rust Client Release](create-release.md) for how the dependency list is generated before a release.
 
+The wheel, the sdist and the crate carry their own copies, since none of them is rooted at the repository root:
+
+```shell
+unzip -l pyfluss-*.whl | grep -E 'dist-info/licenses/(LICENSE|NOTICE)'
+tar -tzf pyfluss-*.tar.gz | grep -E '^[^/]+/(LICENSE|NOTICE)$'
+tar -tzf fluss-rs-*.crate | grep -E '^[^/]+/(LICENSE|NOTICE)$'
+```
+
+The C++ client ships only inside the source archive, so its LICENSE and NOTICE are the ones at the archive root.
+
 ## Testing features
 
 For any user-facing feature included in a release, we aim to ensure it is functional, usable, and well-documented. Release managers may create testing issues that outline key scenarios to validate; these are open to all community members.

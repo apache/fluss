@@ -19,6 +19,8 @@ package org.apache.fluss.server.zk.data;
 
 import org.apache.fluss.fs.FsPath;
 
+import java.util.Objects;
+
 /**
  * The remote log manifest handle of a table bucket stored in {@link ZkData.BucketRemoteLogsZNode}.
  *
@@ -56,6 +58,11 @@ public class RemoteLogManifestHandle {
         RemoteLogManifestHandle that = (RemoteLogManifestHandle) o;
         return remoteLogManifestPath.equals(that.remoteLogManifestPath)
                 && remoteLogEndOffset == that.remoteLogEndOffset;
+    }
+
+    @Override
+    public int hashCode() {
+        return Objects.hash(remoteLogManifestPath, remoteLogEndOffset);
     }
 
     @Override

@@ -154,6 +154,22 @@ let scanner = table.new_scan()
     .create_log_scanner()?;
 ```
 
+## Filter Pushdown
+
+```rust
+use fluss::predicate::col;
+
+let scanner = table
+    .new_scan()
+    .filter(col("event_id").gt(100))?
+    .create_log_scanner()?;
+```
+
+The server skips whole record batches whose statistics cannot match; batches
+with any matching record are returned in full, so non-matching records can
+still appear. Requires column statistics via the `table.statistics.columns`
+table property; see [Filter Pushdown](./filter-pushdown.md).
+
 ## Limit Scan
 
 For a bounded read of up to `n` rows from a single bucket, use a batch scanner

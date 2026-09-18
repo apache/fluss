@@ -66,6 +66,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 
 import static org.apache.fluss.utils.Preconditions.checkArgument;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
@@ -123,7 +124,7 @@ public final class LogTablet {
 
     // The minimum offset that should be retained in the local log. This is used to ensure that,
     // the offset of kv snapshot should be retained, otherwise, kv recovery will fail.
-    private volatile long minRetainOffset;
+    private final AtomicLong minRetainOffset;
     // tracking the log start offset in remote storage
     private volatile long remoteLogStartOffset = Long.MAX_VALUE;
     // tracking the log end offset in remote storage
@@ -185,7 +186,7 @@ public final class LogTablet {
         // Default value to 0L for changelog to avoid cleaning up any segments in case of not
         // updating this value in time. Default value to Long.MAX_VALUE for normal log table,
         // as we don't need to retain logs for kv recovery.
-        this.minRetainOffset = isChangelog ? 0L : Long.MAX_VALUE;
+        this.minRetainOffset = new AtomicLong(isChangelog ? 0L : Long.MAX_VALUE);
     }
 
     public PhysicalTablePath getPhysicalTablePath() {
@@ -637,46 +638,77 @@ public final class LogTablet {
         return findOffset;
     }
 
-    public void updateRemoteLogStartOffset(long remoteLogStartOffset) {
+    private void updateRemoteLogStartOffset(long remoteLogStartOffset) {
         long prev = this.remoteLogStartOffset;
         if (prev == Long.MAX_VALUE || remoteLogStartOffset > prev) {
             this.remoteLogStartOffset = remoteLogStartOffset;
         }
     }
 
+    /** Updates the size of the log segments currently retained in remote storage. */
     public void updateRemoteLogSize(long remoteLogSize) {
         this.remoteLogSize = remoteLogSize;
     }
 
-    public void updateRemoteLogEndOffset(long remoteLogEndOffset) {
+    /**
+     * Updates the remote log offsets from one committed manifest.
+     *
+     * <p>The remote-readable start and end offsets are published before advancing the copied
+     * watermark and deleting local segments. This prevents fetches from observing locally deleted
+     * offsets before the corresponding remote range becomes readable. Local segments are cleaned up
+     * at most once.
+     */
+    public void updateRemoteLogOffsets(
+            long newRemoteLogStartOffset, long remoteLogEndOffset, long highestCopiedEndOffset) {
+        updateRemoteLogStartOffset(newRemoteLogStartOffset);
+
+        boolean shouldCleanup = false;
         if ((remoteLogEndOffset == -1L && this.remoteLogEndOffset != -1L)
                 || remoteLogEndOffset > this.remoteLogEndOffset) {
             this.remoteLogEndOffset = remoteLogEndOffset;
-            // Before highestCopiedEndOffset was introduced, remoteLogEndOffset was also the copy
-            // progress watermark. Preserve that behavior for existing callers.
-            if (remoteLogEndOffset >= 0L) {
-                this.highestCopiedEndOffset =
-                        Math.max(this.highestCopiedEndOffset, remoteLogEndOffset);
-            }
-
-            // try to delete these segments already exist in remote storage.
-            deleteSegmentsAlreadyExistsInRemote();
+            shouldCleanup = true;
         }
-    }
-
-    public void updateHighestCopiedEndOffset(long highestCopiedEndOffset) {
         if (highestCopiedEndOffset > this.highestCopiedEndOffset) {
             this.highestCopiedEndOffset = highestCopiedEndOffset;
+            shouldCleanup = true;
+        }
+        // The remote-readable end offset should never trail the copied watermark unless the
+        // manifest is empty (remoteLogEndOffset == -1). A non-empty manifest with a readable end
+        // behind the copied watermark means local segments could be cleaned up beyond the range
+        // that is actually readable from remote, which risks an unreadable offset gap.
+        if (this.remoteLogEndOffset != -1L
+                && this.remoteLogEndOffset < this.highestCopiedEndOffset) {
+            LOG.warn(
+                    "Remote readable end offset {} is behind copied watermark {} for bucket {}; "
+                            + "local cleanup will be bounded by the readable end offset.",
+                    this.remoteLogEndOffset,
+                    this.highestCopiedEndOffset,
+                    getTableBucket());
+        }
+        if (shouldCleanup) {
             deleteSegmentsAlreadyExistsInRemote();
         }
     }
 
+    /**
+     * Advances the minimum retain offset monotonically.
+     *
+     * <p>Updates may arrive concurrently from replica recovery, coordinator snapshot notifications,
+     * and follower fetch processing, while log cleanup reads the value from a different thread.
+     * {@link AtomicLong} provides cross-thread visibility and makes the check-and-update atomic.
+     * The CAS loop implements a monotonic maximum: if another updater changes the value after it
+     * was read, the loop reloads the latest value and retries only when this update is still
+     * larger. This prevents a delayed, smaller offset from overwriting a newer retention boundary.
+     */
     public void updateMinRetainOffset(long minRetainOffset) {
-        if (minRetainOffset > this.minRetainOffset) {
-            this.minRetainOffset = minRetainOffset;
-
-            // try to delete the old segments that are not needed.
-            deleteSegmentsAlreadyExistsInRemote();
+        long currentMinRetainOffset = this.minRetainOffset.get();
+        while (minRetainOffset > currentMinRetainOffset) {
+            if (this.minRetainOffset.compareAndSet(currentMinRetainOffset, minRetainOffset)) {
+                // try to delete the old segments that are not needed.
+                deleteSegmentsAlreadyExistsInRemote();
+                return;
+            }
+            currentMinRetainOffset = this.minRetainOffset.get();
         }
     }
 
@@ -775,8 +807,19 @@ public final class LogTablet {
         }
     }
 
+    /**
+     * Deletes eligible local segments that have already been copied to remote storage.
+     *
+     * <p>For a non-empty manifest, cleanup never advances past the remote-readable end offset. An
+     * empty manifest keeps using the copied watermark so retention can continue after all remote
+     * segments have expired.
+     */
     public void deleteSegmentsAlreadyExistsInRemote() {
-        cleanupSegments(highestCopiedEndOffset, this::cleanupTieredSegments);
+        long cleanupToOffset =
+                remoteLogEndOffset == -1L
+                        ? highestCopiedEndOffset
+                        : Math.min(remoteLogEndOffset, highestCopiedEndOffset);
+        cleanupSegments(cleanupToOffset, this::cleanupTieredSegments);
     }
 
     /**
@@ -830,7 +873,8 @@ public final class LogTablet {
 
         try {
             // shouldn't clean up segments that will be used by kv recovery.
-            long effectiveCleanupToOffset = Math.min(minRetainOffset, requestedCleanupToOffset);
+            long effectiveCleanupToOffset =
+                    Math.min(minRetainOffset.get(), requestedCleanupToOffset);
             cleanupAction.cleanup(effectiveCleanupToOffset);
         } catch (IOException e) {
             LOG.error(
@@ -1301,7 +1345,12 @@ public final class LogTablet {
                 }
 
                 // update write append info.
-                updateWriterAppendInfo(writerStateManager, batch, updatedWriters, isAppendAsLeader);
+                updateWriterAppendInfo(
+                        writerStateManager,
+                        batch,
+                        updatedWriters,
+                        isAppendAsLeader,
+                        WriterAppendInfo.SequenceValidation.ENFORCE);
             }
         }
 
@@ -1439,7 +1488,8 @@ public final class LogTablet {
             WriterStateManager writerStateManager,
             LogRecordBatch batch,
             Map<Long, WriterAppendInfo> writers,
-            boolean isAppendAsLeader) {
+            boolean isAppendAsLeader,
+            WriterAppendInfo.SequenceValidation sequenceValidation) {
         long writerId = batch.writerId();
         // update writers.
         WriterAppendInfo appendInfo =
@@ -1447,7 +1497,8 @@ public final class LogTablet {
         appendInfo.append(
                 batch,
                 writerStateManager.isWriterInBatchExpired(System.currentTimeMillis(), batch),
-                isAppendAsLeader);
+                isAppendAsLeader,
+                sequenceValidation);
     }
 
     static void rebuildWriterState(
@@ -1565,7 +1616,14 @@ public final class LogTablet {
         Map<Long, WriterAppendInfo> loadedWriters = new HashMap<>();
         for (LogRecordBatch batch : records.batches()) {
             if (batch.hasWriterId()) {
-                updateWriterAppendInfo(writerStateManager, batch, loadedWriters, false);
+                // The records have already been accepted and persisted. Recovery rebuilds writer
+                // state without applying online client sequence validation.
+                updateWriterAppendInfo(
+                        writerStateManager,
+                        batch,
+                        loadedWriters,
+                        false,
+                        WriterAppendInfo.SequenceValidation.WARN_AND_ACCEPT);
             }
         }
         loadedWriters.values().forEach(writerStateManager::update);
@@ -1597,6 +1655,6 @@ public final class LogTablet {
 
     @VisibleForTesting
     public long getMinRetainOffset() {
-        return minRetainOffset;
+        return minRetainOffset.get();
     }
 }

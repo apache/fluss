@@ -1,11 +1,20 @@
 [
   {
     "versionName": "next",
-    "fullVersion": "1.0-SNAPSHOT",
+    "fullVersion": "1.1-SNAPSHOT",
+    "shortVersion": "1.1",
+    "dockerVersion": "1.1-SNAPSHOT",
+    "paimonVersion": "2.0.0",
+    "paimonVersionShort": "2.0",
+    "released": false
+  },
+  {
+    "versionName": "version-1.0",
+    "fullVersion": "1.0.0",
     "shortVersion": "1.0",
-    "dockerVersion": "1.0-SNAPSHOT",
-    "paimonVersion": "1.4.2",
-    "paimonVersionShort": "1.4",
+    "dockerVersion": "1.0.0-rc3",
+    "paimonVersion": "2.0.0",
+    "paimonVersionShort": "2.0",
     "released": false
   },
   {

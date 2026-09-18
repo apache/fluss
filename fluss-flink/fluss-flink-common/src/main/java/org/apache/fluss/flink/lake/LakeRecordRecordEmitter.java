@@ -47,6 +47,11 @@ public class LakeRecordRecordEmitter<OUT> {
             LakeSnapshotAndFlussLogSplitState lakeSnapshotAndFlussLogSplitState =
                     (LakeSnapshotAndFlussLogSplitState) splitState;
 
+            if (recordAndPos.isSnapshotPhaseFinished()) {
+                lakeSnapshotAndFlussLogSplitState.markLakeSplitFinished();
+                return;
+            }
+
             // set current split index
             lakeSnapshotAndFlussLogSplitState.setCurrentLakeSplitIndex(
                     recordAndPos.getCurrentSplitIndex());

@@ -366,7 +366,7 @@ class MetadataUpdateITCase {
                                     assertThat(serverMetadataCache.getTablePath(tableId))
                                             .hasValue(tablePath);
 
-                                    // check table info and bucket location and leader only for
+                                    // Check table info and bucket metadata only for a
                                     // non-partitioned table.
                                     if (!tableContext.isPartitionedTable) {
                                         TableMetadata tableMetadataFromZk =
@@ -441,7 +441,9 @@ class MetadataUpdateITCase {
                                                     bucketId,
                                                     leaderAndIsr.leader(),
                                                     leaderAndIsr.leaderEpoch(),
-                                                    replicas));
+                                                    replicas,
+                                                    leaderAndIsr.isr(),
+                                                    leaderAndIsr.bucketEpoch()));
                                 } catch (Exception e) {
                                     throw new RuntimeException(e);
                                 }
@@ -473,7 +475,9 @@ class MetadataUpdateITCase {
                                                     bucketId,
                                                     leaderAndIsr.leader(),
                                                     leaderAndIsr.leaderEpoch(),
-                                                    replicas));
+                                                    replicas,
+                                                    leaderAndIsr.isr(),
+                                                    leaderAndIsr.bucketEpoch()));
                                 } catch (Exception e) {
                                     throw new RuntimeException(e);
                                 }

@@ -73,6 +73,11 @@ public class FlinkRecordEmitter<OUT> implements RecordEmitter<RecordAndPos, OUT,
             HybridSnapshotLogSplitState hybridSnapshotLogSplitState =
                     splitState.asHybridSnapshotLogSplitState();
 
+            if (recordAndPosition.isSnapshotPhaseFinished()) {
+                hybridSnapshotLogSplitState.markSnapshotFinished();
+                return;
+            }
+
             ScanRecord scanRecord = recordAndPosition.record();
             if (scanRecord.logOffset() >= 0) {
                 // record is with a valid offset, means it's in incremental phase,

@@ -20,29 +20,37 @@ package org.apache.fluss.rpc.entity;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.rpc.messages.PrefixLookupRequest;
 import org.apache.fluss.rpc.protocol.ApiError;
+import org.apache.fluss.utils.ByteArraySlice;
 
 import java.util.List;
 
-/** The Result of {@link PrefixLookupRequest} for each table bucket. */
+/**
+ * Result of {@link PrefixLookupRequest} for each table bucket.
+ *
+ * <p>Successful lookup values are already converted to the RPC value representation.
+ */
 public class PrefixLookupResultForBucket extends ResultForBucket {
 
-    private final List<List<byte[]>> values;
+    private final List<List<ByteArraySlice>> values;
 
-    public PrefixLookupResultForBucket(TableBucket tableBucket, List<List<byte[]>> values) {
+    /** Creates a successful prefix lookup result with RPC-ready values. */
+    public PrefixLookupResultForBucket(TableBucket tableBucket, List<List<ByteArraySlice>> values) {
         this(tableBucket, values, ApiError.NONE);
     }
 
+    /** Creates a failed prefix lookup result. */
     public PrefixLookupResultForBucket(TableBucket tableBucket, ApiError error) {
         this(tableBucket, null, error);
     }
 
     private PrefixLookupResultForBucket(
-            TableBucket tableBucket, List<List<byte[]>> values, ApiError error) {
+            TableBucket tableBucket, List<List<ByteArraySlice>> values, ApiError error) {
         super(tableBucket, error);
         this.values = values;
     }
 
-    public List<List<byte[]>> prefixLookupValues() {
+    /** Returns the RPC-ready values for each prefix key. */
+    public List<List<ByteArraySlice>> prefixLookupValues() {
         return values;
     }
 }

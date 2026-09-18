@@ -51,7 +51,11 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.apache.fluss.record.TestData.DATA1;
@@ -111,17 +115,77 @@ final class LogTabletTest extends LogTestBase {
     }
 
     @Test
-    void testRemoteLogEndOffsetCanReset() {
-        logTablet.updateRemoteLogStartOffset(0L);
-        logTablet.updateRemoteLogEndOffset(10L);
+    void testRemoteLogOffsetsCanResetAfterEmptyManifest() {
+        logTablet.updateRemoteLogOffsets(0L, 10L, 10L);
         assertThat(logTablet.canFetchFromRemoteLog(0L)).isTrue();
+        assertThat(logTablet.canFetchFromRemoteLog(10L)).isFalse();
 
-        logTablet.updateRemoteLogEndOffset(-1L);
+        logTablet.updateRemoteLogOffsets(Long.MAX_VALUE, -1L, 10L);
         assertThat(logTablet.canFetchFromRemoteLog(0L)).isFalse();
+        assertThat(logTablet.canFetchFromRemoteLog(10L)).isFalse();
 
         // A new non-empty range can become readable after the empty state.
-        logTablet.updateRemoteLogEndOffset(5L);
-        assertThat(logTablet.canFetchFromRemoteLog(0L)).isTrue();
+        logTablet.updateRemoteLogOffsets(10L, 20L, 20L);
+        assertThat(logTablet.canFetchFromRemoteLog(0L)).isFalse();
+        assertThat(logTablet.canFetchFromRemoteLog(10L)).isTrue();
+        assertThat(logTablet.canFetchFromRemoteLog(20L)).isFalse();
+    }
+
+    @Test
+    void testMinRetainOffsetIsMonotonicWithConcurrentUpdates() throws Exception {
+        File kvLogDir =
+                LogTestUtils.makeRandomLogTabletDir(
+                        tempDir,
+                        DATA1_TABLE_PATH.getDatabaseName(),
+                        DATA1_TABLE_ID,
+                        DATA1_TABLE_PATH.getTableName());
+        LogTablet kvLogTablet =
+                LogTablet.create(
+                        tempDir,
+                        PhysicalTablePath.of(DATA1_TABLE_PATH),
+                        kvLogDir,
+                        conf,
+                        new AtomicBoolean(false),
+                        TestingMetricGroups.TABLET_SERVER_METRICS,
+                        0,
+                        scheduler,
+                        LogFormat.ARROW,
+                        1,
+                        true,
+                        SystemClock.getInstance(),
+                        true);
+        int updateThreadCount = 32;
+        ExecutorService executor = Executors.newFixedThreadPool(updateThreadCount);
+        CountDownLatch ready = new CountDownLatch(updateThreadCount);
+        CountDownLatch start = new CountDownLatch(1);
+        try {
+            for (int i = 1; i <= updateThreadCount; i++) {
+                final long minRetainOffset = i;
+                executor.execute(
+                        () -> {
+                            ready.countDown();
+                            try {
+                                start.await();
+                            } catch (InterruptedException e) {
+                                Thread.currentThread().interrupt();
+                                return;
+                            }
+                            kvLogTablet.updateMinRetainOffset(minRetainOffset);
+                        });
+            }
+
+            assertThat(ready.await(10, TimeUnit.SECONDS)).isTrue();
+            start.countDown();
+            executor.shutdown();
+            assertThat(executor.awaitTermination(10, TimeUnit.SECONDS)).isTrue();
+
+            assertThat(kvLogTablet.getMinRetainOffset()).isEqualTo(updateThreadCount);
+            kvLogTablet.updateMinRetainOffset(1L);
+            assertThat(kvLogTablet.getMinRetainOffset()).isEqualTo(updateThreadCount);
+        } finally {
+            executor.shutdownNow();
+            kvLogTablet.close();
+        }
     }
 
     @Test
@@ -364,6 +428,46 @@ final class LogTabletTest extends LogTestBase {
         assertThat(log.logSegments().size()).isEqualTo(1);
         assertThat(latestWriterStateEndOffset(log)).isEqualTo(29);
         assertThat(latestWriterSnapshotOffset(log).get()).isEqualTo(29);
+    }
+
+    @Test
+    void testTruncateToBeforeFirstSegmentDeletesHigherOffsetSegment() throws Exception {
+        logTablet.truncateFullyAndStartAt(10L);
+        logTablet.appendAsLeader(
+                genMemoryLogRecordsByObject(Collections.singletonList(new Object[] {1, "a"})));
+        LogSegment oldActiveSegment = logTablet.activeLogSegment();
+        assertThat(oldActiveSegment.getBaseOffset()).isEqualTo(10L);
+
+        logTablet.truncateTo(5L);
+
+        assertThat(oldActiveSegment.deleted()).isTrue();
+        assertThat(logTablet.logSegments())
+                .extracting(LogSegment::getBaseOffset)
+                .containsExactly(5L);
+        assertThat(logTablet.localLogEndOffset()).isEqualTo(5L);
+
+        logTablet.close();
+        logTablet =
+                LogTablet.create(
+                        tempDir,
+                        PhysicalTablePath.of(DATA1_TABLE_PATH),
+                        logDir,
+                        conf,
+                        new AtomicBoolean(
+                                conf.get(ConfigOptions.LOG_RETENTION_ROLL_ACTIVE_SEGMENT_ENABLED)),
+                        TestingMetricGroups.TABLET_SERVER_METRICS,
+                        0,
+                        scheduler,
+                        LogFormat.ARROW,
+                        1,
+                        false,
+                        SystemClock.getInstance(),
+                        false);
+
+        assertThat(logTablet.logSegments())
+                .extracting(LogSegment::getBaseOffset)
+                .containsExactly(5L);
+        assertThat(logTablet.localLogEndOffset()).isEqualTo(5L);
     }
 
     @Test

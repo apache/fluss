@@ -19,59 +19,28 @@ package org.apache.fluss.client.table.getter;
 
 import org.apache.fluss.metadata.ResolvedPartitionSpec;
 import org.apache.fluss.row.InternalRow;
-import org.apache.fluss.types.DataType;
+import org.apache.fluss.row.RowPartitionGetter;
 import org.apache.fluss.types.RowType;
-import org.apache.fluss.utils.PartitionUtils;
 
-import java.util.ArrayList;
 import java.util.List;
-
-import static org.apache.fluss.utils.Preconditions.checkArgument;
-import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
 /** A getter to get partition name from a row. */
 public class PartitionGetter {
 
-    private final List<String> partitionKeys;
-    private final List<InternalRow.FieldGetter> partitionFieldGetters;
-    private final List<DataType> partitionTypes;
+    private final RowPartitionGetter delegate;
 
+    /** Creates a partition getter for the given row type and partition keys. */
     public PartitionGetter(RowType rowType, List<String> partitionKeys) {
-        // check the partition column
-        List<String> fieldNames = rowType.getFieldNames();
-        this.partitionKeys = partitionKeys;
-        partitionFieldGetters = new ArrayList<>();
-        partitionTypes = new ArrayList<>();
-        for (String partitionKey : partitionKeys) {
-            int partitionColumnIndex = fieldNames.indexOf(partitionKey);
-            checkArgument(
-                    partitionColumnIndex >= 0,
-                    "The partition column %s is not in the row %s.",
-                    partitionKey,
-                    rowType);
-
-            // check the data type of the partition column
-            DataType partitionColumnDataType = rowType.getTypeAt(partitionColumnIndex);
-            partitionTypes.add(partitionColumnDataType);
-            partitionFieldGetters.add(
-                    InternalRow.createFieldGetter(partitionColumnDataType, partitionColumnIndex));
-        }
+        this.delegate = new RowPartitionGetter(rowType, partitionKeys);
     }
 
+    /** Returns the partition name extracted from the given row. */
     public String getPartition(InternalRow row) {
-        return getResolvedPartitionSpec(row).getPartitionName();
+        return delegate.getPartition(row);
     }
 
+    /** Returns the resolved partition spec extracted from the given row. */
     public ResolvedPartitionSpec getResolvedPartitionSpec(InternalRow row) {
-        List<String> partitionValues = new ArrayList<>();
-        for (int i = 0; i < partitionFieldGetters.size(); i++) {
-            InternalRow.FieldGetter partitionFieldGetter = partitionFieldGetters.get(i);
-            DataType dataType = partitionTypes.get(i);
-            Object partitionValue = partitionFieldGetter.getFieldOrNull(row);
-            checkNotNull(partitionValue, "Partition value shouldn't be null.");
-            partitionValues.add(
-                    PartitionUtils.convertValueOfType(partitionValue, dataType.getTypeRoot()));
-        }
-        return new ResolvedPartitionSpec(partitionKeys, partitionValues);
+        return delegate.getResolvedPartitionSpec(row);
     }
 }

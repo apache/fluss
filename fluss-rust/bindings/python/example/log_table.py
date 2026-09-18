@@ -84,7 +84,10 @@ async def _run(conn):
         pa.field("salary", pa.decimal128(10, 2)),
     ]
     schema = pa.schema(fields)
-    table_descriptor = fluss.TableDescriptor(fluss.Schema(schema))
+    # Statistics let the server prune batches for a pushed-down filter.
+    table_descriptor = fluss.TableDescriptor(
+        fluss.Schema(schema), properties={"table.statistics.columns": "*"}
+    )
 
     admin = conn.get_admin()
     table_path = fluss.TablePath("fluss", "example_log_table")
@@ -245,6 +248,7 @@ async def _run(conn):
     await _scan_batch(table, num_buckets)
     await _scan_records(table, num_buckets)
     await _projection(table, num_buckets)
+    await _filter_pushdown(table, num_buckets)
     await _limit_scan(table, num_buckets)
     await _context_manager_demo(conn, table_path)
 
@@ -382,6 +386,37 @@ async def _projection(table, num_buckets):
     )
     assert len(df_named) == EXPECTED_ROWS
     print(f"Projected columns: {list(df_named.columns)}")
+
+
+async def _filter_pushdown(table, num_buckets):
+    print("\n--- Filter pushdown (server-side batch pruning) ---")
+
+    async def _collect(scanner, want):
+        rows = []
+        deadline = asyncio.get_running_loop().time() + 10
+        while len(rows) < want and asyncio.get_running_loop().time() < deadline:
+            rows.extend(r.row["id"] for r in await scanner.poll(500))
+        return rows
+
+    unfiltered = await table.new_scan().create_log_scanner()
+    unfiltered.subscribe_buckets({i: fluss.EARLIEST_OFFSET for i in range(num_buckets)})
+    all_ids = await _collect(unfiltered, EXPECTED_ROWS)
+    expected = sorted(i for i in all_ids if i >= 2)
+
+    # Comparisons on fluss.col(...) build a predicate; & and | combine them.
+    predicate = (fluss.col("id") >= 2) & fluss.col("name").is_not_null()
+    scanner = await table.new_scan().filter(predicate).create_log_scanner()
+    scanner.subscribe_buckets({i: fluss.EARLIEST_OFFSET for i in range(num_buckets)})
+    returned = await _collect(scanner, len(expected))
+
+    # A batch is dropped only when its statistics cannot match, so the scan
+    # returns a superset and the filter still has to be applied to the rows.
+    matched = sorted(i for i in returned if i >= 2)
+    assert matched == expected, f"Filtered scan lost rows: {matched} != {expected}"
+    print(
+        f"Filtered scan returned {len(returned)} row(s), "
+        f"{len(matched)} matching ids {matched}"
+    )
 
 
 async def _limit_scan(table, num_buckets):

@@ -45,6 +45,7 @@ import org.apache.flink.types.Row;
 import org.apache.flink.types.RowKind;
 import org.apache.flink.util.CloseableIterator;
 import org.apache.flink.util.CollectionUtil;
+import org.apache.paimon.catalog.Identifier;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -66,6 +67,7 @@ import java.util.Map;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
+import static org.apache.flink.table.api.config.OptimizerConfigOptions.TABLE_OPTIMIZER_REUSE_SOURCE_ENABLED;
 import static org.apache.fluss.flink.source.testutils.FlinkRowAssertionsUtils.assertResultsExactOrder;
 import static org.apache.fluss.flink.source.testutils.FlinkRowAssertionsUtils.assertRowResultsIgnoreOrder;
 import static org.apache.fluss.flink.source.testutils.FlinkRowAssertionsUtils.collectBatchRows;
@@ -962,6 +964,137 @@ class FlinkUnionReadPrimaryKeyTableITCase extends FlinkUnionReadTestBase {
         // cancel jobs
         insertResult.getJobClient().get().cancel().get();
         jobClient.cancel().get();
+    }
+
+    @Test
+    void testDifferentPushDownFiltersWithSourceReuse() throws Exception {
+        boolean originalReuseSource =
+                streamTEnv.getConfig().get(TABLE_OPTIMIZER_REUSE_SOURCE_ENABLED);
+        JobClient tieringJob = null;
+        String tableName = "stream_union_different_pushdown_filters";
+        TablePath tablePath = TablePath.of(DEFAULT_DB, tableName);
+        Map<TableBucket, Long> bucketLogEndOffset = new HashMap<>();
+
+        try {
+            streamTEnv.getConfig().set(TABLE_OPTIMIZER_REUSE_SOURCE_ENABLED, true);
+            tieringJob = buildTieringJob(execEnv);
+            long tableId =
+                    preparePKTableFullType(
+                            tablePath, DEFAULT_BUCKET_NUM, false, bucketLogEndOffset);
+            waitUntilBucketSynced(tablePath, tableId, DEFAULT_BUCKET_NUM, false);
+            assertReplicaStatus(bucketLogEndOffset);
+            tieringJob.cancel().get();
+            tieringJob = null;
+
+            String query =
+                    "SELECT c8 FROM "
+                            + tableName
+                            + " /*+ OPTIONS('scan.startup.mode' = 'full') */"
+                            + " WHERE c8 = 'string' UNION ALL "
+                            + "SELECT CAST(c5 AS STRING) FROM "
+                            + tableName
+                            + " /*+ OPTIONS('scan.startup.mode' = 'full') */"
+                            + " WHERE c5 = 40";
+            CloseableIterator<Row> iterator = streamTEnv.executeSql(query).collect();
+            List<String> actual = collectRowsWithTimeout(iterator, 2, true);
+            assertThat(actual).containsExactlyInAnyOrder("+I[string]", "+I[40]");
+        } finally {
+            streamTEnv.getConfig().set(TABLE_OPTIMIZER_REUSE_SOURCE_ENABLED, originalReuseSource);
+            if (tieringJob != null) {
+                tieringJob.cancel().get();
+            }
+        }
+    }
+
+    @Test
+    void testDifferentProjectionsWithAndWithoutSourceReuse() throws Exception {
+        boolean originalReuseSource =
+                streamTEnv.getConfig().get(TABLE_OPTIMIZER_REUSE_SOURCE_ENABLED);
+        JobClient tieringJob = null;
+        String tableName = "stream_union_different_projections";
+        TablePath tablePath = TablePath.of(DEFAULT_DB, tableName);
+        Map<TableBucket, Long> bucketLogEndOffset = new HashMap<>();
+
+        try {
+            streamTEnv.getConfig().set(TABLE_OPTIMIZER_REUSE_SOURCE_ENABLED, false);
+            tieringJob = buildTieringJob(execEnv);
+            long tableId =
+                    preparePKTableFullType(
+                            tablePath, DEFAULT_BUCKET_NUM, false, bucketLogEndOffset);
+            waitUntilBucketSynced(tablePath, tableId, DEFAULT_BUCKET_NUM, false);
+            assertReplicaStatus(bucketLogEndOffset);
+            tieringJob.cancel().get();
+            tieringJob = null;
+
+            String query =
+                    "SELECT c8 FROM "
+                            + tableName
+                            + " /*+ OPTIONS('scan.startup.mode' = 'full') */"
+                            + " UNION ALL SELECT CAST(c5 AS STRING) FROM "
+                            + tableName
+                            + " /*+ OPTIONS('scan.startup.mode' = 'full') */";
+            CloseableIterator<Row> iterator = streamTEnv.executeSql(query).collect();
+            List<String> actual = collectRowsWithTimeout(iterator, 4, true);
+            assertThat(actual)
+                    .containsExactlyInAnyOrder(
+                            "+I[string]", "+I[another_string]", "+I[4]", "+I[40]");
+
+            streamTEnv.getConfig().set(TABLE_OPTIMIZER_REUSE_SOURCE_ENABLED, true);
+            iterator = streamTEnv.executeSql(query).collect();
+            actual = collectRowsWithTimeout(iterator, 4, true);
+            assertThat(actual)
+                    .containsExactlyInAnyOrder(
+                            "+I[string]", "+I[another_string]", "+I[4]", "+I[40]");
+        } finally {
+            streamTEnv.getConfig().set(TABLE_OPTIMIZER_REUSE_SOURCE_ENABLED, originalReuseSource);
+            if (tieringJob != null) {
+                tieringJob.cancel().get();
+            }
+        }
+    }
+
+    @Test
+    void testUnionReadWithCustomLakeTablePath() throws Exception {
+        String tableName = "pk_table_custom_lake_mapping";
+        TablePath tablePath = TablePath.of(DEFAULT_DB, tableName);
+        TablePath lakeTablePath = TablePath.of("custom_db", "pk_table_custom_lake_mapping_target");
+        Map<String, String> tableProperties = new HashMap<>();
+        tableProperties.put(
+                ConfigOptions.TABLE_DATALAKE_DATABASE_NAME.key(), lakeTablePath.getDatabaseName());
+        tableProperties.put(
+                ConfigOptions.TABLE_DATALAKE_TABLE_NAME.key(), lakeTablePath.getTableName());
+
+        long tableId = createPkTable(tablePath, tableProperties, Collections.emptyMap());
+        TableBucket tableBucket = new TableBucket(tableId, 0);
+
+        List<InternalRow> initialRows = Arrays.asList(row(1, "v1"), row(2, "v2"));
+        writeRows(tablePath, initialRows, false);
+
+        JobClient jobClient = buildTieringJob(execEnv);
+        try {
+            assertReplicaStatus(tableBucket, 2);
+            paimonCatalog.getTable(
+                    Identifier.create(
+                            lakeTablePath.getDatabaseName(), lakeTablePath.getTableName()));
+
+            List<String> lakeRows =
+                    toSortedRows(batchTEnv.executeSql("select a, b from " + tableName + "$lake"));
+            assertThat(lakeRows.toString().replace("+U", "+I")).isEqualTo("[+I[1, v1], +I[2, v2]]");
+
+            List<String> snapshotRows =
+                    toSortedRows(
+                            batchTEnv.executeSql("select * from " + tableName + "$lake$snapshots"));
+            assertThat(snapshotRows).isNotEmpty();
+
+            writeRows(tablePath, Collections.singletonList(row(3, "v3")), false);
+
+            List<String> unionRows =
+                    toSortedRows(batchTEnv.executeSql("select * from " + tableName));
+            assertThat(unionRows.toString().replace("+U", "+I"))
+                    .isEqualTo("[+I[1, v1], +I[2, v2], +I[3, v3]]");
+        } finally {
+            jobClient.cancel().get();
+        }
     }
 
     @Test

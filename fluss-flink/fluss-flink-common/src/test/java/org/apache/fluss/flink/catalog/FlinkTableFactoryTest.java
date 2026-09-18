@@ -17,6 +17,7 @@
 
 package org.apache.fluss.flink.catalog;
 
+import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.flink.FlinkConnectorOptions;
 import org.apache.fluss.flink.adapter.CatalogTableAdapter;
 import org.apache.fluss.flink.sink.FlinkTableSink;
@@ -84,6 +85,42 @@ abstract class FlinkTableFactoryTest {
             ObjectIdentifier.of("default", "default", "t1" + FlinkCatalog.BINLOG_TABLE_SUFFIX);
 
     @Test
+    void testResolveToLakeObjectName() {
+        assertThat(FlinkCatalog.resolveToLakeObjectName(null, "fluss_table$lake"))
+                .isEqualTo("fluss_table");
+        assertThat(FlinkCatalog.resolveToLakeObjectName(null, "fluss_table$lake$snapshots"))
+                .isEqualTo("fluss_table$snapshots");
+        assertThat(FlinkCatalog.resolveToLakeObjectName("custom_lake_table", "fluss_table$lake"))
+                .isEqualTo("custom_lake_table");
+        assertThat(
+                        FlinkCatalog.resolveToLakeObjectName(
+                                "custom_lake_table", "fluss_table$lake$snapshots"))
+                .isEqualTo("custom_lake_table$snapshots");
+        assertThat(FlinkCatalog.resolveToLakeObjectName("custom_lake_table", "fluss_table"))
+                .isEqualTo("fluss_table");
+    }
+
+    @Test
+    void testResolveToLakeIdentifier() {
+        Map<String, String> lakeTableOptions = new HashMap<>();
+        lakeTableOptions.put(
+                "fluss." + ConfigOptions.TABLE_DATALAKE_DATABASE_NAME.key(), "custom_lake_db");
+        lakeTableOptions.put(
+                "fluss." + ConfigOptions.TABLE_DATALAKE_TABLE_NAME.key(), "custom_lake_table");
+
+        ObjectIdentifier flinkIdentifier =
+                ObjectIdentifier.of("catalog", "fluss_db", "fluss_table$lake$snapshots");
+        assertThat(
+                        FlinkTableFactory.resolveToLakeIdentifier(
+                                flinkIdentifier, Collections.emptyMap()))
+                .isEqualTo(ObjectIdentifier.of("catalog", "fluss_db", "fluss_table$snapshots"));
+        assertThat(FlinkTableFactory.resolveToLakeIdentifier(flinkIdentifier, lakeTableOptions))
+                .isEqualTo(
+                        ObjectIdentifier.of(
+                                "catalog", "custom_lake_db", "custom_lake_table$snapshots"));
+    }
+
+    @Test
     void testTableSourceOptions() {
         ResolvedSchema schema = createBasicSchema();
         Map<String, String> validProperties = getBasicOptions();
@@ -104,6 +141,22 @@ abstract class FlinkTableFactoryTest {
         scanModeProperties.put(
                 FlinkConnectorOptions.SCAN_STARTUP_TIMESTAMP.key(), "2023-12-09 23:09:12");
         createTableSource(schema, scanModeProperties);
+
+        // test scan bounded mode options
+        Map<String, String> boundedModeProperties = getBasicOptions();
+        boundedModeProperties.put(FlinkConnectorOptions.SCAN_BOUNDED_MODE.key(), "timestamp");
+        assertThatThrownBy(() -> createTableSource(schema, boundedModeProperties))
+                .isInstanceOf(ValidationException.class)
+                .hasMessageContaining(
+                        "'scan.bounded.timestamp' is required in 'timestamp' bounded mode but missing.");
+        boundedModeProperties.put(
+                FlinkConnectorOptions.SCAN_BOUNDED_TIMESTAMP.key(), "1678883047356");
+        createTableSource(schema, boundedModeProperties);
+        boundedModeProperties.put(
+                FlinkConnectorOptions.SCAN_BOUNDED_TIMESTAMP.key(), "2023-12-09 23:09:12");
+        createTableSource(schema, boundedModeProperties);
+        boundedModeProperties.put(FlinkConnectorOptions.SCAN_BOUNDED_MODE.key(), "latest-offset");
+        createTableSource(schema, boundedModeProperties);
 
         // test split assignment batch size
         Map<String, String> splitAssignmentBatchProperties = getBasicOptions();
@@ -188,6 +241,20 @@ abstract class FlinkTableFactoryTest {
         assertThatThrownBy(() -> createTableSource(schema, fullCacheProperties))
                 .isInstanceOf(UnsupportedOperationException.class)
                 .hasMessageContaining("Full lookup caching is not supported yet.");
+    }
+
+    @Test
+    void testLookupCustomShuffleEligibilityUsesBucketKeys() {
+        ResolvedSchema schema = createBasicSchema();
+        FlinkTableSource hashDistributedSource =
+                (FlinkTableSource) createTableSource(schema, getBasicOptionsWithBucketKey());
+        hashDistributedSource.getLookupRuntimeProvider(createLookupContext(new int[][] {{0}, {2}}));
+        assertThat(hashDistributedSource.getPartitionerAdapter()).isPresent();
+
+        FlinkTableSource randomlyDistributedSource =
+                (FlinkTableSource) createTableSource(schema, getBasicOptions());
+        assertThat(randomlyDistributedSource.getBucketKeyIndexes()).isEmpty();
+        assertThat(randomlyDistributedSource.getPartitionerAdapter()).isEmpty();
     }
 
     @Test
@@ -309,6 +376,7 @@ abstract class FlinkTableFactoryTest {
     private static Map<String, String> getBasicOptionsWithBucketKey() {
         Map<String, String> basicOptions = getBasicOptions();
         basicOptions.put(BUCKET_KEY.key(), "first");
+        basicOptions.put(BUCKET_NUMBER.key(), "1");
         return basicOptions;
     }
 

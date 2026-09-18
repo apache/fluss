@@ -25,6 +25,8 @@ import org.apache.fluss.client.table.writer.UpsertWriter;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.InvalidConfigException;
+import org.apache.fluss.flink.source.lookup.FlussLookupInputPartitioner;
+import org.apache.fluss.flink.source.lookup.LookupNormalizer;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.row.InternalRow;
@@ -34,6 +36,7 @@ import org.apache.fluss.testutils.common.MultiVersionTest;
 import org.apache.fluss.utils.clock.ManualClock;
 
 import org.apache.commons.lang3.RandomUtils;
+import org.apache.flink.api.common.functions.RichMapFunction;
 import org.apache.flink.api.common.typeinfo.TypeInformation;
 import org.apache.flink.api.common.typeinfo.Types;
 import org.apache.flink.api.java.typeutils.RowTypeInfo;
@@ -44,6 +47,10 @@ import org.apache.flink.table.api.EnvironmentSettings;
 import org.apache.flink.table.api.Schema;
 import org.apache.flink.table.api.bridge.java.StreamTableEnvironment;
 import org.apache.flink.table.api.config.ExecutionConfigOptions;
+import org.apache.flink.table.data.GenericRowData;
+import org.apache.flink.table.types.logical.IntType;
+import org.apache.flink.table.types.logical.LogicalType;
+import org.apache.flink.table.types.logical.RowType;
 import org.apache.flink.test.util.AbstractTestBase;
 import org.apache.flink.types.Row;
 import org.apache.flink.util.CloseableIterator;
@@ -67,14 +74,18 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 import static org.apache.fluss.flink.source.testutils.FlinkRowAssertionsUtils.assertQueryResultExactOrder;
 import static org.apache.fluss.flink.source.testutils.FlinkRowAssertionsUtils.assertResultsIgnoreOrder;
+import static org.apache.fluss.flink.source.testutils.FlinkRowAssertionsUtils.collectBatchRows;
 import static org.apache.fluss.flink.source.testutils.FlinkRowAssertionsUtils.collectRowsWithTimeout;
 import static org.apache.fluss.flink.utils.FlinkTestBase.waitUntilPartitions;
 import static org.apache.fluss.flink.utils.FlinkTestBase.writeRows;
@@ -84,6 +95,7 @@ import static org.apache.fluss.testutils.DataTestUtils.row;
 import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assumptions.assumeThat;
 
 /** IT case for using flink sql to read fluss table. */
 abstract class FlinkTableSourceITCase extends AbstractTestBase {
@@ -696,6 +708,88 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
     }
 
     @Test
+    void testLogTableBoundedReadLatestOffset() throws Exception {
+        tEnv.executeSql("create table bounded_latest_log_table (a int, b varchar)");
+        TablePath tablePath = TablePath.of(DEFAULT_DB, "bounded_latest_log_table");
+        writeRows(conn, tablePath, Arrays.asList(row(1, "v1"), row(2, "v2"), row(3, "v3")), true);
+
+        // in streaming execution mode, the bounded source stops at the latest offsets captured
+        // at startup and then the job finishes
+        try (CloseableIterator<Row> rowIter =
+                tEnv.executeSql(
+                                "select * from bounded_latest_log_table "
+                                        + "/*+ OPTIONS('scan.bounded.mode' = 'latest-offset') */")
+                        .collect()) {
+            assertThat(collectBatchRows(rowIter))
+                    .containsExactlyInAnyOrder("+I[1, v1]", "+I[2, v2]", "+I[3, v3]");
+        }
+    }
+
+    @Test
+    void testLogTableBoundedReadTimestampRange() throws Exception {
+        tEnv.executeSql("create table bounded_ts_range_log_table (a int, b varchar)");
+        TablePath tablePath = TablePath.of(DEFAULT_DB, "bounded_ts_range_log_table");
+
+        writeRows(conn, tablePath, Arrays.asList(row(1, "v1"), row(2, "v2")), true);
+        CLOCK.advanceTime(Duration.ofMillis(100));
+        long startTimestamp = CLOCK.milliseconds();
+        writeRows(conn, tablePath, Arrays.asList(row(3, "v3"), row(4, "v4")), true);
+        CLOCK.advanceTime(Duration.ofMillis(100));
+        long stopTimestamp = CLOCK.milliseconds();
+        writeRows(conn, tablePath, Arrays.asList(row(5, "v5"), row(6, "v6")), true);
+
+        // replay only the records committed in the time range [startTimestamp, stopTimestamp)
+        String options =
+                String.format(
+                        " /*+ OPTIONS('scan.startup.mode' = 'timestamp', "
+                                + "'scan.startup.timestamp' = '%d', "
+                                + "'scan.bounded.mode' = 'timestamp', "
+                                + "'scan.bounded.timestamp' = '%d') */",
+                        startTimestamp, stopTimestamp);
+        try (CloseableIterator<Row> rowIter =
+                tEnv.executeSql("select * from bounded_ts_range_log_table" + options).collect()) {
+            assertThat(collectBatchRows(rowIter))
+                    .containsExactlyInAnyOrder("+I[3, v3]", "+I[4, v4]");
+        }
+    }
+
+    @Test
+    void testPrimaryKeyTableChangelogBoundedRead() throws Exception {
+        tEnv.executeSql(
+                "create table bounded_pk_changelog_table (a int not null primary key not enforced,"
+                        + " b varchar) with ('bucket.num' = '1')");
+        TablePath tablePath = TablePath.of(DEFAULT_DB, "bounded_pk_changelog_table");
+        writeRows(conn, tablePath, Arrays.asList(row(1, "v1"), row(2, "v2")), false);
+        writeRows(conn, tablePath, Arrays.asList(row(1, "v11")), false);
+
+        // read the changelog of the primary key table from the earliest offset up to the latest
+        // offsets captured at startup, then the job finishes
+        try (CloseableIterator<Row> rowIter =
+                tEnv.executeSql(
+                                "select * from bounded_pk_changelog_table "
+                                        + "/*+ OPTIONS('scan.startup.mode' = 'earliest', "
+                                        + "'scan.bounded.mode' = 'latest-offset') */")
+                        .collect()) {
+            assertThat(collectBatchRows(rowIter))
+                    .containsExactly("+I[1, v1]", "+I[2, v2]", "-U[1, v1]", "+U[1, v11]");
+        }
+    }
+
+    @Test
+    void testPrimaryKeyTableFullStartupBoundedReadThrows() {
+        tEnv.executeSql(
+                "create table bounded_pk_full_table "
+                        + "(a int not null primary key not enforced, b varchar)");
+        assertThatThrownBy(
+                        () ->
+                                tEnv.executeSql(
+                                        "select * from bounded_pk_full_table "
+                                                + "/*+ OPTIONS('scan.bounded.mode' = 'latest-offset') */"))
+                .hasStackTraceContaining(
+                        "'scan.bounded.mode' is not supported for primary key tables in 'full' startup mode");
+    }
+
+    @Test
     void testReadTimestampGreaterThanMaxTimestamp() throws Exception {
         tEnv.executeSql("create table timestamp_table (a int, b varchar) ");
         TablePath tablePath = TablePath.of(DEFAULT_DB, "timestamp_table");
@@ -765,6 +859,121 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
         List<String> expected =
                 Arrays.asList("+I[1, 11, name1]", "+I[2, 2, name2]", "+I[3, 33, name3]");
         assertResultsIgnoreOrder(collected, expected, true);
+    }
+
+    @ParameterizedTest(name = "bucket.num={0}")
+    @MultiVersionTest
+    @ValueSource(ints = {1, 3, 8, 10})
+    void testLookupCustomShuffle(int numBuckets) throws Exception {
+        assumeThat(supportsLookupCustomShuffle()).isTrue();
+
+        int parallelism = 4;
+        int numLookupKeys = 100;
+        String dim = "lookup_shuffle_" + numBuckets + "_" + RandomUtils.nextInt();
+        tEnv.executeSql(
+                String.format(
+                        "CREATE TABLE %s ("
+                                + " id INT NOT NULL,"
+                                + " name STRING,"
+                                + " PRIMARY KEY (id) NOT ENFORCED"
+                                + ") WITH ("
+                                + " 'bucket.num' = '%d',"
+                                + " 'bucket.key' = 'id',"
+                                + " 'lookup.async' = 'false')",
+                        dim, numBuckets));
+        try (Table dimTable = conn.getTable(TablePath.of(DEFAULT_DB, dim))) {
+            UpsertWriter writer = dimTable.newUpsert().createWriter();
+            for (int id = 0; id < numLookupKeys; id++) {
+                writer.upsert(row(id, "name" + id));
+            }
+            writer.flush();
+        }
+
+        int numProbeRows = numLookupKeys * 2;
+        RowTypeInfo probeType =
+                new RowTypeInfo(
+                        new TypeInformation[] {Types.INT, Types.INT},
+                        new String[] {"id", "occurrence"});
+        DataStream<Row> probeStream =
+                execEnv.fromSequence(0, numProbeRows - 1)
+                        .setParallelism(parallelism)
+                        .map(value -> Row.of((int) (value / 2), (int) (value % 2)))
+                        .returns(probeType)
+                        .setParallelism(parallelism);
+        Schema probeSchema =
+                Schema.newBuilder()
+                        .column("id", DataTypes.INT())
+                        .column("occurrence", DataTypes.INT())
+                        .columnByExpression("proc", "PROCTIME()")
+                        .build();
+        tEnv.createTemporaryView(
+                "lookup_shuffle_src", tEnv.fromDataStream(probeStream, probeSchema));
+
+        String query =
+                String.format(
+                        "SELECT /*+ LOOKUP('table' = 'h', 'shuffle' = 'true') */ "
+                                + "src.id, src.occurrence, h.name "
+                                + "FROM lookup_shuffle_src AS src JOIN %s "
+                                + "FOR SYSTEM_TIME AS OF src.proc AS h ON src.id = h.id",
+                        dim);
+
+        assertThat(tEnv.explainSql(query)).contains("shuffle=[true]");
+        RowTypeInfo taggedType =
+                new RowTypeInfo(
+                        new TypeInformation[] {Types.INT, Types.INT, Types.STRING, Types.INT},
+                        new String[] {"id", "occurrence", "name", "subtask"});
+        DataStream<Row> taggedResults =
+                tEnv.toChangelogStream(tEnv.sqlQuery(query))
+                        .forward()
+                        .map(new LookupSubtaskTagger())
+                        .returns(taggedType)
+                        .setParallelism(parallelism);
+
+        FlussLookupInputPartitioner expectedPartitioner = createLookupInputPartitioner(numBuckets);
+        Map<Integer, Integer> subtaskByLookupKey = new HashMap<>();
+        Map<Integer, Integer> subtaskByBucket = new HashMap<>();
+        Set<Integer> usedSubtasks = new HashSet<>();
+        int resultCount = 0;
+        try (CloseableIterator<Row> collected = taggedResults.executeAndCollect()) {
+            while (collected.hasNext()) {
+                Row result = collected.next();
+                int id = (Integer) result.getField(0);
+                int actualSubtask = (Integer) result.getField(3);
+                int expectedSubtask =
+                        expectedPartitioner.partition(GenericRowData.of(id), parallelism);
+
+                assertThat(result.getField(2)).isEqualTo("name" + id);
+                assertThat(actualSubtask)
+                        .as("id=%d, bucket.num=%d", id, numBuckets)
+                        .isEqualTo(expectedSubtask);
+                Integer previousSubtask = subtaskByLookupKey.putIfAbsent(id, actualSubtask);
+                if (previousSubtask != null) {
+                    assertThat(actualSubtask)
+                            .as("the same lookup key must remain on one subtask")
+                            .isEqualTo(previousSubtask);
+                }
+
+                if (numBuckets >= parallelism && numBuckets % parallelism == 0) {
+                    int bucketId = expectedPartitioner.partition(GenericRowData.of(id), numBuckets);
+                    Integer previousBucketSubtask =
+                            subtaskByBucket.putIfAbsent(bucketId, actualSubtask);
+                    if (previousBucketSubtask != null) {
+                        assertThat(actualSubtask)
+                                .as("all lookup keys in bucket %d must share a subtask", bucketId)
+                                .isEqualTo(previousBucketSubtask);
+                    }
+                    assertThat(actualSubtask).isEqualTo(bucketId % parallelism);
+                }
+
+                usedSubtasks.add(actualSubtask);
+                resultCount++;
+            }
+        }
+
+        assertThat(resultCount).isEqualTo(numProbeRows);
+        assertThat(usedSubtasks)
+                .as("bucket.num=%d should make all lookup subtasks usable", numBuckets)
+                .containsExactlyInAnyOrder(0, 1, 2, 3);
     }
 
     @ParameterizedTest
@@ -1937,6 +2146,33 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
     private enum Caching {
         ENABLE_CACHE,
         DISABLE_CACHE
+    }
+
+    protected boolean supportsLookupCustomShuffle() {
+        return false;
+    }
+
+    private static FlussLookupInputPartitioner createLookupInputPartitioner(int numBuckets) {
+        RowType lookupKeyType =
+                RowType.of(new LogicalType[] {new IntType(false)}, new String[] {"id"});
+        LookupNormalizer normalizer =
+                LookupNormalizer.createPrimaryKeyLookupNormalizer(new int[] {0}, lookupKeyType);
+        return new FlussLookupInputPartitioner(
+                normalizer, lookupKeyType, Collections.singletonList("id"), null, numBuckets);
+    }
+
+    private static class LookupSubtaskTagger extends RichMapFunction<Row, Row> {
+
+        private static final long serialVersionUID = 1L;
+
+        @Override
+        public Row map(Row value) {
+            return Row.of(
+                    value.getField(0),
+                    value.getField(1),
+                    value.getField(2),
+                    getRuntimeContext().getTaskInfo().getIndexOfThisSubtask());
+        }
     }
 
     /**

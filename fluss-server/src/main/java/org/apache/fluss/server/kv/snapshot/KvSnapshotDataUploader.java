@@ -18,6 +18,7 @@
 package org.apache.fluss.server.kv.snapshot;
 
 import org.apache.fluss.exception.FlussRuntimeException;
+import org.apache.fluss.metrics.Counter;
 import org.apache.fluss.server.utils.SnapshotUtil;
 import org.apache.fluss.utils.CloseableRegistry;
 import org.apache.fluss.utils.ExceptionUtils;
@@ -51,6 +52,7 @@ public class KvSnapshotDataUploader extends KvSnapshotDataTransfer {
      * Upload all the files to the target snapshot location using specified number of threads.
      *
      * @param files The files will be uploaded to the snapshot location.
+     * @param remoteKvCopyBytes Thread-safe counter for successfully uploaded bytes of this table.
      * @throws Exception Thrown if can not upload all the files.
      */
     public List<KvFileHandleAndLocalPath> uploadFilesToSnapshotLocation(
@@ -58,7 +60,8 @@ public class KvSnapshotDataUploader extends KvSnapshotDataTransfer {
             SnapshotLocation snapshotLocation,
             SnapshotFileScope snapshotFileScope,
             CloseableRegistry closeableRegistry,
-            CloseableRegistry tmpResourcesRegistry)
+            CloseableRegistry tmpResourcesRegistry,
+            Counter remoteKvCopyBytes)
             throws Exception {
 
         List<CompletableFuture<KvFileHandleAndLocalPath>> futures =
@@ -67,7 +70,8 @@ public class KvSnapshotDataUploader extends KvSnapshotDataTransfer {
                         snapshotLocation,
                         snapshotFileScope,
                         closeableRegistry,
-                        tmpResourcesRegistry);
+                        tmpResourcesRegistry,
+                        remoteKvCopyBytes);
 
         List<KvFileHandleAndLocalPath> handles = new ArrayList<>(files.size());
 
@@ -95,7 +99,8 @@ public class KvSnapshotDataUploader extends KvSnapshotDataTransfer {
             SnapshotLocation snapshotLocation,
             SnapshotFileScope snapshotFileScope,
             CloseableRegistry closeableRegistry,
-            CloseableRegistry tmpResourcesRegistry) {
+            CloseableRegistry tmpResourcesRegistry,
+            Counter remoteKvCopyBytes) {
         return files.stream()
                 .map(
                         e ->
@@ -107,7 +112,8 @@ public class KvSnapshotDataUploader extends KvSnapshotDataTransfer {
                                                                 snapshotLocation,
                                                                 snapshotFileScope,
                                                                 closeableRegistry,
-                                                                tmpResourcesRegistry)),
+                                                                tmpResourcesRegistry,
+                                                                remoteKvCopyBytes)),
                                         dataTransferThreadPool))
                 .collect(Collectors.toList());
     }
@@ -117,7 +123,8 @@ public class KvSnapshotDataUploader extends KvSnapshotDataTransfer {
             SnapshotLocation snapshotLocation,
             SnapshotFileScope snapshotFileScope,
             CloseableRegistry closeableRegistry,
-            CloseableRegistry tmpResourcesRegistry)
+            CloseableRegistry tmpResourcesRegistry,
+            Counter remoteKvCopyBytes)
             throws IOException {
 
         InputStream inputStream = null;
@@ -132,6 +139,7 @@ public class KvSnapshotDataUploader extends KvSnapshotDataTransfer {
             outputStream = snapshotLocation.createSnapshotOutputStream(snapshotFileScope);
             closeableRegistry.registerCloseable(outputStream);
 
+            long uploadedBytes = 0L;
             while (true) {
                 int numBytes = inputStream.read(buffer);
 
@@ -139,11 +147,16 @@ public class KvSnapshotDataUploader extends KvSnapshotDataTransfer {
                     break;
                 }
                 outputStream.write(buffer, 0, numBytes);
+                uploadedBytes += numBytes;
             }
 
             final KvFileHandle result;
             if (closeableRegistry.unregisterCloseable(outputStream)) {
                 result = outputStream.closeAndGetHandle();
+                if (result != null) {
+                    // Count the uploaded bytes even if this snapshot later fails or aborts.
+                    remoteKvCopyBytes.inc(uploadedBytes);
+                }
             } else {
                 result = null;
             }

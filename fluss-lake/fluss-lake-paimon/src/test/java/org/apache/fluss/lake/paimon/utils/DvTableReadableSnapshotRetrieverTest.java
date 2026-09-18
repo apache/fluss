@@ -24,6 +24,7 @@ import org.apache.fluss.client.admin.Admin;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.FlussRuntimeException;
+import org.apache.fluss.exception.LakeTableSnapshotNotExistException;
 import org.apache.fluss.flink.tiering.committer.FlussTableLakeSnapshotCommitter;
 import org.apache.fluss.lake.committer.LakeCommitResult;
 import org.apache.fluss.metadata.PartitionInfo;
@@ -65,6 +66,7 @@ import static org.apache.fluss.lake.paimon.utils.PaimonTestUtils.CompactHelper;
 import static org.apache.fluss.lake.paimon.utils.PaimonTestUtils.writeAndCommitData;
 import static org.apache.fluss.server.utils.LakeStorageUtils.extractLakeProperties;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Unit test for {@link DvTableReadableSnapshotRetriever} using real Paimon tables. */
 class DvTableReadableSnapshotRetrieverTest {
@@ -263,9 +265,9 @@ class DvTableReadableSnapshotRetrieverTest {
         //   │         │ L0: [rows 3-9] ← new        │ ← added in snapshot6
         //   │ bucket2 │ L1: [from s3 (rows 0-2)]    │ ← unchanged
         //   └─────────┴─────────────────────────────┘
-        // Now readable_snapshot can advance: bucket0 and bucket1 have L0, but bucket2 has no L0
-        // However, bucket0 and bucket1's L0 files were flushed in snapshot5 and snapshot2
-        // respectively, so we can use their base snapshots' offsets
+        // In the selected snapshot5, only bucket0 has L0. Bucket1's new L0 belongs to the later
+        // APPEND and must not affect this classification. Bucket0 uses its previous flush offset;
+        // the other buckets use snapshot4's tiered offsets.
         long snapshot6 =
                 writeAndCommitData(
                         fileStoreTable,
@@ -380,55 +382,116 @@ class DvTableReadableSnapshotRetrieverTest {
                 tieredLakeSnapshotEndOffset,
                 readableSnapshotAndOffsets);
 
-        // Step 9: COMPACT snapshot 13 - compact bucket2 (flushes snapshot12's L0)
-        // Snapshot 13 state (after compacting bucket2):
-        //   ┌─────────┬─────────────────────────────┐
-        //   │ Bucket  │ Files                       │
-        //   ├─────────┼─────────────────────────────┤
-        //   │ bucket0 │ L1: [from s11 (rows 0-7)]   │
-        //   │         │ L0: [rows 8-12 from s12]    │ ← unchanged
-        //   │ bucket1 │ L1: [from s11 (rows 0-9)]   │
-        //   │         │ L0: [rows 10-19 from s12]   │ ← unchanged
-        //   │ bucket2 │ L1: [merged s11 L1 + s12 L0]│ ← s12's L0 (rows 3-10) flushed to L1
-        //   │         │     [rows 0-10 total]       │
-        //   └─────────┴─────────────────────────────┘
-        // readable_snapshot advances: bucket2's L0 flushed, use snapshot12's offset (11L)
+        // All buckets have no L0 in snapshot11, so retention advances to snapshot8. Bucket0's
+        // earlier flush used snapshot6, which is now deleted even though its Paimon history exists.
+        assertThat(readableSnapshotAndOffsets.getEarliestSnapshotIdToKeep()).isEqualTo(snapshot8);
+        assertThatThrownBy(() -> flussAdmin.getLakeSnapshot(tablePath, snapshot6).get())
+                .rootCause()
+                .isInstanceOf(LakeTableSnapshotNotExistException.class);
+
+        // Step 9: Compact bucket2 only. Bucket0 still has L0 from snapshot12, so resolving its
+        // readable offset needs the deleted snapshot6. Readable advancement pauses.
         compactHelper.compactBucket(bucket2).commit();
-        long snapshot13 = latestSnapshot(fileStoreTable);
-        // Create an empty tiered snapshot (snapshot14) to simulate tiered snapshot commit
         long snapshot14 = writeAndCommitData(fileStoreTable, Collections.emptyMap());
         readableSnapshotAndOffsets =
                 retrieveReadableSnapshotAndOffsets(tablePath, fileStoreTable, snapshot14);
-        // readable_snapshot = snapshot13
-        // readable_offsets: bucket0 uses snapshot4's offset (8L), bucket1 uses snapshot6's offset
-        // (10L), bucket2 uses snapshot12's offset (11L)
-        assertThat(readableSnapshotAndOffsets.getReadableSnapshotId()).isEqualTo(snapshot13);
-        expectedReadableOffsets = new HashMap<>();
-        expectedReadableOffsets.put(tb0, 8L);
-        expectedReadableOffsets.put(tb1, 10L);
+        assertThat(readableSnapshotAndOffsets).isNull();
+        commitSnapshot(tableId, tablePath, snapshot14, Collections.emptyMap(), null);
+        assertThat(flussAdmin.getLatestLakeSnapshot(tablePath).get().getSnapshotId())
+                .isEqualTo(snapshot14);
+        assertThat(flussAdmin.getReadableLakeSnapshot(tablePath).get().getSnapshotId())
+                .isEqualTo(snapshot11);
+        assertThat(flussAdmin.getReadableLakeSnapshot(tablePath).get().getTableBucketsOffset())
+                .isEqualTo(expectedReadableOffsets);
+
+        // Another APPEND alone cannot recover the missing flush offsets.
+        long snapshot15 = writeAndCommitData(fileStoreTable, Collections.emptyMap());
+        assertThat(retrieveReadableSnapshotAndOffsets(tablePath, fileStoreTable, snapshot15))
+                .isNull();
+        commitSnapshot(tableId, tablePath, snapshot15, Collections.emptyMap(), null);
+
+        // Step 10: Flush the affected bucket0's remaining L0. Its readable offset now comes from
+        // snapshot15, so snapshot6 is no longer needed. Bucket1 still has L0, whose previous flush
+        // can be resolved from the retained snapshot8.
+        compactHelper.compactBucket(bucket0).commit();
+        long snapshot16 = latestSnapshot(fileStoreTable);
+        long snapshot17 = writeAndCommitData(fileStoreTable, Collections.emptyMap());
+        readableSnapshotAndOffsets =
+                retrieveReadableSnapshotAndOffsets(tablePath, fileStoreTable, snapshot17);
+        assertThat(readableSnapshotAndOffsets).isNotNull();
+        assertThat(readableSnapshotAndOffsets.getReadableSnapshotId()).isEqualTo(snapshot16);
+        expectedReadableOffsets.put(tb0, 13L);
         expectedReadableOffsets.put(tb2, 11L);
         assertThat(readableSnapshotAndOffsets.getReadableOffsets())
                 .isEqualTo(expectedReadableOffsets);
-        // all buckets L0 level in snapshot6 has been flushed, we can delete all snapshots prior to
-        // snapshot6 safely since we won't need to search for any earlier snapshots to get readable
-        // offsets
-        assertThat(readableSnapshotAndOffsets.getEarliestSnapshotIdToKeep()).isEqualTo(6);
+        assertThat(readableSnapshotAndOffsets.getTieredOffsets())
+                .isEqualTo(tieredLakeSnapshotEndOffset);
+        assertThat(readableSnapshotAndOffsets.getEarliestSnapshotIdToKeep()).isEqualTo(snapshot8);
         commitSnapshot(
-                tableId,
-                tablePath,
-                snapshot14,
-                tieredLakeSnapshotEndOffset,
-                retrieveReadableSnapshotAndOffsets(tablePath, fileStoreTable, snapshot14));
+                tableId, tablePath, snapshot17, Collections.emptyMap(), readableSnapshotAndOffsets);
+        assertThat(flussAdmin.getReadableLakeSnapshot(tablePath).get().getSnapshotId())
+                .isEqualTo(snapshot16);
+        assertThat(flussAdmin.getReadableLakeSnapshot(tablePath).get().getTableBucketsOffset())
+                .isEqualTo(expectedReadableOffsets);
 
-        // when the compacted snapshot is already registered in ZK,
-        // getReadableSnapshotAndOffsets skips recomputation and returns null.
-        long snapshot15 = writeAndCommitData(fileStoreTable, Collections.emptyMap());
-        DvTableReadableSnapshotRetriever.ReadableSnapshotResult result15 =
-                retrieveReadableSnapshotAndOffsets(tablePath, fileStoreTable, snapshot15);
-        assertThat(result15)
-                .as(
-                        "Compacted snapshot 13 is already in ZK, should skip recomputation and return null")
+        // Once the COMPACT is registered, later APPENDs skip recomputing it.
+        long snapshot18 = writeAndCommitData(fileStoreTable, Collections.emptyMap());
+        assertThat(retrieveReadableSnapshotAndOffsets(tablePath, fileStoreTable, snapshot18))
                 .isNull();
+    }
+
+    @Test
+    void testReadableOffsetsAfterRecoveringAppendSnapshot() throws Exception {
+        int bucket0 = 0;
+        int bucket1 = 1;
+        TablePath tablePath = TablePath.of(DEFAULT_DB, "test_dv_recovered_append_offsets");
+        tableId = createDvTable(tablePath, 2);
+        FileStoreTable fileStoreTable = getPaimonTable(tablePath);
+        CompactHelper compactHelper = new CompactHelper(fileStoreTable, compactionTempDir);
+        TableBucket tb0 = new TableBucket(tableId, bucket0);
+        TableBucket tb1 = new TableBucket(tableId, bucket1);
+
+        long snapshot1 =
+                writeAndCommitData(
+                        fileStoreTable,
+                        Collections.singletonMap(bucket0, generateRows(bucket0, 0, 3)));
+        Map<TableBucket, Long> compactedOffsets = Collections.singletonMap(tb0, 3L);
+        commitSnapshot(tableId, tablePath, snapshot1, compactedOffsets, null);
+        compactHelper.compactBucket(bucket0).commit();
+        long snapshot2 = latestSnapshot(fileStoreTable);
+
+        Map<Integer, List<GenericRow>> appendedRows = new HashMap<>();
+        appendedRows.put(bucket0, generateRows(bucket0, 3, 6));
+        appendedRows.put(bucket1, generateRows(bucket1, 0, 3));
+        long snapshot3 = writeAndCommitData(fileStoreTable, appendedRows);
+        Map<TableBucket, Long> tieredOffsets = new HashMap<>();
+        tieredOffsets.put(tb0, 6L);
+        tieredOffsets.put(tb1, 3L);
+        // Recovery registers the APPEND without registering the preceding readable COMPACT.
+        commitSnapshot(tableId, tablePath, snapshot3, tieredOffsets, null);
+
+        appendedRows.put(bucket0, generateRows(bucket0, 6, 9));
+        appendedRows.put(bucket1, generateRows(bucket1, 3, 6));
+        long snapshot4 = writeAndCommitData(fileStoreTable, appendedRows);
+        DvTableReadableSnapshotRetriever.ReadableSnapshotResult result =
+                retrieveReadableSnapshotAndOffsets(tablePath, fileStoreTable, snapshot4);
+        assertThat(result).isNotNull();
+        assertThat(result.getReadableSnapshotId()).isEqualTo(snapshot2);
+        assertThat(result.getReadableOffsets()).isEqualTo(compactedOffsets);
+        assertThat(result.getTieredOffsets()).isEqualTo(compactedOffsets);
+
+        tieredOffsets.put(tb0, 9L);
+        tieredOffsets.put(tb1, 6L);
+        commitSnapshot(tableId, tablePath, snapshot4, tieredOffsets, result);
+
+        // Bucket0 must resume at 3, and bucket1 (absent from the COMPACT) must not inherit the
+        // recovered APPEND's offset. Check the stored offsets as well as the retriever result.
+        assertThat(flussAdmin.getReadableLakeSnapshot(tablePath).get().getTableBucketsOffset())
+                .isEqualTo(compactedOffsets);
+        assertThat(flussAdmin.getLakeSnapshot(tablePath, snapshot2).get().getTableBucketsOffset())
+                .isEqualTo(compactedOffsets);
+        assertThat(flussAdmin.getLatestLakeSnapshot(tablePath).get().getTableBucketsOffset())
+                .isEqualTo(tieredOffsets);
     }
 
     @Test
@@ -732,8 +795,8 @@ class DvTableReadableSnapshotRetrieverTest {
         assertThat(readableSnapshotAndOffsets.getReadableOffsets())
                 .isEqualTo(expectedReadableOffsets);
 
-        // After compact 13, all buckets have no L0 in the compacted snapshot, we only need
-        // to keep the previous append snapshot 12
+        // All buckets have no L0 in snapshot13, so the current retention policy keeps snapshot12
+        // as the earliest APPEND, without retaining the idle buckets' older flush history.
         assertThat(readableSnapshotAndOffsets.getEarliestSnapshotIdToKeep()).isEqualTo(snapshot12);
     }
 
@@ -895,7 +958,7 @@ class DvTableReadableSnapshotRetrieverTest {
                     LakeCommitResult.withReadableSnapshot(
                             tieredSnapshot,
                             readableSnapshotAndOffsets.getReadableSnapshotId(),
-                            lakeSnapshotTieredEndOffset,
+                            readableSnapshotAndOffsets.getTieredOffsets(),
                             readableSnapshotAndOffsets.getReadableOffsets(),
                             readableSnapshotAndOffsets.getEarliestSnapshotIdToKeep());
         } else {

@@ -50,7 +50,6 @@ import org.apache.fluss.record.DefaultKvRecordBatch;
 import org.apache.fluss.record.DefaultValueRecordBatch;
 import org.apache.fluss.record.FileChannelChunk;
 import org.apache.fluss.record.FileLogRecords;
-import org.apache.fluss.record.KvRecordBatch;
 import org.apache.fluss.record.LogRecords;
 import org.apache.fluss.record.MemoryLogRecords;
 import org.apache.fluss.remote.RemoteLogFetchInfo;
@@ -188,6 +187,8 @@ import org.apache.fluss.server.entity.NotifyLakeTableOffsetData;
 import org.apache.fluss.server.entity.NotifyLeaderAndIsrData;
 import org.apache.fluss.server.entity.NotifyLeaderAndIsrResultForBucket;
 import org.apache.fluss.server.entity.NotifyRemoteLogOffsetsData;
+import org.apache.fluss.server.entity.ProduceLogDataForBucket;
+import org.apache.fluss.server.entity.PutKvDataForBucket;
 import org.apache.fluss.server.entity.StopReplicaData;
 import org.apache.fluss.server.entity.StopReplicaResultForBucket;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshot;
@@ -205,6 +206,7 @@ import org.apache.fluss.server.zk.data.LeaderAndIsr;
 import org.apache.fluss.server.zk.data.PartitionRegistration;
 import org.apache.fluss.server.zk.data.lake.LakeTable;
 import org.apache.fluss.server.zk.data.lake.LakeTableSnapshot;
+import org.apache.fluss.utils.ByteArraySlice;
 import org.apache.fluss.utils.json.DataTypeJsonSerde;
 import org.apache.fluss.utils.json.JsonSerdeUtils;
 import org.apache.fluss.utils.json.TableBucketOffsets;
@@ -230,6 +232,7 @@ import java.util.Set;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
+import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.hasHistoricalProduce;
 import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.toByteBuffer;
 import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.toPbAclInfo;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
@@ -318,6 +321,15 @@ public class ServerRpcMessageUtils {
                 .filter(Objects::nonNull)
                 .map(ServerRpcMessageUtils::toTableChange)
                 .collect(Collectors.toList());
+    }
+
+    public static List<TableChange.DistributionChange> toAlterTableDistributionChanges(
+            AlterTableRequest request) {
+        if (!request.hasModifyBucketCount()) {
+            return Collections.emptyList();
+        }
+        return Collections.singletonList(
+                TableChange.modifyBucketCount(request.getModifyBucketCount().getNewBucketCount()));
     }
 
     private static DatabaseChange toDatabaseChange(PbAlterConfig pbAlterConfig) {
@@ -606,7 +618,8 @@ public class ServerRpcMessageUtils {
                         .setTableJson(tableInfo.toTableDescriptor().toJsonBytes())
                         .setRemoteDataDir(tableInfo.getRemoteDataDir())
                         .setCreatedTime(tableInfo.getCreatedTime())
-                        .setModifiedTime(tableInfo.getModifiedTime());
+                        .setModifiedTime(tableInfo.getModifiedTime())
+                        .setBucketCountEpoch(tableInfo.getBucketCountEpoch());
         TablePath tablePath = tableInfo.getTablePath();
         pbTableMetadata
                 .setTablePath()
@@ -625,6 +638,16 @@ public class ServerRpcMessageUtils {
                         .setPartitionName(partitionMetadata.getPartitionName());
         pbPartitionMetadata.addAllBucketMetadatas(
                 toPbBucketMetadata(partitionMetadata.getBucketMetadataList()));
+        Integer bucketCount = partitionMetadata.getBucketCount();
+        int effectiveBucketCount =
+                bucketCount != null
+                        ? bucketCount
+                        : partitionMetadata.getBucketMetadataList().size();
+        // 0 means the partition assignment is not known yet, not a zero-bucket layout;
+        // omitting the field keeps the client on its table-level fallback instead of 0.
+        if (effectiveBucketCount > 0) {
+            pbPartitionMetadata.setBucketCount(effectiveBucketCount);
+        }
         return pbPartitionMetadata;
     }
 
@@ -647,6 +670,15 @@ public class ServerRpcMessageUtils {
 
             for (Integer replica : bucketMetadata.getReplicas()) {
                 pbBucketMetadata.addReplicaId(replica);
+            }
+
+            Integer bucketEpoch = bucketMetadata.getBucketEpoch();
+            if (bucketEpoch != null) {
+                pbBucketMetadata.setBucketEpoch(bucketEpoch);
+            }
+
+            for (Integer isrId : bucketMetadata.getIsr()) {
+                pbBucketMetadata.addIsr(isrId);
             }
 
             pbBucketMetadataList.add(pbBucketMetadata);
@@ -672,7 +704,11 @@ public class ServerRpcMessageUtils {
                                 ? pbTableMetadata.getRemoteDataDir()
                                 : null,
                         pbTableMetadata.getCreatedTime(),
-                        pbTableMetadata.getModifiedTime());
+                        pbTableMetadata.getModifiedTime(),
+                        // legacy Coordinators predate bucketCountEpoch; read as 0 (never ALTERed)
+                        pbTableMetadata.hasBucketCountEpoch()
+                                ? pbTableMetadata.getBucketCountEpoch()
+                                : 0L);
 
         List<BucketMetadata> bucketMetadata = new ArrayList<>();
         for (PbBucketMetadata pbBucketMetadata : pbTableMetadata.getBucketMetadatasList()) {
@@ -689,7 +725,9 @@ public class ServerRpcMessageUtils {
                 pbBucketMetadata.hasLeaderEpoch() ? pbBucketMetadata.getLeaderEpoch() : null,
                 Arrays.stream(pbBucketMetadata.getReplicaIds())
                         .boxed()
-                        .collect(Collectors.toList()));
+                        .collect(Collectors.toList()),
+                Arrays.stream(pbBucketMetadata.getIsrs()).boxed().collect(Collectors.toList()),
+                pbBucketMetadata.hasBucketEpoch() ? pbBucketMetadata.getBucketEpoch() : null);
     }
 
     private static PartitionMetadata toPartitionMetadata(PbPartitionMetadata pbPartitionMetadata) {
@@ -699,7 +737,8 @@ public class ServerRpcMessageUtils {
                 pbPartitionMetadata.getPartitionId(),
                 pbPartitionMetadata.getBucketMetadatasList().stream()
                         .map(ServerRpcMessageUtils::toBucketMetadata)
-                        .collect(Collectors.toList()));
+                        .collect(Collectors.toList()),
+                pbPartitionMetadata.hasBucketCount() ? pbPartitionMetadata.getBucketCount() : null);
     }
 
     public static NotifyLeaderAndIsrRequest makeNotifyLeaderAndIsrRequest(
@@ -733,6 +772,12 @@ public class ServerRpcMessageUtils {
                 .setPhysicalTablePath(fromPhysicalTablePath(physicalTablePath))
                 .setReplicas(notifyLeaderAndIsrData.getReplicasArray())
                 .setIsrs(notifyLeaderAndIsrData.getIsrArray());
+        if (notifyLeaderAndIsrData.getBucketCount() != null) {
+            reqForBucket.setBucketCount(notifyLeaderAndIsrData.getBucketCount());
+        }
+        if (notifyLeaderAndIsrData.getBucketCountEpoch() != null) {
+            reqForBucket.setBucketCountEpoch(notifyLeaderAndIsrData.getBucketCountEpoch());
+        }
 
         return reqForBucket;
     }
@@ -769,7 +814,11 @@ public class ServerRpcMessageUtils {
                                     isr,
                                     standbyReplicas,
                                     request.getCoordinatorEpoch(),
-                                    reqForBucket.getBucketEpoch())));
+                                    reqForBucket.getBucketEpoch()),
+                            reqForBucket.hasBucketCount() ? reqForBucket.getBucketCount() : null,
+                            reqForBucket.hasBucketCountEpoch()
+                                    ? reqForBucket.getBucketCountEpoch()
+                                    : null));
         }
         return notifyLeaderAndIsrDataList;
     }
@@ -891,12 +940,20 @@ public class ServerRpcMessageUtils {
         return stopReplicaResponse;
     }
 
-    public static Map<TableBucket, MemoryLogRecords> getProduceLogData(
+    /** Converts produce-log requests while preserving their historical partition context. */
+    public static List<ProduceLogDataForBucket> toProduceLogDataForBuckets(
             ProduceLogRequest produceRequest) {
         long tableId = produceRequest.getTableId();
-        Map<TableBucket, MemoryLogRecords> produceEntryData = new HashMap<>();
+        List<ProduceLogDataForBucket> produceLogData =
+                new ArrayList<>(produceRequest.getBucketsReqsCount());
+        Map<TableBucket, Set<String>> originalPartitionsByBucket = new HashMap<>();
+        boolean historicalWriteRequest = hasHistoricalProduce(produceRequest);
         for (PbProduceLogReqForBucket produceLogReqForBucket :
                 produceRequest.getBucketsReqsList()) {
+            if (produceLogReqForBucket.hasOriginalPartitionName() != historicalWriteRequest) {
+                throw new IllegalArgumentException(
+                        "Normal and historical writes cannot be mixed in the same request.");
+            }
             ByteBuffer recordBuffer = toByteBuffer(produceLogReqForBucket.getRecordsSlice());
             MemoryLogRecords logRecords = MemoryLogRecords.pointToByteBuffer(recordBuffer);
             TableBucket tb =
@@ -906,9 +963,23 @@ public class ServerRpcMessageUtils {
                                     ? produceLogReqForBucket.getPartitionId()
                                     : null,
                             produceLogReqForBucket.getBucketId());
-            produceEntryData.put(tb, logRecords);
+            String originalPartitionName =
+                    produceLogReqForBucket.hasOriginalPartitionName()
+                            ? produceLogReqForBucket.getOriginalPartitionName()
+                            : null;
+            Set<String> originalPartitions =
+                    originalPartitionsByBucket.computeIfAbsent(tb, ignored -> new HashSet<>());
+            if (!originalPartitions.add(originalPartitionName)) {
+                throw new IllegalArgumentException(
+                        "A ProduceLog request contains duplicate table bucket "
+                                + tb
+                                + " and original partition "
+                                + originalPartitionName
+                                + '.');
+            }
+            produceLogData.add(new ProduceLogDataForBucket(tb, logRecords, originalPartitionName));
         }
-        return produceEntryData;
+        return produceLogData;
     }
 
     public static ProduceLogResponse makeProduceLogResponse(
@@ -921,6 +992,9 @@ public class ServerRpcMessageUtils {
             TableBucket tableBucket = bucketResult.getTableBucket();
             if (tableBucket.getPartitionId() != null) {
                 producedBucket.setPartitionId(tableBucket.getPartitionId());
+            }
+            if (bucketResult.getOriginalPartitionName() != null) {
+                producedBucket.setOriginalPartitionName(bucketResult.getOriginalPartitionName());
             }
 
             if (bucketResult.failed()) {
@@ -1012,6 +1086,9 @@ public class ServerRpcMessageUtils {
             if (bucketResult.hasFilteredEndOffset()) {
                 fetchLogRespForBucket.setFilteredEndOffset(bucketResult.getFilteredEndOffset());
             }
+            if (bucketResult.hasMinRetainOffset()) {
+                fetchLogRespForBucket.setMinRetainOffset(bucketResult.getMinRetainOffset());
+            }
             if (tb.getPartitionId() != null) {
                 fetchLogRespForBucket.setPartitionId(tb.getPartitionId());
             }
@@ -1101,22 +1178,52 @@ public class ServerRpcMessageUtils {
         return fetchLogResponse;
     }
 
-    public static Map<TableBucket, KvRecordBatch> getPutKvData(PutKvRequest putKvRequest) {
+    /**
+     * Converts put-KV bucket requests while preserving their historical partition context.
+     *
+     * <p>The returned original partition name is null for normal writes. Normal and historical
+     * writes cannot be mixed in one request. Historical target and partition eligibility are
+     * validated by the historical write path.
+     */
+    public static List<PutKvDataForBucket> toPutKvDataForBuckets(PutKvRequest putKvRequest) {
         long tableId = putKvRequest.getTableId();
-        Map<TableBucket, KvRecordBatch> produceEntryData = new HashMap<>();
+        List<PutKvDataForBucket> putKvData = new ArrayList<>(putKvRequest.getBucketsReqsCount());
+        Map<TableBucket, Set<String>> originalPartitionsByBucket = new HashMap<>();
+        boolean historicalWriteRequest =
+                putKvRequest.getBucketsReqsCount() > 0
+                        && putKvRequest.getBucketsReqAt(0).hasOriginalPartitionName();
         for (PbPutKvReqForBucket putKvReqForBucket : putKvRequest.getBucketsReqsList()) {
+            if (putKvReqForBucket.hasOriginalPartitionName() != historicalWriteRequest) {
+                throw new IllegalArgumentException(
+                        "Normal and historical writes cannot be mixed in the same request.");
+            }
             ByteBuffer recordsBuffer = toByteBuffer(putKvReqForBucket.getRecordsSlice());
             DefaultKvRecordBatch kvRecords = DefaultKvRecordBatch.pointToByteBuffer(recordsBuffer);
-            TableBucket tb =
+            TableBucket tableBucket =
                     new TableBucket(
                             tableId,
                             putKvReqForBucket.hasPartitionId()
                                     ? putKvReqForBucket.getPartitionId()
                                     : null,
                             putKvReqForBucket.getBucketId());
-            produceEntryData.put(tb, kvRecords);
+            String originalPartitionName =
+                    putKvReqForBucket.hasOriginalPartitionName()
+                            ? putKvReqForBucket.getOriginalPartitionName()
+                            : null;
+            Set<String> originalPartitions =
+                    originalPartitionsByBucket.computeIfAbsent(
+                            tableBucket, ignored -> new HashSet<>());
+            if (!originalPartitions.add(originalPartitionName)) {
+                throw new IllegalArgumentException(
+                        "A PutKv request contains duplicate table bucket "
+                                + tableBucket
+                                + " and original partition "
+                                + originalPartitionName
+                                + '.');
+            }
+            putKvData.add(new PutKvDataForBucket(tableBucket, kvRecords, originalPartitionName));
         }
-        return produceEntryData;
+        return putKvData;
     }
 
     public static Map<TableBucket, List<byte[]>> toLookupData(LookupRequest lookupRequest) {
@@ -1213,6 +1320,9 @@ public class ServerRpcMessageUtils {
             TableBucket tableBucket = bucketResult.getTableBucket();
             if (tableBucket.getPartitionId() != null) {
                 putKvBucket.setPartitionId(tableBucket.getPartitionId());
+            }
+            if (bucketResult.getOriginalPartitionName() != null) {
+                putKvBucket.setOriginalPartitionName(bucketResult.getOriginalPartitionName());
             }
 
             if (bucketResult.failed()) {
@@ -1322,10 +1432,11 @@ public class ServerRpcMessageUtils {
                 lookupRespForBucket.setError(
                         bucketResult.getErrorCode(), bucketResult.getErrorMessage());
             } else {
-                for (byte[] value : bucketResult.lookupValues()) {
+                List<ByteArraySlice> values = bucketResult.lookupValues();
+                for (ByteArraySlice value : values) {
                     PbValue pbValue = lookupRespForBucket.addValue();
                     if (value != null) {
-                        pbValue.setValues(value);
+                        pbValue.setValues(value.array(), value.offset(), value.length());
                     }
                 }
             }
@@ -1357,10 +1468,10 @@ public class ServerRpcMessageUtils {
                 respForBucket.setError(bucketResult.getErrorCode(), bucketResult.getErrorMessage());
             } else {
                 List<PbValueList> keyResultList = new ArrayList<>();
-                for (List<byte[]> res : bucketResult.prefixLookupValues()) {
+                for (List<ByteArraySlice> res : bucketResult.prefixLookupValues()) {
                     PbValueList pbValueList = new PbValueList();
-                    for (byte[] bytes : res) {
-                        pbValueList.addValue(bytes);
+                    for (ByteArraySlice value : res) {
+                        pbValueList.addValue(value.array(), value.offset(), value.length());
                     }
                     keyResultList.add(pbValueList);
                 }
@@ -1776,18 +1887,24 @@ public class ServerRpcMessageUtils {
     }
 
     public static ListPartitionInfosResponse toListPartitionInfosResponse(
-            List<String> partitionKeys, Map<String, PartitionRegistration> partitionRegistrations) {
+            List<String> partitionKeys,
+            Map<String, PartitionRegistration> partitionRegistrations,
+            int tableBucketCount,
+            long bucketCountEpoch) {
         ListPartitionInfosResponse listPartitionsResponse = new ListPartitionInfosResponse();
         for (Map.Entry<String, PartitionRegistration> partitionRegistration :
                 partitionRegistrations.entrySet()) {
             ResolvedPartitionSpec spec =
                     ResolvedPartitionSpec.fromPartitionName(
                             partitionKeys, partitionRegistration.getKey());
+            PartitionRegistration partition = partitionRegistration.getValue();
             listPartitionsResponse
                     .addPartitionsInfo()
-                    .setPartitionId(partitionRegistration.getValue().getPartitionId())
+                    .setPartitionId(partition.getPartitionId())
                     .setPartitionSpec(makePbPartitionSpec(spec))
-                    .setRemoteDataDir(partitionRegistration.getValue().getRemoteDataDir());
+                    .setRemoteDataDir(partition.getRemoteDataDir())
+                    .setBucketCount(
+                            partition.getBucketCountOrDefault(tableBucketCount, bucketCountEpoch));
         }
         return listPartitionsResponse;
     }

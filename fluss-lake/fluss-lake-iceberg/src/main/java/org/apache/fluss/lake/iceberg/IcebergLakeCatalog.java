@@ -155,6 +155,12 @@ public class IcebergLakeCatalog implements LakeCatalog {
     @Override
     public void alterTable(TablePath tablePath, List<TableChange> tableChanges, Context context)
             throws TableNotExistException {
+        for (TableChange change : tableChanges) {
+            if (change instanceof TableChange.ModifyBucketCount) {
+                throw new UnsupportedOperationException(
+                        "Bucket count rescale is not supported by the Iceberg lake catalog yet.");
+            }
+        }
         try {
             Table table = icebergCatalog.loadTable(toIcebergTableIdentifier(tablePath));
 
@@ -519,6 +525,9 @@ public class IcebergLakeCatalog implements LakeCatalog {
     boolean isIcebergPropertiesCompatible(
             Map<String, String> existingProperties, Map<String, String> expectedProperties) {
         for (Map.Entry<String, String> entry : expectedProperties.entrySet()) {
+            if (entry.getKey().startsWith(FLUSS_CONF_PREFIX)) {
+                continue;
+            }
             String actual = existingProperties.get(entry.getKey());
             if (actual == null || !actual.equals(entry.getValue())) {
                 return false;

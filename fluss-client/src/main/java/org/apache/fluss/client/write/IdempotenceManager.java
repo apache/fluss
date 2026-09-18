@@ -269,7 +269,10 @@ public class IdempotenceManager {
 
         if (error == Errors.OUT_OF_ORDER_SEQUENCE_EXCEPTION
                 && (batch.sequenceHasBeenReset()
-                        || !isNextSequence(tableBucket, batch.batchSequence()))) {
+                        || !isNextSequence(tableBucket, batch.batchSequence())
+                        || lastAckedBatchSequence(tableBucket)
+                                        .orElse(IdempotenceBucketEntry.NO_LAST_ACKED_BATCH_SEQUENCE)
+                                > batch.lastAckedSequenceAtSend())) {
             // We should retry the OutOfOrderSequenceException if the batch is not the next batch,
             // i.e. its batch sequence isn't the lastAckedBatchSequence + 1. However, if the first
             // in flight batch fails fatally, we will adjust the batch sequences of the other
@@ -279,6 +282,13 @@ public class IdempotenceManager {
             // OutOfOrderSequence, we want to retry it. To account for the latter case, we check
             // whether the sequence has been reset since the last drain. If it has, we will retry it
             // anyway.
+            //
+            // We should also retry if the acked sequence has advanced since this batch was sent
+            // (lastAckedBatchSequence > lastAckedSequenceAtSend). That means a predecessor was
+            // acknowledged while this batch was in flight, so this OutOfOrderSequence reflects a
+            // superseded (stale) server state that a response reordering surfaced late; a retry
+            // will observe the advanced state and succeed. A genuine loss shows no such progress
+            // and still resets.
             return true;
         }
 

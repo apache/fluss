@@ -36,7 +36,7 @@ pub async fn main() -> Result<()> {
                 .column("id", DataTypes::int())
                 .column("name", DataTypes::string())
                 .column("age", DataTypes::bigint())
-                .primary_key(vec!["id"])
+                .primary_key(vec!["id"])?
                 .build()?,
         )
         .build()?;

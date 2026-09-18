@@ -17,7 +17,7 @@
 
 # Client integration tests against a SAME-REVISION server (FIP-40 §3.2).
 # Builds the Fluss server image from this source tree ONCE, caches + saves it,
-# then fans out the Rust / Python / C++ / Elixir integration suites against that
+# then fans out the Rust / Python / C++ / Elixir / Gateway integration suites against that
 # fluss:dev image (build-once-fan-out, à la Temporal/PyFlink). The image build is
 # cached on server/proto hashes, so client-only PRs reuse it instead of rebuilding.
 
@@ -37,6 +37,7 @@ on:
       - 'fluss-rust/bindings/**'
       - 'fluss-rust/Cargo.toml'
       - 'fluss-rust/Cargo.lock'
+      - 'fluss-gateway/**'
       - '.github/workflows/client-integration.yml'
   pull_request:
     branches:
@@ -51,6 +52,7 @@ on:
       - 'fluss-rust/bindings/**'
       - 'fluss-rust/Cargo.toml'
       - 'fluss-rust/Cargo.lock'
+      - 'fluss-gateway/**'
       - '.github/workflows/client-integration.yml'
   workflow_dispatch:
 
@@ -60,8 +62,8 @@ concurrency:
 
 jobs:
   # Decide which client suites to run, mirroring the per-binding scoping the
-  # standalone fluss-rust repo had: a binding suite runs only when its own
-  # binding, the core fluss-rs crate, or the server/proto changed. On non-PR
+  # standalone fluss-rust repo had: a client suite runs only when its own
+  # sources, the core fluss-rs crate, or the server/proto changed. On non-PR
   # events (push to main, manual) everything runs.
   detect-changes:
     runs-on: ubuntu-latest
@@ -70,6 +72,7 @@ jobs:
       python: ${{ steps.filter.outputs.python }}
       cpp: ${{ steps.filter.outputs.cpp }}
       elixir: ${{ steps.filter.outputs.elixir }}
+      gateway: ${{ steps.filter.outputs.gateway }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -86,19 +89,21 @@ jobs:
           has() { echo "$changed" | grep -qE "$1"; }
           # a change to this workflow itself should exercise every suite
           has '^\.github/workflows/client-integration\.yml' && all=true || true
-          protocol=false; core=false; py=false; cpp=false; ex=false
+          protocol=false; core=false; py=false; cpp=false; ex=false; gateway=false
           has '^(fluss-rpc/src/main/proto/|fluss-server/|fluss-common/|fluss-dist/|docker/fluss/)' && protocol=true || true
           has '^(fluss-rust/crates/|fluss-rust/Cargo\.)' && core=true || true
           has '^fluss-rust/bindings/python/' && py=true || true
           has '^fluss-rust/bindings/cpp/' && cpp=true || true
           has '^fluss-rust/bindings/elixir/' && ex=true || true
-          # a suite runs if: non-PR (all) OR core crate OR server/proto OR its own binding changed
+          has '^fluss-gateway/' && gateway=true || true
+          # a suite runs if: non-PR (all) OR core crate OR server/proto OR its own sources changed
           gate() { if [ "$all" = true ] || [ "$core" = true ] || [ "$protocol" = true ] || [ "$1" = true ]; then echo true; else echo false; fi; }
           {
             echo "rust=$(gate false)"
             echo "python=$(gate $py)"
             echo "cpp=$(gate $cpp)"
             echo "elixir=$(gate $ex)"
+            echo "gateway=$(gate $gateway)"
           } >> "$GITHUB_OUTPUT"
 
   # Build the server image from THIS source tree once; cache it on server/proto
@@ -106,7 +111,7 @@ jobs:
   # is uploaded as an artifact and loaded by every client integration job.
   build-server-image:
     needs: detect-changes
-    if: needs.detect-changes.outputs.rust == 'true' || needs.detect-changes.outputs.python == 'true' || needs.detect-changes.outputs.cpp == 'true' || needs.detect-changes.outputs.elixir == 'true'
+    if: needs.detect-changes.outputs.rust == 'true' || needs.detect-changes.outputs.python == 'true' || needs.detect-changes.outputs.cpp == 'true' || needs.detect-changes.outputs.elixir == 'true' || needs.detect-changes.outputs.gateway == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -169,6 +174,41 @@ jobs:
       - name: Integration tests
         run: cargo test --features integration_tests --test test_fluss -p fluss-rs
         env:
+          RUST_LOG: DEBUG
+          RUST_BACKTRACE: full
+
+  gateway-integration:
+    needs: [detect-changes, build-server-image]
+    if: needs.detect-changes.outputs.gateway == 'true'
+    timeout-minutes: 60
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: fluss-gateway
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/download-artifact@v4
+        with:
+          name: fluss-dev-image
+          path: /tmp
+      - name: Load server image
+        run: docker load -i /tmp/fluss-dev.tar
+      - name: Install protobuf compiler
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          workspaces: |
+            fluss-gateway
+            fluss-rust
+      - name: Build Fluss test cluster helper
+        run: cargo build --locked --manifest-path ../fluss-rust/Cargo.toml -p fluss-test-cluster
+      - name: Integration Test
+        run: cargo test --locked --features integration_tests --test e2e_cluster
+        env:
+          FLUSS_TEST_CLUSTER_BIN: ${{ github.workspace }}/fluss-rust/target/debug/fluss-test-cluster
+          FLUSS_IMAGE: fluss
+          FLUSS_VERSION: dev
           RUST_LOG: DEBUG
           RUST_BACKTRACE: full
 

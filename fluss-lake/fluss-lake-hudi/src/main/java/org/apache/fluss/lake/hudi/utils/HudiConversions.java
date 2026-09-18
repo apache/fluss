@@ -33,7 +33,6 @@ import org.apache.flink.table.catalog.ObjectPath;
 import org.apache.flink.table.catalog.ResolvedSchema;
 import org.apache.flink.table.catalog.UniqueConstraint;
 import org.apache.flink.table.factories.FactoryUtil;
-import org.apache.flink.table.types.DataType;
 import org.apache.flink.types.RowKind;
 import org.apache.hudi.common.model.HoodieTableType;
 import org.apache.hudi.configuration.FlinkOptions;
@@ -112,7 +111,8 @@ public class HudiConversions {
 
         List<Column> columns = new ArrayList<>();
 
-        // Add regular columns
+        // FIP-27: Hudi lake tables contain only user columns; the Fluss system columns
+        // (__bucket/__offset/__timestamp) are not written to the physical schema.
         for (org.apache.fluss.metadata.Schema.Column column :
                 tableDescriptor.getSchema().getColumns()) {
             String columnName = column.getName();
@@ -131,11 +131,6 @@ public class HudiConversions {
                                 columnName, tablePath, HUDI_METADATA_COLUMN_PREFIX));
             }
             columns.add(Column.physical(columnName, column.getDataType().accept(converter)));
-        }
-
-        // add system metadata columns to schema
-        for (Map.Entry<String, DataType> systemColumn : SYSTEM_COLUMNS.entrySet()) {
-            columns.add(Column.physical(systemColumn.getKey(), systemColumn.getValue()));
         }
 
         UniqueConstraint constraint = null;

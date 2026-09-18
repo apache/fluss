@@ -20,34 +20,49 @@ package org.apache.fluss.rpc.entity;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.rpc.messages.LookupRequest;
 import org.apache.fluss.rpc.protocol.ApiError;
+import org.apache.fluss.utils.ByteArraySlice;
 
 import javax.annotation.Nullable;
 
 import java.util.List;
 
-/** Result of {@link LookupRequest} for each table bucket. */
+/**
+ * Result of {@link LookupRequest} for each table bucket.
+ *
+ * <p>Successful lookup values are already converted to the RPC value representation.
+ */
 public class LookupResultForBucket extends ResultForBucket {
 
-    private final List<byte[]> values;
+    private final List<ByteArraySlice> values;
 
     /** Identifies the original partition for historical lookup; null for normal lookup. */
     private final @Nullable String originalPartitionName;
 
-    public LookupResultForBucket(TableBucket tableBucket, List<byte[]> values) {
+    /** Creates a successful lookup result with RPC-ready values. */
+    public LookupResultForBucket(TableBucket tableBucket, List<ByteArraySlice> values) {
         this(tableBucket, values, null, ApiError.NONE);
     }
 
+    /** Creates a failed lookup result. */
     public LookupResultForBucket(TableBucket tableBucket, ApiError error) {
         this(tableBucket, null, null, error);
     }
 
-    /**
-     * Creates a lookup result with the original partition name used to identify a historical lookup
-     * response.
-     */
+    /** Creates a successful historical lookup result. */
     public LookupResultForBucket(
+            TableBucket tableBucket, List<ByteArraySlice> values, String originalPartitionName) {
+        this(tableBucket, values, originalPartitionName, ApiError.NONE);
+    }
+
+    /** Creates a failed historical lookup result. */
+    public LookupResultForBucket(
+            TableBucket tableBucket, String originalPartitionName, ApiError error) {
+        this(tableBucket, null, originalPartitionName, error);
+    }
+
+    private LookupResultForBucket(
             TableBucket tableBucket,
-            List<byte[]> values,
+            List<ByteArraySlice> values,
             @Nullable String originalPartitionName,
             ApiError error) {
         super(tableBucket, error);
@@ -55,7 +70,8 @@ public class LookupResultForBucket extends ResultForBucket {
         this.originalPartitionName = originalPartitionName;
     }
 
-    public List<byte[]> lookupValues() {
+    /** Returns the RPC-ready lookup values. */
+    public List<ByteArraySlice> lookupValues() {
         return values;
     }
 

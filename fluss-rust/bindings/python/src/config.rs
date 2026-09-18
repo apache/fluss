@@ -182,6 +182,16 @@ impl Config {
                                 ))
                             })?;
                     }
+                    "writer.retry-backoff-ms" => {
+                        config.writer_retry_backoff_ms = value.parse::<u64>().map_err(|e| {
+                            FlussError::new_err(format!("Invalid value '{value}' for '{key}': {e}"))
+                        })?;
+                    }
+                    "writer.retry-max-backoff-ms" => {
+                        config.writer_retry_max_backoff_ms = value.parse::<u64>().map_err(|e| {
+                            FlussError::new_err(format!("Invalid value '{value}' for '{key}': {e}"))
+                        })?;
+                    }
                     "writer.bucket.no-key-assigner" => {
                         config.writer_bucket_no_key_assigner =
                             value.parse::<fcore::config::NoKeyAssigner>().map_err(|e| {
@@ -437,6 +447,30 @@ impl Config {
     #[setter]
     fn set_writer_kv_backpressure_max_throttle_ms(&mut self, timeout: u64) {
         self.inner.writer_kv_backpressure_max_throttle_ms = timeout;
+    }
+
+    /// Get the base writer retry backoff in milliseconds
+    #[getter]
+    fn writer_retry_backoff_ms(&self) -> u64 {
+        self.inner.writer_retry_backoff_ms
+    }
+
+    /// Set the base writer retry backoff in milliseconds
+    #[setter]
+    fn set_writer_retry_backoff_ms(&mut self, backoff: u64) {
+        self.inner.writer_retry_backoff_ms = backoff;
+    }
+
+    /// Get the maximum writer retry backoff in milliseconds
+    #[getter]
+    fn writer_retry_max_backoff_ms(&self) -> u64 {
+        self.inner.writer_retry_max_backoff_ms
+    }
+
+    /// Set the maximum writer retry backoff in milliseconds
+    #[setter]
+    fn set_writer_retry_max_backoff_ms(&mut self, backoff: u64) {
+        self.inner.writer_retry_max_backoff_ms = backoff;
     }
 
     /// Get the connect timeout in milliseconds

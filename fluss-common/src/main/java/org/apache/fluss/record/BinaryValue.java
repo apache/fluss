@@ -34,8 +34,8 @@ public class BinaryValue {
     }
 
     /**
-     * Encode the value (consisted of {@code row} with a {@code schemaId}) to a byte array value to
-     * be expected persisted to kv store.
+     * Encodes this value using the PLAIN {@code [schema id][BinaryRow]} representation used by
+     * ordinary KV values and RPC value bodies.
      */
     public byte[] encodeValue() {
         return ValueEncoder.encodeValue(schemaId, row);

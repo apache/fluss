@@ -169,6 +169,15 @@ public class TableMetricGroup extends AbstractMetricGroup {
         return logMetrics.remoteLogDeleteErrors;
     }
 
+    /** Returns the successful KV snapshot upload byte counter, or a no-op for log tables. */
+    public Counter remoteKvCopyBytes() {
+        if (kvMetrics == null) {
+            return NoOpCounter.INSTANCE;
+        } else {
+            return kvMetrics.remoteKvCopyBytes;
+        }
+    }
+
     public void incKvMessageIn(long n) {
         if (kvMetrics == null) {
             NoOpCounter.INSTANCE.inc(n);
@@ -218,6 +227,24 @@ public class TableMetricGroup extends AbstractMetricGroup {
             return NoOpCounter.INSTANCE;
         } else {
             return kvMetrics.failedHistoricalLookupRequests;
+        }
+    }
+
+    /** Returns the counter for historical put-KV requests received by this table. */
+    public Counter totalHistoricalPutKvRequests() {
+        if (kvMetrics == null) {
+            return NoOpCounter.INSTANCE;
+        } else {
+            return kvMetrics.totalHistoricalPutKvRequests;
+        }
+    }
+
+    /** Returns the counter for failed historical put-KV requests for this table. */
+    public Counter failedHistoricalPutKvRequests() {
+        if (kvMetrics == null) {
+            return NoOpCounter.INSTANCE;
+        } else {
+            return kvMetrics.failedHistoricalPutKvRequests;
         }
     }
 
@@ -574,10 +601,14 @@ public class TableMetricGroup extends AbstractMetricGroup {
 
         private static final String LOOKUP_FILE_DOWNLOADED = "lookup_file_downloaded";
 
+        private final Counter remoteKvCopyBytes;
+
         private final Counter totalLookupRequests;
         private final Counter failedLookupRequests;
         private final Counter totalHistoricalLookupRequests;
         private final Counter failedHistoricalLookupRequests;
+        private final Counter totalHistoricalPutKvRequests;
+        private final Counter failedHistoricalPutKvRequests;
         private final LookupFileDownloadedMetricGroup downloadedHistoricalLookupMetrics;
         private final LookupFileDownloadedMetricGroup nonDownloadedHistoricalLookupMetrics;
         private final Counter totalPutKvRequests;
@@ -590,21 +621,34 @@ public class TableMetricGroup extends AbstractMetricGroup {
         public KvMetricGroup(TableMetricGroup tableMetricGroup) {
             super(tableMetricGroup, TabletType.KV);
 
+            // for kv snapshot upload
+            remoteKvCopyBytes = new ThreadSafeSimpleCounter();
+            meter(MetricNames.REMOTE_KV_COPY_BYTES_RATE, new MeterView(remoteKvCopyBytes));
+
             // for lookup request
             totalLookupRequests = new ThreadSafeSimpleCounter();
             meter(MetricNames.TOTAL_LOOKUP_REQUESTS_RATE, new MeterView(totalLookupRequests));
             failedLookupRequests = new ThreadSafeSimpleCounter();
             meter(MetricNames.FAILED_LOOKUP_REQUESTS_RATE, new MeterView(failedLookupRequests));
             // for historical lookup request
-            MetricGroup historicalLookupMetrics = addGroup("historical");
+            MetricGroup historicalMetrics = addGroup("historical");
             totalHistoricalLookupRequests = new ThreadSafeSimpleCounter();
-            historicalLookupMetrics.meter(
+            historicalMetrics.meter(
                     MetricNames.TOTAL_LOOKUP_REQUESTS_RATE,
                     new MeterView(totalHistoricalLookupRequests));
             failedHistoricalLookupRequests = new ThreadSafeSimpleCounter();
-            historicalLookupMetrics.meter(
+            historicalMetrics.meter(
                     MetricNames.FAILED_LOOKUP_REQUESTS_RATE,
                     new MeterView(failedHistoricalLookupRequests));
+            // for historical put kv request
+            totalHistoricalPutKvRequests = new ThreadSafeSimpleCounter();
+            historicalMetrics.meter(
+                    MetricNames.TOTAL_PUT_KV_REQUESTS_RATE,
+                    new MeterView(totalHistoricalPutKvRequests));
+            failedHistoricalPutKvRequests = new ThreadSafeSimpleCounter();
+            historicalMetrics.meter(
+                    MetricNames.FAILED_PUT_KV_REQUESTS_RATE,
+                    new MeterView(failedHistoricalPutKvRequests));
             // Separate groups expose the same metric names with different downloaded-file labels
             // without adding the label key to the logical metric scope.
             downloadedHistoricalLookupMetrics =

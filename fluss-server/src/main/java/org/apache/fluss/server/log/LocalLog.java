@@ -324,19 +324,30 @@ public final class LocalLog {
     LogSegment createAndDeleteSegment(
             long newOffset, LogSegment segmentToDelete, SegmentDeletionReason reason)
             throws IOException {
-        // delete the old segment.
-        if (newOffset == segmentToDelete.getBaseOffset()) {
-            deleteSegmentFiles(Collections.singletonList(segmentToDelete), reason);
+        boolean replaceAtSameOffset = newOffset == segmentToDelete.getBaseOffset();
+        if (replaceAtSameOffset) {
+            segmentToDelete.changeFileSuffixes("", FlussPaths.DELETED_FILE_SUFFIX);
         }
-        reason.logReason(Collections.singletonList(segmentToDelete));
 
-        // open a new segment.
-        LogSegment newSegment = LogSegment.open(logTabletDir, newOffset, config, logFormat);
+        LogSegment newSegment;
+        try {
+            newSegment = LogSegment.open(logTabletDir, newOffset, config, logFormat);
+        } catch (IOException e) {
+            if (replaceAtSameOffset) {
+                try {
+                    segmentToDelete.changeFileSuffixes(FlussPaths.DELETED_FILE_SUFFIX, "");
+                } catch (IOException rollbackException) {
+                    e.addSuppressed(rollbackException);
+                }
+            }
+            throw e;
+        }
         segments.add(newSegment);
 
-        if (newOffset != segmentToDelete.getBaseOffset()) {
+        if (!replaceAtSameOffset) {
             segments.remove(segmentToDelete.getBaseOffset());
         }
+        deleteSegmentFiles(Collections.singletonList(segmentToDelete), reason);
         return newSegment;
     }
 

@@ -42,7 +42,8 @@ public enum ApiKeys {
     GET_TABLE_SCHEMA(1011, 0, 0, PUBLIC),
     GET_METADATA(1012, 0, 0, PUBLIC),
     UPDATE_METADATA(1013, 0, 0, PRIVATE),
-    PRODUCE_LOG(1014, 0, 0, PUBLIC),
+    // Version 1: Supports original_partition_name in requests and responses for historical writes.
+    PRODUCE_LOG(1014, 0, 1, PUBLIC),
     FETCH_LOG(1015, 0, 0, PUBLIC),
 
     // Version 0: Uses lake's encoder for primary key encoding (legacy behavior).
@@ -51,7 +52,8 @@ public enum ApiKeys {
     // Version 2: Understands the STORAGE_BACKPRESSURE_EXCEPTION error code (72) returned when the
     //            KV storage engine rejects a write under pressure; older versions receive the
     //            retriable KV_STORAGE_EXCEPTION instead.
-    PUT_KV(1016, 0, 2, PUBLIC),
+    // Version 3: Supports original_partition_name in requests and responses for historical writes.
+    PUT_KV(1016, 0, 3, PUBLIC),
 
     // Version 0: Uses lake's encoder for primary key encoding (legacy behavior).
     // Version 1: Uses CompactedKeyEncoder for primary key encoding when bucket key differs from
@@ -64,7 +66,7 @@ public enum ApiKeys {
     LIST_OFFSETS(1021, 0, 0, PUBLIC),
     COMMIT_KV_SNAPSHOT(1022, 0, 0, PRIVATE),
     GET_LATEST_KV_SNAPSHOTS(1023, 0, 0, PUBLIC),
-    GET_KV_SNAPSHOT_METADATA(1024, 0, 0, PUBLIC),
+    GET_KV_SNAPSHOT_METADATA(1024, 0, 1, PUBLIC),
     GET_FILESYSTEM_SECURITY_TOKEN(1025, 0, 0, PUBLIC),
     INIT_WRITER(1026, 0, 0, PUBLIC),
     COMMIT_REMOTE_LOG_MANIFEST(1027, 0, 0, PRIVATE),
@@ -89,7 +91,8 @@ public enum ApiKeys {
     DROP_ACLS(1041, 0, 0, PUBLIC),
     LAKE_TIERING_HEARTBEAT(1042, 0, 0, PRIVATE),
     CONTROLLED_SHUTDOWN(1043, 0, 0, PRIVATE),
-    ALTER_TABLE(1044, 0, 0, PUBLIC),
+    // Version 1: supports modifying the table distribution's bucket count.
+    ALTER_TABLE(1044, 0, 1, PUBLIC),
     DESCRIBE_CLUSTER_CONFIGS(1045, 0, 0, PUBLIC),
     ALTER_CLUSTER_CONFIGS(1046, 0, 0, PUBLIC),
     ADD_SERVER_TAG(1047, 0, 0, PUBLIC),
@@ -109,7 +112,10 @@ public enum ApiKeys {
     SCAN_KV(1061, 0, 0, PUBLIC),
     GET_CLUSTER_HEALTH(1062, 0, 0, PUBLIC),
     LIST_REMOTE_LOG_MANIFESTS(1063, 0, 0, PUBLIC),
-    LIST_KV_SNAPSHOTS(1064, 0, 0, PUBLIC);
+    LIST_KV_SNAPSHOTS(1064, 0, 0, PUBLIC),
+    ADD_SERVER_TAG_BY_RACK(1065, 0, 0, PUBLIC),
+    REMOVE_SERVER_TAG_BY_RACK(1066, 0, 0, PUBLIC),
+    DESCRIBE_BUCKETS(1067, 0, 0, PUBLIC);
 
     private static final Map<Integer, ApiKeys> ID_TO_TYPE =
             Arrays.stream(ApiKeys.values())

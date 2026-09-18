@@ -212,6 +212,9 @@ public class CoordinatorRequestBatch {
             TableBucket tableBucket,
             List<Integer> bucketReplicas,
             LeaderAndIsr leaderAndIsr) {
+        Integer bucketCount = getBucketCount(tableBucket);
+        Long bucketCountEpoch = getBucketCountEpoch(tableBucket.getTableId());
+
         tabletServers.stream()
                 .filter(s -> s >= 0 && !coordinatorContext.shuttingDownTabletServers().contains(s))
                 .forEach(
@@ -226,17 +229,45 @@ public class CoordinatorRequestBatch {
                                                     tablePath,
                                                     tableBucket,
                                                     bucketReplicas,
-                                                    leaderAndIsr));
+                                                    leaderAndIsr,
+                                                    bucketCount,
+                                                    bucketCountEpoch));
                             notifyBucketLeaderAndIsr.put(tableBucket, notifyLeaderAndIsrForBucket);
                         });
 
         // TODO for these cases, we can send NotifyLeaderAndIsrRequest instead of another
         // updateMetadata request, trace by: https://github.com/apache/fluss/issues/983
-        addUpdateMetadataRequestForTabletServers(
-                coordinatorContext.getLiveTabletServers().keySet(),
-                null,
-                null,
-                Collections.singleton(tableBucket));
+        // A missing bucket count means the assignment required to build BucketMetadata is absent.
+        if (bucketCount != null) {
+            addUpdateMetadataRequestForTabletServers(
+                    coordinatorContext.getLiveTabletServers().keySet(),
+                    null,
+                    null,
+                    Collections.singleton(tableBucket));
+        }
+    }
+
+    /**
+     * The actual bucket count of the bucket's owning table/partition, or null when no assignment is
+     * in the coordinator context. The count is immutable per bucket, so it is carried with the
+     * activation instead of waiting for the metadata push.
+     */
+    private @Nullable Integer getBucketCount(TableBucket tableBucket) {
+        Map<Integer, List<Integer>> assignment;
+        if (tableBucket.getPartitionId() != null) {
+            assignment =
+                    coordinatorContext.getPartitionAssignment(
+                            new TablePartition(
+                                    tableBucket.getTableId(), tableBucket.getPartitionId()));
+        } else {
+            assignment = coordinatorContext.getTableAssignment(tableBucket.getTableId());
+        }
+        return assignment.isEmpty() ? null : assignment.size();
+    }
+
+    private @Nullable Long getBucketCountEpoch(long tableId) {
+        TableInfo tableInfo = coordinatorContext.getTableInfoById(tableId);
+        return tableInfo == null ? null : tableInfo.getBucketCountEpoch();
     }
 
     public void addStopReplicaRequestForTabletServers(
@@ -324,6 +355,12 @@ public class CoordinatorRequestBatch {
                 Integer leaderEpoch =
                         bucketLeaderAndIsr.map(LeaderAndIsr::leaderEpoch).orElse(null);
                 Integer leader = bucketLeaderAndIsr.map(LeaderAndIsr::leader).orElse(null);
+                List<Integer> isr =
+                        bucketLeaderAndIsr.map(LeaderAndIsr::isr).orElse(Collections.emptyList());
+                int bucketEpoch =
+                        bucketLeaderAndIsr
+                                .map(LeaderAndIsr::bucketEpoch)
+                                .orElse(BucketMetadata.NO_LEADER_ISR_STATE_EPOCH);
                 if (currentPartitionId == null) {
                     Map<Integer, List<Integer>> tableAssignment =
                             coordinatorContext.getTableAssignment(currentTableId);
@@ -332,7 +369,9 @@ public class CoordinatorRequestBatch {
                                     tableBucket.getBucket(),
                                     leader,
                                     leaderEpoch,
-                                    tableAssignment.get(tableBucket.getBucket()));
+                                    tableAssignment.get(tableBucket.getBucket()),
+                                    isr,
+                                    bucketEpoch);
                     updateMetadataRequestBucketMap
                             .computeIfAbsent(currentTableId, k -> new ArrayList<>())
                             .add(bucketMetadata);
@@ -346,7 +385,9 @@ public class CoordinatorRequestBatch {
                                     tableBucket.getBucket(),
                                     leader,
                                     leaderEpoch,
-                                    partitionAssignment.get(tableBucket.getBucket()));
+                                    partitionAssignment.get(tableBucket.getBucket()),
+                                    isr,
+                                    bucketEpoch);
                     updateMetadataRequestPartitionMap
                             .computeIfAbsent(currentTableId, k -> new HashMap<>())
                             .computeIfAbsent(tableBucket.getPartitionId(), k -> new ArrayList<>())
@@ -675,6 +716,13 @@ public class CoordinatorRequestBatch {
                                 coordinatorContext.isPartitionQueuedForDeletion(
                                         new TablePartition(tableId, partitionId));
                         String partitionName = coordinatorContext.getPartitionName(partitionId);
+                        // the partition assignment size is the partition's actual bucket count;
+                        // null when the assignment is not in context
+                        Map<Integer, List<Integer>> partitionAssignment =
+                                coordinatorContext.getPartitionAssignment(
+                                        new TablePartition(tableId, partitionId));
+                        Integer bucketCount =
+                                partitionAssignment.isEmpty() ? null : partitionAssignment.size();
                         PartitionMetadata partitionMetadata;
                         if (partitionName == null) {
                             if (partitionQueuedForDeletion) {
@@ -683,7 +731,8 @@ public class CoordinatorRequestBatch {
                                                 tableId,
                                                 DELETED_PARTITION_NAME,
                                                 partitionId,
-                                                kvEntry.getValue());
+                                                kvEntry.getValue(),
+                                                bucketCount);
                             } else {
                                 throw new IllegalStateException(
                                         "Partition name is null for partition " + partitionId);
@@ -696,7 +745,8 @@ public class CoordinatorRequestBatch {
                                             partitionQueuedForDeletion
                                                     ? DELETED_PARTITION_ID
                                                     : partitionId,
-                                            kvEntry.getValue());
+                                            kvEntry.getValue(),
+                                            bucketCount);
                         }
                         // table
                         partitionMetadataList.add(partitionMetadata);

@@ -253,6 +253,7 @@ pub struct SchemaBuilder {
     columns: Vec<Column>,
     primary_key: Option<PrimaryKey>,
     auto_increment_col_names: Vec<String>,
+    highest_field_id: Option<i32>,
 }
 
 impl SchemaBuilder {
@@ -291,7 +292,7 @@ impl SchemaBuilder {
         self
     }
 
-    pub fn primary_key<I, S>(self, column_names: I) -> Self
+    pub fn primary_key<I, S>(self, column_names: I) -> Result<Self>
     where
         I: IntoIterator<Item = S>,
         S: Into<String>,
@@ -307,12 +308,18 @@ impl SchemaBuilder {
         mut self,
         constraint_name: N,
         column_names: Vec<P>,
-    ) -> Self {
+    ) -> Result<Self> {
+        if self.primary_key.is_some() {
+            return Err(IllegalArgument {
+                message: "Multiple primary keys are not supported.".to_string(),
+            });
+        }
+
         self.primary_key = Some(PrimaryKey::new(
             constraint_name.into(),
             column_names.into_iter().map(|s| s.into()).collect(),
         ));
-        self
+        Ok(self)
     }
 
     /// Declares a column to be auto-incremented. With an auto-increment column in the table,
@@ -330,9 +337,24 @@ impl SchemaBuilder {
         Ok(self)
     }
 
+    pub(crate) fn highest_field_id(mut self, highest_field_id: i32) -> Self {
+        self.highest_field_id = Some(highest_field_id);
+        self
+    }
+
     pub fn build(&self) -> Result<Schema> {
         let columns = Self::normalize_columns(&self.columns, self.primary_key.as_ref())?;
-        let (columns_with_ids, highest_field_id) = Self::assign_all_field_ids(columns)?;
+        let (columns_with_ids, maximum_field_id) = Self::assign_all_field_ids(columns)?;
+        let highest_field_id = self
+            .highest_field_id
+            .unwrap_or(maximum_field_id)
+            .max(maximum_field_id);
+
+        if !self.auto_increment_col_names.is_empty() && self.primary_key.is_none() {
+            return Err(IllegalArgument {
+                message: "Auto increment column can only be used in primary-key table.".to_string(),
+            });
+        }
 
         let column_names: HashSet<_> = columns_with_ids.iter().map(|c| &c.name).collect();
         for auto_inc_col in &self.auto_increment_col_names {
@@ -341,6 +363,29 @@ impl SchemaBuilder {
                     message: format!(
                         "Auto increment column '{auto_inc_col}' is not found in the schema columns."
                     ),
+                });
+            }
+            if self
+                .primary_key
+                .as_ref()
+                .is_some_and(|pk| pk.column_names().contains(auto_inc_col))
+            {
+                return Err(IllegalArgument {
+                    message: "Auto increment column can not be used as the primary key."
+                        .to_string(),
+                });
+            }
+            let auto_inc_type = columns_with_ids
+                .iter()
+                .find(|c| &c.name == auto_inc_col)
+                .map(|c| c.data_type());
+            if !matches!(
+                auto_inc_type,
+                Some(DataType::Int(_)) | Some(DataType::BigInt(_))
+            ) {
+                return Err(IllegalArgument {
+                    message: "The data type of auto increment column must be INT or BIGINT."
+                        .to_string(),
                 });
             }
         }
@@ -492,15 +537,42 @@ impl SchemaBuilder {
         primary_key: Option<&PrimaryKey>,
     ) -> Result<Vec<Column>> {
         let names: Vec<_> = columns.iter().map(|c| &c.name).collect();
+        if names.iter().any(|name| name.trim().is_empty()) {
+            return Err(Error::invalid_table(
+                "Field names must contain at least one non-whitespace character.",
+            ));
+        }
         if let Some(duplicates) = Self::find_duplicates(&names) {
             return Err(Error::invalid_table(format!(
                 "Duplicate column names found: {duplicates:?}"
             )));
         }
+        for column in columns {
+            column
+                .data_type()
+                .validate_row_field_names()
+                .map_err(|error| match error {
+                    IllegalArgument { message } => Error::invalid_table(message),
+                    other => other,
+                })?;
+        }
 
         let Some(pk) = primary_key else {
             return Ok(columns.to_vec());
         };
+
+        if pk.column_names.is_empty() {
+            return Err(Error::invalid_table(
+                "Primary key constraint must be defined for at least a single column.",
+            ));
+        }
+
+        let primary_key_names: Vec<_> = pk.column_names.iter().collect();
+        if let Some(duplicates) = Self::find_duplicates(&primary_key_names) {
+            return Err(Error::invalid_table(format!(
+                "Primary key constraint must not contain duplicate columns. Found: {duplicates:?}"
+            )));
+        }
 
         let pk_set: HashSet<_> = pk.column_names.iter().collect();
         let all_columns: HashSet<_> = columns.iter().map(|c| &c.name).collect();
@@ -643,7 +715,9 @@ impl TableDescriptorBuilder {
     }
 
     pub fn build(self) -> Result<TableDescriptor> {
-        let schema = self.schema.expect("Schema must be set");
+        let schema = self.schema.ok_or_else(|| IllegalArgument {
+            message: "Schema must be set".to_string(),
+        })?;
         let table_distribution = TableDescriptor::normalize_distribution(
             &schema,
             &self.partition_keys,
@@ -1624,6 +1698,149 @@ mod tests {
     use crate::metadata::DataTypes;
 
     #[test]
+    fn invalid_primary_keys_are_rejected() {
+        for (primary_keys, expected_message) in [
+            (
+                Vec::<&str>::new(),
+                "Primary key constraint must be defined for at least a single column.",
+            ),
+            (
+                vec!["id", "id"],
+                "Primary key constraint must not contain duplicate columns.",
+            ),
+        ] {
+            let err = Schema::builder()
+                .column("id", DataTypes::int())
+                .primary_key(primary_keys)
+                .unwrap()
+                .build()
+                .unwrap_err();
+
+            assert!(
+                err.to_string().contains(expected_message),
+                "unexpected error: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn blank_column_names_are_rejected() {
+        let err = Schema::builder()
+            .column(" \t", DataTypes::int())
+            .build()
+            .unwrap_err();
+
+        assert!(
+            err.to_string()
+                .contains("Field names must contain at least one non-whitespace character."),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn multiple_primary_keys_are_rejected() {
+        let err = Schema::builder()
+            .column("id", DataTypes::int())
+            .primary_key(["id"])
+            .unwrap()
+            .primary_key_named("another_pk", vec!["id"])
+            .unwrap_err();
+
+        assert!(
+            err.to_string()
+                .contains("Multiple primary keys are not supported."),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn invalid_nested_row_field_names_are_rejected() {
+        let err = Schema::builder()
+            .column(
+                "payload",
+                DataTypes::array(DataTypes::map(
+                    DataTypes::string(),
+                    DataTypes::row(vec![
+                        DataTypes::field("value", DataTypes::int()),
+                        DataTypes::field("value", DataTypes::bigint()),
+                    ]),
+                )),
+            )
+            .build()
+            .unwrap_err();
+
+        assert!(
+            err.to_string()
+                .contains("Field names must be unique. Found duplicates:"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn auto_increment_column_requires_a_primary_key_table() {
+        let err = Schema::builder()
+            .column("id", DataTypes::int())
+            .column("seq", DataTypes::bigint())
+            .enable_auto_increment("seq")
+            .unwrap()
+            .build()
+            .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("Auto increment column can only be used in primary-key table."),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn auto_increment_column_can_not_be_a_primary_key_column() {
+        let err = Schema::builder()
+            .column("id", DataTypes::bigint())
+            .column("name", DataTypes::string())
+            .primary_key(["id"])
+            .unwrap()
+            .enable_auto_increment("id")
+            .unwrap()
+            .build()
+            .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("Auto increment column can not be used as the primary key."),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn auto_increment_column_must_be_int_or_bigint() {
+        let err = Schema::builder()
+            .column("id", DataTypes::int())
+            .column("seq", DataTypes::string())
+            .primary_key(["id"])
+            .unwrap()
+            .enable_auto_increment("seq")
+            .unwrap()
+            .build()
+            .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("The data type of auto increment column must be INT or BIGINT."),
+            "unexpected error: {err}"
+        );
+
+        for accepted in [DataTypes::int(), DataTypes::bigint()] {
+            Schema::builder()
+                .column("id", DataTypes::int())
+                .column("seq", accepted)
+                .primary_key(["id"])
+                .unwrap()
+                .enable_auto_increment("seq")
+                .unwrap()
+                .build()
+                .expect("INT and BIGINT auto increment columns should be accepted");
+        }
+    }
+
+    #[test]
     fn test_validate() {
         // assert valid name
         let path = TablePath::new("db_2-abc3".to_string(), "table-1_abc_2".to_string());
@@ -1681,6 +1898,7 @@ mod tests {
             .column("id", DataTypes::int())
             .column("name", DataTypes::string())
             .primary_key(vec!["id".to_string()])
+            .unwrap()
             .build()
             .unwrap();
 
@@ -1766,6 +1984,16 @@ mod tests {
             0,
         );
         assert!(table_info.is_auto_partitioned());
+    }
+
+    #[test]
+    fn table_descriptor_builder_requires_schema() {
+        let result = TableDescriptor::builder().build();
+
+        assert!(matches!(
+            result,
+            Err(Error::IllegalArgument { message }) if message == "Schema must be set"
+        ));
     }
 
     fn stats_table(property: Option<&str>) -> TableInfo {

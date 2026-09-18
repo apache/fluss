@@ -26,6 +26,7 @@ import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.SchemaGetter;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.row.InternalRow;
+import org.apache.fluss.row.encode.KvValueLayout;
 import org.apache.fluss.utils.CloseableIterator;
 import org.apache.fluss.utils.CloseableRegistry;
 import org.apache.fluss.utils.FileUtils;
@@ -83,6 +84,7 @@ public class KvSnapshotBatchScanner implements BatchScanner {
 
     private final Path snapshotLocalDirectory;
     private final RemoteFileDownloader remoteFileDownloader;
+    private final KvValueLayout kvValueLayout;
     private final KvFormat kvFormat;
 
     private final ReentrantLock lock = new ReentrantLock();
@@ -104,6 +106,7 @@ public class KvSnapshotBatchScanner implements BatchScanner {
             List<FsPathAndFileName> fsPathAndFileNames,
             @Nullable int[] projectedFields,
             String scannerTmpDir,
+            KvValueLayout kvValueLayout,
             KvFormat kvFormat,
             RemoteFileDownloader remoteFileDownloader) {
         this.targetSchema = targetSchema;
@@ -112,6 +115,7 @@ public class KvSnapshotBatchScanner implements BatchScanner {
         this.tableBucket = tableBucket;
         this.fsPathAndFileNames = fsPathAndFileNames;
         this.projectedFields = projectedFields;
+        this.kvValueLayout = kvValueLayout;
         this.kvFormat = kvFormat;
         // create a directory to store the snapshot files
         this.snapshotLocalDirectory =
@@ -220,7 +224,8 @@ public class KvSnapshotBatchScanner implements BatchScanner {
                                                         projectedFields,
                                                         targetSchemaId,
                                                         targetSchema,
-                                                        schemaGetter);
+                                                        schemaGetter,
+                                                        kvValueLayout);
                                         readerIsReady.signalAll();
                                     } catch (Throwable e) {
                                         IOUtils.closeQuietly(closeableRegistry);

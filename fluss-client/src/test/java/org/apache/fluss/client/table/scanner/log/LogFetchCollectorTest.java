@@ -92,7 +92,8 @@ public class LogFetchCollectorTest {
         int bucketId = 0; // records for 0-10.
         TableBucket tb = new TableBucket(DATA1_TABLE_ID, bucketId);
         FetchLogResultForBucket resultForBucket0 =
-                new FetchLogResultForBucket(tb, genMemoryLogRecordsByObject(DATA1), 10L);
+                FetchLogResultForBucket.records(
+                        tb, genMemoryLogRecordsByObject(DATA1), 10L, -1L, -1L);
         CompletedFetch completedFetch = makeCompletedFetch(tb, resultForBucket0, fetchOffset);
 
         // Validate that the buffer is empty until after we add the fetch data.
@@ -141,9 +142,11 @@ public class LogFetchCollectorTest {
         logScannerStatus.assignScanBuckets(scanBuckets);
 
         FetchLogResultForBucket resultForBucket1 =
-                new FetchLogResultForBucket(tb1, genMemoryLogRecordsByObject(DATA1), 10L);
+                FetchLogResultForBucket.records(
+                        tb1, genMemoryLogRecordsByObject(DATA1), 10L, -1L, -1L);
         FetchLogResultForBucket resultForBucket2 =
-                new FetchLogResultForBucket(tb2, genMemoryLogRecordsByObject(DATA1), 10L);
+                FetchLogResultForBucket.records(
+                        tb2, genMemoryLogRecordsByObject(DATA1), 10L, -1L, -1L);
         CompletedFetch completedFetch1 = makeCompletedFetch(tb1, resultForBucket1, 0L);
         CompletedFetch completedFetch2 = makeCompletedFetch(tb2, resultForBucket2, 0L);
 
@@ -174,12 +177,14 @@ public class LogFetchCollectorTest {
         CompletedFetch completedFetch1 =
                 makeCompletedFetch(
                         tb1,
-                        new FetchLogResultForBucket(tb1, genMemoryLogRecordsByObject(DATA1), 10L),
+                        FetchLogResultForBucket.records(
+                                tb1, genMemoryLogRecordsByObject(DATA1), 10L, -1L, -1L),
                         0L);
         CompletedFetch completedFetch2 =
                 makeCompletedFetch(
                         tb2,
-                        new FetchLogResultForBucket(tb2, genMemoryLogRecordsByObject(DATA1), 10L),
+                        FetchLogResultForBucket.records(
+                                tb2, genMemoryLogRecordsByObject(DATA1), 10L, -1L, -1L),
                         0L);
 
         logFetchBuffer.add(completedFetch1);
@@ -223,18 +228,21 @@ public class LogFetchCollectorTest {
 
         TableBucket tb = new TableBucket(DATA1_TABLE_ID, 0);
         FetchLogResultForBucket result =
-                new FetchLogResultForBucket(tb, genMemoryLogRecordsByObject(DATA1), 10L);
+                FetchLogResultForBucket.records(
+                        tb, genMemoryLogRecordsByObject(DATA1), 10L, -1L, -1L);
         CompletedFetch completedFetch = makeCompletedFetch(tb, result, 0L);
         logFetchBuffer.add(completedFetch);
 
         ScanRecords firstPoll = collector.collectFetch(logFetchBuffer);
         assertThat(firstPoll.records(tb).size()).isEqualTo(2);
         assertThat(logScannerStatus.getBucketOffset(tb)).isEqualTo(2L);
+        assertThat(logScannerStatus.recordsLag()).isEqualTo(8L);
         assertThat(completedFetch.isConsumed()).isFalse();
 
         ScanRecords secondPoll = collector.collectFetch(logFetchBuffer);
         assertThat(secondPoll.records(tb).size()).isEqualTo(2);
         assertThat(logScannerStatus.getBucketOffset(tb)).isEqualTo(4L);
+        assertThat(logScannerStatus.recordsLag()).isEqualTo(6L);
         assertThat(completedFetch.isConsumed()).isFalse();
     }
 
@@ -249,7 +257,7 @@ public class LogFetchCollectorTest {
                 new LogFetchCollector(logScannerStatus, conf, metadataUpdater);
 
         TableBucket tb = new TableBucket(DATA1_TABLE_ID, 1);
-        FetchLogResultForBucket filteredEmpty = new FetchLogResultForBucket(tb, 10L, 20L);
+        FetchLogResultForBucket filteredEmpty = FetchLogResultForBucket.empty(tb, 10L, 20L);
         CompletedFetch completedFetch = makeCompletedFetch(tb, filteredEmpty, 0L);
         logFetchBuffer.add(completedFetch);
 
@@ -281,7 +289,8 @@ public class LogFetchCollectorTest {
         CompletedFetch completedFetch =
                 makeCompletedFetch(
                         tb,
-                        new FetchLogResultForBucket(tb, genMemoryLogRecordsByObject(DATA1), 10L),
+                        FetchLogResultForBucket.records(
+                                tb, genMemoryLogRecordsByObject(DATA1), 10L, -1L, -1L),
                         0L);
         logFetchBuffer.add(completedFetch);
         logScannerStatus.unassignScanBuckets(Collections.singletonList(tb));
@@ -326,7 +335,7 @@ public class LogFetchCollectorTest {
                 new LogFetchCollector(logScannerStatus, conf, metadataUpdater);
 
         TableBucket tb = new TableBucket(DATA1_TABLE_ID, 0);
-        FetchLogResultForBucket result = new FetchLogResultForBucket(tb, records, 4L);
+        FetchLogResultForBucket result = FetchLogResultForBucket.records(tb, records, 4L, -1L, -1L);
         CompletedFetch completedFetch = makeCompletedFetch(tb, result, 0L);
         logFetchBuffer.add(completedFetch);
 

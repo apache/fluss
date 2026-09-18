@@ -1016,10 +1016,6 @@ mod tests {
     use super::*;
     use crate::client::table::read_context_resolver::ReadContextResolver;
     use crate::client::{EARLIEST_OFFSET, WriteRecord};
-    use crate::compression::{
-        ArrowCompressionInfo, ArrowCompressionRatioEstimator, ArrowCompressionType,
-        DEFAULT_NON_ZSTD_COMPRESSION_LEVEL,
-    };
     use crate::metadata::{
         Column, DataField, DataTypes, PhysicalTablePath, RowType, Schema, TableDescriptor,
         TableInfo, TablePath,
@@ -1029,7 +1025,9 @@ mod tests {
         MemoryLogRecordsArrowBuilder, RECORDS_OFFSET, ReadContext, to_arrow_schema,
     };
     use crate::row::GenericRow;
-    use crate::test_utils::{build_table_info, build_table_info_with_columns};
+    use crate::test_utils::{
+        build_table_info, build_table_info_with_columns, uncompressed_arrow_batch_config,
+    };
     use arrow::array::{Array, StringArray};
     use std::sync::Arc;
 
@@ -1081,15 +1079,12 @@ mod tests {
             source_table_info.get_table_path().clone(),
         )));
         let mut builder = MemoryLogRecordsArrowBuilder::new(
-            source_schema_id,
-            source_table_info.get_row_type(),
+            uncompressed_arrow_batch_config(
+                source_schema_id,
+                source_table_info.get_row_type(),
+                usize::MAX,
+            ),
             false,
-            ArrowCompressionInfo {
-                compression_type: ArrowCompressionType::None,
-                compression_level: DEFAULT_NON_ZSTD_COMPRESSION_LEVEL,
-            },
-            usize::MAX,
-            Arc::new(ArrowCompressionRatioEstimator::default()),
         )?;
         let record = WriteRecord::for_append(
             Arc::clone(&source_table_info),
@@ -1225,15 +1220,8 @@ mod tests {
         let physical_table_path = Arc::new(PhysicalTablePath::of(Arc::new(table_path)));
 
         let mut builder = MemoryLogRecordsArrowBuilder::new(
-            1,
-            &row_type,
+            uncompressed_arrow_batch_config(1, &row_type, usize::MAX),
             false,
-            ArrowCompressionInfo {
-                compression_type: ArrowCompressionType::None,
-                compression_level: DEFAULT_NON_ZSTD_COMPRESSION_LEVEL,
-            },
-            usize::MAX,
-            Arc::new(ArrowCompressionRatioEstimator::default()),
         )?;
 
         let mut row = GenericRow::new(2);
@@ -1331,15 +1319,8 @@ mod tests {
         let physical_table_path = Arc::new(PhysicalTablePath::of(Arc::new(table_path)));
 
         let mut builder = MemoryLogRecordsArrowBuilder::new(
-            1,
-            &row_type,
+            uncompressed_arrow_batch_config(1, &row_type, usize::MAX),
             false,
-            ArrowCompressionInfo {
-                compression_type: ArrowCompressionType::None,
-                compression_level: DEFAULT_NON_ZSTD_COMPRESSION_LEVEL,
-            },
-            usize::MAX,
-            Arc::new(ArrowCompressionRatioEstimator::default()),
         )?;
         let mut row = GenericRow::new(2);
         row.set_field(0, 1_i32);
@@ -1438,15 +1419,8 @@ mod tests {
         let physical_table_path = Arc::new(PhysicalTablePath::of(Arc::new(table_path)));
 
         let mut builder = MemoryLogRecordsArrowBuilder::new(
-            0,
-            &old_row_type,
+            uncompressed_arrow_batch_config(0, &old_row_type, usize::MAX),
             false,
-            ArrowCompressionInfo {
-                compression_type: ArrowCompressionType::None,
-                compression_level: DEFAULT_NON_ZSTD_COMPRESSION_LEVEL,
-            },
-            usize::MAX,
-            Arc::new(ArrowCompressionRatioEstimator::default()),
         )?;
 
         let mut row = GenericRow::new(1);
@@ -1584,15 +1558,8 @@ mod tests {
         let physical_table_path = Arc::new(PhysicalTablePath::of(Arc::new(table_path)));
 
         let mut builder = MemoryLogRecordsArrowBuilder::new(
-            1,
-            &row_type,
+            uncompressed_arrow_batch_config(1, &row_type, usize::MAX),
             false,
-            ArrowCompressionInfo {
-                compression_type: ArrowCompressionType::None,
-                compression_level: DEFAULT_NON_ZSTD_COMPRESSION_LEVEL,
-            },
-            usize::MAX,
-            Arc::new(ArrowCompressionRatioEstimator::default()),
         )?;
         for id in [10_i32, 20, 20] {
             let mut row = GenericRow::new(1);

@@ -27,7 +27,8 @@ import org.apache.fluss.exception.FencedLeaderEpochException;
 import org.apache.fluss.exception.InvalidAlterTableException;
 import org.apache.fluss.exception.InvalidCoordinatorException;
 import org.apache.fluss.fs.FsPath;
-import org.apache.fluss.metadata.DatabaseDescriptor;
+import org.apache.fluss.metadata.PartitionSpec;
+import org.apache.fluss.metadata.ResolvedPartitionSpec;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableBucketReplica;
@@ -36,6 +37,9 @@ import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePartition;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.metrics.Gauge;
+import org.apache.fluss.metrics.MetricNames;
+import org.apache.fluss.metrics.groups.AbstractMetricGroup;
 import org.apache.fluss.rpc.gateway.TabletServerGateway;
 import org.apache.fluss.rpc.messages.AdjustIsrResponse;
 import org.apache.fluss.rpc.messages.ApiMessage;
@@ -46,6 +50,7 @@ import org.apache.fluss.rpc.messages.NotifyLeaderAndIsrRequest;
 import org.apache.fluss.rpc.messages.NotifyLeaderAndIsrResponse;
 import org.apache.fluss.rpc.messages.NotifyRemoteLogOffsetsRequest;
 import org.apache.fluss.rpc.messages.UpdateMetadataRequest;
+import org.apache.fluss.rpc.messages.UpdateMetadataResponse;
 import org.apache.fluss.rpc.protocol.ApiError;
 import org.apache.fluss.rpc.protocol.ApiKeys;
 import org.apache.fluss.rpc.protocol.Errors;
@@ -56,7 +61,6 @@ import org.apache.fluss.server.coordinator.event.CommitRemoteLogManifestEvent;
 import org.apache.fluss.server.coordinator.event.CoordinatorEventManager;
 import org.apache.fluss.server.coordinator.event.NotifyLeaderAndIsrResponseReceivedEvent;
 import org.apache.fluss.server.coordinator.event.RetryOfflineLeaderEvent;
-import org.apache.fluss.server.coordinator.lease.KvSnapshotLeaseManager;
 import org.apache.fluss.server.coordinator.remote.RemoteDirDynamicLoader;
 import org.apache.fluss.server.coordinator.statemachine.BucketState;
 import org.apache.fluss.server.coordinator.statemachine.ReplicaState;
@@ -75,37 +79,26 @@ import org.apache.fluss.server.metadata.TableMetadata;
 import org.apache.fluss.server.metrics.group.TestingMetricGroups;
 import org.apache.fluss.server.tablet.TestTabletServerGateway;
 import org.apache.fluss.server.zk.NOPErrorHandler;
-import org.apache.fluss.server.zk.ZkEpoch;
 import org.apache.fluss.server.zk.ZooKeeperClient;
-import org.apache.fluss.server.zk.ZooKeeperExtension;
 import org.apache.fluss.server.zk.data.BucketAssignment;
-import org.apache.fluss.server.zk.data.CoordinatorAddress;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
 import org.apache.fluss.server.zk.data.PartitionAssignment;
 import org.apache.fluss.server.zk.data.TableAssignment;
 import org.apache.fluss.server.zk.data.TabletServerRegistration;
 import org.apache.fluss.server.zk.data.ZkData;
-import org.apache.fluss.server.zk.data.ZkData.PartitionIdsZNode;
-import org.apache.fluss.server.zk.data.ZkData.TableIdsZNode;
-import org.apache.fluss.testutils.common.AllCallbackWrapper;
+import org.apache.fluss.server.zk.data.ZkVersion;
 import org.apache.fluss.testutils.common.ManuallyTriggeredScheduledExecutorService;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.utils.ExceptionUtils;
 import org.apache.fluss.utils.clock.SystemClock;
-import org.apache.fluss.utils.concurrent.ExecutorThreadFactory;
-import org.apache.fluss.utils.concurrent.FlussScheduler;
-import org.apache.fluss.utils.concurrent.Scheduler;
 import org.apache.fluss.utils.types.Tuple2;
 
-import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.BeforeAll;
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.extension.RegisterExtension;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.nio.file.Path;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
@@ -115,9 +108,10 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentLinkedDeque;
-import java.util.concurrent.Executors;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.stream.Collectors;
@@ -138,10 +132,11 @@ import static org.apache.fluss.server.utils.TableAssignmentUtils.generateAssignm
 import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.apache.fluss.testutils.common.CommonTestUtils.waitValue;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Test for {@link CoordinatorEventProcessor}. */
-class CoordinatorEventProcessorTest {
+class CoordinatorEventProcessorTest extends CoordinatorEventProcessorTestBase {
 
     private static final int N_BUCKETS = 3;
     private static final int REPLICATION_FACTOR = 3;
@@ -157,107 +152,6 @@ class CoordinatorEventProcessorTest {
                     .property(ConfigOptions.TABLE_KV_STANDBY_REPLICA_ENABLED.key(), "true")
                     .build()
                     .withReplicationFactor(REPLICATION_FACTOR);
-
-    @RegisterExtension
-    public static final AllCallbackWrapper<ZooKeeperExtension> ZOO_KEEPER_EXTENSION_WRAPPER =
-            new AllCallbackWrapper<>(new ZooKeeperExtension());
-
-    private static ZooKeeperClient zookeeperClient;
-    private static MetadataManager metadataManager;
-    private static ZkEpoch zkEpoch;
-
-    private CoordinatorEventProcessor eventProcessor;
-    private final String defaultDatabase = "db";
-    private TestCoordinatorChannelManager testCoordinatorChannelManager;
-    private AutoPartitionManager autoPartitionManager;
-    private LakeTableTieringManager lakeTableTieringManager;
-    private CompletedSnapshotStoreManager completedSnapshotStoreManager;
-    private CoordinatorMetadataCache serverMetadataCache;
-    private ReplicaCapacityController replicaCapacityController;
-    private KvSnapshotLeaseManager kvSnapshotLeaseManager;
-    private Scheduler scheduler;
-    private String remoteDataDir;
-
-    @BeforeAll
-    static void baseBeforeAll() throws Exception {
-        zookeeperClient =
-                ZOO_KEEPER_EXTENSION_WRAPPER
-                        .getCustomExtension()
-                        .getZooKeeperClient(NOPErrorHandler.INSTANCE);
-        metadataManager =
-                new MetadataManager(
-                        zookeeperClient,
-                        new Configuration(),
-                        new LakeCatalogDynamicLoader(new Configuration(), null, true));
-
-        // register coordinator server
-        zookeeperClient.registerCoordinatorLeader(
-                new CoordinatorAddress(
-                        "2", Endpoint.fromListenersString("CLIENT://localhost:10012")));
-
-        zkEpoch = zookeeperClient.fenceBecomeCoordinatorLeader("2");
-        // register 3 tablet servers
-        for (int i = 0; i < 3; i++) {
-            zookeeperClient.registerTabletServer(
-                    i,
-                    new TabletServerRegistration(
-                            "rack" + i,
-                            Collections.singletonList(
-                                    new Endpoint("host" + i, 1000, DEFAULT_LISTENER_NAME)),
-                            System.currentTimeMillis()));
-        }
-    }
-
-    @BeforeEach
-    void beforeEach() {
-        serverMetadataCache = new CoordinatorMetadataCache();
-        // set a test channel manager for the context
-        testCoordinatorChannelManager = new TestCoordinatorChannelManager();
-        lakeTableTieringManager =
-                new LakeTableTieringManager(TestingMetricGroups.LAKE_TIERING_METRICS);
-        remoteDataDir = zookeeperClient.getDefaultRemoteDataDir();
-        Configuration conf = new Configuration();
-        conf.setString(ConfigOptions.REMOTE_DATA_DIR, remoteDataDir);
-        replicaCapacityController = new ReplicaCapacityController(conf, serverMetadataCache);
-        autoPartitionManager =
-                new AutoPartitionManager(
-                        serverMetadataCache,
-                        metadataManager,
-                        new RemoteDirDynamicLoader(conf),
-                        conf,
-                        replicaCapacityController);
-        kvSnapshotLeaseManager =
-                new KvSnapshotLeaseManager(
-                        Duration.ofMinutes(10).toMillis(),
-                        zookeeperClient,
-                        remoteDataDir,
-                        SystemClock.getInstance(),
-                        TestingMetricGroups.COORDINATOR_METRICS);
-        kvSnapshotLeaseManager.start();
-
-        scheduler = new FlussScheduler(1);
-        scheduler.startup();
-
-        eventProcessor = buildCoordinatorEventProcessor();
-        eventProcessor.startup();
-        metadataManager.createDatabase(
-                defaultDatabase, DatabaseDescriptor.builder().build(), false);
-        completedSnapshotStoreManager = eventProcessor.completedSnapshotStoreManager();
-    }
-
-    @AfterEach
-    void afterEach() throws Exception {
-        if (eventProcessor != null) {
-            eventProcessor.shutdown();
-        }
-        if (scheduler != null) {
-            scheduler.shutdown();
-        }
-        metadataManager.dropDatabase(defaultDatabase, false, true);
-        // clear the assignment info for all tables;
-        ZOO_KEEPER_EXTENSION_WRAPPER.getCustomExtension().cleanupPath(TableIdsZNode.path());
-        ZOO_KEEPER_EXTENSION_WRAPPER.getCustomExtension().cleanupPath(PartitionIdsZNode.path());
-    }
 
     @Test
     void testLoadedAssignmentsTrackKnownKvAndUnknownTablesConservatively() throws Exception {
@@ -783,6 +677,142 @@ class CoordinatorEventProcessorTest {
         assertThatThrownBy(responseCompletableFuture::get)
                 .cause()
                 .isInstanceOf(InvalidCoordinatorException.class);
+    }
+
+    @Test
+    void testMetricsRemainCollectableAfterDropTableFailure() throws Exception {
+        eventProcessor.shutdown();
+
+        FailingUpdateMetadataChannelManager failingChannelManager =
+                new FailingUpdateMetadataChannelManager();
+        testCoordinatorChannelManager = failingChannelManager;
+        eventProcessor = buildCoordinatorEventProcessor();
+        eventProcessor.startup();
+        completedSnapshotStoreManager = eventProcessor.completedSnapshotStoreManager();
+
+        TablePath tablePath = TablePath.of(defaultDatabase, "test_metrics_during_drop_table");
+        initCoordinatorChannel();
+        TableAssignment tableAssignment =
+                generateAssignment(
+                        N_BUCKETS,
+                        REPLICATION_FACTOR,
+                        new TabletServerInfo[] {
+                            new TabletServerInfo(0, "rack0"),
+                            new TabletServerInfo(1, "rack1"),
+                            new TabletServerInfo(2, "rack2")
+                        });
+        long tableId =
+                metadataManager.createTable(
+                        tablePath, remoteDataDir, TEST_TABLE, tableAssignment, false);
+        verifyTableCreated(tableId, tableAssignment, N_BUCKETS, REPLICATION_FACTOR);
+
+        List<TableBucket> tableBuckets = allTableBuckets(tableId, N_BUCKETS);
+        List<AbstractMetricGroup> bucketMetricGroups = new ArrayList<>();
+        List<Gauge<?>> inFlightGauges = new ArrayList<>();
+        for (TableBucket tableBucket : tableBuckets) {
+            completedSnapshotStoreManager.getOrCreateCompletedSnapshotStore(tablePath, tableBucket);
+            AbstractMetricGroup bucketMetricGroup =
+                    (AbstractMetricGroup)
+                            TestingMetricGroups.COORDINATOR_METRICS.getTableBucketMetricGroup(
+                                    tablePath, tableBucket);
+            assertThat(bucketMetricGroup).isNotNull();
+            bucketMetricGroups.add(bucketMetricGroup);
+            inFlightGauges.add(
+                    (Gauge<?>) bucketMetricGroup.getMetrics().get(MetricNames.KV_NUM_SNAPSHOTS));
+            inFlightGauges.add(
+                    (Gauge<?>)
+                            bucketMetricGroup.getMetrics().get(MetricNames.KV_ALL_SNAPSHOT_SIZE));
+        }
+        assertThat(inFlightGauges).doesNotContainNull();
+
+        failingChannelManager.failNextUpdateMetadata();
+        metadataManager.dropTable(tablePath, false);
+        failingChannelManager.awaitFailure();
+        fromCtx(context -> null);
+
+        assertThat(completedSnapshotStoreManager.getBucketCompletedSnapshotStores()).isEmpty();
+        assertThat(bucketMetricGroups).allMatch(AbstractMetricGroup::isClosed);
+        assertThat(tableBuckets)
+                .allSatisfy(
+                        tableBucket ->
+                                assertThat(
+                                                TestingMetricGroups.COORDINATOR_METRICS
+                                                        .getTableBucketMetricGroup(
+                                                                tablePath, tableBucket))
+                                        .isNull());
+        assertThatCode(() -> inFlightGauges.forEach(Gauge::getValue)).doesNotThrowAnyException();
+    }
+
+    @Test
+    void testMetricsRemainCollectableAfterDropPartitionFailure() throws Exception {
+        eventProcessor.shutdown();
+
+        FailingUpdateMetadataChannelManager failingChannelManager =
+                new FailingUpdateMetadataChannelManager();
+        testCoordinatorChannelManager = failingChannelManager;
+        eventProcessor = buildCoordinatorEventProcessor();
+        eventProcessor.startup();
+        completedSnapshotStoreManager = eventProcessor.completedSnapshotStoreManager();
+
+        TablePath tablePath = TablePath.of(defaultDatabase, "test_metrics_during_drop_partition");
+        initCoordinatorChannel();
+        long tableId =
+                metadataManager.createTable(
+                        tablePath, remoteDataDir, getPartitionedTable(), null, false);
+        Map<Integer, BucketAssignment> assignments =
+                generateAssignment(
+                                N_BUCKETS,
+                                REPLICATION_FACTOR,
+                                new TabletServerInfo[] {
+                                    new TabletServerInfo(0, "rack0"),
+                                    new TabletServerInfo(1, "rack1"),
+                                    new TabletServerInfo(2, "rack2")
+                                })
+                        .getBucketAssignments();
+        PartitionAssignment partitionAssignment = new PartitionAssignment(tableId, assignments);
+        PartitionIdName partition =
+                preparePartitionAssignment(tablePath, tableId, partitionAssignment).f0;
+        verifyPartitionCreated(
+                new TablePartition(tableId, partition.partitionId),
+                partitionAssignment,
+                N_BUCKETS,
+                REPLICATION_FACTOR);
+
+        List<TableBucket> tableBuckets = allTableBuckets(tableId, partition.partitionId, N_BUCKETS);
+        List<AbstractMetricGroup> bucketMetricGroups = new ArrayList<>();
+        List<Gauge<?>> inFlightGauges = new ArrayList<>();
+        for (TableBucket tableBucket : tableBuckets) {
+            completedSnapshotStoreManager.getOrCreateCompletedSnapshotStore(tablePath, tableBucket);
+            AbstractMetricGroup bucketMetricGroup =
+                    (AbstractMetricGroup)
+                            TestingMetricGroups.COORDINATOR_METRICS.getTableBucketMetricGroup(
+                                    tablePath, tableBucket);
+            assertThat(bucketMetricGroup).isNotNull();
+            bucketMetricGroups.add(bucketMetricGroup);
+            inFlightGauges.add(
+                    (Gauge<?>) bucketMetricGroup.getMetrics().get(MetricNames.KV_NUM_SNAPSHOTS));
+            inFlightGauges.add(
+                    (Gauge<?>)
+                            bucketMetricGroup.getMetrics().get(MetricNames.KV_ALL_SNAPSHOT_SIZE));
+        }
+        assertThat(inFlightGauges).doesNotContainNull();
+
+        failingChannelManager.failNextUpdateMetadata();
+        zookeeperClient.deletePartition(tablePath, partition.partitionName);
+        failingChannelManager.awaitFailure();
+        fromCtx(context -> null);
+
+        assertThat(completedSnapshotStoreManager.getBucketCompletedSnapshotStores()).isEmpty();
+        assertThat(bucketMetricGroups).allMatch(AbstractMetricGroup::isClosed);
+        assertThat(tableBuckets)
+                .allSatisfy(
+                        tableBucket ->
+                                assertThat(
+                                                TestingMetricGroups.COORDINATOR_METRICS
+                                                        .getTableBucketMetricGroup(
+                                                                tablePath, tableBucket))
+                                        .isNull());
+        assertThatCode(() -> inFlightGauges.forEach(Gauge::getValue)).doesNotThrowAnyException();
     }
 
     @Test
@@ -1596,7 +1626,12 @@ class CoordinatorEventProcessorTest {
                                         tableInfo,
                                         Collections.singletonList(
                                                 new BucketMetadata(
-                                                        0, replicas.get(0), 0, replicas)))));
+                                                        0,
+                                                        replicas.get(0),
+                                                        0,
+                                                        replicas,
+                                                        replicas,
+                                                        0)))));
 
         // alter table column.
         alterTable(
@@ -1621,6 +1656,96 @@ class CoordinatorEventProcessorTest {
                 () ->
                         verifyMetadataUpdateRequest(
                                 3, new TableMetadata(tableInfo2, Collections.emptyList())));
+    }
+
+    @Test
+    void testSchemaChangeKeepsBucketCountEpochAfterRescale() throws Exception {
+        initCoordinatorChannel();
+        TablePath t1 = TablePath.of(defaultDatabase, "schema_change_keeps_epoch");
+        int originalBucketCount = 3;
+        TableAssignment tableAssignment =
+                generateAssignment(
+                        originalBucketCount,
+                        REPLICATION_FACTOR,
+                        new TabletServerInfo[] {
+                            new TabletServerInfo(0, "rack0"),
+                            new TabletServerInfo(1, "rack1"),
+                            new TabletServerInfo(2, "rack2")
+                        });
+        TableDescriptor partitionedTable =
+                TableDescriptor.builder()
+                        .schema(
+                                Schema.newBuilder()
+                                        .column("a", DataTypes.INT())
+                                        .column("b", DataTypes.STRING())
+                                        .primaryKey("a", "b")
+                                        .build())
+                        .distributedBy(originalBucketCount)
+                        .partitionedBy("b")
+                        .build()
+                        .withReplicationFactor(REPLICATION_FACTOR);
+        long tableId =
+                metadataManager.createTable(
+                        t1, remoteDataDir, partitionedTable, tableAssignment, false);
+        // create one partition so the ALTER bucket.num rescale can commit
+        metadataManager.createPartition(
+                t1,
+                tableId,
+                remoteDataDir,
+                new PartitionAssignment(
+                        tableId,
+                        generateAssignment(
+                                        originalBucketCount,
+                                        REPLICATION_FACTOR,
+                                        new TabletServerInfo[] {
+                                            new TabletServerInfo(0, "rack0"),
+                                            new TabletServerInfo(1, "rack1"),
+                                            new TabletServerInfo(2, "rack2")
+                                        })
+                                .getBucketAssignments()),
+                ResolvedPartitionSpec.fromPartitionSpec(
+                        Collections.singletonList("b"),
+                        new PartitionSpec(Collections.singletonMap("b", "2024-01-01"))),
+                false,
+                originalBucketCount);
+
+        // ALTER bucket.num advances the bucket count epoch (persisted in ZK TableRegistration)
+        metadataManager.alterBucketCount(
+                t1, 8, false, null, ZkVersion.MATCH_ANY_VERSION.getVersion());
+
+        long epochAfterAlter = metadataManager.getTable(t1).getBucketCountEpoch();
+        assertThat(epochAfterAlter).isGreaterThan(0L);
+
+        // A later schema change rebuilds the context TableInfo; the epoch must survive it
+        alterTable(
+                t1,
+                Collections.singletonList(
+                        TableChange.addColumn(
+                                "add_column",
+                                DataTypes.INT(),
+                                null,
+                                TableChange.ColumnPosition.last())));
+
+        retryVerifyContext(
+                ctx -> {
+                    TableInfo tableInfoInCtx = ctx.getTableInfoById(tableId);
+                    assertThat(tableInfoInCtx).isNotNull();
+                    // the schema change took effect
+                    assertThat(tableInfoInCtx.getSchema().getColumnNames()).contains("add_column");
+                    // and the bucket count epoch did NOT roll back to 0
+                    assertThat(tableInfoInCtx.getBucketCountEpoch()).isEqualTo(epochAfterAlter);
+                });
+
+        // the UpdateMetadata pushed for the schema change carries the same epoch
+        TableInfo tableInfoAfterSchemaChange = metadataManager.getTable(t1);
+        assertThat(tableInfoAfterSchemaChange.getBucketCountEpoch()).isEqualTo(epochAfterAlter);
+        retry(
+                Duration.ofMinutes(1),
+                () ->
+                        verifyMetadataUpdateRequest(
+                                3,
+                                new TableMetadata(
+                                        tableInfoAfterSchemaChange, Collections.emptyList())));
     }
 
     @Test
@@ -1655,7 +1780,12 @@ class CoordinatorEventProcessorTest {
                                         tableInfo,
                                         Collections.singletonList(
                                                 new BucketMetadata(
-                                                        0, replicas.get(0), 0, replicas)))));
+                                                        0,
+                                                        replicas.get(0),
+                                                        0,
+                                                        replicas,
+                                                        replicas,
+                                                        0)))));
 
         // alter table properties (custom property)
         TablePropertyChanges.Builder builder = TablePropertyChanges.builder();
@@ -1668,7 +1798,8 @@ class CoordinatorEventProcessorTest {
                 false,
                 null,
                 (currentTable, updatedTable) -> {},
-                (currentTable, updatedTable) -> {});
+                (currentTable, updatedTable) -> {},
+                ZkVersion.MATCH_ANY_VERSION.getVersion());
 
         // get updated table info and verify metadata update request is sent
         TableInfo updatedTableInfo = metadataManager.getTable(t1);
@@ -1735,7 +1866,8 @@ class CoordinatorEventProcessorTest {
                 false,
                 null,
                 (currentTable, updatedTable) -> {},
-                (currentTable, updatedTable) -> {});
+                (currentTable, updatedTable) -> {},
+                ZkVersion.MATCH_ANY_VERSION.getVersion());
 
         // verify standby replicas are removed after re-election
         retryVerifyContext(
@@ -1809,7 +1941,8 @@ class CoordinatorEventProcessorTest {
                 false,
                 null,
                 (currentTable, updatedTable) -> {},
-                (currentTable, updatedTable) -> {});
+                (currentTable, updatedTable) -> {},
+                ZkVersion.MATCH_ANY_VERSION.getVersion());
 
         // Verify re-election happened: standby assigned and leaderEpoch incremented
         retryVerifyContext(
@@ -1872,7 +2005,8 @@ class CoordinatorEventProcessorTest {
                                         false,
                                         null,
                                         (currentTable, updatedTable) -> {},
-                                        (currentTable, updatedTable) -> {}))
+                                        (currentTable, updatedTable) -> {},
+                                        ZkVersion.MATCH_ANY_VERSION.getVersion()))
                 .isInstanceOf(InvalidAlterTableException.class)
                 .hasMessageContaining("can only be altered on primary key tables");
 
@@ -1889,7 +2023,8 @@ class CoordinatorEventProcessorTest {
                                         false,
                                         null,
                                         (currentTable, updatedTable) -> {},
-                                        (currentTable, updatedTable) -> {}))
+                                        (currentTable, updatedTable) -> {},
+                                        ZkVersion.MATCH_ANY_VERSION.getVersion()))
                 .isInstanceOf(InvalidAlterTableException.class)
                 .hasMessageContaining("can only be altered on primary key tables");
     }
@@ -2171,25 +2306,31 @@ class CoordinatorEventProcessorTest {
                 .hasSameElementsAs(expectedIsr);
     }
 
-    private CoordinatorEventProcessor buildCoordinatorEventProcessor() {
-        Configuration conf = new Configuration();
-        conf.set(ConfigOptions.REMOTE_DATA_DIR, remoteDataDir);
-        conf.set(ConfigOptions.COORDINATOR_OFFLINE_LEADER_RETRY_DELAY, Duration.ofDays(1));
-        return new CoordinatorEventProcessor(
-                zookeeperClient,
-                serverMetadataCache,
-                testCoordinatorChannelManager,
-                new CoordinatorContext(zkEpoch),
-                replicaCapacityController,
-                autoPartitionManager,
-                lakeTableTieringManager,
-                TestingMetricGroups.COORDINATOR_METRICS,
-                conf,
-                Executors.newFixedThreadPool(1, new ExecutorThreadFactory("test-coordinator-io")),
-                metadataManager,
-                kvSnapshotLeaseManager,
-                scheduler,
-                SystemClock.getInstance());
+    private static class FailingUpdateMetadataChannelManager extends TestCoordinatorChannelManager {
+
+        private final CountDownLatch failureObserved = new CountDownLatch(1);
+        private volatile boolean failUpdateMetadata;
+
+        private void failNextUpdateMetadata() {
+            failUpdateMetadata = true;
+        }
+
+        @Override
+        public void sendUpdateMetadataRequest(
+                int serverId,
+                UpdateMetadataRequest request,
+                BiConsumer<UpdateMetadataResponse, ? super Throwable> responseConsumer) {
+            if (failUpdateMetadata) {
+                failUpdateMetadata = false;
+                failureObserved.countDown();
+                throw new RuntimeException("Injected update metadata failure");
+            }
+            super.sendUpdateMetadataRequest(serverId, request, responseConsumer);
+        }
+
+        private void awaitFailure() throws InterruptedException {
+            assertThat(failureObserved.await(30, TimeUnit.SECONDS)).isTrue();
+        }
     }
 
     private static class RecordingAutoPartitionManager extends AutoPartitionManager {
@@ -2287,14 +2428,16 @@ class CoordinatorEventProcessorTest {
                 partitionAssignment,
                 remoteDataDir,
                 tablePath,
-                tableId);
+                tableId,
+                partitionAssignment.getBucketAssignments().size());
         zookeeperClient.registerPartitionAssignmentAndMetadata(
                 partition2Id,
                 partition2Name,
                 partitionAssignment,
                 remoteDataDir,
                 tablePath,
-                tableId);
+                tableId,
+                partitionAssignment.getBucketAssignments().size());
 
         return Tuple2.of(
                 new PartitionIdName(partition1Id, partition1Name),

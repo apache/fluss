@@ -25,8 +25,11 @@ import org.apache.fluss.lake.source.RecordReader;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.predicate.PredicateBuilder;
 import org.apache.fluss.types.DataTypes;
+import org.apache.fluss.types.RowType;
 
+import org.apache.hudi.source.ExpressionPredicates;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -35,6 +38,7 @@ import javax.annotation.Nullable;
 import java.io.File;
 import java.io.IOException;
 import java.util.Collections;
+import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -114,6 +118,49 @@ class HudiLakeSourceTest {
                 .isInstanceOf(IOException.class)
                 .hasMessageContaining("Fail to create Hudi record reader")
                 .hasCauseInstanceOf(UnsupportedOperationException.class);
+    }
+
+    @Test
+    void testCopyHasIndependentProjection() throws Exception {
+        Configuration hudiConfig = hudiConfig();
+        TablePath tablePath = TablePath.of("db1", "copied_projected_pk_table");
+        createPkTable(hudiConfig, tablePath);
+
+        HudiLakeSource source = new HudiLakeSource(hudiConfig, tablePath);
+        int[][] projection = project(1);
+        source.withProject(projection);
+        projection[0][0] = 0;
+        HudiLakeSource copy = source.copy();
+        source.withProject(project(0));
+
+        assertThat(copy).isNotSameAs(source);
+        assertThatThrownBy(() -> copy.createRecordReader(sortedReaderContext(null)))
+                .isInstanceOf(IOException.class)
+                .hasCauseInstanceOf(UnsupportedOperationException.class);
+        assertThat(source.createRecordReader(sortedReaderContext(null)))
+                .isInstanceOf(HudiSortedRecordReader.class);
+    }
+
+    @Test
+    void testCopyHasIndependentFilters() throws Exception {
+        Configuration hudiConfig = hudiConfig();
+        TablePath tablePath = TablePath.of("db1", "copied_filter_table");
+        createPkTable(hudiConfig, tablePath);
+
+        HudiLakeSource source = new HudiLakeSource(hudiConfig, tablePath);
+        PredicateBuilder predicateBuilder =
+                new PredicateBuilder(RowType.of(DataTypes.INT(), DataTypes.STRING()));
+        source.withFilters(Collections.singletonList(predicateBuilder.equal(0, 1)));
+        List<ExpressionPredicates.Predicate> sourcePredicates = source.getPredicates();
+
+        HudiLakeSource copy = source.copy();
+
+        assertThat(copy.getPredicates()).hasSize(1).isNotSameAs(sourcePredicates);
+
+        source.withFilters(Collections.emptyList());
+
+        assertThat(source.getPredicates()).isEmpty();
+        assertThat(copy.getPredicates()).hasSize(1).containsExactlyElementsOf(sourcePredicates);
     }
 
     private Configuration hudiConfig() {

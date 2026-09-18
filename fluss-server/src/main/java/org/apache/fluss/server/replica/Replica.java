@@ -24,6 +24,7 @@ import org.apache.fluss.config.ConfigurationUtils;
 import org.apache.fluss.config.TableConfig;
 import org.apache.fluss.exception.FencedLeaderEpochException;
 import org.apache.fluss.exception.InvalidColumnProjectionException;
+import org.apache.fluss.exception.InvalidPartitionException;
 import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.exception.InvalidTimestampException;
 import org.apache.fluss.exception.InvalidUpdateVersionException;
@@ -39,6 +40,7 @@ import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.SchemaGetter;
+import org.apache.fluss.metadata.SchemaInfo;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
@@ -59,9 +61,12 @@ import org.apache.fluss.server.coordinator.CoordinatorContext;
 import org.apache.fluss.server.entity.NotifyLeaderAndIsrData;
 import org.apache.fluss.server.kv.KvManager;
 import org.apache.fluss.server.kv.KvRecoverHelper;
+import org.apache.fluss.server.kv.KvStateLookupResult;
 import org.apache.fluss.server.kv.KvTablet;
 import org.apache.fluss.server.kv.RemoteLogFetcher;
 import org.apache.fluss.server.kv.autoinc.AutoIncIDRange;
+import org.apache.fluss.server.kv.historical.HistoricalValueLookup;
+import org.apache.fluss.server.kv.historical.LocalValueLookupResult;
 import org.apache.fluss.server.kv.rocksdb.RocksDBKvBuilder;
 import org.apache.fluss.server.kv.scan.OpenScanResult;
 import org.apache.fluss.server.kv.scan.ScannerContext;
@@ -105,10 +110,12 @@ import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
 import org.apache.fluss.server.zk.data.ZkData;
 import org.apache.fluss.types.RowType;
+import org.apache.fluss.utils.ByteArraySlice;
 import org.apache.fluss.utils.CloseableRegistry;
 import org.apache.fluss.utils.FlussPaths;
 import org.apache.fluss.utils.IOUtils;
 import org.apache.fluss.utils.clock.Clock;
+import org.apache.fluss.utils.function.FunctionWithException;
 import org.apache.fluss.utils.types.Tuple2;
 
 import org.slf4j.Logger;
@@ -141,7 +148,9 @@ import java.util.function.IntSupplier;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
 
+import static org.apache.fluss.utils.PartitionUtils.HISTORICAL_PARTITION_VALUE;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
+import static org.apache.fluss.utils.Preconditions.checkState;
 import static org.apache.fluss.utils.concurrent.LockUtils.inReadLock;
 import static org.apache.fluss.utils.concurrent.LockUtils.inWriteLock;
 
@@ -186,6 +195,13 @@ public final class Replica {
 
     private final SchemaGetter schemaGetter;
     private volatile TableInfo tableInfo;
+
+    // Routing state carried with activation: both values are immutable per bucket, so they are
+    // set once and never change. Null until the coordinator notifies them.
+    private volatile @Nullable Integer routingBucketCount;
+    private volatile @Nullable Long bucketCountEpoch;
+
+    private final boolean historicalPartition;
     // logFormat and arrowCompressionInfo are immutable and used in hot-path, so cache them here.
     private final LogFormat logFormat;
     private final ArrowCompressionInfo arrowCompressionInfo;
@@ -272,6 +288,8 @@ public final class Replica {
                         tableInfo.getSchema());
         this.tableInfo = tableInfo;
         TableConfig tableConfig = tableInfo.getTableConfig();
+        String partitionName = physicalPath.getPartitionName();
+        this.historicalPartition = HISTORICAL_PARTITION_VALUE.equals(partitionName);
         this.logFormat = tableConfig.getLogFormat();
         this.arrowCompressionInfo = tableConfig.getArrowCompressionInfo();
         this.snapshotContext = snapshotContext;
@@ -316,6 +334,12 @@ public final class Replica {
 
     public long logicalStorageKvSize() {
         if (isLeader() && isKvTable()) {
+            if (isHistoricalPartition()) {
+                // Historical KV tablets do not create snapshots, so use live SST files to account
+                // for their local state instead.
+                KvTablet currentKvTablet = kvTablet;
+                return currentKvTablet == null ? 0L : currentKvTablet.liveSstFilesSize();
+            }
             checkNotNull(kvSnapshotManager, "kvSnapshotManager is null");
             return kvSnapshotManager.getSnapshotSize();
         } else {
@@ -396,6 +420,19 @@ public final class Replica {
         return kvTablet;
     }
 
+    SchemaGetter schemaGetter() {
+        return schemaGetter;
+    }
+
+    /** Returns the latest schema used by historical partition operations. */
+    public SchemaInfo getLatestSchemaInfo() {
+        return schemaGetter.getLatestSchemaInfo();
+    }
+
+    boolean isHistoricalPartition() {
+        return historicalPartition;
+    }
+
     public TablePath getTablePath() {
         return physicalPath.getTablePath();
     }
@@ -420,6 +457,29 @@ public final class Replica {
         return logFormat;
     }
 
+    /**
+     * Adopts the routing state carried by the notification. Both values are immutable per bucket,
+     * so unset fields never overwrite known ones.
+     */
+    public void updateRoutingState(NotifyLeaderAndIsrData data) {
+        if (data.getBucketCount() != null) {
+            this.routingBucketCount = data.getBucketCount();
+        }
+        if (data.getBucketCountEpoch() != null) {
+            this.bucketCountEpoch = data.getBucketCountEpoch();
+        }
+    }
+
+    /** The actual bucket count of the owning table/partition, or null if not yet notified. */
+    public @Nullable Integer getRoutingBucketCount() {
+        return routingBucketCount;
+    }
+
+    /** The bucket layout epoch of the owning table, or null if not yet notified. */
+    public @Nullable Long getBucketCountEpoch() {
+        return bucketCountEpoch;
+    }
+
     public void makeLeader(NotifyLeaderAndIsrData data) throws IOException {
         boolean leaderHWIncremented =
                 inWriteLock(
@@ -429,6 +489,7 @@ public final class Replica {
                             validateBucketEpoch(requestBucketEpoch);
 
                             coordinatorEpoch = data.getCoordinatorEpoch();
+                            updateRoutingState(data);
 
                             long currentTimeMs = clock.milliseconds();
                             // Updating the assignment and ISR state is safe if the bucket epoch is
@@ -501,6 +562,7 @@ public final class Replica {
                     validateBucketEpoch(requestBucketEpoch);
 
                     coordinatorEpoch = data.getCoordinatorEpoch();
+                    updateRoutingState(data);
 
                     updateAssignmentAndIsr(
                             Collections.emptyList(),
@@ -711,20 +773,37 @@ public final class Replica {
 
         // init kv tablet and get the snapshot it uses to init if have any
         Optional<CompletedSnapshot> snapshotUsed = Optional.empty();
+        Exception lastError = null;
         for (int i = 1; i <= INIT_KV_TABLET_MAX_RETRY_TIMES; i++) {
             try {
                 snapshotUsed = initKvTablet();
+                lastError = null;
                 break;
             } catch (Exception e) {
+                lastError = e;
                 LOG.warn(
-                        "Fail to init kv tablet for bucket {}, retrying for {} times",
+                        "Failed to init kv tablet for bucket {} on attempt {}/{}.",
                         tableBucket,
                         i,
+                        INIT_KV_TABLET_MAX_RETRY_TIMES,
                         e);
             }
         }
-        // start periodic kv snapshot
-        startPeriodicKvSnapshot(snapshotUsed.orElse(null));
+        if (lastError != null) {
+            try {
+                dropKv();
+            } catch (Exception cleanupError) {
+                lastError.addSuppressed(cleanupError);
+            }
+            throw new KvStorageException(
+                    String.format(
+                            "Failed to create KV tablet for bucket %s after %s attempts.",
+                            tableBucket, INIT_KV_TABLET_MAX_RETRY_TIMES),
+                    lastError);
+        }
+        if (!isHistoricalPartition()) {
+            startPeriodicKvSnapshot(snapshotUsed.orElse(null));
+        }
     }
 
     private void dropKv() {
@@ -797,8 +876,11 @@ public final class Replica {
         // when replica become follower, we'll always delete the kv files.
 
         // get the offset from which, we should restore from. default is 0
-        long restoreStartOffset = 0;
-        Optional<CompletedSnapshot> optCompletedSnapshot = getLatestSnapshot(tableBucket);
+        long restoreStartOffset = isHistoricalPartition() ? historicalRecoveryStartOffset() : 0;
+        // Lake is the durable base for local historical KV state. Historical replicas therefore
+        // never restore a normal KV snapshot, even if one exists from older code.
+        Optional<CompletedSnapshot> optCompletedSnapshot =
+                isHistoricalPartition() ? Optional.empty() : getLatestSnapshot(tableBucket);
         try {
             Long rowCount;
             AutoIncIDRange autoIncIDRange;
@@ -821,7 +903,8 @@ public final class Replica {
 
                 checkNotNull(kvTablet, "kv tablet should not be null.");
                 restoreStartOffset = completedSnapshot.getLogOffset();
-                rowCount = completedSnapshot.getRowCount();
+                rowCount =
+                        supportsExactRowCount(tableConfig) ? completedSnapshot.getRowCount() : null;
                 // currently, we only support one auto-increment column.
                 autoIncIDRange = completedSnapshot.getFirstAutoIncIDRange();
             } else {
@@ -830,8 +913,11 @@ public final class Replica {
                         tableBucket,
                         physicalPath);
 
-                // actually, kv manager always create a kv tablet since we will drop the kv
-                // if it exists before init kv tablet
+                // Rebuild state in a fresh directory, as with snapshot recovery.
+                // Recovery retries can reuse the tablet opened by the first attempt.
+                if (kvTablet == null) {
+                    kvManager.createTabletDir(logTablet.getDataDir(), physicalPath, tableBucket);
+                }
                 kvTablet =
                         kvManager.getOrCreateKv(
                                 physicalPath,
@@ -843,8 +929,12 @@ public final class Replica {
                                 arrowCompressionInfo,
                                 this::onKvFlushComplete);
 
-                // we don't support rowCount
-                rowCount = tableConfig.getChangelogImage() == ChangelogImage.WAL ? null : 0L;
+                rowCount =
+                        isHistoricalPartition()
+                                        || tableConfig.getChangelogImage() == ChangelogImage.WAL
+                                        || tableConfig.getKvTTL().isPresent()
+                                ? null
+                                : 0L;
                 // TODO: it is possible that this is a recovered kv tablet without kv snapshot but
                 //  with changelogs, in this case, the kv tablet should also have the
                 //  autoIncIDRange, we may need to get it from the changelog in the future.
@@ -854,6 +944,10 @@ public final class Replica {
             }
 
             logTablet.updateMinRetainOffset(restoreStartOffset);
+            if (isHistoricalPartition()) {
+                checkNotNull(kvTablet, "kv tablet should not be null.")
+                        .advanceHistoricalCleanupOffset(restoreStartOffset);
+            }
             recoverKvTablet(restoreStartOffset, rowCount, autoIncIDRange);
         } catch (Exception e) {
             throw new KvStorageException(
@@ -977,7 +1071,8 @@ public final class Replica {
                                 tableConfig.getKvFormat(),
                                 tableConfig.getLogFormat(),
                                 schemaGetter,
-                                remoteLogFetcher);
+                                remoteLogFetcher,
+                                isHistoricalPartition());
                 kvRecoverHelper.recover();
             } finally {
                 remoteLogFetcher.close();
@@ -996,6 +1091,26 @@ public final class Replica {
                 physicalPath,
                 startRecoverLogOffset,
                 end - start);
+    }
+
+    private long historicalRecoveryStartOffset() {
+        long lakeLogEndOffset = logTablet.getLakeLogEndOffset();
+        long localLogEndOffset = logTablet.localLogEndOffset();
+        long logStartOffset = logTablet.logStartOffset();
+        checkState(
+                lakeLogEndOffset < 0 || lakeLogEndOffset <= localLogEndOffset,
+                "Cannot recover historical KV state: lake log end offset %s is beyond the "
+                        + "local log end offset %s.",
+                lakeLogEndOffset,
+                localLogEndOffset);
+        long recoveryStartOffset = lakeLogEndOffset >= 0 ? lakeLogEndOffset : 0L;
+        checkState(
+                recoveryStartOffset >= logStartOffset,
+                "Cannot recover historical KV state: recovery start offset %s is before the "
+                        + "available log start offset %s.",
+                recoveryStartOffset,
+                logStartOffset);
+        return recoveryStartOffset;
     }
 
     private void startPeriodicKvSnapshot(@Nullable CompletedSnapshot completedSnapshot) {
@@ -1025,7 +1140,8 @@ public final class Replica {
                     kvTablet.createIncrementalSnapshot(
                             uploadedSstFiles,
                             snapshotContext.getSnapshotDataUploader(),
-                            lastCompletedSnapshotId);
+                            lastCompletedSnapshotId,
+                            tableMetrics().remoteKvCopyBytes());
 
             // create snapshot ID counter
             SequenceIDCounter snapshotIDCounter =
@@ -1104,6 +1220,12 @@ public final class Replica {
                                         "Leader not local for bucket %s on tabletServer %d",
                                         tableBucket, localTabletServerId));
                     }
+                    // Primary-key writes must go through PUT_KV so the log and local KV state are
+                    // updated together. PRODUCE_LOG is only valid for append-only tables.
+                    if (isKvTable()) {
+                        throw new InvalidPartitionException(
+                                "Produce-log request must not target a primary-key table.");
+                    }
 
                     validateInSyncReplicaSize(requiredAcks);
 
@@ -1164,6 +1286,10 @@ public final class Replica {
                                         "Leader not local for bucket %s on tabletServer %d",
                                         tableBucket, localTabletServerId));
                     }
+                    if (isHistoricalPartition()) {
+                        throw new InvalidPartitionException(
+                                "Normal write request must not target a historical partition.");
+                    }
 
                     validateInSyncReplicaSize(requiredAcks);
                     KvTablet kv = this.kvTablet;
@@ -1181,6 +1307,138 @@ public final class Replica {
                     // we may need to increment high watermark.
                     maybeIncrementLeaderHW(logTablet, clock.milliseconds());
                     return logAppendInfo;
+                });
+    }
+
+    /**
+     * Looks up previous values without holding replica or KV locks during lake I/O, then writes the
+     * records to the local historical KV state.
+     */
+    public LogAppendInfo putHistoricalRecordsToLeader(
+            KvRecordBatch kvRecords,
+            @Nullable int[] targetColumns,
+            MergeMode mergeMode,
+            String originalPartitionName,
+            FunctionWithException<List<byte[]>, List<byte[]>, Exception> lakeLookup,
+            int expectedLeaderEpoch,
+            int requiredAcks)
+            throws Exception {
+        LocalValueLookupResult localLookupResult =
+                inReadLock(
+                        leaderIsrUpdateLock,
+                        () -> {
+                            validateHistoricalWrite(expectedLeaderEpoch, requiredAcks);
+                            KvTablet kv = this.kvTablet;
+                            checkNotNull(
+                                    kv, "KvTablet for the historical replica shouldn't be null.");
+                            return kv.probeLocalPreviousValues(
+                                    kvRecords, targetColumns, mergeMode, originalPartitionName);
+                        });
+
+        // Both the replica read lock and the KV read lock have been released before lake I/O.
+        HistoricalValueLookup historicalValueLookup =
+                localLookupResult.createValueLookup(lakeLookup);
+
+        return inReadLock(
+                leaderIsrUpdateLock,
+                () -> {
+                    validateHistoricalWrite(expectedLeaderEpoch, requiredAcks);
+                    KvTablet kv = this.kvTablet;
+                    checkNotNull(kv, "KvTablet for the historical replica shouldn't be null.");
+                    LogAppendInfo appendInfo =
+                            kv.putHistoricalAsLeader(
+                                    kvRecords,
+                                    targetColumns,
+                                    mergeMode,
+                                    originalPartitionName,
+                                    historicalValueLookup);
+                    maybeIncrementLeaderHW(logTablet, clock.milliseconds());
+                    return appendInfo;
+                });
+    }
+
+    /**
+     * Updates the historical cleanup offset if it is valid.
+     *
+     * <p>{@code beforeUpdate} runs after validation and before the new cleanup offset becomes
+     * visible to the RocksDB compaction filter.
+     */
+    public void tryUpdateHistoricalCleanupOffset(long newCleanupOffset, Runnable beforeUpdate) {
+        checkNotNull(beforeUpdate, "beforeUpdate must not be null.");
+        inWriteLock(
+                leaderIsrUpdateLock,
+                () -> {
+                    if (!isLeader() || !historicalPartition) {
+                        return;
+                    }
+                    KvTablet currentKvTablet = kvTablet;
+                    if (currentKvTablet == null) {
+                        return;
+                    }
+                    long currentCleanupOffset = currentKvTablet.getHistoricalCleanupOffset();
+                    long localLogEndOffset = logTablet.localLogEndOffset();
+                    if (newCleanupOffset < currentCleanupOffset
+                            || newCleanupOffset > localLogEndOffset) {
+                        LOG.warn(
+                                "Ignore invalid historical cleanup offset {} for {} with "
+                                        + "current cleanup offset {} and local log end "
+                                        + "offset {}.",
+                                newCleanupOffset,
+                                tableBucket,
+                                currentCleanupOffset,
+                                localLogEndOffset);
+                        return;
+                    }
+                    beforeUpdate.run();
+                    currentKvTablet.advanceHistoricalCleanupOffset(newCleanupOffset);
+                });
+    }
+
+    private void validateHistoricalWrite(int expectedLeaderEpoch, int requiredAcks) {
+        if (!isLeader()) {
+            throw new NotLeaderOrFollowerException(
+                    String.format(
+                            "Leader not local for bucket %s on tabletServer %d",
+                            tableBucket, localTabletServerId));
+        }
+        if (!isHistoricalPartition()) {
+            throw new InvalidPartitionException(
+                    "Historical write request must target a historical partition.");
+        }
+        if (leaderEpoch != expectedLeaderEpoch) {
+            throw new FencedLeaderEpochException(
+                    String.format(
+                            "Historical write for %s was prepared at leader epoch %s, "
+                                    + "but the current leader epoch is %s.",
+                            tableBucket, expectedLeaderEpoch, leaderEpoch));
+        }
+        validateInSyncReplicaSize(requiredAcks);
+    }
+
+    /** Looks up keys from the local historical KV state of the leader replica. */
+    public List<KvStateLookupResult> lookupHistoricalLocal(
+            String originalPartitionName, List<byte[]> keys) throws Exception {
+        return inReadLock(
+                leaderIsrUpdateLock,
+                () -> {
+                    if (!isLeader()) {
+                        throw new NotLeaderOrFollowerException(
+                                String.format(
+                                        "Leader not local for bucket %s on tabletServer %d",
+                                        tableBucket, localTabletServerId));
+                    }
+                    if (!isHistoricalPartition()) {
+                        throw new InvalidPartitionException(
+                                "Historical lookup request must target a historical partition.");
+                    }
+
+                    KvTablet kv = this.kvTablet;
+                    checkNotNull(kv, "KvTablet for the historical replica shouldn't be null.");
+                    List<KvStateLookupResult> results = new ArrayList<>(keys.size());
+                    for (byte[] key : keys) {
+                        results.add(kv.lookupHistoricalLocal(originalPartitionName, key));
+                    }
+                    return results;
                 });
     }
 
@@ -1396,7 +1654,7 @@ public final class Replica {
         return followerReplica;
     }
 
-    public List<byte[]> lookups(List<byte[]> keys) {
+    public List<ByteArraySlice> lookups(List<byte[]> keys) {
         if (!isKvTable()) {
             throw new NonPrimaryKeyTableException(
                     "the primary key table not exists for " + tableBucket);
@@ -1431,7 +1689,7 @@ public final class Replica {
      * lookup-with-insert-if-not-exists after an {@code acks = 1} insert, where the asynchronous
      * flush may not have materialized the insert into RocksDB yet).
      */
-    public List<byte[]> lookupsFromBufferOrKv(List<byte[]> keys) {
+    public List<ByteArraySlice> lookupsFromBufferOrKv(List<byte[]> keys) {
         if (!isKvTable()) {
             throw new NonPrimaryKeyTableException(
                     "the primary key table not exists for " + tableBucket);
@@ -1460,7 +1718,7 @@ public final class Replica {
                 });
     }
 
-    public List<byte[]> prefixLookup(byte[] prefixKey) {
+    public List<ByteArraySlice> prefixLookup(byte[] prefixKey) {
         if (!isKvTable()) {
             throw new NonPrimaryKeyTableException(
                     "Try to do prefix lookup on a non primary key table: " + getTablePath());
@@ -1509,10 +1767,10 @@ public final class Replica {
                         checkNotNull(
                                 kvTablet,
                                 "KvTablet for the replica to limit scan shouldn't be null.");
-                        List<byte[]> bytes = kvTablet.limitScan(limit);
+                        List<ByteArraySlice> values = kvTablet.limitScan(limit);
                         DefaultValueRecordBatch.Builder builder = DefaultValueRecordBatch.builder();
-                        for (byte[] key : bytes) {
-                            builder.append(key);
+                        for (ByteArraySlice value : values) {
+                            builder.append(value.array(), value.offset(), value.length());
                         }
                         return builder.build();
                     } catch (IOException e) {
@@ -1657,11 +1915,23 @@ public final class Replica {
                 });
     }
 
+    private static boolean supportsExactRowCount(TableConfig tableConfig) {
+        return tableConfig.getChangelogImage() != ChangelogImage.WAL
+                && !tableConfig.getKvTTL().isPresent();
+    }
+
     public long getOffset(RemoteLogManager remoteLogManager, ListOffsetsParam listOffsetsParam)
             throws IOException {
         return inReadLock(
                 leaderIsrUpdateLock,
                 () -> {
+                    if (!isLeader()) {
+                        throw new NotLeaderOrFollowerException(
+                                String.format(
+                                        "Leader not local for bucket %s on tabletServer %d",
+                                        tableBucket, localTabletServerId));
+                    }
+
                     int offsetType = listOffsetsParam.getOffsetType();
                     if (offsetType == ListOffsetsParam.TIMESTAMP_OFFSET_TYPE) {
                         return getOffsetByTimestamp(remoteLogManager, listOffsetsParam);
@@ -1750,6 +2020,8 @@ public final class Replica {
         // the fetch do not prevent a follower from coming into sync.
         long initialHighWatermark = logTablet.getHighWatermark();
         long initialLogEndOffset = logTablet.localLogEndOffset();
+        long initialMinRetainOffset =
+                fetchParams.isFromFollower() && isKvTable() ? logTablet.getMinRetainOffset() : -1L;
         long readOffset =
                 fetchParams.fetchOffset() == FetchParams.FETCH_FROM_EARLIEST_OFFSET
                         ? logTablet.logStartOffset()
@@ -1776,7 +2048,8 @@ public final class Replica {
                 IOUtils.closeQuietly(filterContext.getReadContext());
             }
         }
-        return new LogReadInfo(fetchDataInfo, initialHighWatermark, initialLogEndOffset);
+        return new LogReadInfo(
+                fetchDataInfo, initialHighWatermark, initialLogEndOffset, initialMinRetainOffset);
     }
 
     /**

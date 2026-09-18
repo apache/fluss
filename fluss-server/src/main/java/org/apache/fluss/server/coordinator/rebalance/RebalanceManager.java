@@ -29,6 +29,7 @@ import org.apache.fluss.server.coordinator.CoordinatorContext;
 import org.apache.fluss.server.coordinator.CoordinatorEventProcessor;
 import org.apache.fluss.server.coordinator.event.EventManager;
 import org.apache.fluss.server.coordinator.event.RebalanceTaskTimeoutEvent;
+import org.apache.fluss.server.coordinator.event.RecoverRebalanceEvent;
 import org.apache.fluss.server.coordinator.rebalance.goal.Goal;
 import org.apache.fluss.server.coordinator.rebalance.goal.GoalOptimizer;
 import org.apache.fluss.server.coordinator.rebalance.model.ClusterModel;
@@ -178,11 +179,8 @@ public class RebalanceManager {
         try {
             zkClient.getRebalanceTask()
                     .ifPresent(
-                            rebalancePlan ->
-                                    registerRebalance(
-                                            rebalancePlan.getRebalanceId(),
-                                            rebalancePlan.getExecutePlan(),
-                                            rebalancePlan.getRebalanceStatus()));
+                            rebalanceTask ->
+                                    eventManager.put(new RecoverRebalanceEvent(rebalanceTask)));
         } catch (Exception e) {
             LOG.error(
                     "Failed to get rebalance plan from zookeeper, it will be treated as no"

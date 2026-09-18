@@ -70,6 +70,22 @@ public class ArrayUtilsTest {
     }
 
     @Test
+    void testDeepCopyTwoDimensionalIntArray() {
+        int[][] original = new int[][] {new int[] {1, 2}, null, new int[0]};
+
+        int[][] copy = ArrayUtils.deepCopy(original);
+
+        assertThat(copy).isNotSameAs(original);
+        assertThat(copy[0]).isNotSameAs(original[0]).containsExactly(1, 2);
+        assertThat(copy[1]).isNull();
+        assertThat(copy[2]).isNotSameAs(original[2]).isEmpty();
+
+        original[0][0] = 10;
+        assertThat(copy[0]).containsExactly(1, 2);
+        assertThat(ArrayUtils.deepCopy(null)).isNull();
+    }
+
+    @Test
     void testIsSubset() {
         int[] a = new int[] {1, 2, 3, 4, 5};
         int[] b = new int[] {1, 3, 5};

@@ -85,6 +85,23 @@ public interface LakeSource<Split extends LakeSplit> extends Serializable {
     SimpleVersionedSerializer<Split> getSplitSerializer();
 
     /**
+     * Creates an independent copy of this lake source, including all push-down state that has
+     * already been applied.
+     *
+     * <p>Subsequent calls to {@link #withProject(int[][])}, {@link #withLimit(int)}, or {@link
+     * #withFilters(List)} on either instance must not affect the planning or reading behavior of
+     * the other instance.
+     *
+     * <p>This operation must copy the current state entirely in memory. It must not access a
+     * catalog, load table or schema metadata, or replay ability methods such as push-down
+     * operations. Implementations must also preserve any additional push-down state introduced in
+     * the future.
+     *
+     * @return an independent copy of this lake source
+     */
+    LakeSource<Split> copy();
+
+    /**
      * Context interface for planners, providing the snapshot id of the table in data-lake to plan
      * splits.
      */

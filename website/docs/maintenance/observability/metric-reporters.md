@@ -23,6 +23,27 @@ Push-based reporters usually implement the `Scheduled` interface and periodicall
 
 Pull-based reporters are queried from an external system instead.
 
+## Filtering metrics
+
+Each reporter supports two filters:
+
+- `metrics.reporter.<name>.filter.includes`: metrics to export (default: `*:*:*`).
+- `metrics.reporter.<name>.filter.excludes`: metrics to omit (default: empty). Excludes take precedence.
+
+Rules use `<scope>[:<name>[:<type>]]`, with `;` between rules and `,` between names/types.
+Use logical scopes with `.` separators (without `fluss_` or label values) and original metric names.
+Patterns support `*` wildcards and regular expressions. Types are `counter`, `gauge`, `meter`, or
+`histogram`; omitted names/types match all.
+
+For example, exclude bucket metrics (including subgroups) and histograms from PushGateway:
+
+```yaml
+metrics.reporter.prometheus-push.filter.includes: *:*:*
+metrics.reporter.prometheus-push.filter.excludes: *.bucket;*.bucket.*;*:*:histogram
+```
+
+Restart the Fluss process to apply changes.
+
 ## Reporters
 
 The following sections list the supported reporters currently.

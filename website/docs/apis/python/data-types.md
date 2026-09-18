@@ -85,6 +85,31 @@ row = [1, "Alice", True, 95.5, Decimal("1234.56"), date(1990, 3, 15), time(9, 30
 handle = writer.append(row)
 ```
 
+### Writing an Arrow batch
+
+Your batch must have the table's columns, with the table's names, in the table's
+order. The same applies to the fields of a `ROW` column. Anything else is rejected
+with an error naming the column.
+
+Column types must be the table's too, because `write_arrow_batch` writes your
+buffers as they are and readers decode them with the table's schema — a
+`timestamp[ns]` column written into a `TIMESTAMP(3)` one would read back as
+milliseconds. Types that differ only in how they store the same values are
+converted for you: `large_string`, `large_binary`, `large_list`, the view types,
+and dictionary encoding. Anything that would change a value, such as a different
+`TIMESTAMP` unit or `DECIMAL` scale, is rejected.
+
+`table.arrow_schema` is the schema the table expects. Building against it avoids
+the conversion entirely, which for pandas costs nothing extra:
+
+```python
+batch = pa.Table.from_pandas(df, schema=table.arrow_schema).to_batches()[0]
+writer.write_arrow_batch(batch)
+```
+
+The nullable flags on your schema do not have to match — actual nulls are checked
+against the table's NOT NULL columns separately.
+
 ## Reading Data
 
 ```python

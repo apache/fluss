@@ -29,6 +29,7 @@ import java.util.Collections;
 
 /** A factory to create {@link DynamicTableSource} for lake table. */
 public class LakeTableFactory {
+
     private final LakeFlinkCatalog lakeFlinkCatalog;
 
     public LakeTableFactory(LakeFlinkCatalog lakeFlinkCatalog) {
@@ -36,14 +37,7 @@ public class LakeTableFactory {
     }
 
     public DynamicTableSource createDynamicTableSource(
-            DynamicTableFactory.Context context, String tableName) {
-        ObjectIdentifier originIdentifier = context.getObjectIdentifier();
-        ObjectIdentifier lakeIdentifier =
-                ObjectIdentifier.of(
-                        originIdentifier.getCatalogName(),
-                        originIdentifier.getDatabaseName(),
-                        tableName);
-
+            DynamicTableFactory.Context context, ObjectIdentifier lakeIdentifier) {
         // For Iceberg and Paimon, pass the table name as-is to their factory.
         // Metadata tables will be handled internally by their respective factories.
         DynamicTableFactory.Context newContext =

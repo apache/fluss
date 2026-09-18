@@ -99,6 +99,9 @@ public class TieringSourceEnumerator
 
     private static final Logger LOG = LoggerFactory.getLogger(TieringSourceEnumerator.class);
 
+    /** Delay between claims when draining consecutive empty tables, to pace the claim RPC rate. */
+    private static final long EMPTY_TABLE_POLL_DELAY_MS = 1000L;
+
     private final Configuration flussConf;
     private final SplitEnumeratorContext<TieringSplit> context;
     private final LakeTieringFactory<?, ?> lakeTieringFactory;
@@ -125,17 +128,34 @@ public class TieringSourceEnumerator
 
     private volatile boolean closed = false;
 
+    /** Tracks a pending delayed poll, but not an in-flight request. */
+    private boolean delayedPollScheduled = false;
+
     public TieringSourceEnumerator(
             Configuration flussConf,
             SplitEnumeratorContext<TieringSplit> context,
             LakeTieringFactory<?, ?> lakeTieringFactory,
             long pollTieringTableIntervalMs) {
+        this(
+                flussConf,
+                context,
+                lakeTieringFactory,
+                pollTieringTableIntervalMs,
+                Executors.newSingleThreadScheduledExecutor(
+                        r -> new Thread(r, "Tiering-Timer-Thread")));
+    }
+
+    @VisibleForTesting
+    TieringSourceEnumerator(
+            Configuration flussConf,
+            SplitEnumeratorContext<TieringSplit> context,
+            LakeTieringFactory<?, ?> lakeTieringFactory,
+            long pollTieringTableIntervalMs,
+            ScheduledExecutorService timerService) {
         this.flussConf = flussConf;
         this.context = context;
         this.lakeTieringFactory = lakeTieringFactory;
-        this.timerService =
-                Executors.newSingleThreadScheduledExecutor(
-                        r -> new Thread(r, "Tiering-Timer-Thread"));
+        this.timerService = timerService;
         this.enumeratorMetricGroup = context.metricGroup();
         this.pollTieringTableIntervalMs = pollTieringTableIntervalMs;
         this.pendingSplits = Collections.synchronizedList(new ArrayList<>());
@@ -149,16 +169,26 @@ public class TieringSourceEnumerator
     @Override
     public void start() {
         connection = ConnectionFactory.createConnection(flussConf);
-        flussAdmin = connection.getAdmin();
+        Admin admin = connection.getAdmin();
         FlinkMetricRegistry metricRegistry = new FlinkMetricRegistry(enumeratorMetricGroup);
         ClientMetricGroup clientMetricGroup =
                 new ClientMetricGroup(metricRegistry, "LakeTieringService");
         this.rpcClient = RpcClient.create(flussConf, clientMetricGroup);
         MetadataUpdater metadataUpdater = new MetadataUpdater(flussConf, rpcClient);
-        this.coordinatorGateway =
+        CoordinatorGateway gateway =
                 GatewayClientProxy.createGatewayProxy(
                         metadataUpdater::getCoordinatorServer, rpcClient, CoordinatorGateway.class);
-        this.splitGenerator = new TieringSplitGenerator(flussAdmin);
+        start(gateway, admin, new TieringSplitGenerator(admin));
+    }
+
+    @VisibleForTesting
+    void start(
+            CoordinatorGateway coordinatorGateway,
+            Admin flussAdmin,
+            TieringSplitGenerator splitGenerator) {
+        this.coordinatorGateway = coordinatorGateway;
+        this.flussAdmin = flussAdmin;
+        this.splitGenerator = splitGenerator;
 
         LOG.info("Starting register Tiering Service to Fluss Coordinator...");
         try {
@@ -308,8 +338,7 @@ public class TieringSourceEnumerator
         if (!finishedTables.isEmpty() || !failedTableEpochs.isEmpty()) {
             // call one round of heartbeat to notify table has been finished or failed
             LOG.info("Finished tiering table {}.", finishedTables);
-            this.context.callAsync(
-                    this::requestTieringTableSplitsViaHeartBeat, this::generateAndAssignSplits);
+            requestTableAndAssign(0);
         }
     }
 
@@ -325,8 +354,7 @@ public class TieringSourceEnumerator
         pendingSplits.clear();
         if (!failedTableEpochs.isEmpty()) {
             // call one round of heartbeat to notify table has been finished or failed
-            this.context.callAsync(
-                    this::requestTieringTableSplitsViaHeartBeat, this::generateAndAssignSplits);
+            requestTableAndAssign(0);
         }
     }
 
@@ -474,6 +502,8 @@ public class TieringSourceEnumerator
                         tieringTable.f2.getTableName());
                 tieringTableEpochs.remove(tieringTable.f0);
                 finishedTables.put(tieringTable.f0, TieringFinishInfo.from(tieringTable.f1));
+                // An empty round has no split or completion event to drive the next table.
+                requestTableAndAssign(EMPTY_TABLE_POLL_DELAY_MS);
             } else {
                 pendingSplits.addAll(tieringSplits);
 
@@ -495,6 +525,33 @@ public class TieringSourceEnumerator
             failedTableEpochs.put(tieringTable.f0, tieringTable.f1);
             tieringTableEpochs.remove(tieringTable.f0);
         }
+    }
+
+    /** Requests a tiering table and assigns its splits, immediately or after a delay. */
+    private void requestTableAndAssign(long delayMs) {
+        if (closed) {
+            return;
+        }
+        if (delayMs == 0) {
+            context.callAsync(
+                    this::requestTieringTableSplitsViaHeartBeat, this::generateAndAssignSplits);
+            return;
+        }
+        if (delayedPollScheduled) {
+            return;
+        }
+        delayedPollScheduled = true;
+        timerService.schedule(
+                () ->
+                        context.runInCoordinatorThread(
+                                () -> {
+                                    delayedPollScheduled = false;
+                                    if (!isFailOvering) {
+                                        requestTableAndAssign(0);
+                                    }
+                                }),
+                delayMs,
+                TimeUnit.MILLISECONDS);
     }
 
     private List<TieringSplit> populateTieringRoundMetadata(List<TieringSplit> tieringSplits) {

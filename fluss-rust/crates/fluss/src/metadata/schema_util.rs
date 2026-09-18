@@ -196,6 +196,7 @@ mod tests {
         let origin = Schema::builder()
             .column("a", DataTypes::int())
             .primary_key(["a"])
+            .unwrap()
             .build()
             .unwrap();
         let expected = schema_with_ids(&[(0, "a", DataTypes::int())]);

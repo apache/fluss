@@ -21,11 +21,15 @@ import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.MemorySize;
 import org.apache.fluss.exception.NotLeaderOrFollowerException;
+import org.apache.fluss.memory.MemorySegment;
+import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.record.KvRecord;
 import org.apache.fluss.record.KvRecordBatch;
+import org.apache.fluss.row.TimestampNtz;
+import org.apache.fluss.row.encode.KvValueLayout;
 import org.apache.fluss.rpc.gateway.TabletServerGateway;
 import org.apache.fluss.rpc.messages.PbLookupRespForBucket;
 import org.apache.fluss.rpc.messages.PutKvRequest;
@@ -36,6 +40,7 @@ import org.apache.fluss.server.testutils.FlussClusterExtension;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
 import org.apache.fluss.server.zk.data.TableAssignment;
+import org.apache.fluss.utils.BytesUtils;
 import org.apache.fluss.utils.ExceptionUtils;
 import org.apache.fluss.utils.types.Tuple2;
 
@@ -43,13 +48,14 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 
 import java.time.Duration;
+import java.time.LocalDateTime;
+import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 
-import static org.apache.fluss.record.TestData.DATA1_SCHEMA_PK;
 import static org.apache.fluss.server.testutils.KvTestUtils.assertLookupResponse;
 import static org.apache.fluss.server.testutils.RpcMessageTestUtils.createTable;
 import static org.apache.fluss.server.testutils.RpcMessageTestUtils.newLookupRequest;
@@ -58,6 +64,9 @@ import static org.apache.fluss.testutils.DataTestUtils.genKvRecords;
 import static org.apache.fluss.testutils.DataTestUtils.getKeyValuePairs;
 import static org.apache.fluss.testutils.DataTestUtils.toKvRecordBatch;
 import static org.apache.fluss.testutils.common.CommonTestUtils.waitUntil;
+import static org.apache.fluss.types.DataTypes.INT;
+import static org.apache.fluss.types.DataTypes.STRING;
+import static org.apache.fluss.types.DataTypes.TIMESTAMP;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
@@ -82,6 +91,15 @@ import static org.assertj.core.api.Assertions.assertThat;
  * </ol>
  */
 class KvRecoverFromRemoteLogITCase {
+    private static final Schema EVENT_TIME_SCHEMA =
+            Schema.newBuilder()
+                    .column("a", INT())
+                    .column("event_time", TIMESTAMP(3))
+                    .column("b", STRING())
+                    .primaryKey("a")
+                    .build();
+    private static final LocalDateTime EVENT_TIME = LocalDateTime.of(2099, 1, 1, 0, 0);
+
     @RegisterExtension
     public static final FlussClusterExtension FLUSS_CLUSTER_EXTENSION =
             FlussClusterExtension.builder()
@@ -94,7 +112,12 @@ class KvRecoverFromRemoteLogITCase {
         // Step 1: Create a PK table with 1 bucket and replication factor 3.
         TablePath tablePath = TablePath.of("test_db", "test_kv_recover_from_remote");
         TableDescriptor tableDescriptor =
-                TableDescriptor.builder().schema(DATA1_SCHEMA_PK).distributedBy(1, "a").build();
+                TableDescriptor.builder()
+                        .schema(EVENT_TIME_SCHEMA)
+                        .distributedBy(1, "a")
+                        .property(ConfigOptions.TABLE_KV_TTL.key(), "1 h")
+                        .property(ConfigOptions.TABLE_KV_TTL_TIME_COLUMN.key(), "event_time")
+                        .build();
 
         long tableId = createTable(FLUSS_CLUSTER_EXTENSION, tablePath, tableDescriptor);
         TableBucket tableBucket = new TableBucket(tableId, 0);
@@ -139,7 +162,12 @@ class KvRecoverFromRemoteLogITCase {
             // Write the same key multiple times per batch to increase log volume,
             // ensuring multiple log segments are produced quickly for remote tiering.
             for (int j = 0; j < 10; j++) {
-                batch.addAll(genKvRecords(new Object[] {i, "value_" + i}));
+                batch.addAll(
+                        genKvRecords(
+                                EVENT_TIME_SCHEMA.getRowType(),
+                                new Object[] {
+                                    i, TimestampNtz.fromLocalDateTime(EVENT_TIME), "value_" + i
+                                }));
             }
             allRecords.addAll(batch);
             putRecordBatchAndAssertSuccess(tableBucket, originalLeader, toKvRecordBatch(batch));
@@ -161,7 +189,12 @@ class KvRecoverFromRemoteLogITCase {
             List<KvRecord> batch = new ArrayList<>();
             // Same as Phase 1: write the same key multiple times to produce more log data.
             for (int j = 0; j < 10; j++) {
-                batch.addAll(genKvRecords(new Object[] {i, "value_" + i}));
+                batch.addAll(
+                        genKvRecords(
+                                EVENT_TIME_SCHEMA.getRowType(),
+                                new Object[] {
+                                    i, TimestampNtz.fromLocalDateTime(EVENT_TIME), "value_" + i
+                                }));
             }
             allRecords.addAll(batch);
             putRecordBatchAndAssertSuccess(tableBucket, originalLeader, toKvRecordBatch(batch));
@@ -177,6 +210,18 @@ class KvRecoverFromRemoteLogITCase {
                 () -> leaderLogTablet.canFetchFromRemoteLog(snapshotLogOffset),
                 Duration.ofMinutes(2),
                 "Fail to wait for remote log to cover beyond snapshot offset " + snapshotLogOffset);
+
+        byte[] encodedKey = BytesUtils.toArray(allRecords.get(allRecords.size() - 1).getKey());
+        assertThat(leaderReplica.getKvTablet()).isNotNull();
+        byte[] leaderValue =
+                leaderReplica
+                        .getKvTablet()
+                        .getRocksDBKv()
+                        .multiGet(Collections.singletonList(encodedKey))
+                        .get(0);
+        long originalTag = KvValueLayout.TAGGED.readValueTag(MemorySegment.wrap(leaderValue));
+        assertThat(originalTag)
+                .isEqualTo(EVENT_TIME.atZone(ZoneId.systemDefault()).toInstant().toEpochMilli());
 
         // =====================================================================
         // Step 3: Restart follower → catches up via remote fetch path
@@ -276,6 +321,16 @@ class KvRecoverFromRemoteLogITCase {
                             .get(),
                     keyValue.f1);
         }
+
+        assertThat(followerReplica.getKvTablet()).isNotNull();
+        byte[] recovered =
+                followerReplica
+                        .getKvTablet()
+                        .getRocksDBKv()
+                        .multiGet(Collections.singletonList(encodedKey))
+                        .get(0);
+        assertThat(KvValueLayout.TAGGED.readValueTag(MemorySegment.wrap(recovered)))
+                .isEqualTo(originalTag);
 
         // Clean up: restart the other follower to restore cluster health.
         FLUSS_CLUSTER_EXTENSION.startTabletServer(otherFollower);

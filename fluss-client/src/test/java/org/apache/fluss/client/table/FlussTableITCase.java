@@ -51,6 +51,7 @@ import org.apache.fluss.row.BinaryString;
 import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.ProjectedRow;
+import org.apache.fluss.row.encode.KvValueLayout;
 import org.apache.fluss.row.indexed.IndexedRow;
 import org.apache.fluss.types.BigIntType;
 import org.apache.fluss.types.DataTypes;
@@ -109,7 +110,9 @@ class FlussTableITCase extends ClientToServerITCaseBase {
                         .withDataLakeFormat(DataLakeFormat.PAIMON);
         Map<String, String> options = new HashMap<>(expected.getProperties());
         options.put(ConfigOptions.TABLE_KV_FORMAT_VERSION.key(), "2");
-        options.put(ConfigOptions.TABLE_KV_STANDBY_REPLICA_ENABLED.key(), "true");
+        options.put(
+                ConfigOptions.TABLE_KV_VALUE_LAYOUT_VERSION.key(),
+                String.valueOf(KvValueLayout.PLAIN.version()));
         expected = expected.withProperties(options);
         assertThat(tableInfo.toTableDescriptor()).isEqualTo(expected);
     }

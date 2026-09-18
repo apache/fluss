@@ -23,6 +23,8 @@ import org.apache.fluss.rpc.messages.PutKvRequest;
 import org.apache.fluss.rpc.protocol.ApiError;
 import org.apache.fluss.rpc.protocol.Errors;
 
+import javax.annotation.Nullable;
+
 /** Result of {@link PutKvRequest} for each table bucket. */
 @Internal
 public class PutKvResultForBucket extends WriteResultForBucket {
@@ -30,27 +32,58 @@ public class PutKvResultForBucket extends WriteResultForBucket {
     /** Backpressure pressure value: 0=normal, (0,1)=DELAYED zone. */
     private final float pressure;
 
+    private final @Nullable String originalPartitionName;
+
     public PutKvResultForBucket(TableBucket tableBucket, long changeLogEndOffset) {
-        this(tableBucket, changeLogEndOffset, 0f);
+        this(tableBucket, changeLogEndOffset, ApiError.NONE, 0f, null);
     }
 
     public PutKvResultForBucket(TableBucket tableBucket, long changeLogEndOffset, float pressure) {
-        super(tableBucket, changeLogEndOffset, ApiError.NONE);
-        this.pressure = pressure;
+        this(tableBucket, changeLogEndOffset, ApiError.NONE, pressure, null);
     }
 
     public PutKvResultForBucket(TableBucket tableBucket, ApiError error) {
-        super(tableBucket, -1L, error);
-        this.pressure = 0f;
+        this(tableBucket, -1L, error, 0f, null);
+    }
+
+    public static PutKvResultForBucket historicalSuccess(
+            TableBucket tableBucket,
+            long changeLogEndOffset,
+            @Nullable String originalPartitionName) {
+        return new PutKvResultForBucket(
+                tableBucket, changeLogEndOffset, ApiError.NONE, 0f, originalPartitionName);
+    }
+
+    public static PutKvResultForBucket historicalFailure(
+            TableBucket tableBucket, ApiError error, @Nullable String originalPartitionName) {
+        return new PutKvResultForBucket(tableBucket, -1L, error, 0f, originalPartitionName);
+    }
+
+    private PutKvResultForBucket(
+            TableBucket tableBucket,
+            long changeLogEndOffset,
+            ApiError error,
+            float pressure,
+            @Nullable String originalPartitionName) {
+        super(tableBucket, changeLogEndOffset, error);
+        this.pressure = pressure;
+        this.originalPartitionName = originalPartitionName;
     }
 
     public float getPressure() {
         return pressure;
     }
 
+    /** Returns the original partition name for a historical write, or null for a normal write. */
+    public @Nullable String getOriginalPartitionName() {
+        return originalPartitionName;
+    }
+
     @Override
     public <T extends WriteResultForBucket> T copy(Errors newError) {
         //noinspection unchecked
-        return (T) new PutKvResultForBucket(tableBucket, newError.toApiError());
+        return (T)
+                new PutKvResultForBucket(
+                        tableBucket, -1L, newError.toApiError(), 0f, originalPartitionName);
     }
 }

@@ -28,7 +28,7 @@ let table_descriptor = TableDescriptor::builder()
             .column("session_id", DataTypes::string())
             .column("event_seq", DataTypes::bigint())
             .column("event_data", DataTypes::string())
-            .primary_key(vec!["user_id", "session_id", "event_seq"])
+            .primary_key(vec!["user_id", "session_id", "event_seq"])?
             .build()?,
     )
     // Bucket key (user_id, session_id) is a prefix of the primary key.
@@ -75,7 +75,7 @@ let table_descriptor = TableDescriptor::builder()
             .column("session_id", DataTypes::string())
             .column("event_seq", DataTypes::bigint())
             .column("event_data", DataTypes::string())
-            .primary_key(vec!["region", "user_id", "session_id", "event_seq"])
+            .primary_key(vec!["region", "user_id", "session_id", "event_seq"])?
             .build()?,
     )
     .partitioned_by(vec!["region"])

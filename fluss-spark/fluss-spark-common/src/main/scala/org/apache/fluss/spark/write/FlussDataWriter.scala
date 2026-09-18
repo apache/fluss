@@ -55,7 +55,7 @@ abstract class FlussDataWriter[T](
   protected val flussRow = new SparkAsFlussRow(dataSchema)
 
   @volatile
-  private var asyncWriterException: Option[Throwable] = _
+  private var asyncWriterException: Option[Throwable] = None
 
   def writeRow(record: SparkAsFlussRow): CompletableFuture[T]
 

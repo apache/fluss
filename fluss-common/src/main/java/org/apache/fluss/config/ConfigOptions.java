@@ -413,13 +413,6 @@ public class ConfigOptions {
                                     + "The default value is 10.")
                     .withDeprecatedKeys("coordinator.io-pool.size");
 
-    public static final ConfigOption<String> SERVER_IO_TMP_DIR =
-            key("server.io.tmpdir")
-                    .stringType()
-                    .defaultValue(System.getProperty("java.io.tmpdir") + "/fluss")
-                    .withDescription(
-                            "Local directory used by Fluss components to store temporary files.");
-
     public static final ConfigOption<Integer> SERVER_HISTORICAL_PARTITION_THREAD_POOL_MAX_SIZE =
             key("server.historical-partition.thread-pool.max-size")
                     .intType()
@@ -575,6 +568,24 @@ public class ConfigOptions {
                     .withDescription(
                             "The interval for cleaning up expired producer offsets "
                                     + "and orphan files in remote storage. Default is 1 hour.");
+
+    public static final ConfigOption<Duration> COORDINATOR_CONTROL_REQUEST_RETRY_BACKOFF =
+            key("coordinator.control-request.retry-backoff")
+                    .durationType()
+                    .defaultValue(Duration.ofMillis(100))
+                    .withDescription(
+                            "The backoff duration the coordinator waits before retrying a "
+                                    + "control-plane request to a tablet server after a "
+                                    + "transient RPC-layer failure.");
+
+    public static final ConfigOption<Duration> COORDINATOR_CONTROL_REQUEST_TIMEOUT =
+            key("coordinator.control-request.timeout")
+                    .durationType()
+                    .defaultValue(Duration.ofSeconds(30))
+                    .withDescription(
+                            "The timeout the sender thread waits for a response to a "
+                                    + "control-plane request before treating it as failed "
+                                    + "and retrying.");
 
     // ------------------------------------------------------------------------
     //  ConfigOptions for Tablet Server
@@ -997,8 +1008,9 @@ public class ConfigOptions {
                     .booleanType()
                     .defaultValue(false)
                     .withDescription(
-                            "Whether to roll a non-empty active log segment when it has expired "
-                                    + "according to the table log TTL. Disabled by default.");
+                            "Whether to roll a non-empty active log segment after it has expired "
+                                    + "according to the effective local cleanup TTL and the high "
+                                    + "watermark has reached the log end offset. Disabled by default.");
 
     public static final ConfigOption<Duration> LOG_REPLICA_HIGH_WATERMARK_CHECKPOINT_INTERVAL =
             key("log.replica.high-watermark.checkpoint-interval")
@@ -1194,7 +1206,7 @@ public class ConfigOptions {
                     .intType()
                     .defaultValue(50)
                     .withDescription(
-                            "The number of historical lookup requests allowed to wait for lake lookup processing before throttling them.");
+                            "The maximum number of in-flight historical partition operations, including running and queued lookups and writes, before throttling new operations.");
 
     public static final ConfigOption<MemorySize> NETTY_SERVER_MAX_REQUEST_SIZE =
             key("netty.server.max-request-size")
@@ -1248,7 +1260,7 @@ public class ConfigOptions {
     public static final ConfigOption<Duration> CLIENT_CONNECT_TIMEOUT =
             key("client.connect-timeout")
                     .durationType()
-                    .defaultValue(Duration.ofSeconds(120))
+                    .defaultValue(Duration.ofSeconds(15))
                     .withDescription("The Netty client connect timeout.");
 
     public static final ConfigOption<List<String>> BOOTSTRAP_SERVERS =
@@ -1753,6 +1765,16 @@ public class ConfigOptions {
                                     + "for optimization (encoded bytes can be reused for bucket calculation). "
                                     + "Bucket key encoding always uses datalake's encoder to align with datalake bucket calculation.");
 
+    /** The version of the physical KV value layout. */
+    public static final ConfigOption<Integer> TABLE_KV_VALUE_LAYOUT_VERSION =
+            key("table.kv.value-layout-version")
+                    .intType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "The version of the physical KV value layout in RocksDB. "
+                                    + "The coordinator sets this option during table creation. "
+                                    + "Tables created before this option was introduced use the plain layout.");
+
     public static final ConfigOption<Boolean> TABLE_KV_STANDBY_REPLICA_ENABLED =
             key("table.kv.standby-replica.enabled")
                     .booleanType()
@@ -1760,9 +1782,30 @@ public class ConfigOptions {
                     .withDescription(
                             "Whether to enable standby replicas for primary key tables. "
                                     + "Standby replicas maintain recent KV snapshots for fast leader promotion. "
-                                    + "Automatically set to true by the coordinator during table creation for new PK tables. "
-                                    + "Tables created before this option was introduced are treated as disabled. "
+                                    + "Disabled if not configured, including for tables created before this option was introduced. "
                                     + "Can be dynamically enabled via ALTER TABLE.");
+
+    public static final ConfigOption<Duration> TABLE_KV_TTL =
+            key("table.kv.ttl")
+                    .durationType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "The best-effort row-level TTL for primary key data. "
+                                    + "The changelog retention of a primary key table is controlled separately by 'table.log.ttl'. "
+                                    + "If not set, row-level TTL is disabled. "
+                                    + "The duration must be at least 1 millisecond. "
+                                    + "Expired rows may remain visible until RocksDB compaction removes them.");
+
+    public static final ConfigOption<String> TABLE_KV_TTL_TIME_COLUMN =
+            key("table.kv.ttl.time-column")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "The event-time column for row-level TTL. "
+                                    + "If not set, row-level TTL uses processing time. "
+                                    + "If set, the column must be BIGINT epoch milliseconds, TIMESTAMP, or TIMESTAMP_LTZ. "
+                                    + "TIMESTAMP values are interpreted in the TabletServer's system time zone. "
+                                    + "Rows with null event-time values do not expire through TTL.");
 
     public static final ConfigOption<Boolean> TABLE_AUTO_PARTITION_ENABLED =
             key("table.auto-partition.enabled")
@@ -1900,11 +1943,12 @@ public class ConfigOptions {
                     .booleanType()
                     .defaultValue(false)
                     .withDescription(
-                            "Whether to enable historical partition lookup for the table. "
+                            "Whether to enable historical partition access for the table. "
                                     + "When enabled, the coordinator creates and retains a system partition "
-                                    + "for routing lookups of expired partitions to lake storage. "
-                                    + "Currently, this option only supports auto-partitioned Paimon primary "
-                                    + "key tables with a single partition key. Disabled by default. "
+                                    + "for routing writes to expired partitions and, for primary-key tables, "
+                                    + "lookups of expired partitions to lake storage. Currently, this option "
+                                    + "only supports auto-partitioned Paimon tables with a single partition "
+                                    + "key. Disabled by default. "
                                     + "After changing this option, restart existing lookup jobs that need "
                                     + "to look up historical partition data so that their clients load the "
                                     + "updated table configuration.");
@@ -1920,6 +1964,22 @@ public class ConfigOptions {
                                     + "This ensures consistency in key encoding and bucketing, enabling seamless **Union Read** functionality across Fluss and Lakehouse. "
                                     + "The `table.datalake.format` can be pre-defined before enabling `table.datalake.enabled`. This allows the data lake feature to be dynamically enabled on the table without requiring table recreation. "
                                     + "If `table.datalake.format` is not explicitly set during table creation, the table will default to the format specified by the `datalake.format` configuration in the Fluss cluster.");
+
+    public static final ConfigOption<String> TABLE_DATALAKE_DATABASE_NAME =
+            key("table.datalake.database-name")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "Specifies the database name of the datalake table. This option is currently supported only for Paimon. "
+                                    + "If not set, the Fluss database name is used. The option may be configured before the Paimon table is created and cannot be changed after creation.");
+
+    public static final ConfigOption<String> TABLE_DATALAKE_TABLE_NAME =
+            key("table.datalake.table-name")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "Specifies the table name of the datalake table. This option is currently supported only for Paimon. "
+                                    + "If not set, the Fluss table name is used. The option may be configured before the Paimon table is created and cannot be changed after creation.");
 
     public static final ConfigOption<Duration> TABLE_DATALAKE_FRESHNESS =
             key("table.datalake.freshness")
@@ -2152,6 +2212,29 @@ public class ConfigOptions {
                                     + "The RateLimiter is always enabled. The default value is Long.MAX_VALUE (effectively unlimited). "
                                     + "Set to a lower value (e.g., 100MB) to limit the rate.");
 
+    public static final ConfigOption<MemorySize> KV_SHARED_BLOCK_CACHE_SIZE =
+            key("kv.rocksdb.shared-block-cache.size")
+                    .memoryType()
+                    .defaultValue(MemorySize.ZERO)
+                    .withDescription(
+                            "The soft capacity of the shared block cache for all RocksDB instances "
+                                    + "in the TabletServer. All KV tablets share a single block cache "
+                                    + "to improve memory utilization. Hot tablets can use more cache "
+                                    + "while cold tablets use less. Set to 0 to disable the shared "
+                                    + "block cache, in which case each tablet creates its own cache. "
+                                    + "This is not a hard limit on process memory. The default is 0.");
+
+    public static final ConfigOption<MemorySize> KV_SHARED_WRITE_BUFFER_SIZE =
+            key("kv.rocksdb.shared-write-buffer.size")
+                    .memoryType()
+                    .defaultValue(MemorySize.ZERO)
+                    .withDescription(
+                            "The shared soft memory limit for RocksDB memtables across all KV tablets "
+                                    + "in the TabletServer. Reaching the limit makes RocksDB flush memtables "
+                                    + "more aggressively, but it is not a hard limit on process memory. "
+                                    + "Set to 0 to disable the shared write buffer manager. "
+                                    + "The default is 0. Changes require a TabletServer restart.");
+
     // --------------------------------------------------------------------------
     // Provided configurable ColumnFamilyOptions within Fluss
     // --------------------------------------------------------------------------
@@ -2275,7 +2358,9 @@ public class ConfigOptions {
                     .defaultValue(MemorySize.parse("8mb"))
                     .withDescription(
                             "The amount of the cache for data blocks in RocksDB. "
-                                    + "The default block-cache size is `8MB`.");
+                                    + "The default block-cache size is `8MB`. "
+                                    + "This setting is ignored when "
+                                    + "kv.rocksdb.shared-block-cache.size is greater than 0.");
 
     public static final ConfigOption<Boolean> KV_USE_BLOOM_FILTER =
             key("kv.rocksdb.use-bloom-filter")

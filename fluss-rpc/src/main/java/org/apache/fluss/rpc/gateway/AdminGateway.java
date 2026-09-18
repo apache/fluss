@@ -19,6 +19,8 @@ package org.apache.fluss.rpc.gateway;
 
 import org.apache.fluss.rpc.messages.AcquireKvSnapshotLeaseRequest;
 import org.apache.fluss.rpc.messages.AcquireKvSnapshotLeaseResponse;
+import org.apache.fluss.rpc.messages.AddServerTagByRackRequest;
+import org.apache.fluss.rpc.messages.AddServerTagByRackResponse;
 import org.apache.fluss.rpc.messages.AddServerTagRequest;
 import org.apache.fluss.rpc.messages.AddServerTagResponse;
 import org.apache.fluss.rpc.messages.AlterClusterConfigsRequest;
@@ -63,6 +65,8 @@ import org.apache.fluss.rpc.messages.RegisterProducerOffsetsRequest;
 import org.apache.fluss.rpc.messages.RegisterProducerOffsetsResponse;
 import org.apache.fluss.rpc.messages.ReleaseKvSnapshotLeaseRequest;
 import org.apache.fluss.rpc.messages.ReleaseKvSnapshotLeaseResponse;
+import org.apache.fluss.rpc.messages.RemoveServerTagByRackRequest;
+import org.apache.fluss.rpc.messages.RemoveServerTagByRackResponse;
 import org.apache.fluss.rpc.messages.RemoveServerTagRequest;
 import org.apache.fluss.rpc.messages.RemoveServerTagResponse;
 import org.apache.fluss.rpc.protocol.ApiKeys;
@@ -161,6 +165,14 @@ public interface AdminGateway extends AdminReadOnlyGateway {
 
     @RPC(api = ApiKeys.REMOVE_SERVER_TAG)
     CompletableFuture<RemoveServerTagResponse> removeServerTag(RemoveServerTagRequest request);
+
+    @RPC(api = ApiKeys.ADD_SERVER_TAG_BY_RACK)
+    CompletableFuture<AddServerTagByRackResponse> addServerTagByRack(
+            AddServerTagByRackRequest request);
+
+    @RPC(api = ApiKeys.REMOVE_SERVER_TAG_BY_RACK)
+    CompletableFuture<RemoveServerTagByRackResponse> removeServerTagByRack(
+            RemoveServerTagByRackRequest request);
 
     @RPC(api = ApiKeys.REBALANCE)
     CompletableFuture<RebalanceResponse> rebalance(RebalanceRequest request);

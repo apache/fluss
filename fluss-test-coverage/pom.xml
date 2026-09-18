@@ -23,7 +23,7 @@
     <parent>
         <groupId>org.apache.fluss</groupId>
         <artifactId>fluss</artifactId>
-        <version>1.0-SNAPSHOT</version>
+        <version>1.1-SNAPSHOT</version>
     </parent>
 
     <artifactId>fluss-test-coverage</artifactId>
@@ -66,6 +66,13 @@
         <dependency>
             <groupId>org.apache.fluss</groupId>
             <artifactId>fluss-flink-common</artifactId>
+            <version>${project.version}</version>
+            <scope>compile</scope>
+        </dependency>
+
+        <dependency>
+            <groupId>org.apache.fluss</groupId>
+            <artifactId>fluss-flink-2.3</artifactId>
             <version>${project.version}</version>
             <scope>compile</scope>
         </dependency>
@@ -467,8 +474,6 @@
                                         <exclude>org.apache.fluss.fs.cos.*</exclude>
                                         <exclude>org.apache.fluss.fs.s3.*</exclude>
                                         <exclude>org.apache.fluss.fs.obs.*</exclude>
-                                        <exclude>com.amazonaws.services.s3.model.transform.XmlResponsesSaxParser*
-                                        </exclude>
                                         <exclude>org.apache.fluss.rocksdb.RocksIteratorWrapper
                                         </exclude>
                                         <exclude>org.apache.fluss.plugin.PluginUtils</exclude>
@@ -484,6 +489,9 @@
                                         <!-- end exclude for lake source -->
                                         <exclude>org.apache.fluss.lake.source.*</exclude>
                                         <exclude>org.apache.fluss.lake.lakestorage.LakeStorage</exclude>
+                                        <exclude>
+                                            org.apache.fluss.lake.lakestorage.LakeTableLookuper
+                                        </exclude>
                                         <exclude>
                                             org.apache.fluss.lake.lakestorage.LakeStorage.LookuperContext
                                         </exclude>

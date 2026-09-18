@@ -65,6 +65,7 @@ import static org.apache.fluss.config.ConfigOptions.TABLE_DELETE_BEHAVIOR;
 import static org.apache.fluss.config.FlussConfigUtils.CLIENT_PREFIX;
 import static org.apache.fluss.config.FlussConfigUtils.TABLE_PREFIX;
 import static org.apache.fluss.flink.catalog.FlinkCatalog.LAKE_TABLE_SPLITTER;
+import static org.apache.fluss.flink.catalog.FlinkCatalog.resolveToLakeObjectName;
 import static org.apache.fluss.flink.utils.FlinkConnectorOptionsUtils.getBucketKeyIndexes;
 import static org.apache.fluss.flink.utils.FlinkConnectorOptionsUtils.getBucketKeys;
 import static org.apache.fluss.flink.utils.FlinkConnectorOptionsUtils.validateDistributionModeForMergeEngine;
@@ -72,6 +73,16 @@ import static org.apache.fluss.flink.utils.FlinkConversions.toFlinkOption;
 
 /** Factory to create table source and table sink for Fluss. */
 public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTableSinkFactory {
+
+    // Custom lake paths are currently supported only for Paimon. The Paimon integration
+    // deliberately persists the original Fluss table options with this prefix, and lake identifier
+    // resolution relies on that persisted contract. Keep the prefix in sync with
+    // PaimonConversions.FLUSS_CONF_PREFIX.
+    private static final String PERSISTED_FLUSS_OPTION_PREFIX = "fluss.";
+    private static final String PERSISTED_FLUSS_TABLE_DATALAKE_DATABASE_NAME =
+            PERSISTED_FLUSS_OPTION_PREFIX + ConfigOptions.TABLE_DATALAKE_DATABASE_NAME.key();
+    private static final String PERSISTED_FLUSS_TABLE_DATALAKE_TABLE_NAME =
+            PERSISTED_FLUSS_OPTION_PREFIX + ConfigOptions.TABLE_DATALAKE_TABLE_NAME.key();
 
     protected final LakeFlinkCatalog lakeFlinkCatalog;
     private volatile LakeTableFactory lakeTableFactory;
@@ -86,12 +97,11 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
         ObjectIdentifier tableIdentifier = context.getObjectIdentifier();
         String tableName = tableIdentifier.getObjectName();
         if (tableName.contains(LAKE_TABLE_SPLITTER)) {
-            // Extract the lake table name: for "table$lake" -> "table"
-            // for "table$lake$snapshots" -> "table$snapshots"
-            String lakeTableName = tableName.replaceFirst("\\$lake", "");
-
+            ObjectIdentifier lakeIdentifier =
+                    resolveToLakeIdentifier(
+                            tableIdentifier, context.getCatalogTable().getOptions());
             lakeTableFactory = mayInitLakeTableFactory();
-            return lakeTableFactory.createDynamicTableSource(context, lakeTableName);
+            return lakeTableFactory.createDynamicTableSource(context, lakeIdentifier);
         }
 
         // Check if this is a $changelog suffix in table name
@@ -119,6 +129,8 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
                         context.getConfiguration().get(TableConfigOptions.LOCAL_TIME_ZONE));
         final FlinkConnectorOptionsUtils.StartupOptions startupOptions =
                 FlinkConnectorOptionsUtils.getStartupOptions(tableOptions, timeZone);
+        final FlinkConnectorOptionsUtils.BoundedOptions boundedOptions =
+                FlinkConnectorOptionsUtils.getBoundedOptions(tableOptions, timeZone);
 
         ResolvedSchema resolvedSchema = context.getCatalogTable().getResolvedSchema();
         ResolvedCatalogTable resolvedCatalogTable = context.getCatalogTable();
@@ -161,6 +173,7 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
                 partitionKeyIndexes,
                 isStreamingMode,
                 startupOptions,
+                boundedOptions,
                 tableOptions.get(FlinkConnectorOptions.LOOKUP_ASYNC),
                 tableOptions.get(FlinkConnectorOptions.LOOKUP_INSERT_IF_NOT_EXISTS),
                 cache,
@@ -236,6 +249,8 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
                                 FlinkConnectorOptions.BUCKET_NUMBER,
                                 FlinkConnectorOptions.SCAN_STARTUP_MODE,
                                 FlinkConnectorOptions.SCAN_STARTUP_TIMESTAMP,
+                                FlinkConnectorOptions.SCAN_BOUNDED_MODE,
+                                FlinkConnectorOptions.SCAN_BOUNDED_TIMESTAMP,
                                 FlinkConnectorOptions.SCAN_PARTITION_DISCOVERY_INTERVAL,
                                 FlinkConnectorOptions.SCAN_SPLIT_ASSIGNMENT_BATCH_SIZE,
                                 FlinkConnectorOptions.SCAN_KV_SNAPSHOT_LEASE_ID,
@@ -256,6 +271,20 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
         options.addAll(FlinkConnectorOptions.TABLE_OPTIONS);
         options.addAll(FlinkConnectorOptions.CLIENT_OPTIONS);
         return options;
+    }
+
+    static ObjectIdentifier resolveToLakeIdentifier(
+            ObjectIdentifier flinkIdentifier, Map<String, String> lakeTableOptions) {
+        String lakeDatabaseName =
+                lakeTableOptions.getOrDefault(
+                        PERSISTED_FLUSS_TABLE_DATALAKE_DATABASE_NAME,
+                        flinkIdentifier.getDatabaseName());
+        String lakeObjectName =
+                resolveToLakeObjectName(
+                        lakeTableOptions.get(PERSISTED_FLUSS_TABLE_DATALAKE_TABLE_NAME),
+                        flinkIdentifier.getObjectName());
+        return ObjectIdentifier.of(
+                flinkIdentifier.getCatalogName(), lakeDatabaseName, lakeObjectName);
     }
 
     private static Configuration toFlussClientConfig(
@@ -356,6 +385,8 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
                         context.getConfiguration().get(TableConfigOptions.LOCAL_TIME_ZONE));
         final FlinkConnectorOptionsUtils.StartupOptions startupOptions =
                 FlinkConnectorOptionsUtils.getStartupOptions(tableOptions, timeZone);
+        final FlinkConnectorOptionsUtils.BoundedOptions boundedOptions =
+                FlinkConnectorOptionsUtils.getBoundedOptions(tableOptions, timeZone);
 
         ResolvedCatalogTable resolvedCatalogTable = context.getCatalogTable();
 
@@ -379,6 +410,7 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
                 partitionKeyIndexes,
                 isStreamingMode,
                 startupOptions,
+                boundedOptions,
                 partitionDiscoveryIntervalMs,
                 splitAssignmentBatchSize,
                 catalogTableOptions);
@@ -410,6 +442,8 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
                         context.getConfiguration().get(TableConfigOptions.LOCAL_TIME_ZONE));
         final FlinkConnectorOptionsUtils.StartupOptions startupOptions =
                 FlinkConnectorOptionsUtils.getStartupOptions(tableOptions, timeZone);
+        final FlinkConnectorOptionsUtils.BoundedOptions boundedOptions =
+                FlinkConnectorOptionsUtils.getBoundedOptions(tableOptions, timeZone);
 
         // Check if the table is partitioned from the internal option
         boolean isPartitioned =
@@ -429,6 +463,7 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
                 isPartitioned,
                 isStreamingMode,
                 startupOptions,
+                boundedOptions,
                 partitionDiscoveryIntervalMs,
                 splitAssignmentBatchSize,
                 catalogTableOptions);

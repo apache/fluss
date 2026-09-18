@@ -460,6 +460,40 @@ SELECT * FROM log_table
 'scan.startup.timestamp' = '2023-12-09 23:09:12') */;
 ```
 
+### Stop Reading Position
+
+The config option `scan.bounded.mode` enables you to specify where the source stops reading. A bounded mode other than `unbounded` makes the source bounded even in streaming execution mode: the job finishes once the source reaches the stopping position (a bounded streaming read). Typical usages are replaying a bounded time range of the log, backfilling and archiving.
+
+It is supported for Log Tables, the changelog of Primary Key Tables (`earliest`, `latest` or `timestamp` startup mode) and the `$changelog`/`$binlog` virtual tables, but not for the `full` startup mode of Primary Key Tables (the snapshot reading phase has no bounded end) or the datalake union read.
+
+Fluss supports the following `scan.bounded.mode` options:
+- `unbounded` (default): In streaming execution mode, the source never stops. In batch execution mode, the source reads up to the latest log offsets captured when the source starts.
+- `latest-offset`: The source stops at the latest log offsets captured when the source starts. In batch execution mode, this behaves the same as `unbounded`.
+- `timestamp`: The source stops before the first record batch whose commit timestamp is greater than or equal to the specified time (defined by the configuration item `scan.bounded.timestamp`), i.e. only records with a commit timestamp smaller than the specified time are read. The specified time must not be in the future.
+
+The following SQL statement reads the `log_table` table up to a specified time.
+```sql title="Flink SQL"
+SELECT * FROM log_table
+/*+ OPTIONS('scan.bounded.mode' = 'timestamp',
+'scan.bounded.timestamp' = '2023-12-09 23:09:12') */;
+```
+
+The start and stop reading positions can be combined to replay a time range of the log, even in streaming execution mode.
+```sql title="Flink SQL"
+SELECT * FROM log_table
+/*+ OPTIONS('scan.startup.mode' = 'timestamp',
+'scan.startup.timestamp' = '2023-12-09 00:00:00',
+'scan.bounded.mode' = 'timestamp',
+'scan.bounded.timestamp' = '2023-12-10 00:00:00') */;
+```
+
+The following SQL statement reads the changelog of a primary key table up to the latest log offsets captured when the source starts, and then finishes.
+```sql title="Flink SQL"
+SELECT * FROM pk_table
+/*+ OPTIONS('scan.startup.mode' = 'earliest',
+'scan.bounded.mode' = 'latest-offset') */;
+```
+
 
 
 

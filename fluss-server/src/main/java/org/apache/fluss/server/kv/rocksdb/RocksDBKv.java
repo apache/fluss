@@ -57,6 +57,9 @@ public class RocksDBKv implements AutoCloseable {
     /** RocksDB property name for the number of SST files at level 0 (column-family scoped). */
     private static final String NUM_FILES_AT_LEVEL0 = "rocksdb.num-files-at-level0";
 
+    /** RocksDB property name for the total size of SST files in the current LSM tree. */
+    private static final String LIVE_SST_FILES_SIZE = "rocksdb.live-sst-files-size";
+
     private static final float DELAYED_WRITE_PRESSURE_FLOOR = 0.8f;
 
     private static final long L0_REFRESH_INTERVAL_NANOS = TimeUnit.MILLISECONDS.toNanos(100);
@@ -270,6 +273,11 @@ public class RocksDBKv implements AutoCloseable {
         }
     }
 
+    /** Returns the total size in bytes of the live SST files. */
+    public long liveSstFilesSize() {
+        return readLongProperty(LIVE_SST_FILES_SIZE);
+    }
+
     @Override
     public void close() throws Exception {
         close(KvCloseMode.PRESERVE_LOCAL_STATE);
@@ -406,21 +414,7 @@ public class RocksDBKv implements AutoCloseable {
     }
 
     private long sampleL0FileCount() {
-        if (closed) {
-            return 0L;
-        }
-        ResourceGuard.Lease lease = null;
-        try {
-            lease = rocksDBResourceGuard.acquireResource();
-            return readLongProperty(NUM_FILES_AT_LEVEL0);
-        } catch (IOException acquireFailed) {
-            // RocksDB is already closed (or being closed); treat as no pressure.
-            return 0L;
-        } finally {
-            if (lease != null) {
-                lease.close();
-            }
-        }
+        return readLongProperty(NUM_FILES_AT_LEVEL0);
     }
 
     /**
@@ -443,14 +437,20 @@ public class RocksDBKv implements AutoCloseable {
     }
 
     private long readLongProperty(String propertyName) {
-        try {
+        if (closed) {
+            return 0L;
+        }
+        try (ResourceGuard.Lease ignored = rocksDBResourceGuard.acquireResource()) {
             String value = db.getProperty(defaultColumnFamilyHandle, propertyName);
             if (value == null || value.isEmpty()) {
                 return 0L;
             }
             return Long.parseLong(value);
+        } catch (IOException ignored) {
+            // RocksDB is already closed or being closed.
+            return 0L;
         } catch (RocksDBException | NumberFormatException e) {
-            LOG.warn("Failed to query RocksDB property {} for backpressure", propertyName, e);
+            LOG.warn("Failed to query RocksDB property {}", propertyName, e);
             return 0L;
         }
     }

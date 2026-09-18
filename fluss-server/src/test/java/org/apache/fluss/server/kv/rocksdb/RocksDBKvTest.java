@@ -69,6 +69,18 @@ class RocksDBKvTest {
     }
 
     @Test
+    void testLiveSstFilesSize(@TempDir Path tempDir) throws Exception {
+        try (RocksDBKv rocksDBKv = buildRocksDBKv(tempDir.toFile())) {
+            rocksDBKv.put(new byte[] {1}, new byte[] {2});
+            try (FlushOptions flushOptions = new FlushOptions().setWaitForFlush(true)) {
+                rocksDBKv.db.flush(flushOptions);
+            }
+
+            assertThat(rocksDBKv.liveSstFilesSize()).isPositive();
+        }
+    }
+
+    @Test
     void testClosePreservesUnflushedStateByDefault(@TempDir Path tempDir) throws Exception {
         byte[] key = new byte[] {1};
         byte[] value = new byte[] {2};

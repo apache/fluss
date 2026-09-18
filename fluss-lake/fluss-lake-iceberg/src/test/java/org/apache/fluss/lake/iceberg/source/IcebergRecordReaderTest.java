@@ -129,11 +129,17 @@ class IcebergRecordReaderTest extends IcebergSourceTestBase {
         InternalRow.FieldGetter[] projectFieldGetters =
                 InternalRow.createFieldGetters(
                         RowType.of(new TinyIntType(), new StringType(), new DoubleType()));
-        lakeSource.withProject(new int[][] {new int[] {5}, new int[] {1}, new int[] {3}});
+        int[][] project = new int[][] {new int[] {5}, new int[] {1}, new int[] {3}};
+        lakeSource.withProject(project);
+        project[0][0] = 0;
+        LakeSource<IcebergSplit> copiedLakeSource = lakeSource.copy();
+        lakeSource.withProject(new int[][] {new int[] {0}});
+        assertThat(copiedLakeSource).isNotSameAs(lakeSource);
 
         List<Row> projectActual = new ArrayList<>();
-        for (IcebergSplit icebergSplit : lakeSource.createPlanner(snapshot::snapshotId).plan()) {
-            RecordReader recordReader = lakeSource.createRecordReader(() -> icebergSplit);
+        for (IcebergSplit icebergSplit :
+                copiedLakeSource.createPlanner(snapshot::snapshotId).plan()) {
+            RecordReader recordReader = copiedLakeSource.createRecordReader(() -> icebergSplit);
             CloseableIterator<LogRecord> iterator = recordReader.read();
             projectActual.addAll(
                     convertToFlinkRow(

@@ -47,6 +47,12 @@ public class MetricNames {
     public static final String KV_LEADER_REPLICA_CAPACITY = "kvLeaderReplicaCapacity";
     public static final String REPLICAS_TO_DELETE_COUNT = "replicasToDeleteCount";
     public static final String PENDING_LEADER_ACTIVATION_COUNT = "pendingLeaderActivationCount";
+    // for coordinator sender (per-tablet-server control request sender threads)
+    public static final String SENDER_QUEUE_SIZE = "senderQueueSize";
+    public static final String SENDER_QUEUE_TIME_MS = "senderQueueTimeMs";
+    public static final String SENDER_RETRY_COUNT = "senderRetryCount";
+    public static final String SENDER_STALE_DROP_COUNT = "senderStaleDropCount";
+    public static final String SENDER_ALIVE = "senderAlive";
 
     // for coordinator event processor
     public static final String EVENT_QUEUE_SIZE = "eventQueueSize";
@@ -128,6 +134,8 @@ public class MetricNames {
             "totalProduceLogRequestsPerSecond";
     public static final String FAILED_PRODUCE_FETCH_LOG_REQUESTS_RATE =
             "failedProduceLogRequestsPerSecond";
+
+    public static final String REMOTE_KV_COPY_BYTES_RATE = "remoteKvCopyBytesPerSecond";
 
     public static final String REMOTE_LOG_COPY_BYTES_RATE = "remoteLogCopyBytesPerSecond";
     public static final String REMOTE_LOG_COPY_REQUESTS_RATE = "remoteLogCopyRequestsPerSecond";
@@ -232,6 +240,24 @@ public class MetricNames {
     /** Total memory usage across all RocksDB instances in this server (Sum aggregation). */
     public static final String ROCKSDB_MEMORY_USAGE_TOTAL = "rocksdbMemoryUsageTotal";
 
+    /** Memory usage of the shared RocksDB block cache in this server. */
+    public static final String ROCKSDB_SHARED_BLOCK_CACHE_USAGE = "rocksdbSharedBlockCacheUsage";
+
+    /** Configured capacity of the shared RocksDB block cache in this server. */
+    public static final String ROCKSDB_SHARED_BLOCK_CACHE_CAPACITY =
+            "rocksdbSharedBlockCacheCapacity";
+
+    /** Pinned memory usage of the shared RocksDB block cache in this server. */
+    public static final String ROCKSDB_SHARED_BLOCK_CACHE_PINNED_USAGE =
+            "rocksdbSharedBlockCachePinnedUsage";
+
+    /** Approximate memory charged to the shared RocksDB write buffer manager in this server. */
+    public static final String ROCKSDB_SHARED_WRITE_BUFFER_USAGE = "rocksdbSharedWriteBufferUsage";
+
+    /** Configured soft capacity of the shared RocksDB write buffer manager in this server. */
+    public static final String ROCKSDB_SHARED_WRITE_BUFFER_CAPACITY =
+            "rocksdbSharedWriteBufferCapacity";
+
     // Table-level RocksDB memory metrics (Sum aggregation)
     /** Total memtable memory usage across all buckets of this table. */
     public static final String ROCKSDB_MEMTABLE_MEMORY_USAGE_TOTAL =
@@ -252,6 +278,13 @@ public class MetricNames {
     /** Total pinned memory in block cache across all buckets of this table. */
     public static final String ROCKSDB_BLOCK_CACHE_PINNED_USAGE_TOTAL =
             "rocksdbBlockCachePinnedUsageTotal";
+
+    // Server-level KV WAL memory pool metrics for primary key tables
+    /** Memory used by the KV WAL memory pool for primary key tables in this server (bytes). */
+    public static final String KV_WAL_MEMORY_POOL_USAGE = "kvWalMemoryPoolUsage";
+
+    /** Total capacity of the KV WAL memory pool for primary key tables in this server (bytes). */
+    public static final String KV_WAL_MEMORY_POOL_CAPACITY = "kvWalMemoryPoolCapacity";
 
     // --------------------------------------------------------------------------------------------
     // metrics for table bucket
@@ -313,6 +346,7 @@ public class MetricNames {
     public static final String SCANNER_FETCH_LATENCY_MS = "fetchLatencyMs";
     public static final String SCANNER_FETCH_RATE = "fetchRequestsPerSecond";
     public static final String SCANNER_BYTES_PER_REQUEST = "bytesPerRequest";
+    public static final String SCANNER_RECORDS_LAG = "recordsLag";
     public static final String SCANNER_REMOTE_FETCH_BYTES_RATE = "remoteFetchBytesPerSecond";
     public static final String SCANNER_REMOTE_FETCH_RATE = "remoteFetchRequestsPerSecond";
     public static final String SCANNER_REMOTE_FETCH_ERROR_RATE = "remoteFetchErrorPerSecond";

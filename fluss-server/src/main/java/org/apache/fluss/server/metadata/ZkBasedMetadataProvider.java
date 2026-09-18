@@ -110,7 +110,8 @@ public abstract class ZkBasedMetadataProvider implements MetadataProvider {
                                                 tableId,
                                                 partitionName,
                                                 partitionId,
-                                                bucketMetadataList);
+                                                bucketMetadataList,
+                                                bucketMetadataList.size());
                                 result.add(partitionMetadata);
                             });
             return result;

@@ -212,25 +212,43 @@ which tar
 
 ## Rust, Python, and C++ client publishing
 
-A unified release also publishes the Rust, Python, and C++ clients (under `fluss-rust/`). As release manager, make sure the following access and CI secrets are in place.
+A unified release also publishes the Rust, Python, and C++ clients (under `fluss-rust/`). As release manager, make sure the following registry access and publisher configs are in place.
 
 ### Registry access
 
 - **crates.io** (`fluss-rs`): your account must be an owner of the crate. Verify with `cargo login <token>`, then `cargo publish -p fluss-rs --dry-run`.
-- **PyPI / TestPyPI** (`pyfluss`): confirm you are a maintainer at https://pypi.org/project/pyfluss/, and generate API tokens on both PyPI and TestPyPI.
+- **PyPI / TestPyPI** (`pyfluss`): confirm you are a maintainer at https://pypi.org/project/pyfluss/.
 - **Hex.pm** (Elixir `fluss`): post-1.0 only — not published yet.
 
-### GitHub Actions secrets
+### Trusted Publishing
 
-Publishing is automated by the `rust-release.yml` and `python-release.yml` workflows when a version tag is pushed. Configure these repository secrets:
+Publishing is automated by the `rust-release.yml` and `python-release.yml` workflows when a version tag is pushed. Neither workflow holds an API token. Each one asks GitHub for a short-lived OIDC token that states which repository, workflow file, and ref it came from, and the registry trades that for a publish token valid for minutes. The registry decides whether to make the trade by looking up a publisher config that it stores itself, so there is no repository secret to create, rotate, or delete around a release.
 
-- `CARGO_REGISTRY_TOKEN` — crates.io API token
-- `PYPI_API_TOKEN` — PyPI token (final release)
-- `TEST_PYPI_API_TOKEN` — TestPyPI token (release candidates)
+Each registry holds one such config, and a crate owner or project maintainer sets it up once:
+
+| Registry | Where | Fields |
+| --- | --- | --- |
+| crates.io | the `fluss-rs` crate's settings page | repository `apache/fluss`, workflow `rust-release.yml` |
+| PyPI | the `pyfluss` project's publishing settings | owner `apache`, repository `fluss`, workflow `python-release.yml` |
+| TestPyPI | a **pending publisher** under your account's publishing settings | project `pyfluss`, owner `apache`, repository `fluss`, workflow `python-release.yml` |
+
+TestPyPI is the odd one out because `pyfluss` has never been published there. A trusted publisher is normally attached to an existing project, so for a name that does not exist yet PyPI offers a *pending* publisher instead: you name the project up front, and the first successful publish creates it and converts the config into a regular one.
+
+Leave the environment field empty in all three. That field is matched against the OIDC token, and none of these jobs declare a GitHub environment, so a publisher config that names one will reject them.
+
+A release manager does not repeat this setup. The check worth doing before an RC is that the configs still name the workflow files above, because renaming a workflow file silently invalidates them.
 
 ### Toolchain for the dependency audit
 
 Regenerating the Rust dependency/license list (an ASF requirement) needs the toolchain in `fluss-rust/rust-toolchain.toml`, [cargo-deny](https://embarkstudios.github.io/cargo-deny/), and Python 3.11+ (for `fluss-rust/scripts/dependencies.py`).
+
+## Docker Hub access
+
+Before the first Gateway release, file an ASF Infra request to create and
+authorize the `apache/fluss-gateway` Docker Hub repository. Confirm that the
+release manager can push to `apache/fluss`, `apache/fluss-gateway`, and
+`apache/fluss-quickstart-flink`; the Gateway image cannot be staged until the
+new repository exists.
 
 ## Further reading
 
@@ -242,4 +260,3 @@ It's recommended but not mandatory to read following documents before making a r
 - Release publish: https://infra.apache.org/release-publishing.html
 - Release download pages: https://infra.apache.org/release-download-pages.html
 - Publishing maven artifacts: https://infra.apache.org/publishing-maven-artifacts.html
-

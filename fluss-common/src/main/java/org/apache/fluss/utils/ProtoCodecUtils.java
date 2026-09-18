@@ -302,6 +302,7 @@ public final class ProtoCodecUtils {
     /** Holder for a byte array and byte length. */
     public static final class BytesHolder {
         public byte[] b;
+        public int offset;
         public int len;
     }
 }

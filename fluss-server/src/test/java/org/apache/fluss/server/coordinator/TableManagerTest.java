@@ -318,7 +318,8 @@ class TableManagerTest {
                 partitionAssignment,
                 DEFAULT_REMOTE_DATA_DIR,
                 DATA1_TABLE_PATH,
-                tableId);
+                tableId,
+                partitionAssignment.getBucketAssignments().size());
 
         // create partition
         tableManager.onCreateNewPartition(

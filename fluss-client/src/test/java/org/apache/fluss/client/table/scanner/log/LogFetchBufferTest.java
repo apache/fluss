@@ -297,7 +297,8 @@ public class LogFetchBufferTest {
         return new DefaultCompletedFetch(
                 tableBucket,
                 DATA1_TABLE_PATH,
-                new FetchLogResultForBucket(tableBucket, genMemoryLogRecordsByObject(DATA1), 10L),
+                FetchLogResultForBucket.records(
+                        tableBucket, genMemoryLogRecordsByObject(DATA1), 10L, -1L, -1L),
                 readContext,
                 logScannerStatus,
                 true,

@@ -18,6 +18,7 @@
 
 package org.apache.fluss.lake.paimon.source;
 
+import org.apache.fluss.config.Configuration;
 import org.apache.fluss.lake.source.LakeSource;
 import org.apache.fluss.lake.source.RecordReader;
 import org.apache.fluss.metadata.TablePath;
@@ -76,6 +77,18 @@ class PaimonLakeSourceTest extends PaimonSourceTestBase {
     }
 
     @Test
+    void testEmptyFiltersDoNotAccessCatalog() {
+        PaimonLakeSource lakeSource =
+                new PaimonLakeSource(
+                        new Configuration(), TablePath.of("missing_db", "missing_table"));
+
+        LakeSource.FilterPushDownResult result = lakeSource.withFilters(Collections.emptyList());
+
+        assertThat(result.acceptedPredicates()).isEmpty();
+        assertThat(result.remainingPredicates()).isEmpty();
+    }
+
+    @Test
     void testWithFilters() throws Exception {
         TablePath tablePath = TablePath.of("fluss", "test_filters");
         createTable(tablePath, SCHEMA);
@@ -117,6 +130,7 @@ class PaimonLakeSourceTest extends PaimonSourceTestBase {
         LakeSource.FilterPushDownResult filterPushDownResult = lakeSource.withFilters(allFilters);
         assertThat(filterPushDownResult.acceptedPredicates()).isEqualTo(allFilters);
         assertThat(filterPushDownResult.remainingPredicates()).isEmpty();
+        LakeSource<PaimonSplit> copiedLakeSource = lakeSource.copy();
 
         // read data to verify the filters work
         List<PaimonSplit> paimonSplits = lakeSource.createPlanner(() -> 2).plan();
@@ -162,6 +176,14 @@ class PaimonLakeSourceTest extends PaimonSourceTestBase {
         assertThat(filterPushDownResult.acceptedPredicates()).isEmpty();
         assertThat(filterPushDownResult.remainingPredicates().toString())
                 .isEqualTo(allFilters.toString());
+
+        List<PaimonSplit> unfilteredSplits = lakeSource.createPlanner(() -> 2).plan();
+        assertThat(unfilteredSplits).hasSize(1);
+        assertThat(unfilteredSplits.get(0).dataSplit().dataFiles()).hasSize(2);
+
+        List<PaimonSplit> copiedFilteredSplits = copiedLakeSource.createPlanner(() -> 2).plan();
+        assertThat(copiedFilteredSplits).hasSize(1);
+        assertThat(copiedFilteredSplits.get(0).dataSplit().dataFiles()).hasSize(1);
     }
 
     private static class UnSupportFilterFunction extends LeafFunction {

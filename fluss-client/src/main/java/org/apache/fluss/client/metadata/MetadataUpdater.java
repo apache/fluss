@@ -96,7 +96,7 @@ public class MetadataUpdater {
         return cluster.getPartitionId(physicalTablePath);
     }
 
-    public Long getPartitionIdOrElseThrow(PhysicalTablePath physicalTablePath) {
+    public long getPartitionIdOrElseThrow(PhysicalTablePath physicalTablePath) {
         return cluster.getPartitionIdOrElseThrow(physicalTablePath);
     }
 

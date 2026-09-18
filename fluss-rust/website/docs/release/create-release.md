@@ -39,13 +39,13 @@ Anybody can propose a release (e.g. on the dev [mailing list](https://fluss.apac
 
 Before your first release, perform one-time configuration. See **[Release Manager Preparation](https://fluss.apache.org/community/how-to-release/release-manager-preparation/)** (GPG key, etc.). For fluss-rust you do **not** need Nexus/Maven; you only need GPG for signing the source archive and (optionally) git signing.
 
-For GitHub Actions publishing, configure the repository secret `CARGO_REGISTRY_TOKEN` with a crates.io API token from an account allowed to publish `fluss-rs`. The `Release Rust` workflow uses this secret directly when a release tag is pushed.
+GitHub Actions publishes with crates.io Trusted Publishing, so no API token is stored in the repository. The `Release Rust` workflow exchanges the job's OIDC identity for a publish token that lasts minutes. This relies on a Trusted Publishing config on the `fluss-rs` crate naming repository `apache/fluss` and workflow `rust-release.yml`; a crate owner sets it up once, not per release.
 
 **Checklist (one-time)**
 
 - [ ] GPG key set up and published to [KEYS](https://downloads.apache.org/fluss/KEYS) or Apache account
 - [ ] Git configured to use your GPG key for signing tags
-- [ ] GitHub Actions secret `CARGO_REGISTRY_TOKEN` configured for crates.io publishing
+- [ ] Trusted Publishing configured on the `fluss-rs` crate for `apache/fluss` + `rust-release.yml`
 
 ### 1. Install Rust (and optional: just)
 
@@ -353,7 +353,8 @@ svn commit -m "Remove RC after release fluss-rust ${RELEASE_VERSION}"
 
 - **fluss-rust:** [crates.io/crates/fluss-rs](https://crates.io/crates/fluss-rs) shows version `$RELEASE_VERSION`
 - **fluss-python:** [PyPI – pyfluss](https://pypi.org/project/pyfluss/) shows version `$RELEASE_VERSION`
-- **fluss-cpp:** Distributed via the source archive; no separate registry
+- **fluss-cpp:** Distributed via the source archive; no separate registry. A prebuilt
+  or registry artifact for it would need its own LICENSE and NOTICE.
 
 ### 5. Create GitHub Release
 

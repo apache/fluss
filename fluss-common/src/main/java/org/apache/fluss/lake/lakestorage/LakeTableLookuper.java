@@ -54,15 +54,27 @@ public interface LakeTableLookuper extends AutoCloseable {
      *
      * @param key lake-format encoded primary key bytes
      * @param context lookup context
-     * @return Fluss value bytes, or null if the key does not exist
+     * @return plain Fluss value bytes encoded as {@code [schema-id][BinaryRow]}, or null if the key
+     *     does not exist
      */
     @Nullable
     byte[] lookup(byte[] key, LookupContext context) throws Exception;
 
+    /**
+     * Requests that registered lake data files be refreshed before the next lookup.
+     *
+     * <p>This method must not perform I/O and may be called concurrently with {@link
+     * #lookup(byte[], LookupContext)}. Implementations must ensure that it is thread-safe.
+     */
+    default void requestRefresh() {
+        throw new UnsupportedOperationException(
+                "Refreshing registered files is not supported by this lake table lookuper.");
+    }
+
     /** Context for a lake table point lookup. */
     final class LookupContext {
         private final ResolvedPartitionSpec partitionSpec;
-        private final int bucketId;
+        private final @Nullable Integer bucketId;
         private final short schemaId;
         private final RowType valueRowType;
         private final LookupMetricRecorder lookupMetricRecorder;
@@ -71,14 +83,15 @@ public interface LakeTableLookuper extends AutoCloseable {
          * Creates a lookup context.
          *
          * @param partitionSpec resolved Fluss partition spec for the lookup
-         * @param bucketId target bucket id in the lake table
+         * @param bucketId target bucket id in the lake table, or null when the caller cannot
+         *     determine it and the implementation has to resolve it from the lake metadata
          * @param schemaId schema id to encode the returned Fluss value with
          * @param valueRowType row type to encode the returned Fluss value with
          * @param lookupMetricRecorder recorder for lake table point lookup metrics
          */
         public LookupContext(
                 ResolvedPartitionSpec partitionSpec,
-                int bucketId,
+                @Nullable Integer bucketId,
                 short schemaId,
                 RowType valueRowType,
                 LookupMetricRecorder lookupMetricRecorder) {
@@ -95,8 +108,11 @@ public interface LakeTableLookuper extends AutoCloseable {
             return partitionSpec;
         }
 
-        /** Returns the target bucket id in the lake table. */
-        public int bucketId() {
+        /**
+         * Returns the target bucket id in the lake table, or null when the implementation has to
+         * resolve it from the lake metadata.
+         */
+        public @Nullable Integer bucketId() {
             return bucketId;
         }
 

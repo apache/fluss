@@ -44,11 +44,11 @@
 //!
 //!     // ---- Primary key (KV) table: upsert and lookup ----
 //!     let kv_path = TablePath::new("fluss", "users");
-//!     let mut kv_schema = Schema::builder()
+//!     let kv_schema = Schema::builder()
 //!         .column("id", DataTypes::int())
 //!         .column("name", DataTypes::string())
 //!         .column("age", DataTypes::bigint())
-//!         .primary_key(vec!["id"]);
+//!         .primary_key(vec!["id"])?;
 //!     let kv_descriptor = TableDescriptor::builder()
 //!         .schema(kv_schema.build()?)
 //!         .build()?;

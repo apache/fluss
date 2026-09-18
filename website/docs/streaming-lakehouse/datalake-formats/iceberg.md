@@ -218,8 +218,17 @@ Use Iceberg-specific configurations as parameters when starting the Flink tierin
 
 When a Fluss table is created or altered with the option `'table.datalake.enabled' = 'true'` and configured with Iceberg as the datalake format, Fluss will automatically create a corresponding Iceberg table with the same table path.
 
-The schema of the Iceberg table matches that of the Fluss table, except for the addition of three system columns at the end: `__bucket`, `__offset`, and `__timestamp`.  
-These system columns help Fluss clients consume data from Iceberg in a streaming fashion, such as seeking by a specific bucket using an offset or timestamp.
+Newly created Iceberg tables (**clean** tables) contain only the user-defined columns of the Fluss table. Fluss no longer appends the `__bucket`, `__offset`, and `__timestamp` system columns to the physical schema, and a clean table therefore has no `__bucket` partitioning or `__offset` sort order.
+
+:::note
+The **Primary Key Tables**, **Log Tables**, and **Partitioned Tables** sections below describe the mapping for the current **clean** layout: only user columns, the bucket transform on the user bucket key (if any), the identity transform on user partition keys, and no sort order.
+
+Iceberg tables created by earlier Fluss versions (**legacy** tables) additionally carry the three trailing `__bucket`/`__offset`/`__timestamp` columns, an `identity(__bucket)` partition for bucket-unaware tables, and an `ASC(__offset)` sort order. These tables are **not** migrated and remain fully readable and writable. Fluss detects the layout from the physical schema — a table is treated as legacy when it carries the system columns, and clean otherwise — so both layouts are supported side by side without any manual migration.
+
+The names `__bucket`, `__offset`, and `__timestamp` remain reserved for Fluss internal use, so user columns must not use these names.
+
+For the rolling-upgrade requirements when moving to a Fluss version that creates clean tables, see [Upgrade Notes](../../maintenance/operations/upgrade-notes-1.0.md).
+:::
 
 ### Basic Configuration
 
@@ -262,7 +271,6 @@ CREATE TABLE fluss_order_with_lake (
  ) WITH (
      'table.datalake.enabled' = 'true',
      'table.datalake.freshness' = '30s',
-     'table.datalake.auto-compaction' = 'true',
      'iceberg.write.format.default' = 'orc',
      'iceberg.commit.retry.num-retries' = '5'
 );
@@ -274,8 +282,7 @@ Primary key tables in Fluss are mapped to Iceberg tables with:
 
 - **Primary key constraints**: The Iceberg table maintains the same primary key definition
 - **Merge-on-read (MOR) strategy**: Updates and deletes are handled efficiently using Iceberg's MOR capabilities
-- **Bucket partitioning**: Automatically partitioned by the primary key using Iceberg's bucket transform with the bucket num of Fluss to align with Fluss
-- **Sorted by system column `__offset`**: Sorted by the system column `__offset` (which is derived from the Fluss change log) to preserve the data order and facilitate mapping back to the original Fluss change log
+- **Bucket partitioning**: Automatically partitioned by the primary key (the bucket key) using Iceberg's bucket transform with the bucket num of Fluss to align with Fluss
 
 ```sql title="Primary Key Table Example"
 CREATE TABLE user_profiles (
@@ -300,12 +307,8 @@ CREATE TABLE user_profiles (
     email STRING,
     last_login TIMESTAMP,
     profile_data STRING,
-    __bucket INT,
-    __offset BIGINT,
-    __timestamp TIMESTAMP_LTZ,
     PRIMARY KEY (user_id) NOT ENFORCED
-) PARTITIONED BY (bucket(user_id, 4))
-SORTED BY (__offset ASC);
+) PARTITIONED BY (bucket(user_id, 4));
 ```
 
 ### Log Tables
@@ -314,10 +317,7 @@ The table mapping for Fluss log tables varies depending on whether the bucket ke
 
 #### No Bucket Key
 
-Log tables without bucket in Fluss are mapped to Iceberg tables with:
-
-- **Identity partitioning**: Using identity partitioning on the `__bucket` system column, which enables seeking to the data files in Iceberg if a specified Fluss bucket is given
-- **Sorted by system column `__offset`**: Sorted by the system column `__offset` (which is derived from the Fluss log data) to preserve the data order and facilitate mapping back to the original Fluss log data
+Log tables without a bucket key in Fluss are mapped to unpartitioned Iceberg tables containing only the user columns.
 
 ```sql title="Log Table without Bucket Key"
 CREATE TABLE access_logs (
@@ -337,12 +337,8 @@ CREATE TABLE access_logs (
     timestamp TIMESTAMP,
     user_id BIGINT,
     action STRING,
-    ip_address STRING,
-    __bucket INT,
-    __offset BIGINT,
-    __timestamp TIMESTAMP_LTZ
-) PARTITIONED BY (IDENTITY(__bucket))
-SORTED BY (__offset ASC);
+    ip_address STRING
+);
 ```
 
 #### Single Bucket Key
@@ -350,7 +346,6 @@ SORTED BY (__offset ASC);
 Log tables with one bucket key in Fluss are mapped to Iceberg tables with:
 
 - **Bucket partitioning**: Automatically partitioned by the bucket key using Iceberg's bucket transform with the bucket num of Fluss to align with Fluss
-- **Sorted by system column `__offset`**: Sorted by the system column `__offset` (which is derived from the Fluss log data) to preserve the data order and facilitate mapping back to the original Fluss log data
 
 ```sql title="Log Table with Bucket Key"
 CREATE TABLE order_events (
@@ -371,12 +366,8 @@ CREATE TABLE order_events (
     order_id BIGINT,
     item_id BIGINT,
     amount INT,
-    event_time TIMESTAMP,
-    __bucket INT,
-    __offset BIGINT,
-    __timestamp TIMESTAMP_LTZ
-) PARTITIONED BY (bucket(order_id, 5))
-SORTED BY (__offset ASC);
+    event_time TIMESTAMP
+) PARTITIONED BY (bucket(order_id, 5));
 ```
 
 ### Partitioned Tables
@@ -405,17 +396,13 @@ CREATE TABLE daily_sales (
     amount DECIMAL(10,2),
     customer_id BIGINT,
     sale_date STRING,
-    __bucket INT,
-    __offset BIGINT,
-    __timestamp TIMESTAMP_LTZ,
     PRIMARY KEY (sale_id) NOT ENFORCED
-) PARTITIONED BY (IDENTITY(sale_date), bucket(sale_id, 4))
-SORTED BY (__offset ASC);
+) PARTITIONED BY (IDENTITY(sale_date), bucket(sale_id, 4));
 ```
 
 ### System Columns
 
-All Iceberg tables created by Fluss include three system columns:
+**Legacy** Iceberg tables (created by earlier Fluss versions) include three trailing system columns. Newly created **clean** tables do not include them.
 
 | Column        | Type          | Description                                   |
 |---------------|---------------|-----------------------------------------------|
@@ -564,7 +551,9 @@ Tiering-managed auto compaction is currently only supported for legacy Iceberg l
 
 #### Configuration
 
-```sql title="Flink SQL"
+As noted above, `table.datalake.auto-compaction` only takes effect for legacy tables. The following shows the option syntax; it is a no-op on a newly created clean table.
+
+```sql title="Flink SQL (legacy tables only)"
 CREATE TABLE example_table (
     id BIGINT,
     data STRING,

@@ -17,12 +17,16 @@
 
 package org.apache.fluss.flink.utils;
 
+import org.apache.fluss.client.initializer.NoStoppingOffsetsInitializer;
+import org.apache.fluss.client.initializer.OffsetsInitializer;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.flink.FlinkConnectorOptions;
+import org.apache.fluss.flink.FlinkConnectorOptions.ScanBoundedMode;
 import org.apache.fluss.flink.FlinkConnectorOptions.ScanStartupMode;
 import org.apache.fluss.flink.sink.shuffle.DistributionMode;
 import org.apache.fluss.metadata.MergeEngineType;
 
+import org.apache.flink.api.connector.source.Boundedness;
 import org.apache.flink.configuration.ConfigurationUtils;
 import org.apache.flink.configuration.ReadableConfig;
 import org.apache.flink.table.api.ValidationException;
@@ -43,6 +47,8 @@ import java.util.stream.Collectors;
 
 import static org.apache.fluss.config.ConfigOptions.CLIENT_SCANNER_IO_TMP_DIR;
 import static org.apache.fluss.config.ConfigOptions.LAKE_TIERING_IO_TMP_DIRS;
+import static org.apache.fluss.flink.FlinkConnectorOptions.SCAN_BOUNDED_MODE;
+import static org.apache.fluss.flink.FlinkConnectorOptions.SCAN_BOUNDED_TIMESTAMP;
 import static org.apache.fluss.flink.FlinkConnectorOptions.SCAN_SPLIT_ASSIGNMENT_BATCH_SIZE;
 import static org.apache.fluss.flink.FlinkConnectorOptions.SCAN_STARTUP_MODE;
 import static org.apache.fluss.flink.FlinkConnectorOptions.SCAN_STARTUP_TIMESTAMP;
@@ -62,6 +68,7 @@ public class FlinkConnectorOptionsUtils {
 
     public static void validateTableSourceOptions(ReadableConfig tableOptions) {
         validateScanStartupMode(tableOptions);
+        validateScanBoundedMode(tableOptions);
         validateScanSplitAssignmentBatchSize(tableOptions);
     }
 
@@ -109,6 +116,60 @@ public class FlinkConnectorOptionsUtils {
         return options;
     }
 
+    public static BoundedOptions getBoundedOptions(ReadableConfig tableOptions, ZoneId timeZone) {
+        ScanBoundedMode scanBoundedMode = tableOptions.get(SCAN_BOUNDED_MODE);
+        switch (scanBoundedMode) {
+            case UNBOUNDED:
+                return BoundedOptions.unbounded();
+            case LATEST_OFFSET:
+                return BoundedOptions.latestOffset();
+            case TIMESTAMP:
+                return BoundedOptions.timestamp(
+                        parseTimestamp(
+                                tableOptions.get(SCAN_BOUNDED_TIMESTAMP),
+                                SCAN_BOUNDED_TIMESTAMP.key(),
+                                timeZone));
+            default:
+                throw new IllegalArgumentException("Unsupported bounded mode: " + scanBoundedMode);
+        }
+    }
+
+    /** Creates the stopping offsets initializer from the given bounded options. */
+    public static OffsetsInitializer toStoppingOffsetsInitializer(BoundedOptions boundedOptions) {
+        switch (boundedOptions.getBoundedMode()) {
+            case UNBOUNDED:
+                return new NoStoppingOffsetsInitializer();
+            case LATEST_OFFSET:
+                return OffsetsInitializer.latest();
+            case TIMESTAMP:
+                return OffsetsInitializer.timestamp(boundedOptions.getBoundedTimestampMs());
+            default:
+                throw new IllegalArgumentException(
+                        "Unsupported bounded mode: " + boundedOptions.getBoundedMode());
+        }
+    }
+
+    /**
+     * Creates the stopping offsets initializer for the execution mode and bounded options.
+     *
+     * <p>Batch execution remains bounded by the latest offsets when no explicit bounded mode is
+     * configured.
+     */
+    public static OffsetsInitializer toStoppingOffsetsInitializer(
+            boolean streaming, BoundedOptions boundedOptions) {
+        if (!streaming && boundedOptions.getBoundedMode() == ScanBoundedMode.UNBOUNDED) {
+            return OffsetsInitializer.latest();
+        }
+        return toStoppingOffsetsInitializer(boundedOptions);
+    }
+
+    /** Returns the Flink source boundedness for the execution mode and bounded options. */
+    public static Boundedness toBoundedness(boolean streaming, BoundedOptions boundedOptions) {
+        return streaming && boundedOptions.getBoundedMode() == ScanBoundedMode.UNBOUNDED
+                ? Boundedness.CONTINUOUS_UNBOUNDED
+                : Boundedness.BOUNDED;
+    }
+
     public static List<String> getBucketKeys(ReadableConfig tableOptions) {
         Optional<String> bucketKey = tableOptions.getOptional(FlinkConnectorOptions.BUCKET_KEY);
         if (!bucketKey.isPresent()) {
@@ -152,6 +213,18 @@ public class FlinkConnectorOptionsUtils {
                         String.format(
                                 "'%s' is required int '%s' startup mode but missing.",
                                 SCAN_STARTUP_TIMESTAMP.key(), TIMESTAMP));
+            }
+        }
+    }
+
+    private static void validateScanBoundedMode(ReadableConfig tableOptions) {
+        ScanBoundedMode scanBoundedMode = tableOptions.get(SCAN_BOUNDED_MODE);
+        if (scanBoundedMode == ScanBoundedMode.TIMESTAMP) {
+            if (!tableOptions.getOptional(SCAN_BOUNDED_TIMESTAMP).isPresent()) {
+                throw new ValidationException(
+                        String.format(
+                                "'%s' is required in '%s' bounded mode but missing.",
+                                SCAN_BOUNDED_TIMESTAMP.key(), ScanBoundedMode.TIMESTAMP));
             }
         }
     }
@@ -237,5 +310,41 @@ public class FlinkConnectorOptionsUtils {
     public static class StartupOptions {
         public ScanStartupMode startupMode;
         public long startupTimestampMs;
+    }
+
+    /** Immutable Fluss bounded options. */
+    public static final class BoundedOptions {
+        private final ScanBoundedMode boundedMode;
+        private final long boundedTimestampMs;
+
+        private BoundedOptions(ScanBoundedMode boundedMode, long boundedTimestampMs) {
+            this.boundedMode = boundedMode;
+            this.boundedTimestampMs = boundedTimestampMs;
+        }
+
+        /** Returns the default bounded options, i.e. no user-specified stopping offsets. */
+        public static BoundedOptions unbounded() {
+            return new BoundedOptions(ScanBoundedMode.UNBOUNDED, 0L);
+        }
+
+        /** Returns bounded options that stop at the latest offsets resolved at startup. */
+        public static BoundedOptions latestOffset() {
+            return new BoundedOptions(ScanBoundedMode.LATEST_OFFSET, 0L);
+        }
+
+        /** Returns bounded options that stop at offsets resolved from the given timestamp. */
+        public static BoundedOptions timestamp(long timestampMs) {
+            return new BoundedOptions(ScanBoundedMode.TIMESTAMP, timestampMs);
+        }
+
+        /** Returns the configured bounded mode. */
+        public ScanBoundedMode getBoundedMode() {
+            return boundedMode;
+        }
+
+        /** Returns the timestamp used by timestamp bounded mode. */
+        public long getBoundedTimestampMs() {
+            return boundedTimestampMs;
+        }
     }
 }

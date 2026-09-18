@@ -28,6 +28,7 @@
 //! from the request plus current cluster state, so any instance can serve any request and instances can be added
 //! or removed freely behind a plain load balancer.
 
+pub mod backend;
 pub mod config;
 pub mod error;
 pub mod lifecycle;

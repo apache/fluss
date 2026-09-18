@@ -54,6 +54,8 @@ public class RecordAndPos {
     // the index for the current split that the record is from
     protected int currentSplitIndex;
 
+    private final boolean isSnapshotPhaseFinished;
+
     public RecordAndPos(ScanRecord scanRecord) {
         this(scanRecord, NO_READ_RECORDS_COUNT, DEFAULT_SPLIT_INDEX);
     }
@@ -63,9 +65,23 @@ public class RecordAndPos {
     }
 
     public RecordAndPos(ScanRecord scanRecord, long readRecordsCount, int currentSplitIndex) {
+        this(scanRecord, readRecordsCount, currentSplitIndex, false);
+    }
+
+    private RecordAndPos(
+            ScanRecord scanRecord,
+            long readRecordsCount,
+            int currentSplitIndex,
+            boolean isSnapshotPhaseFinished) {
         this.scanRecord = scanRecord;
         this.readRecordsCount = readRecordsCount;
         this.currentSplitIndex = currentSplitIndex;
+        this.isSnapshotPhaseFinished = isSnapshotPhaseFinished;
+    }
+
+    /** Creates a marker indicating that the snapshot phase has been fully read. */
+    public static RecordAndPos snapshotPhaseFinished() {
+        return new RecordAndPos(null, NO_READ_RECORDS_COUNT, DEFAULT_SPLIT_INDEX, true);
     }
 
     public long readRecordsCount() {
@@ -80,6 +96,11 @@ public class RecordAndPos {
         return scanRecord;
     }
 
+    /** Returns whether this is a marker indicating that the snapshot phase has been fully read. */
+    public boolean isSnapshotPhaseFinished() {
+        return isSnapshotPhaseFinished;
+    }
+
     @Override
     public boolean equals(Object o) {
         if (this == o) {
@@ -91,12 +112,14 @@ public class RecordAndPos {
         RecordAndPos that = (RecordAndPos) o;
         return readRecordsCount == that.readRecordsCount
                 && currentSplitIndex == that.currentSplitIndex
+                && isSnapshotPhaseFinished == that.isSnapshotPhaseFinished
                 && Objects.equals(scanRecord, that.scanRecord);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(scanRecord, readRecordsCount, currentSplitIndex);
+        return Objects.hash(
+                scanRecord, readRecordsCount, currentSplitIndex, isSnapshotPhaseFinished);
     }
 
     @Override
@@ -108,6 +131,7 @@ public class RecordAndPos {
                 + readRecordsCount
                 + ", currentSplitIndex="
                 + currentSplitIndex
+                + (isSnapshotPhaseFinished ? ", isSnapshotPhaseFinished=true" : "")
                 + '}';
     }
 }

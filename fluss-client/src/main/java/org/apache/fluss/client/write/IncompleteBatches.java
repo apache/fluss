@@ -45,13 +45,9 @@ final class IncompleteBatches {
         }
     }
 
-    public void remove(WriteBatch batch) {
+    public boolean removeIfPresent(WriteBatch batch) {
         synchronized (incomplete) {
-            boolean removed = this.incomplete.remove(batch);
-            if (!removed) {
-                throw new IllegalStateException(
-                        "Remove from the incomplete set failed. This should be impossible.");
-            }
+            return this.incomplete.remove(batch);
         }
     }
 

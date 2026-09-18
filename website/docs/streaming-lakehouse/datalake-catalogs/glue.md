@@ -191,14 +191,14 @@ Choose the provider chain for your environment:
 
 | Environment | Provider Chain |
 |-------------|---------------|
-| **ECS Fargate** | `com.amazonaws.auth.ContainerCredentialsProvider,com.amazonaws.auth.EnvironmentVariableCredentialsProvider,com.amazonaws.auth.InstanceProfileCredentialsProvider` |
-| **EKS (IRSA)** | `com.amazonaws.auth.WebIdentityTokenCredentialsProvider,com.amazonaws.auth.EnvironmentVariableCredentialsProvider,com.amazonaws.auth.InstanceProfileCredentialsProvider` |
-| **EC2 (instance profile)** | `com.amazonaws.auth.InstanceProfileCredentialsProvider` |
+| **ECS Fargate** | `software.amazon.awssdk.auth.credentials.ContainerCredentialsProvider,software.amazon.awssdk.auth.credentials.EnvironmentVariableCredentialsProvider,software.amazon.awssdk.auth.credentials.InstanceProfileCredentialsProvider` |
+| **EKS (IRSA)** | `software.amazon.awssdk.auth.credentials.WebIdentityTokenFileCredentialsProvider,software.amazon.awssdk.auth.credentials.EnvironmentVariableCredentialsProvider,software.amazon.awssdk.auth.credentials.InstanceProfileCredentialsProvider` |
+| **EC2 (instance profile)** | `software.amazon.awssdk.auth.credentials.InstanceProfileCredentialsProvider` |
 
 Example for ECS Fargate:
 
 ```yaml
-fs.s3a.aws.credentials.provider: com.amazonaws.auth.ContainerCredentialsProvider,com.amazonaws.auth.EnvironmentVariableCredentialsProvider,com.amazonaws.auth.InstanceProfileCredentialsProvider
+fs.s3a.aws.credentials.provider: software.amazon.awssdk.auth.credentials.ContainerCredentialsProvider,software.amazon.awssdk.auth.credentials.EnvironmentVariableCredentialsProvider,software.amazon.awssdk.auth.credentials.InstanceProfileCredentialsProvider
 ```
 
 The credential provider chain handles automatic credential refresh — no static keys or manual token rotation needed.
@@ -284,8 +284,8 @@ datalake.iceberg.io-impl: org.apache.iceberg.aws.s3.S3FileIO
 
 # S3 credentials — use the provider chain for your environment
 # ECS Fargate:
-fs.s3a.aws.credentials.provider: com.amazonaws.auth.ContainerCredentialsProvider,com.amazonaws.auth.EnvironmentVariableCredentialsProvider,com.amazonaws.auth.InstanceProfileCredentialsProvider
-# EKS (IRSA): use WebIdentityTokenCredentialsProvider instead of ContainerCredentialsProvider
+fs.s3a.aws.credentials.provider: software.amazon.awssdk.auth.credentials.ContainerCredentialsProvider,software.amazon.awssdk.auth.credentials.EnvironmentVariableCredentialsProvider,software.amazon.awssdk.auth.credentials.InstanceProfileCredentialsProvider
+# EKS (IRSA): use WebIdentityTokenFileCredentialsProvider instead of ContainerCredentialsProvider
 # EC2: use InstanceProfileCredentialsProvider alone
 
 # Required for non-standard regions (GovCloud, China):

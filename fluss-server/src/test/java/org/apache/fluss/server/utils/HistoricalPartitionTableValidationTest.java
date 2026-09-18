@@ -54,7 +54,6 @@ class HistoricalPartitionTableValidationTest {
                                 + "'table.datalake.enabled' must be set to true; "
                                 + "'table.datalake.format' must be set to 'paimon' "
                                 + "(currently not set); "
-                                + "the table must define a primary key; "
                                 + "the table must define exactly one partition key (found 0).");
 
         // Case 2: Aggregate requirements before related validators can report only one failure.
@@ -80,7 +79,6 @@ class HistoricalPartitionTableValidationTest {
                         "'table.datalake.historical-partition.enabled' has unmet requirements: "
                                 + "'table.datalake.format' must be set to 'paimon' "
                                 + "(currently 'iceberg'); "
-                                + "the table must define a primary key; "
                                 + "the table must define exactly one partition key (found 0).");
     }
 }

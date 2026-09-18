@@ -162,6 +162,13 @@ pub struct AlterTableRequest {
     pub rename_columns: ::prost::alloc::vec::Vec<PbRenameColumn>,
     #[prost(message, repeated, tag = "7")]
     pub modify_columns: ::prost::alloc::vec::Vec<PbModifyColumn>,
+    #[prost(message, optional, tag = "8")]
+    pub modify_bucket_count: ::core::option::Option<PbModifyBucketCount>,
+}
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct PbModifyBucketCount {
+    #[prost(int32, required, tag = "1")]
+    pub new_bucket_count: i32,
 }
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct AlterTableResponse {}
@@ -185,6 +192,25 @@ pub struct GetTableInfoResponse {
     pub modified_time: i64,
     #[prost(string, optional, tag = "6")]
     pub remote_data_dir: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(int64, optional, tag = "7")]
+    pub bucket_count_epoch: ::core::option::Option<i64>,
+}
+/// describe buckets request and response
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct DescribeBucketsRequest {
+    #[prost(message, required, tag = "1")]
+    pub table_path: PbTablePath,
+    #[prost(message, optional, tag = "2")]
+    pub partition_spec: ::core::option::Option<PbPartitionSpec>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct DescribeBucketsResponse {
+    #[prost(message, required, tag = "1")]
+    pub table_path: PbTablePath,
+    #[prost(int64, required, tag = "2")]
+    pub table_id: i64,
+    #[prost(message, repeated, tag = "3")]
+    pub bucket_info: ::prost::alloc::vec::Vec<PbBucketInfo>,
 }
 /// list tables request and response
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
@@ -365,6 +391,8 @@ pub struct LimitScanRequest {
     pub bucket_id: i32,
     #[prost(int32, required, tag = "5")]
     pub limit: i32,
+    #[prost(int32, optional, tag = "6")]
+    pub routing_bucket_count: ::core::option::Option<i32>,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct LimitScanResponse {
@@ -392,6 +420,8 @@ pub struct PbScanReqForBucket {
     /// If set, stops returning rows after this many records.
     #[prost(int64, optional, tag = "4")]
     pub limit: ::core::option::Option<i64>,
+    #[prost(int32, optional, tag = "5")]
+    pub routing_bucket_count: ::core::option::Option<i32>,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ScanKvRequest {
@@ -512,6 +542,8 @@ pub struct ListOffsetsRequest {
     pub bucket_id: ::prost::alloc::vec::Vec<i32>,
     #[prost(int64, optional, tag = "6")]
     pub start_timestamp: ::core::option::Option<i64>,
+    #[prost(int32, optional, tag = "7")]
+    pub routing_bucket_count: ::core::option::Option<i32>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ListOffsetsResponse {
@@ -661,11 +693,15 @@ pub struct ListPartitionInfosRequest {
     pub table_path: PbTablePath,
     #[prost(message, optional, tag = "2")]
     pub partial_partition_spec: ::core::option::Option<PbPartitionSpec>,
+    #[prost(bool, optional, tag = "3")]
+    pub include_system_partitions: ::core::option::Option<bool>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ListPartitionInfosResponse {
     #[prost(message, repeated, tag = "1")]
     pub partitions_info: ::prost::alloc::vec::Vec<PbPartitionInfo>,
+    #[prost(bool, optional, tag = "2")]
+    pub system_partitions_included: ::core::option::Option<bool>,
 }
 /// list remote log manifest entries (one per bucket of a table or partition)
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
@@ -972,6 +1008,15 @@ pub struct AddServerTagRequest {
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct AddServerTagResponse {}
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct AddServerTagByRackRequest {
+    #[prost(string, repeated, tag = "1")]
+    pub racks: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    #[prost(int32, required, tag = "2")]
+    pub server_tag: i32,
+}
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct AddServerTagByRackResponse {}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct RemoveServerTagRequest {
     #[prost(int32, repeated, tag = "1")]
     pub server_ids: ::prost::alloc::vec::Vec<i32>,
@@ -980,6 +1025,15 @@ pub struct RemoveServerTagRequest {
 }
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct RemoveServerTagResponse {}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct RemoveServerTagByRackRequest {
+    #[prost(string, repeated, tag = "1")]
+    pub racks: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    #[prost(int32, required, tag = "2")]
+    pub server_tag: i32,
+}
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct RemoveServerTagByRackResponse {}
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct RebalanceRequest {
     #[prost(int32, repeated, tag = "1")]
@@ -1131,6 +1185,9 @@ pub struct PbTableMetadata {
     pub modified_time: i64,
     #[prost(string, optional, tag = "8")]
     pub remote_data_dir: ::core::option::Option<::prost::alloc::string::String>,
+    /// A table-level, monotonically increasing version for bucket.num changes.
+    #[prost(int64, optional, tag = "9")]
+    pub bucket_count_epoch: ::core::option::Option<i64>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PbPartitionMetadata {
@@ -1143,6 +1200,9 @@ pub struct PbPartitionMetadata {
     pub partition_id: i64,
     #[prost(message, repeated, tag = "4")]
     pub bucket_metadata: ::prost::alloc::vec::Vec<PbBucketMetadata>,
+    /// the actual bucket count for this partition, used for per-partition bucket rescale
+    #[prost(int32, optional, tag = "5")]
+    pub bucket_count: ::core::option::Option<i32>,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct PbBucketMetadata {
@@ -1153,9 +1213,36 @@ pub struct PbBucketMetadata {
     pub leader_id: ::core::option::Option<i32>,
     #[prost(int32, repeated, tag = "3")]
     pub replica_id: ::prost::alloc::vec::Vec<i32>,
-    /// TODO: Add isr here.
     #[prost(int32, optional, tag = "4")]
     pub leader_epoch: ::core::option::Option<i32>,
+    /// Generation of the complete leader/ISR state.
+    /// Absence indicates legacy metadata; -1 indicates no leader/ISR state exists.
+    #[prost(int32, optional, tag = "5")]
+    pub bucket_epoch: ::core::option::Option<i32>,
+    #[prost(int32, repeated, tag = "6")]
+    pub isr: ::prost::alloc::vec::Vec<i32>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct PbBucketInfo {
+    #[prost(int64, optional, tag = "1")]
+    pub partition_id: ::core::option::Option<i64>,
+    #[prost(string, optional, tag = "2")]
+    pub partition_name: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(int32, required, tag = "3")]
+    pub bucket_id: i32,
+    /// optional as the leader may not be elected yet
+    #[prost(int32, optional, tag = "4")]
+    pub leader_id: ::core::option::Option<i32>,
+    #[prost(int32, repeated, tag = "5")]
+    pub replica_id: ::prost::alloc::vec::Vec<i32>,
+    #[prost(int32, optional, tag = "6")]
+    pub leader_epoch: ::core::option::Option<i32>,
+    /// Generation of the complete leader/ISR state.
+    /// Absence indicates legacy metadata; -1 indicates no leader/ISR state exists.
+    #[prost(int32, optional, tag = "7")]
+    pub bucket_epoch: ::core::option::Option<i32>,
+    #[prost(int32, repeated, tag = "8")]
+    pub isr: ::prost::alloc::vec::Vec<i32>,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct PbProduceLogReqForBucket {
@@ -1165,6 +1252,11 @@ pub struct PbProduceLogReqForBucket {
     pub bucket_id: i32,
     #[prost(bytes = "bytes", required, tag = "3")]
     pub records: ::prost::bytes::Bytes,
+    /// The original partition name for a historical write; unset for a normal write.
+    #[prost(string, optional, tag = "4")]
+    pub original_partition_name: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(int32, optional, tag = "5")]
+    pub routing_bucket_count: ::core::option::Option<i32>,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct PbProduceLogRespForBucket {
@@ -1178,6 +1270,9 @@ pub struct PbProduceLogRespForBucket {
     pub error_message: ::core::option::Option<::prost::alloc::string::String>,
     #[prost(int64, optional, tag = "5")]
     pub base_offset: ::core::option::Option<i64>,
+    /// The original partition name echoed from a historical write request; unset for a normal write.
+    #[prost(string, optional, tag = "6")]
+    pub original_partition_name: ::core::option::Option<::prost::alloc::string::String>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PbFetchLogReqForTable {
@@ -1208,6 +1303,8 @@ pub struct PbFetchLogReqForBucket {
     pub fetch_offset: i64,
     #[prost(int32, required, tag = "4")]
     pub max_fetch_bytes: i32,
+    #[prost(int32, optional, tag = "5")]
+    pub routing_bucket_count: ::core::option::Option<i32>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PbFetchLogRespForTable {
@@ -1240,6 +1337,10 @@ pub struct PbFetchLogRespForBucket {
     /// its next fetch from the later of this offset and the end of the records it received.
     #[prost(int64, optional, tag = "9")]
     pub filtered_end_offset: ::core::option::Option<i64>,
+    /// The safe local log retention boundary confirmed by a committed KV snapshot. This is only
+    /// returned for KV follower fetches and is distinct from the physical log_start_offset.
+    #[prost(int64, optional, tag = "10")]
+    pub min_retain_offset: ::core::option::Option<i64>,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct PbPutKvReqForBucket {
@@ -1249,6 +1350,13 @@ pub struct PbPutKvReqForBucket {
     pub bucket_id: i32,
     #[prost(bytes = "bytes", required, tag = "3")]
     pub records: ::prost::bytes::Bytes,
+    /// The original partition name for historical PK writes. It is unset for normal writes.
+    #[prost(string, optional, tag = "4")]
+    pub original_partition_name: ::core::option::Option<::prost::alloc::string::String>,
+    /// the bucket count the sender used to form bucket_id; the server compares it against the
+    /// actual count to detect stale routing. Not authoritative metadata.
+    #[prost(int32, optional, tag = "5")]
+    pub routing_bucket_count: ::core::option::Option<i32>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PbPutKvRespForBucket {
@@ -1269,6 +1377,9 @@ pub struct PbPutKvRespForBucket {
     /// introduced in v1.0
     #[prost(float, optional, tag = "6")]
     pub pressure: ::core::option::Option<f32>,
+    /// The original partition name for historical PK writes. It is unset for normal writes.
+    #[prost(string, optional, tag = "7")]
+    pub original_partition_name: ::core::option::Option<::prost::alloc::string::String>,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct PbLookupReqForBucket {
@@ -1281,6 +1392,8 @@ pub struct PbLookupReqForBucket {
     /// The original partition name for historical lookup. It is unset for normal lookup.
     #[prost(string, optional, tag = "4")]
     pub original_partition_name: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(int32, optional, tag = "5")]
+    pub routing_bucket_count: ::core::option::Option<i32>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PbLookupRespForBucket {
@@ -1317,6 +1430,8 @@ pub struct PbPrefixLookupReqForBucket {
     pub bucket_id: i32,
     #[prost(bytes = "bytes", repeated, tag = "3")]
     pub keys: ::prost::alloc::vec::Vec<::prost::bytes::Bytes>,
+    #[prost(int32, optional, tag = "4")]
+    pub routing_bucket_count: ::core::option::Option<i32>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PbPrefixLookupRespForBucket {
@@ -1426,6 +1541,10 @@ pub struct PbNotifyLeaderAndIsrReqForBucket {
     pub bucket_epoch: i32,
     #[prost(int32, repeated, tag = "8")]
     pub standby_replicas: ::prost::alloc::vec::Vec<i32>,
+    #[prost(int32, optional, tag = "9")]
+    pub bucket_count: ::core::option::Option<i32>,
+    #[prost(int64, optional, tag = "10")]
+    pub bucket_count_epoch: ::core::option::Option<i64>,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct PbNotifyLeaderAndIsrRespForBucket {
@@ -1529,6 +1648,9 @@ pub struct PbPartitionInfo {
     pub partition_spec: PbPartitionSpec,
     #[prost(string, optional, tag = "3")]
     pub remote_data_dir: ::core::option::Option<::prost::alloc::string::String>,
+    /// the actual bucket count for this partition, used for per-partition bucket rescale
+    #[prost(int32, optional, tag = "4")]
+    pub bucket_count: ::core::option::Option<i32>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PbPartitionSpec {
@@ -1844,6 +1966,8 @@ pub struct PbTableStatsReqForBucket {
     pub partition_id: ::core::option::Option<i64>,
     #[prost(int32, required, tag = "2")]
     pub bucket_id: i32,
+    #[prost(int32, optional, tag = "3")]
+    pub routing_bucket_count: ::core::option::Option<i32>,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct PbTableStatsRespForBucket {
