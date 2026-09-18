@@ -18,6 +18,7 @@
 package org.apache.fluss.server.log;
 
 import org.apache.fluss.annotation.Internal;
+import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.CorruptMessageException;
@@ -54,7 +55,9 @@ import javax.annotation.concurrent.NotThreadSafe;
 import java.io.File;
 import java.io.IOException;
 import java.nio.file.NoSuchFileException;
+import java.util.Iterator;
 import java.util.Optional;
+import java.util.concurrent.ThreadLocalRandom;
 
 import static org.apache.fluss.record.LogRecordBatchFormat.V0_RECORD_BATCH_HEADER_SIZE;
 import static org.apache.fluss.utils.IOUtils.closeQuietly;
@@ -77,6 +80,7 @@ import static org.apache.fluss.utils.IOUtils.closeQuietly;
 public final class LogSegment {
 
     private static final Logger LOG = LoggerFactory.getLogger(LogSegment.class);
+    private static final long UNINITIALIZED_TIMESTAMP = Long.MIN_VALUE;
 
     // the log format of the log segment
     private final LogFormat logFormat;
@@ -96,10 +100,16 @@ public final class LogSegment {
     // The approximate number of bytes between entries in the index.
     private final int indexIntervalBytes;
 
+    // The random jitter subtracted from the time-based rolling threshold for this segment.
+    private final long rollTimeJitterMs;
+
     private int bytesSinceLastIndexEntry = 0;
 
     // The maximum timestamp and start offset we see so far
     private volatile TimestampOffset maxTimestampAndStartOffsetSoFar = TimestampOffset.UNKNOWN;
+
+    // The commit timestamp of the first record batch in this segment.
+    private long firstBatchTimestamp = UNINITIALIZED_TIMESTAMP;
 
     public LogSegment(
             LogFormat logFormat,
@@ -107,13 +117,15 @@ public final class LogSegment {
             LazyIndex<OffsetIndex> lazyOffsetIndex,
             LazyIndex<TimeIndex> lazyTimeIndex,
             long baseOffset,
-            int indexIntervalBytes) {
+            int indexIntervalBytes,
+            long rollTimeJitterMs) {
         this.logFormat = logFormat;
         this.fileLogRecords = fileLogRecords;
         this.lazyOffsetIndex = lazyOffsetIndex;
         this.lazyTimeIndex = lazyTimeIndex;
         this.baseOffset = baseOffset;
         this.indexIntervalBytes = indexIntervalBytes;
+        this.rollTimeJitterMs = rollTimeJitterMs;
     }
 
     public FileLogRecords getFileLogRecords() {
@@ -149,6 +161,11 @@ public final class LogSegment {
             LogFormat logFormat)
             throws IOException {
         int maxIndexSize = (int) logConfig.get(ConfigOptions.LOG_INDEX_FILE_SIZE).getBytes();
+        long maxSegmentTimeMs = logConfig.get(ConfigOptions.LOG_SEGMENT_MAX_TIME).toMillis();
+        long maxJitterMs = logConfig.get(ConfigOptions.LOG_SEGMENT_MAX_TIME_JITTER).toMillis();
+        long jitterUpperBound = Math.min(maxSegmentTimeMs, maxJitterMs);
+        long rollTimeJitterMs =
+                jitterUpperBound > 0 ? ThreadLocalRandom.current().nextLong(jitterUpperBound) : 0L;
 
         return new LogSegment(
                 logFormat,
@@ -162,7 +179,8 @@ public final class LogSegment {
                 LazyIndex.forTime(
                         FlussPaths.timeIndexFile(dir, baseOffset), baseOffset, maxIndexSize),
                 baseOffset,
-                (int) logConfig.get(ConfigOptions.LOG_INDEX_INTERVAL_SIZE).getBytes());
+                (int) logConfig.get(ConfigOptions.LOG_INDEX_INTERVAL_SIZE).getBytes(),
+                rollTimeJitterMs);
     }
 
     public OffsetIndex offsetIndex() throws IOException {
@@ -230,9 +248,33 @@ public final class LogSegment {
     /** Check whether this segment should roll. */
     public boolean shouldRoll(RollParams rollParams) throws IOException {
         return getSizeInBytes() > rollParams.maxSegmentBytes - rollParams.messagesSize
+                || shouldRollForTime(rollParams)
                 || offsetIndex().isFull()
                 || timeIndex().isFull()
                 || !canConvertToRelativeOffset(rollParams.maxOffsetInMessages);
+    }
+
+    @VisibleForTesting
+    long rollTimeJitterMs() {
+        return rollTimeJitterMs;
+    }
+
+    private boolean shouldRollForTime(RollParams rollParams) {
+        if (rollParams.maxSegmentTimeMs <= 0 || getSizeInBytes() == 0) {
+            return false;
+        }
+
+        if (firstBatchTimestamp == UNINITIALIZED_TIMESTAMP) {
+            Iterator<LogRecordBatch> batches = fileLogRecords.batches().iterator();
+            if (!batches.hasNext()) {
+                return false;
+            }
+            firstBatchTimestamp = batches.next().commitTimestamp();
+        }
+
+        return firstBatchTimestamp >= 0
+                && rollParams.firstTimestampInMessages - firstBatchTimestamp
+                        > rollParams.maxSegmentTimeMs - rollTimeJitterMs;
     }
 
     public int getSizeInBytes() {
@@ -272,6 +314,10 @@ public final class LogSegment {
             int physicalPosition = fileLogRecords.sizeInBytes();
             ensureOffsetInRange(largestOffset);
             int appendedBytes = fileLogRecords.append(records);
+
+            if (physicalPosition == 0) {
+                firstBatchTimestamp = records.batches().iterator().next().commitTimestamp();
+            }
 
             if (LOG.isTraceEnabled()) {
                 LOG.trace(
@@ -320,10 +366,15 @@ public final class LogSegment {
         int validBytes = 0;
         int lastIndexEntry = 0;
         maxTimestampAndStartOffsetSoFar = TimestampOffset.UNKNOWN;
+        firstBatchTimestamp = UNINITIALIZED_TIMESTAMP;
         try {
             for (LogRecordBatch batch : fileLogRecords.batches()) {
                 batch.ensureValid();
                 ensureOffsetInRange(batch.lastLogOffset());
+
+                if (firstBatchTimestamp == UNINITIALIZED_TIMESTAMP) {
+                    firstBatchTimestamp = batch.commitTimestamp();
+                }
 
                 // The max timestamp is exposed at the batch level, so no need to iterate the
                 // records
@@ -399,6 +450,9 @@ public final class LogSegment {
         bytesSinceLastIndexEntry = 0;
         if (maxTimestampSoFar() >= 0) {
             maxTimestampAndStartOffsetSoFar = readLargestTimestamp();
+        }
+        if (getSizeInBytes() == 0) {
+            firstBatchTimestamp = UNINITIALIZED_TIMESTAMP;
         }
 
         return bytesTruncated;
