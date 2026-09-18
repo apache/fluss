@@ -58,6 +58,7 @@ import org.apache.fluss.rpc.protocol.FetchLogReadPreference;
 import org.apache.fluss.rpc.util.PredicateMessageUtils;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.ChunkedAllocationManager;
 import org.apache.fluss.shaded.netty4.io.netty.buffer.ByteBuf;
+import org.apache.fluss.utils.ExceptionUtils;
 import org.apache.fluss.utils.IOUtils;
 import org.apache.fluss.utils.Projection;
 
@@ -700,13 +701,19 @@ public class LogFetcher implements Closeable {
     public synchronized void close() throws IOException {
         if (!isClosed) {
             isClosed = true;
-            IOUtils.closeQuietly(logFetchBuffer, "logFetchBuffer");
-            IOUtils.closeQuietly(remoteLogDownloader, "remoteLogDownloader");
-            for (TableReadContext tableReadContext : tableReadContexts.values()) {
-                tableReadContext.close();
+            List<AutoCloseable> closeables = new ArrayList<>();
+            closeables.add(logFetchBuffer);
+            closeables.add(remoteLogDownloader);
+            closeables.addAll(tableReadContexts.values());
+            closeables.add(chunkedFactory::close);
+            try {
+                IOUtils.closeAll(closeables);
+            } catch (Exception e) {
+                throw new IOException("Failed to close LogFetcher.", e);
+            } finally {
+                tableReadContexts.clear();
+                LOG.info("LogFetcher is closed.");
             }
-            chunkedFactory.close();
-            LOG.info("LogFetcher is closed.");
         }
     }
 
@@ -740,7 +747,7 @@ public class LogFetcher implements Closeable {
 
     /** Per-table context holding read contexts, projection, and predicate info. */
     @VisibleForTesting
-    static class TableReadContext {
+    static class TableReadContext implements AutoCloseable {
         final TablePath tablePath;
         final boolean isPartitioned;
         final LogRecordReadContext readContext;
@@ -785,9 +792,17 @@ public class LogFetcher implements Closeable {
             this.filterSchemaId = tableInfo.getSchemaId();
         }
 
-        void close() {
-            readContext.close();
-            remoteReadContext.close();
+        /**
+         * Closes local and remote read contexts even if one of them fails, so Arrow memory from the
+         * other context is not leaked.
+         */
+        @Override
+        public void close() {
+            try {
+                IOUtils.closeAll(readContext, remoteReadContext);
+            } catch (Exception e) {
+                ExceptionUtils.rethrow(e);
+            }
         }
     }
 }
