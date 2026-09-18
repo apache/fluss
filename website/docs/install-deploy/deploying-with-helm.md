@@ -200,14 +200,14 @@ The following table lists the configurable parameters of the Fluss chart, and th
 |-----------|-------------|---------|
 | `security.client.sasl.mechanism` | Client listener SASL mechanism (`""`, `plain`) | `""` |
 | `security.internal.sasl.mechanism` | Internal listener SASL mechanism (`""`, `plain`) | `""` |
-| `security.external.sasl.mechanism` | EXTERNAL listener SASL mechanism (`""`, `plain`, `client`). `client` reuses CLIENT SASL. Empty is PLAINTEXT (warns when EXTERNAL is enabled) | `""` |
+| `security.external.sasl.mechanism` | EXTERNAL listener SASL mechanism (`""`, `plain`). Empty is PLAINTEXT (warns when EXTERNAL is enabled) | `""` |
 | `security.client.sasl.plain.users` | Client listener username and password pairs for PLAIN | `[]` |
-| `security.external.sasl.plain.users` | EXTERNAL listener username and password pairs for PLAIN (ignored when mechanism is `client`) | `[]` |
+| `security.external.sasl.plain.users` | EXTERNAL listener username and password pairs for PLAIN | `[]` |
 | `security.internal.sasl.plain.username` | Internal listener PLAIN username | `""` |
 | `security.internal.sasl.plain.password` | Internal listener PLAIN password | `""` |
 | `security.internal.sasl.plain.existingSecret` | Reference to a pre-existing Secret for internal SASL credentials | `{}` |
 
-Only `plain` mechanism is supported for now (EXTERNAL also accepts `client`, which reuses CLIENT SASL). An empty string disables SASL and maps to the `PLAINTEXT` protocol.
+Only `plain` mechanism is supported for now. An empty string disables SASL and maps to the `PLAINTEXT` protocol.
 
 If the internal SASL username or password is left empty, the chart automatically generates credentials based on the Helm release name:
 
@@ -391,7 +391,7 @@ The same pattern works with Sealed Secrets, HashiCorp Vault Agent Injector (prod
 | `configurationOverrides.default.bucket.number` | Default number of buckets for tables | `3` |
 | `configurationOverrides.default.replication.factor` | Default replication factor | `3` |
 | `configurationOverrides.zookeeper.path.root` | ZooKeeper root path for Fluss | `/fluss` |
-| `configurationOverrides.zookeeper.address` | ZooKeeper ensemble address | `zk-zookeeper.{{ .Release.Namespace }}.svc.cluster.local:2181` |
+| `configurationOverrides.zookeeper.address` | ZooKeeper ensemble address | `zk-zookeeper.{{ .Release.Namespace }}.svc.{{ .Values.clusterDomain }}:2181` |
 | `configurationOverrides.remote.data.dir` | Remote data directory for snapshots | `/tmp/fluss/remote-data` |
 | `configurationOverrides.data.dir` | Local data directory | `/tmp/fluss/data` |
 | `configurationOverrides.internal.listener.name` | Internal listener name | `INTERNAL` |
@@ -624,7 +624,7 @@ tablet:
         - tablet-server-2.fluss.example.com
 ```
 
-Host IP + unique port (for example when you create per-pod NodePorts yourself). `${NODE_IP}` is the only runtime token accepted in `advertisedHost`; `$NODE_IP` is injected on the coordinator always, and on tablets when referenced:
+Host IP + unique port (for example when you create per-pod NodePorts yourself). `${NODE_IP}` is the only runtime token accepted in `advertisedHost`; the `NODE_IP` env var is injected only when referenced:
 
 ```yaml
 listeners:
@@ -659,7 +659,25 @@ tablet:
 
 Then forward every pod to the advertised localhost port (`coordinator-server-0:9125`, `tablet-server-0:9126`, `tablet-server-1:9127`, ...). Bootstrap the client at `127.0.0.1:9125`.
 
-EXTERNAL security is independent of CLIENT. Default is PLAINTEXT, which prints a `VALUES WARNING` when EXTERNAL is enabled. Set `security.external.sasl.mechanism` to `plain` (own users) or `client` (reuse CLIENT SASL). Setting `security.external.sasl.*` without `listeners.external.enabled: true` has no effect and also prints a `VALUES WARNING`. SASL/PLAIN without TLS sends credentials in cleartext; until TLS lands ([FIP-29](https://cwiki.apache.org/confluence/display/FLUSS/FIP-29%3A+Support+TLS+and+mTLS+Authentication)), keep EXTERNAL on a trusted network.
+EXTERNAL security is independent of CLIENT. Default is PLAINTEXT, which prints a `VALUES WARNING` when EXTERNAL is enabled. Set `security.external.sasl.mechanism` to `plain` and provide `security.external.sasl.plain.users`. To share credentials between CLIENT and EXTERNAL, point both listeners' user entries at the same `existingSecret`:
+
+```yaml
+security:
+  client:
+    sasl:
+      mechanism: plain
+      plain:
+        users:
+          - existingSecret: { name: fluss-sasl-alice }
+  external:
+    sasl:
+      mechanism: plain
+      plain:
+        users:
+          - existingSecret: { name: fluss-sasl-alice }
+```
+
+Setting `security.external.sasl.*` without `listeners.external.enabled: true` has no effect and also prints a `VALUES WARNING`. SASL/PLAIN without TLS sends credentials in cleartext; until TLS lands ([FIP-29](https://cwiki.apache.org/confluence/display/FLUSS/FIP-29%3A+Support+TLS+and+mTLS+Authentication)), keep EXTERNAL on a trusted network.
 
 Custom bind ports:
 

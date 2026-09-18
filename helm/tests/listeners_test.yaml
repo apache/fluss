@@ -152,6 +152,7 @@ tests:
 suite: node ip downward api
 templates:
   - templates/sts-tablet.yaml
+  - templates/sts-coordinator.yaml
 tests:
   - it: does not expose NODE_IP by default
     asserts:
@@ -178,6 +179,7 @@ tests:
       - matchRegex:
           path: spec.template.spec.containers[0].command[2]
           pattern: 'EXTERNAL://\$\{NODE_IP\}:\$EXTERNAL_ADVERTISED_PORT'
+        template: templates/sts-tablet.yaml
 
 ---
 
@@ -324,24 +326,7 @@ tests:
       security.external.sasl.mechanism: bogus
     asserts:
       - failedTemplate:
-          errorMessage: "VALUES VALIDATION:\nsecurity.external.sasl.mechanism must be empty or: plain, client"
-
-  - it: fails when mechanism is client but EXTERNAL users are set
-    set:
-      listeners.external.enabled: true
-      listeners.external.advertisedHost: "fluss.example.com"
-      tablet.listeners.external.advertisedPorts: [9126, 9127, 9128]
-      security.client.sasl.mechanism: plain
-      security.client.sasl.plain.users:
-        - username: client-user
-          password: client-pass
-      security.external.sasl.mechanism: client
-      security.external.sasl.plain.users:
-        - username: ext-user
-          password: ext-pass
-    asserts:
-      - failedTemplate:
-          errorMessage: "VALUES VALIDATION:\nsecurity.external.sasl.plain.users must be empty when security.external.sasl.mechanism is client; CLIENT users are reused"
+          errorMessage: "VALUES VALIDATION:\nsecurity.external.sasl.mechanism must be empty or: plain"
 
   - it: fails when mechanism is plain but EXTERNAL users are empty
     set:
@@ -430,16 +415,19 @@ tests:
           pattern: 'external\.FlussServer'
         template: templates/configmap-jaas-template.yaml
 
-  - it: reuses CLIENT SASL when security.external.sasl.mechanism is client
+  - it: shares credentials across CLIENT and EXTERNAL via the same existingSecret
     set:
       listeners.external.enabled: true
       listeners.external.advertisedHost: "fluss.example.com"
       tablet.listeners.external.advertisedPorts: [9126, 9127, 9128]
       security.client.sasl.mechanism: plain
       security.client.sasl.plain.users:
-        - username: client-user
-          password: client-pass
-      security.external.sasl.mechanism: client
+        - existingSecret:
+            name: fluss-sasl-alice
+      security.external.sasl.mechanism: plain
+      security.external.sasl.plain.users:
+        - existingSecret:
+            name: fluss-sasl-alice
     asserts:
       - matchRegex:
           path: data["server.yaml"]
@@ -447,11 +435,11 @@ tests:
         template: templates/configmap.yaml
       - matchRegex:
           path: data["jaas.conf"]
-          pattern: 'external\.FlussServer\s*\{'
+          pattern: 'user_\$\{FLUSS_JAAS_CLIENT_USERNAME_0\}'
         template: templates/configmap-jaas-template.yaml
       - matchRegex:
           path: data["jaas.conf"]
-          pattern: 'user_\$\{FLUSS_JAAS_CLIENT_USERNAME_0\}'
+          pattern: 'user_\$\{FLUSS_JAAS_EXTERNAL_USERNAME_0\}'
         template: templates/configmap-jaas-template.yaml
 
   - it: uses dedicated EXTERNAL users when mechanism is plain

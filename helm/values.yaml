@@ -87,12 +87,12 @@ tablet:
   envFrom: []
   # Optional EXTERNAL advertised host/port overrides for tablets only.
   # advertisedHosts / advertisedPorts are per-ordinal; length must equal numberOfReplicas.
-  # listeners:
-  #   external:
-  #     advertisedHost: ""
-  #     advertisedHosts: []
-  #     advertisedPort: ""
-  #     advertisedPorts: []
+  listeners:
+    external:
+      advertisedHost: ""
+      advertisedHosts: []
+      advertisedPort: ""
+      advertisedPorts: []
   annotations: {}
   service:
     annotations: {}
@@ -140,10 +140,10 @@ coordinator:
   extraEnv: []
   envFrom: []
   # Optional EXTERNAL advertised host/port overrides for the coordinator.
-  # listeners:
-  #   external:
-  #     advertisedHost: ""
-  #     advertisedPort: ""
+  listeners:
+    external:
+      advertisedHost: ""
+      advertisedPort: ""
   annotations: {}
   service:
     annotations: {}
@@ -207,11 +207,12 @@ security:
 
   external:
     sasl:
-      # "" (PLAINTEXT + warning when listeners.external.enabled) | plain | client
-      # client: reuse security.client.sasl (explicit opt-in to mirroring)
+      # "" (PLAINTEXT + warning when listeners.external.enabled) | plain
       mechanism: ""
       plain:
         users: []
+        # To share credentials with CLIENT, point both listeners' users at the
+        # same existingSecret.
         # - username: external-user
         #   password: external-pass
         # - existingSecret:

@@ -82,8 +82,8 @@ Usage:
 {{- if and (include "fluss.security.sasl.plain.enabled" .) (eq $clientMechanism "plain") }}
 {{- include "fluss.security.sasl.plain.userList.env" (dict "kind" "client" "users" (.Values.security.client.sasl.plain.users | default list)) }}
 {{- end }}
-{{- /* external (own users only; mechanism=client reuses the client env above) */ -}}
-{{- if and (eq (include "fluss.security.external.resolvedMechanism" . | trim) "plain") (not (include "fluss.security.external.usesClientUsers" .)) }}
+{{- /* external */ -}}
+{{- if eq (include "fluss.security.external.mechanism" . | trim) "plain" }}
 {{- $ext := .Values.security.external | default dict -}}
 {{- $sasl := $ext.sasl | default dict -}}
 {{- $plain := $sasl.plain | default dict -}}

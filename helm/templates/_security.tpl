@@ -59,7 +59,7 @@ Usage:
 {{- define "fluss.security.sasl.enabled" -}}
 {{- $internal := include "fluss.security.listener.mechanism" (dict "context" .Values "listener" "internal") -}}
 {{- $client := include "fluss.security.listener.mechanism" (dict "context" .Values "listener" "client") -}}
-{{- $external := include "fluss.security.external.resolvedMechanism" . -}}
+{{- $external := include "fluss.security.external.mechanism" . -}}
 {{- if or (ne $internal "") (ne $client "") (ne $external "") -}}true{{- end -}}
 {{- end -}}
 
@@ -71,12 +71,12 @@ Usage:
 {{- define "fluss.security.sasl.plain.enabled" -}}
 {{- $internal := include "fluss.security.listener.mechanism" (dict "context" .Values "listener" "internal") -}}
 {{- $client := include "fluss.security.listener.mechanism" (dict "context" .Values "listener" "client") -}}
-{{- $external := include "fluss.security.external.resolvedMechanism" . -}}
+{{- $external := include "fluss.security.external.mechanism" . -}}
 {{- if or (eq $internal "plain") (eq $client "plain") (eq $external "plain") -}}true{{- end -}}
 {{- end -}}
 
 {{/*
-Raw security.external.sasl.mechanism: "" | plain | client.
+Raw security.external.sasl.mechanism: "" | plain.
 Usage:
   include "fluss.security.external.mechanismSetting" .
 */}}
@@ -87,20 +87,14 @@ Usage:
 {{- end -}}
 
 {{/*
-Resolved EXTERNAL SASL mechanism. "client" aliases to the CLIENT listener mechanism.
-Empty when EXTERNAL is disabled. Allowed resolved values: "", "plain".
+EXTERNAL SASL mechanism in effect: security.external.sasl.mechanism, or empty
+when the EXTERNAL listener is disabled.
 Usage:
-  include "fluss.security.external.resolvedMechanism" .
+  include "fluss.security.external.mechanism" .
 */}}
-{{- define "fluss.security.external.resolvedMechanism" -}}
-{{- if not (include "fluss.listeners.external.enabled" .) -}}
-{{- else -}}
-{{- $setting := include "fluss.security.external.mechanismSetting" . -}}
-{{- if eq $setting "client" -}}
-{{- include "fluss.security.listener.mechanism" (dict "context" .Values "listener" "client") -}}
-{{- else -}}
-{{- $setting -}}
-{{- end -}}
+{{- define "fluss.security.external.mechanism" -}}
+{{- if (include "fluss.listeners.external.enabled" .) -}}
+{{- include "fluss.security.external.mechanismSetting" . -}}
 {{- end -}}
 {{- end -}}
 
@@ -110,19 +104,8 @@ Usage:
   include "fluss.security.external.protocol" .
 */}}
 {{- define "fluss.security.external.protocol" -}}
-{{- $mechanism := include "fluss.security.external.resolvedMechanism" . | trim -}}
+{{- $mechanism := include "fluss.security.external.mechanism" . | trim -}}
 {{- if eq $mechanism "" -}}PLAINTEXT{{- else -}}SASL{{- end -}}
-{{- end -}}
-
-{{/*
-True when EXTERNAL SASL PLAIN users come from security.client.sasl.plain.users.
-Usage:
-  include "fluss.security.external.usesClientUsers" .
-*/}}
-{{- define "fluss.security.external.usesClientUsers" -}}
-{{- if and (eq (include "fluss.security.external.mechanismSetting" .) "client") (eq (include "fluss.security.external.resolvedMechanism" . | trim) "plain") -}}
-true
-{{- end -}}
 {{- end -}}
 
 {{/*
@@ -148,7 +131,7 @@ Usage:
     {{- $mechanisms = append $mechanisms (upper $current) -}}
   {{- end -}}
 {{- end -}}
-{{- $external := include "fluss.security.external.resolvedMechanism" . | trim -}}
+{{- $external := include "fluss.security.external.mechanism" . | trim -}}
 {{- if and (ne $external "") (not (has (upper $external) $mechanisms)) -}}
   {{- $mechanisms = append $mechanisms (upper $external) -}}
 {{- end -}}
@@ -165,18 +148,13 @@ Usage:
 {{- $root := . -}}
 {{- $msgs := list -}}
 {{- $allowedMechanisms := list "" "plain" -}}
-{{- range $listener := list "internal" "client" -}}
+{{- range $listener := list "internal" "client" "external" -}}
   {{- $listenerValues := index $root.Values.security $listener | default (dict) -}}
   {{- $sasl := $listenerValues.sasl | default (dict) -}}
   {{- $mechanism := lower (default "" $sasl.mechanism) -}}
   {{- if not (has $mechanism $allowedMechanisms) -}}
     {{- $msgs = append $msgs (printf "security.%s.sasl.mechanism must be empty or: plain" $listener) -}}
   {{- end -}}
-{{- end -}}
-{{- $externalAllowed := list "" "plain" "client" -}}
-{{- $external := include "fluss.security.external.mechanismSetting" $root -}}
-{{- if not (has $external $externalAllowed) -}}
-  {{- $msgs = append $msgs "security.external.sasl.mechanism must be empty or: plain, client" -}}
 {{- end -}}
 {{- join "\n" $msgs -}}
 {{- end -}}
@@ -227,23 +205,16 @@ Usage:
 {{- end -}}
 
 {{/*
-Validates security.external.sasl when EXTERNAL is enabled.
+Validates security.external.sasl.plain.users when EXTERNAL SASL PLAIN is in effect.
 Usage:
   include "fluss.security.sasl.validateExternal" .
 */}}
 {{- define "fluss.security.sasl.validateExternal" -}}
-{{- if not (include "fluss.listeners.external.enabled" .) -}}
-{{- else -}}
-{{- $setting := include "fluss.security.external.mechanismSetting" . -}}
+{{- if eq (include "fluss.security.external.mechanism" . | trim) "plain" -}}
 {{- $ext := .Values.security.external | default dict -}}
 {{- $sasl := $ext.sasl | default dict -}}
 {{- $plain := $sasl.plain | default dict -}}
-{{- $userList := $plain.users | default list -}}
-{{- if and (eq $setting "client") (gt (len $userList) 0) -}}
-  {{- print "security.external.sasl.plain.users must be empty when security.external.sasl.mechanism is client; CLIENT users are reused" -}}
-{{- else if eq $setting "plain" -}}
-  {{- include "fluss.security.sasl.validatePlainUsersList" (dict "users" $userList "path" "security.external.sasl.plain.users" "requiredWhen" "security.external.sasl.mechanism is plain") -}}
-{{- end -}}
+{{- include "fluss.security.sasl.validatePlainUsersList" (dict "users" ($plain.users | default list) "path" "security.external.sasl.plain.users" "requiredWhen" "security.external.sasl.mechanism is plain") -}}
 {{- end -}}
 {{- end -}}
 

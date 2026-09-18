@@ -290,7 +290,7 @@ Usage:
 {{- define "fluss.listeners.validateWarning" -}}
 {{- $msgs := list -}}
 {{- if and (include "fluss.listeners.external.enabled" .) (eq (include "fluss.security.external.protocol" . | trim) "PLAINTEXT") -}}
-{{- $msgs = append $msgs "listeners.external is enabled with PLAINTEXT; an unauthenticated listener is exposed outside the cluster. Set security.external.sasl.mechanism to plain (or client, to reuse CLIENT SASL) or keep EXTERNAL on a trusted network." -}}
+{{- $msgs = append $msgs "listeners.external is enabled with PLAINTEXT; an unauthenticated listener is exposed outside the cluster. Set security.external.sasl.mechanism to plain or keep EXTERNAL on a trusted network." -}}
 {{- end -}}
 {{/* Only tablet is checked because the coordinator is single-replica today (no HA, FIP-9). */}}
 {{- $replicas := .Values.tablet.numberOfReplicas | int -}}
