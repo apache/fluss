@@ -293,7 +293,8 @@ When using SET to modify [Storage Options](engine-flink/options.md#storage-optio
 - `bucket.num`: Set the target number of buckets. For partitioned tables, the new value applies to newly created partitions; existing partitions retain their original bucket count. Not supported on non-partitioned tables, tables using the aggregation merge engine, or tables with the historical partition enabled, and among lake-enabled tables only Paimon is supported. See [Rescaling Bucket Count for Future Partitions](../table-design/data-distribution/bucketing.md#rescaling-bucket-count-for-future-partitions) for the full semantics, examples, and operational guidance.
 - The following [Storage Options](engine-flink/options.md#storage-options):
   - `table.datalake.enabled`: Enable or disable lakehouse storage for the table.
-  - `table.datalake.historical-partition.enabled`: Enable or disable historical partition lookup.
+  - `table.datalake.historical-partition.enabled`: Enable or disable
+    [historical partition access](../table-design/data-distribution/partitioning.md#historical-partition-access).
   - `table.datalake.freshness`: Set the data freshness for lakehouse storage.
   - `table.log.tiered.local-segments`: Set the number of log segments to retain locally when tiered storage is enabled.
   - `table.auto-partition.num-retention`: Set the number of historical partitions to retain for auto partitioning.
@@ -315,7 +316,6 @@ ALTER TABLE my_table SET ('table.log.tiered.local-segments' = '5');
 
 **Limits**
 - If lakehouse storage (`table.datalake.enabled`) is already enabled for a table, options with lakehouse format prefixes (e.g., `paimon.*`) cannot be modified again.
-- After changing `table.datalake.historical-partition.enabled`, restart existing lookup jobs that need to look up historical partition data so that their clients load the updated table configuration.
 
 
 ### RESET properties

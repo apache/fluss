@@ -69,6 +69,47 @@ In this case, when automatic partitioning occurs (Fluss will periodically operat
 | table.auto-partition.num-retention | Integer | no       | 7                    | The number of history partitions to retain for auto created partitions in each check for auto partition. For example, if the current check time is 2024-11-11, time-unit is DAY, and the value is configured as 3, then the history partitions 20241108, 20241109, 20241110 will be retained. The partitions earlier than 20241108 will be deleted. The default value is 7. This option can be modified after table creation by `ALTER TABLE ... SET` or `ALTER TABLE ... RESET`.                                                                                                                                                                                                                                       |
 | table.auto-partition.time-zone     | String  | no       | the system time zone | The time zone for auto partitions, which is by default the same as the system time zone.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 
+### Historical Partition Access
+
+:::warning
+**After changing `table.datalake.historical-partition.enabled`, restart existing writer and lookup
+jobs that need historical partition access so that their clients load the updated table
+configuration.**
+:::
+
+Auto partitioning eventually removes partitions that fall outside the configured retention window.
+After an original Fluss partition is removed, late records cannot be written to it and primary-key
+lookups cannot find its rows in Fluss, even when the existing data has already been tiered to
+Paimon. Historical partition access provides read and write access without recreating the expired
+partition. This is a table-level capability and is independent of the compute engine used to access
+the table.
+
+Enable the capability on an eligible table:
+
+```sql
+ALTER TABLE my_partitioned_table SET (
+  'table.datalake.historical-partition.enabled' = 'true'
+);
+```
+
+When enabled, the Coordinator creates and retains an internal `__historical__` system partition:
+
+- **Writes:** Log tables and primary-key tables route records for expired partitions through the
+  system partition while preserving each record's original partition name. The tiering service
+  writes the records back to their original Paimon partitions.
+- **Reads:** Primary-key point lookups continue to resolve rows after the original Fluss partition
+  no longer exists. Historical reads currently support only primary-key point lookups.
+
+The option is disabled by default and currently has the following requirements and limitations:
+
+- The table must use Paimon lakehouse storage, with `table.datalake.enabled` and
+  `table.auto-partition.enabled` set to `true`.
+- The table must have exactly one partition key.
+- The bucket count cannot be rescaled while historical partition access is enabled, and the option
+  cannot be enabled after the table's bucket count has been rescaled.
+
+Disabling the option removes the internal system partition.
+
 ### Partition Generation Rules
 The time unit for the automatic partition table `auto-partition.time-unit` can take values of HOUR, DAY, MONTH, QUARTER, or YEAR. Automatic partitioning will use the following format to create partitions.
 
