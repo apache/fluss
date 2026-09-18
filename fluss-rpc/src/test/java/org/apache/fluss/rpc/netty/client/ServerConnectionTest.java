@@ -370,9 +370,9 @@ public class ServerConnectionTest {
     }
 
     @Test
-    void testRejectHistoricalLookupsForOldServer() throws Exception {
+    void testHistoricalLookupNotRejectedForServerAdvertisingLookupV1() throws Exception {
         nettyServer.close();
-        buildNettyServer(new OldLookupGatewayService());
+        buildNettyServer(new LookupV1GatewayService());
 
         ServerConnection connection =
                 new ServerConnection(
@@ -384,16 +384,8 @@ public class ServerConnectionTest {
         try {
             assertThat(connection.send(ApiKeys.LOOKUP, lookupRequest(null)).get())
                     .isInstanceOf(LookupResponse.class);
-
-            assertThatThrownBy(
-                            () ->
-                                    connection
-                                            .send(ApiKeys.LOOKUP, lookupRequest("dt=20260823"))
-                                            .get())
-                    .rootCause()
-                    .isInstanceOf(UnsupportedVersionException.class)
-                    .hasMessageContaining("require LOOKUP version 2 or newer")
-                    .hasMessageContaining("negotiated version 1");
+            assertThat(connection.send(ApiKeys.LOOKUP, lookupRequest("dt=20260823")).get())
+                    .isInstanceOf(LookupResponse.class);
         } finally {
             connection.close().get();
         }
@@ -483,7 +475,8 @@ public class ServerConnectionTest {
         }
     }
 
-    private static class OldLookupGatewayService extends TestingTabletGatewayService {
+    /** A server that supports historical lookup but still advertises {@code LOOKUP} version 1. */
+    private static class LookupV1GatewayService extends TestingTabletGatewayService {
         @Override
         public CompletableFuture<ApiVersionsResponse> apiVersions(ApiVersionsRequest request) {
             return super.apiVersions(request)
@@ -496,11 +489,6 @@ public class ServerConnectionTest {
                                 }
                                 return response;
                             });
-        }
-
-        @Override
-        public CompletableFuture<LookupResponse> lookup(LookupRequest request) {
-            return CompletableFuture.completedFuture(new LookupResponse());
         }
     }
 

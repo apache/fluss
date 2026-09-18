@@ -28,6 +28,7 @@ import org.apache.fluss.exception.InvalidMetadataException;
 import org.apache.fluss.exception.LeaderNotAvailableException;
 import org.apache.fluss.exception.PartitionNotExistException;
 import org.apache.fluss.exception.RetriableException;
+import org.apache.fluss.exception.UnsupportedVersionException;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TablePartition;
@@ -61,6 +62,7 @@ import java.util.stream.Collectors;
 
 import static org.apache.fluss.client.utils.ClientRpcMessageUtils.makeLookupRequest;
 import static org.apache.fluss.client.utils.ClientRpcMessageUtils.makePrefixLookupRequest;
+import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.hasHistoricalLookup;
 
 /**
  * This background thread pool lookup operations from {@link #lookupQueue}, and send lookup requests
@@ -342,12 +344,19 @@ class LookupSender implements Runnable {
             Thread.currentThread().interrupt();
             throw new FlussRuntimeException("interrupted:", e);
         }
+        // Determined from the request rather than from the batches, so that the client and the
+        // server decide the lookup kind by the exact same predicate.
+        boolean historicalRequest = hasHistoricalLookup(lookupRequest);
         gateway.lookup(lookupRequest)
                 .thenAccept(
                         lookupResponse -> {
                             try {
                                 handleLookupResponse(
-                                        tableId, destination, lookupResponse, lookupsByBatchKey);
+                                        tableId,
+                                        destination,
+                                        historicalRequest,
+                                        lookupResponse,
+                                        lookupsByBatchKey);
                             } finally {
                                 maxInFlightReuqestsSemaphore.release();
                             }
@@ -403,6 +412,7 @@ class LookupSender implements Runnable {
     private void handleLookupResponse(
             long tableId,
             int destination,
+            boolean historicalRequest,
             LookupResponse lookupResponse,
             Map<LookupBatchKey, LookupBatch> lookupsByBatchKey) {
         for (PbLookupRespForBucket pbLookupRespForBucket : lookupResponse.getBucketsRespsList()) {
@@ -413,12 +423,18 @@ class LookupSender implements Runnable {
                                     ? pbLookupRespForBucket.getPartitionId()
                                     : null,
                             pbLookupRespForBucket.getBucketId());
-            LookupBatchKey lookupBatchKey =
-                    new LookupBatchKey(
-                            tableBucket,
-                            pbLookupRespForBucket.hasOriginalPartitionName()
-                                    ? pbLookupRespForBucket.getOriginalPartitionName()
-                                    : null);
+            String originalPartitionName =
+                    pbLookupRespForBucket.hasOriginalPartitionName()
+                            ? pbLookupRespForBucket.getOriginalPartitionName()
+                            : null;
+
+            if (historicalRequest && originalPartitionName == null) {
+                handleUnEchoedHistoricalResponse(
+                        destination, tableBucket, pbLookupRespForBucket, lookupsByBatchKey);
+                continue;
+            }
+
+            LookupBatchKey lookupBatchKey = new LookupBatchKey(tableBucket, originalPartitionName);
             LookupBatch lookupBatch = lookupsByBatchKey.get(lookupBatchKey);
             if (pbLookupRespForBucket.hasErrorCode()) {
                 ApiError error = ApiError.fromErrorMessage(pbLookupRespForBucket);
@@ -438,6 +454,36 @@ class LookupSender implements Runnable {
                 lookupBatch.complete(byteValues);
             }
         }
+    }
+
+    private void handleUnEchoedHistoricalResponse(
+            int destination,
+            TableBucket tableBucket,
+            PbLookupRespForBucket pbLookupRespForBucket,
+            Map<LookupBatchKey, LookupBatch> lookupsByBatchKey) {
+        ApiError error;
+        if (pbLookupRespForBucket.hasErrorCode()) {
+            error = ApiError.fromErrorMessage(pbLookupRespForBucket);
+        } else {
+            error =
+                    ApiError.fromThrowable(
+                            new UnsupportedVersionException(
+                                    "Server "
+                                            + destination
+                                            + " answered a historical partition lookup on "
+                                            + tableBucket
+                                            + " without echoing the original partition name, so it"
+                                            + " does not support historical partition lookup."
+                                            + " Please upgrade the tablet server to a newer"
+                                            + " version."));
+        }
+        List<LookupQuery> lookups = new ArrayList<>();
+        for (LookupBatch lookupBatch : lookupsByBatchKey.values()) {
+            if (lookupBatch.tableBucket().equals(tableBucket)) {
+                lookups.addAll(lookupBatch.lookups());
+            }
+        }
+        handleLookupError(tableBucket, destination, error, lookups, "lookup");
     }
 
     private void handlePrefixLookupResponse(

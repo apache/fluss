@@ -48,4 +48,9 @@ class ApiKeysTest {
     void testAlterTableSupportsBucketCountChange() {
         assertThat(ApiKeys.ALTER_TABLE.highestSupportedVersion).isEqualTo((short) 1);
     }
+
+    @Test
+    void testLookupAdvertisesHistoricalPartitionSupport() {
+        assertThat(ApiKeys.LOOKUP.highestSupportedVersion).isEqualTo((short) 2);
+    }
 }

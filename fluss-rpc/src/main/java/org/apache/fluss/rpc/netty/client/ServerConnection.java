@@ -32,7 +32,6 @@ import org.apache.fluss.rpc.messages.ApiVersionsRequest;
 import org.apache.fluss.rpc.messages.ApiVersionsResponse;
 import org.apache.fluss.rpc.messages.AuthenticateRequest;
 import org.apache.fluss.rpc.messages.AuthenticateResponse;
-import org.apache.fluss.rpc.messages.LookupRequest;
 import org.apache.fluss.rpc.messages.ProduceLogRequest;
 import org.apache.fluss.rpc.messages.PutKvRequest;
 import org.apache.fluss.rpc.metrics.ClientMetricGroup;
@@ -67,7 +66,6 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.function.BiConsumer;
 
-import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.hasHistoricalLookup;
 import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.hasHistoricalProduce;
 import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.hasHistoricalPut;
 import static org.apache.fluss.utils.IOUtils.closeQuietly;
@@ -78,7 +76,6 @@ final class ServerConnection {
     private static final Logger LOG = LoggerFactory.getLogger(ServerConnection.class);
     private static final short HISTORICAL_PRODUCE_LOG_MIN_VERSION = 1;
     private static final short HISTORICAL_PUT_KV_MIN_VERSION = 3;
-    private static final short HISTORICAL_LOOKUP_MIN_VERSION = 2;
     private static final short ALTER_BUCKET_COUNT_MIN_VERSION = 1;
 
     private final ServerNode node;
@@ -408,20 +405,6 @@ final class ServerConnection {
                 throw new UnsupportedVersionException(
                         "Historical partition writes require PUT_KV version "
                                 + HISTORICAL_PUT_KV_MIN_VERSION
-                                + " or newer, but server "
-                                + node
-                                + " negotiated version "
-                                + version
-                                + '.');
-            }
-        }
-
-        if (apiKey == ApiKeys.LOOKUP && version < HISTORICAL_LOOKUP_MIN_VERSION) {
-            LookupRequest lookupRequest = (LookupRequest) rawRequest;
-            if (hasHistoricalLookup(lookupRequest)) {
-                throw new UnsupportedVersionException(
-                        "Historical partition lookups require LOOKUP version "
-                                + HISTORICAL_LOOKUP_MIN_VERSION
                                 + " or newer, but server "
                                 + node
                                 + " negotiated version "
