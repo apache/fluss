@@ -126,10 +126,8 @@ class IcebergKeyDecoderTest {
         IcebergKeyDecoder decoder = new IcebergKeyDecoder(rowType, Collections.singletonList("ts"));
 
         // Iceberg uses microsecond precision, so only test values that are multiples of 1000 nanos
-        long[] millisValues = {0L, 1000L, 1698235273182L};
-        int[] nanosValues = {
-            0, 0, 123000, 999000
-        }; // Must be multiples of 1000 for microsecond precision
+        long[] millisValues = {0L, 1000L, 1698235273182L, -1L, -1L, -2L, 1L};
+        int[] nanosValues = {0, 0, 123000, 0, 999000, 999000, 999000}; // multiples of 1000
 
         for (int i = 0; i < millisValues.length; i++) {
             InternalRow original =
