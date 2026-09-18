@@ -14,6 +14,7 @@ Fluss provides a pluggable authorization framework that uses Access Control List
 |--------------------|---------|---------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | authorizer.enabled | Boolean | false         | Specifies whether to enable the authorization feature.                                                                                                                                                                                                                                                         |
 | authorizer.type    | String  | default       | Specifies the type of authorizer to be used for access control. This value corresponds to the identifier of the authorization plugin. The default value is `default`, which indicates the built-in authorizer implementation. Custom authorizers can be implemented by providing a matching plugin identifier. |
+| security.acl.principal.ignore-case | Boolean | false | Whether to perform case-insensitive matching on principal name and type during ACL authorization checks. When set to true, principals such as `User:Admin` and `user:admin` will be treated as the same principal. The default is false for strict case-sensitive matching. |
 
 
 ## Core Components of ACLs
