@@ -27,11 +27,22 @@ image:
   pullPolicy: IfNotPresent
   pullSecrets: []
 
+# Prefixes every resource name with the release name, and scopes the ZooKeeper
+# root path to it, so that several Fluss clusters can share one namespace.
+# Off by default: renaming a StatefulSet makes Helm replace it and orphans its
+# PersistentVolumeClaims, so an existing release must opt in deliberately. See
+# "Running several Fluss clusters in one namespace" in the Fluss Helm
+# deployment documentation. This default is expected to flip in a later
+# release, after which the option is deprecated.
+releaseScopedResourceNames: false
+
 # Fluss server configuration options
 configurationOverrides:
   default.bucket.number: 3
   default.replication.factor: 3
-  zookeeper.path.root: /fluss
+  # Follows releaseScopedResourceNames: scoping the root to the release keeps
+  # two clusters sharing a ZooKeeper ensemble from overwriting each other.
+  zookeeper.path.root: /fluss{{ if .Values.releaseScopedResourceNames }}/{{ .Release.Name }}{{ end }}
   zookeeper.address: zk-zookeeper.{{ .Release.Namespace }}.svc.cluster.local:2181
   remote.data.dir: /tmp/fluss/remote-data
   data.dir: /tmp/fluss/data
