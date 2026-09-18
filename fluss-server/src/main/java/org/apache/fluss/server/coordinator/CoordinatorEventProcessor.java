@@ -281,7 +281,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
                         zooKeeperClient,
                         coordinatorEventManager,
                         SystemClock.getInstance(),
-                        coordinatorMetricGroup);
+                        coordinatorMetricGroup.getRebalanceMetrics());
         this.offlineLeaderRetryDelayMs =
                 conf.get(ConfigOptions.COORDINATOR_OFFLINE_LEADER_RETRY_DELAY).toMillis();
         if (offlineLeaderRetryDelayMs <= 0) {

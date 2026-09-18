@@ -26,6 +26,7 @@ import org.apache.fluss.metrics.groups.AbstractMetricGroup;
 import org.apache.fluss.metrics.groups.MetricGroup;
 import org.apache.fluss.metrics.registry.MetricRegistry;
 import org.apache.fluss.server.coordinator.event.CoordinatorEvent;
+import org.apache.fluss.server.coordinator.rebalance.RebalanceMetrics;
 
 import javax.annotation.Nullable;
 
@@ -54,7 +55,7 @@ public class CoordinatorMetricGroup extends AbstractMetricGroup {
     private final Map<Class<? extends CoordinatorEvent>, CoordinatorEventMetricGroup>
             eventMetricGroups = new ConcurrentHashMap<>();
 
-    private @Nullable AbstractMetricGroup rebalanceMetricGroup;
+    private final RebalanceMetrics rebalanceMetrics;
 
     public CoordinatorMetricGroup(
             MetricRegistry registry, String clusterId, String hostname, String serverId) {
@@ -62,6 +63,7 @@ public class CoordinatorMetricGroup extends AbstractMetricGroup {
         this.clusterId = clusterId;
         this.hostname = hostname;
         this.serverId = serverId;
+        this.rebalanceMetrics = new RebalanceMetrics(this);
     }
 
     @Override
@@ -82,27 +84,9 @@ public class CoordinatorMetricGroup extends AbstractMetricGroup {
                 eventClass, e -> new CoordinatorEventMetricGroup(registry, eventClass, this));
     }
 
-    /**
-     * Returns the leader-scoped rebalance metric group, retaining the coordinator metric scope. The
-     * rebalance manager closes this group on leadership loss so a new leader term can register
-     * fresh gauges and counters without replacing the server metric group.
-     */
-    public synchronized AbstractMetricGroup getOrAddRebalanceMetricGroup() {
-        if (rebalanceMetricGroup == null || rebalanceMetricGroup.isClosed()) {
-            rebalanceMetricGroup = new RebalanceMetricGroup(registry, this);
-            if (isClosed()) {
-                rebalanceMetricGroup.close();
-            }
-        }
-        return rebalanceMetricGroup;
-    }
-
-    @Override
-    public synchronized void close() {
-        if (rebalanceMetricGroup != null) {
-            rebalanceMetricGroup.close();
-        }
-        super.close();
+    /** Returns the rebalance metrics for this coordinator server. */
+    public RebalanceMetrics getRebalanceMetrics() {
+        return rebalanceMetrics;
     }
 
     // ------------------------------------------------------------------------
@@ -147,19 +131,6 @@ public class CoordinatorMetricGroup extends AbstractMetricGroup {
         SimpleTableMetricGroup tableMetricGroup = metricGroupByTable.get(tablePath);
         if (tableMetricGroup != null) {
             tableMetricGroup.removeBucketMetricsGroupForPartition(tableId, partitionId);
-        }
-    }
-
-    /** Rebalance metrics share the coordinator scope but have a leader-specific lifetime. */
-    private static class RebalanceMetricGroup extends AbstractMetricGroup {
-
-        private RebalanceMetricGroup(MetricRegistry registry, CoordinatorMetricGroup parent) {
-            super(registry, parent.getScopeComponents(), parent);
-        }
-
-        @Override
-        protected String getGroupName(CharacterFilter filter) {
-            return "";
         }
     }
 

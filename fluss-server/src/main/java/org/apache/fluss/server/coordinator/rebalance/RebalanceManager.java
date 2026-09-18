@@ -25,10 +25,6 @@ import org.apache.fluss.cluster.rebalance.RebalanceStatus;
 import org.apache.fluss.cluster.rebalance.ServerTag;
 import org.apache.fluss.exception.NoRebalanceInProgressException;
 import org.apache.fluss.metadata.TableBucket;
-import org.apache.fluss.metrics.Counter;
-import org.apache.fluss.metrics.MetricNames;
-import org.apache.fluss.metrics.ThreadSafeSimpleCounter;
-import org.apache.fluss.metrics.groups.MetricGroup;
 import org.apache.fluss.server.coordinator.CoordinatorContext;
 import org.apache.fluss.server.coordinator.CoordinatorEventProcessor;
 import org.apache.fluss.server.coordinator.event.EventManager;
@@ -40,7 +36,6 @@ import org.apache.fluss.server.coordinator.rebalance.model.ClusterModel;
 import org.apache.fluss.server.coordinator.rebalance.model.RackModel;
 import org.apache.fluss.server.coordinator.rebalance.model.ServerModel;
 import org.apache.fluss.server.metadata.ServerInfo;
-import org.apache.fluss.server.metrics.group.CoordinatorMetricGroup;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
 import org.apache.fluss.server.zk.data.RebalanceTask;
@@ -97,10 +92,7 @@ public class RebalanceManager {
     private final EventManager eventManager;
     private final Clock clock;
     private final ScheduledExecutorService timeoutChecker;
-    private final MetricGroup metricGroup;
-    private final Counter rebalancesCompleted;
-    private final Counter rebalancesFailed;
-    private final Counter rebalancesCanceled;
+    private final RebalanceMetrics metrics;
 
     /** A queue of in progress table bucket to rebalance. */
     private final Queue<TableBucket> inProgressRebalanceTasksQueue = new ArrayDeque<>();
@@ -139,13 +131,13 @@ public class RebalanceManager {
             ZooKeeperClient zkClient,
             EventManager eventManager,
             Clock clock,
-            CoordinatorMetricGroup coordinatorMetricGroup) {
+            RebalanceMetrics metrics) {
         this(
                 eventProcessor,
                 zkClient,
                 eventManager,
                 clock,
-                coordinatorMetricGroup,
+                metrics,
                 // TODO: Reuse the CoordinatorServer shared scheduler for this lightweight
                 // coordinator timeout checker instead of creating a component-owned scheduler.
                 Executors.newScheduledThreadPool(
@@ -158,7 +150,7 @@ public class RebalanceManager {
             ZooKeeperClient zkClient,
             EventManager eventManager,
             Clock clock,
-            CoordinatorMetricGroup coordinatorMetricGroup,
+            RebalanceMetrics metrics,
             ScheduledExecutorService timeoutChecker) {
         this.eventProcessor = eventProcessor;
         this.zkClient = zkClient;
@@ -166,38 +158,24 @@ public class RebalanceManager {
         this.clock = clock == null ? SystemClock.getInstance() : clock;
         this.timeoutChecker = timeoutChecker;
         this.goalOptimizer = new GoalOptimizer();
-        this.metricGroup = coordinatorMetricGroup.getOrAddRebalanceMetricGroup();
-        this.rebalancesCompleted =
-                metricGroup.counter(
-                        MetricNames.REBALANCES_COMPLETED_TOTAL, new ThreadSafeSimpleCounter());
-        this.rebalancesFailed =
-                metricGroup.counter(
-                        MetricNames.REBALANCES_FAILED_TOTAL, new ThreadSafeSimpleCounter());
-        this.rebalancesCanceled =
-                metricGroup.counter(
-                        MetricNames.REBALANCES_CANCELED_TOTAL, new ThreadSafeSimpleCounter());
-        registerMetrics();
+        this.metrics = metrics;
     }
 
-    private void registerMetrics() {
-        metricGroup.gauge(
-                MetricNames.REBALANCE_IN_PROGRESS, () -> rebalanceStatus == REBALANCING ? 1 : 0);
-        metricGroup.gauge(MetricNames.REBALANCE_BUCKETS_PENDING, inProgressRebalanceTasks::size);
-        metricGroup.gauge(
-                MetricNames.REBALANCE_BUCKETS_COMPLETED, () -> finishedBucketCount(COMPLETED));
-        metricGroup.gauge(MetricNames.REBALANCE_BUCKETS_FAILED, () -> finishedBucketCount(FAILED));
-        metricGroup.gauge(
-                MetricNames.REBALANCE_BUCKETS_TIMED_OUT, () -> finishedBucketCount(TIMEOUT));
-        metricGroup.gauge(
-                MetricNames.REBALANCE_DURATION_MS,
-                () ->
-                        rebalanceStatus == REBALANCING
-                                ? Math.max(0L, clock.milliseconds() - registerTime)
-                                : 0L);
-        metricGroup.gauge(MetricNames.INFLIGHT_BUCKET_DURATION_MS, this::inflightBucketDurationMs);
+    long rebalanceInProgress() {
+        return rebalanceStatus == REBALANCING ? 1L : 0L;
     }
 
-    private long finishedBucketCount(RebalanceStatus status) {
+    long pendingBucketCount() {
+        return inProgressRebalanceTasks.size();
+    }
+
+    long rebalanceDurationMs() {
+        return rebalanceStatus == REBALANCING
+                ? Math.max(0L, clock.milliseconds() - registerTime)
+                : 0L;
+    }
+
+    long finishedBucketCount(RebalanceStatus status) {
         if (!bucketResultsAvailable) {
             return 0L;
         }
@@ -211,7 +189,7 @@ public class RebalanceManager {
                 .anyMatch(result -> result.status() == status);
     }
 
-    private long inflightBucketDurationMs() {
+    long inflightBucketDurationMs() {
         TableBucket bucket = inflightTaskBucket;
         long startMs = inflightTaskStartMs;
         return bucket == null || startMs < 0 ? 0L : Math.max(0L, clock.milliseconds() - startMs);
@@ -219,6 +197,7 @@ public class RebalanceManager {
 
     public void startup() {
         LOG.info("Start up rebalance manager.");
+        metrics.bind(this);
         initialize();
     }
 
@@ -386,7 +365,7 @@ public class RebalanceManager {
         }
 
         if (rebalanceStatus == REBALANCING) {
-            rebalancesCanceled.inc();
+            metrics.incRebalancesCanceled();
         }
         rebalanceStatus = CANCELED;
         inProgressRebalanceTasksQueue.clear();
@@ -477,9 +456,9 @@ public class RebalanceManager {
 
         if (bucketResultsAvailable) {
             if (hasFinishedBucket(FAILED) || hasFinishedBucket(TIMEOUT)) {
-                rebalancesFailed.inc();
+                metrics.incRebalancesFailed();
             } else {
-                rebalancesCompleted.inc();
+                metrics.incRebalancesCompleted();
             }
         }
         rebalanceStatus = COMPLETED;
@@ -593,8 +572,8 @@ public class RebalanceManager {
 
     public void close() {
         isClosed = true;
+        metrics.unbind(this);
         timeoutChecker.shutdownNow();
-        metricGroup.close();
     }
 
     @VisibleForTesting
