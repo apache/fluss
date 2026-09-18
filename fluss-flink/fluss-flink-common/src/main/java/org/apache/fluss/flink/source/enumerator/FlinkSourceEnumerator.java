@@ -87,6 +87,7 @@ import java.util.Set;
 import java.util.TreeMap;
 import java.util.stream.Collectors;
 
+import static org.apache.fluss.utils.PartitionUtils.HISTORICAL_PARTITION_VALUE;
 import static org.apache.fluss.utils.Preconditions.checkArgument;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 import static org.apache.fluss.utils.Preconditions.checkState;
@@ -846,9 +847,33 @@ public class FlinkSourceEnumerator
             return Collections.emptySet();
         }
         try {
-            List<PartitionInfo> partitionInfos = flussAdmin.listPartitionInfos(tablePath).get();
+            boolean includeHistoricalPartition =
+                    streaming
+                            && hasPrimaryKey
+                            && tableInfo.getTableConfig().isHistoricalPartitionEnabled();
+            List<PartitionInfo> partitionInfos =
+                    flussAdmin.listPartitionInfos(tablePath, includeHistoricalPartition).get();
+            List<PartitionInfo> historicalPartitions = Collections.emptyList();
+            if (includeHistoricalPartition) {
+                historicalPartitions =
+                        partitionInfos.stream()
+                                .filter(
+                                        partition ->
+                                                HISTORICAL_PARTITION_VALUE.equals(
+                                                        partition.getPartitionName()))
+                                .collect(Collectors.toList());
+                partitionInfos =
+                        partitionInfos.stream()
+                                .filter(
+                                        partition ->
+                                                !HISTORICAL_PARTITION_VALUE.equals(
+                                                        partition.getPartitionName()))
+                                .collect(Collectors.toList());
+            }
             partitionInfos = applyPartitionFilter(partitionInfos);
-            return new LinkedHashSet<>(partitionInfos);
+            Set<PartitionInfo> partitions = new LinkedHashSet<>(partitionInfos);
+            partitions.addAll(historicalPartitions);
+            return partitions;
         } catch (Exception e) {
             throw new FlinkRuntimeException(
                     String.format("Failed to list partitions for %s", tablePath),
@@ -1077,6 +1102,17 @@ public class FlinkSourceEnumerator
         List<SourceSplitBase> splits = new ArrayList<>();
         for (Partition partition : newPartitions) {
             String partitionName = partition.getPartitionName();
+            if (HISTORICAL_PARTITION_VALUE.equals(partitionName)) {
+                // Historical partitions have no KV snapshot. Without a lake snapshot, consume
+                // their retained changelog using the existing full-mode fallback.
+                splits.addAll(
+                        getLogSplit(
+                                partition.getPartitionId(),
+                                partitionName,
+                                OffsetsInitializer.earliest(),
+                                partition.getBucketCount()));
+                continue;
+            }
             splits.addAll(
                     getSnapshotAndLogSplits(
                             getLatestKvSnapshotsAndRegister(partitionName), partitionName));
