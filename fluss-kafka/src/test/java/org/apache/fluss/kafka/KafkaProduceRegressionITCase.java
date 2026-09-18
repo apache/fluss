@@ -21,9 +21,13 @@ import org.apache.fluss.client.Connection;
 import org.apache.fluss.client.ConnectionFactory;
 import org.apache.fluss.client.admin.Admin;
 import org.apache.fluss.client.table.Table;
+import org.apache.fluss.client.table.scanner.ScanRecord;
 import org.apache.fluss.client.table.scanner.log.LogScanner;
 import org.apache.fluss.client.table.scanner.log.ScanRecords;
 import org.apache.fluss.cluster.ServerNode;
+import org.apache.fluss.cluster.rebalance.RebalancePlanForBucket;
+import org.apache.fluss.cluster.rebalance.RebalanceProgress;
+import org.apache.fluss.cluster.rebalance.RebalanceStatus;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.cluster.AlterConfig;
@@ -32,9 +36,12 @@ import org.apache.fluss.kafka.format.KafkaDataFormat;
 import org.apache.fluss.metadata.DatabaseDescriptor;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.Schema;
+import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.server.coordinator.event.RecoverRebalanceEvent;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
+import org.apache.fluss.server.zk.data.RebalanceTask;
 import org.apache.fluss.types.DataTypes;
 
 import org.apache.kafka.clients.producer.KafkaProducer;
@@ -42,14 +49,20 @@ import org.apache.kafka.clients.producer.ProducerConfig;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.clients.producer.RecordMetadata;
 import org.apache.kafka.common.Uuid;
+import org.apache.kafka.common.compress.Compression;
 import org.apache.kafka.common.errors.NotEnoughReplicasException;
 import org.apache.kafka.common.message.MetadataResponseData.MetadataResponsePartition;
 import org.apache.kafka.common.message.MetadataResponseData.MetadataResponseTopic;
-import org.apache.kafka.common.protocol.ApiKeys;
+import org.apache.kafka.common.message.ProduceRequestData;
 import org.apache.kafka.common.protocol.Errors;
+import org.apache.kafka.common.record.MemoryRecords;
+import org.apache.kafka.common.record.SimpleRecord;
+import org.apache.kafka.common.requests.AbstractRequest;
 import org.apache.kafka.common.requests.AbstractResponse;
 import org.apache.kafka.common.requests.MetadataRequest;
 import org.apache.kafka.common.requests.MetadataResponse;
+import org.apache.kafka.common.requests.ProduceRequest;
+import org.apache.kafka.common.requests.ProduceResponse;
 import org.apache.kafka.common.requests.RequestHeader;
 import org.apache.kafka.common.requests.RequestUtils;
 import org.apache.kafka.common.serialization.ByteArraySerializer;
@@ -63,8 +76,10 @@ import java.net.Socket;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
@@ -91,12 +106,12 @@ class KafkaProduceRegressionITCase {
 
     @Test
     void testAdvertisedListenersAndTopicIdentityLifecycle() throws Exception {
-        String topic = "metadata_lifecycle";
-        TablePath path = TablePath.of(DATABASE, topic);
+        TablePath path = TablePath.of(DATABASE, "metadata_lifecycle");
+        String topic = path.toString();
         try (Connection connection = ConnectionFactory.createConnection(CLUSTER.getClientConfig());
                 Admin admin = connection.getAdmin()) {
             try {
-                createTable(admin, topic, 3);
+                createTable(admin, path, 3);
                 MetadataResponse initial = waitForTopic(topic);
                 Uuid initialId = initial.data().topics().find(topic).topicId();
                 assertThat(initialId).isNotEqualTo(Uuid.ZERO_UUID);
@@ -111,7 +126,7 @@ class KafkaProduceRegressionITCase {
                                 assertThat(fetchMetadata(topic).errors())
                                         .containsEntry(topic, Errors.UNKNOWN_TOPIC_OR_PARTITION));
 
-                createTable(admin, topic, 3);
+                createTable(admin, path, 3);
                 retry(
                         Duration.ofMinutes(1),
                         () -> {
@@ -130,12 +145,13 @@ class KafkaProduceRegressionITCase {
 
     @Test
     void testProducerRefreshesMetadataAfterLeaderFailover() throws Exception {
-        String topic = "metadata_failover";
+        TablePath path = TablePath.of(DATABASE, "metadata_failover");
+        String topic = path.toString();
         int stoppedLeader = -1;
         try (Connection connection = ConnectionFactory.createConnection(CLUSTER.getClientConfig());
                 Admin admin = connection.getAdmin()) {
             try {
-                createTable(admin, topic, 3);
+                createTable(admin, path, 3);
                 MetadataResponsePartition initial =
                         waitForTopic(topic).data().topics().find(topic).partitions().get(0);
                 stoppedLeader = initial.leaderId();
@@ -156,7 +172,7 @@ class KafkaProduceRegressionITCase {
                                 assertThat(partition.leaderEpoch())
                                         .isGreaterThan(initial.leaderEpoch());
                             });
-                    // Reuse the producer's cached route so the failed request triggers a refresh.
+                    // Reuse the same producer to verify routing recovers after leader disconnect.
                     // acks=1 permits data loss and offset reuse after failover; this verifies
                     // continued routing, not durability of the first acknowledged record.
                     assertThat(send(producer, topic, "after_failover").offset()).isNotNegative();
@@ -169,7 +185,104 @@ class KafkaProduceRegressionITCase {
                         CLUSTER.waitUntilAllGatewayHasSameMetadata();
                     }
                 } finally {
-                    admin.dropTable(TablePath.of(DATABASE, topic), true).get();
+                    admin.dropTable(path, true).get();
+                }
+            }
+        }
+    }
+
+    @Test
+    void testProducerRefreshesMetadataAfterOnlineLeaderChange() throws Exception {
+        TablePath path = TablePath.of(DATABASE, "metadata_online_leader_change");
+        String topic = path.toString();
+        String rebalanceId = "kafka-online-leader-change";
+        try (Connection connection = ConnectionFactory.createConnection(CLUSTER.getClientConfig());
+                Admin admin = connection.getAdmin()) {
+            try {
+                createTable(admin, path, 3);
+                TableBucket bucket =
+                        new TableBucket(admin.getTableInfo(path).get().getTableId(), 0);
+                MetadataResponsePartition initial =
+                        waitForTopic(topic).data().topics().find(topic).partitions().get(0);
+                int oldLeader = initial.leaderId();
+                int newLeader =
+                        initial.replicaNodes().stream()
+                                .filter(id -> id != oldLeader)
+                                .findFirst()
+                                .get();
+                List<ServerNode> nodes = CLUSTER.getTabletServerNodes("KAFKA");
+                ServerNode oldNode =
+                        nodes.stream().filter(node -> node.id() == oldLeader).findFirst().get();
+
+                // Keep this socket open across the handoff to verify the old leader stays
+                // reachable.
+                try (Socket oldLeaderSocket = connect(oldNode);
+                        KafkaProducer<byte[], byte[]> producer = producer("all", true)) {
+                    MetadataResponse before =
+                            (MetadataResponse) sendRequest(oldLeaderSocket, metadataRequest(topic));
+                    assertThat(before.data().topics().find(topic).partitions().get(0).leaderId())
+                            .isEqualTo(oldLeader);
+                    assertThat(send(producer, topic, "before_handoff").offset()).isZero();
+                    CLUSTER.waitUntilReplicaExpandToIsr(bucket, newLeader);
+                    double retriesBefore = producerMetric(producer, "record-retry-total");
+                    double disconnectsBefore = producerMetric(producer, "connection-close-total");
+
+                    rebalanceLeader(bucket, initial, newLeader, rebalanceId);
+                    retry(
+                            Duration.ofMinutes(1),
+                            () -> {
+                                assertThat(admin.listRebalanceProgress(rebalanceId).get())
+                                        .isPresent()
+                                        .get()
+                                        .extracting(RebalanceProgress::status)
+                                        .isEqualTo(RebalanceStatus.COMPLETED);
+                                MetadataResponsePartition updated =
+                                        fetchMetadata(topic)
+                                                .data()
+                                                .topics()
+                                                .find(topic)
+                                                .partitions()
+                                                .get(0);
+                                assertThat(updated.errorCode()).isEqualTo(Errors.NONE.code());
+                                assertThat(updated.leaderId()).isEqualTo(newLeader);
+                                assertThat(updated.leaderEpoch())
+                                        .isGreaterThan(initial.leaderEpoch());
+                            });
+                    CLUSTER.waitAndGetFollowerReplica(bucket, oldLeader);
+                    assertThat(CLUSTER.getTabletServerNodes("KAFKA"))
+                            .containsExactlyInAnyOrderElementsOf(nodes);
+
+                    ProduceResponse rejected =
+                            (ProduceResponse)
+                                    sendRequest(oldLeaderSocket, produceRequest(topic, "rejected"));
+                    assertThat(rejected.data().responses().find(topic).partitionResponses())
+                            .singleElement()
+                            .satisfies(
+                                    partition -> {
+                                        assertThat(partition.index()).isZero();
+                                        assertThat(partition.errorCode())
+                                                .isEqualTo(Errors.NOT_LEADER_OR_FOLLOWER.code());
+                                        assertThat(partition.baseOffset()).isEqualTo(-1L);
+                                    });
+
+                    // partitionsFor uses the already populated producer cache. Separate raw
+                    // Metadata requests above must not refresh this route before the next send.
+                    assertThat(producer.partitionsFor(topic).get(0).leader().id())
+                            .isEqualTo(oldLeader);
+                    assertThat(send(producer, topic, "after_handoff").offset()).isEqualTo(1L);
+                    assertThat(producerMetric(producer, "record-retry-total"))
+                            .isGreaterThan(retriesBefore);
+                    assertThat(producerMetric(producer, "connection-close-total"))
+                            .isEqualTo(disconnectsBefore);
+                    assertThat(producer.partitionsFor(topic).get(0).leader().id())
+                            .isEqualTo(newLeader);
+                    assertValues(connection, path, "before_handoff", "after_handoff");
+                }
+            } finally {
+                try {
+                    admin.cancelRebalance(rebalanceId).get();
+                } finally {
+                    admin.dropTable(path, true).get();
                 }
             }
         }
@@ -177,38 +290,39 @@ class KafkaProduceRegressionITCase {
 
     @Test
     void testClusterMinIsrPolicyAndDynamicReload() throws Exception {
-        String replicated = "acks_all_replicated";
-        String underReplicated = "acks_all_under_replicated";
+        TablePath replicated = TablePath.of(DATABASE, "acks_all_replicated");
+        TablePath underReplicated = TablePath.of(DATABASE, "acks_all_under_replicated");
         try (Connection connection = ConnectionFactory.createConnection(CLUSTER.getClientConfig());
                 Admin admin = connection.getAdmin()) {
             try {
                 createTable(admin, replicated, 3);
                 createTable(admin, underReplicated, 1);
                 try (KafkaProducer<byte[], byte[]> producer = producer("all", false)) {
-                    assertThat(send(producer, replicated, "replicated").offset()).isZero();
-                    assertThatThrownBy(() -> send(producer, underReplicated, "rejected"))
+                    assertThat(send(producer, replicated.toString(), "replicated").offset())
+                            .isZero();
+                    assertThatThrownBy(() -> send(producer, underReplicated.toString(), "rejected"))
                             .isInstanceOf(ExecutionException.class)
                             .hasCauseInstanceOf(NotEnoughReplicasException.class);
 
                     setMinIsr(admin, 1);
-                    assertThat(send(producer, underReplicated, "accepted").offset()).isZero();
+                    assertThat(send(producer, underReplicated.toString(), "accepted").offset())
+                            .isZero();
                     // Offset zero and native readback also prove the rejected write was not stored.
-                    assertSingleValue(connection, underReplicated, "accepted");
+                    assertValues(connection, underReplicated, "accepted");
                 }
             } finally {
                 try {
                     setMinIsr(admin, 2);
                 } finally {
-                    admin.dropTable(TablePath.of(DATABASE, replicated), true).get();
-                    admin.dropTable(TablePath.of(DATABASE, underReplicated), true).get();
+                    admin.dropTable(replicated, true).get();
+                    admin.dropTable(underReplicated, true).get();
                 }
             }
         }
     }
 
-    private static void createTable(Admin admin, String topic, int replicas) throws Exception {
-        admin.createDatabase(DATABASE, DatabaseDescriptor.EMPTY, true).get();
-        TablePath path = TablePath.of(DATABASE, topic);
+    private static void createTable(Admin admin, TablePath path, int replicas) throws Exception {
+        admin.createDatabase(path.getDatabaseName(), DatabaseDescriptor.EMPTY, true).get();
         admin.createTable(
                         path,
                         TableDescriptor.builder()
@@ -246,18 +360,22 @@ class KafkaProduceRegressionITCase {
                                                         .isEqualTo(minIsr)));
     }
 
-    private static void assertSingleValue(Connection connection, String topic, String expected)
+    private static void assertValues(Connection connection, TablePath path, String... expected)
             throws Exception {
-        try (Table table = connection.getTable(TablePath.of(DATABASE, topic));
+        try (Table table = connection.getTable(path);
                 LogScanner scanner = table.newScan().createLogScanner()) {
             scanner.subscribeFromBeginning(0);
+            List<String> values = new ArrayList<>();
             retry(
                     Duration.ofSeconds(30),
                     () -> {
                         ScanRecords records = scanner.poll(Duration.ofSeconds(1));
-                        assertThat(records).hasSize(1);
-                        assertThat(records.iterator().next().getRow().getBytes(0))
-                                .isEqualTo(expected.getBytes(StandardCharsets.UTF_8));
+                        for (ScanRecord record : records) {
+                            values.add(
+                                    new String(
+                                            record.getRow().getBytes(0), StandardCharsets.UTF_8));
+                        }
+                        assertThat(values).containsExactly(expected);
                     });
         }
     }
@@ -297,33 +415,106 @@ class KafkaProduceRegressionITCase {
     }
 
     private static MetadataResponse fetchMetadata(String topic) throws Exception {
-        MetadataRequest request =
-                new MetadataRequest.Builder(Collections.singletonList(topic), false)
-                        .build(METADATA_VERSION);
+        try (Socket socket = connect(CLUSTER.getTabletServerNodes("KAFKA").get(0))) {
+            return (MetadataResponse) sendRequest(socket, metadataRequest(topic));
+        }
+    }
+
+    private static MetadataRequest metadataRequest(String topic) {
+        return new MetadataRequest.Builder(Collections.singletonList(topic), false)
+                .build(METADATA_VERSION);
+    }
+
+    private static ProduceRequest produceRequest(String topic, String value) {
+        MemoryRecords records =
+                MemoryRecords.withRecords(
+                        Compression.NONE, new SimpleRecord(value.getBytes(StandardCharsets.UTF_8)));
+        ProduceRequestData.TopicProduceData topicData =
+                new ProduceRequestData.TopicProduceData()
+                        .setName(topic)
+                        .setPartitionData(
+                                Collections.singletonList(
+                                        new ProduceRequestData.PartitionProduceData()
+                                                .setIndex(0)
+                                                .setRecords(records)));
+        return new ProduceRequest(
+                new ProduceRequestData()
+                        .setAcks((short) 1)
+                        .setTimeoutMs(5000)
+                        .setTopicData(
+                                new ProduceRequestData.TopicProduceDataCollection(
+                                        Collections.singletonList(topicData).iterator())),
+                (short) 11);
+    }
+
+    private static Socket connect(ServerNode node) throws Exception {
+        Socket socket = new Socket();
+        try {
+            socket.connect(new InetSocketAddress(node.host(), node.port()), 5000);
+            socket.setSoTimeout(5000);
+            return socket;
+        } catch (Exception failure) {
+            socket.close();
+            throw failure;
+        }
+    }
+
+    private static AbstractResponse sendRequest(Socket socket, AbstractRequest request)
+            throws Exception {
         RequestHeader header =
-                new RequestHeader(ApiKeys.METADATA, METADATA_VERSION, "regression-test", 1);
+                new RequestHeader(request.apiKey(), request.version(), "regression-test", 1);
         ByteBuffer serialized =
                 RequestUtils.serialize(
                         header.data(), header.headerVersion(), request.data(), request.version());
         byte[] requestBytes = new byte[serialized.remaining()];
         serialized.get(requestBytes);
-        ServerNode node = CLUSTER.getTabletServerNodes("KAFKA").get(0);
-        try (Socket socket = new Socket()) {
-            socket.connect(new InetSocketAddress(node.host(), node.port()), 5000);
-            socket.setSoTimeout(5000);
-            try (DataOutputStream output = new DataOutputStream(socket.getOutputStream());
-                    DataInputStream input = new DataInputStream(socket.getInputStream())) {
-                output.writeInt(requestBytes.length);
-                output.write(requestBytes);
-                output.flush();
-                int size = input.readInt();
-                assertThat(size).isBetween(1, 1024 * 1024);
-                byte[] response = new byte[size];
-                input.readFully(response);
-                return (MetadataResponse)
-                        AbstractResponse.parseResponse(ByteBuffer.wrap(response), header);
-            }
-        }
+        // The caller owns the socket and may send another request on the same connection.
+        DataOutputStream output = new DataOutputStream(socket.getOutputStream());
+        DataInputStream input = new DataInputStream(socket.getInputStream());
+        output.writeInt(requestBytes.length);
+        output.write(requestBytes);
+        output.flush();
+        int size = input.readInt();
+        assertThat(size).isBetween(1, 1024 * 1024);
+        byte[] response = new byte[size];
+        input.readFully(response);
+        return AbstractResponse.parseResponse(ByteBuffer.wrap(response), header);
+    }
+
+    private static void rebalanceLeader(
+            TableBucket bucket,
+            MetadataResponsePartition initial,
+            int newLeader,
+            String rebalanceId)
+            throws Exception {
+        List<Integer> replicas = new ArrayList<>(initial.replicaNodes());
+        Collections.swap(replicas, 0, replicas.indexOf(newLeader));
+        RebalancePlanForBucket plan =
+                new RebalancePlanForBucket(
+                        bucket, initial.leaderId(), newLeader, initial.replicaNodes(), replicas);
+        RebalanceTask task =
+                new RebalanceTask(
+                        rebalanceId,
+                        RebalanceStatus.NOT_STARTED,
+                        Collections.singletonMap(bucket, plan));
+        // Submit a deterministic leader-only plan through the coordinator event thread.
+        // All replicas and their client connections remain online during the real handoff.
+        CLUSTER.getZooKeeperClient().registerRebalanceTask(task);
+        CLUSTER.getCoordinatorServer()
+                .getCoordinatorEventProcessor()
+                .getCoordinatorEventManager()
+                .put(new RecoverRebalanceEvent(task));
+    }
+
+    private static double producerMetric(KafkaProducer<byte[], byte[]> producer, String name) {
+        return producer.metrics().entrySet().stream()
+                .filter(
+                        entry ->
+                                entry.getKey().group().equals("producer-metrics")
+                                        && entry.getKey().name().equals(name))
+                .mapToDouble(entry -> ((Number) entry.getValue().metricValue()).doubleValue())
+                .findFirst()
+                .getAsDouble();
     }
 
     private static RecordMetadata send(
@@ -350,13 +541,13 @@ class KafkaProduceRegressionITCase {
         config.put(ProducerConfig.REQUEST_TIMEOUT_MS_CONFIG, 5000);
         config.put(ProducerConfig.DELIVERY_TIMEOUT_MS_CONFIG, 30000);
         config.put(ProducerConfig.MAX_BLOCK_MS_CONFIG, 30000);
+        config.put(ProducerConfig.METADATA_MAX_AGE_CONFIG, (int) Duration.ofHours(1).toMillis());
         return new KafkaProducer<>(config);
     }
 
     private static Configuration clusterConfig() {
         Configuration config = new Configuration();
         config.set(ConfigOptions.KAFKA_ENABLED, true);
-        config.set(ConfigOptions.KAFKA_DATABASE, DATABASE);
         config.set(ConfigOptions.DEFAULT_REPLICATION_FACTOR, 3);
         config.set(ConfigOptions.LOG_REPLICA_MIN_IN_SYNC_REPLICAS_NUMBER, 2);
         return config;
