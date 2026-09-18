@@ -20,7 +20,7 @@
 apiVersion: policy/v1
 kind: PodDisruptionBudget
 metadata:
-  name: coordinator-server
+  name: {{ include "fluss.coordinator.fullname" . }}
   labels:
   {{- include "fluss.labels" . | nindent 4 }}
 spec:
