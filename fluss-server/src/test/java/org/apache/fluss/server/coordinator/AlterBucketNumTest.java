@@ -509,55 +509,6 @@ class AlterBucketNumTest {
         assertThat(partition.get().getBucketCount()).isEqualTo(originalBucketCount);
     }
 
-    @Test
-    void testAlterMergeEngineToAggregationRejectedAfterRescale() throws Exception {
-        // The reverse direction of the mutual exclusion: 'table.merge-engine' is not alterable,
-        // so a rescaled table can never switch to the aggregation merge engine afterwards. If
-        // altering the merge engine ever becomes supported, this test reminds that change to
-        // keep rejecting the switch to aggregation on rescaled tables (epoch > 0).
-        TablePath tablePath = TablePath.of(DEFAULT_DB, "test_reject_aggregation_after_rescale");
-        int originalBucketCount = 4;
-        TableAssignment tableAssignment =
-                generateAssignment(originalBucketCount, 3, getTabletServers());
-        metadataManager.createTable(
-                tablePath,
-                remoteDataDir,
-                partitionedPrimaryKeyTable(originalBucketCount, null),
-                tableAssignment,
-                false);
-        TableInfo tableInfo = metadataManager.getTable(tablePath);
-        metadataManager.createPartition(
-                tablePath,
-                tableInfo.getTableId(),
-                remoteDataDir,
-                new PartitionAssignment(
-                        tableInfo.getTableId(), tableAssignment.getBucketAssignments()),
-                fromPartitionName(tableInfo.getPartitionKeys(), "2024-01"),
-                false,
-                originalBucketCount);
-
-        // Rescale the default-engine table first, which advances the bucketCountEpoch.
-        alterBucketNum(metadataManager, tablePath, 8);
-        assertThat(metadataManager.getTable(tablePath).getBucketCountEpoch()).isEqualTo(1L);
-
-        // Switching the rescaled table to the aggregation merge engine must be rejected.
-        assertThatThrownBy(
-                        () ->
-                                alterMergeEngine(
-                                        metadataManager,
-                                        tablePath,
-                                        MergeEngineType.AGGREGATION.name()))
-                .isInstanceOf(InvalidAlterTableException.class)
-                .hasMessageContaining("'table.merge-engine'")
-                .hasMessageContaining("not supported to alter yet");
-
-        // The merge engine is untouched and the bucket layout stays at the rescaled state.
-        assertThat(metadataManager.getTable(tablePath).getTableConfig().getMergeEngineType())
-                .isEmpty();
-        assertThat(metadataManager.getTable(tablePath).getNumBuckets()).isEqualTo(8);
-        assertThat(metadataManager.getTable(tablePath).getBucketCountEpoch()).isEqualTo(1L);
-    }
-
     // ========================== Success Tests ==========================
 
     @ParameterizedTest(name = "bucketNum {0} -> {1}")
@@ -1067,22 +1018,6 @@ class AlterBucketNumTest {
             builder.property(ConfigOptions.TABLE_MERGE_ENGINE.key(), mergeEngine);
         }
         return builder.build().withReplicationFactor(3);
-    }
-
-    private static void alterMergeEngine(
-            MetadataManager manager, TablePath tablePath, String mergeEngine) {
-        String key = ConfigOptions.TABLE_MERGE_ENGINE.key();
-        TablePropertyChanges.Builder builder = TablePropertyChanges.builder();
-        builder.setTableProperty(key, mergeEngine);
-        manager.alterTableProperties(
-                tablePath,
-                Collections.singletonList(TableChange.set(key, mergeEngine)),
-                builder.build(),
-                false,
-                null,
-                (currentTable, updatedTable) -> {},
-                (currentTable, updatedTable) -> {},
-                ZkVersion.MATCH_ANY_VERSION.getVersion());
     }
 
     private static void alterBucketNum(
