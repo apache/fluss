@@ -452,15 +452,18 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
 #### Rebalance Metrics
 
 Rebalance metrics use the `coordinator` scope with no additional infix or per-table/per-bucket labels.
-They are registered only on the active coordinator and removed when it loses leadership.
-Gauges describe the most recently registered rebalance. Finished bucket counts include only outcomes
-observed in the current coordinator leader term, remain available after completion or cancellation,
-and are cleared when the next rebalance is registered. Recovering a previously finished rebalance
-leaves these counts at 0 because per-bucket outcomes are not persisted. These zeros indicate no
+They are registered when the coordinator server starts and remain registered across leadership changes.
+Gauges report 0 on standby. On the active coordinator, they describe the most recently registered
+rebalance. Finished bucket counts include only outcomes observed in the current leader term, remain
+available after completion or cancellation within that term, and are cleared when the next rebalance
+is registered. Recovering a previously finished rebalance leaves these counts at 0 because per-bucket
+outcomes are not persisted. These zeros indicate no
 outcomes observed by this leader, not that the historical rebalance had no failures or timeouts.
-Counters accumulate across rebalances within a coordinator leader term and reset on failover.
+Counters accumulate across rebalances and leader terms within the same coordinator process. They
+retain their values on standby and reset when the coordinator server restarts, not on leadership
+changes. These are per-process counts, not a cluster-wide total transferred between coordinators.
 Recovering a previously finished rebalance does not increment the counters; a recovered unfinished
-rebalance is counted when it finishes in the new leader term.
+rebalance is counted by the coordinator that observes its completion.
 
 <table class="table table-bordered">
   <thead>
@@ -508,17 +511,17 @@ rebalance is counted when it finishes in the new leader term.
     </tr>
     <tr>
       <td>rebalancesCompletedTotal</td>
-      <td>Number of rebalances that finished without failed or timed-out buckets, including empty plans.</td>
+      <td>Number of rebalances observed by this coordinator process to finish without failed or timed-out buckets, including empty plans, across all its leader terms.</td>
       <td>Counter</td>
     </tr>
     <tr>
       <td>rebalancesFailedTotal</td>
-      <td>Number of rebalances that finished with at least one failed or timed-out bucket. This is an outcome metric; the existing Admin API can still report the rebalance status as <code>COMPLETED</code> because execution has finished.</td>
+      <td>Number of rebalances observed by this coordinator process to finish with at least one failed or timed-out bucket, across all its leader terms. This is an outcome metric; the existing Admin API can still report the rebalance status as <code>COMPLETED</code> because execution has finished.</td>
       <td>Counter</td>
     </tr>
     <tr>
       <td>rebalancesCanceledTotal</td>
-      <td>Number of running rebalances canceled on this leader. Repeated cancellation and cancellation when idle do not increment it.</td>
+      <td>Number of running rebalances canceled by this coordinator process across all its leader terms. Repeated cancellation and cancellation when idle do not increment it.</td>
       <td>Counter</td>
     </tr>
   </tbody>
