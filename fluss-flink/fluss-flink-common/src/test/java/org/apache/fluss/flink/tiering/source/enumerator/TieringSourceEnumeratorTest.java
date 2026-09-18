@@ -35,6 +35,8 @@ import org.apache.fluss.metadata.TableChange;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.rpc.messages.CommitLakeTableSnapshotRequest;
+import org.apache.fluss.rpc.messages.LakeTieringHeartbeatRequest;
+import org.apache.fluss.rpc.messages.LakeTieringHeartbeatResponse;
 import org.apache.fluss.rpc.messages.PbLakeTableOffsetForBucket;
 import org.apache.fluss.rpc.messages.PbLakeTableSnapshotInfo;
 
@@ -63,7 +65,9 @@ import static org.apache.fluss.client.table.scanner.log.LogScanner.EARLIEST_OFFS
 import static org.apache.fluss.config.ConfigOptions.TABLE_AUTO_PARTITION_NUM_PRECREATE;
 import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.catchThrowableOfType;
 
 /** Unit tests for {@link TieringSourceEnumerator} and {@link TieringSplitGenerator}. */
 class TieringSourceEnumeratorTest extends TieringTestBase {
@@ -826,6 +830,39 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
                             new NetworkException("coordinator disconnected"));
             assertThatThrownBy(() -> enumerator.generateAndAssignSplits(null, networkError))
                     .isSameAs(networkError);
+        }
+    }
+
+    @Test
+    void testCoordinatorEpochChangeTriggersFailover() throws Exception {
+        try (FlussMockSplitEnumeratorContext<TieringSplit> context =
+                        new FlussMockSplitEnumeratorContext<>(1);
+                TieringSourceEnumerator enumerator =
+                        createTieringSourceEnumerator(flussConf, context)) {
+            enumerator.start();
+
+            int coordinatorEpoch =
+                    coordinatorGateway
+                            .lakeTieringHeartbeat(new LakeTieringHeartbeatRequest())
+                            .get()
+                            .getCoordinatorEpoch();
+            LakeTieringHeartbeatResponse sameEpochResponse =
+                    new LakeTieringHeartbeatResponse().setCoordinatorEpoch(coordinatorEpoch);
+            assertThatCode(() -> enumerator.checkCoordinatorEpoch(sameEpochResponse))
+                    .doesNotThrowAnyException();
+
+            int newCoordinatorEpoch = coordinatorEpoch + 1;
+            LakeTieringHeartbeatResponse newEpochResponse =
+                    new LakeTieringHeartbeatResponse().setCoordinatorEpoch(newCoordinatorEpoch);
+            FlinkRuntimeException epochChangeError =
+                    catchThrowableOfType(
+                            () -> enumerator.checkCoordinatorEpoch(newEpochResponse),
+                            FlinkRuntimeException.class);
+            assertThat(epochChangeError)
+                    .hasMessageContaining(String.valueOf(coordinatorEpoch))
+                    .hasMessageContaining(String.valueOf(newCoordinatorEpoch));
+            assertThatThrownBy(() -> enumerator.generateAndAssignSplits(null, epochChangeError))
+                    .isSameAs(epochChangeError);
         }
     }
 

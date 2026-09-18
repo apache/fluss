@@ -419,6 +419,7 @@ public class TieringSourceEnumerator
                     waitHeartbeatResponse(
                             coordinatorGateway.lakeTieringHeartbeat(
                                     heartBeatWithRequestNewTieringTable(tieringHeartbeatRequest)));
+            checkCoordinatorEpoch(heartbeatResponse);
             if (heartbeatResponse.hasTieringTable()) {
                 PbLakeTieringTableInfo tieringTable = heartbeatResponse.getTieringTable();
                 lakeTieringInfo =
@@ -435,7 +436,10 @@ public class TieringSourceEnumerator
             }
         } else {
             // report heartbeat to fluss coordinator
-            waitHeartbeatResponse(coordinatorGateway.lakeTieringHeartbeat(tieringHeartbeatRequest));
+            LakeTieringHeartbeatResponse heartbeatResponse =
+                    waitHeartbeatResponse(
+                            coordinatorGateway.lakeTieringHeartbeat(tieringHeartbeatRequest));
+            checkCoordinatorEpoch(heartbeatResponse);
         }
 
         // if come to here, we can remove currentFinishedTables/failedTableEpochs to avoid send
@@ -443,6 +447,17 @@ public class TieringSourceEnumerator
         currentFinishedTables.forEach(finishedTables::remove);
         currentFailedTableEpochs.forEach(failedTableEpochs::remove);
         return lakeTieringInfo;
+    }
+
+    @VisibleForTesting
+    void checkCoordinatorEpoch(LakeTieringHeartbeatResponse heartbeatResponse) {
+        int currentCoordinatorEpoch = heartbeatResponse.getCoordinatorEpoch();
+        if (currentCoordinatorEpoch != flussCoordinatorEpoch) {
+            throw new FlinkRuntimeException(
+                    String.format(
+                            "Fluss Coordinator epoch changed from %d to %d. Triggering Tiering job failover.",
+                            flussCoordinatorEpoch, currentCoordinatorEpoch));
+        }
     }
 
     private void generateTieringSplits(Tuple3<Long, Long, TablePath> tieringTable)
