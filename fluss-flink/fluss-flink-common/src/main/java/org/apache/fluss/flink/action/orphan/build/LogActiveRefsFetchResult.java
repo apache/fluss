@@ -18,6 +18,7 @@
 package org.apache.fluss.flink.action.orphan.build;
 
 import org.apache.fluss.annotation.Internal;
+import org.apache.fluss.flink.action.orphan.RpcErrorClassifier;
 import org.apache.fluss.flink.action.orphan.rule.BucketActiveRefs;
 
 import javax.annotation.Nullable;
@@ -56,9 +57,9 @@ public final class LogActiveRefsFetchResult {
         READ_FAILED,
         /**
          * Table metadata enumerates the bucket, but the {@code LIST_REMOTE_LOG_MANIFESTS} response
-         * did not include an entry for it — typically because the bucket has not yet committed any
-         * remote manifest (e.g. log tiering has not produced one), or an occasional server-side
-         * underreport (e.g. partial ZK read). Cleanup has nothing to clean for this bucket.
+         * did not include an entry for it. A successful RPC means the bucket has not committed a
+         * remote manifest at that instant. Physical files may nevertheless exist when a first
+         * tiering attempt uploaded files but failed before publishing its manifest.
          */
         NOT_LISTED
     }
@@ -84,6 +85,14 @@ public final class LogActiveRefsFetchResult {
                 RpcListStatus.listFailed(reason), Collections.emptyMap(), Collections.emptyMap());
     }
 
+    static LogActiveRefsFetchResult listFailed(
+            String reason, RpcErrorClassifier.Category category, Throwable cause) {
+        return new LogActiveRefsFetchResult(
+                RpcListStatus.listFailed(reason, category, cause),
+                Collections.emptyMap(),
+                Collections.emptyMap());
+    }
+
     /**
      * Result for a target whose {@code LIST_REMOTE_LOG_MANIFESTS} RPC succeeded. {@code resolved}
      * carries the per-bucket active refs for RESOLVED buckets; {@code readFailures} carries the
@@ -104,6 +113,16 @@ public final class LogActiveRefsFetchResult {
     @Nullable
     public String listFailureReason() {
         return list.reason();
+    }
+
+    @Nullable
+    public RpcErrorClassifier.Category listFailureCategory() {
+        return list.category();
+    }
+
+    @Nullable
+    public Throwable listFailureCause() {
+        return list.cause();
     }
 
     /**

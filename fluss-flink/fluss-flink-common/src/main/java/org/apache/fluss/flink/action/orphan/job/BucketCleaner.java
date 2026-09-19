@@ -19,24 +19,23 @@ package org.apache.fluss.flink.action.orphan.job;
 
 import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.flink.action.orphan.audit.AuditLogger;
+import org.apache.fluss.flink.action.orphan.fs.FileSystemProbe;
 import org.apache.fluss.flink.action.orphan.fs.SafeDeleter;
 import org.apache.fluss.flink.action.orphan.rule.BucketActiveRefs;
 import org.apache.fluss.flink.action.orphan.rule.Decision;
 import org.apache.fluss.flink.action.orphan.rule.FileMeta;
 import org.apache.fluss.flink.action.orphan.rule.FileRule;
+import org.apache.fluss.flink.action.orphan.rule.MtimePolicy;
 import org.apache.fluss.flink.action.orphan.rule.RuleDispatcher;
 import org.apache.fluss.fs.FileStatus;
 import org.apache.fluss.fs.FileSystem;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.shaded.guava32.com.google.common.util.concurrent.RateLimiter;
-import org.apache.fluss.utils.FlussPaths;
-
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.util.ArrayDeque;
 import java.util.Deque;
+import java.util.Optional;
 
 /**
  * Per-bucket orphan cleanup for live buckets: walks the provided bucket directories and dispatches
@@ -48,13 +47,12 @@ import java.util.Deque;
 @Internal
 public final class BucketCleaner {
 
-    private static final Logger LOG = LoggerFactory.getLogger(BucketCleaner.class);
-
     private final RuleDispatcher dispatcher;
     private final SafeDeleter safeDeleter;
     private final AuditLogger audit;
     private final long cutoffMillis;
     private final RateLimiter remoteFsOpRateLimiter;
+    private final boolean dryRun;
 
     public BucketCleaner(
             RuleDispatcher dispatcher,
@@ -62,11 +60,22 @@ public final class BucketCleaner {
             AuditLogger audit,
             long cutoffMillis,
             RateLimiter remoteFsOpRateLimiter) {
+        this(dispatcher, safeDeleter, audit, cutoffMillis, remoteFsOpRateLimiter, false);
+    }
+
+    public BucketCleaner(
+            RuleDispatcher dispatcher,
+            SafeDeleter safeDeleter,
+            AuditLogger audit,
+            long cutoffMillis,
+            RateLimiter remoteFsOpRateLimiter,
+            boolean dryRun) {
         this.dispatcher = dispatcher;
         this.safeDeleter = safeDeleter;
         this.audit = audit;
         this.cutoffMillis = cutoffMillis;
         this.remoteFsOpRateLimiter = remoteFsOpRateLimiter;
+        this.dryRun = dryRun;
     }
 
     /** Cleans one bucket's log/kv subtrees using the caller-supplied active reference set. */
@@ -84,68 +93,84 @@ public final class BucketCleaner {
     private void walkAndCleanDir(FsPath root, BucketActiveRefs activeRefs, BucketCleanStats stats)
             throws IOException {
         FileSystem fs = root.getFileSystem();
-        remoteFsOpRateLimiter.acquire();
-        if (!fs.exists(root)) {
-            return;
-        }
         Deque<DirVisit> stack = new ArrayDeque<DirVisit>();
-        stack.push(new DirVisit(root, false, false));
+        stack.push(new DirVisit(root, false, false, null, true));
         while (!stack.isEmpty()) {
             DirVisit visit = stack.pop();
             if (visit.postOrder) {
-                if (visit.oldEnough && safeDeleter.deleteEmptyDir(visit.dir)) {
-                    stats.deleted++;
-                    stats.emptyDirsRemoved++;
+                if (visit.oldEnough && !visit.hasRemainingChild) {
+                    stats.plannedDirs++;
+                    if (dryRun) {
+                        audit.logWouldDeleteDir(visit.dir);
+                    } else if (safeDeleter.deleteEmptyDir(visit.dir)) {
+                        stats.emptyDirsRemoved++;
+                    } else {
+                        stats.deleteFailures++;
+                        visit.markParentRemaining();
+                    }
+                } else {
+                    visit.markParentRemaining();
                 }
                 continue;
             }
-            FileStatus[] children;
-            try {
-                remoteFsOpRateLimiter.acquire();
-                children = fs.listStatus(visit.dir);
-            } catch (IOException e) {
-                LOG.warn("Failed to list directory: {}", visit.dir, e);
+            Optional<FileStatus[]> listing =
+                    FileSystemProbe.listStatus(fs, visit.dir, remoteFsOpRateLimiter);
+            if (!listing.isPresent()) {
+                stats.rules.recordMissingDirectory();
+                visit.markParentRemaining();
                 continue;
             }
-            if (children == null) {
-                continue;
-            }
-            if (!visit.dir.toString().equals(root.toString())) {
-                stack.push(new DirVisit(visit.dir, true, visit.oldEnough));
+            FileStatus[] children = listing.get();
+            if (!visit.root) {
+                visit.postOrder = true;
+                stack.push(visit);
             }
             for (FileStatus child : children) {
                 FsPath childPath = child.getPath();
                 if (child.isDir()) {
-                    if (FlussPaths.REMOTE_KV_SNAPSHOT_SHARED_DIR.equals(childPath.getName())) {
-                        continue;
-                    }
+                    stats.rules.recordDirectoryMtime(child.getModificationTime());
                     stack.push(
                             new DirVisit(
-                                    childPath, false, child.getModificationTime() < cutoffMillis));
+                                    childPath,
+                                    false,
+                                    MtimePolicy.evaluateInactiveFile(
+                                                    child.getModificationTime(), cutoffMillis)
+                                            == Decision.DELETE,
+                                    visit,
+                                    false));
                     continue;
                 }
                 FileMeta meta =
                         new FileMeta(childPath, child.getLen(), child.getModificationTime());
                 FileRule rule = dispatcher.dispatch(meta);
                 Decision decision = rule.evaluate(meta, activeRefs, cutoffMillis);
-                stats.scanned++;
+                stats.scannedFiles++;
+                stats.rules.record(rule.id(), decision, meta.size());
                 switch (decision) {
                     case DELETE:
+                        stats.plannedFiles++;
+                        stats.plannedBytes += meta.size();
                         if (safeDeleter.deleteFile(meta.path(), decision, rule.id())) {
-                            stats.deleted++;
-                            stats.bytesReclaimed += meta.size();
+                            if (!dryRun) {
+                                stats.deletedFiles++;
+                                stats.bytesReclaimed += meta.size();
+                            }
                         } else {
                             stats.deleteFailures++;
+                            visit.hasRemainingChild = true;
                         }
                         break;
                     case SKIP_UNKNOWN:
                         audit.logSkipUnknown(meta.path(), rule.id());
+                        visit.hasRemainingChild = true;
                         break;
                     case KEEP_ACTIVE:
                     case DEFER:
+                        visit.hasRemainingChild = true;
                         // no-op
                         break;
                     default:
+                        visit.hasRemainingChild = true;
                         // unknown decision — skip defensively
                         break;
                 }
@@ -155,8 +180,12 @@ public final class BucketCleaner {
 
     /** Per-bucket cleanup statistics. */
     public static final class BucketCleanStats {
-        public long scanned;
-        public long deleted;
+        public final RuleSummary rules = new RuleSummary();
+        public long scannedFiles;
+        public long plannedFiles;
+        public long plannedDirs;
+        public long plannedBytes;
+        public long deletedFiles;
         public long emptyDirsRemoved;
         public long deleteFailures;
         public long bytesReclaimed;
@@ -168,13 +197,25 @@ public final class BucketCleaner {
 
     private static final class DirVisit {
         private final FsPath dir;
-        private final boolean postOrder;
+        private boolean postOrder;
         private final boolean oldEnough;
+        private final DirVisit parent;
+        private final boolean root;
+        private boolean hasRemainingChild;
 
-        private DirVisit(FsPath dir, boolean postOrder, boolean oldEnough) {
+        private DirVisit(
+                FsPath dir, boolean postOrder, boolean oldEnough, DirVisit parent, boolean root) {
             this.dir = dir;
             this.postOrder = postOrder;
             this.oldEnough = oldEnough;
+            this.parent = parent;
+            this.root = root;
+        }
+
+        private void markParentRemaining() {
+            if (parent != null) {
+                parent.hasRemainingChild = true;
+            }
         }
     }
 }

@@ -24,6 +24,7 @@ import org.apache.fluss.utils.FlussPaths;
 import java.util.Arrays;
 import java.util.HashSet;
 import java.util.Set;
+import java.util.regex.Pattern;
 
 /**
  * Rule for files under a {@code snap-<id>/} KV snapshot directory.
@@ -44,6 +45,11 @@ public final class KvSnapshotFileRule implements FileRule {
 
     private static final Set<String> KNOWN_FIXED_NAMES =
             new HashSet<String>(Arrays.asList("_METADATA", "CURRENT", "LOG", "IDENTITY"));
+
+    // SnapshotLocation uploads every remote KV file under a generated UUID name.
+    private static final Pattern REMOTE_FILE_UUID =
+            Pattern.compile(
+                    "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}");
 
     @Override
     public RuleId id() {
@@ -81,10 +87,13 @@ public final class KvSnapshotFileRule implements FileRule {
             return Decision.KEEP_ACTIVE;
         }
 
-        return file.modificationTime() < cutoffMillis ? Decision.DELETE : Decision.DEFER;
+        return MtimePolicy.evaluateInactiveFile(file.modificationTime(), cutoffMillis);
     }
 
     private static boolean isKnownSnapshotFile(String fileName) {
+        if (REMOTE_FILE_UUID.matcher(fileName).matches()) {
+            return true;
+        }
         if (KNOWN_FIXED_NAMES.contains(fileName)) {
             return true;
         }
