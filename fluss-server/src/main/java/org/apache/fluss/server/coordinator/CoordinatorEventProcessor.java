@@ -346,10 +346,13 @@ public class CoordinatorEventProcessor implements EventProcessor {
     }
 
     public void shutdown() {
-        clearOfflineLeaderRetryTask();
-        // close the event manager
-        coordinatorEventManager.close();
-        rebalanceManager.close();
+        try {
+            clearOfflineLeaderRetryTask();
+            // close the event manager
+            coordinatorEventManager.close();
+        } finally {
+            rebalanceManager.close();
+        }
         onShutdown();
         coordinatorContext.resetContext();
         updateObservedKvLeaderReplicaCount();

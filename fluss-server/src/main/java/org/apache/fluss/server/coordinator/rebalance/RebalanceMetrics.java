@@ -23,6 +23,7 @@ import org.apache.fluss.metrics.ThreadSafeSimpleCounter;
 import org.apache.fluss.metrics.groups.MetricGroup;
 
 import javax.annotation.Nullable;
+import javax.annotation.concurrent.ThreadSafe;
 
 import java.util.function.ToLongFunction;
 
@@ -30,7 +31,14 @@ import static org.apache.fluss.cluster.rebalance.RebalanceStatus.COMPLETED;
 import static org.apache.fluss.cluster.rebalance.RebalanceStatus.FAILED;
 import static org.apache.fluss.cluster.rebalance.RebalanceStatus.TIMEOUT;
 
-/** Rebalance metrics registered for the lifetime of a coordinator server. */
+/**
+ * Rebalance metrics registered for the lifetime of a coordinator server.
+ *
+ * <p>The coordinator event thread binds and unbinds the current {@link RebalanceManager} and
+ * updates counters, while metric reporter threads may concurrently read gauges via {@link
+ * #readCurrent(ToLongFunction)}.
+ */
+@ThreadSafe
 public class RebalanceMetrics {
 
     private final Counter rebalancesCompleted = new ThreadSafeSimpleCounter();

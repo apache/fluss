@@ -49,6 +49,7 @@ import org.slf4j.LoggerFactory;
 import javax.annotation.Nullable;
 
 import java.util.ArrayDeque;
+import java.util.EnumMap;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -62,6 +63,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
 
 import static org.apache.fluss.cluster.rebalance.RebalanceStatus.CANCELED;
 import static org.apache.fluss.cluster.rebalance.RebalanceStatus.COMPLETED;
@@ -104,6 +106,8 @@ public class RebalanceManager {
     /** A mapping from table bucket to rebalance status of failed or completed tasks. */
     private final Map<TableBucket, RebalanceResultForBucket> finishedRebalanceTasks =
             new ConcurrentHashMap<>();
+
+    private final Map<RebalanceStatus, AtomicLong> finishedBucketCounts = newFinishedBucketCounts();
 
     private final GoalOptimizer goalOptimizer;
     private volatile long registerTime;
@@ -158,7 +162,7 @@ public class RebalanceManager {
         this.clock = clock == null ? SystemClock.getInstance() : clock;
         this.timeoutChecker = timeoutChecker;
         this.goalOptimizer = new GoalOptimizer();
-        this.metrics = metrics;
+        this.metrics = checkNotNull(metrics, "metrics");
     }
 
     long rebalanceInProgress() {
@@ -179,14 +183,11 @@ public class RebalanceManager {
         if (!bucketResultsAvailable) {
             return 0L;
         }
-        return finishedRebalanceTasks.values().stream()
-                .filter(result -> result.status() == status)
-                .count();
+        return finishedBucketCounts.get(status).get();
     }
 
     private boolean hasFinishedBucket(RebalanceStatus status) {
-        return finishedRebalanceTasks.values().stream()
-                .anyMatch(result -> result.status() == status);
+        return finishedBucketCounts.get(status).get() > 0;
     }
 
     long inflightBucketDurationMs() {
@@ -242,6 +243,7 @@ public class RebalanceManager {
         inProgressRebalanceTasks.clear();
         inProgressRebalanceTasksQueue.clear();
         finishedRebalanceTasks.clear();
+        finishedBucketCounts.values().forEach(count -> count.set(0L));
         bucketResultsAvailable = !FINAL_STATUSES.contains(newStatus);
         // Clear gate (bucket) first, then data (startMs).
         inflightTaskBucket = null;
@@ -284,6 +286,7 @@ public class RebalanceManager {
             finishedRebalanceTasks.put(
                     tableBucket,
                     RebalanceResultForBucket.of(resultForBucket.plan(), statusForBucket));
+            finishedBucketCounts.get(statusForBucket).incrementAndGet();
             // Clear gate (bucket) first, then data (startMs).
             inflightTaskBucket = null;
             inflightTaskStartMs = -1;
@@ -522,6 +525,14 @@ public class RebalanceManager {
             bucketPlan.put(rebalancePlanForBucket.getTableBucket(), rebalancePlanForBucket);
         }
         return new RebalanceTask(rebalanceId, NOT_STARTED, bucketPlan);
+    }
+
+    private static Map<RebalanceStatus, AtomicLong> newFinishedBucketCounts() {
+        Map<RebalanceStatus, AtomicLong> counts = new EnumMap<>(RebalanceStatus.class);
+        for (RebalanceStatus status : RebalanceStatus.values()) {
+            counts.put(status, new AtomicLong());
+        }
+        return counts;
     }
 
     private boolean isOfflineTagged(ServerTag serverTag) {
