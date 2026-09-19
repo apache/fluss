@@ -20,9 +20,15 @@
 #include <arrow/record_batch.h>
 #include <arrow/type.h>
 
+#include <atomic>
 #include <chrono>
+#include <condition_variable>
+#include <exception>
 #include <iostream>
+#include <memory>
+#include <mutex>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 #include "fluss.hpp"
@@ -85,6 +91,9 @@ int main() {
 
     // 5) Write rows with scalar and temporal values
     fluss::AppendWriter writer;
+    // Defaults: 262144 pending callback operations per Writer, 30s admission wait.
+    // Pass WriteCallbackOptions to lower the limit for large captures or many writers.
+    // This count is independent of the Connection's write-buffer byte budget.
     check("new_append_writer", table.NewAppend().CreateWriter(writer));
 
     struct RowData {
@@ -141,6 +150,54 @@ int main() {
         check("append", writer.Append(row, wr));
         check("wait", wr.Wait());
         std::cout << "Row acknowledged by server" << std::endl;
+    }
+
+    // Callback acknowledgment
+    {
+        // The SDK runs callbacks; no application waiting thread is required.
+        // This example counts outcomes only. It does not implement durable recovery.
+        std::atomic<size_t> succeeded{0};
+        std::atomic<size_t> failed{0};
+        for (const auto& r : rows) {
+            const int32_t id = 1000 + r.id;
+            fluss::GenericRow row;
+            row.SetInt32(0, id);
+            row.SetString(1, r.name);
+            row.SetFloat32(2, r.score);
+            row.SetInt32(3, r.age);
+            row.SetDate(4, r.date);
+            row.SetTime(5, r.time);
+            row.SetTimestampNtz(6, r.ts_ntz);
+            row.SetTimestampLtz(7, r.ts_ltz);
+            auto submitted = writer.Append(row, [id, &succeeded, &failed](fluss::Result result) {
+                if (result.Ok()) {
+                    ++succeeded;
+                } else {
+                    // An error does not prove the row was not written. A new Append
+                    // can duplicate it, even with SDK idempotence enabled.
+                    // For recovery, retain id and input in application-owned state
+                    // and schedule duplicate-safe retries outside this callback.
+                    if (failed.fetch_add(1) == 0) {
+                        std::cerr << "Write failed for id=" << id << ": " << result.error_message
+                                  << '\n';
+                    }
+                }
+            });
+            if (!submitted.Ok()) {
+                // No callback will run for this submission; handle this path too.
+                std::cerr << "Submission failed for id=" << id << ": " << submitted.error_message
+                          << '\n';
+                break;
+            }
+        }
+        // Submission has stopped. Wait for callbacks before leaving the counters'
+        // scope; individual callback failures are checked below.
+        // check() exits on error; a continuing application must keep callback state alive.
+        check("flush", writer.Flush());
+        std::cout << "Callback writes: succeeded=" << succeeded << " failed=" << failed << '\n';
+        if (failed != 0) {
+            return 1;
+        }
     }
 
     // Append a row with all fields null (matches Rust log_table.rs all_supported_datatypes)

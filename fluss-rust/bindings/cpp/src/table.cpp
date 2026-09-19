@@ -1281,14 +1281,23 @@ bool Table::HasPrimaryKey() const {
 TableAppend::TableAppend(ffi::Table* table) noexcept : table_(table) {}
 
 Result TableAppend::CreateWriter(AppendWriter& out) {
+    return CreateWriter(out, WriteCallbackOptions{});
+}
+
+Result TableAppend::CreateWriter(AppendWriter& out, const WriteCallbackOptions& options) {
+    auto validation = ffi::WriteCallbackCapacity::Validate(options);
+    if (!validation.Ok()) {
+        return validation;
+    }
     if (table_ == nullptr) {
         return utils::make_client_error("Table not available");
     }
 
+    auto capacity = std::make_shared<ffi::WriteCallbackCapacity>(options);
     auto ffi_result = table_->new_append_writer();
     auto result = utils::from_ffi_result(ffi_result.result);
     if (result.Ok()) {
-        out = AppendWriter(utils::ptr_from_ffi<ffi::AppendWriter>(ffi_result));
+        out = AppendWriter(utils::ptr_from_ffi<ffi::AppendWriter>(ffi_result), std::move(capacity));
     }
     return result;
 }
@@ -1339,11 +1348,20 @@ std::vector<size_t> TableUpsert::ResolveNameProjection() const {
 }
 
 Result TableUpsert::CreateWriter(UpsertWriter& out) {
+    return CreateWriter(out, WriteCallbackOptions{});
+}
+
+Result TableUpsert::CreateWriter(UpsertWriter& out, const WriteCallbackOptions& options) {
+    auto validation = ffi::WriteCallbackCapacity::Validate(options);
+    if (!validation.Ok()) {
+        return validation;
+    }
     if (table_ == nullptr) {
         return utils::make_client_error("Table not available");
     }
 
     try {
+        auto capacity = std::make_shared<ffi::WriteCallbackCapacity>(options);
         auto resolved_indices = !column_names_.empty() ? ResolveNameProjection() : column_indices_;
 
         rust::Vec<size_t> rust_indices;
@@ -1353,7 +1371,8 @@ Result TableUpsert::CreateWriter(UpsertWriter& out) {
         auto ffi_result = table_->create_upsert_writer(std::move(rust_indices));
         auto result = utils::from_ffi_result(ffi_result.result);
         if (result.Ok()) {
-            out = UpsertWriter(utils::ptr_from_ffi<ffi::UpsertWriter>(ffi_result));
+            out = UpsertWriter(utils::ptr_from_ffi<ffi::UpsertWriter>(ffi_result),
+                               std::move(capacity));
         }
         return result;
     } catch (const std::exception& e) {
@@ -1605,13 +1624,19 @@ Result WriteResult::Wait() {
     return utils::from_ffi_result(ffi_result);
 }
 
+Result WriteResult::Notify(std::unique_ptr<ffi::WriteCallback> callback) {
+    return utils::from_ffi_result(inner_->notify(std::move(callback)));
+}
+
 // ============================================================================
 // AppendWriter
 // ============================================================================
 
 AppendWriter::AppendWriter() noexcept = default;
 
-AppendWriter::AppendWriter(ffi::AppendWriter* writer) noexcept : writer_(writer) {}
+AppendWriter::AppendWriter(ffi::AppendWriter* writer,
+                           std::shared_ptr<ffi::WriteCallbackCapacity> callback_capacity) noexcept
+    : writer_(writer), callback_capacity_(std::move(callback_capacity)) {}
 
 AppendWriter::~AppendWriter() noexcept { Destroy(); }
 
@@ -1622,7 +1647,8 @@ void AppendWriter::Destroy() noexcept {
     }
 }
 
-AppendWriter::AppendWriter(AppendWriter&& other) noexcept : writer_(other.writer_) {
+AppendWriter::AppendWriter(AppendWriter&& other) noexcept
+    : writer_(other.writer_), callback_capacity_(std::move(other.callback_capacity_)) {
     other.writer_ = nullptr;
 }
 
@@ -1630,6 +1656,7 @@ AppendWriter& AppendWriter::operator=(AppendWriter&& other) noexcept {
     if (this != &other) {
         Destroy();
         writer_ = other.writer_;
+        callback_capacity_ = std::move(other.callback_capacity_);
         other.writer_ = nullptr;
     }
     return *this;
@@ -1654,6 +1681,25 @@ Result AppendWriter::Append(const GenericRow& row, WriteResult& out) {
     auto result = utils::from_ffi_result(ffi_result.result);
     if (result.Ok()) {
         out = WriteResult(utils::ptr_from_ffi<ffi::WriteResult>(ffi_result));
+    }
+    return result;
+}
+
+Result AppendWriter::Append(const GenericRow& row, WriteCallback callback) {
+    if (!callback) {
+        return utils::make_client_error("Write callback must not be empty");
+    }
+    // Allocate before submission so an allocation failure cannot lose an
+    // already accepted write's completion notification.
+    auto completion = std::make_unique<ffi::WriteCallback>(std::move(callback));
+    auto reserved = completion->Reserve(callback_capacity_);
+    if (!reserved.Ok()) {
+        return reserved;
+    }
+    WriteResult pending;
+    auto result = Append(row, pending);
+    if (result.Ok()) {
+        return pending.Notify(std::move(completion));
     }
     return result;
 }
@@ -1696,13 +1742,33 @@ Result AppendWriter::AppendArrowBatch(const std::shared_ptr<arrow::RecordBatch>&
     return result;
 }
 
+Result AppendWriter::AppendArrowBatch(const std::shared_ptr<arrow::RecordBatch>& batch,
+                                      WriteCallback callback) {
+    if (!callback) {
+        return utils::make_client_error("Write callback must not be empty");
+    }
+    auto completion = std::make_unique<ffi::WriteCallback>(std::move(callback));
+    auto reserved = completion->Reserve(callback_capacity_);
+    if (!reserved.Ok()) {
+        return reserved;
+    }
+    WriteResult pending;
+    auto result = AppendArrowBatch(batch, pending);
+    if (result.Ok()) {
+        return pending.Notify(std::move(completion));
+    }
+    return result;
+}
+
 Result AppendWriter::Flush() {
     if (!Available()) {
         return utils::make_client_error("AppendWriter not available");
     }
 
     auto ffi_result = writer_->flush();
-    return utils::from_ffi_result(ffi_result);
+    auto result = utils::from_ffi_result(ffi_result);
+    if (!result.Ok()) return result;
+    return callback_capacity_->AwaitAll(std::chrono::seconds(60));
 }
 
 // ============================================================================
@@ -1711,7 +1777,9 @@ Result AppendWriter::Flush() {
 
 UpsertWriter::UpsertWriter() noexcept = default;
 
-UpsertWriter::UpsertWriter(ffi::UpsertWriter* writer) noexcept : writer_(writer) {}
+UpsertWriter::UpsertWriter(ffi::UpsertWriter* writer,
+                           std::shared_ptr<ffi::WriteCallbackCapacity> callback_capacity) noexcept
+    : writer_(writer), callback_capacity_(std::move(callback_capacity)) {}
 
 UpsertWriter::~UpsertWriter() noexcept { Destroy(); }
 
@@ -1722,7 +1790,8 @@ void UpsertWriter::Destroy() noexcept {
     }
 }
 
-UpsertWriter::UpsertWriter(UpsertWriter&& other) noexcept : writer_(other.writer_) {
+UpsertWriter::UpsertWriter(UpsertWriter&& other) noexcept
+    : writer_(other.writer_), callback_capacity_(std::move(other.callback_capacity_)) {
     other.writer_ = nullptr;
 }
 
@@ -1730,6 +1799,7 @@ UpsertWriter& UpsertWriter::operator=(UpsertWriter&& other) noexcept {
     if (this != &other) {
         Destroy();
         writer_ = other.writer_;
+        callback_capacity_ = std::move(other.callback_capacity_);
         other.writer_ = nullptr;
     }
     return *this;
@@ -1758,6 +1828,23 @@ Result UpsertWriter::Upsert(const GenericRow& row, WriteResult& out) {
     return result;
 }
 
+Result UpsertWriter::Upsert(const GenericRow& row, WriteCallback callback) {
+    if (!callback) {
+        return utils::make_client_error("Write callback must not be empty");
+    }
+    auto completion = std::make_unique<ffi::WriteCallback>(std::move(callback));
+    auto reserved = completion->Reserve(callback_capacity_);
+    if (!reserved.Ok()) {
+        return reserved;
+    }
+    WriteResult pending;
+    auto result = Upsert(row, pending);
+    if (result.Ok()) {
+        return pending.Notify(std::move(completion));
+    }
+    return result;
+}
+
 Result UpsertWriter::Delete(const GenericRow& row) {
     WriteResult wr;
     return Delete(row, wr);
@@ -1779,13 +1866,32 @@ Result UpsertWriter::Delete(const GenericRow& row, WriteResult& out) {
     return result;
 }
 
+Result UpsertWriter::Delete(const GenericRow& row, WriteCallback callback) {
+    if (!callback) {
+        return utils::make_client_error("Write callback must not be empty");
+    }
+    auto completion = std::make_unique<ffi::WriteCallback>(std::move(callback));
+    auto reserved = completion->Reserve(callback_capacity_);
+    if (!reserved.Ok()) {
+        return reserved;
+    }
+    WriteResult pending;
+    auto result = Delete(row, pending);
+    if (result.Ok()) {
+        return pending.Notify(std::move(completion));
+    }
+    return result;
+}
+
 Result UpsertWriter::Flush() {
     if (!Available()) {
         return utils::make_client_error("UpsertWriter not available");
     }
 
     auto ffi_result = writer_->upsert_flush();
-    return utils::from_ffi_result(ffi_result);
+    auto result = utils::from_ffi_result(ffi_result);
+    if (!result.Ok()) return result;
+    return callback_capacity_->AwaitAll(std::chrono::seconds(60));
 }
 
 // ============================================================================

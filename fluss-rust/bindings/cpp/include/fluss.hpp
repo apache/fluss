@@ -21,6 +21,7 @@
 
 #include <chrono>
 #include <cstdint>
+#include <functional>
 #include <limits>
 #include <memory>
 #include <optional>
@@ -47,6 +48,8 @@ struct Admin;
 struct Table;
 struct AppendWriter;
 struct WriteResult;
+class WriteCallback;
+class WriteCallbackCapacity;
 struct LogScanner;
 struct RecordBatchLogReader;
 struct BatchScanner;
@@ -527,8 +530,58 @@ struct Result {
 
     bool Ok() const { return error_code == 0; }
 
-    /// Returns true if retrying the request may succeed. Client-side errors always return false.
+    /// Returns true if retrying the request may succeed. Does not guarantee that a failed
+    /// write had no effect or that application resubmission is duplicate-safe.
+    /// Client-side errors always return false.
     bool IsRetriable() const { return ErrorCode::IsRetriable(error_code); }
+};
+
+/// Receives the final outcome of an accepted write. Function pointers and lambdas
+/// are supported. An empty callback is rejected before submitting the write.
+///
+/// During normal operation, the SDK owns the callback until completion and invokes
+/// it exactly once on SDK-managed background threads; no caller polling or waiting
+/// thread is needed. Process exit or a crash can prevent delivery. Callbacks never
+/// run inline in the submitting call, but may run concurrently and out of order,
+/// including before the call returns.
+/// Keep callbacks short and synchronize access to shared state, including writers.
+/// Callback overloads do not make writers safe for concurrent access. Captured
+/// references must remain valid until the callback finishes; capturing shared
+/// ownership is recommended. Keep the connection alive until completion.
+///
+/// Success follows the configured acknowledgment policy. Errors are reported after
+/// internal retry handling, but do not guarantee that no data was written.
+/// Application resubmission is a new operation and can produce duplicates even
+/// with SDK idempotence enabled. Retain input identifiers and recovery state as
+/// needed; one callback invocation is not an exactly-once delivery guarantee.
+///
+/// Callback threads are shared across connections. Do not wait for another
+/// callback from a callback: it can exhaust the worker pool. Synchronous SDK
+/// calls require exclusive writer access. Callback submissions to a full writer
+/// fail immediately when called from a callback, instead of blocking the workers.
+/// WriteCallbackOptions bounds outstanding callback operations per writer.
+/// Hand off retries or expensive work without blocking; bound application queues
+/// and handle overflow without silently discarding failed operations.
+///
+/// Exceptions thrown by callbacks are caught and reported to stderr; they do not
+/// change the write outcome or retry the callback. Stop submissions before Flush().
+/// After a successful Rust write flush, Flush() waits up to 60 seconds for pending
+/// callbacks to finish. On error, referenced state may still be in use.
+/// Inside a callback only the callback wait is skipped; the write flush may block.
+/// Flush() does not wait for work handed to application workers or retry queues.
+using WriteCallback = std::function<void(Result)>;
+
+/// Admission limits for callback overloads only; Wait and fire-and-forget are unchanged.
+struct WriteCallbackOptions {
+    /// Maximum operations reserved for submission or awaiting callback completion.
+    /// Must be positive. One AppendArrowBatch call counts as one operation, not its rows.
+    /// Per-writer count, not preallocated storage or a byte limit. Reduce for many
+    /// writers or large captures; independent of Configuration::writer_buffer_memory_size.
+    size_t max_pending_operations = 262144;
+
+    /// Maximum wait for callback capacity; zero rejects immediately when full.
+    /// Must be nonnegative. Does not bound buffer waits, ACKs, retries, or callback duration.
+    std::chrono::milliseconds enqueue_timeout{30000};
 };
 
 struct TablePath {
@@ -1553,7 +1606,8 @@ struct Configuration {
     bool writer_enable_idempotence{true};
     // Maximum number of in-flight requests per bucket for idempotent writes
     size_t writer_max_inflight_requests_per_bucket{5};
-    // Total memory available for buffering write batches (default 64MB)
+    // Shared write-batch memory budget per Connection, across its tables and writers
+    // (default 64 MiB). Not a process RSS limit or a callback-capture memory budget.
     size_t writer_buffer_memory_size{64 * 1024 * 1024};
     // Maximum time in milliseconds to block waiting for buffer memory
     uint64_t writer_buffer_wait_timeout_ms{std::numeric_limits<uint64_t>::max()};
@@ -1740,6 +1794,8 @@ class TableAppend {
     TableAppend& operator=(TableAppend&&) noexcept = default;
 
     Result CreateWriter(AppendWriter& out);
+    /// Create a writer with per-writer callback admission limits.
+    Result CreateWriter(AppendWriter& out, const WriteCallbackOptions& options);
 
    private:
     friend class Table;
@@ -1759,6 +1815,8 @@ class TableUpsert {
     TableUpsert& PartialUpdateByName(std::vector<std::string> column_names);
 
     Result CreateWriter(UpsertWriter& out);
+    /// Create a writer with per-writer callback admission limits shared by Upsert and Delete.
+    Result CreateWriter(UpsertWriter& out, const WriteCallbackOptions& options);
 
    private:
     friend class Table;
@@ -1877,6 +1935,7 @@ class WriteResult {
     friend class UpsertWriter;
     WriteResult(ffi::WriteResult* inner) noexcept;
 
+    Result Notify(std::unique_ptr<ffi::WriteCallback> callback);
     void Destroy() noexcept;
     ffi::WriteResult* inner_{nullptr};
 };
@@ -1895,17 +1954,26 @@ class AppendWriter {
 
     Result Append(const GenericRow& row);
     Result Append(const GenericRow& row, WriteResult& out);
+    /// Submit a row and notify callback of its final outcome without waiting for
+    /// acknowledgment. Returns submission status; on failure no callback runs.
+    /// Submission can block on callback capacity and buffer backpressure. See WriteCallbackOptions.
+    Result Append(const GenericRow& row, WriteCallback callback);
     Result AppendArrowBatch(const std::shared_ptr<arrow::RecordBatch>& batch);
     Result AppendArrowBatch(const std::shared_ptr<arrow::RecordBatch>& batch, WriteResult& out);
+    /// Like the callback Append overload, but notifies once for the entire batch.
+    Result AppendArrowBatch(const std::shared_ptr<arrow::RecordBatch>& batch,
+                            WriteCallback callback);
     Result Flush();
 
    private:
     friend class Table;
     friend class TableAppend;
-    AppendWriter(ffi::AppendWriter* writer) noexcept;
+    AppendWriter(ffi::AppendWriter* writer,
+                 std::shared_ptr<ffi::WriteCallbackCapacity> callback_capacity) noexcept;
 
     void Destroy() noexcept;
     ffi::AppendWriter* writer_{nullptr};
+    std::shared_ptr<ffi::WriteCallbackCapacity> callback_capacity_;
 };
 
 class UpsertWriter {
@@ -1922,16 +1990,24 @@ class UpsertWriter {
 
     Result Upsert(const GenericRow& row);
     Result Upsert(const GenericRow& row, WriteResult& out);
+    /// Submit an upsert and notify callback of its final outcome. Returns
+    /// submission status; on failure no callback runs. Submission may block on
+    /// callback capacity and buffer backpressure, but not acknowledgment. See WriteCallbackOptions.
+    Result Upsert(const GenericRow& row, WriteCallback callback);
     Result Delete(const GenericRow& row);
     Result Delete(const GenericRow& row, WriteResult& out);
+    /// Like the callback Upsert overload, but deletes a row by primary key.
+    Result Delete(const GenericRow& row, WriteCallback callback);
     Result Flush();
 
    private:
     friend class Table;
     friend class TableUpsert;
-    UpsertWriter(ffi::UpsertWriter* writer) noexcept;
+    UpsertWriter(ffi::UpsertWriter* writer,
+                 std::shared_ptr<ffi::WriteCallbackCapacity> callback_capacity) noexcept;
     void Destroy() noexcept;
     ffi::UpsertWriter* writer_{nullptr};
+    std::shared_ptr<ffi::WriteCallbackCapacity> callback_capacity_;
 };
 
 class Lookuper {

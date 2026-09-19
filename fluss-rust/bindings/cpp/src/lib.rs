@@ -16,6 +16,7 @@
 // under the License.
 
 mod types;
+mod write_callback;
 
 use std::collections::HashMap;
 use std::str::FromStr;
@@ -42,6 +43,15 @@ static RUNTIME: LazyLock<tokio::runtime::Runtime> = LazyLock::new(|| {
 
 #[cxx::bridge(namespace = "fluss::ffi")]
 mod ffi {
+    unsafe extern "C++" {
+        include!("write_callback.hpp");
+
+        type WriteCallback;
+
+        #[cxx_name = "Complete"]
+        fn complete(self: Pin<&mut WriteCallback>, error_code: i32, error_message: &str);
+    }
+
     struct HashMapValue {
         key: String,
         value: String,
@@ -670,6 +680,7 @@ mod ffi {
         // WriteResult
         unsafe fn delete_write_result(wr: *mut WriteResult);
         fn wait(self: &mut WriteResult) -> FfiResult;
+        fn notify(self: &mut WriteResult, callback: UniquePtr<WriteCallback>) -> FfiResult;
 
         // UpsertWriter
         unsafe fn delete_upsert_writer(writer: *mut UpsertWriter);

@@ -55,6 +55,9 @@ genrule(
     name = "cargo_build_debug",
     srcs = glob([
         "src/**/*.rs",
+        "src/**/*.hpp",
+        "include/**/*.hpp",
+        "build.rs",
         "Cargo.toml",
     ]),
     outs = [
@@ -121,6 +124,9 @@ genrule(
     name = "cargo_build_release",
     srcs = glob([
         "src/**/*.rs",
+        "src/**/*.hpp",
+        "include/**/*.hpp",
+        "build.rs",
         "Cargo.toml",
     ]),
     outs = [
@@ -274,6 +280,7 @@ cc_library(
     textual_hdrs = [
         "src/ffi_converter.hpp",
         "src/type_lowering.hpp",
+        "src/write_callback.hpp",
         ":rust_bridge_h_unified",
         ":lib_rs_h_unified",
         ":cxx_h_unified",

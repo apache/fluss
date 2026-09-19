@@ -65,7 +65,7 @@ not apply to `CreateBucketBatchScanner()`.
 
 ## Examples and Documentation
 
-- [examples/example.cpp](examples/example.cpp) demonstrates log-table writes, continuous scans,
+- [examples/example.cpp](examples/example.cpp) demonstrates log-table writes with Wait and bounded callbacks, continuous scans,
   bounded Arrow record-batch scans, projections, and offset queries.
 - [examples/admin_example.cpp](examples/admin_example.cpp) demonstrates database, table,
   partition, and cluster administration.
@@ -75,6 +75,30 @@ not apply to `CreateBucketBatchScanner()`.
 - The website documentation includes the
   [C++ API reference](../../website/docs/user-guide/cpp/api-reference.md) and
   [log-table examples](../../website/docs/user-guide/cpp/example/log-tables.md).
+
+The callback section configures `WriteCallbackOptions` to bound outstanding callback
+operations. The SDK executes callbacks; applications do not need a waiting thread or
+poll loop. The example uses the defaults: `max_pending_operations = 262144` per Writer
+and `enqueue_timeout = 30s`. That timeout covers only waiting for callback capacity.
+
+The callback limit counts operations, not bytes; it does not preallocate 262144 slots.
+The separate `Configuration::writer_buffer_memory_size` remains 64 MiB by default,
+shared across all tables and writers on a Connection. Neither setting caps process RSS.
+For a high-throughput starting configuration, see the
+[buffer sizing guidance](../../website/docs/user-guide/cpp/api-reference.md#sizing-callback-capacity-and-write-buffers),
+including a 512 MiB per-Connection example and how to budget for multiple writers.
+
+A failed callback does not prove that the record was not written. Application
+resubmission can duplicate it, even with SDK idempotence enabled. The example only
+counts and logs outcomes; it does not implement durable recovery. Keep callbacks
+short, protect shared state, and handle retries outside the callback with an
+application recovery policy.
+
+After submissions stop, `Flush()` first flushes writes and, on success, waits up to
+60 seconds for pending callbacks. This is not a whole-call timeout. If it returns an
+error, keep callback state alive; if it succeeds, still check individual write results.
+See the [callback guarantees and recovery guidance](../../website/docs/user-guide/cpp/api-reference.md#write-guarantees-and-recovery)
+for result semantics, callback implementation, and shutdown requirements.
 
 For a bounded log scan, pass the per-bucket offset ranges directly to `TableScan`. The returned
 reader yields one Arrow batch at a time until every `[starting_offset, stopping_offset)` range

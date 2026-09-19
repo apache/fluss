@@ -25,6 +25,8 @@ Complete API reference for the Fluss C++ client.
 | `writer_dynamic_batch_size_enabled`   | `bool`        | `true`               | Enable per-table dynamic batch sizing: target grows 10% above 80% fill, shrinks 5% below 50% |
 | `writer_dynamic_batch_size_min`       | `int32_t`     | `262144` (256 KB)    | Lower bound for the dynamic batch size estimator (ignored when disabled)                 |
 | `writer_batch_timeout_ms`             | `int64_t`     | `100`                | Maximum time in ms to wait for a writer batch to fill up before sending                  |
+| `writer_buffer_memory_size`          | `size_t`      | `67108864` (64 MiB) | Shared write-batch memory budget per Connection, across all tables and writers; not a process RSS limit |
+| `writer_buffer_wait_timeout_ms`       | `uint64_t`    | `UINT64_MAX`        | Maximum wait for Rust write-buffer capacity in ms; separate from callback admission |
 | `writer_kv_backpressure_max_throttle_ms` | `uint64_t`  | `3000`               | Maximum per-bucket KV backpressure throttle in milliseconds                             |
 | `writer_bucket_no_key_assigner`       | `std::string` | `"sticky"`           | Bucket assignment strategy for tables without bucket keys: `"sticky"` or `"round_robin"` |
 | `scanner_remote_log_prefetch_num`     | `size_t`      | `4`                  | Number of remote log segments to prefetch                                                |
@@ -130,6 +132,7 @@ Complete API reference for the Fluss C++ client.
 | Method                                       | Description             |
 |----------------------------------------------|-------------------------|
 | `CreateWriter(AppendWriter& out) -> Result`  | Create an append writer |
+| `CreateWriter(AppendWriter& out, const WriteCallbackOptions& options) -> Result` | Create a writer with callback admission limits |
 
 ## `TableUpsert`
 
@@ -138,6 +141,7 @@ Complete API reference for the Fluss C++ client.
 | `PartialUpdateByIndex(std::vector<size_t> column_indices) -> TableUpsert&`   | Configure partial update by column indices |
 | `PartialUpdateByName(std::vector<std::string> column_names) -> TableUpsert&` | Configure partial update by column names   |
 | `CreateWriter(UpsertWriter& out) -> Result`                                  | Create an upsert writer                    |
+| `CreateWriter(UpsertWriter& out, const WriteCallbackOptions& options) -> Result` | Create a writer with callback admission limits |
 
 ## `TableLookup`
 
@@ -188,6 +192,10 @@ are retained. Filters apply to Arrow log scans and are rejected by `CreateBucket
 |-------------------------------------------------------------|----------------------------------------|
 | `Append(const GenericRow& row) -> Result`                   | Append a row (fire-and-forget)         |
 | `Append(const GenericRow& row, WriteResult& out) -> Result` | Append a row with write acknowledgment |
+| `Append(const GenericRow& row, WriteCallback callback) -> Result` | Append a row with completion notification |
+| `AppendArrowBatch(const std::shared_ptr<arrow::RecordBatch>& batch) -> Result` | Append a batch (fire-and-forget) |
+| `AppendArrowBatch(const std::shared_ptr<arrow::RecordBatch>& batch, WriteResult& out) -> Result` | Append a batch with write acknowledgment |
+| `AppendArrowBatch(const std::shared_ptr<arrow::RecordBatch>& batch, WriteCallback callback) -> Result` | Append a batch with one completion notification |
 | `Flush() -> Result`                                         | Flush all pending writes               |
 
 ## `UpsertWriter`
@@ -196,8 +204,10 @@ are retained. Filters apply to Arrow log scans and are rejected by `CreateBucket
 |-------------------------------------------------------------|-----------------------------------------------|
 | `Upsert(const GenericRow& row) -> Result`                   | Upsert a row (fire-and-forget)                |
 | `Upsert(const GenericRow& row, WriteResult& out) -> Result` | Upsert a row with write acknowledgment        |
+| `Upsert(const GenericRow& row, WriteCallback callback) -> Result` | Upsert a row with completion notification |
 | `Delete(const GenericRow& row) -> Result`                   | Delete a row by primary key (fire-and-forget) |
 | `Delete(const GenericRow& row, WriteResult& out) -> Result` | Delete a row with write acknowledgment        |
+| `Delete(const GenericRow& row, WriteCallback callback) -> Result` | Delete a row with completion notification |
 | `Flush() -> Result`                                         | Flush all pending operations                  |
 
 ## `WriteResult`
@@ -205,6 +215,292 @@ are retained. Filters apply to Arrow log scans and are rejected by `CreateBucket
 | Method             | Description                                 |
 |--------------------|---------------------------------------------|
 | `Wait() -> Result` | Wait for server acknowledgment of the write |
+
+## `WriteCallback`
+
+`WriteCallback` is `std::function<void(Result)>`. Pass a function pointer or a
+lambda to receive the final write outcome without a `WriteResult` handle or a
+call to `Wait()`:
+
+```cpp
+void OnWriteComplete(fluss::Result completed) {
+    if (!completed.Ok()) {
+        // The record may already have been written. Logging alone is not recovery.
+        std::cerr << "Write failed: " << completed.error_message << '\n';
+    }
+}
+
+auto submitted = writer.Append(row, &OnWriteComplete);
+if (!submitted.Ok()) {
+    // Submission failed; OnWriteComplete will not be called.
+    std::cerr << "Submission failed: " << submitted.error_message << '\n';
+}
+```
+
+The immediate return value reports submission status, not acknowledgment. An
+empty callback is rejected before submission. During normal operation, each
+successfully submitted operation invokes its callback exactly once with its
+final success or failure, subject to the lifetime and shutdown requirements below;
+`AppendArrowBatch` invokes one callback for the batch, not one per row or bucket.
+Submission does not wait for acknowledgment, but may still wait for callback
+capacity and then for Rust writer buffer space under backpressure.
+
+### Write guarantees and recovery
+
+- A successful submission means the operation was accepted, not that it was
+  written successfully. Check both the immediate return value and the callback
+  result. A submission error does not register a callback.
+- A successful callback reports completion under the configured acknowledgment
+  policy. It does not strengthen that policy; for example, `writer_acks = "0"`
+  does not wait for server acknowledgment.
+- The SDK handles retryable write errors internally according to its retry
+  configuration. The callback reports the resulting completion, not each retry
+  attempt. A failure can be reported when retries are exhausted or an error
+  cannot be retried; not every failure goes through the configured retry count.
+- **A failed callback does not guarantee that the record was not written.**
+  Even for a single row, the server may have written it before a response was
+  lost. Other errors can represent a definite rejection. `Result` has no separate
+  field that distinguishes these outcomes, and `IsRetriable()` is not proof that
+  nothing was written or that resubmission is duplicate-safe.
+- Calling `Append` again is a new operation. SDK idempotence for internal retries
+  does not deduplicate application resubmissions of the same logical record.
+  Decide whether to resubmit using application identifiers, deduplication or
+  reconciliation, and a bounded retry policy. Do not blindly resubmit every error.
+- One callback invocation per accepted operation is not an exactly-once delivery
+  guarantee. Pending notifications are not persisted and can be lost on process
+  exit or a crash. Applications requiring recovery across restarts must retain
+  their source records or durable operation state independently of the callback.
+
+`AppendArrowBatch` is not atomic across internal batches or buckets. Its single
+callback cannot identify which individual rows succeeded. A failed submission
+can also follow partial acceptance without registering a callback; see the
+operational limits below before retrying a batch.
+
+### Callback capacity
+
+```cpp
+fluss::WriteCallbackOptions options;
+// These are the defaults; CreateWriter(writer) also uses them.
+options.max_pending_operations = 262144;
+options.enqueue_timeout = std::chrono::seconds(30);
+fluss::AppendWriter writer;
+auto created = table.NewAppend().CreateWriter(writer, options);
+// Check created before using writer. NewUpsert().CreateWriter accepts the same options.
+```
+
+| Option | Default | Meaning |
+|--------|---------|---------|
+| `max_pending_operations` | `262144` | Positive, per-writer limit on callback operations reserved for submission or not yet finished |
+| `enqueue_timeout` | `30s` | Nonnegative maximum wait for callback capacity; `0ms` rejects immediately when full |
+
+The existing `CreateWriter(writer)` overload uses these defaults. Each callback
+submission reserves one slot **before** submitting to Rust and holds it through
+user callback execution and capture cleanup. Submission errors and exceptions
+return the slot automatically. `Upsert` and `Delete` share their writer's limit;
+`AppendArrowBatch` consumes one slot per call, regardless of row count. Moving
+a writer transfers its capacity state; already accepted callbacks retain it
+independently of the writer's lifetime.
+
+When capacity is full, the submitting thread waits up to `enqueue_timeout`.
+A capacity rejection returns `CLIENT_ERROR` without submitting any data or
+registering a callback; it never discards an accepted notification. Client errors
+return false from `IsRetriable()`, including capacity errors. Applications may
+reschedule capacity-rejected submissions with backoff, but must not blindly
+retry every client error: other submission failures can have different effects,
+including partial ArrowBatch acceptance described below.
+
+This timeout covers **only callback capacity admission**, not the entire
+`Append` call, buffer waits, network requests, core retries, or callback duration.
+It does not cancel any accepted write. Do not hold a mutex needed by callbacks
+while submitting: a full writer can wait for those callbacks to finish.
+
+### Sizing callback capacity and write buffers
+
+There are two independent budgets:
+
+| Setting | Scope | What it limits |
+|---------|-------|----------------|
+| `max_pending_operations` | Each Writer | Callback operations from admission through callback execution and capture cleanup |
+| `writer_buffer_memory_size` | Each Connection | Rust write-batch memory accounting shared by all its tables and writers, including writes using `Wait()` or fire-and-forget |
+
+The callback default of 262144 operations with a 30-second admission wait was
+used in an eight-hour load test with 1 KiB rows, short callbacks, and five writers
+per Connection. It is a starting point, not a throughput or latency guarantee.
+The limit is not preallocated storage. It allows four times as many outstanding
+operations as the previous 65536 default, so applications with tighter memory
+budgets should explicitly select a smaller value.
+
+Budget callback capacity across **all writers**, including writers for different
+tables. Five writers at the default allow 1310720 operations in total; fifty allow
+13107200. If each outstanding operation retains 1 KiB of application data, those
+limits permit roughly 1.25 GiB and 12.5 GiB of captures alone, before SDK overhead.
+An `AppendArrowBatch` counts as one operation even when its batch contains many
+rows, so large batches need a separate application byte budget.
+
+For callback capacity, estimate each writer's operation rate multiplied by the
+time from admission until its callback finishes, then allow headroom for bursts
+and tail latency **within the process memory budget**. Measure capture sizes too.
+Use smaller limits for many tables, large captures, or tight memory budgets.
+If callbacks are slow, shorten or offload their work before increasing capacity;
+a larger queue does not fix a sustained completion-rate deficit.
+
+The Connection buffer accounts for write batches, not callback captures,
+application input, or application retry queues. Its accounting is not a precise
+bound on actual Arrow builder allocations or process RSS.
+Sharing a Connection shares this budget: do not multiply it by the number of
+writers, but expect busy or stalled tables to compete for it. Separate Connections
+have separate budgets, which must be added when sizing the process or host.
+
+The following explicit settings were used with the callback defaults in that
+high-throughput test. They are **not** new Connection defaults:
+
+```cpp
+fluss::Configuration config;
+config.bootstrap_servers = "127.0.0.1:9123";  // Replace with your cluster endpoint.
+config.writer_buffer_memory_size = 512ULL * 1024 * 1024;  // Per Connection.
+config.writer_buffer_wait_timeout_ms = 5000;
+config.writer_batch_size = 2 * 1024 * 1024;
+config.writer_dynamic_batch_size_min = 1024 * 1024;
+config.writer_batch_timeout_ms = 100;
+config.writer_request_max_size = 32 * 1024 * 1024;
+// Apply config when creating the Connection; use default callback options per Writer.
+```
+
+Keep the 64 MiB Connection default for a small workload unless measurements show
+buffer pressure. For sustained high-throughput writes with several writers,
+512 MiB per Connection is a tested starting point if the host has sufficient
+headroom. Eight such Connections have a 4 GiB write-buffer budget in total, not a
+4 GiB RSS limit. More active buckets and tables can retain more concurrent
+batches; tune using buffer pressure, achieved throughput, completion latency,
+and RSS together. Increase the budget only when the downstream service can
+drain it; larger buffers can otherwise just extend queues and latency. The
+eight-hour test also showed RSS growth, so it does not establish long-term memory
+stability or a universally safe configuration.
+
+`enqueue_timeout` and `writer_buffer_wait_timeout_ms` govern different waits
+that can occur in the same call. Set them to suit upstream latency and overload
+handling, rather than assuming either is a whole-call deadline. Lowering an
+admission timeout rejects sooner; it does not cancel accepted writes. Increasing
+callback capacity does not increase Rust buffer space, and increasing Rust buffer
+space does not prevent slow callbacks from filling their operation limit.
+The default `writer_buffer_wait_timeout_ms = UINT64_MAX` permits a much longer
+buffer wait than the 30-second callback admission timeout; configure a finite
+buffer wait when the application needs to stop waiting and handle overload.
+
+### Execution and lifecycle
+
+Implement the callback's application logic; the SDK supplies the execution
+threads. There is no need to create a waiting thread, call `Wait()`, or poll for
+callback delivery.
+
+The SDK takes ownership of the callback and its captures. Callbacks run on
+background callback threads, may execute concurrently and out of submission
+order, and may start before the submitting call returns. Keep callbacks short;
+synchronize access to shared state and keep captured references valid until the
+callback finishes. Callback overloads do not make writers safe for concurrent
+access: serialize access if both the caller and a callback use the same writer.
+Prefer capturing `std::shared_ptr` by value when sharing
+application state. Keep the connection alive until outstanding operations
+complete. Exceptions thrown by callbacks are caught and reported to stderr;
+they do not change the write outcome or cause the callback to be invoked again.
+
+A callback should update thread-safe completion state and return promptly.
+Capture an operation identifier by value so failures can be associated with
+their input; `Result` does not contain the original row. If recovery is needed,
+retain the payload or a reference to a durable source until its outcome has been
+handled. The example above only logs failures; it is not a recovery implementation.
+
+For expensive processing or retries, hand off to an application event loop or
+worker through a bounded, nonblocking mechanism. Define what happens when that
+queue is full: preserve the failed operation and stop or backpressure new
+submissions rather than silently dropping it or blocking SDK callback workers.
+Do not loop on `Append`, sleep for retry backoff, or call `Flush()` inside a
+callback. Schedule retries outside the callback with exclusive writer access.
+They do not need to wait for `Flush()`, and remain subject to the duplicate risks
+described above. A separate application thread is optional if an existing
+submission loop can handle the handoff.
+
+Callbacks register directly with their internal write batch, rather than
+creating an asynchronous ACK-waiting task for each row. When a batch completes,
+its callbacks are dispatched to four process-wide callback workers in jobs of
+at most 64 callbacks. Each worker takes one job at a time; every registered
+callback still runs individually. Registrations arriving after batch completion
+are dispatched separately, without waiting to fill a job. Both Arrow log and KV
+write batches use this path. An `AppendArrowBatch` spanning multiple internal
+batches aggregates their results into the operation's single callback.
+
+The completion queue remains internally unbounded; per-writer admission limits
+outstanding callback operations rather than dropping results from this queue.
+This is not a byte or process-wide memory limit: capture sizes, batch sizes, the
+number of writers, and application-owned retry queues need separate controls.
+An aggregate ArrowBatch callback may report an error while later internal batches
+are still pending, so its capacity slot does not bound all underlying batch memory.
+Do not wait for another callback from within a callback, since all callback
+workers could become occupied. A callback submission from within any SDK write
+callback fails immediately if its target writer's capacity is full, regardless
+of `enqueue_timeout`, to avoid blocking the shared workers on their own capacity.
+This applies across writers and on the fallback executor as well. It does not
+remove Rust buffer waits or make arbitrary blocking SDK calls deadlock-free.
+Exclusive writer access is still required. If dedicated workers cannot be
+initialized, the SDK falls back to its runtime blocking pool to preserve delivery.
+
+For shutdown, stop and join submitting threads, then call `Flush()` outside a
+callback. It first runs the Rust write flush and, if that succeeds, waits up to
+60 seconds for this writer's pending callbacks and captures to finish. The
+60-second callback wait is not an end-to-end timeout for the entire call.
+Check individual callback results as well: successful flushing is not a summary
+that every submitted operation succeeded.
+
+If the write flush fails or the callback wait times out, callbacks may still be
+pending; do not release their referenced state. A timeout does not cancel them.
+`Flush()` does not wait for work handed to application workers or retry queues;
+those need their own shutdown handling. When called inside a callback, only the
+callback-wait phase is skipped; the Rust write flush can still block. Do not use
+this path as a shutdown barrier.
+
+### Compatibility and operational limits
+
+- Existing fire-and-forget and `WriteResult::Wait()` overloads retain their
+  result semantics and do not consume callback capacity. Rust callers can still
+  `.await` a `WriteResultFuture`. Callback overloads now apply bounded admission
+  by default; existing callback callers may block or receive a capacity error.
+  Completion follows the configured acknowledgment policy; a callback does not
+  add a stronger durability guarantee or change retries, request ordering,
+  wire formats, or storage formats.
+- The shared Rust completion path also changes for callers that do not register
+  callbacks: results are stored behind an `Arc`, callback registration state is
+  added per batch, and waiters are notified after releasing the result lock.
+  This changes allocation and scheduling costs, not the reported write outcome.
+  The boxed waiting future is now allocated on first poll rather than at
+  construction. Callback workers are initialized only when callbacks are used.
+- For an `AppendArrowBatch` spanning multiple internal batches, success requires
+  all their results to succeed. As with `Wait()`, errors are selected in internal
+  handle order, not completion order; an error may be reported while later
+  batches remain pending. This is not an atomic multi-bucket write, and an error
+  does not imply that no rows were written. A submission error can also follow
+  partial acceptance of a multi-bucket batch; in that case no callback is
+  registered, so handle the returned error and do not assume an all-or-nothing retry.
+- The four-worker count and 64-callback job size are implementation details,
+  not ordering or latency guarantees. A slow callback delays other callbacks in
+  its job, and slow callbacks from one connection can delay another connection.
+  The blocking-pool fallback is not limited to four callback threads.
+- Callback delivery is in memory only. There is no end-to-end callback deadline
+  or durable recovery of pending notifications.
+  Connection or writer destruction is not a callback-drain barrier; process exit,
+  crashes, or fatal resource exhaustion can prevent pending callbacks from running.
+  The process-wide executor is not automatically drained at exit.
+- Application tracking must allow callbacks before submission returns and
+  exclude rejected submissions, which have no callback. Follow the shutdown
+  sequence above before releasing callback state or the connection; an
+  application-side wait timeout does not cancel the write or its callback.
+- C++ exceptions thrown by user callbacks are contained. If copying error text
+  fails, the callback still receives the error code, but the message may be empty.
+  Allocation failures while constructing the callback before submission can still
+  throw a C++ exception rather than return a `Result`.
+
+The new overloads keep ordinary existing calls source-compatible. Code that
+selects an overload by taking a member-function address should specify the
+intended function type explicitly.
 
 ## `Lookuper`
 
