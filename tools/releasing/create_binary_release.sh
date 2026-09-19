@@ -70,9 +70,6 @@ make_binary_release() {
   $MVN clean package -Prelease -am -Dgpg.skip -Dcheckstyle.skip=true -DskipTests
 
   cd fluss-dist/target/fluss-${RELEASE_VERSION}-bin
-  cp ${FLUSS_DIR}/LICENSE-bin ./fluss-${RELEASE_VERSION}/LICENSE
-  cp ${FLUSS_DIR}/NOTICE-bin ./fluss-${RELEASE_VERSION}/NOTICE
-
   tar $TAR_OPTIONS -czf "${dir_name}.tgz" fluss-*
 
   cp fluss-*.tgz ${RELEASE_DIR}
