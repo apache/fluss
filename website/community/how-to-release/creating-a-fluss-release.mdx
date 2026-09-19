@@ -527,12 +527,9 @@ git diff --quiet &&
 git diff --cached --quiet
 ```
 
-#### Verify the legal files for the Fluss server image
-
-The Fluss server Dockerfile copies `build-target/` into `/opt/fluss/`. Before
-preparing the Docker build context, verify that the Maven build produced the
-top-level legal files and that they exactly match the binary distribution's
-`LICENSE-bin` and `NOTICE-bin` files:
+Before preparing the Docker build context, verify that the Maven-generated
+legal files exactly match the binary distribution's `LICENSE-bin` and
+`NOTICE-bin` files:
 
 ```bash
 $ cmp LICENSE-bin build-target/LICENSE && \
@@ -541,26 +538,13 @@ $ cmp LICENSE-bin build-target/LICENSE && \
 Fluss Docker legal files verified
 ```
 
-`cmp` produces no output when the files are identical, so the success message
-above is the only expected output. If either file is missing or different, the
-command exits non-zero and the success message is not printed. In that case,
-**do not manually copy the files and do not build or push the Docker image**.
-First confirm that the checkout is still at the recorded RC commit and clean,
-then regenerate `build-target` from the repository root:
-
-```bash
-$ mvn -B --no-transfer-progress clean package -pl fluss-dist -am -DskipTests
-```
-
-Run the comparison again. If it still fails, treat the problem as a release
-blocker: discard or cancel the current candidate, fix the packaging through the
-normal review process, increment `RC_NUM`, and rebuild the complete candidate.
-Do not modify the signed RC tag or patch the Docker build context by hand.
-
-#### Build and push the Fluss server image
-
-Only after the legal-file verification succeeds, prepare the Docker build
-context and build and push the image:
+`cmp` is silent when both files match, so the success message above is the only
+expected output. If either comparison fails, stop the release, verify that the
+checkout is still at the recorded RC commit and clean, and rerun
+`mvn -B --no-transfer-progress clean package -pl fluss-dist -am -DskipTests`;
+if it still fails, fix the packaging and create a new RC instead of copying the
+files manually; only after the verification succeeds should you prepare the
+Docker build context and build and push the image:
 
 ```bash
 $ rm -rf docker/fluss/build-target/
