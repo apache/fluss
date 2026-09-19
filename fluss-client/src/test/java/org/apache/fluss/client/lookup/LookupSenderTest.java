@@ -27,6 +27,7 @@ import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.exception.NotLeaderOrFollowerException;
 import org.apache.fluss.exception.TableNotExistException;
 import org.apache.fluss.exception.TimeoutException;
+import org.apache.fluss.exception.UnsupportedVersionException;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
@@ -52,8 +53,10 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
@@ -170,6 +173,60 @@ public class LookupSenderTest {
         assertThat(request.getBucketsReqsList())
                 .extracting(PbLookupReqForBucket::getOriginalPartitionName)
                 .containsExactly("dt=20200101", "dt=20200102", "dt=20200103");
+    }
+
+    /**
+     * A server that does not support historical lookup answers the request as a normal lookup, so
+     * it succeeds without echoing the original partition name and its values belong to another
+     * keyspace. The negotiated version cannot report this, so the un-echoed response is what the
+     * capability is detected from, and it must not surface as an empty result or an NPE.
+     */
+    @Test
+    void testHistoricalLookupFailsWhenPartitionNameNotEchoed() {
+        gateway.setLookupHandler(this::createNonEchoingResponse);
+
+        LookupQuery query =
+                new LookupQuery(
+                        DATA1_TABLE_PATH_PK, TABLE_BUCKET, bytes("key1"), false, "dt=20200101");
+
+        lookupSender.sendLookups(1, LookupType.LOOKUP, Collections.singletonList(query));
+
+        assertThatThrownBy(() -> query.future().get(5, TimeUnit.SECONDS))
+                .isInstanceOf(ExecutionException.class)
+                .hasRootCauseInstanceOf(UnsupportedVersionException.class)
+                .hasMessageContaining("without echoing the original partition name")
+                .hasMessageContaining("does not support historical partition lookup");
+    }
+
+    /**
+     * Routing validation runs before the historical path on the server and reports once per bucket
+     * without the original partition name, so a server that fully supports historical lookup also
+     * produces un-echoed buckets. Those carry an error code, and the server's own error must reach
+     * every batch routed to the bucket rather than being reported as a missing capability.
+     */
+    @Test
+    void testHistoricalLookupErrorWithoutEchoedNameFailsAllBatchesOnBucket() {
+        gateway.setLookupHandler(
+                request ->
+                        createNonEchoingFailedResponse(
+                                request,
+                                new InvalidBucketRoutingException("invalid bucket routing")));
+
+        LookupQuery query1 =
+                new LookupQuery(
+                        DATA1_TABLE_PATH_PK, TABLE_BUCKET, bytes("key1"), false, "dt=20200101");
+        LookupQuery query2 =
+                new LookupQuery(
+                        DATA1_TABLE_PATH_PK, TABLE_BUCKET, bytes("key2"), false, "dt=20200102");
+
+        lookupSender.sendLookups(1, LookupType.LOOKUP, Arrays.asList(query1, query2));
+
+        for (LookupQuery query : Arrays.asList(query1, query2)) {
+            assertThatThrownBy(() -> query.future().get(5, TimeUnit.SECONDS))
+                    .isInstanceOf(ExecutionException.class)
+                    .hasRootCauseInstanceOf(InvalidBucketRoutingException.class);
+        }
+        assertThat(metadataUpdater.getBucketLocation(TABLE_BUCKET)).isEmpty();
     }
 
     @Test
@@ -711,6 +768,58 @@ public class LookupSenderTest {
                                                 bucketRequest.getKeyAt(i),
                                                 StandardCharsets.UTF_8)));
             }
+        }
+        return CompletableFuture.completedFuture(response);
+    }
+
+    /**
+     * A response from a server that does not implement historical lookup: the unknown request field
+     * is skipped, the request is answered as a normal lookup, and the original partition name is
+     * not echoed.
+     */
+    private CompletableFuture<LookupResponse> createNonEchoingResponse(LookupRequest request) {
+        LookupResponse response = new LookupResponse();
+        for (PbLookupReqForBucket bucketRequest : request.getBucketsReqsList()) {
+            PbLookupRespForBucket bucketResponse = response.addBucketsResp();
+            bucketResponse.setBucketId(bucketRequest.getBucketId());
+            if (bucketRequest.hasPartitionId()) {
+                bucketResponse.setPartitionId(bucketRequest.getPartitionId());
+            }
+            for (int i = 0; i < bucketRequest.getKeysCount(); i++) {
+                bucketResponse
+                        .addValue()
+                        .setValues(
+                                responseValue(
+                                        "",
+                                        new String(
+                                                bucketRequest.getKeyAt(i),
+                                                StandardCharsets.UTF_8)));
+            }
+        }
+        return CompletableFuture.completedFuture(response);
+    }
+
+    /**
+     * An error response without the echoed original partition name, as the server's routing
+     * validation produces it. Routing errors are collected once per bucket, so a bucket appears
+     * once even when several original partitions were batched onto it.
+     */
+    private CompletableFuture<LookupResponse> createNonEchoingFailedResponse(
+            LookupRequest request, Exception exception) {
+        LookupResponse response = new LookupResponse();
+        ApiError error = ApiError.fromThrowable(exception);
+        Set<Integer> respondedBuckets = new HashSet<>();
+        for (PbLookupReqForBucket bucketRequest : request.getBucketsReqsList()) {
+            if (!respondedBuckets.add(bucketRequest.getBucketId())) {
+                continue;
+            }
+            PbLookupRespForBucket bucketResponse = response.addBucketsResp();
+            bucketResponse.setBucketId(bucketRequest.getBucketId());
+            if (bucketRequest.hasPartitionId()) {
+                bucketResponse.setPartitionId(bucketRequest.getPartitionId());
+            }
+            bucketResponse.setErrorCode(error.error().code());
+            bucketResponse.setErrorMessage(error.formatErrMsg());
         }
         return CompletableFuture.completedFuture(response);
     }
