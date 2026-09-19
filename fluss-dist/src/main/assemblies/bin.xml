@@ -48,6 +48,21 @@
 
 
     <files>
+        <!-- copy binary distribution legal files -->
+        <file>
+            <source>${project.basedir}/../LICENSE-bin</source>
+            <outputDirectory>/</outputDirectory>
+            <destName>LICENSE</destName>
+            <fileMode>0644</fileMode>
+        </file>
+
+        <file>
+            <source>${project.basedir}/../NOTICE-bin</source>
+            <outputDirectory>/</outputDirectory>
+            <destName>NOTICE</destName>
+            <fileMode>0644</fileMode>
+        </file>
+
         <!-- copy fluss-server fat jar -->
         <file>
             <source>../fluss-server/target/fluss-server-${project.version}.jar</source>
