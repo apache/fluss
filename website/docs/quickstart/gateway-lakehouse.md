@@ -456,9 +456,27 @@ curl -sS --fail-with-body -X POST \
   -d '{"entries": [{"id": "order-4", "upsert": {"order_id": 4, "customer": "Dave", "amount_cents": 2200, "status": "placed"}}]}'
 ```
 
-Re-run `SELECT ... FROM orders` in the SQL client – `order_id 4` appears
-immediately in the unified view. The lake-only view, `orders$lake`, will
-reflect it once the tiering service has processed it.
+Return to the SQL client opened earlier and query the unified view:
+
+```sql title="Flink SQL"
+SELECT order_id, customer, amount_cents, status
+FROM orders
+ORDER BY order_id;
+```
+
+`order_id = 4` appears immediately. At this point, the lake-only view is
+expected to still contain only the first three orders because the new record
+has not been tiered yet. Wait approximately 30 seconds for the next tiering
+cycle, then query the lake-only view:
+
+```sql title="Flink SQL"
+SELECT order_id, customer, amount_cents, status
+FROM orders$lake
+ORDER BY order_id;
+```
+
+After the tiering service commits the new data, the result includes
+`order_id = 4`.
 
 The two query forms serve different purposes:
 
