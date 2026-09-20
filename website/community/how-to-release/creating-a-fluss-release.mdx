@@ -540,11 +540,12 @@ Fluss Docker legal files verified
 
 `cmp` is silent when both files match, so the success message above is the only
 expected output. If either comparison fails, stop the release, verify that the
-checkout is still at the recorded RC commit and clean, and rerun
-`mvn -B --no-transfer-progress clean package -pl fluss-dist -am -DskipTests`;
-if it still fails, fix the packaging and create a new RC instead of copying the
-files manually; only after the verification succeeds should you prepare the
-Docker build context and build and push the image:
+checkout is still at the recorded RC commit and clean, rerun
+`RELEASE_VERSION=$RELEASE_VERSION releasing/create_binary_release.sh` from
+`tools/`, and repeat the comparison; continue with the same RC and prepare the
+Docker build context only if it then succeeds without replacing any staged or
+published candidate artifacts; otherwise, fix the packaging and create a new RC
+instead of patching the current one.
 
 ```bash
 $ rm -rf docker/fluss/build-target/
