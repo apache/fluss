@@ -2010,10 +2010,12 @@ public class ConfigOptions {
                     .noDefaultValue()
                     .withDescription(
                             "Defines the merge engine for the primary key table. By default, primary key table doesn't have merge engine. "
-                                    + "The supported merge engines are `first_row`, `versioned`, and `aggregation`. "
+                                    + "The supported merge engines are `first_row`, `versioned`, `aggregation`, and `update_if_changed`. "
                                     + "The `first_row` merge engine will keep the first row of the same primary key. "
                                     + "The `versioned` merge engine will keep the row with the largest version of the same primary key. "
-                                    + "The `aggregation` merge engine will aggregate rows with the same primary key using field-level aggregate functions.");
+                                    + "The `aggregation` merge engine will aggregate rows with the same primary key using field-level aggregate functions. "
+                                    + "The `update_if_changed` merge engine keeps last-row upsert semantics but suppresses value-identical writes: "
+                                    + "when an incoming row is logically equal to the stored row, the write is a no-op and no changelog is emitted.");
 
     public static final ConfigOption<String> TABLE_MERGE_ENGINE_VERSION_COLUMN =
             // we may need to introduce "del-column" in the future to support delete operation

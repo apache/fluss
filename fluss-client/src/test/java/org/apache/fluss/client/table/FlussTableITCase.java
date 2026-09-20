@@ -36,6 +36,7 @@ import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.MemorySize;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.fs.TestFileSystem;
+import org.apache.fluss.metadata.ChangelogImage;
 import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.LogFormat;
@@ -63,6 +64,7 @@ import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import javax.annotation.Nullable;
@@ -1558,6 +1560,149 @@ class FlussTableITCase extends ClientToServerITCaseBase {
                         .withSchema(doProjection ? rowType.project(new int[] {0}) : rowType)
                         .isEqualTo(expectedScanRows.get(i));
             }
+        }
+    }
+
+    @ParameterizedTest
+    @EnumSource(ChangelogImage.class)
+    void testUpdateIfChangedMergeEngine(ChangelogImage changelogImage) throws Exception {
+        TableDescriptor tableDescriptor =
+                TableDescriptor.builder()
+                        .schema(DATA1_SCHEMA_PK)
+                        .property(
+                                ConfigOptions.TABLE_MERGE_ENGINE, MergeEngineType.UPDATE_IF_CHANGED)
+                        .property(ConfigOptions.TABLE_CHANGELOG_IMAGE, changelogImage)
+                        .build();
+        RowType rowType = DATA1_SCHEMA_PK.getRowType();
+        TablePath tablePath =
+                TablePath.of(
+                        "test_db_1",
+                        "test_update_if_changed_merge_engine_" + changelogImage.name());
+        createTable(tablePath, tableDescriptor, false);
+
+        try (Table table = conn.getTable(tablePath)) {
+            UpsertWriter upsertWriter = table.newUpsert().createWriter();
+            // insert a row
+            upsertWriter.upsert(row(0, "v0"));
+            // value-identical upserts: should be no-ops that emit no changelog
+            upsertWriter.upsert(row(0, "v0"));
+            upsertWriter.upsert(row(0, "v0"));
+            // a field differs: should emit an update changelog
+            upsertWriter.upsert(row(0, "v1"));
+            // delete the row: should emit a delete changelog
+            upsertWriter.delete(row(0, "v1"));
+            upsertWriter.flush();
+
+            // No records should be emitted for the value-identical upserts.
+            List<ScanRecord> expected = new ArrayList<>();
+            expected.add(new ScanRecord(-1, -1, ChangeType.INSERT, row(0, "v0")));
+            if (changelogImage == ChangelogImage.FULL) {
+                expected.add(new ScanRecord(-1, -1, ChangeType.UPDATE_BEFORE, row(0, "v0")));
+            }
+            expected.add(new ScanRecord(-1, -1, ChangeType.UPDATE_AFTER, row(0, "v1")));
+            expected.add(new ScanRecord(-1, -1, ChangeType.DELETE, row(0, "v1")));
+
+            LogScanner logScanner = table.newScan().createLogScanner();
+            logScanner.subscribeFromBeginning(0);
+            List<ScanRecord> actualLogRecords = new ArrayList<>(expected.size());
+            while (actualLogRecords.size() < expected.size()) {
+                ScanRecords scanRecords = logScanner.poll(Duration.ofSeconds(1));
+                scanRecords.forEach(actualLogRecords::add);
+            }
+            assertThat(logScanner.poll(Duration.ofSeconds(1))).isEmpty();
+            logScanner.close();
+
+            assertThat(actualLogRecords).hasSize(expected.size());
+            for (int i = 0; i < actualLogRecords.size(); i++) {
+                ScanRecord actual = actualLogRecords.get(i);
+                assertThat(actual.getChangeType()).isEqualTo(expected.get(i).getChangeType());
+                assertThatRow(actual.getRow())
+                        .withSchema(rowType)
+                        .isEqualTo(expected.get(i).getRow());
+            }
+        }
+    }
+
+    @ParameterizedTest
+    @EnumSource(ChangelogImage.class)
+    void testUpdateIfChangedMergeEngineWithPartialUpdate(ChangelogImage changelogImage)
+            throws Exception {
+        Schema schema =
+                Schema.newBuilder()
+                        .column("id", DataTypes.INT())
+                        .column("name", DataTypes.STRING())
+                        .column("data", DataTypes.STRING())
+                        .primaryKey("id")
+                        .build();
+        TableDescriptor tableDescriptor =
+                TableDescriptor.builder()
+                        .schema(schema)
+                        .distributedBy(1, "id")
+                        .property(
+                                ConfigOptions.TABLE_MERGE_ENGINE, MergeEngineType.UPDATE_IF_CHANGED)
+                        .property(ConfigOptions.TABLE_CHANGELOG_IMAGE, changelogImage)
+                        .build();
+        RowType rowType = schema.getRowType();
+        TablePath tablePath =
+                TablePath.of(
+                        "test_db_1",
+                        "test_update_if_changed_partial_update_" + changelogImage.name());
+        createTable(tablePath, tableDescriptor, false);
+
+        try (Table table = conn.getTable(tablePath)) {
+            UpsertWriter fullWriter = table.newUpsert().createWriter();
+            fullWriter.upsert(row(0, "v0", "kept")).get();
+
+            UpsertWriter partialWriter =
+                    table.newUpsert().partialUpdate("id", "name").createWriter();
+            // unchanged partial upsert: no changelog
+            partialWriter.upsert(row(0, "v0", null)).get();
+            // changed partial upsert: normal update changelog
+            partialWriter.upsert(row(0, "v1", null)).get();
+            // unchanged partial upsert: no changelog
+            partialWriter.upsert(row(0, "v1", null)).get();
+            // changed partial delete: clears name and emits an update changelog
+            partialWriter.delete(row(0, "v1", null)).get();
+            // unchanged partial delete: no changelog
+            partialWriter.delete(row(0, null, null)).get();
+            partialWriter.flush();
+
+            List<ScanRecord> expected = new ArrayList<>();
+            expected.add(new ScanRecord(-1, -1, ChangeType.INSERT, row(0, "v0", "kept")));
+            if (changelogImage == ChangelogImage.FULL) {
+                expected.add(
+                        new ScanRecord(-1, -1, ChangeType.UPDATE_BEFORE, row(0, "v0", "kept")));
+            }
+            expected.add(new ScanRecord(-1, -1, ChangeType.UPDATE_AFTER, row(0, "v1", "kept")));
+            if (changelogImage == ChangelogImage.FULL) {
+                expected.add(
+                        new ScanRecord(-1, -1, ChangeType.UPDATE_BEFORE, row(0, "v1", "kept")));
+            }
+            expected.add(new ScanRecord(-1, -1, ChangeType.UPDATE_AFTER, row(0, null, "kept")));
+
+            LogScanner logScanner = table.newScan().createLogScanner();
+            logScanner.subscribeFromBeginning(0);
+            List<ScanRecord> actualLogRecords = new ArrayList<>(expected.size());
+            while (actualLogRecords.size() < expected.size()) {
+                ScanRecords scanRecords = logScanner.poll(Duration.ofSeconds(1));
+                scanRecords.forEach(actualLogRecords::add);
+            }
+            assertThat(logScanner.poll(Duration.ofSeconds(1))).isEmpty();
+            logScanner.close();
+
+            assertThat(actualLogRecords).hasSize(expected.size());
+            for (int i = 0; i < actualLogRecords.size(); i++) {
+                ScanRecord actual = actualLogRecords.get(i);
+                assertThat(actual.getChangeType()).isEqualTo(expected.get(i).getChangeType());
+                assertThatRow(actual.getRow())
+                        .withSchema(rowType)
+                        .isEqualTo(expected.get(i).getRow());
+            }
+
+            Lookuper lookuper = table.newLookup().createLookuper();
+            assertThatRow(lookuper.lookup(row(0)).get().getSingletonRow())
+                    .withSchema(rowType)
+                    .isEqualTo(row(0, null, "kept"));
         }
     }
 

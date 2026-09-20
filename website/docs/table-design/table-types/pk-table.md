@@ -86,6 +86,7 @@ The following merge engines are supported:
 2. [FirstRow Merge Engine](/table-design/merge-engines/first-row.md)
 3. [Versioned Merge Engine](/table-design/merge-engines/versioned.md)
 4. [Aggregation Merge Engine](/table-design/merge-engines/aggregation.md)
+5. [UpdateIfChanged Merge Engine](/table-design/merge-engines/update-if-changed.md)
 
 
 ## Change Data Feed

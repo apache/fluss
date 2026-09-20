@@ -22,10 +22,10 @@ package org.apache.fluss.metadata;
  *
  * <p>A primary key table with a merge engine is a special kind of table, called "merge table".
  * Fluss provides 3 kinds of table: "primary key table", "log table", and "merge table". Merge table
- * is a primary key table that has a primary key definition but doesn't directly UPDATE and DELETE
- * rows in the table, and instead, it merges the append rows into a new data set according to the
- * defined {@link MergeEngineType}. Therefore, it doesn't support direct UPDATE (also
- * partial-update) and DELETE operations and only supports INSERT or APPEND operations.
+ * is a primary key table that merges incoming rows into a new data set according to the defined
+ * {@link MergeEngineType}. Most merge engines accept only INSERT or APPEND operations, rather than
+ * direct UPDATE (including partial update) and DELETE operations. {@link #UPDATE_IF_CHANGED} is an
+ * exception that retains normal primary-key table update and delete semantics.
  *
  * <p>Note: A primary key table doesn't have a merge engine by default.
  *
@@ -61,7 +61,20 @@ public enum MergeEngineType {
      *
      * @since 0.9
      */
-    AGGREGATION;
+    AGGREGATION,
+
+    /**
+     * A merge engine that keeps last-row upsert semantics but suppresses value-identical writes.
+     * When an incoming row is logically equal to the currently stored row (compared by logical
+     * field values, not raw bytes), the write is a no-op and no changelog is emitted. When at least
+     * one field differs, the incoming row replaces the stored row and a normal update changelog is
+     * emitted. Unlike {@link #FIRST_ROW}, legitimate updates are still applied; unlike {@link
+     * #VERSIONED}, no version column is required. Partial updates and delete operations are
+     * supported.
+     *
+     * @since 1.1
+     */
+    UPDATE_IF_CHANGED;
 
     /** Creates a {@link MergeEngineType} from the given string. */
     public static MergeEngineType fromString(String type) {
@@ -72,6 +85,8 @@ public enum MergeEngineType {
                 return VERSIONED;
             case "AGGREGATION":
                 return AGGREGATION;
+            case "UPDATE_IF_CHANGED":
+                return UPDATE_IF_CHANGED;
             default:
                 throw new IllegalArgumentException("Unsupported merge engine type: " + type);
         }

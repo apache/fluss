@@ -183,6 +183,40 @@ class RowMergerCreateTest {
     }
 
     @Test
+    void testCreateUpdateIfChangedRowMerger() {
+        Schema schema =
+                Schema.newBuilder()
+                        .column("id", DataTypes.INT())
+                        .column("value", DataTypes.STRING())
+                        .primaryKey("id")
+                        .build();
+
+        Configuration conf = new Configuration();
+        conf.setString(
+                ConfigOptions.TABLE_MERGE_ENGINE.key(), MergeEngineType.UPDATE_IF_CHANGED.name());
+        TableConfig tableConfig = new TableConfig(conf);
+
+        RowMerger merger =
+                RowMerger.create(tableConfig, KvFormat.COMPACTED, createSchemaGetter(schema));
+        merger.configureTargetColumns(null, SCHEMA_ID, schema);
+
+        assertThat(merger).isInstanceOf(UpdateIfChangedRowMerger.class);
+        // delete is supported and defaults to ALLOW
+        assertThat(merger.deleteBehavior()).isEqualTo(DeleteBehavior.ALLOW);
+
+        // value-identical write is a no-op (returns the old value instance)
+        BinaryRow oldRow = compactedRow(schema.getRowType(), new Object[] {1, "a"});
+        BinaryRow newRow = compactedRow(schema.getRowType(), new Object[] {1, "a"});
+        BinaryValue oldValue = toBinaryValue(oldRow);
+        assertThat(merger.merge(oldValue, toBinaryValue(newRow))).isSameAs(oldValue);
+
+        // changed write returns the new value
+        BinaryValue changed =
+                toBinaryValue(compactedRow(schema.getRowType(), new Object[] {1, "b"}));
+        assertThat(merger.merge(oldValue, changed)).isSameAs(changed);
+    }
+
+    @Test
     void testCreateAggregateRowMergerWithCompositePrimaryKeyAndMultipleAggTypes() {
         // Create schema with composite primary key and various aggregation function types
         Schema schema =
