@@ -37,12 +37,17 @@ import javax.annotation.Nullable;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.DateTimeException;
+import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
 import java.time.format.DateTimeParseException;
 import java.util.Base64;
+
+import static org.apache.fluss.utils.DateTimeUtils.timestampToMicros;
+import static org.apache.fluss.utils.DateTimeUtils.timestampToNanos;
 
 /** Strict JSON-to-Fluss scalar converter construction. */
 final class JsonToFlussConverters {
@@ -110,10 +115,9 @@ final class JsonToFlussConverters {
             case FLOAT:
                 return (node, path) -> {
                     require(node.isNumber(), path, dataType, "expected a JSON number");
-                    double doubleValue = node.doubleValue();
-                    float value = (float) doubleValue;
+                    float value = node.floatValue();
                     require(
-                            Double.isFinite(doubleValue) && Float.isFinite(value),
+                            Float.isFinite(value),
                             path,
                             dataType,
                             "non-finite or overflowing number");
@@ -135,10 +139,7 @@ final class JsonToFlussConverters {
             case CHAR:
                 return charConverter((CharType) dataType);
             case STRING:
-                return (node, path) -> {
-                    require(node.isTextual(), path, dataType, "expected a JSON string");
-                    return BinaryString.fromString(node.textValue());
-                };
+                return (node, path) -> BinaryString.fromString(textualValue(node, path, dataType));
             case BINARY:
                 return binaryConverter((BinaryType) dataType);
             case BYTES:
@@ -170,6 +171,22 @@ final class JsonToFlussConverters {
         return (node, path) -> {
             require(node.isNumber(), path, dataType, "expected a JSON number");
             BigDecimal value = node.decimalValue();
+            if (value.signum() == 0) {
+                return Decimal.zero(dataType.getPrecision(), dataType.getScale());
+            }
+            // Check the resulting digits before setScale can expand a large JSON exponent.
+            // Use long arithmetic because BigDecimal scales may span the entire int range.
+            long scaledPrecision = (long) value.precision() - value.scale() + dataType.getScale();
+            require(
+                    scaledPrecision <= dataType.getPrecision(),
+                    path,
+                    dataType,
+                    "decimal precision exceeds target");
+            require(
+                    value.stripTrailingZeros().scale() <= dataType.getScale(),
+                    path,
+                    dataType,
+                    "decimal scale exceeds target");
             final BigDecimal scaled;
             try {
                 scaled = value.setScale(dataType.getScale(), RoundingMode.UNNECESSARY);
@@ -239,7 +256,13 @@ final class JsonToFlussConverters {
                 throw invalid(path, dataType, "invalid ISO-8601 local timestamp", e);
             }
             validatePrecision(timestamp.getNano(), dataType.getPrecision(), path, dataType);
-            return TimestampNtz.fromLocalDateTime(timestamp);
+            long millis =
+                    timestampMillis(
+                            timestamp.toInstant(ZoneOffset.UTC),
+                            dataType.getPrecision(),
+                            path,
+                            dataType);
+            return TimestampNtz.fromMillis(millis, timestamp.getNano() % 1_000_000);
         };
     }
 
@@ -257,8 +280,28 @@ final class JsonToFlussConverters {
                         e);
             }
             validatePrecision(timestamp.getNano(), dataType.getPrecision(), path, dataType);
-            return TimestampLtz.fromInstant(timestamp.toInstant());
+            long millis =
+                    timestampMillis(timestamp.toInstant(), dataType.getPrecision(), path, dataType);
+            return TimestampLtz.fromEpochMillis(millis, timestamp.getNano() % 1_000_000);
         };
+    }
+
+    private static long timestampMillis(
+            Instant timestamp, int precision, String path, DataType dataType) {
+        try {
+            long millis = timestamp.toEpochMilli();
+            int nanos = timestamp.getNano() % 1_000_000;
+            // Arrow stores precision 4-6 in microseconds and precision 7-9 in nanoseconds.
+            // Check here as well so Kafka reports the offending JSON field before encoding.
+            if (precision > 6) {
+                timestampToNanos(millis, nanos);
+            } else if (precision > 3) {
+                timestampToMicros(millis, nanos);
+            }
+            return millis;
+        } catch (ArithmeticException e) {
+            throw invalid(path, dataType, "timestamp exceeds storage range", e);
+        }
     }
 
     private static long integralValue(JsonNode node, String path, DataType dataType) {
@@ -269,7 +312,27 @@ final class JsonToFlussConverters {
 
     private static String textualValue(JsonNode node, String path, DataType dataType) {
         require(node.isTextual(), path, dataType, "expected a JSON string");
-        return node.textValue();
+        String value = node.textValue();
+        // Jackson can retain unpaired JSON escapes in Java strings. Reject them before
+        // BinaryString's UTF-8 encoding silently replaces them with a question mark.
+        for (int i = 0; i < value.length(); i++) {
+            char character = value.charAt(i);
+            if (Character.isHighSurrogate(character)) {
+                require(
+                        i + 1 < value.length() && Character.isLowSurrogate(value.charAt(i + 1)),
+                        path,
+                        dataType,
+                        "unpaired UTF-16 surrogate");
+                i++;
+            } else {
+                require(
+                        !Character.isLowSurrogate(character),
+                        path,
+                        dataType,
+                        "unpaired UTF-16 surrogate");
+            }
+        }
+        return value;
     }
 
     private static byte[] decodeBase64(JsonNode node, String path, DataType dataType) {
