@@ -235,13 +235,18 @@ for information on how to setup cloud file systems.
 
 ```shell
 docker compose up -d
-docker compose ps
+docker compose ps --status running --quiet \
+  rustfs coordinator-server tablet-server zookeeper gateway jobmanager taskmanager | wc -l
 ```
 
+The second command should output `7`. A lower number means that one or more
+long-running containers failed to start. Run `docker compose ps -a` to identify them.
+
 :::note
-The `sql-client` service may exit after `docker compose up -d` because no
-interactive terminal is attached. This is expected. You will start a new SQL
-client container with `docker compose run --rm sql-client` later in this guide.
+The count excludes the one-shot `rustfs-init` service and the interactive
+`sql-client` service. The `sql-client` service may exit after `docker compose up -d`
+because no interactive terminal is attached. This is expected. You will start a new
+SQL client container with `docker compose run --rm sql-client` later in this guide.
 :::
 
 5. Wait until the Gateway can reach Fluss:
