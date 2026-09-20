@@ -71,19 +71,8 @@ In this case, when automatic partitioning occurs (Fluss will periodically operat
 
 ### Historical Partition Access
 
-Historical partition lookups run on TabletServers. Configure `datalake.format` and the related
-`datalake.<format>.*` options on every TabletServer, for example:
-
-```yaml title="server.yaml"
-datalake.enabled: true
-datalake.format: paimon
-datalake.paimon.metastore: filesystem
-datalake.paimon.warehouse: /path/to/paimon/warehouse
-```
-
-Also make the Paimon connector, `paimon-bundle`, and required catalog or storage JARs available on
-every TabletServer. Use `${FLUSS_HOME}/plugins/paimon/` for the binary distribution or
-`${FLUSS_HOME}/lib/` for a flat classpath, then restart the TabletServers after changes.
+Before using historical partition lookup, complete the
+[Paimon server-side setup](../../streaming-lakehouse/datalake-formats/paimon.md#historical-partition-lookup-setup).
 
 :::warning
 **After changing `table.datalake.historical-partition.enabled`, restart existing writer and lookup

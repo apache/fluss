@@ -122,6 +122,25 @@ CREATE TABLE fluss_order_with_lake (
 
 For example, you can specify the Paimon property `file.format` to change the file format of the Paimon table, or set `deletion-vectors.enabled` to enable or disable deletion vectors for the Paimon table.
 
+### Historical Partition Lookup Setup
+
+Historical partition lookups run on TabletServers. Configure `datalake.format` and the related
+`datalake.paimon.*` options on every TabletServer, using the same Paimon catalog and warehouse as
+the tiering service, for example:
+
+```yaml title="server.yaml"
+datalake.enabled: true
+datalake.format: paimon
+datalake.paimon.metastore: filesystem
+datalake.paimon.warehouse: /path/to/paimon/warehouse
+```
+
+The Fluss binary distribution already includes the Paimon connector and `paimon-bundle` in
+`${FLUSS_HOME}/plugins/paimon/`. Add any
+[required catalog or storage JARs](../../install-deploy/deploying-streaming-lakehouse.md#fluss-server-jars)
+to this directory on every TabletServer. For example, when using OSS, add `paimon-oss-<version>.jar`
+matching the bundled Paimon version. Restart the TabletServers after changing the configuration or JARs.
+
 ## Read Tables
 
 ### Reading with Apache Flink
