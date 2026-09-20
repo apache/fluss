@@ -517,35 +517,24 @@ If you can't login Docker ID in your region because of network issues, you can f
 
 Next, we need to build and push Docker images for the release candidates. This will enable users to easily test the new functionality using the Quickstart guide in the [Fluss documentation](https://fluss.apache.org/docs/quickstart/flink/) improving accessibility and feedback during the release validation phase.
 
-On the image-build machine, export the recorded `RELEASE_COMMIT` and verify
-that the Dockerfiles and preparation scripts are from that RC. From the
-repository root, check:
+On the image-build machine, export the recorded `RELEASE_COMMIT`. From the
+repository root, verify that the checkout is clean, the Docker inputs come from
+that RC, and the generated legal files match the binary distribution:
 
 ```bash
 test "$(git rev-parse HEAD)" = "${RELEASE_COMMIT:?Set the recorded RC commit}" &&
 git diff --quiet &&
-git diff --cached --quiet
+git diff --cached --quiet &&
+cmp LICENSE-bin build-target/LICENSE &&
+cmp NOTICE-bin build-target/NOTICE &&
+echo "Fluss Docker inputs verified"
+Fluss Docker inputs verified
 ```
 
-Before preparing the Docker build context, verify that the Maven-generated
-legal files exactly match the binary distribution's `LICENSE-bin` and
-`NOTICE-bin` files:
-
-```bash
-$ cmp LICENSE-bin build-target/LICENSE && \
-    cmp NOTICE-bin build-target/NOTICE && \
-    echo "Fluss Docker legal files verified"
-Fluss Docker legal files verified
-```
-
-`cmp` is silent when both files match, so the success message above is the only
-expected output. If either comparison fails, stop the release, verify that the
-checkout is still at the recorded RC commit and clean, rerun
-`RELEASE_VERSION=$RELEASE_VERSION releasing/create_binary_release.sh` from
-`tools/`, and repeat the comparison; continue with the same RC and prepare the
-Docker build context only if it then succeeds without replacing any staged or
-published candidate artifacts; otherwise, fix the packaging and create a new RC
-instead of patching the current one.
+All checks are silent on success, so the message above is the only expected
+output. If any check fails, stop and verify that the image-build machine has
+checked out the intended release branch at the recorded `RELEASE_COMMIT`, then
+run the checks again.
 
 ```bash
 $ rm -rf docker/fluss/build-target/
