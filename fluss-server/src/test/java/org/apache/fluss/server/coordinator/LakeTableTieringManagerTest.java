@@ -176,6 +176,91 @@ class LakeTableTieringManagerTest {
     }
 
     @Test
+    void testDuplicateNormalFinishIsIdempotent() {
+        long tableId = 1L;
+        TablePath tablePath = TablePath.of("db", "table");
+        TableInfo tableInfo = createTableInfo(tableId, tablePath, Duration.ofSeconds(10));
+        tableTieringManager.addNewLakeTable(tableInfo);
+
+        manualClock.advanceTime(Duration.ofSeconds(10));
+        assertRequestTable(tableId, tablePath, 1);
+
+        manualClock.advanceTime(Duration.ofSeconds(1));
+        tableTieringManager.finishTableTiering(tableId, 1, false, new TieringStats(1024L, 100L));
+
+        long firstCompletionTime = manualClock.milliseconds();
+        manualClock.advanceTime(Duration.ofMillis(50));
+        tableTieringManager.finishTableTiering(tableId, 1, false, new TieringStats(2048L, 200L));
+
+        assertThat(tableTieringManager.getTableState(tableId))
+                .isEqualTo(LakeTableTieringManager.TieringState.Scheduled);
+        assertThat(tableTieringManager.getTableLastSuccessTime(tableId))
+                .isEqualTo(firstCompletionTime);
+        assertThat(tableTieringManager.getLastTieringResultField(tableId, r -> r.tierDuration))
+                .isEqualTo(1000L);
+        assertThat(tableTieringManager.getLastTieringResultField(tableId, r -> r.fileSize))
+                .isEqualTo(1024L);
+        assertThat(tableTieringManager.getLastTieringResultField(tableId, r -> r.recordCount))
+                .isEqualTo(100L);
+
+        // The duplicate must not reschedule the next round from the duplicate report time.
+        manualClock.advanceTime(Duration.ofMillis(9950));
+        assertRequestTable(tableId, tablePath, 2);
+
+        // Once the next round starts, the old completion must still be fenced.
+        assertThatThrownBy(
+                        () ->
+                                tableTieringManager.finishTableTiering(
+                                        tableId, 1, false, TieringStats.UNKNOWN))
+                .isInstanceOf(FencedTieringEpochException.class)
+                .hasMessage(
+                        "The tiering epoch %d is not match current epoch %d in coordinator for table %d.",
+                        1, 2, tableId);
+    }
+
+    @Test
+    void testFinishTableTieringRequiresTieringState() {
+        long tableId = 1L;
+        TablePath tablePath = TablePath.of("db", "table");
+        TableInfo tableInfo = createTableInfo(tableId, tablePath, Duration.ofSeconds(10));
+        tableTieringManager.addNewLakeTable(tableInfo);
+
+        assertThatThrownBy(
+                        () ->
+                                tableTieringManager.finishTableTiering(
+                                        tableId, 0, false, new TieringStats(1024L, 100L)))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage(
+                        "The table %d to finish tiering must in Tiering state, but in %s state.",
+                        tableId, LakeTableTieringManager.TieringState.Scheduled);
+        assertThat(tableTieringManager.getTableLastSuccessTime(tableId)).isEqualTo(0L);
+        assertThat(tableTieringManager.getLastTieringResultField(tableId, r -> r.tierDuration))
+                .isEqualTo(-1L);
+
+        manualClock.advanceTime(Duration.ofSeconds(10));
+        waitValue(
+                () ->
+                        tableTieringManager.getTableState(tableId)
+                                        == LakeTableTieringManager.TieringState.Pending
+                                ? Optional.of(true)
+                                : Optional.empty(),
+                Duration.ofSeconds(5),
+                "Table should be in pending state");
+
+        assertThatThrownBy(
+                        () ->
+                                tableTieringManager.finishTableTiering(
+                                        tableId, 1, false, new TieringStats(1024L, 100L)))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage(
+                        "The table %d to finish tiering must in Tiering state, but in %s state.",
+                        tableId, LakeTableTieringManager.TieringState.Pending);
+        assertThat(tableTieringManager.getTableLastSuccessTime(tableId)).isEqualTo(0L);
+        assertThat(tableTieringManager.getLastTieringResultField(tableId, r -> r.tierDuration))
+                .isEqualTo(-1L);
+    }
+
+    @Test
     void testTieringServiceTimeOutReTriggerPending() {
         long tableId1 = 1L;
         TablePath tablePath1 = TablePath.of("db", "table1");
@@ -421,6 +506,17 @@ class LakeTableTieringManagerTest {
 
         // mock lake tiering force finish (e.g., due to exceeding tiering duration)
         tableTieringManager.finishTableTiering(tableId1, 1, true, TieringStats.UNKNOWN);
+
+        // a repeated forced completion uses the old epoch and must still be fenced
+        assertThatThrownBy(
+                        () ->
+                                tableTieringManager.finishTableTiering(
+                                        tableId1, 1, true, TieringStats.UNKNOWN))
+                .isInstanceOf(FencedTieringEpochException.class)
+                .hasMessage(
+                        "The tiering epoch %d is not match current epoch %d in coordinator for table %d.",
+                        1, 2, tableId1);
+
         // should immediately be re-pending and can be requested again without waiting
         assertRequestTable(tableId1, tablePath1, 2);
 
