@@ -219,7 +219,7 @@ CREATE TEMPORARY TABLE page_views (
     'connector'                    = 'faker',
     'rows-per-second'              = '10',
     'fields.email.expression'      =
-        '#{Name.firstName}#{number.numberBetween ''1'',''500''}@example.com',
+        'user#{number.numberBetween ''1'',''500''}@example.com',
     'fields.channel.expression'    =
         '#{Options.option ''app'',''web'',''mini_program''}',
     'fields.city.expression'       =
@@ -253,6 +253,9 @@ After the pipeline is submitted, the prompt returns immediately since Flink DML 
 
 ```sql
 SET 'execution.runtime-mode' = 'batch';
+```
+
+```sql
 SET 'sql-client.execution.result-mode' = 'tableau';
 ```
 
@@ -344,20 +347,20 @@ SELECT * FROM user_dict LIMIT 10;
 
 **Output:**
 ```text
-+-------------------+------+
-|             email |  uid |
-+-------------------+------+
-|  Bo77@example.com | 1740 |
-|  Don1@example.com |  927 |
-|  Ken9@example.com |  912 |
-|  Tad3@example.com | 1525 |
-| Al201@example.com |   89 |
-| Amy15@example.com | 1371 |
-| Bo302@example.com | 1657 |
-| Bob12@example.com |  234 |
-| Eve45@example.com |  891 |
-| Joe78@example.com | 1102 |
-+-------------------+------+
++---------------------+------+
+|               email |  uid |
++---------------------+------+
+|  user77@example.com | 1740 |
+|   user1@example.com |  927 |
+|   user9@example.com |  912 |
+|   user3@example.com | 1525 |
+| user201@example.com |   89 |
+|  user15@example.com | 1371 |
+| user302@example.com | 1657 |
+|  user12@example.com |  234 |
+|  user45@example.com |  891 |
+|  user78@example.com | 1102 |
++---------------------+------+
 10 rows in set
 ```
 
