@@ -247,6 +247,8 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
         String insertPlan = tEnv.explainSql(insertSql, ExplainDetail.JSON_EXECUTION_PLAN);
         if (distributionMode == DistributionMode.BUCKET) {
             assertThat(insertPlan).contains("\"ship_strategy\" : \"BUCKET\"");
+        } else if (distributionMode == DistributionMode.BUCKET_LOAD_BALANCE) {
+            assertThat(insertPlan).contains("\"ship_strategy\" : \"BUCKET_LOAD_BALANCE\"");
         } else {
             assertThat(insertPlan).contains("\"ship_strategy\" : \"FORWARD\"");
         }
@@ -390,10 +392,10 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
                         + "(11, 3511, 'stave'), "
                         + "(12, 3512, 'Tim')";
 
-        if (distributionMode == DistributionMode.BUCKET) {
+        if (distributionMode == DistributionMode.BUCKET
+                || distributionMode == DistributionMode.BUCKET_LOAD_BALANCE) {
             assertThatThrownBy(() -> tEnv.explainSql(insertSql, ExplainDetail.JSON_EXECUTION_PLAN))
-                    .hasMessageContaining(
-                            "BUCKET mode is only supported for log tables with bucket keys");
+                    .hasMessageContaining("mode is only supported for log tables with bucket keys");
             return;
         }
 
@@ -457,6 +459,8 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
         String insertPlan = tEnv.explainSql(insertSql, ExplainDetail.JSON_EXECUTION_PLAN);
         if (distributionMode == DistributionMode.BUCKET) {
             assertThat(insertPlan).contains("\"ship_strategy\" : \"BUCKET\"");
+        } else if (distributionMode == DistributionMode.BUCKET_LOAD_BALANCE) {
+            assertThat(insertPlan).contains("\"ship_strategy\" : \"BUCKET_LOAD_BALANCE\"");
         } else if (distributionMode == DistributionMode.AUTO
                 || distributionMode == DistributionMode.NONE) {
             assertThat(insertPlan).contains("\"ship_strategy\" : \"FORWARD\"");

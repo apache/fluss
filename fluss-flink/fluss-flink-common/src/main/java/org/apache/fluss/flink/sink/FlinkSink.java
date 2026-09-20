@@ -173,6 +173,12 @@ class FlinkSink<InputT> extends SinkAdapter<InputT> {
                     }
                     throw new UnsupportedOperationException(
                             "BUCKET mode is only supported for log tables with bucket keys");
+                case BUCKET_LOAD_BALANCE:
+                    if (!bucketKeys.isEmpty()) {
+                        return bucketLoadBalanceShuffle(input);
+                    }
+                    throw new UnsupportedOperationException(
+                            "BUCKET_LOAD_BALANCE mode is only supported for log tables with bucket keys");
                 case PARTITION_DYNAMIC:
                     if (partitionKeys.isEmpty()) {
                         throw new UnsupportedOperationException(
@@ -229,6 +235,18 @@ class FlinkSink<InputT> extends SinkAdapter<InputT> {
                             toFlussRowType(tableRowType),
                             bucketKeys,
                             partitionKeys,
+                            lakeFormat,
+                            numBucket,
+                            flussSerializationSchema),
+                    input.getParallelism());
+        }
+
+        private DataStream<InputT> bucketLoadBalanceShuffle(DataStream<InputT> input) {
+            return partition(
+                    input,
+                    new BucketLoadBalanceChannelComputer<>(
+                            toFlussRowType(tableRowType),
+                            bucketKeys,
                             lakeFormat,
                             numBucket,
                             flussSerializationSchema),
@@ -331,6 +349,18 @@ class FlinkSink<InputT> extends SinkAdapter<InputT> {
                                             toFlussRowType(tableRowType),
                                             bucketKeys,
                                             partitionKeys,
+                                            lakeFormat,
+                                            numBucket,
+                                            flussSerializationSchema),
+                                    input.getParallelism());
+                    break;
+                case BUCKET_LOAD_BALANCE:
+                    stream =
+                            partition(
+                                    input,
+                                    new BucketLoadBalanceChannelComputer<>(
+                                            toFlussRowType(tableRowType),
+                                            bucketKeys,
                                             lakeFormat,
                                             numBucket,
                                             flussSerializationSchema),

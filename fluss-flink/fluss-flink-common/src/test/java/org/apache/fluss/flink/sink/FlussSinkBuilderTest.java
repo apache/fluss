@@ -160,6 +160,10 @@ class FlussSinkBuilderTest {
         builder.setDistributionMode(DistributionMode.PARTITION_DYNAMIC);
         shuffleMode = getFieldValue(builder, "distributionMode");
         assertThat(shuffleMode).isEqualTo(DistributionMode.PARTITION_DYNAMIC);
+
+        builder.setDistributionMode(DistributionMode.BUCKET_LOAD_BALANCE);
+        shuffleMode = getFieldValue(builder, "distributionMode");
+        assertThat(shuffleMode).isEqualTo(DistributionMode.BUCKET_LOAD_BALANCE);
     }
 
     @Test

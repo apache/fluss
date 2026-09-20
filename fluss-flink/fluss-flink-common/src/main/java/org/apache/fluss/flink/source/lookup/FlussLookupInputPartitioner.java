@@ -25,7 +25,6 @@ import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.encode.CompactedKeyEncoder;
 import org.apache.fluss.row.encode.KeyEncoder;
-import org.apache.fluss.utils.MathUtils;
 
 import org.apache.flink.table.data.RowData;
 import org.apache.flink.table.types.logical.RowType;
@@ -33,7 +32,6 @@ import org.apache.flink.table.types.logical.RowType;
 import javax.annotation.Nullable;
 
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.List;
 
 import static org.apache.fluss.utils.Preconditions.checkArgument;
@@ -44,11 +42,10 @@ import static org.apache.fluss.utils.Preconditions.checkNotNull;
  * bucketing used by {@code PrimaryKeyLookuper}/{@code PrefixKeyLookuper} (bucket-key encoding +
  * {@link BucketingFunction}).
  *
- * <p>Partitioned and non-partitioned tables use the same strategy. When the bucket and subtask
- * counts do not evenly divide each other, weighted logical slots balance the expected load across
- * subtasks. This keeps every lookup key on a stable subtask while bounding each bucket's RPC
- * fan-out. Existing bucket-affinity mappings are preserved when either count is an exact multiple
- * of the other.
+ * <p>The routing delegates to {@link
+ * org.apache.fluss.flink.sink.BucketLoadBalanceChannelComputer#routeByBucket} which uses LCM-based
+ * logical slot assignment to balance load evenly across all subtasks while keeping every lookup key
+ * on a stable subtask.
  */
 public class FlussLookupInputPartitioner implements InputDataPartitionerAdapter {
 
@@ -128,47 +125,17 @@ public class FlussLookupInputPartitioner implements InputDataPartitionerAdapter 
         RowData normalizedKey = normalizer.normalizeLookupKey(joinKeys);
         InternalRow flussKeyRow = reuseRow.replace(normalizedKey);
         byte[] bucketKeyBytes = bucketKeyEncoder.encodeKey(flussKeyRow);
-        // BucketingFunction always returns a non-negative bucket id.
-        int bucketId = bucketingFunction.bucketing(bucketKeyBytes, numBuckets);
-        if (numBuckets >= numPartitions && numBuckets % numPartitions == 0) {
-            return bucketId % numPartitions;
-        }
-
         byte[] lookupKeyBytes = lookupKeyEncoder.encodeKey(flussKeyRow);
-        // Do not derive this hash from the bucket hash. The low bits of that hash determine the
-        // bucket id, so reusing it can make some logical slots unreachable.
-        int lookupKeyHash = MathUtils.murmurHash(Arrays.hashCode(lookupKeyBytes));
-        if (numPartitions > numBuckets && numPartitions % numBuckets == 0) {
-            // Preserve the original disjoint round-robin assignment when every bucket owns the
-            // same number of subtasks.
-            int candidateCount = numPartitions / numBuckets;
-            return (lookupKeyHash % candidateCount) * numBuckets + bucketId;
-        }
-
-        // Represent the assignment with LCM(numBuckets, numPartitions) logical slots without
-        // materializing them. Each bucket owns numPartitions / gcd consecutive slots and each
-        // subtask owns numBuckets / gcd consecutive slots. A uniform hash within a bucket therefore
-        // gives every subtask the same expected number of slots, while a bucket can only fan out to
-        // the subtasks whose slot ranges overlap its own range.
-        int gcd = greatestCommonDivisor(numBuckets, numPartitions);
-        int slotsPerBucket = numPartitions / gcd;
-        int slotsPerSubtask = numBuckets / gcd;
-        int slotWithinBucket = lookupKeyHash % slotsPerBucket;
-        long logicalSlot = (long) bucketId * slotsPerBucket + slotWithinBucket;
-        return (int) (logicalSlot / slotsPerSubtask);
+        // Delegate to the shared bucket-load-balance routing algorithm.
+        // bucketKeyBytes determines the bucket; lookupKeyBytes provides a separate hash
+        // domain so that different lookup keys in the same bucket are spread across the
+        // bucket's subtask range while the same lookup key always lands on the same subtask.
+        return org.apache.fluss.flink.sink.BucketLoadBalanceChannelComputer.routeByBucket(
+                bucketKeyBytes, lookupKeyBytes, numBuckets, numPartitions, bucketingFunction);
     }
 
     @Override
     public boolean isDeterministic() {
         return true;
-    }
-
-    private static int greatestCommonDivisor(int first, int second) {
-        while (second != 0) {
-            int remainder = first % second;
-            first = second;
-            second = remainder;
-        }
-        return first;
     }
 }

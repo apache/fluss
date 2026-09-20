@@ -91,12 +91,13 @@ public class FlinkConnectorOptionsUtils {
             @Nullable MergeEngineType mergeEngineType, DistributionMode distributionMode) {
         if (mergeEngineType != null
                 && distributionMode != DistributionMode.BUCKET
+                && distributionMode != DistributionMode.BUCKET_LOAD_BALANCE
                 && distributionMode != DistributionMode.AUTO) {
             throw new IllegalArgumentException(
                     String.format(
                             "For primary key tables with merge engine ('%s'), "
-                                    + "'sink.distribution-mode' must be 'bucket' or 'auto' (default). "
-                                    + "Disabling shuffle breaks merge semantics because records with the same key "
+                                    + "'sink.distribution-mode' must be 'bucket', 'bucket_load_balance' or 'auto' (default). "
+                                    + "Disabling keyed shuffle breaks merge semantics because records with the same key "
                                     + "must be processed by the same task. Current mode: %s",
                             mergeEngineType, distributionMode));
         }
