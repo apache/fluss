@@ -294,7 +294,8 @@ When using SET to modify [Storage Options](engine-flink/options.md#storage-optio
 - The following [Storage Options](engine-flink/options.md#storage-options):
   - `table.datalake.enabled`: Enable or disable lakehouse storage for the table.
   - `table.datalake.historical-partition.enabled`: Enable or disable
-    [historical partition access](../table-design/data-distribution/partitioning.md#historical-partition-access).
+    [historical partition access](../table-design/data-distribution/partitioning.md#historical-partition-access),
+    including writes to expired partitions and lookups of expired partition data.
   - `table.datalake.freshness`: Set the data freshness for lakehouse storage.
   - `table.log.tiered.local-segments`: Set the number of log segments to retain locally when tiered storage is enabled.
   - `table.auto-partition.num-retention`: Set the number of historical partitions to retain for auto partitioning.
@@ -316,6 +317,7 @@ ALTER TABLE my_table SET ('table.log.tiered.local-segments' = '5');
 
 **Limits**
 - If lakehouse storage (`table.datalake.enabled`) is already enabled for a table, options with lakehouse format prefixes (e.g., `paimon.*`) cannot be modified again.
+- After changing `table.datalake.historical-partition.enabled`, restart existing write and lookup jobs that need historical partition access so that their clients load the updated table configuration.
 
 
 ### RESET properties

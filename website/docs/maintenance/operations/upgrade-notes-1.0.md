@@ -188,9 +188,9 @@ If your existing deployment or internal scripts only set `datalake.format`, they
 
 For new configuration examples and operational guidance, we recommend explicitly configuring `datalake.enabled` together with `datalake.format`.
 
-### Historical Partition Lookup
+### Historical Partition Access
 
-Historical partition lookup through `table.datalake.historical-partition.enabled` is disabled by default and supports only **auto-partitioned Paimon primary-key tables with a single partition key**. After changing this option, restart existing lookup jobs that need access to historical partition data so their clients load the updated table configuration. See [Modifying Table Properties](../../engine-flink/ddl.md#set-properties).
+Historical partition access through `table.datalake.historical-partition.enabled` is disabled by default and supports only **auto-partitioned Paimon tables with a single partition key**. When enabled, both log and primary-key tables support writes to expired partitions, and lookups can access expired partition data. After changing this option, restart existing write and lookup jobs that need historical partition access so their clients load the updated table configuration. See [Modifying Table Properties](../../engine-flink/ddl.md#set-properties).
 
 ### Lake Table Schema Changes (FIP-27)
 
