@@ -270,7 +270,7 @@ const config: Config = {
 
   ],
   themeConfig: {
-    image: 'img/logo/png/colored_logo.png',
+    image: 'img/social/fluss-social-card.png',
     colorMode: {
       defaultMode: 'light',
       disableSwitch: false,
