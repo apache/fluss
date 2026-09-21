@@ -29,6 +29,7 @@ import org.apache.fluss.lake.lakestorage.LakeCatalog;
 import org.apache.fluss.lake.lakestorage.LakeStorage;
 import org.apache.fluss.lake.lakestorage.LakeStoragePlugin;
 import org.apache.fluss.lake.lakestorage.LakeTableLookupRuntime;
+import org.apache.fluss.lake.lakestorage.LakeTableLookupRuntime.LookupRuntimeOptions;
 import org.apache.fluss.lake.lakestorage.LakeTableLookuper;
 import org.apache.fluss.lake.serializer.SimpleVersionedSerializer;
 import org.apache.fluss.lake.source.LakeSource;
@@ -91,7 +92,7 @@ public class TestingPaimonStoragePlugin implements LakeStoragePlugin {
 
         @Override
         public LakeTableLookupRuntime createLakeTableLookupRuntime(
-                String ioTmpDir, long lookupCacheMaxDiskBytes) {
+                String ioTmpDir, LookupRuntimeOptions options) {
             return new LakeTableLookupRuntime() {
                 @Override
                 public LakeTableLookuper createLakeTableLookuper(
@@ -100,7 +101,7 @@ public class TestingPaimonStoragePlugin implements LakeStoragePlugin {
                 }
 
                 @Override
-                public void updateLookupCacheMaxDiskBytes(long lookupCacheMaxDiskBytes) {}
+                public void reconfigure(LookupRuntimeOptions options) {}
 
                 @Override
                 public void close() {}

@@ -22,9 +22,10 @@ import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.TableConfig;
 import org.apache.fluss.metadata.TablePath;
 
+import static org.apache.fluss.utils.Preconditions.checkArgument;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
-/** TabletServer-scoped runtime for creating lake table lookupers. */
+/** TabletServer-scoped runtime managing shared resources and creating lake table lookupers. */
 @PublicEvolving
 public interface LakeTableLookupRuntime extends AutoCloseable {
 
@@ -37,8 +38,45 @@ public interface LakeTableLookupRuntime extends AutoCloseable {
      */
     LakeTableLookuper createLakeTableLookuper(TablePath tablePath, Context context);
 
-    /** Updates the maximum local lookup cache size in bytes. */
-    void updateLookupCacheMaxDiskBytes(long lookupCacheMaxDiskBytes);
+    /**
+     * Applies a new snapshot of the runtime resource settings to existing and future lookupers
+     * without replacing them.
+     *
+     * <p>This method may be called concurrently with lookuper creation and lookups. Implementations
+     * must apply the settings in a thread-safe manner. Lake-format and table-specific configuration
+     * is outside the scope of this method.
+     *
+     * @param options the new runtime resource settings
+     */
+    void reconfigure(LookupRuntimeOptions options);
+
+    /**
+     * Immutable snapshot of the format-independent resource settings for a lookup runtime.
+     *
+     * <p>These settings apply to resources shared by all table lookupers in one runtime.
+     * Lake-format and table-specific configuration is supplied separately when creating a lookuper.
+     */
+    final class LookupRuntimeOptions {
+
+        private final long localCacheMaxBytes;
+
+        /**
+         * Creates runtime resource settings.
+         *
+         * @param localCacheMaxBytes positive disk-space budget in bytes for local caches shared by
+         *     all lookupers in the runtime; implementations without local disk caches may ignore
+         *     this budget
+         */
+        public LookupRuntimeOptions(long localCacheMaxBytes) {
+            checkArgument(localCacheMaxBytes > 0, "localCacheMaxBytes must be greater than 0.");
+            this.localCacheMaxBytes = localCacheMaxBytes;
+        }
+
+        /** Returns the runtime-wide disk-space budget for local caches, in bytes. */
+        public long localCacheMaxBytes() {
+            return localCacheMaxBytes;
+        }
+    }
 
     /** Runtime context for creating a lake table lookuper. */
     final class Context {

@@ -20,6 +20,7 @@ package org.apache.fluss.lake.paimon;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.lake.lakestorage.LakeStorage;
 import org.apache.fluss.lake.lakestorage.LakeTableLookupRuntime;
+import org.apache.fluss.lake.lakestorage.LakeTableLookupRuntime.LookupRuntimeOptions;
 import org.apache.fluss.lake.lakestorage.LakeTableLookuper;
 import org.apache.fluss.lake.paimon.lookup.PaimonLakeTableLookuper;
 import org.apache.fluss.lake.paimon.lookup.PaimonScanBasedTableLookuper;
@@ -39,7 +40,6 @@ import org.apache.paimon.CoreOptions;
 import org.apache.paimon.disk.IOManager;
 import org.apache.paimon.options.MemorySize;
 
-import static org.apache.fluss.utils.Preconditions.checkArgument;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
 /** Paimon implementation of {@link LakeStorage}. */
@@ -68,8 +68,8 @@ public class PaimonLakeStorage implements LakeStorage {
 
     @Override
     public LakeTableLookupRuntime createLakeTableLookupRuntime(
-            String ioTmpDir, long lookupCacheMaxDiskBytes) {
-        return new PaimonLakeTableLookupRuntime(ioTmpDir, lookupCacheMaxDiskBytes);
+            String ioTmpDir, LookupRuntimeOptions options) {
+        return new PaimonLakeTableLookupRuntime(ioTmpDir, options);
     }
 
     /** Paimon lookup runtime sharing one I/O manager across table lookupers. */
@@ -77,22 +77,22 @@ public class PaimonLakeStorage implements LakeStorage {
         private final IOManager ioManager;
         private final SharedLookupFileCache lookupFileCache;
 
-        private PaimonLakeTableLookupRuntime(String ioTmpDir, long lookupCacheMaxDiskBytes) {
-            checkArgument(
-                    lookupCacheMaxDiskBytes > 0, "lookupCacheMaxDiskBytes must be greater than 0.");
+        private PaimonLakeTableLookupRuntime(String ioTmpDir, LookupRuntimeOptions options) {
+            checkNotNull(options, "options must not be null.");
             this.ioManager = IOManager.create(checkNotNull(ioTmpDir, "ioTmpDir must not be null."));
-            // ponytail: one runtime-wide retention; add a server option if this needs tuning.
             this.lookupFileCache =
                     new SharedLookupFileCache(
                             CoreOptions.LOOKUP_CACHE_FILE_RETENTION.defaultValue(),
-                            new MemorySize(lookupCacheMaxDiskBytes));
+                            new MemorySize(options.localCacheMaxBytes()));
         }
 
         @Override
         public LakeTableLookuper createLakeTableLookuper(TablePath tablePath, Context context) {
             if (context.tableConfig().getHistoricalLookupMode() == LakeLookupMode.SCAN) {
                 return new PaimonScanBasedTableLookuper(
-                        new Configuration(context.lakeConfiguration()), tablePath, context.tableConfig());
+                        new Configuration(context.lakeConfiguration()),
+                        tablePath,
+                        context.tableConfig());
             }
             return new PaimonLakeTableLookuper(
                     new Configuration(context.lakeConfiguration()),
@@ -105,10 +105,9 @@ public class PaimonLakeStorage implements LakeStorage {
         }
 
         @Override
-        public void updateLookupCacheMaxDiskBytes(long lookupCacheMaxDiskBytes) {
-            checkArgument(
-                    lookupCacheMaxDiskBytes > 0, "lookupCacheMaxDiskBytes must be greater than 0.");
-            lookupFileCache.updateMaxDiskSize(new MemorySize(lookupCacheMaxDiskBytes));
+        public void reconfigure(LookupRuntimeOptions options) {
+            checkNotNull(options, "options must not be null.");
+            lookupFileCache.updateMaxDiskSize(new MemorySize(options.localCacheMaxBytes()));
         }
 
         @Override
