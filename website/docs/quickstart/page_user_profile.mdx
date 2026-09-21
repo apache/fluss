@@ -123,11 +123,12 @@ Before proceeding, ensure that [Docker](https://docs.docker.com/engine/install/)
    docker compose up -d
    ```
 
-4. Confirm all containers are running.
+4. Count the long-running containers (the interactive `sql-client` service is excluded).
    ```shell
-   docker compose ps
+   docker compose ps --status running --quiet \
+     coordinator-server tablet-server zookeeper jobmanager taskmanager | wc -l
    ```
-   You should see `coordinator-server`, `tablet-server`, `zookeeper`, `jobmanager`, `taskmanager`, and `sql-client` all in the `running` state.
+   The expected output is `5`. A lower number means that one or more containers failed to start. Run `docker compose ps -a` to identify them. The `sql-client` service may exit because no interactive terminal is attached; this is expected because a new SQL client container is started later with `docker compose run sql-client`.
 
 :::note
 All the following commands involving `docker compose` should be executed in the working directory that contains the `docker-compose.yml` file.
