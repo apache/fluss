@@ -58,8 +58,6 @@ import static org.apache.paimon.table.sink.BatchWriteBuilder.COMMIT_IDENTIFIER;
 public class PaimonLakeCommitter implements LakeCommitter<PaimonWriteResult, PaimonCommittable> {
 
     private static final Logger LOG = LoggerFactory.getLogger(PaimonLakeCommitter.class);
-    private static final String PAIMON_COMMIT_USER_PREFIX = FLUSS_LAKE_TIERING_COMMIT_USER + "_";
-    private static final String UNIQUE_COMMIT_USER_PREFIX = PAIMON_COMMIT_USER_PREFIX + "_";
 
     private final Catalog paimonCatalog;
     private final FileStoreTable fileStoreTable;
@@ -270,7 +268,8 @@ public class PaimonLakeCommitter implements LakeCommitter<PaimonWriteResult, Pai
             dynamicOptions.put(
                     CoreOptions.COMMIT_CALLBACKS.key(),
                     PaimonLakeCommitter.PaimonCommitCallback.class.getName());
-            dynamicOptions.put(CoreOptions.COMMIT_USER_PREFIX.key(), PAIMON_COMMIT_USER_PREFIX);
+            dynamicOptions.put(
+                    CoreOptions.COMMIT_USER_PREFIX.key(), FLUSS_LAKE_TIERING_COMMIT_USER);
 
             boolean writeOnly = !isAutoSnapshotExpiration;
             dynamicOptions.put(CoreOptions.WRITE_ONLY.key(), Boolean.toString(writeOnly));
@@ -294,8 +293,7 @@ public class PaimonLakeCommitter implements LakeCommitter<PaimonWriteResult, Pai
     }
 
     private static boolean isFlussLakeTieringCommitUser(String commitUser) {
-        return FLUSS_LAKE_TIERING_COMMIT_USER.equals(commitUser)
-                || commitUser.startsWith(UNIQUE_COMMIT_USER_PREFIX);
+        return commitUser.startsWith(FLUSS_LAKE_TIERING_COMMIT_USER);
     }
 
     /** A {@link CommitCallback} to save paimon commit snapshot info. */

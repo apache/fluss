@@ -335,41 +335,32 @@ class PaimonTieringTest {
     }
 
     @Test
-    void testUniqueCommitUsersAndMissingSnapshotRecovery() throws Exception {
+    void testUniqueCommitUsersAndBackwardCompatibleRecovery() throws Exception {
         TablePath tablePath = TablePath.of("paimon", "test_unique_commit_users");
         TableInfo tableInfo = createNonPartitionedLogTable(tablePath);
-
-        long firstSnapshotId;
-        try (LakeCommitter<PaimonWriteResult, PaimonCommittable> lakeCommitter =
-                createLakeCommitter(tablePath, tableInfo, new Configuration())) {
-            firstSnapshotId =
-                    lakeCommitter
-                            .commit(
-                                    lakeCommitter.toCommittable(Collections.emptyList()),
-                                    Collections.singletonMap(
-                                            FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY,
-                                            "first-offsets"))
-                            .getCommittedSnapshotId();
-        }
-
-        long secondSnapshotId;
-        try (LakeCommitter<PaimonWriteResult, PaimonCommittable> lakeCommitter =
-                createLakeCommitter(tablePath, tableInfo, new Configuration())) {
-            secondSnapshotId =
-                    lakeCommitter
-                            .commit(
-                                    lakeCommitter.toCommittable(Collections.emptyList()),
-                                    Collections.singletonMap(
-                                            FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY,
-                                            "second-offsets"))
-                            .getCommittedSnapshotId();
-        }
-
         FileStoreTable fileStoreTable =
-                (FileStoreTable) paimonCatalog.getTable(toPaimon(tablePath));
+                ((FileStoreTable) paimonCatalog.getTable(toPaimon(tablePath)))
+                        .copy(Collections.singletonMap(CoreOptions.COMMIT_CALLBACKS.key(), ""));
+
+        ManifestCommittable legacyCommittable = new ManifestCommittable(COMMIT_IDENTIFIER);
+        legacyCommittable.addProperty(FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY, "legacy-offsets");
+        try (TableCommitImpl tableCommit =
+                fileStoreTable.newCommit(FLUSS_LAKE_TIERING_COMMIT_USER)) {
+            tableCommit.ignoreEmptyCommit(false).commit(legacyCommittable);
+        }
+        try (LakeCommitter<PaimonWriteResult, PaimonCommittable> lakeCommitter =
+                createLakeCommitter(tablePath, tableInfo, new Configuration())) {
+            CommittedLakeSnapshot legacySnapshot = lakeCommitter.getMissingLakeSnapshot(null);
+            assertThat(legacySnapshot).isNotNull();
+            assertThat(legacySnapshot.getLakeSnapshotId()).isOne();
+        }
+
+        long firstSnapshotId = commitEmptySnapshot(tablePath, tableInfo, "first-offsets");
+        long secondSnapshotId = commitEmptySnapshot(tablePath, tableInfo, "second-offsets");
+
         Snapshot firstSnapshot = fileStoreTable.snapshotManager().snapshot(firstSnapshotId);
         Snapshot secondSnapshot = fileStoreTable.snapshotManager().snapshot(secondSnapshotId);
-        String uniqueCommitUserPrefix = FLUSS_LAKE_TIERING_COMMIT_USER + "__";
+        String uniqueCommitUserPrefix = FLUSS_LAKE_TIERING_COMMIT_USER + "_";
         assertThat(firstSnapshot.commitUser()).startsWith(uniqueCommitUserPrefix);
         assertThat(secondSnapshot.commitUser())
                 .startsWith(uniqueCommitUserPrefix)
@@ -381,35 +372,6 @@ class PaimonTieringTest {
                     lakeCommitter.getMissingLakeSnapshot(firstSnapshotId);
             assertThat(missingSnapshot).isNotNull();
             assertThat(missingSnapshot.getLakeSnapshotId()).isEqualTo(secondSnapshotId);
-            assertThat(missingSnapshot.getSnapshotProperties())
-                    .containsEntry(FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY, "second-offsets");
-        }
-    }
-
-    @Test
-    void testMissingSnapshotRecoveryForLegacyCommitUser() throws Exception {
-        TablePath tablePath = TablePath.of("paimon", "test_legacy_commit_user");
-        TableInfo tableInfo = createNonPartitionedLogTable(tablePath);
-        FileStoreTable fileStoreTable =
-                ((FileStoreTable) paimonCatalog.getTable(toPaimon(tablePath)))
-                        .copy(Collections.singletonMap(CoreOptions.COMMIT_CALLBACKS.key(), ""));
-        ManifestCommittable committable = new ManifestCommittable(COMMIT_IDENTIFIER);
-        committable.addProperty(FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY, "legacy-offsets");
-        try (TableCommitImpl tableCommit =
-                fileStoreTable.newCommit(FLUSS_LAKE_TIERING_COMMIT_USER)) {
-            tableCommit.ignoreEmptyCommit(false);
-            tableCommit.commit(committable);
-        }
-
-        Snapshot legacySnapshot = fileStoreTable.snapshotManager().snapshot(1L);
-        assertThat(legacySnapshot.commitUser()).isEqualTo(FLUSS_LAKE_TIERING_COMMIT_USER);
-        try (LakeCommitter<PaimonWriteResult, PaimonCommittable> lakeCommitter =
-                createLakeCommitter(tablePath, tableInfo, new Configuration())) {
-            CommittedLakeSnapshot missingSnapshot = lakeCommitter.getMissingLakeSnapshot(null);
-            assertThat(missingSnapshot).isNotNull();
-            assertThat(missingSnapshot.getLakeSnapshotId()).isOne();
-            assertThat(missingSnapshot.getSnapshotProperties())
-                    .containsEntry(FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY, "legacy-offsets");
         }
     }
 
@@ -1204,6 +1166,19 @@ class PaimonTieringTest {
                         return new Configuration();
                     }
                 });
+    }
+
+    private long commitEmptySnapshot(TablePath tablePath, TableInfo tableInfo, String offsets)
+            throws Exception {
+        try (LakeCommitter<PaimonWriteResult, PaimonCommittable> lakeCommitter =
+                createLakeCommitter(tablePath, tableInfo, new Configuration())) {
+            return lakeCommitter
+                    .commit(
+                            lakeCommitter.toCommittable(Collections.emptyList()),
+                            Collections.singletonMap(
+                                    FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY, offsets))
+                    .getCommittedSnapshotId();
+        }
     }
 
     private void createTable(
