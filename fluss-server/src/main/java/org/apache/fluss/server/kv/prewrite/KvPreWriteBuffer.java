@@ -127,6 +127,10 @@ public class KvPreWriteBuffer implements AutoCloseable {
     // under the kv write lock (or in single-threaded tests) to be exact.
     private long memoryUsageBytes = 0;
 
+    // Accounting delta accumulated by the put path since the last publish; guarded by the kv
+    // write lock.
+    private long unpublishedDeltaBytes = 0;
+
     private boolean closed;
 
     public KvPreWriteBuffer(
@@ -306,6 +310,12 @@ public class KvPreWriteBuffer implements AutoCloseable {
         return memoryUsageBytes;
     }
 
+    /** Returns the accounting delta accumulated by the put path but not yet published. */
+    @VisibleForTesting
+    long getUnpublishedDeltaBytes() {
+        return unpublishedDeltaBytes;
+    }
+
     /**
      * Prepares a prefix of entries for asynchronous flush without removing them from the buffer.
      *
@@ -393,14 +403,30 @@ public class KvPreWriteBuffer implements AutoCloseable {
 
     /**
      * Adds an entry to the incrementally maintained memory accounting. An entry without a previous
-     * version is the latest version of a new key and thus adds one map node. The put path appends
-     * entries one by one, so each accounted entry is published to the shared counter directly.
+     * version is the latest version of a new key and thus adds one map node. The shared counter is
+     * not updated here: the put path accumulates the delta locally and {@link
+     * #publishPendingAccountingDelta()} applies it to the shared counter once per write batch.
      */
     private void addToAccounting(KvEntry entry) {
         pendingFlushBytes += entryBytes(entry.getKey(), entry.getValue());
         long accountedBytes = entryAccountedBytes(entry, entry.previousEntry == null);
         memoryUsageBytes += accountedBytes;
-        memoryUsageBytesCounter.addAndGet(accountedBytes);
+        unpublishedDeltaBytes += accountedBytes;
+    }
+
+    /**
+     * Publishes the accounting delta accumulated by the put path since the last publish to the
+     * shared counter in one update, so a write batch performs a single atomic update instead of one
+     * per record. Called at batch boundaries, i.e. before the kv write lock is released; until then
+     * the shared counter briefly under-reports the local accounting, which is acceptable for an
+     * observability metric. Must be called under the kv write lock.
+     */
+    public void publishPendingAccountingDelta() {
+        if (unpublishedDeltaBytes != 0) {
+            long delta = unpublishedDeltaBytes;
+            unpublishedDeltaBytes = 0;
+            memoryUsageBytesCounter.addAndGet(delta);
+        }
     }
 
     /**
@@ -436,8 +462,9 @@ public class KvPreWriteBuffer implements AutoCloseable {
             return;
         }
         closed = true;
-        memoryUsageBytesCounter.addAndGet(-memoryUsageBytes);
+        memoryUsageBytesCounter.addAndGet(unpublishedDeltaBytes - memoryUsageBytes);
         memoryUsageBytes = 0;
+        unpublishedDeltaBytes = 0;
         allKvEntries.clear();
         kvEntryMap.clear();
         maxLogSequenceNumber = -1;

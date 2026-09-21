@@ -378,16 +378,21 @@ class KvPreWriteBufferTest {
     private static void bufferInsert(
             KvPreWriteBuffer kvPreWriteBuffer, String key, String value, int elementCount) {
         kvPreWriteBuffer.insert(toKey(key), value.getBytes(), elementCount);
+        // each helper call is one write batch; publish its accounting delta eagerly so tests
+        // observe the shared counter in sync with the local accounting
+        kvPreWriteBuffer.publishPendingAccountingDelta();
     }
 
     private static void bufferUpdate(
             KvPreWriteBuffer kvPreWriteBuffer, String key, String value, int elementCount) {
         kvPreWriteBuffer.update(toKey(key), value.getBytes(), elementCount);
+        kvPreWriteBuffer.publishPendingAccountingDelta();
     }
 
     private static void bufferDelete(
             KvPreWriteBuffer kvPreWriteBuffer, String key, int elementCount) {
         kvPreWriteBuffer.delete(toKey(key), elementCount);
+        kvPreWriteBuffer.publishPendingAccountingDelta();
     }
 
     @Test
@@ -554,9 +559,14 @@ class KvPreWriteBufferTest {
         bufferInsert(reference, "k", "v1", 1);
         long singleVersionUsage = reference.memoryUsageBytes();
 
-        // v1 and v2 for the same key: only the latest version holds the key's map node
+        // v1 and v2 for the same key: only the latest version holds the key's map node. The
+        // put path accumulates the delta locally, so before the publish the shared counter
+        // lags behind the local accounting by the batch delta (a brief under-count)
         buffer.insert(key, "v1".getBytes(), 1);
         buffer.insert(key, "v2".getBytes(), 2);
+        assertThat(sharedMemoryUsageBytes.get()).isEqualTo(0L);
+        assertThat(buffer.memoryUsageBytes()).isGreaterThan(0L);
+        buffer.publishPendingAccountingDelta();
         assertThat(sharedMemoryUsageBytes.get()).isEqualTo(buffer.memoryUsageBytes());
 
         // truncating v2 reinstates v1 as the mapped version; the map-node accounting must be
@@ -608,6 +618,39 @@ class KvPreWriteBufferTest {
         assertThat(sharedMemoryUsageBytes.get()).isEqualTo(reference.memoryUsageBytes());
         assertThat(sharedMemoryUsageBytes.get()).isEqualTo(buffer.memoryUsageBytes());
         assertThat(sharedMemoryUsageBytes.get()).isLessThan(usageBefore);
+    }
+
+    @Test
+    void testPutPathAccountingPublishedAtBatchBoundary() {
+        AtomicLong sharedMemoryUsageBytes = new AtomicLong();
+        KvPreWriteBuffer buffer =
+                new KvPreWriteBuffer(
+                        TestingMetricGroups.TABLET_SERVER_METRICS, sharedMemoryUsageBytes);
+        KvPreWriteBuffer.Key key = toKey("k");
+
+        // a write batch of three mutations accumulates locally; the shared counter sees
+        // nothing until the batch boundary publishes the whole delta in one update
+        buffer.insert(key, "v1".getBytes(), 1);
+        buffer.insert(key, "v2".getBytes(), 2);
+        buffer.delete(key, 3);
+        assertThat(sharedMemoryUsageBytes.get()).isEqualTo(0L);
+        assertThat(buffer.memoryUsageBytes()).isGreaterThan(0L);
+
+        buffer.publishPendingAccountingDelta();
+        assertThat(sharedMemoryUsageBytes.get()).isEqualTo(buffer.memoryUsageBytes());
+
+        // publishing again without new mutations is a no-op
+        buffer.publishPendingAccountingDelta();
+        assertThat(sharedMemoryUsageBytes.get()).isEqualTo(buffer.memoryUsageBytes());
+
+        // the local accounting, including any delta not yet published, is released on close
+        buffer.insert(key, "v4".getBytes(), 4);
+        assertThat(sharedMemoryUsageBytes.get())
+                .isEqualTo(buffer.memoryUsageBytes() - buffer.getUnpublishedDeltaBytes());
+        buffer.close();
+        assertThat(sharedMemoryUsageBytes.get()).isEqualTo(0L);
+        buffer.close();
+        assertThat(sharedMemoryUsageBytes.get()).isEqualTo(0L);
     }
 
     @Test

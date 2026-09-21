@@ -841,14 +841,19 @@ public final class KvTablet {
                                         tableBucket));
                     }
 
-                    LogAppendInfo appendInfo =
-                            kvWriteProcessor.putAsLeader(
-                                    kvRecords,
-                                    targetColumns,
-                                    mergeMode,
-                                    kvStateAccessor,
-                                    originalPartitionName,
-                                    historicalValueLookup);
+                    LogAppendInfo appendInfo;
+                    try {
+                        appendInfo =
+                                kvWriteProcessor.putAsLeader(
+                                        kvRecords,
+                                        targetColumns,
+                                        mergeMode,
+                                        kvStateAccessor,
+                                        originalPartitionName,
+                                        historicalValueLookup);
+                    } finally {
+                        kvPreWriteBuffer.publishPendingAccountingDelta();
+                    }
                     if (!appendInfo.duplicated()) {
                         // KvWriteProcessor appends one WAL batch for each accepted KV batch.
                         kvPreWriteBuffer.markWalBatchEnd(appendInfo.lastOffset() + 1);
