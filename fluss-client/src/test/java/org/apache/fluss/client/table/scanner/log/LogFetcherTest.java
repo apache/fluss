@@ -39,12 +39,16 @@ import org.apache.fluss.rpc.protocol.ApiError;
 import org.apache.fluss.rpc.protocol.FetchLogReadPreference;
 import org.apache.fluss.server.entity.FetchReqInfo;
 import org.apache.fluss.server.tablet.TestTabletServerGateway;
+import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.ArrowBuf;
+import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.ChunkedAllocationManager;
 import org.apache.fluss.utils.IOUtils;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import java.io.IOException;
+import java.lang.reflect.Field;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
@@ -54,6 +58,7 @@ import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.apache.fluss.client.metadata.TestingMetadataUpdater.NODE1;
@@ -66,6 +71,7 @@ import static org.apache.fluss.record.TestData.DATA1_TABLE_PATH;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getFetchLogData;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeFetchLogResponse;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** UT Test for {@link LogFetcher}. */
 public class LogFetcherTest {
@@ -220,6 +226,87 @@ public class LogFetcherTest {
                     .isEqualTo(FetchLogReadPreference.REMOTE_FIRST.value());
         } finally {
             remoteFirstFetcher.close();
+        }
+    }
+
+    @Test
+    void testCloseClosesRemainingContextsWhenOneFails() throws Exception {
+        Field contextsField = LogFetcher.class.getDeclaredField("tableReadContexts");
+        contextsField.setAccessible(true);
+        @SuppressWarnings("unchecked")
+        Map<Long, LogFetcher.TableReadContext> contexts =
+                (Map<Long, LogFetcher.TableReadContext>) contextsField.get(logFetcher);
+
+        AtomicBoolean succeedingClosed = new AtomicBoolean(false);
+        LogFetcher.TableReadContext succeeding =
+                new LogFetcher.TableReadContext(
+                        DATA1_TABLE_INFO,
+                        LogRecordReadContext.SchemaResolution.TARGET,
+                        null,
+                        null,
+                        createSchemaGetter(new Configuration()),
+                        new ChunkedAllocationManager.ChunkedFactory()) {
+                    @Override
+                    public void close() {
+                        succeedingClosed.set(true);
+                        super.close();
+                    }
+                };
+        LogFetcher.TableReadContext failing =
+                new LogFetcher.TableReadContext(
+                        DATA1_TABLE_INFO,
+                        LogRecordReadContext.SchemaResolution.TARGET,
+                        null,
+                        null,
+                        createSchemaGetter(new Configuration()),
+                        new ChunkedAllocationManager.ChunkedFactory()) {
+                    @Override
+                    public void close() {
+                        super.close();
+                        throw new RuntimeException("simulated table read context close failure");
+                    }
+                };
+        contexts.put(1001L, failing);
+        contexts.put(1002L, succeeding);
+
+        Field factoryField = LogFetcher.class.getDeclaredField("chunkedFactory");
+        factoryField.setAccessible(true);
+        Object factory = factoryField.get(logFetcher);
+        Field closedField = factory.getClass().getDeclaredField("closed");
+        closedField.setAccessible(true);
+
+        assertThatThrownBy(() -> logFetcher.close())
+                .isInstanceOf(IOException.class)
+                .hasRootCauseMessage("simulated table read context close failure");
+        assertThat(succeedingClosed.get()).isTrue();
+        assertThat((Boolean) closedField.get(factory)).isTrue();
+        assertThat(logFetcher.getRegisteredTableCount()).isZero();
+    }
+
+    @Test
+    void testTableReadContextClosesRemoteWhenLocalCloseFails() throws Exception {
+        ChunkedAllocationManager.ChunkedFactory factory =
+                new ChunkedAllocationManager.ChunkedFactory();
+        LogFetcher.TableReadContext context =
+                new LogFetcher.TableReadContext(
+                        DATA1_TABLE_INFO,
+                        LogRecordReadContext.SchemaResolution.TARGET,
+                        null,
+                        null,
+                        createSchemaGetter(new Configuration()),
+                        factory);
+        ArrowBuf outstanding = context.readContext.getBufferAllocator().buffer(64);
+        try {
+            assertThatThrownBy(context::close).isInstanceOf(IllegalStateException.class);
+            assertThatThrownBy(() -> context.remoteReadContext.getBufferAllocator().buffer(8))
+                    .isInstanceOf(IllegalStateException.class);
+        } finally {
+            try {
+                outstanding.close();
+            } catch (IllegalStateException ignored) {
+                // The local allocator is already closed together with the table read context.
+            }
+            factory.close();
         }
     }
 
