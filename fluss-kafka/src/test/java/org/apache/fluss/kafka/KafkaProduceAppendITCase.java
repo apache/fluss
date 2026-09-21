@@ -169,6 +169,73 @@ class KafkaProduceAppendITCase {
     }
 
     @Test
+    void testNullValuesAreSkippedWhileEmptyValuesAndNullKeysSurvive() throws Exception {
+        try (Connection connection = ConnectionFactory.createConnection(CLUSTER.getClientConfig());
+                org.apache.fluss.client.admin.Admin admin = connection.getAdmin()) {
+            admin.createDatabase(DATABASE, DatabaseDescriptor.EMPTY, true).get();
+            for (String format : new String[] {"raw", "string"}) {
+                TablePath path = TablePath.of(DATABASE, "null_values_" + format);
+                admin.createTable(path, descriptor(format), false).get();
+                CLUSTER.waitUntilAllGatewayHasSameMetadata();
+                try (KafkaProducer<byte[], byte[]> producer = producer("all", 0)) {
+                    String topic = path.toString();
+                    assertThat(
+                                    producer.send(
+                                                    new ProducerRecord<byte[], byte[]>(
+                                                            topic,
+                                                            0,
+                                                            123L,
+                                                            new byte[] {(byte) 0xff},
+                                                            null))
+                                            .get(30, TimeUnit.SECONDS)
+                                            .offset())
+                            .isEqualTo(-1L);
+                    assertThat(
+                                    producer.send(
+                                                    new ProducerRecord<byte[], byte[]>(
+                                                            topic, 0, 123L, null, new byte[0]))
+                                            .get(30, TimeUnit.SECONDS)
+                                            .offset())
+                            .isZero();
+                    assertThat(
+                                    producer.send(
+                                                    new ProducerRecord<byte[], byte[]>(
+                                                            topic, 0, 123L, null, VALUE))
+                                            .get(30, TimeUnit.SECONDS)
+                                            .offset())
+                            .isEqualTo(1L);
+                    try (Table table = connection.getTable(path);
+                            LogScanner scanner = table.newScan().createLogScanner()) {
+                        scanner.subscribeFromBeginning(0);
+                        int count = 0;
+                        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(30);
+                        while (count < 2 && System.nanoTime() < deadline) {
+                            for (ScanRecord record : scanner.poll(Duration.ofSeconds(1))) {
+                                InternalRow row = record.getRow();
+                                byte[] expected = count == 0 ? new byte[0] : VALUE;
+                                if (format.equals("raw")) {
+                                    assertThat(row.getBytes(0)).isEqualTo(expected);
+                                } else {
+                                    assertThat(row.getString(0).toString())
+                                            .isEqualTo(
+                                                    new String(expected, StandardCharsets.UTF_8));
+                                }
+                                assertThat(row.isNullAt(3)).isTrue();
+                                assertThat(row.getTimestampNtz(1, 3).getMillisecond())
+                                        .isEqualTo(123L);
+                                count++;
+                            }
+                        }
+                        assertThat(count).isEqualTo(2);
+                    }
+                } finally {
+                    admin.dropTable(path, true).get();
+                }
+            }
+        }
+    }
+
+    @Test
     void testPipelinedProducePreservesAppendOrder() throws Exception {
         TablePath path = TablePath.of(DATABASE, "produce_pipelined");
         try (Connection connection = ConnectionFactory.createConnection(CLUSTER.getClientConfig());
