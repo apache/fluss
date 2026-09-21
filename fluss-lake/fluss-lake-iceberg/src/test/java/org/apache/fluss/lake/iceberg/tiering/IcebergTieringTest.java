@@ -166,6 +166,7 @@ class IcebergTieringTest {
         return Stream.of(
                 Arguments.of(
                         typeName,
+                        "write",
                         UPDATE_AFTER,
                         flussTemporalType,
                         icebergTemporalType,
@@ -173,6 +174,7 @@ class IcebergTieringTest {
                         expectedIcebergValue),
                 Arguments.of(
                         typeName,
+                        "delete",
                         UPDATE_BEFORE,
                         flussTemporalType,
                         icebergTemporalType,
@@ -275,17 +277,17 @@ class IcebergTieringTest {
         }
     }
 
-    @ParameterizedTest(name = "{0}-{1}")
+    @ParameterizedTest(name = "{0}-{1}-rows")
     @MethodSource("temporalIdentifierArgs")
     void testTieringTemporalIdentifier(
             String typeName,
+            String operationName,
             ChangeType changeType,
             DataType flussTemporalType,
             Type icebergTemporalType,
             Object flussTemporalValue,
             Object expectedIcebergValue)
             throws Exception {
-        String operationName = changeType == UPDATE_AFTER ? "write" : "delete";
         TablePath tablePath =
                 TablePath.of(
                         "iceberg", "test_temporal_identifier_" + operationName + "_" + typeName);
@@ -307,7 +309,7 @@ class IcebergTieringTest {
                 // See
                 // https://github.com/apache/iceberg/blob/apache-iceberg-1.10.1/core/src/main/java/org/apache/iceberg/io/BaseTaskWriter.java#L153-L162
                 writer.write(toRecord(1L, changeRow, UPDATE_AFTER));
-            } else {
+            } else if (changeType == UPDATE_BEFORE) {
                 // The equal id makes StructLikeMap.remove compare the temporal identifier against
                 // the composite identifier key inserted above.
                 // See
