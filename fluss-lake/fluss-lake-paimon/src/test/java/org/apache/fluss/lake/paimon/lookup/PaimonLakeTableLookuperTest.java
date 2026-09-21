@@ -26,6 +26,7 @@ import org.apache.fluss.exception.DiskWriteLockedException;
 import org.apache.fluss.exception.KvStorageException;
 import org.apache.fluss.exception.RetriableException;
 import org.apache.fluss.lake.lakestorage.LakeTableLookupRuntime;
+import org.apache.fluss.lake.lakestorage.LakeTableLookupRuntime.LookupRuntimeOptions;
 import org.apache.fluss.lake.lakestorage.LakeTableLookuper;
 import org.apache.fluss.lake.lakestorage.TestingLakeCatalogContext;
 import org.apache.fluss.lake.paimon.PaimonLakeCatalog;
@@ -131,7 +132,8 @@ class PaimonLakeTableLookuperTest {
         lookupRuntime =
                 new PaimonLakeStorage(paimonConfig)
                         .createLakeTableLookupRuntime(
-                                tempWarehouseDir.getAbsolutePath(), LOOKUP_CACHE_MAX_DISK_BYTES);
+                                tempWarehouseDir.getAbsolutePath(),
+                                new LookupRuntimeOptions(LOOKUP_CACHE_MAX_DISK_BYTES));
     }
 
     @AfterEach
@@ -338,7 +340,11 @@ class PaimonLakeTableLookuperTest {
 
                 try (LakeTableLookuper lookuper =
                         createLookuper(
-                                LakeLookupMode.SST, tablePath, KvFormat.COMPACTED, 1, diskWriteGuard)) {
+                                LakeLookupMode.SST,
+                                tablePath,
+                                KvFormat.COMPACTED,
+                                1,
+                                diskWriteGuard)) {
                     Future<byte[]> firstLookup =
                             executor.submit(
                                     () ->
@@ -495,7 +501,8 @@ class PaimonLakeTableLookuperTest {
         LakeTableLookupRuntime sharedLookupRuntime =
                 new PaimonLakeStorage(paimonConfig)
                         .createLakeTableLookupRuntime(
-                                lookupDir.getAbsolutePath(), LOOKUP_CACHE_MAX_DISK_BYTES);
+                                lookupDir.getAbsolutePath(),
+                                new LookupRuntimeOptions(LOOKUP_CACHE_MAX_DISK_BYTES));
         try {
             try (LakeTableLookuper firstLookuper =
                             sharedLookupRuntime.createLakeTableLookuper(

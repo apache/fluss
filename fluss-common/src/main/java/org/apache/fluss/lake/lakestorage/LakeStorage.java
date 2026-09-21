@@ -18,6 +18,7 @@
 package org.apache.fluss.lake.lakestorage;
 
 import org.apache.fluss.annotation.PublicEvolving;
+import org.apache.fluss.lake.lakestorage.LakeTableLookupRuntime.LookupRuntimeOptions;
 import org.apache.fluss.lake.source.LakeSource;
 import org.apache.fluss.lake.writer.LakeTieringFactory;
 import org.apache.fluss.metadata.TablePath;
@@ -55,11 +56,11 @@ public interface LakeStorage {
      * Creates a TabletServer-scoped runtime for lake table point lookup.
      *
      * @param ioTmpDir local directory shared by lookupers for temporary files
-     * @param lookupCacheMaxDiskBytes maximum local lookup cache size in bytes
+     * @param options initial runtime resource settings
      * @return the lookup runtime
      */
     default LakeTableLookupRuntime createLakeTableLookupRuntime(
-            String ioTmpDir, long lookupCacheMaxDiskBytes) {
+            String ioTmpDir, LookupRuntimeOptions options) {
         throw new UnsupportedOperationException(
                 "Point lookup is not supported for this lake storage.");
     }

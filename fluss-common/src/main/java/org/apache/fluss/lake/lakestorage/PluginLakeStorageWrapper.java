@@ -20,6 +20,7 @@ package org.apache.fluss.lake.lakestorage;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.TableAlreadyExistException;
 import org.apache.fluss.exception.TableNotExistException;
+import org.apache.fluss.lake.lakestorage.LakeTableLookupRuntime.LookupRuntimeOptions;
 import org.apache.fluss.lake.source.LakeSource;
 import org.apache.fluss.lake.writer.LakeTieringFactory;
 import org.apache.fluss.metadata.TableChange;
@@ -140,11 +141,10 @@ public class PluginLakeStorageWrapper implements LakeStoragePlugin {
 
         @Override
         public LakeTableLookupRuntime createLakeTableLookupRuntime(
-                String ioTmpDir, long lookupCacheMaxDiskBytes) {
+                String ioTmpDir, LookupRuntimeOptions options) {
             try (TemporaryClassLoaderContext ignored = TemporaryClassLoaderContext.of(loader)) {
                 return new ClassLoaderFixingLakeTableLookupRuntime(
-                        inner.createLakeTableLookupRuntime(ioTmpDir, lookupCacheMaxDiskBytes),
-                        loader);
+                        inner.createLakeTableLookupRuntime(ioTmpDir, options), loader);
             }
         }
     }
@@ -170,9 +170,9 @@ public class PluginLakeStorageWrapper implements LakeStoragePlugin {
         }
 
         @Override
-        public void updateLookupCacheMaxDiskBytes(long lookupCacheMaxDiskBytes) {
+        public void reconfigure(LookupRuntimeOptions options) {
             try (TemporaryClassLoaderContext ignored = TemporaryClassLoaderContext.of(loader)) {
-                inner.updateLookupCacheMaxDiskBytes(lookupCacheMaxDiskBytes);
+                inner.reconfigure(options);
             }
         }
 
