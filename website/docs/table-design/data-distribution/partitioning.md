@@ -71,6 +71,8 @@ In this case, when automatic partitioning occurs (Fluss will periodically operat
 
 ### Historical Partition Access
 
+Before using historical partition access, make sure the [Paimon server-side setup](../../streaming-lakehouse/datalake-formats/paimon.md#historical-partition-access-setup) is completed.
+
 Auto partitioning eventually removes partitions that fall outside the configured retention window.
 After an original Fluss partition is removed, late records cannot be written to it and primary-key
 lookups cannot find its rows in Fluss, even when the existing data has already been tiered to
