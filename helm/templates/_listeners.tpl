@@ -264,24 +264,6 @@ Usage:
 {{- end -}}
 
 {{/*
-True when this component's EXTERNAL advertised host uses ${NODE_IP}.
-Usage:
-  include "fluss.listeners.usesNodeIp" (dict "ctx" . "component" "tablet")
-*/}}
-{{- define "fluss.listeners.usesNodeIp" -}}
-{{- $ctx := .ctx -}}
-{{- if include "fluss.listeners.isNodeIpToken" (include "fluss.listeners.external.hostExpr" .) -}}
-true
-{{- else -}}
-{{- range $h := include "fluss.listeners.external.hostsYaml" . | fromYamlArray -}}
-{{- if include "fluss.listeners.isNodeIpToken" (tpl ($h | toString) $ctx) -}}
-true
-{{- end -}}
-{{- end -}}
-{{- end -}}
-{{- end -}}
-
-{{/*
 Warning when tablet replicas > 1 would advertise a shared host:port, or when
 EXTERNAL is PLAINTEXT.
 Usage:
@@ -326,6 +308,7 @@ Usage:
 */}}
 {{- define "fluss.listeners.validateError" -}}
 {{- $msgs := list -}}
+{{- /* clusterDomain and override-key fights */ -}}
 {{- $domain := include "fluss.listeners.clusterDomain" . -}}
 {{- if eq $domain "" -}}
 {{- $msgs = append $msgs "clusterDomain must not be empty" -}}
@@ -336,6 +319,7 @@ Usage:
 {{- if hasKey (.Values.configurationOverrides | default dict) "advertised.listeners" -}}
 {{- $msgs = append $msgs "configurationOverrides cannot set advertised.listeners; the chart always writes it from listeners.* values" -}}
 {{- end -}}
+{{- /* coordinator is single-replica: no per-ordinal arrays */ -}}
 {{- $coord := .Values.coordinator | default dict -}}
 {{- $coordListeners := index $coord "listeners" | default dict -}}
 {{- $coordExt := index $coordListeners "external" | default dict -}}
@@ -348,6 +332,7 @@ Usage:
 {{- $msgs = append $msgs "coordinator.listeners.external.advertisedPorts is not supported; the coordinator is single-replica, use advertisedPort" -}}
 {{- end -}}
 {{- if (include "fluss.listeners.external.enabled" .) -}}
+{{- /* tablet arrays: type, mutual exclusion, length, uniqueness, tokens */ -}}
 {{- $replicas := .Values.tablet.numberOfReplicas | int -}}
 {{- $tablet := .Values.tablet | default dict -}}
 {{- $tabletListeners := index $tablet "listeners" | default dict -}}
@@ -399,6 +384,7 @@ Usage:
 {{- end -}}
 {{- end -}}
 {{- end -}}
+{{- /* required host/port and bind-port collision (including metrics) */ -}}
 {{- $extHost := include "fluss.listeners.external.hostExpr" (dict "ctx" . "component" "tablet") -}}
 {{- $coordHost := include "fluss.listeners.external.hostExpr" (dict "ctx" . "component" "coordinator") -}}
 {{- if or (not $extHost) (not $coordHost) -}}

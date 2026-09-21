@@ -138,14 +138,6 @@ tests:
             targetPort: external
             protocol: TCP
         template: templates/svc-coordinator.yaml
-      - notContains:
-          path: spec.template.spec.containers[0].env
-          content:
-            name: NODE_IP
-            valueFrom:
-              fieldRef:
-                fieldPath: status.hostIP
-        template: templates/sts-tablet.yaml
 
 ---
 
@@ -154,16 +146,16 @@ templates:
   - templates/sts-tablet.yaml
   - templates/sts-coordinator.yaml
 tests:
-  - it: does not expose NODE_IP by default
+  - it: always exposes NODE_IP
     asserts:
-      - notContains:
+      - contains:
           path: spec.template.spec.containers[0].env
           content:
             name: NODE_IP
             valueFrom:
               fieldRef:
                 fieldPath: status.hostIP
-  - it: exposes NODE_IP when EXTERNAL advertisedHost is the whitelisted token
+  - it: advertises ${NODE_IP} when advertisedHost is the whitelisted token
     set:
       listeners.external.enabled: true
       listeners.external.advertisedHost: "${NODE_IP}"
@@ -336,7 +328,7 @@ tests:
       security.external.sasl.mechanism: plain
     asserts:
       - failedTemplate:
-          errorMessage: "VALUES VALIDATION:\nsecurity.external.sasl.plain.users must contain at least one user when security.external.sasl.mechanism is plain"
+          errorMessage: "VALUES VALIDATION:\nsecurity.external.sasl.plain.users must contain at least one user when the matching mechanism is plain"
 
   - it: warns when EXTERNAL advertised address is shared across tablet replicas
     set:

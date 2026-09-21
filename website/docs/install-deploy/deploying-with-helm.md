@@ -186,7 +186,7 @@ The following table lists the configurable parameters of the Fluss chart, and th
 | `listeners.external.enabled` | Bind an extra EXTERNAL listener so out-of-cluster clients can be advertised separately from in-cluster CLIENT | `false` |
 | `listeners.external.port` | Bind port for the extra listener (must differ from internal, client, and metrics ports) | `9125` |
 | `listeners.external.advertisedHost` | Shared advertised host for EXTERNAL (`hostname`/`IP` or `${NODE_IP}`; required when enabled unless overridden per component) | `""` |
-| `listeners.external.advertisedPort` | Shared advertised port for EXTERNAL (empty = `listeners.external.port`) | `""` |
+| `listeners.external.advertisedPort` | Shared advertised port for EXTERNAL (defaults to `listeners.external.port`) | `""` |
 | `coordinator.listeners.external.advertisedHost` | Coordinator EXTERNAL advertised host (overrides the shared host) | `""` |
 | `coordinator.listeners.external.advertisedPort` | Coordinator EXTERNAL advertised port | `""` |
 | `tablet.listeners.external.advertisedHost` | Shared EXTERNAL host for every tablet (overrides the shared host) | `""` |
@@ -587,8 +587,6 @@ CLIENT://<pod>.tablet-server-hs.<ns>.svc.<clusterDomain>:9124
 
 `clusterDomain` defaults to `cluster.local`. Set it if your cluster uses a different DNS domain.
 
-A Fluss client bootstraps against the coordinator, then `MetadataResponse` redirects produce/fetch/lookup to each tablet's advertised `CLIENT` address. Those FQDNs resolve only inside the cluster. Port-forwarding (or exposing) **only** the coordinator therefore lets bootstrap succeed and writes fail. A shared LoadBalancer/NodePort in front of the headless Service has the same problem: the port is reachable, but metadata still hands the client in-cluster addresses.
-
 - **Internal port (9123)**: server-to-server communication
 - **Client port (9124)**: in-cluster client connections (chart-owned advertised FQDN)
 - **External port (9125)**: optional extra listener for out-of-cluster clients (disabled by default)
@@ -598,11 +596,13 @@ If an existing deployment still sets either key there, upgrade will fail with `V
 
 #### Out-of-cluster clients
 
-Keep the default `CLIENT` advertised FQDN for in-cluster workloads (Flink, Spark, other pods) and enable a second listener. External clients must bootstrap against the **EXTERNAL** advertised address, not the in-cluster CLIENT DNS.
+A client bootstraps against the coordinator, then metadata redirects produce/fetch/lookup to each tablet's advertised address. In-cluster `CLIENT` FQDNs do not resolve outside the cluster, so exposing only the coordinator (port-forward, shared LoadBalancer, or NodePort on the headless Service) lets bootstrap succeed and writes fail.
+
+Enable a second `EXTERNAL` listener and bootstrap against that advertised address, not the in-cluster CLIENT DNS. Keep the default `CLIENT` advertised FQDN for in-cluster workloads (Flink, Spark, other pods).
 
 Each tablet (and the coordinator) must advertise a **unique** host or port. A single hostname for every replica cannot work: the client connects directly to the bucket leader. Uniqueness is configured with per-ordinal arrays (`advertisedHosts` / `advertisedPorts`), not shell formulas.
 
-The chart does **not** create NodePort or LoadBalancer Services per pod; that topology is the same problem [FIP-41](https://cwiki.apache.org/confluence/display/FLUSS/FIP-41%3A+Fluss+Kubernetes+Operator) deferred for the Kubernetes operator. You still have to make the advertised addresses resolve and route to the right pod.
+The chart does **not** create NodePort or LoadBalancer Services per pod. You still have to make the advertised addresses resolve and route to the right pod.
 
 Per-pod DNS (recommended):
 
@@ -624,7 +624,7 @@ tablet:
         - tablet-server-2.fluss.example.com
 ```
 
-Host IP + unique port (for example when you create per-pod NodePorts yourself). `${NODE_IP}` is the only runtime token accepted in `advertisedHost`; the `NODE_IP` env var is injected only when referenced:
+Host IP + unique port (for example when you create per-pod NodePorts yourself). `${NODE_IP}` is the only runtime token accepted in `advertisedHost`:
 
 ```yaml
 listeners:
@@ -677,7 +677,7 @@ security:
           - existingSecret: { name: fluss-sasl-alice }
 ```
 
-Setting `security.external.sasl.*` without `listeners.external.enabled: true` has no effect and also prints a `VALUES WARNING`. SASL/PLAIN without TLS sends credentials in cleartext; until TLS lands ([FIP-29](https://cwiki.apache.org/confluence/display/FLUSS/FIP-29%3A+Support+TLS+and+mTLS+Authentication)), keep EXTERNAL on a trusted network.
+Setting `security.external.sasl.*` without `listeners.external.enabled: true` has no effect and also prints a `VALUES WARNING`. SASL/PLAIN without TLS sends credentials in cleartext; keep EXTERNAL on a trusted network.
 
 Custom bind ports:
 

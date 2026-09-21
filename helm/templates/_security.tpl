@@ -164,14 +164,13 @@ Validates a SASL PLAIN users list. Each entry is either a literal
 {username, password} pair OR {existingSecret: {name, usernameKey?, passwordKey?}}.
 Mixing the two shapes within one entry is not allowed.
 Usage:
-  include "fluss.security.sasl.validatePlainUsersList" (dict "users" $users "path" "security.client.sasl.plain.users" "requiredWhen" "security.client.sasl.mechanism is plain")
+  include "fluss.security.sasl.validatePlainUsersList" (dict "users" $users "path" "security.client.sasl.plain.users")
 */}}
 {{- define "fluss.security.sasl.validatePlainUsersList" -}}
 {{- $users := .users | default (list) -}}
 {{- $path := .path -}}
-{{- $requiredWhen := .requiredWhen -}}
 {{- if eq (len $users) 0 -}}
-  {{- printf "%s must contain at least one user when %s" $path $requiredWhen -}}
+  {{- printf "%s must contain at least one user when the matching mechanism is plain" $path -}}
 {{- else -}}
   {{- $errs := list -}}
   {{- range $idx, $user := $users -}}
@@ -200,7 +199,7 @@ Usage:
 {{- define "fluss.security.sasl.validateClientPlainUsers" -}}
 {{- $clientMechanism := include "fluss.security.listener.mechanism" (dict "context" .Values "listener" "client") -}}
 {{- if eq $clientMechanism "plain" -}}
-  {{- include "fluss.security.sasl.validatePlainUsersList" (dict "users" (.Values.security.client.sasl.plain.users | default list) "path" "security.client.sasl.plain.users" "requiredWhen" "security.client.sasl.mechanism is plain") -}}
+  {{- include "fluss.security.sasl.validatePlainUsersList" (dict "users" (.Values.security.client.sasl.plain.users | default list) "path" "security.client.sasl.plain.users") -}}
 {{- end -}}
 {{- end -}}
 
@@ -214,7 +213,7 @@ Usage:
 {{- $ext := .Values.security.external | default dict -}}
 {{- $sasl := $ext.sasl | default dict -}}
 {{- $plain := $sasl.plain | default dict -}}
-{{- include "fluss.security.sasl.validatePlainUsersList" (dict "users" ($plain.users | default list) "path" "security.external.sasl.plain.users" "requiredWhen" "security.external.sasl.mechanism is plain") -}}
+{{- include "fluss.security.sasl.validatePlainUsersList" (dict "users" ($plain.users | default list) "path" "security.external.sasl.plain.users") -}}
 {{- end -}}
 {{- end -}}
 
