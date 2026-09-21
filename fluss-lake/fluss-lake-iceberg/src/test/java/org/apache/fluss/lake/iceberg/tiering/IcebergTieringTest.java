@@ -130,30 +130,54 @@ class IcebergTieringTest {
         LocalDateTime timestamp = LocalDateTime.of(date, time);
         Instant timestampLtz = timestamp.toInstant(ZoneOffset.UTC);
         return Stream.of(
+                        temporalIdentifierArgsForType(
+                                "date",
+                                DataTypes.DATE(),
+                                Types.DateType.get(),
+                                (int) date.toEpochDay(),
+                                date),
+                        temporalIdentifierArgsForType(
+                                "time",
+                                DataTypes.TIME(),
+                                Types.TimeType.get(),
+                                (int) (time.toNanoOfDay() / 1_000_000),
+                                time),
+                        temporalIdentifierArgsForType(
+                                "timestamp",
+                                DataTypes.TIMESTAMP(),
+                                Types.TimestampType.withoutZone(),
+                                TimestampNtz.fromLocalDateTime(timestamp),
+                                timestamp),
+                        temporalIdentifierArgsForType(
+                                "timestamp_ltz",
+                                DataTypes.TIMESTAMP_LTZ(),
+                                Types.TimestampType.withZone(),
+                                TimestampLtz.fromInstant(timestampLtz),
+                                OffsetDateTime.ofInstant(timestampLtz, ZoneOffset.UTC)))
+                .flatMap(arguments -> arguments);
+    }
+
+    private static Stream<Arguments> temporalIdentifierArgsForType(
+            String typeName,
+            DataType flussTemporalType,
+            Type icebergTemporalType,
+            Object flussTemporalValue,
+            Object expectedIcebergValue) {
+        return Stream.of(
                 Arguments.of(
-                        "date",
-                        DataTypes.DATE(),
-                        Types.DateType.get(),
-                        (int) date.toEpochDay(),
-                        date),
+                        typeName,
+                        UPDATE_AFTER,
+                        flussTemporalType,
+                        icebergTemporalType,
+                        flussTemporalValue,
+                        expectedIcebergValue),
                 Arguments.of(
-                        "time",
-                        DataTypes.TIME(),
-                        Types.TimeType.get(),
-                        (int) (time.toNanoOfDay() / 1_000_000),
-                        time),
-                Arguments.of(
-                        "timestamp",
-                        DataTypes.TIMESTAMP(),
-                        Types.TimestampType.withoutZone(),
-                        TimestampNtz.fromLocalDateTime(timestamp),
-                        timestamp),
-                Arguments.of(
-                        "timestamp_ltz",
-                        DataTypes.TIMESTAMP_LTZ(),
-                        Types.TimestampType.withZone(),
-                        TimestampLtz.fromInstant(timestampLtz),
-                        OffsetDateTime.ofInstant(timestampLtz, ZoneOffset.UTC)));
+                        typeName,
+                        UPDATE_BEFORE,
+                        flussTemporalType,
+                        icebergTemporalType,
+                        flussTemporalValue,
+                        expectedIcebergValue));
     }
 
     @ParameterizedTest
@@ -251,31 +275,45 @@ class IcebergTieringTest {
         }
     }
 
-    @ParameterizedTest(name = "{0}")
+    @ParameterizedTest(name = "{0}-{1}")
     @MethodSource("temporalIdentifierArgs")
-    void testTieringWriteTemporalIdentifier(
+    void testTieringTemporalIdentifier(
             String typeName,
+            ChangeType changeType,
             DataType flussTemporalType,
             Type icebergTemporalType,
             Object flussTemporalValue,
             Object expectedIcebergValue)
             throws Exception {
-        TablePath tablePath = TablePath.of("iceberg", "test_temporal_identifier_write_" + typeName);
+        String operationName = changeType == UPDATE_AFTER ? "write" : "delete";
+        TablePath tablePath =
+                TablePath.of(
+                        "iceberg", "test_temporal_identifier_" + operationName + "_" + typeName);
         TableInfo tableInfo =
                 createTemporalIdentifierTable(tablePath, flussTemporalType, icebergTemporalType);
 
         GenericRow insertRow = temporalIdentifierRow(flussTemporalValue, "before");
-        GenericRow updateRow = temporalIdentifierRow(flussTemporalValue, "after");
+        GenericRow changeRow =
+                temporalIdentifierRow(
+                        flussTemporalValue, changeType == UPDATE_AFTER ? "after" : "before");
 
         IcebergWriteResult writeResult;
         try (LakeWriter<IcebergWriteResult> writer =
                 createLakeWriter(tablePath, 0, null, null, tableInfo)) {
             writer.write(toRecord(0L, insertRow, INSERT));
-            // The equal id makes StructLikeMap.put continue to compare the temporal identifier
-            // when UPDATE_AFTER replaces the same composite identifier key.
-            // See
-            // https://github.com/apache/iceberg/blob/apache-iceberg-1.10.1/core/src/main/java/org/apache/iceberg/io/BaseTaskWriter.java#L153-L162
-            writer.write(toRecord(1L, updateRow, UPDATE_AFTER));
+            if (changeType == UPDATE_AFTER) {
+                // The equal id makes StructLikeMap.put continue to compare the temporal identifier
+                // when UPDATE_AFTER replaces the same composite identifier key.
+                // See
+                // https://github.com/apache/iceberg/blob/apache-iceberg-1.10.1/core/src/main/java/org/apache/iceberg/io/BaseTaskWriter.java#L153-L162
+                writer.write(toRecord(1L, changeRow, UPDATE_AFTER));
+            } else {
+                // The equal id makes StructLikeMap.remove compare the temporal identifier against
+                // the composite identifier key inserted above.
+                // See
+                // https://github.com/apache/iceberg/blob/apache-iceberg-1.10.1/core/src/main/java/org/apache/iceberg/io/BaseTaskWriter.java#L181-L208
+                writer.write(toRecord(1L, changeRow, UPDATE_BEFORE));
+            }
             writeResult = writer.complete();
         }
         try (LakeCommitter<IcebergWriteResult, IcebergCommittable> committer =
@@ -288,54 +326,16 @@ class IcebergTieringTest {
         Table table = icebergCatalog.loadTable(toIceberg(tablePath));
         table.refresh();
         try (CloseableIterator<Record> rows = IcebergGenerics.read(table).build().iterator()) {
-            assertThat(rows.hasNext()).isTrue();
-            Record actual = rows.next();
-            assertThat(actual.getField("id")).isEqualTo(1);
-            assertThat(actual.getField("temporal_identifier")).isEqualTo(expectedIcebergValue);
-            assertThat(actual.getField("payload")).isEqualTo("after");
-            assertThat(rows.hasNext()).isFalse();
-        }
-    }
-
-    @ParameterizedTest(name = "{0}")
-    @MethodSource("temporalIdentifierArgs")
-    void testTieringDeleteTemporalIdentifier(
-            String typeName,
-            DataType flussTemporalType,
-            Type icebergTemporalType,
-            Object flussTemporalValue,
-            Object ignoredExpectedIcebergValue)
-            throws Exception {
-        TablePath tablePath =
-                TablePath.of("iceberg", "test_temporal_identifier_delete_" + typeName);
-        TableInfo tableInfo =
-                createTemporalIdentifierTable(tablePath, flussTemporalType, icebergTemporalType);
-
-        GenericRow insertRow = temporalIdentifierRow(flussTemporalValue, "payload");
-        GenericRow updateBeforeRow = temporalIdentifierRow(flussTemporalValue, "payload");
-
-        IcebergWriteResult writeResult;
-        try (LakeWriter<IcebergWriteResult> writer =
-                createLakeWriter(tablePath, 0, null, null, tableInfo)) {
-            writer.write(toRecord(0L, insertRow, INSERT));
-            // The equal id makes StructLikeMap.remove compare the temporal identifier against the
-            // composite identifier key inserted above.
-            // See
-            // https://github.com/apache/iceberg/blob/apache-iceberg-1.10.1/core/src/main/java/org/apache/iceberg/io/BaseTaskWriter.java#L181-L208
-            writer.write(toRecord(1L, updateBeforeRow, UPDATE_BEFORE));
-            writeResult = writer.complete();
-        }
-        try (LakeCommitter<IcebergWriteResult, IcebergCommittable> committer =
-                createLakeCommitter(tablePath, tableInfo)) {
-            committer.commit(
-                    committer.toCommittable(Collections.singletonList(writeResult)),
-                    Collections.emptyMap());
-        }
-
-        Table table = icebergCatalog.loadTable(toIceberg(tablePath));
-        table.refresh();
-        try (CloseableIterator<Record> rows = IcebergGenerics.read(table).build().iterator()) {
-            assertThat(rows.hasNext()).isFalse();
+            if (changeType == UPDATE_AFTER) {
+                assertThat(rows.hasNext()).isTrue();
+                Record actual = rows.next();
+                assertThat(actual.getField("id")).isEqualTo(1);
+                assertThat(actual.getField("temporal_identifier")).isEqualTo(expectedIcebergValue);
+                assertThat(actual.getField("payload")).isEqualTo("after");
+                assertThat(rows.hasNext()).isFalse();
+            } else {
+                assertThat(rows.hasNext()).isFalse();
+            }
         }
     }
 
