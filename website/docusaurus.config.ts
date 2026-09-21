@@ -21,6 +21,7 @@ import lightTheme from './src/utils/prismLight';
 import darkTheme from './src/utils/prismDark';
 import versionReplace from './src/plugins/remark-version-replace/index';
 import { loadVersionData } from './src/utils/versionData';
+import {prepareBlogPosts} from './src/utils/blogPosts';
 const { versionsMap, latestVersion } = loadVersionData();
 
 const config: Config = {
@@ -170,6 +171,9 @@ const config: Config = {
         },
         blog: {
           showReadingTime: false,
+          // The card index filters the full archive, including older posts.
+          postsPerPage: 'ALL',
+          processBlogPosts: prepareBlogPosts,
           feedOptions: {
             type: ['rss', 'atom'],
             xslt: true,

@@ -71,15 +71,17 @@ slug: my-post-slug
 title: "My Blog Post Title"
 date: YYYY-MM-DD
 authors: [your_key]
-tags: [apache-fluss]
+tags: [engineering]
+description: "A short summary explaining what readers will learn from this post."
 image: ./assets/my_post/banner.png
 ---
 ```
 
 - `slug` — URL path for the post (for example, `/blog/my-post-slug`).
 - `authors` — List of author keys defined in `blog/authors.yml`.
-- `tags` — List of tag keys defined in `blog/tags.yml`.
-- `image` — Optional cover image used for social sharing (Open Graph previews).
+- `tags` — One or two category keys from the four categories below.
+- `description` — One concise sentence (roughly 120–200 characters) for the homepage card and social sharing.
+- `image` — Cover image for the homepage and social sharing. Use an explicit banner path; posts in `blog/releases/` should use `./../assets/<my_post>/banner.png` so Docusaurus bundles the image.
 
 ### 3. Add images
 
@@ -89,7 +91,9 @@ Place post-specific images in `blog/assets/<post_name>/` and reference them with
 ![My Diagram](assets/my_post/diagram.png)
 ```
 
-Keep images reasonably sized (compressed PNG or SVG) so the site stays fast to load.
+Use a **1200 × 510 px** canvas (40:17, approximately 2.35:1) for blog banners, or **2400 × 1020 px** for high-density screens. Keep titles and logos at least 60 px from the edges of the smaller canvas, and use a short headline that remains legible at a card width of about 400 px. Aim for a compressed image below 300 KB where possible.
+
+The homepage fits the complete image into a fixed banner frame. Older images with different ratios have padding. For a full-bleed cover, compose a separate banner for this canvas and reference it in `image`; preserve the original illustration in the article body. Avoid stretching images or cropping titles and logos to force a different ratio.
 
 ### 4. Add yourself as an author
 
@@ -105,16 +109,18 @@ your_key:
 
 Place your avatar image in `blog/static/avatars/`.
 
-### 5. Register new tags
+### 5. Choose categories
 
-If your post uses a tag that does not yet exist, define it in `blog/tags.yml`:
+Choose one primary category and, when useful, one secondary category from `blog/tags.yml`:
 
-```yaml
-my-new-tag:
-  label: 'My New Tag'
-```
+| Key | Label | Use for |
+| --- | --- | --- |
+| `announcement` | Announcement | Releases, project milestones, and official announcements |
+| `case-study` | Case Study | Enterprise case studies and production practices |
+| `engineering` | Engineering | Architecture, system internals, and technical deep dives |
+| `guides` | Guides | Getting started, how-to guides, application patterns, and best practices |
 
-Reuse existing tags when you can; only add new ones when none of them fit.
+Keep the taxonomy limited to these four categories. Put technology names such as Flink, Iceberg, Rust, or Arrow in the title, summary, or article text. For example, a graduation announcement uses `[announcement]`; a production tuning deep dive can use `[engineering, guides]`.
 
 ## Preview and Build Locally
 
