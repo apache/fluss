@@ -25,9 +25,9 @@ import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.types.ArrayType;
 import org.apache.fluss.types.BytesType;
-import org.apache.fluss.types.LocalZonedTimestampType;
 import org.apache.fluss.types.RowType;
 import org.apache.fluss.types.StringType;
+import org.apache.fluss.types.TimestampType;
 
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -234,12 +234,9 @@ public final class KafkaTopicSchemaResolver {
     private static void validateMetadataColumns(
             RowType rowType, int timestampPosition, int headersPosition) {
         if (timestampPosition >= 0) {
-            if (!(rowType.getTypeAt(timestampPosition) instanceof LocalZonedTimestampType)
-                    || rowType.getTypeAt(timestampPosition).isNullable()
-                    || ((LocalZonedTimestampType) rowType.getTypeAt(timestampPosition))
-                                    .getPrecision()
-                            != 3) {
-                throw invalid("Kafka timestamp column must be TIMESTAMP_LTZ(3) NOT NULL.");
+            if (!(rowType.getTypeAt(timestampPosition) instanceof TimestampType)
+                    || ((TimestampType) rowType.getTypeAt(timestampPosition)).getPrecision() != 3) {
+                throw invalid("Kafka timestamp column must be TIMESTAMP(3).");
             }
         }
         if (headersPosition >= 0) {

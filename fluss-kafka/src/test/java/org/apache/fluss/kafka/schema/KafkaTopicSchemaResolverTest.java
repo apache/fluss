@@ -41,7 +41,7 @@ public class KafkaTopicSchemaResolverTest {
         Schema schema =
                 Schema.newBuilder()
                         .column("message", DataTypes.BYTES())
-                        .column("received_at", DataTypes.TIMESTAMP_LTZ(3).copy(false))
+                        .column("received_at", DataTypes.TIMESTAMP(3).copy(false))
                         .column("attributes", headersType())
                         .column("message_key", DataTypes.BYTES())
                         .build();
@@ -220,12 +220,32 @@ public class KafkaTopicSchemaResolverTest {
     }
 
     @Test
+    public void testAcceptsTimestampWithEitherNullability() {
+        for (boolean nullable : new boolean[] {true, false}) {
+            TableDescriptor descriptor =
+                    table(
+                                    Schema.newBuilder()
+                                            .column("body", DataTypes.BYTES())
+                                            .column("ts", DataTypes.TIMESTAMP(3).copy(nullable))
+                                            .build(),
+                                    "raw")
+                            .customProperty(KafkaDataFormat.TIMESTAMP_COLUMN_CONFIG, "ts")
+                            .build();
+            KafkaTopicSchema mapping = new KafkaTopicSchemaResolver().resolve(descriptor);
+            assertThat(mapping.timestampPosition()).isEqualTo(1);
+            assertThat(mapping.valueProjection().positions()).containsExactly(0);
+        }
+    }
+
+    @Test
     public void testRejectsWrongTimestampTypes() {
         for (DataType type :
                 new DataType[] {
                     DataTypes.STRING(),
                     DataTypes.TIMESTAMP_LTZ(3),
-                    DataTypes.TIMESTAMP_LTZ(6).copy(false)
+                    DataTypes.TIMESTAMP_LTZ(3).copy(false),
+                    DataTypes.TIMESTAMP(2),
+                    DataTypes.TIMESTAMP(6).copy(false)
                 }) {
             assertInvalid(
                     table(
@@ -235,7 +255,7 @@ public class KafkaTopicSchemaResolverTest {
                                             .build(),
                                     "raw")
                             .customProperty(KafkaDataFormat.TIMESTAMP_COLUMN_CONFIG, "ts"),
-                    "TIMESTAMP_LTZ(3) NOT NULL");
+                    "TIMESTAMP(3)");
         }
     }
 
@@ -279,7 +299,7 @@ public class KafkaTopicSchemaResolverTest {
                 table(
                                 Schema.newBuilder()
                                         .column("body", DataTypes.BYTES())
-                                        .column("ts", DataTypes.TIMESTAMP_LTZ(3).copy(false))
+                                        .column("ts", DataTypes.TIMESTAMP(3).copy(false))
                                         .build(),
                                 "raw")
                         .customProperty(KafkaDataFormat.TIMESTAMP_COLUMN_CONFIG, "ts");

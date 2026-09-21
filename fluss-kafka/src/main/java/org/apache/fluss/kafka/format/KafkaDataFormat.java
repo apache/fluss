@@ -39,7 +39,10 @@ public enum KafkaDataFormat {
     /** Strategy for deriving fields populated from the Kafka record value. */
     public static final String VALUE_FIELDS_INCLUDE_CONFIG = "kafka.value.fields-include";
 
-    /** Fluss column populated from the Kafka record timestamp. */
+    /**
+     * TIMESTAMP(3) column populated from the Kafka record epoch milliseconds as UTC calendar
+     * values. A missing Kafka timestamp (-1) maps to null and requires a nullable column.
+     */
     public static final String TIMESTAMP_COLUMN_CONFIG = "kafka.metadata.timestamp.column";
 
     /** Fluss column populated from the Kafka record headers. */

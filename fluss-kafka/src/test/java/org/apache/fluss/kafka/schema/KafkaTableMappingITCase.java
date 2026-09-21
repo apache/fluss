@@ -54,12 +54,14 @@ public class KafkaTableMappingITCase {
                                 Schema.newBuilder()
                                         .column("event_key", DataTypes.STRING())
                                         .column("event_body", DataTypes.BYTES())
+                                        .column("event_time", DataTypes.TIMESTAMP(3))
                                         .build())
                         .distributedBy(2)
                         .logFormat(LogFormat.ARROW)
                         .customProperty(KafkaDataFormat.KEY_FORMAT_CONFIG, "string")
                         .customProperty(KafkaDataFormat.KEY_FIELDS_CONFIG, "event_key")
                         .customProperty(KafkaDataFormat.VALUE_FORMAT_CONFIG, "raw")
+                        .customProperty(KafkaDataFormat.TIMESTAMP_COLUMN_CONFIG, "event_time")
                         .customProperty(KafkaDataFormat.VALUE_FIELDS_INCLUDE_CONFIG, "EXCEPT_KEY")
                         .build();
         KafkaTopicMapper mapper = new KafkaTopicMapper();
@@ -105,6 +107,9 @@ public class KafkaTableMappingITCase {
             assertThat(mapping.keyFormat()).isEqualTo(KafkaDataFormat.STRING);
             assertThat(mapping.valueProjection().positions()).containsExactly(1);
             assertThat(mapping.valueFormat()).isEqualTo(KafkaDataFormat.RAW);
+            assertThat(mapping.timestampPosition()).isEqualTo(2);
+            assertThat(persisted.getSchema().getRowType().getTypeAt(2))
+                    .isEqualTo(DataTypes.TIMESTAMP(3));
         }
     }
 }
