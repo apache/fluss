@@ -839,8 +839,10 @@ In [GitHub Milestones](https://github.com/apache/fluss/milestones), mark the cur
 
 **Checklist to proceed to the next step**
 - Maven artifacts released and indexed in the Maven Central Repository (usually takes about a day to show up)
-- Source & binary distributions available in the release repository of https://dist.apache.org/repos/dist/release/fluss/
+- Source & binary distributions available on `https://downloads.apache.org/fluss/fluss-${RELEASE_VERSION}/`
 - Helm Chart package available in the release repository of https://dist.apache.org/repos/dist/release/fluss/helm-chart/
+- Python client artifacts available on [PyPI](https://pypi.org/project/pyfluss/)
+- Rust client crate available on [crates.io](https://crates.io/crates/fluss-rs)
 - Dev repository https://dist.apache.org/repos/dist/dev/fluss/ is empty
 - Release tagged in the source code repository
 - Docker images for the release pushed to DockerHub ([apache/fluss](https://hub.docker.com/r/apache/fluss/tags), [apache/fluss-gateway](https://hub.docker.com/r/apache/fluss-gateway/tags), [apache/fluss-quickstart-flink](https://hub.docker.com/r/apache/fluss-quickstart-flink/tags))
@@ -848,7 +850,10 @@ In [GitHub Milestones](https://github.com/apache/fluss/milestones), mark the cur
 
 ## Promote the release
 
-Once the release has been finalized, wait at least one hour after uploading the new release before updating the project download page or sending the announcement emails, in accordance with the [ASF release policy](https://www.apache.org/legal/release-policy.html#how-should-releases-be-announced).
+Before merging the website pull requests or sending the announcement emails, make sure both of the following conditions are met:
+
+- At least one hour has passed since uploading the new release, in accordance with the [ASF release policy](https://www.apache.org/legal/release-policy.html#how-should-releases-be-announced).
+- The corresponding release artifacts are publicly available from [downloads.apache.org](https://downloads.apache.org/fluss/), [Maven Central](https://search.maven.org/search?q=g:org.apache.fluss), [PyPI](https://pypi.org/project/pyfluss/), and [crates.io](https://crates.io/crates/fluss-rs).
 
 ### Merge website pull request
 
