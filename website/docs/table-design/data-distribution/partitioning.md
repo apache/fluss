@@ -71,7 +71,7 @@ In this case, when automatic partitioning occurs (Fluss will periodically operat
 
 ### Historical Partition Access
 
-Before using historical partition lookup, complete the
+Before using historical partition lookup, make sure the [Paimon server-side setup](../../streaming-lakehouse/datalake-formats/paimon.md#historical-partition-lookup-setup) is completed.
 [Paimon server-side setup](../../streaming-lakehouse/datalake-formats/paimon.md#historical-partition-lookup-setup).
 
 :::warning
