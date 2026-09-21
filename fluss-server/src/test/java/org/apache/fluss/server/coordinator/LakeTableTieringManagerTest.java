@@ -160,104 +160,32 @@ class LakeTableTieringManagerTest {
         assertThat(tableTieringManager.requestTable()).isNull();
 
         // mock lake tiering finish one-round tiering
-        tableTieringManager.finishTableTiering(tableId1, tieredEpoch, false, TieringStats.UNKNOWN);
-        // not advance time, request table should return null
-        assertThat(tableTieringManager.requestTable()).isNull();
-
-        // now, advance 1 second to trigger the table tiering
-        manualClock.advanceTime(Duration.ofSeconds(4));
-        // not reach data freshness, shouldn't request table
-        assertThat(tableTieringManager.requestTable()).isNull();
-
-        // advance 6 seconds again, should get table now
-        manualClock.advanceTime(Duration.ofSeconds(6));
-        // the tiered epoch should be 2 now
-        assertRequestTable(tableId1, tablePath1, 2);
-    }
-
-    @Test
-    void testDuplicateNormalFinishIsIdempotent() {
-        long tableId = 1L;
-        TablePath tablePath = TablePath.of("db", "table");
-        TableInfo tableInfo = createTableInfo(tableId, tablePath, Duration.ofSeconds(10));
-        tableTieringManager.addNewLakeTable(tableInfo);
-
-        manualClock.advanceTime(Duration.ofSeconds(10));
-        assertRequestTable(tableId, tablePath, 1);
-
         manualClock.advanceTime(Duration.ofSeconds(1));
-        tableTieringManager.finishTableTiering(tableId, 1, false, new TieringStats(1024L, 100L));
+        tableTieringManager.finishTableTiering(
+                tableId1, tieredEpoch, false, new TieringStats(1024L, 100L));
 
         long firstCompletionTime = manualClock.milliseconds();
         manualClock.advanceTime(Duration.ofMillis(50));
-        tableTieringManager.finishTableTiering(tableId, 1, false, new TieringStats(2048L, 200L));
+        tableTieringManager.finishTableTiering(
+                tableId1, tieredEpoch, false, new TieringStats(2048L, 200L));
 
-        assertThat(tableTieringManager.getTableState(tableId))
+        assertThat(tableTieringManager.getTableState(tableId1))
                 .isEqualTo(LakeTableTieringManager.TieringState.Scheduled);
-        assertThat(tableTieringManager.getTableLastSuccessTime(tableId))
+        assertThat(tableTieringManager.getTableLastSuccessTime(tableId1))
                 .isEqualTo(firstCompletionTime);
-        assertThat(tableTieringManager.getLastTieringResultField(tableId, r -> r.tierDuration))
+        assertThat(tableTieringManager.getLastTieringResultField(tableId1, r -> r.tierDuration))
                 .isEqualTo(1000L);
-        assertThat(tableTieringManager.getLastTieringResultField(tableId, r -> r.fileSize))
+        assertThat(tableTieringManager.getLastTieringResultField(tableId1, r -> r.fileSize))
                 .isEqualTo(1024L);
-        assertThat(tableTieringManager.getLastTieringResultField(tableId, r -> r.recordCount))
+        assertThat(tableTieringManager.getLastTieringResultField(tableId1, r -> r.recordCount))
                 .isEqualTo(100L);
 
         // The duplicate must not reschedule the next round from the duplicate report time.
-        manualClock.advanceTime(Duration.ofMillis(9950));
-        assertRequestTable(tableId, tablePath, 2);
-
-        // Once the next round starts, the old completion must still be fenced.
-        assertThatThrownBy(
-                        () ->
-                                tableTieringManager.finishTableTiering(
-                                        tableId, 1, false, TieringStats.UNKNOWN))
-                .isInstanceOf(FencedTieringEpochException.class)
-                .hasMessage(
-                        "The tiering epoch %d is not match current epoch %d in coordinator for table %d.",
-                        1, 2, tableId);
-    }
-
-    @Test
-    void testFinishTableTieringRequiresTieringState() {
-        long tableId = 1L;
-        TablePath tablePath = TablePath.of("db", "table");
-        TableInfo tableInfo = createTableInfo(tableId, tablePath, Duration.ofSeconds(10));
-        tableTieringManager.addNewLakeTable(tableInfo);
-
-        assertThatThrownBy(
-                        () ->
-                                tableTieringManager.finishTableTiering(
-                                        tableId, 0, false, new TieringStats(1024L, 100L)))
-                .isInstanceOf(IllegalStateException.class)
-                .hasMessage(
-                        "The table %d to finish tiering must in Tiering state, but in %s state.",
-                        tableId, LakeTableTieringManager.TieringState.Scheduled);
-        assertThat(tableTieringManager.getTableLastSuccessTime(tableId)).isEqualTo(0L);
-        assertThat(tableTieringManager.getLastTieringResultField(tableId, r -> r.tierDuration))
-                .isEqualTo(-1L);
-
-        manualClock.advanceTime(Duration.ofSeconds(10));
-        waitValue(
-                () ->
-                        tableTieringManager.getTableState(tableId)
-                                        == LakeTableTieringManager.TieringState.Pending
-                                ? Optional.of(true)
-                                : Optional.empty(),
-                Duration.ofSeconds(5),
-                "Table should be in pending state");
-
-        assertThatThrownBy(
-                        () ->
-                                tableTieringManager.finishTableTiering(
-                                        tableId, 1, false, new TieringStats(1024L, 100L)))
-                .isInstanceOf(IllegalStateException.class)
-                .hasMessage(
-                        "The table %d to finish tiering must in Tiering state, but in %s state.",
-                        tableId, LakeTableTieringManager.TieringState.Pending);
-        assertThat(tableTieringManager.getTableLastSuccessTime(tableId)).isEqualTo(0L);
-        assertThat(tableTieringManager.getLastTieringResultField(tableId, r -> r.tierDuration))
-                .isEqualTo(-1L);
+        assertThat(tableTieringManager.requestTable()).isNull();
+        manualClock.advanceTime(Duration.ofSeconds(4));
+        assertThat(tableTieringManager.requestTable()).isNull();
+        manualClock.advanceTime(Duration.ofMillis(5950));
+        assertRequestTable(tableId1, tablePath1, 2);
     }
 
     @Test

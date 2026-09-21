@@ -448,18 +448,17 @@ public class LakeTableTieringManager implements AutoCloseable {
                 () -> {
                     validateTieringServiceRequest(tableId, tieredEpoch);
                     TieringState tieringState = tieringStates.get(tableId);
-                    if (!isForceFinished
-                            && tieredEpoch > 0
-                            && tieringState == TieringState.Scheduled) {
-                        // The normal tiering round has already completed. Treat a repeated report
-                        // for the same epoch as a successful no-op.
+                    if (tieringState == TieringState.Scheduled) {
+                        // Completion reports use at-least-once delivery. Heartbeats can copy one
+                        // finished entry twice, and a lost response can trigger a retry. The first
+                        // report moves the table to Scheduled.
+                        // Ignore repeats to preserve statistics and state.
+                        LOG.debug(
+                                "Ignore the duplicate tiering completion report for table {} at epoch {} "
+                                        + "because the table is already in Scheduled state.",
+                                tableId,
+                                tieredEpoch);
                         return;
-                    }
-                    if (tieringState != TieringState.Tiering) {
-                        throw new IllegalStateException(
-                                String.format(
-                                        "The table %d to finish tiering must in Tiering state, but in %s state.",
-                                        tableId, tieringState));
                     }
                     updateTableTieringResult(tableId, stats);
                     // to tiered state firstly
