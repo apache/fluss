@@ -32,6 +32,8 @@ on:
       - 'fluss-server/**'
       - 'fluss-common/**'
       - 'fluss-dist/**'
+      - 'LICENSE-bin'
+      - 'NOTICE-bin'
       - 'docker/fluss/**'
       - 'fluss-rust/crates/**'
       - 'fluss-rust/bindings/**'
@@ -47,6 +49,8 @@ on:
       - 'fluss-server/**'
       - 'fluss-common/**'
       - 'fluss-dist/**'
+      - 'LICENSE-bin'
+      - 'NOTICE-bin'
       - 'docker/fluss/**'
       - 'fluss-rust/crates/**'
       - 'fluss-rust/bindings/**'
@@ -90,7 +94,7 @@ jobs:
           # a change to this workflow itself should exercise every suite
           has '^\.github/workflows/client-integration\.yml' && all=true || true
           protocol=false; core=false; py=false; cpp=false; ex=false; gateway=false
-          has '^(fluss-rpc/src/main/proto/|fluss-server/|fluss-common/|fluss-dist/|docker/fluss/)' && protocol=true || true
+          has '^(fluss-rpc/src/main/proto/|fluss-server/|fluss-common/|fluss-dist/|LICENSE-bin$|NOTICE-bin$|docker/fluss/)' && protocol=true || true
           has '^(fluss-rust/crates/|fluss-rust/Cargo\.)' && core=true || true
           has '^fluss-rust/bindings/python/' && py=true || true
           has '^fluss-rust/bindings/cpp/' && cpp=true || true
@@ -121,7 +125,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: /tmp/fluss-dev.tar
-          key: fluss-dev-image-${{ hashFiles('fluss-server/**', 'fluss-common/**', 'fluss-rpc/**', 'fluss-dist/**', 'docker/fluss/**', 'pom.xml') }}
+          key: fluss-dev-image-${{ hashFiles('fluss-server/**', 'fluss-common/**', 'fluss-rpc/**', 'fluss-dist/**', 'LICENSE-bin', 'NOTICE-bin', 'docker/fluss/**', 'pom.xml') }}
 
       - name: Set up JDK 17
         if: steps.image-cache.outputs.cache-hit != 'true'
@@ -135,10 +139,14 @@ jobs:
         if: steps.image-cache.outputs.cache-hit != 'true'
         run: |
           ./mvnw -B --no-transfer-progress clean package -pl fluss-dist -am -DskipTests
+          cmp LICENSE-bin build-target/LICENSE
+          cmp NOTICE-bin build-target/NOTICE
           rm -rf docker/fluss/build-target
           mkdir -p docker/fluss/build-target
           cp -r build-target/* docker/fluss/build-target/
           docker build -t fluss:dev docker/fluss
+          docker run --rm --network none --read-only --entrypoint /bin/sh fluss:dev \
+            -c 'test -s /opt/fluss/LICENSE && test -s /opt/fluss/NOTICE'
           docker save fluss:dev -o /tmp/fluss-dev.tar
 
       - name: Upload server image
