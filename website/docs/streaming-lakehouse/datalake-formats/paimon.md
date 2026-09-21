@@ -42,6 +42,26 @@ Verify downloaded JARs using the [verification instructions](/downloads#verifyin
 
 For general guidance on configuring Paimon as the lakehouse storage, you can refer to [Deploying Streaming Lakehouse](../../install-deploy/deploying-streaming-lakehouse.md) documentation. When starting the tiering service, make sure to use Paimon-specific configurations as parameters.
 
+### Historical Partition Access Setup
+
+Historical partition access supports both lookups and writes. Configure `datalake.format` and the
+related `datalake.paimon.*` options on every TabletServer, using the same Paimon catalog and
+warehouse as the tiering service, for example:
+
+```yaml title="server.yaml"
+datalake.enabled: true
+datalake.format: paimon
+datalake.paimon.metastore: filesystem
+datalake.paimon.warehouse: /path/to/paimon/warehouse
+```
+
+Download the [Fluss Paimon lake connector](#dependencies) and
+[paimon-bundle-$PAIMON_VERSION$.jar](https://repo.maven.apache.org/maven2/org/apache/paimon/paimon-bundle/$PAIMON_VERSION$/paimon-bundle-$PAIMON_VERSION$.jar),
+and place them in `${FLUSS_HOME}/plugins/paimon/` on every TabletServer. Add any
+[required catalog or storage JARs](../../install-deploy/deploying-streaming-lakehouse.md#fluss-server-jars)
+to the same directory. For example, when using OSS, add `paimon-oss-<version>.jar` matching your
+Paimon version. Restart the TabletServers after changing the configuration or JARs.
+
 ### Create a Paimon Table
 
 When a table is created or altered with the option `'table.datalake.enabled' = 'true'`, Fluss will automatically create a corresponding Paimon table with the same table path by default.

@@ -517,17 +517,24 @@ If you can't login Docker ID in your region because of network issues, you can f
 
 Next, we need to build and push Docker images for the release candidates. This will enable users to easily test the new functionality using the Quickstart guide in the [Fluss documentation](https://fluss.apache.org/docs/quickstart/flink/) improving accessibility and feedback during the release validation phase.
 
-On the image-build machine, export the recorded `RELEASE_COMMIT` and verify
-that the Dockerfiles and preparation scripts are from that RC. From the
-repository root, check:
+On the image-build machine, export the recorded `RELEASE_COMMIT`. From the
+repository root, verify that the checkout is clean, the Docker inputs come from
+that RC, and the generated legal files match the binary distribution:
 
 ```bash
 test "$(git rev-parse HEAD)" = "${RELEASE_COMMIT:?Set the recorded RC commit}" &&
 git diff --quiet &&
-git diff --cached --quiet
+git diff --cached --quiet &&
+cmp LICENSE-bin build-target/LICENSE &&
+cmp NOTICE-bin build-target/NOTICE &&
+echo "Fluss Docker inputs verified"
+Fluss Docker inputs verified
 ```
 
-Then run the following commands to build and push the fluss Docker image.
+All checks are silent on success, so the message above is the only expected
+output. If any check fails, stop and verify that the image-build machine has
+checked out the intended release branch at the recorded `RELEASE_COMMIT`, then
+run the checks again.
 
 ```bash
 $ rm -rf docker/fluss/build-target/
@@ -832,8 +839,10 @@ In [GitHub Milestones](https://github.com/apache/fluss/milestones), mark the cur
 
 **Checklist to proceed to the next step**
 - Maven artifacts released and indexed in the Maven Central Repository (usually takes about a day to show up)
-- Source & binary distributions available in the release repository of https://dist.apache.org/repos/dist/release/fluss/
+- Source & binary distributions available on `https://downloads.apache.org/fluss/fluss-${RELEASE_VERSION}/`
 - Helm Chart package available in the release repository of https://dist.apache.org/repos/dist/release/fluss/helm-chart/
+- Python client artifacts available on [PyPI](https://pypi.org/project/pyfluss/)
+- Rust client crate available on [crates.io](https://crates.io/crates/fluss-rs)
 - Dev repository https://dist.apache.org/repos/dist/dev/fluss/ is empty
 - Release tagged in the source code repository
 - Docker images for the release pushed to DockerHub ([apache/fluss](https://hub.docker.com/r/apache/fluss/tags), [apache/fluss-gateway](https://hub.docker.com/r/apache/fluss-gateway/tags), [apache/fluss-quickstart-flink](https://hub.docker.com/r/apache/fluss-quickstart-flink/tags))
@@ -841,13 +850,13 @@ In [GitHub Milestones](https://github.com/apache/fluss/milestones), mark the cur
 
 ## Promote the release
 
+Before merging the website pull requests or sending the announcement emails, verify that the corresponding release artifacts and Docker images are publicly available from [downloads.apache.org](https://downloads.apache.org/fluss/), [Maven Central](https://search.maven.org/search?q=g:org.apache.fluss), [PyPI](https://pypi.org/project/pyfluss/), [crates.io](https://crates.io/crates/fluss-rs), and Docker Hub ([apache/fluss](https://hub.docker.com/r/apache/fluss/tags), [apache/fluss-gateway](https://hub.docker.com/r/apache/fluss-gateway/tags), [apache/fluss-quickstart-flink](https://hub.docker.com/r/apache/fluss-quickstart-flink/tags)), and ensure that at least one hour has passed since uploading the new release, in accordance with the [ASF release policy](https://www.apache.org/legal/release-policy.html#how-should-releases-be-announced).
+
 ### Merge website pull request
 
 Merge the website pull requests for the release blog and download page that were created in the [Prepare for the release](#9-pull-requests-for-release-blog-and-downloads) step.
 
 ### Apache mailing lists
-
-Once the release has been finalized, the last step of the process is to promote the release within the project and beyond. Please wait for 24h after finalizing the release in accordance with the [ASF release policy](https://www.apache.org/legal/release-policy.html#release-announcements).
 
 Announce on the dev@ mailing list that the release has been finished.
 
@@ -874,6 +883,16 @@ https://downloads.apache.org/fluss/fluss-1.0.0/
 Maven artifacts for Fluss can be found at:
 
 https://search.maven.org/search?q=g:org.apache.fluss%20AND%20v:1.0.0
+
+Docker images for Fluss can be found at:
+https://hub.docker.com/r/apache/fluss/tags?name=1.0.0
+https://hub.docker.com/r/apache/fluss-gateway/tags?name=1.0.0
+
+Python client artifacts can be found at:
+https://pypi.org/project/pyfluss/1.0.0/
+
+The Rust client crate can be found at:
+https://crates.io/crates/fluss-rs/1.0.0
 
 Please check out the release blog post for an overview of this release:
 https://fluss.apache.org/blog/releases/1.0/
