@@ -20,6 +20,7 @@ import Link from '@docusaurus/Link';
 import Layout from '@theme/Layout';
 import {useColorMode} from '@docusaurus/theme-common';
 import HomepageFeatures from '@site/src/components/HomepageFeatures';
+import UserLogoBand from '@site/src/components/UserLogoBand';
 import {useEffect, useRef, useState} from 'react';
 import {Highlight} from 'prism-react-renderer';
 import flussPrismDark from '@site/src/utils/prismDark';
@@ -538,6 +539,7 @@ function HomepageHeader({heroRef}: {heroRef: React.RefObject<HTMLElement>}) {
                         <HeroCodePanel />
                     </div>
                 </div>
+                <UserLogoBand />
             </div>
         </header>
     );

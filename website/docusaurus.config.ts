@@ -297,6 +297,10 @@ const config: Config = {
           type: 'dropdown',
           items: [
             {
+              label: 'User Stories',
+              to: '/user-stories',
+            },
+            {
               label: 'Talks',
               to: '/learn/talks',
             },
@@ -348,6 +352,7 @@ const config: Config = {
         {
           title: 'Community',
           items: [
+            {label: 'User Stories', to: '/user-stories'},
             {label: 'GitHub', href: 'https://github.com/apache/fluss'},
             {label: 'Slack', href: 'https://join.slack.com/t/apache-fluss/shared_invite/zt-473vgmvjr-cmIma~_iAA4cN02o5u2pDQ'},
             {label: 'Welcome', to: '/community/welcome'},

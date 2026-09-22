@@ -44,15 +44,11 @@
     overflow: hidden;
     margin-top: -60px;
     padding: calc(var(--fluss-space-32) + 60px) 0 var(--fluss-space-24);
-    /* Hero gradient pinned to the dark-mode rendering for BOTH themes.
-     * The bottom stop is the dark-mode --fluss-blue-800 override value
-     * (#D6E4ED, light blue) so the gradient fades from deep blue to light
-     * blue identically in light and dark — composited with the cyan +
-     * brand-blue radial overlays above for the layered hero look. */
+    /* Keep the hero dark in both themes so the white user logos remain legible. */
     background:
         radial-gradient(1200px 600px at 80% 0%, rgba(38, 109, 149, 0.18), transparent 60%),
         radial-gradient(900px 500px at 10% 100%, rgba(38, 109, 149, 0.25), transparent 60%),
-        linear-gradient(180deg, #0A1745 0%, #102856 60%, #D6E4ED 100%);
+        linear-gradient(180deg, #0A1745 0%, #102856 100%);
     color: #FFFFFF;
 }
 
