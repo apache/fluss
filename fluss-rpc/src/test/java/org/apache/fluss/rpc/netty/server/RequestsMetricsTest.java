@@ -106,6 +106,24 @@ class RequestsMetricsTest {
                         });
     }
 
+    @Test
+    void registersMetricsForAdditionalTabletServerRequests() {
+        RecordingMetricRegistry registry = new RecordingMetricRegistry();
+        MetricGroup serverMetricGroup = new GenericMetricGroup(registry, null, "tabletserver");
+        RequestsMetrics requestsMetrics =
+                RequestsMetrics.createTabletServerRequestMetrics(serverMetricGroup);
+
+        assertThat(requestsMetrics.getMetrics(ApiKeys.LIST_OFFSETS.id, false, false)).isPresent();
+        assertThat(requestsMetrics.getMetrics(ApiKeys.LIST_OFFSETS.id, true, false)).isPresent();
+        assertThat(requestsMetrics.getMetrics(ApiKeys.LIMIT_SCAN.id, false, false)).isPresent();
+        assertThat(requestsMetrics.getMetrics(ApiKeys.SCAN_KV.id, false, false)).isPresent();
+        assertThat(requestsMetrics.getMetrics(ApiKeys.GET_TABLE_STATS.id, false, false))
+                .isPresent();
+        assertThat(requestsMetrics.getMetrics(ApiKeys.NOTIFY_LEADER_AND_ISR.id, false, false))
+                .isPresent();
+        assertThat(requestsMetrics.getMetrics(ApiKeys.STOP_REPLICA.id, false, false)).isPresent();
+    }
+
     static class RecordingMetricRegistry implements MetricRegistry {
 
         private final List<RegisteredMetric> registeredMetrics = new ArrayList<>();

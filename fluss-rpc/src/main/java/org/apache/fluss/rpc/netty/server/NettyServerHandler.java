@@ -26,6 +26,7 @@ import org.apache.fluss.rpc.messages.ApiMessage;
 import org.apache.fluss.rpc.messages.AuthenticateRequest;
 import org.apache.fluss.rpc.messages.AuthenticateResponse;
 import org.apache.fluss.rpc.messages.FetchLogRequest;
+import org.apache.fluss.rpc.messages.ListOffsetsRequest;
 import org.apache.fluss.rpc.messages.LookupRequest;
 import org.apache.fluss.rpc.messages.PutKvRequest;
 import org.apache.fluss.rpc.protocol.ApiError;
@@ -354,9 +355,13 @@ public final class NettyServerHandler extends ChannelInboundHandlerAdapter {
         boolean isHistorical = false;
         ApiMessage requestMessage = request.getMessage();
         if (request.getApiKey() == ApiKeys.FETCH_LOG.id) {
-            // for fetch, we need to identify it's from client or follower
+            // For fetch, identify whether the request is from a client or follower.
             FetchLogRequest fetchLogRequest = (FetchLogRequest) requestMessage;
             isFromFollower = fetchLogRequest.getFollowerServerId() >= 0;
+        } else if (request.getApiKey() == ApiKeys.LIST_OFFSETS.id) {
+            // For list offsets, identify whether the request is from a client or follower.
+            ListOffsetsRequest listOffsetsRequest = (ListOffsetsRequest) requestMessage;
+            isFromFollower = listOffsetsRequest.getFollowerServerId() >= 0;
         } else if (request.getApiKey() == ApiKeys.LOOKUP.id) {
             isHistorical = hasHistoricalLookup((LookupRequest) requestMessage);
         } else if (request.getApiKey() == ApiKeys.PUT_KV.id) {

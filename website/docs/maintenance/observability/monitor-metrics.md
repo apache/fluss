@@ -716,6 +716,13 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
           request_metadata
           request_fetchLogClient
           request_fetchLogFollower
+          request_listOffsetsClient
+          request_listOffsetsFollower
+          request_limitScan
+          request_scanKv
+          request_tableStats
+          request_notifyLeaderAndIsr
+          request_stopReplica
       </td>
       <td>requestsPerSecond</td>
       <td>The total number of requests processed per second for each request type.</td>
@@ -723,7 +730,7 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
     </tr>
     <tr>
       <td>errorsPerSecond</td>
-      <td>The total number of failed RPC responses processed per second for each request type. Errors carried by successful response buckets are excluded.</td>
+      <td>The total number of failed RPC responses processed per second for each request type. This original aggregate excludes errors carried by successful response buckets or scan responses.</td>
       <td>Meter</td>
     </tr>
     <tr>
@@ -754,7 +761,7 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
     <tr>
       <td rowspan="1">request_error</td>
       <td>errorsPerSecond</td>
-      <td>The number of errors processed per second for each request type and <code>error</code> name. It includes failed RPC responses and non-<code>NONE</code> error codes in successful response buckets. Because one successful response can contain multiple bucket errors, this metric does not necessarily sum to the request type's total <code>errorsPerSecond</code>. A series appears only after its request/error first occurs.</td>
+      <td>The number of errors processed per second for each request type and <code>error</code> name. It includes failed RPC responses and non-<code>NONE</code> error codes in successful response buckets or scan responses. Because one successful response can contain multiple bucket or scan errors, this metric does not necessarily sum to the request type's original aggregate <code>errorsPerSecond</code>. A series appears only after its request/error first occurs.</td>
       <td>Meter</td>
     </tr>
      <tr>
