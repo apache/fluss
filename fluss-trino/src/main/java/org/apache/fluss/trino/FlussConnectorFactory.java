@@ -17,11 +17,19 @@
 
 package org.apache.fluss.trino;
 
+import com.google.inject.Injector;
+import io.airlift.bootstrap.Bootstrap;
+import io.airlift.bootstrap.LifeCycleManager;
+import io.trino.plugin.base.ConnectorContextModule;
 import io.trino.spi.connector.Connector;
 import io.trino.spi.connector.ConnectorContext;
 import io.trino.spi.connector.ConnectorFactory;
+import io.trino.spi.connector.ConnectorMetadata;
 
 import java.util.Map;
+
+import static io.trino.plugin.base.Versions.checkStrictSpiVersionMatch;
+import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
 /** Factory for creating Fluss connectors. */
 public class FlussConnectorFactory implements ConnectorFactory {
@@ -34,6 +42,31 @@ public class FlussConnectorFactory implements ConnectorFactory {
     @Override
     public Connector create(
             String catalogName, Map<String, String> config, ConnectorContext context) {
-        return new FlussConnector();
+        checkNotNull(catalogName, "catalogName is null");
+        checkNotNull(config, "config is null");
+        checkNotNull(context, "context is null");
+
+        checkStrictSpiVersionMatch(context, this);
+
+        Bootstrap app =
+                new Bootstrap(
+                        "io.trino.bootstrap.catalog." + catalogName,
+                        new ConnectorContextModule(catalogName, context),
+                        new FlussConnectorModule(),
+                        binder ->
+                                binder.bind(ClassLoader.class)
+                                        .toInstance(FlussConnectorFactory.class.getClassLoader()));
+
+        Injector injector =
+                app.doNotInitializeLogging()
+                        .disableSystemProperties()
+                        .setRequiredConfigurationProperties(config)
+                        .initialize();
+
+        LifeCycleManager lifeCycleManager = injector.getInstance(LifeCycleManager.class);
+
+        ConnectorMetadata metadata = injector.getInstance(ConnectorMetadata.class);
+
+        return new FlussConnector(lifeCycleManager, metadata);
     }
 }

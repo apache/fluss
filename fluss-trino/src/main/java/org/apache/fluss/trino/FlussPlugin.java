@@ -20,13 +20,13 @@ package org.apache.fluss.trino;
 import io.trino.spi.Plugin;
 import io.trino.spi.connector.ConnectorFactory;
 
-import java.util.List;
+import java.util.Collections;
 
 /** Apache Fluss connector plugin for Trino. */
 public class FlussPlugin implements Plugin {
 
     @Override
     public Iterable<ConnectorFactory> getConnectorFactories() {
-        return List.of(new FlussConnectorFactory());
+        return Collections.singletonList(new FlussConnectorFactory());
     }
 }

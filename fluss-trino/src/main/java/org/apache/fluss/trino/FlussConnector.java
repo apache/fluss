@@ -17,11 +17,51 @@
 
 package org.apache.fluss.trino;
 
+import io.airlift.bootstrap.LifeCycleManager;
 import io.trino.spi.connector.Connector;
+import io.trino.spi.connector.ConnectorMetadata;
+import io.trino.spi.connector.ConnectorSession;
+import io.trino.spi.connector.ConnectorTransactionHandle;
+import io.trino.spi.session.PropertyMetadata;
+import io.trino.spi.transaction.IsolationLevel;
+
+import java.util.List;
+
+import static io.trino.spi.transaction.IsolationLevel.READ_COMMITTED;
+import static io.trino.spi.transaction.IsolationLevel.checkConnectorSupports;
+import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
 /** Trino connector for Apache Fluss. */
 public class FlussConnector implements Connector {
 
+    private final LifeCycleManager lifeCycleManager;
+    private final ConnectorMetadata metadata;
+
+    public FlussConnector(LifeCycleManager lifeCycleManager, ConnectorMetadata metadata) {
+        this.lifeCycleManager = checkNotNull(lifeCycleManager, "lifeCycleManager is null");
+        this.metadata = checkNotNull(metadata, "metadata is null");
+    }
+
     @Override
-    public void shutdown() {}
+    public ConnectorTransactionHandle beginTransaction(
+            IsolationLevel isolationLevel, boolean readOnly, boolean autoCommit) {
+        checkConnectorSupports(READ_COMMITTED, isolationLevel);
+        return FlussTransactionHandle.INSTANCE;
+    }
+
+    @Override
+    public ConnectorMetadata getMetadata(
+            ConnectorSession session, ConnectorTransactionHandle transactionHandle) {
+        return metadata;
+    }
+
+    @Override
+    public List<PropertyMetadata<?>> getTableProperties() {
+        return FlussTableProperties.getTableProperties();
+    }
+
+    @Override
+    public void shutdown() {
+        lifeCycleManager.stop();
+    }
 }
