@@ -28,11 +28,13 @@ import io.trino.spi.connector.ConnectorMetadata;
 
 import java.util.Map;
 
-import static io.trino.plugin.base.Versions.checkStrictSpiVersionMatch;
+import static org.apache.fluss.trino.TrinoVersionCompatibility.verifyCompatibleVersion;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
 /** Factory for creating Fluss connectors. */
 public class FlussConnectorFactory implements ConnectorFactory {
+    private static final int MIN_SUPPORTED_TRINO_VERSION = 483;
+    private static final int MAX_SUPPORTED_TRINO_VERSION = 483;
 
     @Override
     public String getName() {
@@ -46,7 +48,7 @@ public class FlussConnectorFactory implements ConnectorFactory {
         checkNotNull(config, "config is null");
         checkNotNull(context, "context is null");
 
-        checkStrictSpiVersionMatch(context, this);
+        verifyCompatibleVersion(context.getSpiVersion());
 
         Bootstrap app =
                 new Bootstrap(

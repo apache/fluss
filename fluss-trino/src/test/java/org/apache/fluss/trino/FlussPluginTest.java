@@ -22,7 +22,8 @@ import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-class FlussPluginTest {
+/** Tests plugin registration. */
+final class FlussPluginTest {
 
     @Test
     void testConnectorFactory() {
