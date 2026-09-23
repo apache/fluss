@@ -1955,6 +1955,7 @@ public class ConfigOptions {
                                     + "updated table configuration.");
 
     /** Lookup strategy for historical partitions stored in lake storage. */
+    @Internal
     public static final ConfigOption<LakeLookupMode>
             TABLE_DATALAKE_HISTORICAL_PARTITION_LOOKUP_MODE =
                     key("table.datalake.historical-partition.lookup-mode")
