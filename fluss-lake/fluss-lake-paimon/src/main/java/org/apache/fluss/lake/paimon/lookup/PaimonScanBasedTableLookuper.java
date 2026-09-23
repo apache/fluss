@@ -28,6 +28,7 @@ import org.apache.fluss.row.decode.KeyDecoder;
 import org.apache.fluss.utils.ExceptionUtils;
 import org.apache.fluss.utils.IOUtils;
 
+import org.apache.paimon.CoreOptions;
 import org.apache.paimon.catalog.Catalog;
 import org.apache.paimon.catalog.CatalogContext;
 import org.apache.paimon.catalog.CatalogFactory;
@@ -161,8 +162,19 @@ public class PaimonScanBasedTableLookuper implements LakeTableLookuper {
 
     private @Nullable byte[] scanLookup(FileStoreTable table, byte[] key, LookupContext context)
             throws Exception {
+        FileStoreTable scanTable = table;
+        Long lakeSnapshotId = context.lakeSnapshotId();
+        if (lakeSnapshotId != null) {
+            // Paimon propagates the table's snapshot and manifest caches to this copy.
+            scanTable =
+                    scanTable.copy(
+                            Collections.singletonMap(
+                                    CoreOptions.SCAN_SNAPSHOT_ID.key(),
+                                    String.valueOf(lakeSnapshotId)));
+        }
         ReadBuilder readBuilder =
-                table.newReadBuilder()
+                scanTable
+                        .newReadBuilder()
                         .withFilter(createKeyPredicates(table, key, context))
                         .withPartitionFilter(createPartitionPredicate(table, context))
                         .withReadType(

@@ -17,6 +17,7 @@
 
 package org.apache.fluss.config;
 
+import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.annotation.PublicEvolving;
 import org.apache.fluss.compression.ArrowCompressionInfo;
 import org.apache.fluss.metadata.ChangelogImage;
@@ -136,6 +137,7 @@ public class TableConfig {
     }
 
     /** Gets the lookup mode for historical partitions of the table. */
+    @Internal
     public LakeLookupMode getHistoricalLookupMode() {
         return config.get(ConfigOptions.TABLE_DATALAKE_HISTORICAL_PARTITION_LOOKUP_MODE);
     }
