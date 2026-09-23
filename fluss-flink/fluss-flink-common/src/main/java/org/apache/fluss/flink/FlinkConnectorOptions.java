@@ -232,7 +232,7 @@ public class FlinkConnectorOptions {
                     .defaultValue(DistributionMode.AUTO)
                     .withDescription(
                             "Defines the distribution mode for writing data to the sink. Available options are:\n"
-                                    + "- BUCKET_LOAD_BALANCE: Shuffle data by bucket key with even load distribution across all downstream subtasks using LCM-based logical slot assignment. Records with the same bucket key always route to the same subtask. Requires 'bucket.key' to be defined. Suitable for tables where intra-bucket ordering is not required but even load distribution matters.\n"
+                                    + "- BUCKET_LOAD_BALANCE: Shuffle data by bucket key with even load distribution across all downstream subtasks using LCM-based logical slot assignment. Records with the same bucket key always route to the same subtask. Requires 'bucket.key' to be defined. Suitable for tables where intra-bucket ordering is not required but even load distribution matters. Not supported for tables with the aggregation merge engine, because Undo Recovery requires each bucket to be written by exactly one subtask.\n"
                                     + "- AUTO: Automatically chooses the best mode based on the table type. "
                                     + "Uses BUCKET mode for Primary Key Tables and Log table with bucket key to maximize throughput, "
                                     + "and NONE for Log Tables without bucket key.\n"

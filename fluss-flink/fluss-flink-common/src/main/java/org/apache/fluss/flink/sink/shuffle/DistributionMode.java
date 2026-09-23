@@ -76,8 +76,11 @@ public enum DistributionMode {
      *
      * <p>Routing algorithm: first compute bucket ID via {@code BucketingFunction}, then select the
      * concrete subtask within the bucket's assigned slot range using the bucket key's murmur hash.
-     * Records with the same bucket key always route to the same subtask, making this mode safe for
-     * Primary Key tables (merge semantics preserved).
+     * Records with the same bucket key always route to the same subtask, so merge semantics are
+     * preserved at runtime. However, one bucket may be written by several subtasks when the bucket
+     * count and the sink parallelism do not evenly divide each other, which breaks the
+     * one-writer-per-bucket assumption of Undo Recovery; this mode is therefore rejected for tables
+     * using the aggregation merge engine.
      *
      * <p>Characteristics:
      *

@@ -53,6 +53,7 @@ import java.io.Serializable;
 import java.util.List;
 
 import static org.apache.fluss.flink.sink.FlinkStreamPartitioner.partition;
+import static org.apache.fluss.flink.utils.FlinkConnectorOptionsUtils.validateDistributionModeForUndoRecovery;
 import static org.apache.fluss.flink.utils.FlinkConversions.toFlussRowType;
 import static org.apache.fluss.utils.Preconditions.checkState;
 
@@ -335,6 +336,11 @@ class FlinkSink<InputT> extends SinkAdapter<InputT> {
 
         @Override
         public DataStream<InputT> addPreWriteTopology(DataStream<InputT> input) {
+            // Defense in depth: the entry points (FlinkTableFactory and FlussSinkBuilder)
+            // validate the distribution mode via validateDistributionModeForMergeEngine before
+            // constructing this builder, but the builder can also be constructed directly, so
+            // re-validate the Undo Recovery constraint here.
+            validateDistributionModeForUndoRecovery(enableUndoRecovery, distributionMode);
             DataStream<InputT> stream;
             switch (distributionMode) {
                 case NONE:

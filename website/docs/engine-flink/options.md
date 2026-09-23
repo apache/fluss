@@ -191,7 +191,7 @@ Shuffle data by bucket ID before writing to sink. This groups data with the same
 Shuffle data by bucket key before writing to sink. Unlike **BUCKET**, this mode uses an LCM-based logical slot assignment to ensure every subtask receives data, even when the bucket count and sink parallelism do not evenly divide each other.
 
 **Characteristics:**
-- Records with the same bucket key always route to the same subtask, so it is safe for Primary Key tables and merge-engine tables
+- Records with the same bucket key always route to the same subtask, so merge semantics are preserved at runtime; however, this mode is **not supported for tables with the `aggregation` merge engine**, because Undo Recovery requires each bucket to be written by exactly one subtask, while bucket_load_balance may fan one bucket out to several subtasks
 - For Log Tables, it only takes effect when the `bucket.key` is defined
 - Intra-bucket ordering is not guaranteed; use this mode when load balancing matters more than per-bucket ordering
 

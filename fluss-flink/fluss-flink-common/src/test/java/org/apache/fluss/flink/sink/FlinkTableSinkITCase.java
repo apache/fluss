@@ -496,6 +496,25 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
     }
 
     @Test
+    @MultiVersionTest
+    void testAggregationMergeEngineRejectsBucketLoadBalance() {
+        // Undo Recovery for aggregation tables assumes one writer per bucket, while
+        // bucket_load_balance may fan one bucket out to several subtasks, so the combination
+        // must be rejected when the sink is planned.
+        tEnv.executeSql(
+                "create table agg_load_balance_sink (a int not null primary key not enforced, "
+                        + "b int) "
+                        + "with('table.merge-engine' = 'aggregation', "
+                        + "'fields.b.agg' = 'sum', "
+                        + "'sink.distribution-mode' = 'bucket_load_balance')");
+
+        String insertSql = "INSERT INTO agg_load_balance_sink VALUES (1, 1)";
+        assertThatThrownBy(() -> tEnv.explainSql(insertSql, ExplainDetail.JSON_EXECUTION_PLAN))
+                .hasStackTraceContaining("is not supported when Undo Recovery is enabled")
+                .hasStackTraceContaining("Please use 'bucket' or 'auto'");
+    }
+
+    @Test
     void testPutDuringAddColumn() throws Exception {
         tEnv.executeSql(
                 "create table sink_test (a int not null primary key not enforced, b bigint, c string)");

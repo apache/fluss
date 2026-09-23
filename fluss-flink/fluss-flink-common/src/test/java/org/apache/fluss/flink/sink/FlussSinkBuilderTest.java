@@ -210,7 +210,7 @@ class FlussSinkBuilderTest {
                         Collections.emptyList(),
                         Collections.emptyList(),
                         null,
-                        DistributionMode.NONE,
+                        DistributionMode.BUCKET,
                         new OrderSerializationSchema(),
                         true,
                         null);
@@ -220,6 +220,41 @@ class FlussSinkBuilderTest {
         assertThatThrownBy(() -> writerBuilder.addPreWriteTopology(input))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("multiple topologies");
+    }
+
+    @Test
+    void testUndoRecoveryRejectsUnsafeDistributionModes() {
+        StreamExecutionEnvironment environment =
+                StreamExecutionEnvironment.getExecutionEnvironment();
+        DataStream<Order> input = environment.fromElements(new Order());
+        // Undo Recovery assumes each bucket is written by exactly one subtask; modes that may fan
+        // one bucket out to several subtasks must be rejected even when the builder is
+        // constructed directly, bypassing the entry-point validation.
+        for (DistributionMode mode :
+                new DistributionMode[] {
+                    DistributionMode.NONE, DistributionMode.BUCKET_LOAD_BALANCE
+                }) {
+            FlinkSink.UpsertSinkWriterBuilder<Order> writerBuilder =
+                    new FlinkSink.UpsertSinkWriterBuilder<>(
+                            TablePath.of(databaseName, tableName),
+                            new Configuration(),
+                            RowType.of(new IntType()),
+                            null,
+                            1,
+                            Collections.emptyList(),
+                            Collections.emptyList(),
+                            null,
+                            mode,
+                            new OrderSerializationSchema(),
+                            true,
+                            null);
+
+            assertThatThrownBy(() -> writerBuilder.addPreWriteTopology(input))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("is not supported when Undo Recovery is enabled")
+                    .hasMessageContaining("'" + mode.name() + "'")
+                    .hasMessageContaining("Please use 'bucket' or 'auto'");
+        }
     }
 
     @Test

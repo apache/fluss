@@ -20,6 +20,7 @@ package org.apache.fluss.flink.source.lookup;
 import org.apache.fluss.bucketing.BucketingFunction;
 import org.apache.fluss.flink.adapter.SupportsLookupCustomShuffleAdapter.InputDataPartitionerAdapter;
 import org.apache.fluss.flink.row.FlinkAsFlussRow;
+import org.apache.fluss.flink.shuffle.BucketLoadBalanceRouter;
 import org.apache.fluss.flink.utils.FlinkConversions;
 import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.row.InternalRow;
@@ -42,10 +43,9 @@ import static org.apache.fluss.utils.Preconditions.checkNotNull;
  * bucketing used by {@code PrimaryKeyLookuper}/{@code PrefixKeyLookuper} (bucket-key encoding +
  * {@link BucketingFunction}).
  *
- * <p>The routing delegates to {@link
- * org.apache.fluss.flink.sink.BucketLoadBalanceChannelComputer#routeByBucket} which uses LCM-based
- * logical slot assignment to balance load evenly across all subtasks while keeping every lookup key
- * on a stable subtask.
+ * <p>The routing delegates to {@link BucketLoadBalanceRouter} which uses LCM-based logical slot
+ * assignment to balance load evenly across all subtasks while keeping every lookup key on a stable
+ * subtask.
  */
 public class FlussLookupInputPartitioner implements InputDataPartitionerAdapter {
 
@@ -60,9 +60,7 @@ public class FlussLookupInputPartitioner implements InputDataPartitionerAdapter 
     @Nullable private final DataLakeFormat lakeFormat;
     private final int numBuckets;
 
-    private transient KeyEncoder bucketKeyEncoder;
-    private transient KeyEncoder lookupKeyEncoder;
-    private transient BucketingFunction bucketingFunction;
+    private transient BucketLoadBalanceRouter bucketLoadBalanceRouter;
     private transient FlinkAsFlussRow reuseRow;
 
     /**
@@ -96,16 +94,17 @@ public class FlussLookupInputPartitioner implements InputDataPartitionerAdapter 
     }
 
     private void ensureInitialized() {
-        if (bucketKeyEncoder == null) {
+        if (bucketLoadBalanceRouter == null) {
             org.apache.fluss.types.RowType flussKeyType =
                     FlinkConversions.toFlussRowType(keyFlinkRowType);
             // bucketing uses the bucket-key encoder consistent with the client's bucket routing
-            bucketKeyEncoder =
-                    KeyEncoder.ofBucketKeyEncoder(flussKeyType, bucketKeyNames, lakeFormat);
-            lookupKeyEncoder =
-                    CompactedKeyEncoder.createKeyEncoder(
-                            flussKeyType, keyFlinkRowType.getFieldNames());
-            bucketingFunction = BucketingFunction.of(lakeFormat);
+            bucketLoadBalanceRouter =
+                    new BucketLoadBalanceRouter(
+                            KeyEncoder.ofBucketKeyEncoder(flussKeyType, bucketKeyNames, lakeFormat),
+                            CompactedKeyEncoder.createKeyEncoder(
+                                    flussKeyType, keyFlinkRowType.getFieldNames()),
+                            BucketingFunction.of(lakeFormat),
+                            numBuckets);
             reuseRow = new FlinkAsFlussRow();
         }
     }
@@ -124,18 +123,6 @@ public class FlussLookupInputPartitioner implements InputDataPartitionerAdapter 
         // normalize the projected join keys into the Fluss key order
         RowData normalizedKey = normalizer.normalizeLookupKey(joinKeys);
         InternalRow flussKeyRow = reuseRow.replace(normalizedKey);
-        byte[] bucketKeyBytes = bucketKeyEncoder.encodeKey(flussKeyRow);
-        byte[] lookupKeyBytes = lookupKeyEncoder.encodeKey(flussKeyRow);
-        // Delegate to the shared bucket-load-balance routing algorithm.
-        // bucketKeyBytes determines the bucket; lookupKeyBytes provides a separate hash
-        // domain so that different lookup keys in the same bucket are spread across the
-        // bucket's subtask range while the same lookup key always lands on the same subtask.
-        return org.apache.fluss.flink.sink.BucketLoadBalanceChannelComputer.routeByBucket(
-                bucketKeyBytes, lookupKeyBytes, numBuckets, numPartitions, bucketingFunction);
-    }
-
-    @Override
-    public boolean isDeterministic() {
-        return true;
+        return bucketLoadBalanceRouter.route(flussKeyRow, numPartitions);
     }
 }
