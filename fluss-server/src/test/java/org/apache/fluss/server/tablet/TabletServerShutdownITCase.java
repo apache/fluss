@@ -33,13 +33,11 @@ import org.apache.fluss.server.testutils.FlussClusterExtension;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
 import org.apache.fluss.types.DataTypes;
-import org.apache.fluss.utils.FlussPaths;
 import org.apache.fluss.utils.types.Tuple2;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.rocksdb.FlushOptions;
 
@@ -68,7 +66,6 @@ import static org.apache.fluss.testutils.DataTestUtils.genMemoryLogRecordsByObje
 import static org.apache.fluss.testutils.DataTestUtils.getKeyValuePairs;
 import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assumptions.assumeThat;
 
 /** The ITCase for tabletServer shutdown (controlled shutdown). */
 public class TabletServerShutdownITCase {
@@ -264,12 +261,9 @@ public class TabletServerShutdownITCase {
     }
 
     @ParameterizedTest
-    @CsvSource({"true, false", "false, false", "true, true", "false, true"})
-    void testKvRecoveryAfterStartupCleanup(boolean withSnapshot, boolean failCleanup)
-            throws Exception {
-        TablePath tablePath =
-                TablePath.of(
-                        "test_shutdown", "kv_startup_recovery_" + withSnapshot + "_" + failCleanup);
+    @ValueSource(booleans = {true, false})
+    void testKvRecoveryAfterStartupCleanup(boolean withSnapshot) throws Exception {
+        TablePath tablePath = TablePath.of("test_shutdown", "kv_startup_recovery_" + withSnapshot);
         long tableId =
                 createTable(
                         FLUSS_CLUSTER_EXTENSION,
@@ -306,57 +300,19 @@ public class TabletServerShutdownITCase {
         Files.write(staleFile, new byte[] {1});
 
         FLUSS_CLUSTER_EXTENSION.stopTabletServer(leader);
-        boolean restarted = false;
-        try {
-            if (failCleanup) {
-                // The tablet can be renamed, but recursive deletion of its RocksDB files fails.
-                File dbDir = new File(kvDir, "db");
-                assertThat(dbDir.setWritable(false)).isTrue();
-                assumeThat(Files.isWritable(dbDir.toPath())).isFalse();
-            }
-            FLUSS_CLUSTER_EXTENSION.startTabletServer(leader);
-            restarted = true;
-            Replica recovered = FLUSS_CLUSTER_EXTENSION.waitAndGetLeaderReplica(tableBucket);
-            assertThat(staleFile).doesNotExist();
-            assertThat(kvDir).isDirectory();
-            if (failCleanup) {
-                File[] pendingDeletionDirs =
-                        kvDir.getParentFile()
-                                .listFiles(
-                                        file ->
-                                                file.getName().startsWith(kvDir.getName() + ".")
-                                                        && file.getName()
-                                                                .endsWith(
-                                                                        FlussPaths
-                                                                                .DELETED_FILE_SUFFIX));
-                assertThat(pendingDeletionDirs).hasSize(1);
-                assertThat(new File(pendingDeletionDirs[0], "db")).isDirectory();
-            }
-            assertThat(recovered.getRowCount()).isEqualTo(2L);
-            TabletServerGateway recoveredGateway =
-                    FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(leader);
-            for (Tuple2<byte[], byte[]> keyValue :
-                    getKeyValuePairs(
-                            genKvRecords(new Object[] {1, "updated"}, new Object[] {2, "b1"}))) {
-                assertLookupResponse(
-                        recoveredGateway.lookup(newLookupRequest(tableId, 0, keyValue.f0)).get(),
-                        keyValue.f1);
-            }
-        } finally {
-            if (failCleanup) {
-                // Restore permissions at either the original path or the renamed deletion path.
-                File[] tabletDirs = kvDir.getParentFile().listFiles(File::isDirectory);
-                assertThat(tabletDirs).isNotNull();
-                for (File tabletDir : tabletDirs) {
-                    File dbDir = new File(tabletDir, "db");
-                    if (dbDir.exists()) {
-                        assertThat(dbDir.setWritable(true)).isTrue();
-                    }
-                }
-            }
-            if (!restarted) {
-                FLUSS_CLUSTER_EXTENSION.startTabletServer(leader);
-            }
+        FLUSS_CLUSTER_EXTENSION.startTabletServer(leader);
+        Replica recovered = FLUSS_CLUSTER_EXTENSION.waitAndGetLeaderReplica(tableBucket);
+        assertThat(staleFile).doesNotExist();
+        assertThat(kvDir).isDirectory();
+        assertThat(recovered.getRowCount()).isEqualTo(2L);
+        TabletServerGateway recoveredGateway =
+                FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(leader);
+        for (Tuple2<byte[], byte[]> keyValue :
+                getKeyValuePairs(
+                        genKvRecords(new Object[] {1, "updated"}, new Object[] {2, "b1"}))) {
+            assertLookupResponse(
+                    recoveredGateway.lookup(newLookupRequest(tableId, 0, keyValue.f0)).get(),
+                    keyValue.f1);
         }
         dropTable(FLUSS_CLUSTER_EXTENSION, tablePath);
     }

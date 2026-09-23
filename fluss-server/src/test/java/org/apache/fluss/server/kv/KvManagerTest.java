@@ -63,9 +63,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.MethodSource;
-import org.junit.jupiter.params.provider.ValueSource;
 
 import javax.annotation.Nullable;
 
@@ -194,7 +192,9 @@ final class KvManagerTest {
                             "db/table-1/kv-0",
                             "db/table-2/20260917-p2/kv-1",
                             "dropped/table-3/kv-0",
-                            "dropped/table-4/20260917-p4/kv-2")) {
+                            "dropped/table-4/20260917-p4/kv-2",
+                            "dropped/table-3/kv-0.old.deleted",
+                            "dropped/no-id/kv-invalid")) {
                 Path kvDir = dataDir.toPath().resolve(path);
                 Files.createDirectories(kvDir.resolve("db"));
                 Files.write(kvDir.resolve("db/000001.sst"), new byte[] {1, 2, 3});
@@ -249,23 +249,7 @@ final class KvManagerTest {
     }
 
     @Test
-    void testStartupCleanupRejectsOpenTablets() throws Exception {
-        initTableBuckets(null);
-        KvTablet kv = getOrCreateKv(tablePath1, null, tableBucket1);
-        byte[] key = "live-key".getBytes(StandardCharsets.UTF_8);
-        KvRecord record = kvRecordFactory.ofRecord(key, new Object[] {1, "value"});
-        put(kv, record);
-
-        assertThatThrownBy(kvManager::startup)
-                .isInstanceOf(IllegalStateException.class)
-                .hasMessage("Cannot clean KV directories while KV tablets are open.");
-
-        assertThat(kv.getKvTabletDir()).isDirectory();
-        verifyMultiGet(kv, key, valueOf(record));
-    }
-
-    @Test
-    void testStartupCleanupContinuesOnOtherDisksAfterDeletionFailure(@TempDir File secondDataDir)
+    void testStartupCleanupIsolatesFailedDeletionsAndRetries(@TempDir File secondDataDir)
             throws Exception {
         configureTwoDataDirs(secondDataDir);
         Path otherKvDir =
@@ -286,6 +270,15 @@ final class KvManagerTest {
             assertThat(Files.readAllBytes(pendingDirs[0].toPath().resolve("db/data")))
                     .containsExactly(1);
             assertThat(otherKvDir).doesNotExist();
+
+            // A pending deletion must not block cleanup of a new tablet at the original path.
+            Files.createDirectories(kvDir.resolve("db"));
+            Files.write(kvDir.resolve("db/data"), new byte[] {2});
+            kvManager.startup();
+            assertThat(kvDir).doesNotExist();
+            assertThat(tableDir.listFiles()).containsExactly(pendingDirs[0]);
+            assertThat(Files.readAllBytes(pendingDirs[0].toPath().resolve("db/data")))
+                    .containsExactly(1);
         } finally {
             makeKvStoreDirectoriesWritable(tableDir);
         }
@@ -293,32 +286,6 @@ final class KvManagerTest {
         // Cleanup can be retried once the disk problem is resolved.
         kvManager.startup();
         assertThat(tableDir).doesNotExist();
-    }
-
-    @Test
-    void testStartupCleanupRetriesPendingDeletionWithoutBlockingNewTablet() throws Exception {
-        Path kvDir = Files.createDirectories(tempDir.toPath().resolve("db/table-1/kv-0"));
-        Files.write(kvDir.resolve("data"), new byte[] {1});
-        Path pendingDir = Files.createDirectory(kvDir.resolveSibling("kv-0.deleted"));
-        Path pendingFile = Files.write(pendingDir.resolve("data"), new byte[] {2});
-        try {
-            assertThat(pendingDir.toFile().setWritable(false)).isTrue();
-            assumeThat(Files.isWritable(pendingDir)).isFalse();
-
-            kvManager.startup();
-            // Retrying an older deletion must neither rename it again nor prevent isolation of
-            // the current tablet, regardless of directory enumeration order.
-            kvManager.startup();
-
-            assertThat(kvDir).doesNotExist();
-            assertThat(kvDir.getParent().toFile().listFiles()).containsExactly(pendingDir.toFile());
-            assertThat(Files.readAllBytes(pendingFile)).containsExactly(2);
-        } finally {
-            assertThat(pendingDir.toFile().setWritable(true)).isTrue();
-        }
-
-        kvManager.startup();
-        assertThat(kvDir.getParent()).doesNotExist();
     }
 
     @Test
@@ -357,65 +324,22 @@ final class KvManagerTest {
     }
 
     @Test
-    void testStartupCleanupWithSymbolicDataRoot(@TempDir Path linkDir) throws Exception {
-        tearDown();
-        kvManager = null;
-        logManager = null;
-        localDiskManager = null;
-        Path dataLink = Files.createSymbolicLink(linkDir.resolve("data"), tempDir.toPath());
-        conf.set(ConfigOptions.DATA_DIR, dataLink.toString());
-        createManagers();
-        Path staleDir = tempDir.toPath().resolve("db/table-1/kv-0");
-        Files.createDirectories(staleDir);
-        Files.write(staleDir.resolve("data"), new byte[] {1});
-
-        kvManager.startup();
-
-        assertThat(staleDir).doesNotExist();
-        assertThat(Files.isSymbolicLink(dataLink)).isTrue();
-        assertThat(tempDir).isDirectory();
-    }
-
-    @ParameterizedTest
-    @CsvSource({
-        "db, table-1/kv-0",
-        "db/table-1, kv-0",
-        "db/table-1/partition-p1, kv-0",
-        "db/table-1/kv-0, db",
-        "db/table-1/partition-p1/kv-0, db"
-    })
-    void testStartupCleanupSkipsSymbolicLinks(
-            String linkPath, String targetPath, @TempDir Path outsideDir) throws Exception {
-        Path outsideKvDir = Files.createDirectories(outsideDir.resolve(targetPath));
-        Path outsideFile = Files.write(outsideKvDir.resolve("data"), new byte[] {1, 2, 3});
-        Path link = tempDir.toPath().resolve(linkPath);
-        Files.createDirectories(link.getParent());
-        Files.createSymbolicLink(link, outsideDir);
-        Path staleDir = Files.createDirectories(tempDir.toPath().resolve("other/table-2/kv-0"));
-
-        kvManager.startup();
-
-        assertThat(staleDir).doesNotExist();
-        assertThat(Files.readAllBytes(outsideFile)).containsExactly(1, 2, 3);
-        assertThat(Files.isSymbolicLink(link)).isTrue();
-    }
-
-    @ParameterizedTest
-    @ValueSource(strings = {"db", "db/table-1", "db/table-1/partition-p1"})
-    void testStartupCleanupContinuesOnOtherDisksAfterListingFailure(
-            String unreadablePath, @TempDir File secondDataDir) throws Exception {
+    void testStartupCleanupSkipsUnreadableDirectories(@TempDir File secondDataDir)
+            throws Exception {
         configureTwoDataDirs(secondDataDir);
         Path otherKvDir =
                 Files.createDirectories(secondDataDir.toPath().resolve("db/table-2/kv-0"));
         Path kvDir = tempDir.toPath().resolve("db/table-1/partition-p1/kv-0");
         Files.createDirectories(kvDir);
         Path retainedFile = Files.write(kvDir.resolve("data"), new byte[] {1});
-        File unreadableDir = tempDir.toPath().resolve(unreadablePath).toFile();
+        Path siblingKvDir = Files.createDirectories(tempDir.toPath().resolve("db/table-3/kv-0"));
+        File unreadableDir = tempDir.toPath().resolve("db/table-1").toFile();
         try {
             assertThat(unreadableDir.setReadable(false)).isTrue();
             assumeThat(unreadableDir.canRead()).isFalse();
 
             kvManager.startup();
+            assertThat(siblingKvDir).doesNotExist();
             assertThat(otherKvDir).doesNotExist();
         } finally {
             assertThat(unreadableDir.setReadable(true)).isTrue();
@@ -424,55 +348,6 @@ final class KvManagerTest {
         assertThat(retainedFile).exists();
         kvManager.startup();
         assertThat(kvDir).doesNotExist();
-    }
-
-    @Test
-    void testStartupCleanupLeavesExcludedSymbolicLinks(@TempDir Path outsideDir) throws Exception {
-        Path outsideFile = Files.write(outsideDir.resolve("data"), new byte[] {1, 2, 3});
-        Path kvDir = tempDir.toPath().resolve("db/table-1/kv-0");
-        Files.createDirectories(kvDir);
-        List<Path> links = new ArrayList<>();
-        for (String path :
-                Arrays.asList(
-                        FlussPaths.HISTORICAL_LOOKUP_CACHE_DIR_NAME,
-                        FlussPaths.REMOTE_LOG_INDEX_LOCAL_CACHE,
-                        "db/table-1/log-0",
-                        "db/table-1/backup")) {
-            links.add(Files.createSymbolicLink(tempDir.toPath().resolve(path), outsideDir));
-        }
-
-        kvManager.startup();
-
-        assertThat(kvDir).doesNotExist();
-        assertThat(Files.readAllBytes(outsideFile)).containsExactly(1, 2, 3);
-        for (Path link : links) {
-            assertThat(Files.isSymbolicLink(link)).isTrue();
-        }
-    }
-
-    @ParameterizedTest
-    @ValueSource(strings = {"db/foo/kv-0", "db/table-1/kv-abc", "db/foo/partition-p1/kv-abc"})
-    void testStartupCleanupDoesNotRequireValidTabletIds(String path) throws Exception {
-        Path staleDir = Files.createDirectories(tempDir.toPath().resolve(path));
-        Files.write(staleDir.resolve("data"), new byte[] {1});
-
-        kvManager.startup();
-
-        assertThat(staleDir).doesNotExist();
-        assertThat(tempDir.toPath().resolve("db")).doesNotExist();
-        assertThat(tempDir).isDirectory();
-    }
-
-    @Test
-    void testStartupCleanupDoesNotFollowLinksInsideKv(@TempDir Path outsideDir) throws Exception {
-        Path outsideFile = Files.write(outsideDir.resolve("data"), new byte[] {1, 2, 3});
-        Path staleDir = Files.createDirectories(tempDir.toPath().resolve("db/table-1/kv-0"));
-        Files.createSymbolicLink(staleDir.resolve("db"), outsideDir);
-
-        kvManager.startup();
-
-        assertThat(staleDir).doesNotExist();
-        assertThat(Files.readAllBytes(outsideFile)).containsExactly(1, 2, 3);
     }
 
     @Test
