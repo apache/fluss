@@ -230,6 +230,30 @@ class TableDescriptorValidationTest {
     }
 
     @Test
+    void testAlterHistoricalLookupMode() {
+        TableInfo currentTable =
+                TableInfo.of(
+                        TestData.DATA1_TABLE_PATH_PK,
+                        TestData.DATA1_TABLE_ID_PK,
+                        1,
+                        TestData.DATA1_TABLE_DESCRIPTOR_PK.withDataLakeFormat(
+                                DataLakeFormat.PAIMON),
+                        "file://remote",
+                        1L,
+                        1L);
+
+        assertThatCode(
+                        () ->
+                                TableDescriptorValidation.validateAlterTableProperties(
+                                        currentTable,
+                                        Collections.singleton(
+                                                ConfigOptions
+                                                        .TABLE_DATALAKE_HISTORICAL_PARTITION_LOOKUP_MODE
+                                                        .key())))
+                .doesNotThrowAnyException();
+    }
+
+    @Test
     void testCustomLakePathValidation() {
         // invalid database and table names
         assertThatThrownBy(
