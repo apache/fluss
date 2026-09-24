@@ -821,6 +821,11 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
         }
     }
 
+    @VisibleForTesting
+    boolean hasKvLock(TableBucket tableBucket) {
+        return kvLocks.containsKey(tableBucket);
+    }
+
     private <T, E extends Exception> T inKvLock(
             TableBucket tableBucket, SupplierWithException<T, E> action) throws E {
         while (true) {

@@ -870,6 +870,31 @@ final class KvManagerTest {
     }
 
     @Test
+    void testKvLockRemovedWhenBucketHasNoKv() throws Exception {
+        initTableBuckets(null);
+        getOrCreateKv(tablePath1, null, tableBucket1);
+        assertThat(kvManager.hasKvLock(tableBucket1)).isTrue();
+
+        kvManager.dropKv(tableBucket1);
+        assertThat(kvManager.hasKvLock(tableBucket1)).isFalse();
+
+        kvManager.dropKv(tableBucket2);
+        assertThat(kvManager.hasKvLock(tableBucket2)).isFalse();
+
+        SchemaGetter failingSchemaGetter =
+                new TestingSchemaGetter(new SchemaInfo(DATA1_SCHEMA_PK, 1)) {
+                    @Override
+                    public SchemaInfo getLatestSchemaInfo() {
+                        throw new FlussRuntimeException("Failed schema lookup.");
+                    }
+                };
+        assertThatThrownBy(() -> getOrCreateKv(tablePath1, null, tableBucket1, failingSchemaGetter))
+                .hasMessageContaining("Failed schema lookup.");
+        assertThat(kvManager.getKv(tableBucket1)).isNotPresent();
+        assertThat(kvManager.hasKvLock(tableBucket1)).isFalse();
+    }
+
+    @Test
     void testGetNonExistentKv() {
         initTableBuckets(null);
         Optional<KvTablet> kv = kvManager.getKv(tableBucket1);
