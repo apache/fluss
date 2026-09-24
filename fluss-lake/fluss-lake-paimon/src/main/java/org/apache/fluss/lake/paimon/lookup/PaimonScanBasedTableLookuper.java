@@ -62,7 +62,8 @@ import static org.apache.fluss.utils.concurrent.LockUtils.inReadLock;
 import static org.apache.fluss.utils.concurrent.LockUtils.inWriteLock;
 
 /**
- * Looks up a primary key by scanning the latest Paimon snapshot with a limit of one row.
+ * Looks up a primary key by scanning the requested Paimon snapshot, or the latest snapshot when no
+ * snapshot ID is provided, with a limit of one row.
  *
  * <p>Each scan is restricted to the requested partition, bucket, and complete primary key. It does
  * not create local lookup files. Lookups use independent readers and encoders and may run in
@@ -120,7 +121,7 @@ public class PaimonScanBasedTableLookuper implements LakeTableLookuper {
 
     @Override
     public void requestRefresh() {
-        // Each lookup already plans a fresh scan of the latest snapshot.
+        // Each lookup plans a fresh scan, so there are no cached data files to refresh.
     }
 
     @Override
