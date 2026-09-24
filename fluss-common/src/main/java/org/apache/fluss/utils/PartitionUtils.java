@@ -439,7 +439,7 @@ public class PartitionUtils {
     }
 
     /** Returns the time string format pattern for the given time unit. */
-    private static String getPartitionTimeFormat(
+    public static String getPartitionTimeFormat(
             AutoPartitionTimeUnit timeUnit, AutoPartitionStrategy autoPartitionStrategy) {
         String timeFormat = autoPartitionStrategy.timeFormat();
         if (timeFormat != null) {
