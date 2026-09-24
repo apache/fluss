@@ -1241,16 +1241,149 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
     }
 
     @Test
-    void testLookupFullCacheThrowException() {
+    @MultiVersionTest
+    void testLookupFullCacheWithoutCustomShuffleFailsPlanning() {
+        assumeThat(supportsLookupCustomShuffle()).isTrue();
         tEnv.executeSql(
-                "create table lookup_join_throw_table"
-                        + " (a int not null primary key not enforced, b varchar)"
-                        + " with ('lookup.cache' = 'FULL')");
-        // should throw exception
-        assertThatThrownBy(() -> tEnv.executeSql("select * from lookup_join_throw_table"))
-                .cause()
-                .isInstanceOf(UnsupportedOperationException.class)
-                .hasMessage("Full lookup caching is not supported yet.");
+                "CREATE TABLE lookup_full_without_shuffle ("
+                        + " id INT NOT NULL, name STRING, PRIMARY KEY (id) NOT ENFORCED"
+                        + ") WITH ('bucket.num' = '4', 'bucket.key' = 'id',"
+                        + " 'lookup.cache' = 'FULL')");
+        RowTypeInfo probeType =
+                new RowTypeInfo(new TypeInformation[] {Types.INT}, new String[] {"id"});
+        DataStream<Row> probeStream =
+                execEnv.fromElements(Row.of(1)).returns(probeType).setParallelism(1);
+        Schema probeSchema =
+                Schema.newBuilder()
+                        .column("id", DataTypes.INT())
+                        .columnByExpression("proc", "PROCTIME()")
+                        .build();
+        tEnv.createTemporaryView(
+                "lookup_full_probe", tEnv.fromDataStream(probeStream, probeSchema));
+
+        assertThatThrownBy(
+                        () ->
+                                tEnv.explainSql(
+                                        "SELECT src.id, dim.name FROM lookup_full_probe AS src "
+                                                + "JOIN lookup_full_without_shuffle "
+                                                + "FOR SYSTEM_TIME AS OF src.proc AS dim "
+                                                + "ON src.id = dim.id"))
+                .hasStackTraceContaining("preferCustomShuffle=true");
+    }
+
+    @Test
+    @MultiVersionTest
+    void testLookupFullCacheWithBucketShuffle() throws Exception {
+        assumeThat(supportsLookupCustomShuffle()).isTrue();
+        int bucketCount = 3;
+        int parallelism = 4;
+        int numRows = 40;
+        String dim = "lookup_full_dim";
+        tEnv.executeSql(
+                String.format(
+                        "CREATE TABLE %s ("
+                                + " id INT NOT NULL, name STRING, PRIMARY KEY (id) NOT ENFORCED"
+                                + ") WITH ('bucket.num' = '%d', 'bucket.key' = 'id',"
+                                + " 'lookup.cache' = 'FULL', 'lookup.async' = 'false')",
+                        dim, bucketCount));
+        try (Table dimTable = conn.getTable(TablePath.of(DEFAULT_DB, dim))) {
+            UpsertWriter writer = dimTable.newUpsert().createWriter();
+            for (int id = 0; id < numRows; id++) {
+                writer.upsert(row(id, "name" + id));
+            }
+            writer.flush();
+        }
+
+        RowTypeInfo probeType =
+                new RowTypeInfo(new TypeInformation[] {Types.INT}, new String[] {"id"});
+        DataStream<Row> probeStream =
+                execEnv.fromSequence(0, numRows - 1)
+                        .setParallelism(parallelism)
+                        .map(id -> Row.of(id.intValue()))
+                        .returns(probeType)
+                        .setParallelism(parallelism);
+        Schema probeSchema =
+                Schema.newBuilder()
+                        .column("id", DataTypes.INT())
+                        .columnByExpression("proc", "PROCTIME()")
+                        .build();
+        tEnv.createTemporaryView(
+                "lookup_full_probe", tEnv.fromDataStream(probeStream, probeSchema));
+
+        String query =
+                String.format(
+                        "SELECT /*+ LOOKUP('table' = 'dim', 'shuffle' = 'true') */ "
+                                + "src.id, dim.name FROM lookup_full_probe AS src "
+                                + "JOIN %s FOR SYSTEM_TIME AS OF src.proc AS dim "
+                                + "ON src.id = dim.id",
+                        dim);
+        assertThat(tEnv.explainSql(query)).contains("shuffle=[true]");
+
+        List<String> expected = new ArrayList<>();
+        for (int id = 0; id < numRows; id++) {
+            expected.add("+I[" + id + ", name" + id + "]");
+        }
+        assertResultsIgnoreOrder(tEnv.executeSql(query).collect(), expected, true);
+    }
+
+    /** Full cache with a prefix lookup: join only on the bucket key of a composite primary key. */
+    @Test
+    @MultiVersionTest
+    void testLookupFullCachePrefixLookupWithBucketShuffle() throws Exception {
+        assumeThat(supportsLookupCustomShuffle()).isTrue();
+        int bucketCount = 3;
+        int parallelism = 4;
+        int numRows = 20;
+        String dim = "lookup_full_prefix_dim";
+        tEnv.executeSql(
+                String.format(
+                        "CREATE TABLE %s ("
+                                + " id INT NOT NULL, name STRING, PRIMARY KEY (id, name) NOT ENFORCED"
+                                + ") WITH ('bucket.num' = '%d', 'bucket.key' = 'id',"
+                                + " 'lookup.cache' = 'FULL', 'lookup.async' = 'false')",
+                        dim, bucketCount));
+        // two rows share the same bucket-key prefix (id) within the primary key (id, name)
+        try (Table dimTable = conn.getTable(TablePath.of(DEFAULT_DB, dim))) {
+            UpsertWriter writer = dimTable.newUpsert().createWriter();
+            for (int id = 0; id < numRows; id++) {
+                writer.upsert(row(id, "name" + id + "_a"));
+                writer.upsert(row(id, "name" + id + "_b"));
+            }
+            writer.flush();
+        }
+
+        RowTypeInfo probeType =
+                new RowTypeInfo(new TypeInformation[] {Types.INT}, new String[] {"id"});
+        DataStream<Row> probeStream =
+                execEnv.fromSequence(0, numRows - 1)
+                        .setParallelism(parallelism)
+                        .map(id -> Row.of(id.intValue()))
+                        .returns(probeType)
+                        .setParallelism(parallelism);
+        Schema probeSchema =
+                Schema.newBuilder()
+                        .column("id", DataTypes.INT())
+                        .columnByExpression("proc", "PROCTIME()")
+                        .build();
+        tEnv.createTemporaryView(
+                "lookup_full_prefix_probe", tEnv.fromDataStream(probeStream, probeSchema));
+
+        // join only on the bucket-key prefix (id): every probe row matches two dim rows
+        String query =
+                String.format(
+                        "SELECT /*+ LOOKUP('table' = 'dim', 'shuffle' = 'true') */ "
+                                + "src.id, dim.name FROM lookup_full_prefix_probe AS src "
+                                + "JOIN %s FOR SYSTEM_TIME AS OF src.proc AS dim "
+                                + "ON src.id = dim.id",
+                        dim);
+        assertThat(tEnv.explainSql(query)).contains("shuffle=[true]");
+
+        List<String> expected = new ArrayList<>();
+        for (int id = 0; id < numRows; id++) {
+            expected.add("+I[" + id + ", name" + id + "_a]");
+            expected.add("+I[" + id + ", name" + id + "_b]");
+        }
+        assertResultsIgnoreOrder(tEnv.executeSql(query).collect(), expected, true);
     }
 
     @ParameterizedTest
