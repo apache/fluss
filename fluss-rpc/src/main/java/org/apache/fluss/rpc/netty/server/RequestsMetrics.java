@@ -54,8 +54,9 @@ public class RequestsMetrics {
             // we create a metrics group for each type of request, with the request type
             // as variable
             addMetrics(serverMetricsGroup, toRequestName(apiKey, false, false));
-            if (apiKey == ApiKeys.FETCH_LOG) {
-                // For fetch, register separate metric groups for clients and followers.
+            if (apiKey == ApiKeys.FETCH_LOG || apiKey == ApiKeys.LIST_OFFSETS) {
+                // For fetch and list offsets, register separate metric groups for clients and
+                // followers.
                 addMetrics(serverMetricsGroup, toRequestName(apiKey, true, false));
             }
             if (apiKey == ApiKeys.LOOKUP) {
@@ -76,7 +77,13 @@ public class RequestsMetrics {
                         ApiKeys.LOOKUP,
                         ApiKeys.FETCH_LOG,
                         ApiKeys.PREFIX_LOOKUP,
-                        ApiKeys.GET_METADATA);
+                        ApiKeys.GET_METADATA,
+                        ApiKeys.LIST_OFFSETS,
+                        ApiKeys.LIMIT_SCAN,
+                        ApiKeys.SCAN_KV,
+                        ApiKeys.GET_TABLE_STATS,
+                        ApiKeys.NOTIFY_LEADER_AND_ISR,
+                        ApiKeys.STOP_REPLICA);
         return new RequestsMetrics(serverMetricsGroup, apiKeys);
     }
 
@@ -115,6 +122,18 @@ public class RequestsMetrics {
                 return "prefixLookup";
             case FETCH_LOG:
                 return isFromFollower ? "fetchLogFollower" : "fetchLogClient";
+            case LIST_OFFSETS:
+                return isFromFollower ? "listOffsetsFollower" : "listOffsetsClient";
+            case LIMIT_SCAN:
+                return "limitScan";
+            case SCAN_KV:
+                return "scanKv";
+            case GET_TABLE_STATS:
+                return "tableStats";
+            case NOTIFY_LEADER_AND_ISR:
+                return "notifyLeaderAndIsr";
+            case STOP_REPLICA:
+                return "stopReplica";
             case GET_METADATA:
                 return "metadata";
             default:
@@ -182,7 +201,11 @@ public class RequestsMetrics {
 
         void markError(Errors error) {
             errorsCount.inc();
-            errorsCountByError.computeIfAbsent(error, this::registerErrorMeter).inc();
+            markErrorCount(error, 1);
+        }
+
+        void markErrorCount(Errors error, int count) {
+            errorsCountByError.computeIfAbsent(error, this::registerErrorMeter).inc(count);
         }
 
         private Counter registerErrorMeter(Errors error) {
