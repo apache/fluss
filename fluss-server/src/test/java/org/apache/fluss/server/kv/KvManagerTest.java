@@ -80,10 +80,12 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.apache.fluss.compression.ArrowCompressionInfo.DEFAULT_COMPRESSION;
 import static org.apache.fluss.record.TestData.DATA1_SCHEMA_PK;
@@ -584,6 +586,59 @@ final class KvManagerTest {
                                 recoveredMetricGroup,
                                 MetricNames.ROCKSDB_SHARED_WRITE_BUFFER_CAPACITY))
                 .isEqualTo(capacity.getBytes());
+    }
+
+    @Test
+    void testPreWriteBufferServerLevelMetrics() throws Exception {
+        initTableBuckets(null);
+        TabletServerMetricGroup metricGroup = TestingMetricGroups.TABLET_SERVER_METRICS;
+        long memoryUsageBefore =
+                gaugeValue(metricGroup, MetricNames.KV_PRE_WRITE_BUFFER_MEMORY_USAGE_BYTES);
+
+        KvTablet kvTablet = getOrCreateKv(tablePath1, null, tableBucket1);
+        // block the async flush right before its native write, so the buffered entry stays
+        // accounted while we assert on the gauge
+        CountDownLatch flushEnteredNativeWrite = new CountDownLatch(1);
+        CountDownLatch releaseNativeWrite = new CountDownLatch(1);
+        kvTablet.setBeforeNativeWrite(
+                () -> {
+                    flushEnteredNativeWrite.countDown();
+                    try {
+                        releaseNativeWrite.await();
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                    }
+                });
+
+        try {
+            // write one kv record; it stays in the pre-write buffer until the flush completes
+            KvRecordBatch kvRecordBatch =
+                    kvRecordBatchFactory.ofRecords(
+                            Collections.singletonList(
+                                    kvRecordFactory.ofRecord(
+                                            "key1".getBytes(), new Object[] {1, "a"})));
+            kvTablet.putAsLeader(kvRecordBatch, null);
+
+            // the put path itself does not schedule a flush; request one explicitly so the
+            // async flush reaches its native write while the entry is still accounted
+            AtomicReference<Throwable> flushFailure = new AtomicReference<>();
+            kvTablet.requestFlush(kvTablet.localLogEndOffset(), flushFailure::set);
+
+            // wait until the async flush reaches its native write; the entry is still accounted
+            flushEnteredNativeWrite.await();
+            assertThat(flushFailure.get()).isNull();
+            assertThat(gaugeValue(metricGroup, MetricNames.KV_PRE_WRITE_BUFFER_MEMORY_USAGE_BYTES))
+                    .isGreaterThan(memoryUsageBefore);
+        } finally {
+            // release the flush and wait for its completion
+            releaseNativeWrite.countDown();
+            kvTablet.setBeforeNativeWrite(null);
+        }
+        flushAndWait(kvTablet, Long.MAX_VALUE);
+
+        // the accounting returns to its previous value once the buffered entry is flushed
+        assertThat(gaugeValue(metricGroup, MetricNames.KV_PRE_WRITE_BUFFER_MEMORY_USAGE_BYTES))
+                .isEqualTo(memoryUsageBefore);
     }
 
     @ParameterizedTest

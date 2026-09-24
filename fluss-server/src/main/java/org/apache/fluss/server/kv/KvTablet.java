@@ -212,6 +212,7 @@ public final class KvTablet {
             ValueDecoder valueDecoder,
             AtomicLong historicalCleanupOffset,
             @Nullable RocksDBStatistics rocksDBStatistics,
+            AtomicLong sharedPreWriteBufferMemoryUsageBytes,
             KvFlushScheduler kvFlushScheduler,
             boolean closeFlushScheduler,
             @Nullable Runnable flushCompleteListener,
@@ -230,7 +231,8 @@ public final class KvTablet {
         this.serverMetricGroup = serverMetricGroup;
         this.kvFlushScheduler = kvFlushScheduler;
         this.closeFlushScheduler = closeFlushScheduler;
-        this.kvPreWriteBuffer = new KvPreWriteBuffer(serverMetricGroup);
+        this.kvPreWriteBuffer =
+                new KvPreWriteBuffer(serverMetricGroup, sharedPreWriteBufferMemoryUsageBytes);
         this.kvStateAccessor =
                 new KvStateAccessor(kvPreWriteBuffer, rocksDBKv, historicalPartition);
         this.kvValueLayout = kvValueLayout;
@@ -312,6 +314,7 @@ public final class KvTablet {
                 sharedRateLimiter,
                 null,
                 null,
+                new AtomicLong(),
                 new KvFlushScheduler(serverConf),
                 true,
                 null,
@@ -337,6 +340,7 @@ public final class KvTablet {
             RateLimiter sharedRateLimiter,
             @Nullable Cache sharedBlockCache,
             @Nullable WriteBufferManager sharedWriteBufferManager,
+            AtomicLong sharedPreWriteBufferMemoryUsageBytes,
             KvFlushScheduler kvFlushScheduler,
             @Nullable Runnable flushCompleteListener,
             AutoIncrementManager autoIncrementManager,
@@ -360,6 +364,7 @@ public final class KvTablet {
                 sharedRateLimiter,
                 sharedBlockCache,
                 sharedWriteBufferManager,
+                sharedPreWriteBufferMemoryUsageBytes,
                 kvFlushScheduler,
                 false,
                 flushCompleteListener,
@@ -384,6 +389,7 @@ public final class KvTablet {
             ChangelogImage changelogImage,
             RateLimiter sharedRateLimiter,
             @Nullable Cache sharedBlockCache,
+            AtomicLong sharedPreWriteBufferMemoryUsageBytes,
             KvFlushScheduler kvFlushScheduler,
             @Nullable Runnable flushCompleteListener,
             AutoIncrementManager autoIncrementManager,
@@ -407,6 +413,7 @@ public final class KvTablet {
                 sharedRateLimiter,
                 sharedBlockCache,
                 null,
+                sharedPreWriteBufferMemoryUsageBytes,
                 kvFlushScheduler,
                 false,
                 flushCompleteListener,
@@ -432,6 +439,7 @@ public final class KvTablet {
             RateLimiter sharedRateLimiter,
             @Nullable Cache sharedBlockCache,
             @Nullable WriteBufferManager sharedWriteBufferManager,
+            AtomicLong sharedPreWriteBufferMemoryUsageBytes,
             KvFlushScheduler kvFlushScheduler,
             boolean closeFlushScheduler,
             @Nullable Runnable flushCompleteListener,
@@ -512,6 +520,7 @@ public final class KvTablet {
                 valueDecoder,
                 historicalCleanupOffset,
                 rocksDBStatistics,
+                sharedPreWriteBufferMemoryUsageBytes,
                 kvFlushScheduler,
                 closeFlushScheduler,
                 flushCompleteListener,
@@ -557,6 +566,7 @@ public final class KvTablet {
                 sharedRateLimiter,
                 null,
                 null,
+                new AtomicLong(),
                 new KvFlushScheduler(serverConf),
                 true,
                 null,
@@ -831,14 +841,19 @@ public final class KvTablet {
                                         tableBucket));
                     }
 
-                    LogAppendInfo appendInfo =
-                            kvWriteProcessor.putAsLeader(
-                                    kvRecords,
-                                    targetColumns,
-                                    mergeMode,
-                                    kvStateAccessor,
-                                    originalPartitionName,
-                                    historicalValueLookup);
+                    LogAppendInfo appendInfo;
+                    try {
+                        appendInfo =
+                                kvWriteProcessor.putAsLeader(
+                                        kvRecords,
+                                        targetColumns,
+                                        mergeMode,
+                                        kvStateAccessor,
+                                        originalPartitionName,
+                                        historicalValueLookup);
+                    } finally {
+                        kvPreWriteBuffer.publishPendingAccountingDelta();
+                    }
                     if (!appendInfo.duplicated()) {
                         // KvWriteProcessor appends one WAL batch for each accepted KV batch.
                         kvPreWriteBuffer.markWalBatchEnd(appendInfo.lastOffset() + 1);
@@ -1387,6 +1402,9 @@ public final class KvTablet {
                             // Terminal transition: closing forces IDLE regardless of the current
                             // state, see the FlushState state graph.
                             flushState = FlushState.IDLE;
+                            // Release the remaining pre-write buffer accounting to the shared
+                            // ledger while the local accounting values are still exact.
+                            kvPreWriteBuffer.close();
                             return true;
                         });
         if (shouldClose && closeFlushScheduler) {

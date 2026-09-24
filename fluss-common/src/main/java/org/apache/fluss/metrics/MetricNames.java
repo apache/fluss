@@ -258,6 +258,14 @@ public class MetricNames {
     public static final String ROCKSDB_SHARED_WRITE_BUFFER_CAPACITY =
             "rocksdbSharedWriteBufferCapacity";
 
+    // Server-level pre-write buffer metrics (aggregated from all KV tablets, Sum aggregation)
+    /**
+     * Estimated memory usage of the pre-write buffers across all KV tablets in this server (Sum
+     * aggregation).
+     */
+    public static final String KV_PRE_WRITE_BUFFER_MEMORY_USAGE_BYTES =
+            "kvPreWriteBufferMemoryUsageBytes";
+
     // Table-level RocksDB memory metrics (Sum aggregation)
     /** Total memtable memory usage across all buckets of this table. */
     public static final String ROCKSDB_MEMTABLE_MEMORY_USAGE_TOTAL =

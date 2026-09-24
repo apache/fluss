@@ -17,13 +17,16 @@
 
 package org.apache.fluss.server.kv.prewrite;
 
+import org.apache.fluss.metrics.registry.NOPMetricRegistry;
 import org.apache.fluss.server.kv.prewrite.KvPreWriteBuffer.PreparedFlush;
 import org.apache.fluss.server.kv.prewrite.KvPreWriteBuffer.TruncateReason;
+import org.apache.fluss.server.metrics.group.TabletServerMetricGroup;
 import org.apache.fluss.server.metrics.group.TestingMetricGroups;
 
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
+import java.util.concurrent.atomic.AtomicLong;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -33,7 +36,8 @@ class KvPreWriteBufferTest {
 
     @Test
     void testIllegalLSN() {
-        KvPreWriteBuffer buffer = new KvPreWriteBuffer(TestingMetricGroups.TABLET_SERVER_METRICS);
+        KvPreWriteBuffer buffer =
+                new KvPreWriteBuffer(TestingMetricGroups.TABLET_SERVER_METRICS, new AtomicLong());
         bufferInsert(buffer, "key1", "value1", 1);
         bufferDelete(buffer, "key1", 3);
 
@@ -52,7 +56,8 @@ class KvPreWriteBufferTest {
 
     @Test
     void testWriteAndFlush() throws Exception {
-        KvPreWriteBuffer buffer = new KvPreWriteBuffer(TestingMetricGroups.TABLET_SERVER_METRICS);
+        KvPreWriteBuffer buffer =
+                new KvPreWriteBuffer(TestingMetricGroups.TABLET_SERVER_METRICS, new AtomicLong());
         int elementCount = 0;
 
         // put a series of kv entries
@@ -131,7 +136,8 @@ class KvPreWriteBufferTest {
 
     @Test
     void testTruncate() {
-        KvPreWriteBuffer buffer = new KvPreWriteBuffer(TestingMetricGroups.TABLET_SERVER_METRICS);
+        KvPreWriteBuffer buffer =
+                new KvPreWriteBuffer(TestingMetricGroups.TABLET_SERVER_METRICS, new AtomicLong());
         int elementCount = 0;
 
         // put a series of kv entries
@@ -184,7 +190,8 @@ class KvPreWriteBufferTest {
 
     @Test
     void testRowCount() {
-        KvPreWriteBuffer buffer = new KvPreWriteBuffer(TestingMetricGroups.TABLET_SERVER_METRICS);
+        KvPreWriteBuffer buffer =
+                new KvPreWriteBuffer(TestingMetricGroups.TABLET_SERVER_METRICS, new AtomicLong());
         int elementCount = 0;
 
         // put a series of kv entries
@@ -228,7 +235,8 @@ class KvPreWriteBufferTest {
 
     @Test
     void testSplitPreparedFlushByRecordCount() {
-        KvPreWriteBuffer buffer = new KvPreWriteBuffer(TestingMetricGroups.TABLET_SERVER_METRICS);
+        KvPreWriteBuffer buffer =
+                new KvPreWriteBuffer(TestingMetricGroups.TABLET_SERVER_METRICS, new AtomicLong());
         // +key0(lsn 0), +key1(lsn 1), +key2(lsn 2), +key3(lsn 3), -key2(lsn 4)
         for (int i = 0; i < 4; i++) {
             bufferInsert(buffer, "key" + i, "value" + i, i);
@@ -264,7 +272,8 @@ class KvPreWriteBufferTest {
 
     @Test
     void testSplitPreparedFlushByByteSize() {
-        KvPreWriteBuffer buffer = new KvPreWriteBuffer(TestingMetricGroups.TABLET_SERVER_METRICS);
+        KvPreWriteBuffer buffer =
+                new KvPreWriteBuffer(TestingMetricGroups.TABLET_SERVER_METRICS, new AtomicLong());
         // Entry payload sizes are 6, 5, and 5 bytes.
         bufferInsert(buffer, "a", "12345", 0);
         buffer.markWalBatchEnd(1);
@@ -288,7 +297,8 @@ class KvPreWriteBufferTest {
 
     @Test
     void testSplitPreparedFlushWithOversizedEntry() {
-        KvPreWriteBuffer buffer = new KvPreWriteBuffer(TestingMetricGroups.TABLET_SERVER_METRICS);
+        KvPreWriteBuffer buffer =
+                new KvPreWriteBuffer(TestingMetricGroups.TABLET_SERVER_METRICS, new AtomicLong());
         // The first entry is larger than the byte limit and must remain a non-empty singleton.
         bufferInsert(buffer, "a", "1234567890", 0);
         buffer.markWalBatchEnd(1);
@@ -307,7 +317,8 @@ class KvPreWriteBufferTest {
 
     @Test
     void testSplitPreparedFlushUsesFirstReachedLimit() {
-        KvPreWriteBuffer buffer = new KvPreWriteBuffer(TestingMetricGroups.TABLET_SERVER_METRICS);
+        KvPreWriteBuffer buffer =
+                new KvPreWriteBuffer(TestingMetricGroups.TABLET_SERVER_METRICS, new AtomicLong());
         // Entry payload sizes are 2, 2, 11, and 5 bytes.
         bufferInsert(buffer, "a", "x", 0);
         buffer.markWalBatchEnd(1);
@@ -333,7 +344,8 @@ class KvPreWriteBufferTest {
 
     @Test
     void testCompletePrefixSegmentsAndAbortRest() {
-        KvPreWriteBuffer buffer = new KvPreWriteBuffer(TestingMetricGroups.TABLET_SERVER_METRICS);
+        KvPreWriteBuffer buffer =
+                new KvPreWriteBuffer(TestingMetricGroups.TABLET_SERVER_METRICS, new AtomicLong());
         // Entry payload sizes are 6, 5, 5, and 6 bytes.
         bufferInsert(buffer, "a", "12345", 0);
         buffer.markWalBatchEnd(1);
@@ -366,21 +378,27 @@ class KvPreWriteBufferTest {
     private static void bufferInsert(
             KvPreWriteBuffer kvPreWriteBuffer, String key, String value, int elementCount) {
         kvPreWriteBuffer.insert(toKey(key), value.getBytes(), elementCount);
+        // each helper call is one write batch; publish its accounting delta eagerly so tests
+        // observe the shared counter in sync with the local accounting
+        kvPreWriteBuffer.publishPendingAccountingDelta();
     }
 
     private static void bufferUpdate(
             KvPreWriteBuffer kvPreWriteBuffer, String key, String value, int elementCount) {
         kvPreWriteBuffer.update(toKey(key), value.getBytes(), elementCount);
+        kvPreWriteBuffer.publishPendingAccountingDelta();
     }
 
     private static void bufferDelete(
             KvPreWriteBuffer kvPreWriteBuffer, String key, int elementCount) {
         kvPreWriteBuffer.delete(toKey(key), elementCount);
+        kvPreWriteBuffer.publishPendingAccountingDelta();
     }
 
     @Test
     void testPrepareAndCompleteFlush() {
-        KvPreWriteBuffer buffer = new KvPreWriteBuffer(TestingMetricGroups.TABLET_SERVER_METRICS);
+        KvPreWriteBuffer buffer =
+                new KvPreWriteBuffer(TestingMetricGroups.TABLET_SERVER_METRICS, new AtomicLong());
 
         bufferInsert(buffer, "key1", "value1", 1);
         bufferInsert(buffer, "key2", "value2", 2);
@@ -405,7 +423,8 @@ class KvPreWriteBufferTest {
 
     @Test
     void testAbortPreparedFlush() {
-        KvPreWriteBuffer buffer = new KvPreWriteBuffer(TestingMetricGroups.TABLET_SERVER_METRICS);
+        KvPreWriteBuffer buffer =
+                new KvPreWriteBuffer(TestingMetricGroups.TABLET_SERVER_METRICS, new AtomicLong());
 
         bufferInsert(buffer, "key1", "value1", 1);
         bufferDelete(buffer, "key2", 2);
@@ -425,7 +444,8 @@ class KvPreWriteBufferTest {
 
     @Test
     void testCannotTruncatePreparedFlush() {
-        KvPreWriteBuffer buffer = new KvPreWriteBuffer(TestingMetricGroups.TABLET_SERVER_METRICS);
+        KvPreWriteBuffer buffer =
+                new KvPreWriteBuffer(TestingMetricGroups.TABLET_SERVER_METRICS, new AtomicLong());
 
         bufferInsert(buffer, "key1", "value1", 1);
         bufferInsert(buffer, "key2", "value2", 2);
@@ -438,7 +458,8 @@ class KvPreWriteBufferTest {
 
     @Test
     void testPendingFlushBytesTracking() {
-        KvPreWriteBuffer buffer = new KvPreWriteBuffer(TestingMetricGroups.TABLET_SERVER_METRICS);
+        KvPreWriteBuffer buffer =
+                new KvPreWriteBuffer(TestingMetricGroups.TABLET_SERVER_METRICS, new AtomicLong());
 
         // Initially zero
         assertThat(buffer.pendingFlushBytes()).isEqualTo(0);
@@ -469,8 +490,173 @@ class KvPreWriteBufferTest {
     }
 
     @Test
+    void testEstimatedMemoryUsage() {
+        TabletServerMetricGroup metricGroup =
+                new TabletServerMetricGroup(NOPMetricRegistry.INSTANCE, "fluss", "rack", "host", 0);
+        AtomicLong sharedMemoryUsageBytes = new AtomicLong();
+        KvPreWriteBuffer buffer = new KvPreWriteBuffer(metricGroup, sharedMemoryUsageBytes);
+
+        assertThat(buffer.memoryUsageBytes()).isEqualTo(0L);
+        assertThat(sharedMemoryUsageBytes.get()).isEqualTo(0L);
+
+        // +key1(10 bytes), +key2(11 bytes), -key3(4 bytes): 25 payload bytes in total
+        bufferInsert(buffer, "key1", "value1", 1);
+        bufferInsert(buffer, "key2", "value22", 2);
+        bufferDelete(buffer, "key3", 3);
+        long payloadBytes = 25;
+
+        // the estimation covers the payload bytes plus the per-entry object overhead
+        assertThat(buffer.memoryUsageBytes()).isGreaterThan(payloadBytes);
+        // the shared counter mirrors the local accounting of the buffer
+        assertThat(sharedMemoryUsageBytes.get()).isEqualTo(buffer.memoryUsageBytes());
+
+        // flushing all entries releases the whole accounted usage
+        flushBuffer(buffer, Long.MAX_VALUE);
+        assertThat(buffer.memoryUsageBytes()).isEqualTo(0L);
+        assertThat(sharedMemoryUsageBytes.get()).isEqualTo(0L);
+
+        // truncating entries also releases their accounted usage
+        bufferInsert(buffer, "key1", "value1", 4);
+        assertThat(buffer.memoryUsageBytes()).isPositive();
+        buffer.truncateTo(4, TruncateReason.ERROR);
+        assertThat(buffer.memoryUsageBytes()).isEqualTo(0L);
+        assertThat(sharedMemoryUsageBytes.get()).isEqualTo(0L);
+    }
+
+    @Test
+    void testCloseReleasesAccounting() {
+        TabletServerMetricGroup metricGroup =
+                new TabletServerMetricGroup(NOPMetricRegistry.INSTANCE, "fluss", "rack", "host", 0);
+        AtomicLong sharedMemoryUsageBytes = new AtomicLong();
+        KvPreWriteBuffer buffer = new KvPreWriteBuffer(metricGroup, sharedMemoryUsageBytes);
+        bufferInsert(buffer, "key1", "value1", 0);
+        bufferInsert(buffer, "key2", "value2", 1);
+        assertThat(sharedMemoryUsageBytes.get()).isPositive();
+
+        // closing releases the remaining accounting to the shared counter exactly once
+        buffer.close();
+        assertThat(buffer.memoryUsageBytes()).isEqualTo(0L);
+        assertThat(sharedMemoryUsageBytes.get()).isEqualTo(0L);
+
+        // closing again is idempotent and must not over-release the shared counter
+        buffer.close();
+        assertThat(sharedMemoryUsageBytes.get()).isEqualTo(0L);
+    }
+
+    @Test
+    void testSameKeyVersionAccountingAcrossTruncateFlushClose() {
+        AtomicLong sharedMemoryUsageBytes = new AtomicLong();
+        KvPreWriteBuffer buffer =
+                new KvPreWriteBuffer(
+                        TestingMetricGroups.TABLET_SERVER_METRICS, sharedMemoryUsageBytes);
+        KvPreWriteBuffer.Key key = toKey("k");
+
+        // reference: the accounting of a buffer holding just one version of the key
+        AtomicLong referenceSharedBytes = new AtomicLong();
+        KvPreWriteBuffer reference =
+                new KvPreWriteBuffer(
+                        TestingMetricGroups.TABLET_SERVER_METRICS, referenceSharedBytes);
+        bufferInsert(reference, "k", "v1", 1);
+        long singleVersionUsage = reference.memoryUsageBytes();
+
+        // v1 and v2 for the same key: only the latest version holds the key's map node. The
+        // put path accumulates the delta locally, so before the publish the shared counter
+        // lags behind the local accounting by the batch delta (a brief under-count)
+        buffer.insert(key, "v1".getBytes(), 1);
+        buffer.insert(key, "v2".getBytes(), 2);
+        assertThat(sharedMemoryUsageBytes.get()).isEqualTo(0L);
+        assertThat(buffer.memoryUsageBytes()).isGreaterThan(0L);
+        buffer.publishPendingAccountingDelta();
+        assertThat(sharedMemoryUsageBytes.get()).isEqualTo(buffer.memoryUsageBytes());
+
+        // truncating v2 reinstates v1 as the mapped version; the map-node accounting must be
+        // restored, leaving exactly the accounting of v1 alone instead of leaking it
+        buffer.truncateTo(2, TruncateReason.ERROR);
+        assertThat(buffer.memoryUsageBytes()).isEqualTo(singleVersionUsage);
+        assertThat(sharedMemoryUsageBytes.get()).isEqualTo(singleVersionUsage);
+
+        // flushing the reinstated v1 brings both the local and the shared accounting back to
+        // zero with an empty buffer instead of going negative
+        flushBuffer(buffer, Long.MAX_VALUE);
+        assertThat(buffer.memoryUsageBytes()).isEqualTo(0L);
+        assertThat(sharedMemoryUsageBytes.get()).isEqualTo(0L);
+
+        // closing the empty buffer releases nothing extra and stays idempotent
+        buffer.close();
+        assertThat(sharedMemoryUsageBytes.get()).isEqualTo(0L);
+        buffer.close();
+        assertThat(sharedMemoryUsageBytes.get()).isEqualTo(0L);
+    }
+
+    @Test
+    void testTruncatePartialCompletionStillReleasesAccounting() {
+        AtomicLong sharedMemoryUsageBytes = new AtomicLong();
+        KvPreWriteBuffer buffer =
+                new KvPreWriteBuffer(
+                        TestingMetricGroups.TABLET_SERVER_METRICS, sharedMemoryUsageBytes);
+
+        // k2 becomes PREPARED so a truncate past it fails midway, after the same-key k1
+        // versions have already been removed
+        bufferInsert(buffer, "k2", "v", 1);
+        bufferInsert(buffer, "k1", "v1", 2);
+        bufferInsert(buffer, "k1", "v2", 3);
+        buffer.prepareFlush(2);
+        long usageBefore = sharedMemoryUsageBytes.get();
+
+        assertThatThrownBy(() -> buffer.truncateTo(1, TruncateReason.ERROR))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("Cannot truncate prepared pre-write entry.");
+
+        // the accounting of the already removed k1 versions, including the map node restored
+        // for the rolled-back version, must still be released to the shared counter: it equals
+        // the accounting of the remaining k2 entry and stays in sync with the local accounting
+        AtomicLong referenceSharedBytes = new AtomicLong();
+        KvPreWriteBuffer reference =
+                new KvPreWriteBuffer(
+                        TestingMetricGroups.TABLET_SERVER_METRICS, referenceSharedBytes);
+        bufferInsert(reference, "k2", "v", 1);
+        assertThat(sharedMemoryUsageBytes.get()).isEqualTo(reference.memoryUsageBytes());
+        assertThat(sharedMemoryUsageBytes.get()).isEqualTo(buffer.memoryUsageBytes());
+        assertThat(sharedMemoryUsageBytes.get()).isLessThan(usageBefore);
+    }
+
+    @Test
+    void testPutPathAccountingPublishedAtBatchBoundary() {
+        AtomicLong sharedMemoryUsageBytes = new AtomicLong();
+        KvPreWriteBuffer buffer =
+                new KvPreWriteBuffer(
+                        TestingMetricGroups.TABLET_SERVER_METRICS, sharedMemoryUsageBytes);
+        KvPreWriteBuffer.Key key = toKey("k");
+
+        // a write batch of three mutations accumulates locally; the shared counter sees
+        // nothing until the batch boundary publishes the whole delta in one update
+        buffer.insert(key, "v1".getBytes(), 1);
+        buffer.insert(key, "v2".getBytes(), 2);
+        buffer.delete(key, 3);
+        assertThat(sharedMemoryUsageBytes.get()).isEqualTo(0L);
+        assertThat(buffer.memoryUsageBytes()).isGreaterThan(0L);
+
+        buffer.publishPendingAccountingDelta();
+        assertThat(sharedMemoryUsageBytes.get()).isEqualTo(buffer.memoryUsageBytes());
+
+        // publishing again without new mutations is a no-op
+        buffer.publishPendingAccountingDelta();
+        assertThat(sharedMemoryUsageBytes.get()).isEqualTo(buffer.memoryUsageBytes());
+
+        // the local accounting, including any delta not yet published, is released on close
+        buffer.insert(key, "v4".getBytes(), 4);
+        assertThat(sharedMemoryUsageBytes.get())
+                .isEqualTo(buffer.memoryUsageBytes() - buffer.getUnpublishedDeltaBytes());
+        buffer.close();
+        assertThat(sharedMemoryUsageBytes.get()).isEqualTo(0L);
+        buffer.close();
+        assertThat(sharedMemoryUsageBytes.get()).isEqualTo(0L);
+    }
+
+    @Test
     void testCompleteFlushDetachesFlushedEntriesFromPreviousChain() {
-        KvPreWriteBuffer buffer = new KvPreWriteBuffer(TestingMetricGroups.TABLET_SERVER_METRICS);
+        KvPreWriteBuffer buffer =
+                new KvPreWriteBuffer(TestingMetricGroups.TABLET_SERVER_METRICS, new AtomicLong());
         KvPreWriteBuffer.Key key = toKey("k");
 
         buffer.insert(key, "v1".getBytes(), 1);
@@ -505,7 +691,8 @@ class KvPreWriteBufferTest {
 
     @Test
     void testTruncateRollbackSemanticsAfterFlushDetachment() {
-        KvPreWriteBuffer buffer = new KvPreWriteBuffer(TestingMetricGroups.TABLET_SERVER_METRICS);
+        KvPreWriteBuffer buffer =
+                new KvPreWriteBuffer(TestingMetricGroups.TABLET_SERVER_METRICS, new AtomicLong());
         KvPreWriteBuffer.Key key = toKey("k");
 
         // v1@1, v2@2, v3@3; flush covers v1 and v2, v3 stays buffered
