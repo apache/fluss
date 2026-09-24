@@ -52,6 +52,9 @@ public interface SnapshotContext {
     /** Get the interval of kv snapshot. */
     long getSnapshotIntervalMs();
 
+    /** Whether to retain and recover from the latest completed local KV snapshot. */
+    boolean isLocalRecoveryEnabled();
+
     /** Get the size of the write buffer for writing the kv snapshot file to remote filesystem. */
     int getSnapshotFsWriteBufferSize();
 

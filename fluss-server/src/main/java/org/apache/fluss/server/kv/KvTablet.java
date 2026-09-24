@@ -1416,7 +1416,8 @@ public final class KvTablet {
             Map<Long, Collection<KvFileHandleAndLocalPath>> uploadedSstFiles,
             KvSnapshotDataUploader kvSnapshotDataUploader,
             long lastCompletedSnapshotId,
-            Counter remoteKvCopyBytes) {
+            Counter remoteKvCopyBytes,
+            boolean localRecoveryEnabled) {
         return new RocksIncrementalSnapshot(
                 uploadedSstFiles,
                 rocksDBKv.getDb(),
@@ -1424,7 +1425,8 @@ public final class KvTablet {
                 kvSnapshotDataUploader,
                 kvTabletDir,
                 lastCompletedSnapshotId,
-                remoteKvCopyBytes);
+                remoteKvCopyBytes,
+                localRecoveryEnabled);
     }
 
     // only for testing.
