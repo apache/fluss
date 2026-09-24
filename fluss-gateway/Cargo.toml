@@ -80,8 +80,12 @@ serde_path_to_error = "0.1"
 # The gateway.yaml configuration file is YAML with flat dotted keys.
 # serde_yaml_ng is the maintained, API-compatible fork of the archived serde_yaml crate.
 serde_yaml_ng = "0.10"
+# rustls parses PEM certificates and keys without invoking an external TLS runtime.
+rustls-pemfile = "2"
 # Runtime capabilities used by the server; test-only I/O/time controls are enabled below.
 tokio = { version = "1.44.2", features = ["macros", "net", "rt-multi-thread", "signal", "time"] }
+# Shared TLS acceptor for REST and future protocol frontends; uses rustls already in the graph.
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
 # Only `sync::CancellationToken` is used, which needs no feature of its own.
 tokio-util = { version = "0.7", default-features = false }
 utoipa = { version = "5", features = ["axum_extras"] }
@@ -92,12 +96,16 @@ uuid = { version = "1.10", features = ["v4"] }
 http-body-util = "0.1"
 # No `blocking`: every suite is async, and the blocking client panics when dropped inside a tokio context.
 reqwest = { version = "0.12", default-features = false, features = ["json"] }
+rcgen = "0.13"
 tempfile = "3"
 tokio = { version = "1.44.2", features = ["io-util", "test-util"] }
 tower = { version = "0.5", features = ["util"] }
 
 [[test]]
 name = "http_api"
+
+[[test]]
+name = "tls"
 
 [[test]]
 name = "e2e_cluster"

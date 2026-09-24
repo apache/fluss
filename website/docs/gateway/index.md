@@ -55,12 +55,16 @@ for all settings and defaults.
 ### Security
 
 The 1.0 preview implements only `trust` mode: the REST listener does not
-authenticate callers or terminate TLS. `password`, `token`, and
-`trusted-header` are reserved values and do not protect requests.
+authenticate callers. `password`, `token`, and `trusted-header` are reserved
+values and do not protect requests. The REST listener can terminate TLS when
+`gateway.rest.tls.profile` selects a declared TLS identity; plaintext remains
+the default.
 
-Deploy the Gateway behind an authenticated ingress that terminates TLS. The
-container listens on `0.0.0.0`; restrict access to both the REST and Prometheus
-ports with network controls.
+Deploy the Gateway behind an authenticated ingress or restrict access to known
+callers, and enable TLS at either the Gateway or ingress. The container listens
+on `0.0.0.0`; restrict access to both the REST and Prometheus ports with network
+controls. See [Deploying Fluss Gateway](../install-deploy/deploying-gateway.md#enable-https-on-the-rest-listener)
+for TLS configuration.
 
 The Gateway uses one shared service connection per Fluss cluster. With
 SASL/PLAIN, Fluss authorizes every request as the configured service account;
