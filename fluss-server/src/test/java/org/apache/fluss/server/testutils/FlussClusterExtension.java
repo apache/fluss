@@ -684,6 +684,9 @@ public final class FlussClusterExtension
                     List<Integer> isr = leaderAndIsr.isr();
                     for (int replicaId : isr) {
                         TabletServer tabletServer = getTabletServerById(replicaId);
+                        assertThat(tabletServer)
+                                .as("Tablet server %s should be available.", replicaId)
+                                .isNotNull();
                         ReplicaManager replicaManager = tabletServer.getReplicaManager();
                         assertThat(replicaManager.getReplica(tableBucket))
                                 .isInstanceOf(ReplicaManager.OnlineReplica.class);
@@ -696,7 +699,11 @@ public final class FlussClusterExtension
                     }
 
                     int leader = leaderAndIsr.leader();
-                    ReplicaManager replicaManager = getTabletServerById(leader).getReplicaManager();
+                    TabletServer leaderServer = getTabletServerById(leader);
+                    assertThat(leaderServer)
+                            .as("Leader tablet server %s should be available.", leader)
+                            .isNotNull();
+                    ReplicaManager replicaManager = leaderServer.getReplicaManager();
                     assertThat(replicaManager.getReplicaOrException(tableBucket).isLeader())
                             .isTrue();
                 });

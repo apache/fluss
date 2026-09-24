@@ -406,6 +406,23 @@ final class LogTabletTest extends LogTestBase {
     }
 
     @Test
+    void testInitializeEmptyLocalTailProtectsExistingLog() throws Exception {
+        logTablet.initializeEmptyLocalTail(17L);
+        logTablet.initializeEmptyLocalTail(17L);
+        assertThat(logTablet.localLogStartOffset()).isEqualTo(17L);
+        assertThat(logTablet.localLogEndOffset()).isEqualTo(17L);
+        assertThat(logTablet.getHighWatermark()).isEqualTo(17L);
+        assertThatThrownBy(() -> logTablet.initializeEmptyLocalTail(18L))
+                .isInstanceOf(IllegalStateException.class);
+        logTablet.appendAsLeader(
+                genMemoryLogRecordsByObject(Collections.singletonList(new Object[] {1, "a"})));
+        assertThatThrownBy(() -> logTablet.initializeEmptyLocalTail(17L))
+                .isInstanceOf(IllegalStateException.class);
+        assertThat(logTablet.localLogStartOffset()).isEqualTo(17L);
+        assertThat(logTablet.localLogEndOffset()).isEqualTo(18L);
+    }
+
+    @Test
     void testWriterStateTruncateFullyAndStartAt() throws Exception {
         MemoryLogRecords records =
                 genMemoryLogRecordsByObject(Collections.singletonList(new Object[] {1, "a"}));

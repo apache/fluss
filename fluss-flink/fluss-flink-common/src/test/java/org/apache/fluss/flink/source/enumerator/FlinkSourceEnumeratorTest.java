@@ -214,7 +214,10 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
 
     @Test
     void testBoundedPkTableEmitsSnapshotSplitsByDefault() throws Throwable {
-        createTable(DEFAULT_TABLE_PATH, DEFAULT_PK_TABLE_DESCRIPTOR);
+        long tableId = createTable(DEFAULT_TABLE_PATH, DEFAULT_PK_TABLE_DESCRIPTOR);
+        for (int bucket = 0; bucket < DEFAULT_BUCKET_NUM; bucket++) {
+            FLUSS_CLUSTER_EXTENSION.waitUntilAllReplicaReady(new TableBucket(tableId, bucket));
+        }
         int numSubtasks = DEFAULT_BUCKET_NUM;
         try (MockSplitEnumeratorContext<SourceSplitBase> context =
                 new MockSplitEnumeratorContext<>(numSubtasks)) {

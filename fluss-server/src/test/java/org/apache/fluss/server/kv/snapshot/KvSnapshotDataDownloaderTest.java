@@ -28,6 +28,7 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.security.MessageDigest;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Random;
@@ -80,6 +81,60 @@ class KvSnapshotDataDownloaderTest {
                         contents[i][j], dstPath.resolve(String.format("shared-%d-%d", i, j)));
             }
         }
+    }
+
+    @Test
+    void testRejectUnsafeLocalPathBeforeDownload(@TempDir Path destDir, @TempDir Path srcDir)
+            throws Exception {
+        Path source = srcDir.resolve("state");
+        Files.write(source, new byte[] {1});
+        KvSnapshotHandle handle =
+                KvSnapshotHandle.create(
+                        java.util.Collections.singletonList(
+                                KvFileHandleAndLocalPath.of(
+                                        new KvFileHandle(source.toString(), 1L), "../state")),
+                        java.util.Collections.emptyList(),
+                        1L);
+
+        assertThatThrownBy(
+                        () ->
+                                new KvSnapshotDataDownloader(downLoaderThreadPool)
+                                        .transferAllDataToDirectory(
+                                                new KvSnapshotDownloadSpec(handle, destDir),
+                                                new CloseableRegistry()))
+                .isInstanceOf(IOException.class)
+                .hasMessageContaining("Unsafe KV snapshot local path");
+        assertThat(destDir.resolve("../state").normalize()).doesNotExist();
+    }
+
+    @Test
+    void testDigestMismatchCleansUpDownloadedFiles(@TempDir Path destDir, @TempDir Path srcDir)
+            throws Exception {
+        byte[] content = new byte[] {1, 2, 3};
+        Path source = srcDir.resolve("state");
+        Files.write(source, content);
+        KvSnapshotHandle handle =
+                KvSnapshotHandle.create(
+                        java.util.Collections.singletonList(
+                                KvFileHandleAndLocalPath.of(
+                                        new KvFileHandle(
+                                                source.toString(),
+                                                content.length,
+                                                "0000000000000000000000000000000000000000000000000000000000000000"),
+                                        "state")),
+                        java.util.Collections.emptyList(),
+                        content.length);
+        Path destination = destDir.resolve("download");
+
+        assertThatThrownBy(
+                        () ->
+                                new KvSnapshotDataDownloader(downLoaderThreadPool)
+                                        .transferAllDataToDirectory(
+                                                new KvSnapshotDownloadSpec(handle, destination),
+                                                new CloseableRegistry()))
+                .isInstanceOf(IOException.class)
+                .hasMessageContaining("SHA-256");
+        assertThat(destination).doesNotExist();
     }
 
     /** Tests cleanup on download failures. */
@@ -148,7 +203,8 @@ class KvSnapshotDataDownloaderTest {
         for (int i = 0; i < numSubHandles; ++i) {
             Path path = srcPath.resolve(String.format("state-%d-%d", remoteHandleId, i));
             Files.write(path, content[i]);
-            handles.add(new KvFileHandle(path.toString(), content.length));
+            handles.add(
+                    new KvFileHandle(path.toString(), content[i].length, sha256Hex(content[i])));
         }
 
         List<KvFileHandleAndLocalPath> sharedStates = new ArrayList<>(numSubHandles);
@@ -166,5 +222,21 @@ class KvSnapshotDataDownloaderTest {
                 KvSnapshotHandle.create(sharedStates, privateStates, -1);
 
         return new KvSnapshotDownloadSpec(kvSnapshotHandle, dstPath);
+    }
+
+    private static String sha256Hex(byte[] content) {
+        try {
+            byte[] hash = MessageDigest.getInstance("SHA-256").digest(content);
+            char[] result = new char[hash.length * 2];
+            char[] alphabet = "0123456789abcdef".toCharArray();
+            for (int i = 0; i < hash.length; i++) {
+                int value = hash[i] & 0xff;
+                result[i * 2] = alphabet[value >>> 4];
+                result[i * 2 + 1] = alphabet[value & 0xf];
+            }
+            return new String(result);
+        } catch (Exception e) {
+            throw new IllegalStateException(e);
+        }
     }
 }

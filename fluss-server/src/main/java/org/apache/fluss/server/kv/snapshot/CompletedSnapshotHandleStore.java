@@ -43,6 +43,23 @@ public interface CompletedSnapshotHandleStore {
             throws Exception;
 
     /**
+     * Confirms an existing immutable snapshot handle under the active coordinator epoch.
+     *
+     * <p>An identical registration can be retried; a conflicting handle is rejected. Failures,
+     * including uncertain results, must leave the snapshot metadata file intact.
+     *
+     * @param tableBucket the target bucket
+     * @param snapshotHandle the handle of the already written snapshot metadata
+     * @param coordinatorZkVersion the expected coordinator epoch node version
+     * @throws Exception if the handle cannot be confirmed
+     */
+    void registerExternal(
+            TableBucket tableBucket,
+            CompletedSnapshotHandle snapshotHandle,
+            int coordinatorZkVersion)
+            throws Exception;
+
+    /**
      * Remove the snapshot handle for the given snapshot id of the given table bucket.
      *
      * @param tableBucket the table bucket the snapshot belongs to
