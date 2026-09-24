@@ -158,6 +158,13 @@ public class FlussLookupInputPartitioner implements InputDataPartitionerAdapter 
         return (int) (logicalSlot / slotsPerSubtask);
     }
 
+    /** Hashes normalized key bytes, independently of the Flink row representation and row kind. */
+    int hashLookupKey(RowData joinKeys) {
+        ensureInitialized();
+        InternalRow key = reuseRow.replace(normalizer.normalizeLookupKey(joinKeys));
+        return MathUtils.murmurHash(Arrays.hashCode(lookupKeyEncoder.encodeKey(key)));
+    }
+
     @Override
     public boolean isDeterministic() {
         return true;

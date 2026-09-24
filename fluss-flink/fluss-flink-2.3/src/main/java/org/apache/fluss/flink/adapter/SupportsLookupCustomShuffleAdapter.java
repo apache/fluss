@@ -23,7 +23,7 @@ import org.apache.flink.table.connector.source.abilities.SupportsLookupCustomShu
 import java.util.Optional;
 
 /**
- * Flink 2.x adapter that bridges the version-neutral lookup partitioner to {@link
+ * Flink 2.3 adapter that bridges the version-neutral lookup partitioner to {@link
  * SupportsLookupCustomShuffle}.
  */
 public interface SupportsLookupCustomShuffleAdapter extends SupportsLookupCustomShuffle {
@@ -44,6 +44,6 @@ public interface SupportsLookupCustomShuffleAdapter extends SupportsLookupCustom
     /** Returns the version-neutral custom partitioner prepared for the current lookup. */
     Optional<InputDataPartitionerAdapter> getPartitionerAdapter();
 
-    /** Flink 2.x custom partitioner exposed through the version-neutral adapter. */
+    /** Flink 2.3 custom partitioner exposed through the version-neutral adapter. */
     interface InputDataPartitionerAdapter extends InputDataPartitioner {}
 }

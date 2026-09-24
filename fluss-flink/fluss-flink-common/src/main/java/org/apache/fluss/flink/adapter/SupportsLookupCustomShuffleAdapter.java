@@ -17,6 +17,7 @@
 
 package org.apache.fluss.flink.adapter;
 
+import org.apache.flink.table.connector.source.LookupTableSource;
 import org.apache.flink.table.data.RowData;
 
 import java.io.Serializable;
@@ -37,6 +38,15 @@ public interface SupportsLookupCustomShuffleAdapter {
      * stream in its original distribution.
      */
     Optional<InputDataPartitionerAdapter> getPartitionerAdapter();
+
+    /**
+     * Whether the planner has installed the source's custom shuffle for this lookup. Flink 1.x does
+     * not expose this information, so it cannot guarantee that a local full cache owns every lookup
+     * key routed to it.
+     */
+    default boolean preferCustomShuffle(LookupTableSource.LookupContext context) {
+        return false;
+    }
 
     /** Version-neutral custom partitioner for lookup join keys. */
     interface InputDataPartitionerAdapter extends Serializable {
