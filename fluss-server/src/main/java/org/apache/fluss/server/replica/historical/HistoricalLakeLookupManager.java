@@ -28,6 +28,7 @@ import org.apache.fluss.lake.lakestorage.LakeStoragePlugin;
 import org.apache.fluss.lake.lakestorage.LakeStoragePluginSetUp;
 import org.apache.fluss.lake.lakestorage.LakeTableLookuper;
 import org.apache.fluss.metadata.DataLakeFormat;
+import org.apache.fluss.metadata.LakeLookupMode;
 import org.apache.fluss.metadata.ResolvedPartitionSpec;
 import org.apache.fluss.metadata.SchemaInfo;
 import org.apache.fluss.metadata.TableBucket;
@@ -78,9 +79,10 @@ import static org.apache.fluss.utils.Preconditions.checkState;
  * <p>Creating a lake table lookuper may initialize catalog, table, and query state and allocate
  * local lookup files, so lookupers are cached and reused. The cache is keyed by table ID rather
  * than table path to prevent a deleted and recreated table from reusing the old table's lookuper. A
- * cached lookuper is replaced when its schema ID or lake configuration version no longer matches
- * the current request. Active lookups can finish on the old lookuper, which is closed after its
- * last lookup releases it. A new required lake snapshot refreshes the cached lookuper in place.
+ * cached lookuper is replaced when its schema ID, lookup mode, or lake configuration version no
+ * longer matches the current request. Active lookups can finish on the old lookuper, which is
+ * closed after its last lookup releases it. A new required lake snapshot refreshes the cached
+ * lookuper in place.
  *
  * <p>Up to ten table lookupers are cached. Each lookuper receives one tenth of the server-level
  * disk budget, and Caffeine evicts lookupers when the table limit is exceeded.
@@ -487,6 +489,7 @@ class HistoricalLakeLookupManager implements AutoCloseable {
         long currentLakeConfigVersion = lakeConfigVersion;
         Configuration currentConf = conf;
         long cacheSizeBytes = lookupCacheMaxDiskBytesPerTable;
+        LakeLookupMode lookupMode = tableInfo.getTableConfig().getHistoricalLookupMode();
         return lakeTableLookupers
                 .asMap()
                 .compute(
@@ -499,11 +502,12 @@ class HistoricalLakeLookupManager implements AutoCloseable {
                                     requiredLakeSnapshotIds.get(context.tableId);
                             CachedLakeTableLookuper selectedLookuper = currentLookuper;
                             // Create the lookuper lazily, and recreate it after schema,
-                            // lake configuration, or server cache size changes so it
+                            // lookup mode, lake configuration, or server cache size changes so it
                             // reloads lake table/query state and uses the current
                             // settings.
                             if (selectedLookuper == null
                                     || selectedLookuper.schemaId != context.schemaId
+                                    || selectedLookuper.lookupMode != lookupMode
                                     || selectedLookuper.lakeConfigVersion
                                             != currentLakeConfigVersion
                                     || selectedLookuper.cacheSizeBytes != cacheSizeBytes) {
@@ -524,6 +528,7 @@ class HistoricalLakeLookupManager implements AutoCloseable {
                                                 context.tableId,
                                                 context.tablePath,
                                                 context.schemaId,
+                                                lookupMode,
                                                 currentLakeConfigVersion,
                                                 cacheSizeBytes,
                                                 requiredLakeSnapshotId,
@@ -560,6 +565,7 @@ class HistoricalLakeLookupManager implements AutoCloseable {
         private final long tableId;
         private final TablePath tablePath;
         private final int schemaId;
+        private final LakeLookupMode lookupMode;
         private final long lakeConfigVersion;
         private final long cacheSizeBytes;
         /** The opaque lake snapshot ID covered by the last file refresh, or null if none. */
@@ -575,6 +581,7 @@ class HistoricalLakeLookupManager implements AutoCloseable {
                 long tableId,
                 TablePath tablePath,
                 int schemaId,
+                LakeLookupMode lookupMode,
                 long lakeConfigVersion,
                 long cacheSizeBytes,
                 @Nullable Long lakeSnapshotId,
@@ -583,6 +590,7 @@ class HistoricalLakeLookupManager implements AutoCloseable {
             this.tableId = tableId;
             this.tablePath = tablePath;
             this.schemaId = schemaId;
+            this.lookupMode = lookupMode;
             this.lakeConfigVersion = lakeConfigVersion;
             this.cacheSizeBytes = cacheSizeBytes;
             this.lakeSnapshotId = lakeSnapshotId;

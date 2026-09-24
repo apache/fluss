@@ -1976,7 +1976,7 @@ public class ConfigOptions {
                                             + "SST uses local lookup files cached from lake storage. "
                                             + "SCAN scans the requested partition and bucket with primary-key filters "
                                             + "and a limit of one row, without creating local lookup files. "
-                                            + "This option can only be set when creating the table and cannot be altered.");
+                                            + "This option can be changed with ALTER TABLE SET or reset to SST with ALTER TABLE RESET.");
 
     public static final ConfigOption<DataLakeFormat> TABLE_DATALAKE_FORMAT =
             key("table.datalake.format")

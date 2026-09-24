@@ -24,6 +24,7 @@ import org.apache.fluss.config.TableConfig;
 import org.apache.fluss.lake.lakestorage.LakeTableLookuper;
 import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.KvFormat;
+import org.apache.fluss.metadata.LakeLookupMode;
 import org.apache.fluss.metadata.ResolvedPartitionSpec;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.SchemaInfo;
@@ -242,6 +243,45 @@ class HistoricalLakeLookupManagerTest {
 
         assertThat(manager.createdLookupers).hasSize(1);
         assertThat(initialLookuper.closed).isFalse();
+    }
+
+    @Test
+    void testReplacesLookuperWhenTableLookupModeChanges() throws Exception {
+        TestingHistoricalLakeLookupManager manager = createTestingManager();
+
+        lookup(manager, PARTITION_TABLE_INFO);
+        TestingLakeTableLookuper sstLookuper = manager.createdLookupers.get(0);
+
+        TableDescriptor scanDescriptor =
+                TableDescriptor.builder(PARTITION_TABLE_INFO.toTableDescriptor())
+                        .property(
+                                ConfigOptions.TABLE_DATALAKE_HISTORICAL_PARTITION_LOOKUP_MODE,
+                                LakeLookupMode.SCAN)
+                        .build();
+        TableInfo scanTableInfo =
+                TableInfo.of(
+                        PARTITION_TABLE_INFO.getTablePath(),
+                        PARTITION_TABLE_INFO.getTableId(),
+                        PARTITION_TABLE_INFO.getSchemaId(),
+                        scanDescriptor,
+                        PARTITION_TABLE_INFO.getRemoteDataDir(),
+                        PARTITION_TABLE_INFO.getCreatedTime(),
+                        PARTITION_TABLE_INFO.getModifiedTime());
+        lookup(manager, scanTableInfo);
+
+        assertThat(sstLookuper.closed).isTrue();
+        assertThat(manager.createdLookupers).hasSize(2);
+        assertThat(manager.createdTableConfigs.get(1).getHistoricalLookupMode())
+                .isEqualTo(LakeLookupMode.SCAN);
+
+        lookup(manager, scanTableInfo);
+        assertThat(manager.createdLookupers).hasSize(2);
+
+        lookup(manager, PARTITION_TABLE_INFO);
+        assertThat(manager.createdLookupers.get(1).closed).isTrue();
+        assertThat(manager.createdLookupers).hasSize(3);
+        assertThat(manager.createdTableConfigs.get(2).getHistoricalLookupMode())
+                .isEqualTo(LakeLookupMode.SST);
     }
 
     @Test
