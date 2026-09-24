@@ -53,6 +53,7 @@ import java.io.Serializable;
 import java.util.List;
 
 import static org.apache.fluss.flink.sink.FlinkStreamPartitioner.partition;
+import static org.apache.fluss.flink.utils.FlinkConnectorOptionsUtils.validateDistributionModeForUndoRecovery;
 import static org.apache.fluss.flink.utils.FlinkConversions.toFlussRowType;
 import static org.apache.fluss.utils.Preconditions.checkState;
 
@@ -173,6 +174,12 @@ class FlinkSink<InputT> extends SinkAdapter<InputT> {
                     }
                     throw new UnsupportedOperationException(
                             "BUCKET mode is only supported for log tables with bucket keys");
+                case BUCKET_LOAD_BALANCE:
+                    if (!bucketKeys.isEmpty()) {
+                        return bucketLoadBalanceShuffle(input);
+                    }
+                    throw new UnsupportedOperationException(
+                            "BUCKET_LOAD_BALANCE mode is only supported for log tables with bucket keys");
                 case PARTITION_DYNAMIC:
                     if (partitionKeys.isEmpty()) {
                         throw new UnsupportedOperationException(
@@ -229,6 +236,18 @@ class FlinkSink<InputT> extends SinkAdapter<InputT> {
                             toFlussRowType(tableRowType),
                             bucketKeys,
                             partitionKeys,
+                            lakeFormat,
+                            numBucket,
+                            flussSerializationSchema),
+                    input.getParallelism());
+        }
+
+        private DataStream<InputT> bucketLoadBalanceShuffle(DataStream<InputT> input) {
+            return partition(
+                    input,
+                    new BucketLoadBalanceChannelComputer<>(
+                            toFlussRowType(tableRowType),
+                            bucketKeys,
                             lakeFormat,
                             numBucket,
                             flussSerializationSchema),
@@ -317,6 +336,11 @@ class FlinkSink<InputT> extends SinkAdapter<InputT> {
 
         @Override
         public DataStream<InputT> addPreWriteTopology(DataStream<InputT> input) {
+            // Defense in depth: the entry points (FlinkTableFactory and FlussSinkBuilder)
+            // validate the distribution mode via validateDistributionModeForMergeEngine before
+            // constructing this builder, but the builder can also be constructed directly, so
+            // re-validate the Undo Recovery constraint here.
+            validateDistributionModeForUndoRecovery(enableUndoRecovery, distributionMode);
             DataStream<InputT> stream;
             switch (distributionMode) {
                 case NONE:
@@ -331,6 +355,18 @@ class FlinkSink<InputT> extends SinkAdapter<InputT> {
                                             toFlussRowType(tableRowType),
                                             bucketKeys,
                                             partitionKeys,
+                                            lakeFormat,
+                                            numBucket,
+                                            flussSerializationSchema),
+                                    input.getParallelism());
+                    break;
+                case BUCKET_LOAD_BALANCE:
+                    stream =
+                            partition(
+                                    input,
+                                    new BucketLoadBalanceChannelComputer<>(
+                                            toFlussRowType(tableRowType),
+                                            bucketKeys,
                                             lakeFormat,
                                             numBucket,
                                             flussSerializationSchema),

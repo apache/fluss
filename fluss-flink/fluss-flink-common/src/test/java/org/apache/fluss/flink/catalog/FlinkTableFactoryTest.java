@@ -21,6 +21,7 @@ import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.flink.FlinkConnectorOptions;
 import org.apache.fluss.flink.adapter.CatalogTableAdapter;
 import org.apache.fluss.flink.sink.FlinkTableSink;
+import org.apache.fluss.flink.sink.shuffle.DistributionMode;
 import org.apache.fluss.flink.source.BinlogFlinkTableSource;
 import org.apache.fluss.flink.source.ChangelogFlinkTableSource;
 import org.apache.fluss.flink.source.FlinkTableSource;
@@ -319,6 +320,61 @@ abstract class FlinkTableFactoryTest {
         // test create table sink with custom properties is ok
         properties.put("k1", "v1");
         createTableSink(schema, properties);
+    }
+
+    @Test
+    void testSinkDistributionModeForMergeEngine() {
+        ResolvedSchema schema = createBasicSchema();
+
+        // keyed modes are accepted for every merge engine
+        for (String mergeEngine : new String[] {"first_row", "versioned", "aggregation"}) {
+            for (String mode : new String[] {"auto", "bucket"}) {
+                Map<String, String> properties = getBasicOptionsWithBucketKey();
+                properties.put(ConfigOptions.TABLE_MERGE_ENGINE.key(), mergeEngine);
+                properties.put(FlinkConnectorOptions.SINK_DISTRIBUTION_MODE.key(), mode);
+                createTableSink(schema, properties);
+            }
+        }
+
+        // unkeyed modes are rejected for every merge engine
+        for (String mergeEngine : new String[] {"first_row", "versioned", "aggregation"}) {
+            for (String mode : new String[] {"none", "partition_dynamic"}) {
+                Map<String, String> properties = getBasicOptionsWithBucketKey();
+                properties.put(ConfigOptions.TABLE_MERGE_ENGINE.key(), mergeEngine);
+                properties.put(FlinkConnectorOptions.SINK_DISTRIBUTION_MODE.key(), mode);
+                assertThatThrownBy(() -> createTableSink(schema, properties))
+                        .isInstanceOf(IllegalArgumentException.class)
+                        .hasMessageContaining(
+                                "'sink.distribution-mode' must be 'bucket', 'bucket_load_balance' or 'auto'");
+            }
+        }
+
+        // bucket_load_balance is accepted for merge engines without Undo Recovery ...
+        for (String mergeEngine : new String[] {"first_row", "versioned"}) {
+            Map<String, String> properties = getBasicOptionsWithBucketKey();
+            properties.put(ConfigOptions.TABLE_MERGE_ENGINE.key(), mergeEngine);
+            properties.put(
+                    FlinkConnectorOptions.SINK_DISTRIBUTION_MODE.key(), "bucket_load_balance");
+            createTableSink(schema, properties);
+        }
+
+        // ... but rejected for aggregation, whose Undo Recovery assumes one writer per bucket
+        Map<String, String> aggregationProperties = getBasicOptionsWithBucketKey();
+        aggregationProperties.put(ConfigOptions.TABLE_MERGE_ENGINE.key(), "aggregation");
+        aggregationProperties.put(
+                FlinkConnectorOptions.SINK_DISTRIBUTION_MODE.key(), "bucket_load_balance");
+        assertThatThrownBy(() -> createTableSink(schema, aggregationProperties))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("is not supported when Undo Recovery is enabled")
+                .hasMessageContaining("BUCKET_LOAD_BALANCE")
+                .hasMessageContaining("Please use 'bucket' or 'auto'");
+
+        // without a merge engine, all modes stay accepted (no Undo Recovery is involved)
+        for (DistributionMode mode : DistributionMode.values()) {
+            Map<String, String> properties = getBasicOptionsWithBucketKey();
+            properties.put(FlinkConnectorOptions.SINK_DISTRIBUTION_MODE.key(), mode.name());
+            createTableSink(schema, properties);
+        }
     }
 
     private ResolvedSchema createBasicSchema() {

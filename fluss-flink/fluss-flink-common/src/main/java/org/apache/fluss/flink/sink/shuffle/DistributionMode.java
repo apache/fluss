@@ -65,5 +65,27 @@ public enum DistributionMode {
      * <p>Note: This mode has overhead costs including data statistics collection and additional
      * shuffle operations.
      */
-    PARTITION_DYNAMIC
+    PARTITION_DYNAMIC,
+
+    /**
+     * Shuffle data by bucket key with even load distribution across all downstream subtasks.
+     *
+     * <p>Unlike {@link #BUCKET} which maps each bucket to exactly one subtask (potentially leaving
+     * some subtasks idle), this mode uses an LCM-based logical slot assignment to ensure every
+     * subtask receives data.
+     *
+     * <p>Routing algorithm: first compute bucket ID via {@code BucketingFunction}, then select the
+     * concrete subtask within the bucket's assigned slot range using the bucket key's murmur hash.
+     * Records with the same bucket key always route to the same subtask, so merge semantics are
+     * preserved at runtime. However, one bucket may be written by several subtasks when the bucket
+     * count and the sink parallelism do not evenly divide each other, which breaks the
+     * one-writer-per-bucket assumption of Undo Recovery; this mode is therefore rejected for tables
+     * using the aggregation merge engine.
+     *
+     * <p>Characteristics:
+     *
+     * <p>Requires 'bucket.key' to be defined. Suitable for tables where intra-bucket ordering is
+     * not required but even load distribution matters.
+     */
+    BUCKET_LOAD_BALANCE
 }
