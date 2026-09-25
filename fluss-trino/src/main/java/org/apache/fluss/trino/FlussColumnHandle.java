@@ -18,9 +18,8 @@
 
 package org.apache.fluss.trino;
 
-import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.annotation.JsonCreator;
-import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.annotation.JsonProperty;
-
+import com.fasterxml.jackson.annotation.JsonCreator;
+import com.fasterxml.jackson.annotation.JsonProperty;
 import io.trino.spi.connector.ColumnHandle;
 
 import java.util.Objects;

@@ -21,8 +21,12 @@ import com.google.inject.Binder;
 import com.google.inject.Scopes;
 import io.airlift.configuration.AbstractConfigurationAwareModule;
 import io.trino.plugin.base.classloader.ClassLoaderSafeConnectorMetadata;
+import io.trino.plugin.base.classloader.ClassLoaderSafeConnectorPageSourceProvider;
+import io.trino.plugin.base.classloader.ClassLoaderSafeConnectorSplitManager;
 import io.trino.plugin.base.classloader.ForClassLoaderSafe;
 import io.trino.spi.connector.ConnectorMetadata;
+import io.trino.spi.connector.ConnectorPageSourceProvider;
+import io.trino.spi.connector.ConnectorSplitManager;
 
 import static io.airlift.configuration.ConfigBinder.configBinder;
 
@@ -33,11 +37,27 @@ public class FlussConnectorModule extends AbstractConfigurationAwareModule {
     public void setup(Binder binder) {
         configBinder(binder).bindConfig(FlussConfig.class);
 
+        binder.bind(FlussConnector.class).in(Scopes.SINGLETON);
         binder.bind(FlussClientManager.class).in(Scopes.SINGLETON);
+        binder.bind(ConnectorPageSourceProvider.class)
+                .annotatedWith(ForClassLoaderSafe.class)
+                .to(FlussPageSourceProvider.class)
+                .in(Scopes.SINGLETON);
+        binder.bind(ConnectorPageSourceProvider.class)
+                .to(ClassLoaderSafeConnectorPageSourceProvider.class)
+                .in(Scopes.SINGLETON);
 
         binder.bind(ConnectorMetadata.class)
                 .annotatedWith(ForClassLoaderSafe.class)
                 .to(FlussMetadata.class)
+                .in(Scopes.SINGLETON);
+
+        binder.bind(ConnectorSplitManager.class)
+                .annotatedWith(ForClassLoaderSafe.class)
+                .to(FlussSplitManager.class)
+                .in(Scopes.SINGLETON);
+        binder.bind(ConnectorSplitManager.class)
+                .to(ClassLoaderSafeConnectorSplitManager.class)
                 .in(Scopes.SINGLETON);
 
         binder.bind(FlussMetadataAccess.class).in(Scopes.SINGLETON);

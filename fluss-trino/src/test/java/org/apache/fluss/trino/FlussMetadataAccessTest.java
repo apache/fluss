@@ -33,9 +33,9 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.Optional;
 
-import static io.trino.spi.StandardErrorCode.GENERIC_INTERNAL_ERROR;
 import static io.trino.spi.StandardErrorCode.NOT_SUPPORTED;
 import static java.util.concurrent.CompletableFuture.completedFuture;
+import static org.apache.fluss.trino.FlussErrorCode.FLUSS_METADATA_ERROR;
 import static org.apache.fluss.trino.TestingFlussMetadata.metadataAccess;
 import static org.apache.fluss.trino.TestingFlussMetadata.usersTable;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -73,7 +73,7 @@ final class FlussMetadataAccessTest {
                                 assertThat(failure.getErrorCode())
                                         .isEqualTo(NOT_SUPPORTED.toErrorCode()))
                 .hasMessage("Ambiguous Fluss database 'sales': Sales, sales");
-        assertThatThrownBy(() -> access.listTableIndexes(Optional.empty()))
+        assertThatThrownBy(() -> access.listTableNameMappings(Optional.empty()))
                 .isInstanceOf(TrinoException.class)
                 .hasMessageContaining("Ambiguous Fluss database");
     }
@@ -102,8 +102,8 @@ final class FlussMetadataAccessTest {
                 .thenReturn(completedFuture(Collections.singletonList("Users")));
         when(admin.listTables("Inventory"))
                 .thenReturn(completedFuture(Collections.singletonList("Products")));
-        assertThat(access.listTableIndexes(Optional.empty()))
-                .flatExtracting(FlussMetadataAccess.TableNameIndex::listTableNames)
+        assertThat(access.listTableNameMappings(Optional.empty()))
+                .flatExtracting(FlussMetadataAccess.TableNameMapping::listTableNames)
                 .containsExactly(
                         new SchemaTableName("sales", "users"),
                         new SchemaTableName("inventory", "products"));
@@ -115,8 +115,8 @@ final class FlussMetadataAccessTest {
                 .thenReturn(completedFuture(Arrays.asList("Sales", "sales", "Inventory")));
         when(admin.listTables("Inventory"))
                 .thenReturn(completedFuture(Collections.singletonList("Products")));
-        assertThat(access.listTableIndexes(Optional.of("inventory")))
-                .flatExtracting(FlussMetadataAccess.TableNameIndex::listTableNames)
+        assertThat(access.listTableNameMappings(Optional.of("inventory")))
+                .flatExtracting(FlussMetadataAccess.TableNameMapping::listTableNames)
                 .containsExactly(new SchemaTableName("inventory", "products"));
     }
 
@@ -125,15 +125,15 @@ final class FlussMetadataAccessTest {
         when(admin.listDatabases()).thenReturn(completedFuture(Collections.emptyList()));
         assertThat(access.resolveSchema("missing")).isEmpty();
         assertThat(access.resolveTable(new SchemaTableName("missing", "users"))).isEmpty();
-        assertThat(access.listTableIndexes(Optional.of("missing"))).isEmpty();
+        assertThat(access.listTableNameMappings(Optional.of("missing"))).isEmpty();
     }
 
     @Test
     void testTableIndexResolvesOnlyRequestedNames() {
         when(admin.listTables("Sales"))
                 .thenReturn(completedFuture(Arrays.asList("Users", "Order", "oRder")));
-        FlussMetadataAccess.TableNameIndex index =
-                access.indexTables(new ResolvedSchemaName("sales", "Sales"));
+        FlussMetadataAccess.TableNameMapping index =
+                access.loadTableNameMapping(new ResolvedSchemaName("sales", "Sales"));
         assertThat(index.listTableNames())
                 .containsExactly(
                         new SchemaTableName("sales", "users"),
@@ -154,7 +154,9 @@ final class FlussMetadataAccessTest {
                 .thenReturn(
                         FutureUtils.completedExceptionally(
                                 new DatabaseNotExistException("dropped")));
-        assertThat(access.indexTables(new ResolvedSchemaName("sales", "Sales")).listTableNames())
+        assertThat(
+                        access.loadTableNameMapping(new ResolvedSchemaName("sales", "Sales"))
+                                .listTableNames())
                 .isEmpty();
     }
 
@@ -181,7 +183,7 @@ final class FlussMetadataAccessTest {
                         () ->
                                 access.getTableInfo(
                                         new FlussTableHandle(
-                                                "sales", "users", "Sales", "Users", 42, 3)))
+                                                "sales", "users", "Sales", "Users", 42, 3, 4, 0)))
                 .isInstanceOf(TableNotFoundException.class)
                 .hasCause(failure)
                 .hasMessageContaining("sales.users");
@@ -193,13 +195,14 @@ final class FlussMetadataAccessTest {
         when(admin.getTableInfo(TablePath.of("Sales", "Users"))).thenReturn(completedFuture(info));
         assertThat(
                         access.getTableInfo(
-                                new FlussTableHandle("sales", "users", "Sales", "Users", 42, 3)))
+                                new FlussTableHandle(
+                                        "sales", "users", "Sales", "Users", 42, 3, 4, 0)))
                 .isSameAs(info);
         assertThatThrownBy(
                         () ->
                                 access.getTableInfo(
                                         new FlussTableHandle(
-                                                "sales", "users", "Sales", "Users", 41, 3)))
+                                                "sales", "users", "Sales", "Users", 41, 3, 4, 0)))
                 .isInstanceOfSatisfying(
                         TrinoException.class,
                         failure ->
@@ -210,7 +213,7 @@ final class FlussMetadataAccessTest {
                         () ->
                                 access.getTableInfo(
                                         new FlussTableHandle(
-                                                "sales", "users", "Sales", "Users", 42, 2)))
+                                                "sales", "users", "Sales", "Users", 42, 2, 4, 0)))
                 .isInstanceOf(TrinoException.class)
                 .hasMessageContaining("changed during query planning");
     }
@@ -224,7 +227,7 @@ final class FlussMetadataAccessTest {
                         TrinoException.class,
                         exception ->
                                 assertThat(exception.getErrorCode())
-                                        .isEqualTo(GENERIC_INTERNAL_ERROR.toErrorCode()))
+                                        .isEqualTo(FLUSS_METADATA_ERROR.toErrorCode()))
                 .hasCause(failure);
     }
 

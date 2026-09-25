@@ -17,10 +17,13 @@
 
 package org.apache.fluss.trino;
 
+import com.google.inject.Inject;
 import io.airlift.bootstrap.LifeCycleManager;
 import io.trino.spi.connector.Connector;
 import io.trino.spi.connector.ConnectorMetadata;
+import io.trino.spi.connector.ConnectorPageSourceProvider;
 import io.trino.spi.connector.ConnectorSession;
+import io.trino.spi.connector.ConnectorSplitManager;
 import io.trino.spi.connector.ConnectorTransactionHandle;
 import io.trino.spi.session.PropertyMetadata;
 import io.trino.spi.transaction.IsolationLevel;
@@ -36,10 +39,19 @@ public class FlussConnector implements Connector {
 
     private final LifeCycleManager lifeCycleManager;
     private final ConnectorMetadata metadata;
+    private final ConnectorSplitManager splitManager;
+    private final ConnectorPageSourceProvider pageSourceProvider;
 
-    public FlussConnector(LifeCycleManager lifeCycleManager, ConnectorMetadata metadata) {
+    @Inject
+    public FlussConnector(
+            LifeCycleManager lifeCycleManager,
+            ConnectorMetadata metadata,
+            ConnectorSplitManager splitManager,
+            ConnectorPageSourceProvider pageSourceProvider) {
         this.lifeCycleManager = checkNotNull(lifeCycleManager, "lifeCycleManager is null");
         this.metadata = checkNotNull(metadata, "metadata is null");
+        this.splitManager = checkNotNull(splitManager, "splitManager is null");
+        this.pageSourceProvider = checkNotNull(pageSourceProvider, "pageSourceProvider is null");
     }
 
     @Override
@@ -53,6 +65,16 @@ public class FlussConnector implements Connector {
     public ConnectorMetadata getMetadata(
             ConnectorSession session, ConnectorTransactionHandle transactionHandle) {
         return metadata;
+    }
+
+    @Override
+    public ConnectorSplitManager getSplitManager() {
+        return splitManager;
+    }
+
+    @Override
+    public ConnectorPageSourceProvider getPageSourceProvider() {
+        return pageSourceProvider;
     }
 
     @Override

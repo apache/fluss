@@ -43,7 +43,9 @@
         <jackson.version>2.22</jackson.version>
 
         <!-- Test dependencies -->
-        <junit5.version>5.9.1</junit5.version>
+        <!-- Match the Jupiter/Platform API used by Trino 483 testing. -->
+        <junit.version>6.1.2</junit.version>
+        <curator.version>5.4.0</curator.version>
         <assertj.version>3.27.7</assertj.version>
         <mockito.version>5.20.0</mockito.version>
 
@@ -116,7 +118,66 @@
             <scope>provided</scope>
         </dependency>
 
-        <!-- Test dependencies -->
+        <!-- Test dependencies (Trino, Fluss and Curator: Apache License 2.0). -->
+        <dependency>
+            <groupId>io.trino</groupId>
+            <artifactId>trino-testing</artifactId>
+            <version>${trino.version}</version>
+            <scope>test</scope>
+        </dependency>
+
+        <dependency>
+            <groupId>org.apache.fluss</groupId>
+            <artifactId>fluss-server</artifactId>
+            <version>${project.version}</version>
+            <scope>test</scope>
+        </dependency>
+
+        <dependency>
+            <groupId>org.apache.fluss</groupId>
+            <artifactId>fluss-server</artifactId>
+            <version>${project.version}</version>
+            <type>test-jar</type>
+            <scope>test</scope>
+        </dependency>
+
+        <dependency>
+            <groupId>org.apache.fluss</groupId>
+            <artifactId>fluss-test-utils</artifactId>
+            <version>${project.version}</version>
+            <scope>test</scope>
+        </dependency>
+
+        <dependency>
+            <groupId>org.apache.fluss</groupId>
+            <artifactId>fluss-common</artifactId>
+            <version>${project.version}</version>
+            <type>test-jar</type>
+            <scope>test</scope>
+        </dependency>
+
+        <dependency>
+            <groupId>org.apache.fluss</groupId>
+            <artifactId>fluss-rpc</artifactId>
+            <version>${project.version}</version>
+            <type>test-jar</type>
+            <scope>test</scope>
+        </dependency>
+
+        <dependency>
+            <groupId>org.apache.curator</groupId>
+            <artifactId>curator-test</artifactId>
+            <version>${curator.version}</version>
+            <scope>test</scope>
+        </dependency>
+
+        <dependency>
+            <groupId>io.airlift</groupId>
+            <artifactId>json</artifactId>
+            <version>${dep.airlift.version}</version>
+            <scope>test</scope>
+        </dependency>
+
         <dependency>
             <groupId>io.airlift</groupId>
             <artifactId>configuration-testing</artifactId>
@@ -134,7 +195,7 @@
         <dependency>
             <groupId>org.junit.jupiter</groupId>
             <artifactId>junit-jupiter</artifactId>
-            <version>${junit5.version}</version>
+            <version>${junit.version}</version>
             <scope>test</scope>
         </dependency>
 
@@ -275,6 +336,28 @@
                 <configuration>
                     <!-- Explicit instrumentation avoids dynamic agent attachment -->
                     <argLine>-javaagent:"${settings.localRepository}/org/mockito/mockito-core/${mockito.version}/mockito-core-${mockito.version}.jar"</argLine>
+                </configuration>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-failsafe-plugin</artifactId>
+                <version>${maven.surefire.plugin.version}</version>
+                <executions>
+                    <execution>
+                        <goals>
+                            <goal>integration-test</goal>
+                            <goal>verify</goal>
+                        </goals>
+                    </execution>
+                </executions>
+                <configuration>
+                    <argLine>--add-modules=jdk.incubator.vector --enable-native-access=ALL-UNNAMED --add-opens=java.base/java.nio=ALL-UNNAMED</argLine>
+                    <systemPropertyVariables>
+                        <junit.jupiter.execution.timeout.default>2 m</junit.jupiter.execution.timeout.default>
+                    </systemPropertyVariables>
+                    <includes>
+                        <include>**/*ITCase.java</include>
+                    </includes>
                 </configuration>
             </plugin>
         </plugins>

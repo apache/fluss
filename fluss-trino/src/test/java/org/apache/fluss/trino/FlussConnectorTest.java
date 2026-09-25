@@ -20,7 +20,9 @@ package org.apache.fluss.trino;
 import io.airlift.bootstrap.LifeCycleManager;
 import io.trino.spi.TrinoException;
 import io.trino.spi.connector.ConnectorMetadata;
+import io.trino.spi.connector.ConnectorPageSourceProvider;
 import io.trino.spi.connector.ConnectorSession;
+import io.trino.spi.connector.ConnectorSplitManager;
 import org.junit.jupiter.api.Test;
 
 import static io.trino.spi.StandardErrorCode.UNSUPPORTED_ISOLATION_LEVEL;
@@ -36,7 +38,12 @@ final class FlussConnectorTest {
     @Test
     void testMetadataForReadCommittedTransaction() {
         ConnectorMetadata metadata = mock(ConnectorMetadata.class);
-        FlussConnector connector = new FlussConnector(mock(LifeCycleManager.class), metadata);
+        FlussConnector connector =
+                new FlussConnector(
+                        mock(LifeCycleManager.class),
+                        metadata,
+                        mock(ConnectorSplitManager.class),
+                        mock(ConnectorPageSourceProvider.class));
         assertThat(connector.beginTransaction(READ_COMMITTED, true, true))
                 .isSameAs(FlussTransactionHandle.INSTANCE);
         assertThat(
@@ -48,7 +55,11 @@ final class FlussConnectorTest {
     @Test
     void testRejectUnsupportedIsolation() {
         FlussConnector connector =
-                new FlussConnector(mock(LifeCycleManager.class), mock(ConnectorMetadata.class));
+                new FlussConnector(
+                        mock(LifeCycleManager.class),
+                        mock(ConnectorMetadata.class),
+                        mock(ConnectorSplitManager.class),
+                        mock(ConnectorPageSourceProvider.class));
         assertThatThrownBy(() -> connector.beginTransaction(SERIALIZABLE, true, true))
                 .isInstanceOfSatisfying(
                         TrinoException.class,
@@ -60,7 +71,12 @@ final class FlussConnectorTest {
     @Test
     void testShutdownStopsLifecycle() {
         LifeCycleManager lifecycle = mock(LifeCycleManager.class);
-        new FlussConnector(lifecycle, mock(ConnectorMetadata.class)).shutdown();
+        new FlussConnector(
+                        lifecycle,
+                        mock(ConnectorMetadata.class),
+                        mock(ConnectorSplitManager.class),
+                        mock(ConnectorPageSourceProvider.class))
+                .shutdown();
         verify(lifecycle).stop();
     }
 }

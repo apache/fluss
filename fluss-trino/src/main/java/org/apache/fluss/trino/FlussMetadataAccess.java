@@ -19,6 +19,7 @@
 package org.apache.fluss.trino;
 
 import org.apache.fluss.client.admin.Admin;
+import org.apache.fluss.client.admin.OffsetSpec;
 import org.apache.fluss.exception.DatabaseNotExistException;
 import org.apache.fluss.exception.TableNotExistException;
 import org.apache.fluss.metadata.TableInfo;
@@ -27,11 +28,13 @@ import org.apache.fluss.shaded.guava32.com.google.common.collect.ImmutableList;
 import org.apache.fluss.shaded.guava32.com.google.common.collect.ImmutableMap;
 
 import com.google.inject.Inject;
+import io.trino.spi.ErrorCodeSupplier;
 import io.trino.spi.TrinoException;
 import io.trino.spi.connector.SchemaTableName;
 import io.trino.spi.connector.TableNotFoundException;
 
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -43,6 +46,9 @@ import java.util.concurrent.CompletionException;
 
 import static io.trino.spi.StandardErrorCode.GENERIC_INTERNAL_ERROR;
 import static io.trino.spi.StandardErrorCode.NOT_SUPPORTED;
+import static org.apache.fluss.trino.FlussErrorCode.FLUSS_METADATA_ERROR;
+import static org.apache.fluss.trino.FlussErrorCode.FLUSS_SPLIT_ERROR;
+import static org.apache.fluss.trino.FlussTableScanValidator.validateIdentity;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
 /**
@@ -62,36 +68,42 @@ final class FlussMetadataAccess {
     }
 
     List<String> listSchemaNames() {
-        return ImmutableList.copyOf(indexSchemas().keySet());
+        return ImmutableList.copyOf(loadSchemaNameMapping().keySet());
     }
 
     Optional<ResolvedSchemaName> resolveSchema(String schemaName) {
         checkNotNull(schemaName, "schemaName is null");
 
         String canonicalName = canonicalize(schemaName);
-        return resolveName(indexSchemas(), canonicalName, "database")
+        return resolveName(loadSchemaNameMapping(), canonicalName, "database")
                 .map(physicalName -> new ResolvedSchemaName(canonicalName, physicalName));
     }
 
-    TableNameIndex indexTables(ResolvedSchemaName schema) {
+    TableNameMapping loadTableNameMapping(ResolvedSchemaName schema) {
         checkNotNull(schema, "schema is null");
 
         try {
-            return new TableNameIndex(
-                    schema, indexNames(await(admin.listTables(schema.getFlussName()))));
+            return new TableNameMapping(
+                    schema,
+                    buildNameMapping(
+                            await(
+                                    admin.listTables(schema.getFlussName()),
+                                    FLUSS_METADATA_ERROR,
+                                    "Failed to list Fluss tables in database "
+                                            + schema.getFlussName())));
         } catch (DatabaseNotExistException e) {
             // The database may have been dropped after resolving its name.
-            return new TableNameIndex(schema, ImmutableMap.of());
+            return new TableNameMapping(schema, ImmutableMap.of());
         }
     }
 
     /**
-     * Returns table-name snapshots for the requested schema or the whole catalog.
+     * Returns table-name mappings for the requested schema or the whole catalog.
      *
      * <p>Because Trino identifiers are case-insensitive, a catalog-wide listing fails if any
      * logical schema maps to multiple case-distinct Fluss databases.
      */
-    List<TableNameIndex> listTableIndexes(Optional<String> schemaName) {
+    List<TableNameMapping> listTableNameMappings(Optional<String> schemaName) {
         checkNotNull(schemaName, "schemaName is null");
 
         if (schemaName.isPresent()) {
@@ -99,11 +111,11 @@ final class FlussMetadataAccess {
             if (!schema.isPresent()) {
                 return ImmutableList.of();
             }
-            return ImmutableList.of(indexTables(schema.get()));
+            return ImmutableList.of(loadTableNameMapping(schema.get()));
         }
 
-        Map<String, List<String>> schemas = indexSchemas();
-        ImmutableList.Builder<TableNameIndex> indexes = ImmutableList.builder();
+        Map<String, List<String>> schemas = loadSchemaNameMapping();
+        ImmutableList.Builder<TableNameMapping> tableNameMappingBuilder = ImmutableList.builder();
 
         for (String name : schemas.keySet()) {
             String physicalName =
@@ -111,11 +123,12 @@ final class FlussMetadataAccess {
                             .orElseThrow(
                                     () ->
                                             new IllegalStateException(
-                                                    "Missing database in name index: " + name));
-            indexes.add(indexTables(new ResolvedSchemaName(name, physicalName)));
+                                                    "Missing database in name mapping: " + name));
+            tableNameMappingBuilder.add(
+                    loadTableNameMapping(new ResolvedSchemaName(name, physicalName)));
         }
 
-        return indexes.build();
+        return tableNameMappingBuilder.build();
     }
 
     Optional<ResolvedTableName> resolveTable(SchemaTableName tableName) {
@@ -126,7 +139,7 @@ final class FlussMetadataAccess {
             return Optional.empty();
         }
 
-        return indexTables(schema.get()).resolveTable(tableName.getTableName());
+        return loadTableNameMapping(schema.get()).resolveTable(tableName.getTableName());
     }
 
     /**
@@ -159,46 +172,80 @@ final class FlussMetadataAccess {
         }
     }
 
-    private Map<String, List<String>> indexSchemas() {
-        return indexNames(await(admin.listDatabases()));
+    /** Returns one validated offset for every requested bucket. */
+    Map<Integer, Long> listOffsets(
+            FlussTableHandle table, Collection<Integer> buckets, OffsetSpec offsetSpec) {
+        try {
+            TablePath tablePath =
+                    TablePath.of(table.getFlussDatabaseName(), table.getFlussTableName());
+
+            Map<Integer, Long> offsets =
+                    await(
+                            admin.listOffsets(tablePath, buckets, offsetSpec).all(),
+                            FLUSS_SPLIT_ERROR,
+                            "Failed to list Fluss offsets for " + table);
+
+            for (int bucket : buckets) {
+                Long offset = offsets.get(bucket);
+                if (offset == null || offset < 0) {
+                    throw new TrinoException(
+                            GENERIC_INTERNAL_ERROR,
+                            "Missing or invalid Fluss offset for "
+                                    + table
+                                    + " bucket "
+                                    + bucket
+                                    + ": "
+                                    + offset);
+                }
+            }
+
+            return ImmutableMap.copyOf(offsets);
+        } catch (TableNotExistException | DatabaseNotExistException e) {
+            throw new TableNotFoundException(
+                    new SchemaTableName(table.getSchemaName(), table.getTableName()), e);
+        }
+    }
+
+    private Map<String, List<String>> loadSchemaNameMapping() {
+        return buildNameMapping(
+                await(
+                        admin.listDatabases(),
+                        FLUSS_METADATA_ERROR,
+                        "Failed to list Fluss databases"));
     }
 
     private TableInfo loadTableInfo(String databaseName, String tableName) {
-        return await(admin.getTableInfo(TablePath.of(databaseName, tableName)));
-    }
-
-    private static void validateIdentity(FlussTableHandle table, TableInfo info) {
-        if (table.getTableId() != info.getTableId() || table.getSchemaId() != info.getSchemaId()) {
-            throw new TrinoException(
-                    NOT_SUPPORTED,
-                    "Fluss table or schema changed during query planning; retry the query");
-        }
+        TablePath tablePath = TablePath.of(databaseName, tableName);
+        return await(
+                admin.getTableInfo(tablePath),
+                FLUSS_METADATA_ERROR,
+                "Failed to get Fluss table metadata for " + tablePath);
     }
 
     private static String canonicalize(String name) {
         return name.toLowerCase(Locale.ROOT);
     }
 
-    private static Map<String, List<String>> indexNames(List<String> names) {
+    private static Map<String, List<String>> buildNameMapping(List<String> names) {
         Map<String, List<String>> candidates = new LinkedHashMap<>();
 
         for (String name : names) {
             candidates.computeIfAbsent(canonicalize(name), ignored -> new ArrayList<>()).add(name);
         }
 
-        ImmutableMap.Builder<String, List<String>> index = ImmutableMap.builder();
+        ImmutableMap.Builder<String, List<String>> nameMapping = ImmutableMap.builder();
         for (Map.Entry<String, List<String>> entry : candidates.entrySet()) {
             List<String> physicalNames = new ArrayList<>(entry.getValue());
             Collections.sort(physicalNames);
-            index.put(entry.getKey(), ImmutableList.copyOf(physicalNames));
+            nameMapping.put(entry.getKey(), ImmutableList.copyOf(physicalNames));
         }
 
-        return index.build();
+        return nameMapping.build();
     }
 
     private static Optional<String> resolveName(
-            Map<String, List<String>> names, String name, String objectType) {
-        List<String> candidates = names.get(canonicalize(name));
+            Map<String, List<String>> mapping, String name, String objectType) {
+        List<String> candidates = mapping.get(canonicalize(name));
         if (candidates == null) {
             return Optional.empty();
         }
@@ -217,11 +264,12 @@ final class FlussMetadataAccess {
         return Optional.of(candidates.get(0));
     }
 
-    private static <T> T await(CompletableFuture<T> future) {
+    private static <T> T await(
+            CompletableFuture<T> future, ErrorCodeSupplier errorCode, String message) {
         try {
             return future.join();
         } catch (CompletionException e) {
-            Throwable cause = e.getCause();
+            Throwable cause = unwrapCompletionException(e);
 
             if (cause instanceof TableNotExistException) {
                 throw (TableNotExistException) cause;
@@ -229,21 +277,33 @@ final class FlussMetadataAccess {
             if (cause instanceof DatabaseNotExistException) {
                 throw (DatabaseNotExistException) cause;
             }
+            if (cause instanceof TrinoException) {
+                throw (TrinoException) cause;
+            }
+            if (cause instanceof Error) {
+                throw (Error) cause;
+            }
 
-            throw new TrinoException(
-                    GENERIC_INTERNAL_ERROR, "Failed to retrieve metadata from Fluss", cause);
+            throw new TrinoException(errorCode, message, cause);
         }
     }
 
+    private static Throwable unwrapCompletionException(Throwable failure) {
+        while (failure instanceof CompletionException && failure.getCause() != null) {
+            failure = failure.getCause();
+        }
+        return failure;
+    }
+
     /** Immutable table-name snapshot that resolves physical names without additional RPC calls. */
-    static final class TableNameIndex {
+    static final class TableNameMapping {
 
         private final ResolvedSchemaName schema;
-        private final Map<String, List<String>> names;
+        private final Map<String, List<String>> candidates;
 
-        private TableNameIndex(ResolvedSchemaName schema, Map<String, List<String>> names) {
+        private TableNameMapping(ResolvedSchemaName schema, Map<String, List<String>> candidates) {
             this.schema = checkNotNull(schema, "schema is null");
-            this.names = checkNotNull(names, "names is null");
+            this.candidates = checkNotNull(candidates, "candidates is null");
         }
 
         /**
@@ -252,7 +312,7 @@ final class FlussMetadataAccess {
         List<SchemaTableName> listTableNames() {
             ImmutableList.Builder<SchemaTableName> tables = ImmutableList.builder();
 
-            for (String name : names.keySet()) {
+            for (String name : candidates.keySet()) {
                 tables.add(new SchemaTableName(schema.getTrinoName(), name));
             }
 
@@ -261,14 +321,14 @@ final class FlussMetadataAccess {
 
         /** Returns whether any physical table has the requested logical name. */
         boolean containsTable(String tableName) {
-            return names.containsKey(canonicalize(tableName));
+            return candidates.containsKey(canonicalize(tableName));
         }
 
         /** Resolves one logical table name and rejects ambiguity for that name only. */
         Optional<ResolvedTableName> resolveTable(String tableName) {
             String canonicalName = canonicalize(tableName);
 
-            return resolveName(names, canonicalName, "table")
+            return resolveName(candidates, canonicalName, "table")
                     .map(physicalName -> schema.table(canonicalName, physicalName));
         }
     }

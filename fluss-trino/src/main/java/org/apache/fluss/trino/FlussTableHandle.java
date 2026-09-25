@@ -18,9 +18,8 @@
 
 package org.apache.fluss.trino;
 
-import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.annotation.JsonCreator;
-import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.annotation.JsonProperty;
-
+import com.fasterxml.jackson.annotation.JsonCreator;
+import com.fasterxml.jackson.annotation.JsonProperty;
 import io.trino.spi.connector.ConnectorTableHandle;
 
 import java.util.Objects;
@@ -42,6 +41,8 @@ public final class FlussTableHandle implements ConnectorTableHandle {
     // Stable Fluss identity used for stale-handle detection.
     private final long tableId;
     private final int schemaId;
+    private final int bucketCount;
+    private final long bucketCountEpoch;
 
     @JsonCreator
     public FlussTableHandle(
@@ -50,7 +51,9 @@ public final class FlussTableHandle implements ConnectorTableHandle {
             @JsonProperty("flussDatabaseName") String flussDatabaseName,
             @JsonProperty("flussTableName") String flussTableName,
             @JsonProperty("tableId") long tableId,
-            @JsonProperty("schemaId") int schemaId) {
+            @JsonProperty("schemaId") int schemaId,
+            @JsonProperty("bucketCount") int bucketCount,
+            @JsonProperty("bucketCountEpoch") long bucketCountEpoch) {
         this.schemaName = checkNotNull(schemaName, "schemaName is null");
         this.tableName = checkNotNull(tableName, "tableName is null");
         this.flussDatabaseName = checkNotNull(flussDatabaseName, "flussDatabaseName is null");
@@ -59,6 +62,10 @@ public final class FlussTableHandle implements ConnectorTableHandle {
         checkArgument(schemaId >= 0, "schemaId must be non-negative");
         this.tableId = tableId;
         this.schemaId = schemaId;
+        checkArgument(bucketCount > 0, "bucketCount must be positive");
+        checkArgument(bucketCountEpoch >= 0, "bucketCountEpoch must be non-negative");
+        this.bucketCount = bucketCount;
+        this.bucketCountEpoch = bucketCountEpoch;
     }
 
     @JsonProperty
@@ -91,6 +98,18 @@ public final class FlussTableHandle implements ConnectorTableHandle {
         return schemaId;
     }
 
+    /** Returns the planned number of buckets. */
+    @JsonProperty
+    public int getBucketCount() {
+        return bucketCount;
+    }
+
+    /** Returns the bucket layout epoch used to reject stale handles. */
+    @JsonProperty
+    public long getBucketCountEpoch() {
+        return bucketCountEpoch;
+    }
+
     @Override
     public boolean equals(Object obj) {
         if (this == obj) {
@@ -104,6 +123,8 @@ public final class FlussTableHandle implements ConnectorTableHandle {
         FlussTableHandle that = (FlussTableHandle) obj;
         return tableId == that.tableId
                 && schemaId == that.schemaId
+                && bucketCount == that.bucketCount
+                && bucketCountEpoch == that.bucketCountEpoch
                 && schemaName.equals(that.schemaName)
                 && tableName.equals(that.tableName)
                 && flussDatabaseName.equals(that.flussDatabaseName)
@@ -113,7 +134,14 @@ public final class FlussTableHandle implements ConnectorTableHandle {
     @Override
     public int hashCode() {
         return Objects.hash(
-                schemaName, tableName, flussDatabaseName, flussTableName, tableId, schemaId);
+                schemaName,
+                tableName,
+                flussDatabaseName,
+                flussTableName,
+                tableId,
+                schemaId,
+                bucketCount,
+                bucketCountEpoch);
     }
 
     @Override

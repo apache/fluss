@@ -17,13 +17,22 @@
 
 package org.apache.fluss.trino;
 
+import io.airlift.json.JsonCodec;
 import org.junit.jupiter.api.Test;
 
+import static io.airlift.json.JsonCodec.jsonCodec;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Tests physical column identity and ordinal validation. */
 final class FlussColumnHandleTest {
+    @Test
+    void testJsonRoundTrip() {
+        FlussColumnHandle handle = new FlussColumnHandle("MixedCase", 2);
+        JsonCodec<FlussColumnHandle> codec = jsonCodec(FlussColumnHandle.class);
+        assertThat(codec.fromJson(codec.toJson(handle))).isEqualTo(handle);
+    }
+
     @Test
     void testEqualityIncludesCaseSensitiveNameAndOrdinal() {
         FlussColumnHandle handle = new FlussColumnHandle("ID", 0);

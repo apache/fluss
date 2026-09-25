@@ -74,9 +74,10 @@ final class FlussColumnsSystemTable implements SystemTable {
                                 nullableColumn(BUCKET_KEY_POSITION, BIGINT),
                                 nullableColumn(COMMENT, VARCHAR)));
 
-        Map<String, Long> primaryKeyPositions = indexPositions(tableInfo.getPrimaryKeys());
-        Map<String, Long> partitionKeyPositions = indexPositions(tableInfo.getPartitionKeys());
-        Map<String, Long> bucketKeyPositions = indexPositions(tableInfo.getBucketKeys());
+        Map<String, Long> primaryKeyPositions = positionsByColumnName(tableInfo.getPrimaryKeys());
+        Map<String, Long> partitionKeyPositions =
+                positionsByColumnName(tableInfo.getPartitionKeys());
+        Map<String, Long> bucketKeyPositions = positionsByColumnName(tableInfo.getBucketKeys());
 
         InMemoryRecordSet.Builder builder = InMemoryRecordSet.builder(metadata);
         List<Schema.Column> columns = tableInfo.getSchema().getColumns();
@@ -131,7 +132,7 @@ final class FlussColumnsSystemTable implements SystemTable {
         return ColumnMetadata.builder().setName(name).setType(type).setNullable(true).build();
     }
 
-    private static Map<String, Long> indexPositions(List<String> columnNames) {
+    private static Map<String, Long> positionsByColumnName(List<String> columnNames) {
         Map<String, Long> positions = new LinkedHashMap<>();
 
         for (int i = 0; i < columnNames.size(); i++) {
