@@ -21,19 +21,18 @@ package org.apache.fluss.trino;
 import org.apache.fluss.client.Connection;
 import org.apache.fluss.client.ConnectionFactory;
 import org.apache.fluss.client.admin.Admin;
+import org.apache.fluss.client.table.Table;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.utils.IOUtils;
 
 import com.google.inject.Inject;
-import io.airlift.log.Logger;
 import jakarta.annotation.PreDestroy;
 
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
 /** Owns the shared Fluss connection and Admin client. */
 public final class FlussClientManager {
-    private static final Logger log = Logger.get(FlussClientManager.class);
-
     private static final String BOOTSTRAP_SERVERS = "bootstrap.servers";
     private static final String SECURITY_PROTOCOL = "client.security.protocol";
     private static final String SASL_MECHANISM = "client.security.sasl.mechanism";
@@ -61,7 +60,6 @@ public final class FlussClientManager {
         try {
             admin = connection.getAdmin();
         } catch (RuntimeException | Error failure) {
-            log.error(failure, "Failed to initialize FlussClientManager");
             try {
                 connection.close();
             } catch (Exception closeFailure) {
@@ -74,6 +72,11 @@ public final class FlussClientManager {
     /** Returns the shared Admin client. Callers must not close it. */
     Admin getAdmin() {
         return admin;
+    }
+
+    /** Opens an independently owned table; the caller must close it. */
+    Table openTable(TablePath tablePath) {
+        return connection.getTable(tablePath);
     }
 
     @PreDestroy

@@ -19,12 +19,10 @@ package org.apache.fluss.trino;
 
 import com.google.inject.Injector;
 import io.airlift.bootstrap.Bootstrap;
-import io.airlift.bootstrap.LifeCycleManager;
 import io.trino.plugin.base.ConnectorContextModule;
 import io.trino.spi.connector.Connector;
 import io.trino.spi.connector.ConnectorContext;
 import io.trino.spi.connector.ConnectorFactory;
-import io.trino.spi.connector.ConnectorMetadata;
 
 import java.util.Map;
 
@@ -33,9 +31,6 @@ import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
 /** Factory for creating Fluss connectors. */
 public class FlussConnectorFactory implements ConnectorFactory {
-    private static final int MIN_SUPPORTED_TRINO_VERSION = 483;
-    private static final int MAX_SUPPORTED_TRINO_VERSION = 483;
-
     @Override
     public String getName() {
         return "fluss";
@@ -65,10 +60,6 @@ public class FlussConnectorFactory implements ConnectorFactory {
                         .setRequiredConfigurationProperties(config)
                         .initialize();
 
-        LifeCycleManager lifeCycleManager = injector.getInstance(LifeCycleManager.class);
-
-        ConnectorMetadata metadata = injector.getInstance(ConnectorMetadata.class);
-
-        return new FlussConnector(lifeCycleManager, metadata);
+        return injector.getInstance(FlussConnector.class);
     }
 }

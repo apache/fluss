@@ -59,6 +59,13 @@ This file is based on the checkstyle file of Apache Beam.
         <property name="file" value="${checkstyle.suppressions.file}" default="suppressions.xml"/>
     </module>
 
+    <!-- Trino serializes these SPI DTOs with its own Jackson implementation. -->
+    <module name="SuppressionSingleFilter">
+        <property name="id" value="unshadedJackson"/>
+        <property name="files" value="[/\\]fluss-trino[/\\]src[/\\]main[/\\]java[/\\]org[/\\]apache[/\\]fluss[/\\]trino[/\\]Fluss(TableHandle|ColumnHandle|Split)\.java$"/>
+        <property name="message" value="^com\.fasterxml\.jackson\.annotation\.(JsonCreator|JsonProperty);.*"/>
+    </module>
+
     <!-- Check that every module has a package-info.java -->
     <!--<module name="JavadocPackage"/>-->
 
@@ -222,6 +229,7 @@ This file is based on the checkstyle file of Apache Beam.
             <message key="import.illegal" value="{0}; Use fluss-shaded-jackson instead."/>
         </module>
         <module name="IllegalImport">
+            <property name="id" value="unshadedJackson"/>
             <property name="illegalPkgs" value="com.fasterxml.jackson"/>
             <message key="import.illegal" value="{0}; Use fluss-shaded-jackson instead."/>
         </module>

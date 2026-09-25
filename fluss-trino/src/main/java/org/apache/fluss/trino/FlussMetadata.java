@@ -71,9 +71,9 @@ public final class FlussMetadata implements ConnectorMetadata {
     public List<SchemaTableName> listTables(ConnectorSession session, Optional<String> schemaName) {
         ImmutableList.Builder<SchemaTableName> tables = ImmutableList.builder();
 
-        for (FlussMetadataAccess.TableNameIndex index :
-                metadataAccess.listTableIndexes(schemaName)) {
-            tables.addAll(index.listTableNames());
+        for (FlussMetadataAccess.TableNameMapping tableNameMapping :
+                metadataAccess.listTableNameMappings(schemaName)) {
+            tables.addAll(tableNameMapping.listTableNames());
         }
 
         return tables.build();
@@ -113,7 +113,9 @@ public final class FlussMetadata implements ConnectorMetadata {
                 resolved.getFlussDatabaseName(),
                 resolved.getFlussTableName(),
                 info.getTableId(),
-                info.getSchemaId());
+                info.getSchemaId(),
+                info.getNumBuckets(),
+                info.getBucketCountEpoch());
     }
 
     @Override
@@ -130,7 +132,8 @@ public final class FlussMetadata implements ConnectorMetadata {
             return Optional.empty();
         }
 
-        FlussMetadataAccess.TableNameIndex tables = metadataAccess.indexTables(schema.get());
+        FlussMetadataAccess.TableNameMapping tables =
+                metadataAccess.loadTableNameMapping(schema.get());
 
         // Physical tables take precedence over connector-defined system tables.
         if (tables.containsTable(name)) {
@@ -261,28 +264,28 @@ public final class FlussMetadata implements ConnectorMetadata {
 
     private List<ResolvedTableName> getFilteredRelations(
             Optional<String> schemaName, UnaryOperator<Set<SchemaTableName>> relationFilter) {
-        Map<SchemaTableName, FlussMetadataAccess.TableNameIndex> indexesByTable =
+        Map<SchemaTableName, FlussMetadataAccess.TableNameMapping> mappingsByTable =
                 new LinkedHashMap<>();
 
-        for (FlussMetadataAccess.TableNameIndex index :
-                metadataAccess.listTableIndexes(schemaName)) {
-            for (SchemaTableName tableName : index.listTableNames()) {
-                indexesByTable.put(tableName, index);
+        for (FlussMetadataAccess.TableNameMapping mapping :
+                metadataAccess.listTableNameMappings(schemaName)) {
+            for (SchemaTableName tableName : mapping.listTableNames()) {
+                mappingsByTable.put(tableName, mapping);
             }
         }
 
         Set<SchemaTableName> filteredNames =
-                relationFilter.apply(new LinkedHashSet<>(indexesByTable.keySet()));
+                relationFilter.apply(new LinkedHashSet<>(mappingsByTable.keySet()));
 
         ImmutableList.Builder<ResolvedTableName> tables = ImmutableList.builder();
 
         for (SchemaTableName tableName : filteredNames) {
-            FlussMetadataAccess.TableNameIndex index = indexesByTable.get(tableName);
-            if (index == null) {
+            FlussMetadataAccess.TableNameMapping mapping = mappingsByTable.get(tableName);
+            if (mapping == null) {
                 continue;
             }
 
-            index.resolveTable(tableName.getTableName()).ifPresent(tables::add);
+            mapping.resolveTable(tableName.getTableName()).ifPresent(tables::add);
         }
 
         return tables.build();

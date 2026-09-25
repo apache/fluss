@@ -23,6 +23,8 @@ import org.apache.fluss.client.admin.Admin;
 import org.apache.fluss.config.Configuration;
 
 import io.trino.plugin.base.classloader.ClassLoaderSafeConnectorMetadata;
+import io.trino.plugin.base.classloader.ClassLoaderSafeConnectorPageSourceProvider;
+import io.trino.plugin.base.classloader.ClassLoaderSafeConnectorSplitManager;
 import io.trino.spi.connector.Connector;
 import io.trino.spi.connector.ConnectorContext;
 import io.trino.spi.connector.ConnectorMetadata;
@@ -72,6 +74,10 @@ final class FlussConnectorFactoryTest {
                 assertThat(metadata.listSchemaNames(mock(ConnectorSession.class)))
                         .containsExactly("sales");
                 assertThat(connector.getTableProperties()).isNotEmpty();
+                assertThat(connector.getPageSourceProvider())
+                        .isInstanceOf(ClassLoaderSafeConnectorPageSourceProvider.class);
+                assertThat(connector.getSplitManager())
+                        .isInstanceOf(ClassLoaderSafeConnectorSplitManager.class);
             } finally {
                 connector.shutdown();
             }
