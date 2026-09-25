@@ -75,8 +75,12 @@ impl TableAppend {
             None
         };
 
+        let non_partitioned_path = partition_getter
+            .is_none()
+            .then(|| Arc::new(PhysicalTablePath::of(Arc::clone(&self.table_path))));
         Ok(AppendWriter {
             table_path: Arc::clone(&self.table_path),
+            non_partitioned_path,
             partition_getter,
             writer_client: self.writer_client.clone(),
             table_info: Arc::clone(&self.table_info),
@@ -104,6 +108,9 @@ impl BucketRouter {
 
 pub struct AppendWriter {
     table_path: Arc<TablePath>,
+    // Immutable identity only, not cached metadata or routing. Keep one path
+    // per writer instead of allocating and freeing it on every unpartitioned row.
+    non_partitioned_path: Option<Arc<PhysicalTablePath>>,
     partition_getter: Option<PartitionGetter>,
     writer_client: Arc<WriterClient>,
     table_info: Arc<TableInfo>,
@@ -111,6 +118,18 @@ pub struct AppendWriter {
 }
 
 impl AppendWriter {
+    fn physical_path<R: InternalRow>(&self, row: &R) -> Result<Arc<PhysicalTablePath>> {
+        if let Some(path) = &self.non_partitioned_path {
+            Ok(Arc::clone(path))
+        } else {
+            Ok(Arc::new(get_physical_path(
+                &self.table_path,
+                self.partition_getter.as_ref(),
+                row,
+            )?))
+        }
+    }
+
     fn check_field_count<R: InternalRow>(&self, row: &R) -> Result<()> {
         let expected = self.table_info.get_row_type().fields().len();
         if row.get_field_count() != expected {
@@ -151,11 +170,7 @@ impl AppendWriter {
         deadline: Option<Instant>,
     ) -> Result<WriteResultFuture> {
         self.check_field_count(row)?;
-        let physical_table_path = Arc::new(get_physical_path(
-            &self.table_path,
-            self.partition_getter.as_ref(),
-            row,
-        )?);
+        let physical_table_path = self.physical_path(row)?;
         let bucket_key = match &self.bucket_router {
             Some(router) => Some(router.encode_key(row)?),
             None => None,
@@ -209,13 +224,13 @@ impl AppendWriter {
                 0,
                 None,
             )?;
-            Arc::new(get_physical_path(
-                &self.table_path,
-                self.partition_getter.as_ref(),
-                &first_row,
-            )?)
+            self.physical_path(&first_row)?
         } else {
-            Arc::new(PhysicalTablePath::of(Arc::clone(&self.table_path)))
+            Arc::clone(
+                self.non_partitioned_path
+                    .as_ref()
+                    .expect("unpartitioned writer path"),
+            )
         };
 
         let Some(router) = self.bucket_router.as_ref() else {
@@ -299,4 +314,84 @@ fn take_rows(batch: &RecordBatch, indices: &[u32]) -> Result<RecordBatch> {
         message: format!("Failed to rebuild split arrow batch: {e}"),
         source: None,
     })
+}
+
+#[cfg(test)]
+mod path_tests {
+    use super::*;
+    use crate::client::metadata::Metadata;
+    use crate::config::Config;
+    use crate::metadata::{DataTypes, Schema, TableDescriptor};
+    use crate::row::{Datum, GenericRow};
+    use crate::test_utils::build_cluster;
+    use std::time::Duration;
+
+    fn table_append(partitioned: bool) -> (TableAppend, Arc<WriterClient>) {
+        let path = TablePath::new("db", "path_cache");
+        let schema = Schema::builder()
+            .column("id", DataTypes::int())
+            .build()
+            .unwrap();
+        let mut descriptor = TableDescriptor::builder()
+            .schema(schema)
+            .distributed_by(Some(4), vec![]);
+        if partitioned {
+            descriptor = descriptor.partitioned_by(vec!["id"]);
+        }
+        let info = TableInfo::of(path.clone(), 1, 1, descriptor.build().unwrap(), 0, 0);
+        let metadata = Arc::new(Metadata::new_for_test(Arc::new(build_cluster(&path, 1, 4))));
+        let client = Arc::new(
+            WriterClient::new(
+                Config {
+                    writer_enable_idempotence: false,
+                    ..Default::default()
+                },
+                metadata,
+            )
+            .unwrap(),
+        );
+        (
+            TableAppend::new(path, Arc::new(info), client.clone()),
+            client,
+        )
+    }
+
+    #[tokio::test]
+    async fn unpartitioned_path_is_reused_within_but_not_between_writers() {
+        let (append, client) = table_append(false);
+        let writer = append.create_writer().unwrap();
+        let other = append.create_writer().unwrap();
+        let a = GenericRow::from_data(vec![Datum::Int32(1)]);
+        let b = GenericRow::from_data(vec![Datum::Int32(2)]);
+        let first = writer.physical_path(&a).unwrap();
+        let second = writer.physical_path(&b).unwrap();
+        let third = other.physical_path(&a).unwrap();
+        assert!(Arc::ptr_eq(&first, &second));
+        assert!(!Arc::ptr_eq(&first, &third));
+        assert_eq!(first, third);
+        assert!(first.get_partition_name().is_none());
+        client.close(Duration::from_secs(1)).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn partitioned_paths_are_resolved_for_each_row_and_reject_null() {
+        let (append, client) = table_append(true);
+        let writer = append.create_writer().unwrap();
+        assert!(writer.non_partitioned_path.is_none());
+        let a = GenericRow::from_data(vec![Datum::Int32(1)]);
+        let b = GenericRow::from_data(vec![Datum::Int32(2)]);
+        let first = writer.physical_path(&a).unwrap();
+        let second = writer.physical_path(&b).unwrap();
+        assert_ne!(first, second);
+        assert_eq!(
+            first.as_ref(),
+            &get_physical_path(&writer.table_path, writer.partition_getter.as_ref(), &a).unwrap()
+        );
+        assert!(
+            writer
+                .physical_path(&GenericRow::from_data(vec![Datum::Null]))
+                .is_err()
+        );
+        client.close(Duration::from_secs(1)).await.unwrap();
+    }
 }

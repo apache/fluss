@@ -19,21 +19,22 @@ use crate::client::broadcast;
 use crate::client::write::IdempotenceManager;
 use crate::client::write::batch::WriteBatch::{ArrowLog, Kv};
 use crate::client::write::batch::{ArrowLogWriteBatch, KvWriteBatch, WriteBatch};
+use crate::client::write::bucket_assigner::BucketAssigner;
 use crate::client::write::dynamic_batch_size::DynamicWriteBatchSizeEstimator;
-use crate::client::{LogWriteRecord, Record, ResultHandle, WriteRecord};
+use crate::client::{LogWriteRecord, Record, ResultHandle, WriteRecord, WriterClient};
 use crate::cluster::{BucketLocation, Cluster, ServerNode};
 use crate::compression::ArrowCompressionRatioEstimator;
 use crate::config::Config;
 use crate::error::{Error, FlussError, Result};
-use crate::metadata::{PhysicalTablePath, TableBucket, TablePath};
+use crate::metadata::{PhysicalTablePath, TableBucket, TableInfo, TablePath};
 use crate::record::{ArrowBatchConfig, NO_BATCH_SEQUENCE, NO_WRITER_ID};
 use crate::util::current_time_ms;
 use crate::{BucketId, PartitionId, TableId};
 use dashmap::DashMap;
 use parking_lot::{Condvar, Mutex, RwLock};
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicI64, AtomicUsize, Ordering};
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 use tokio::sync::Notify;
 
@@ -190,7 +191,8 @@ impl Drop for MemoryPermit {
 }
 
 // Type alias to simplify complex nested types
-type BucketBatches = Vec<(BucketId, Arc<Mutex<VecDeque<WriteBatch>>>)>;
+type BucketQueue = Arc<Mutex<VecDeque<WriteBatch>>>;
+type BucketBatches = Vec<(BucketId, BucketQueue)>;
 
 #[allow(dead_code)]
 pub struct RecordAccumulator {
@@ -371,41 +373,141 @@ impl RecordAccumulator {
         cluster: &Cluster,
         abort_if_batch_full: bool,
     ) -> Result<RecordAppendResult> {
+        let table_info = cluster.get_table(record.physical_table_path.get_table_path())?;
+        self.append_with_table_info(record, bucket_id, cluster, abort_if_batch_full, table_info)
+    }
+
+    /// Route and find the existing bucket queue through one table-context lookup.
+    /// No table-map guard survives selection, deque locking or buffer waits.
+    pub(super) fn append_routed(
+        &self,
+        record: &WriteRecord<'_>,
+        cluster: &Arc<Cluster>,
+        table_info: &TableInfo,
+    ) -> Result<RecordAppendResult> {
+        let (bucket_id, abort, queue) =
+            self.select_bucket_queue(record, cluster, table_info, None)?;
+        let result = self.append_to_queue(record, cluster, abort, queue)?;
+        if !result.abort_record_for_new_batch {
+            return Ok(result);
+        }
+        let (_, _, queue) =
+            self.select_bucket_queue(record, cluster, table_info, Some(bucket_id))?;
+        self.append_to_queue(record, cluster, false, queue)
+    }
+
+    fn select_bucket_queue(
+        &self,
+        record: &WriteRecord<'_>,
+        cluster: &Arc<Cluster>,
+        table_info: &TableInfo,
+        previous_bucket: Option<BucketId>,
+    ) -> Result<(BucketId, bool, BucketQueue)> {
+        let path = &record.physical_table_path;
+        let context = match self.write_batches.get(path) {
+            Some(context) => context,
+            None => {
+                self.write_batches
+                    .entry(Arc::clone(path))
+                    .or_insert_with(|| {
+                        BucketAndWriteBatches::new(
+                            table_info.is_partitioned(),
+                            if table_info.is_partitioned() {
+                                cluster.get_partition_id(path)
+                            } else {
+                                None
+                            },
+                            &self.config,
+                        )
+                    });
+                self.write_batches.get(path).expect("initialized context")
+            }
+        };
+        let assigner = match context.bucket_assigner.get() {
+            Some(assigner) => assigner,
+            None => {
+                let candidate = WriterClient::create_bucket_assigner(
+                    &record.table_info,
+                    Arc::clone(path),
+                    &self.config,
+                )?;
+                // Concurrent initializations must all route through the winner.
+                let _ = context.bucket_assigner.set(candidate);
+                context.bucket_assigner.get().expect("initialized assigner")
+            }
+        };
+        if let Some(previous) = previous_bucket {
+            assigner.on_new_batch(cluster, previous);
+        }
+        let bucket_id = assigner.assign_bucket(record.bucket_key.as_ref(), cluster)?;
+        let abort = assigner.abort_if_batch_full();
+        let queue = context.batches.get(&bucket_id).cloned();
+        drop(context);
+        let queue = queue
+            .unwrap_or_else(|| self.create_bucket_queue(record, bucket_id, cluster, table_info));
+        Ok((bucket_id, abort, queue))
+    }
+
+    fn create_bucket_queue(
+        &self,
+        record: &WriteRecord<'_>,
+        bucket_id: BucketId,
+        cluster: &Cluster,
+        table_info: &TableInfo,
+    ) -> BucketQueue {
+        let path = &record.physical_table_path;
+        // Recheck under the exclusive map guard; never detach a queue already
+        // owned by the accumulator or create a second one for racing producers.
+        let mut context = self
+            .write_batches
+            .entry(Arc::clone(path))
+            .or_insert_with(|| {
+                BucketAndWriteBatches::new(
+                    table_info.is_partitioned(),
+                    if table_info.is_partitioned() {
+                        cluster.get_partition_id(path)
+                    } else {
+                        None
+                    },
+                    &self.config,
+                )
+            });
+        context
+            .batches
+            .entry(bucket_id)
+            .or_insert_with(|| Arc::new(Mutex::new(VecDeque::new())))
+            .clone()
+    }
+
+    fn append_with_table_info(
+        &self,
+        record: &WriteRecord<'_>,
+        bucket_id: BucketId,
+        cluster: &Cluster,
+        abort_if_batch_full: bool,
+        table_info: &TableInfo,
+    ) -> Result<RecordAppendResult> {
         let physical_table_path = &record.physical_table_path;
-        let table_path = physical_table_path.get_table_path();
-        let table_info = cluster.get_table(table_path)?;
-        let is_partitioned_table = table_info.is_partitioned();
+        // Most appends target an existing bucket. Avoid taking the map shard's
+        // exclusive lock on that path, including for producers on other buckets.
+        // Return only owned values: no map guard may survive into deque locking
+        // or the blocking memory allocation below.
+        let existing = self
+            .write_batches
+            .get(physical_table_path)
+            .and_then(|entry| entry.batches.get(&bucket_id).cloned());
+        let dq = existing
+            .unwrap_or_else(|| self.create_bucket_queue(record, bucket_id, cluster, table_info));
+        self.append_to_queue(record, cluster, abort_if_batch_full, dq)
+    }
 
-        let partition_id = if is_partitioned_table {
-            cluster.get_partition_id(physical_table_path)
-        } else {
-            None
-        };
-
-        let (dq, compression_ratio_estimator, dynamic_target) = {
-            let mut binding = self
-                .write_batches
-                .entry(Arc::clone(physical_table_path))
-                .or_insert_with(|| {
-                    BucketAndWriteBatches::new(is_partitioned_table, partition_id, &self.config)
-                });
-            let bucket_and_batches = binding.value_mut();
-            let dq = bucket_and_batches
-                .batches
-                .entry(bucket_id)
-                .or_insert_with(|| Arc::new(Mutex::new(VecDeque::new())))
-                .clone();
-            let dynamic_target = bucket_and_batches
-                .dynamic_batch_size
-                .as_ref()
-                .map(|est| est.current());
-            (
-                dq,
-                Arc::clone(&bucket_and_batches.compression_ratio_estimator),
-                dynamic_target,
-            )
-        };
-
+    fn append_to_queue(
+        &self,
+        record: &WriteRecord<'_>,
+        cluster: &Cluster,
+        abort_if_batch_full: bool,
+        dq: BucketQueue,
+    ) -> Result<RecordAppendResult> {
         let mut dq_guard = dq.lock();
         if let Some(append_result) = self.try_append(record, &mut dq_guard)? {
             return Ok(append_result);
@@ -421,6 +523,21 @@ impl RecordAccumulator {
         // producer holds dq + blocks on memory, while sender needs dq to drain.
         drop(dq_guard);
 
+        // Batch configuration is only needed when allocating a new batch.
+        // Avoid a shared estimator Arc increment/decrement and dynamic-size
+        // load for every row appended to an existing batch.
+        let (compression_ratio_estimator, dynamic_target) = {
+            // Entries are retained on abort/drop so outstanding queue Arcs can
+            // never become detached from the accumulator.
+            let entry = self
+                .write_batches
+                .get(&record.physical_table_path)
+                .expect("initialized table");
+            (
+                Arc::clone(&entry.compression_ratio_estimator),
+                entry.dynamic_batch_size.as_ref().map(|est| est.current()),
+            )
+        };
         let batch_size = dynamic_target.unwrap_or(self.config.writer_batch_size as usize);
         let record_size = record.estimated_record_size();
         let alloc_size = batch_size.max(record_size);
@@ -1260,6 +1377,9 @@ struct BucketAndWriteBatches {
     is_partitioned_table: bool,
     partition_id: Option<PartitionId>,
     batches: HashMap<BucketId, Arc<Mutex<VecDeque<WriteBatch>>>>,
+    // Shared by every writer for this physical path, alongside its queues.
+    // OnceLock permits fallible/racing creation without a second routing map.
+    bucket_assigner: OnceLock<Arc<dyn BucketAssigner>>,
     /// Compression ratio estimator shared across Arrow log batches for this table.
     compression_ratio_estimator: Arc<ArrowCompressionRatioEstimator>,
     /// `None` when `writer_dynamic_batch_size_enabled` is false.
@@ -1278,6 +1398,7 @@ impl BucketAndWriteBatches {
             is_partitioned_table,
             partition_id,
             batches: Default::default(),
+            bucket_assigner: OnceLock::new(),
             compression_ratio_estimator: Arc::new(ArrowCompressionRatioEstimator::default()),
             dynamic_batch_size,
         }
@@ -1339,6 +1460,10 @@ impl ReadyCheckResult {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "accumulator_concurrency_tests.rs"]
+mod concurrency_tests;
 
 #[cfg(test)]
 mod tests {
