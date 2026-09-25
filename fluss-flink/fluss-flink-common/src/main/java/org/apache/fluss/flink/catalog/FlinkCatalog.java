@@ -139,6 +139,13 @@ public class FlinkCatalog extends AbstractCatalog {
     public static final String CHANGELOG_TABLE_SUFFIX = "$changelog";
     public static final String BINLOG_TABLE_SUFFIX = "$binlog";
 
+    private static final String FLUSS_CONF_PREFIX = "fluss.";
+
+    static final String LAKE_TABLE_DATABASE_NAME_OPTION =
+            FLUSS_CONF_PREFIX + ConfigOptions.TABLE_DATALAKE_DATABASE_NAME.key();
+    static final String LAKE_TABLE_NAME_OPTION =
+            FLUSS_CONF_PREFIX + ConfigOptions.TABLE_DATALAKE_TABLE_NAME.key();
+
     protected final ClassLoader classLoader;
 
     protected final String catalogName;
@@ -411,12 +418,11 @@ public class FlinkCatalog extends AbstractCatalog {
             TableInfo tableInfo;
             // table name contains $lake, means to read from datalake
             if (tableName.contains(LAKE_TABLE_SPLITTER)) {
-                tableInfo =
-                        admin.getTableInfo(
-                                        TablePath.of(
-                                                objectPath.getDatabaseName(),
-                                                tableName.split("\\" + LAKE_TABLE_SPLITTER)[0]))
-                                .get();
+                TablePath flussTablePath =
+                        TablePath.of(
+                                objectPath.getDatabaseName(),
+                                tableName.split("\\" + LAKE_TABLE_SPLITTER)[0]);
+                tableInfo = admin.getTableInfo(flussTablePath).get();
                 // we need to make sure the table enable datalake
                 if (!tableInfo.getTableConfig().isDataLakeEnabled()) {
                     throw new UnsupportedOperationException(
@@ -430,11 +436,13 @@ public class FlinkCatalog extends AbstractCatalog {
                 String lakeObjectName =
                         resolveToLakeObjectName(lakeTablePath.getTableName(), tableName);
 
-                return getLakeTable(
-                        lakeTablePath.getDatabaseName(),
-                        lakeObjectName,
-                        tableInfo.getProperties(),
-                        getLakeCatalogProperties());
+                CatalogBaseTable lakeTable =
+                        getLakeTable(
+                                lakeTablePath.getDatabaseName(),
+                                lakeObjectName,
+                                tableInfo.getProperties(),
+                                getLakeCatalogProperties());
+                return withResolvedLakeTablePath(lakeTable, flussTablePath, lakeTablePath);
             } else {
                 tableInfo = admin.getTableInfo(tablePath).get();
             }
@@ -512,6 +520,20 @@ public class FlinkCatalog extends AbstractCatalog {
         return lakeFlinkCatalog
                 .getLakeCatalog(properties, lakeCatalogProperties)
                 .getTable(new ObjectPath(lakeDatabaseName, lakeObjectName));
+    }
+
+    private static CatalogBaseTable withResolvedLakeTablePath(
+            CatalogBaseTable lakeTable, TablePath flussTablePath, TablePath lakeTablePath) {
+        if (!(lakeTable instanceof CatalogTable) || lakeTablePath.equals(flussTablePath)) {
+            return lakeTable;
+        }
+
+        Map<String, String> options = new HashMap<>(lakeTable.getOptions());
+        // Some lake metadata tables do not retain the original Fluss options. Use the resolved lake
+        // path as the source of truth for factory identifier resolution.
+        options.put(LAKE_TABLE_DATABASE_NAME_OPTION, lakeTablePath.getDatabaseName());
+        options.put(LAKE_TABLE_NAME_OPTION, lakeTablePath.getTableName());
+        return ((CatalogTable) lakeTable).copy(options);
     }
 
     @Override
