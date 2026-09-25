@@ -94,7 +94,7 @@ error_kinds! {
     InvalidArgument => 400, "invalid_argument", retry_after: false;
     /// The request carries no usable credential, or the credential failed verification.
     Unauthenticated => 401, "unauthenticated", retry_after: false;
-    /// The authenticated principal is not allowed to perform the operation.
+    /// Gateway admission policy or backend permissions do not allow the operation.
     Unauthorized => 403, "unauthorized", retry_after: false;
     /// The requested cluster, database, table, or partition does not exist.
     NotFound => 404, "not_found", retry_after: false;

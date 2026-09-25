@@ -229,6 +229,8 @@ const CLUSTERS_KEY: &str = "gateway.clusters";
 const CLUSTER_KEY_PREFIX: &str = "gateway.cluster.";
 const CLIENT_OPTION_PREFIX: &str = "client.";
 const SECURITY_AUTHENTICATION_KEY: &str = "gateway.security.authentication";
+const SECURITY_PROXY_ADDRESSES_KEY: &str = "gateway.security.trusted-header.proxy-addresses";
+const SECURITY_INSECURE_KEY: &str = "gateway.security.allow-insecure-transport";
 const SECURITY_USERS_KEY: &str = "gateway.security.users";
 const SECURITY_TOKENS_KEY: &str = "gateway.security.tokens";
 const SECURITY_TRUSTED_HEADER_NAME_KEY: &str = "gateway.security.trusted-header.name";
@@ -355,6 +357,30 @@ impl FromConfigValue for ByteSize {
     }
 }
 
+impl FromConfigValue for Vec<IpAddr> {
+    fn from_config_value(value: &Value) -> Result<Self, String> {
+        let entries = match value {
+            Value::Sequence(entries) => entries
+                .iter()
+                .map(String::from_config_value)
+                .collect::<Result<Vec<_>, _>>()?,
+            _ => String::from_config_value(value)?
+                .split(',')
+                .map(str::trim)
+                .map(str::to_owned)
+                .collect(),
+        };
+        entries
+            .iter()
+            .map(|entry| {
+                entry
+                    .parse()
+                    .map_err(|_| "expected a list of IP addresses".to_owned())
+            })
+            .collect()
+    }
+}
+
 impl FromConfigValue for AuthenticationMode {
     fn from_config_value(value: &Value) -> Result<Self, String> {
         match String::from_config_value(value)?.as_str() {
@@ -362,7 +388,7 @@ impl FromConfigValue for AuthenticationMode {
             "password" => Ok(Self::Password),
             "token" => Ok(Self::Token),
             "trusted-header" => Ok(Self::TrustedHeader),
-            _ => Err("expected trust, password, token, or trusted-header".to_string()),
+            _ => Err("expected trust, password, token, or trusted-header".into()),
         }
     }
 }
@@ -537,6 +563,16 @@ const CONFIG_ENTRIES: &[GatewayConfigEntry] = &[
         GatewayConfigEntry,
         SECURITY_AUTHENTICATION_KEY,
         security.authentication
+    ),
+    typed_entry!(
+        GatewayConfigEntry,
+        SECURITY_PROXY_ADDRESSES_KEY,
+        security.trusted_proxy_addresses
+    ),
+    typed_entry!(
+        GatewayConfigEntry,
+        SECURITY_INSECURE_KEY,
+        security.allow_insecure_transport
     ),
     typed_entry!(GatewayConfigEntry, SECURITY_USERS_KEY, optional security.users),
     typed_entry!(GatewayConfigEntry, SECURITY_TOKENS_KEY, optional security.tokens),
@@ -746,11 +782,10 @@ impl ClusterConfig {
     }
 }
 
-/// HTTP caller authentication mode.
+/// Gateway caller authentication mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default)]
 #[serde(rename_all = "kebab-case")]
 pub enum AuthenticationMode {
-    /// Every caller is accepted and reported as an anonymous principal.
     #[default]
     Trust,
     Password,
@@ -758,33 +793,24 @@ pub enum AuthenticationMode {
     TrustedHeader,
 }
 
-/// Client-to-gateway authentication settings. Every credential-bearing field is a [`Secret`].
+/// Client-to-Gateway settings. Credential-bearing fields are always redacted.
 #[derive(Debug, Clone, PartialEq, Deserialize, Default)]
 #[serde(deny_unknown_fields, default)]
 pub struct SecurityConfig {
     pub authentication: AuthenticationMode,
-    /// Password-mode user table; the entries embed password material.
     pub users: Option<Secret>,
-    /// Token-mode table; the entries are bearer tokens.
     pub tokens: Option<Secret>,
-    /// Trusted-header-mode header name, defaulting to `x-forwarded-user`.
     pub trusted_header_name: Option<String>,
+    pub trusted_proxy_addresses: Vec<IpAddr>,
+    pub allow_insecure_transport: bool,
 }
 
 impl SecurityConfig {
-    /// Returns the header the trusted-header mode reads the principal from.
+    /// Name of the identity assertion header for the REST adapter.
     pub fn trusted_header_name(&self) -> &str {
         self.trusted_header_name
             .as_deref()
             .unwrap_or(DEFAULT_TRUSTED_HEADER_NAME)
-    }
-
-    fn parsed_user_count(&self) -> Result<usize, String> {
-        parse_user_table(self.users.as_ref().map(Secret::expose).unwrap_or(""))
-    }
-
-    fn parsed_token_count(&self) -> Result<usize, String> {
-        parse_token_table(self.tokens.as_ref().map(Secret::expose).unwrap_or(""))
     }
 }
 
@@ -1034,44 +1060,23 @@ impl GatewayConfig {
             // Reject user mode until per-caller identities are supported; never fall back to
             // the shared service account.
             problems.push(format!(
-                "{} user is not supported yet: fluss-rust cannot send a SASL authorization ID, and \
-                 client authentication is not implemented",
+                "{} user is not supported yet: fluss-rust cannot send a SASL authorization ID",
                 cluster_key(id, CLUSTER_IDENTITY_MODE_KEY)
             ));
         }
     }
 
     fn validate_security(&self, problems: &mut Vec<String>) {
-        match self.security.authentication {
-            AuthenticationMode::Password => match self.security.parsed_user_count() {
-                Ok(0) => problems.push(format!(
-                    "{SECURITY_USERS_KEY} must configure at least one user when \
-                     {SECURITY_AUTHENTICATION_KEY} is password"
-                )),
-                Ok(_) => {}
-                Err(problem) => problems.push(format!("{SECURITY_USERS_KEY}: {problem}")),
-            },
-            AuthenticationMode::Token => match self.security.parsed_token_count() {
-                Ok(0) => problems.push(format!(
-                    "{SECURITY_TOKENS_KEY} must configure at least one token when \
-                     {SECURITY_AUTHENTICATION_KEY} is token"
-                )),
-                Ok(_) => {}
-                Err(problem) => problems.push(format!("{SECURITY_TOKENS_KEY}: {problem}")),
-            },
-            AuthenticationMode::TrustedHeader => {
-                let name = self.security.trusted_header_name();
-                if name.is_empty()
-                    || !name
-                        .bytes()
-                        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
-                {
-                    problems.push(format!(
-                        "{SECURITY_TRUSTED_HEADER_NAME_KEY} must be a legal HTTP header name"
-                    ));
-                }
-            }
-            _ => {}
+        if let Err(problem) = crate::protocol::rest::auth::validate_config(
+            &self.security,
+            self.server
+                .rest
+                .bind_address
+                .ip()
+                .to_canonical()
+                .is_loopback(),
+        ) {
+            problems.push(problem);
         }
     }
 
@@ -1382,76 +1387,6 @@ fn cluster_key(id: &str, key: &str) -> String {
     format!("{CLUSTER_KEY_PREFIX}{id}.{key}")
 }
 
-fn parse_user_table(raw: &str) -> Result<usize, String> {
-    let mut principals = std::collections::BTreeSet::new();
-    for (position, entry) in raw.split(',').enumerate() {
-        let entry = entry.trim();
-        if entry.is_empty() {
-            continue;
-        }
-        let Some((principal, secret)) = entry.split_once(':') else {
-            return Err(format!(
-                "user entry {position} must be `principal:secret` or `principal:bcrypt:<hash>`"
-            ));
-        };
-        let principal = principal.trim();
-        if principal.is_empty() {
-            return Err(format!("user entry {position} has an empty principal"));
-        }
-        if secret.is_empty() {
-            return Err(format!("user entry {position} has an empty secret"));
-        }
-        if let Some(hash) = secret.strip_prefix("bcrypt:")
-            && (!hash.starts_with("$2") || hash.split('$').count() != 4)
-        {
-            return Err(format!(
-                "user entry {position} (principal {principal:?}) has a malformed bcrypt hash"
-            ));
-        }
-        if !principals.insert(principal) {
-            return Err(format!(
-                "user entry {position} duplicates principal {principal:?}"
-            ));
-        }
-    }
-    Ok(principals.len())
-}
-
-fn parse_token_table(raw: &str) -> Result<usize, String> {
-    let mut tokens = std::collections::BTreeSet::new();
-    for (position, entry) in raw.split(',').enumerate() {
-        let entry = entry.trim();
-        if entry.is_empty() {
-            continue;
-        }
-        let Some((token, principal)) = entry.rsplit_once(':') else {
-            return Err(format!(
-                "token entry {position} must be `<token>:<principal>` or `sha256:<hex>:<principal>`"
-            ));
-        };
-        let principal = principal.trim();
-        if principal.is_empty() {
-            return Err(format!("token entry {position} has an empty principal"));
-        }
-        if token.is_empty() {
-            return Err(format!("token entry {position} has an empty token"));
-        }
-        if let Some(digest) = token.strip_prefix("sha256:")
-            && (digest.len() != 64 || !digest.bytes().all(|byte| byte.is_ascii_hexdigit()))
-        {
-            return Err(format!(
-                "token entry {position} (principal {principal:?}) has a malformed sha256 digest"
-            ));
-        }
-        if !tokens.insert(token) {
-            return Err(format!(
-                "token entry {position} (principal {principal:?}) duplicates an earlier token"
-            ));
-        }
-    }
-    Ok(tokens.len())
-}
-
 fn unsupported_client_option(id: &str, option: &str, origin: Option<&str>) -> ConfigError {
     let key = cluster_key(id, &format!("{CLIENT_OPTION_PREFIX}{option}"));
     let message = format!("{key}: native Fluss client option overrides are not supported yet");
@@ -1558,7 +1493,15 @@ fn read_config_file(
         match resolve_key(key)? {
             ResolvedKey::ClusterDeclaration => declared = Some(declared_cluster_ids(value)?),
             ResolvedKey::Fixed(entry) => {
-                scalar(value).map_err(reason)?;
+                if entry.key == SECURITY_PROXY_ADDRESSES_KEY
+                    && let Value::Sequence(entries) = value
+                {
+                    for entry in entries {
+                        scalar(entry).map_err(&reason)?;
+                    }
+                } else {
+                    scalar(value).map_err(reason)?;
+                }
                 pending.fixed.insert(
                     entry.key,
                     (
@@ -2223,8 +2166,7 @@ mod tests {
             .iter()
             .find(|error| error.contains("connection.identity-mode"))
             .unwrap_or_else(|| panic!("{errors:?}"));
-        assert!(refusal.contains("authorization ID"), "{refusal}");
-        assert!(refusal.contains("client authentication"), "{refusal}");
+        assert!(refusal.contains("SASL authorization ID"), "{refusal}");
 
         assert!(GatewayConfig::default().validate().is_ok());
     }
@@ -2413,7 +2355,11 @@ mod tests {
              gateway.security.authentication: token\n\
              gateway.security.tokens: token:alice\n",
         ] {
-            let warnings = load_file(contents).unwrap().warnings();
+            let warnings = load_file(&format!(
+                "{contents}gateway.security.allow-insecure-transport: true\n"
+            ))
+            .unwrap()
+            .warnings();
             assert!(
                 warnings
                     .iter()
@@ -2439,7 +2385,8 @@ mod tests {
 
         let config = load_file(
             "gateway.rest.listen: 0.0.0.0:8080\n\
-             gateway.security.authentication: trusted-header\n",
+             gateway.security.authentication: trusted-header\n\
+             gateway.security.trusted-header.proxy-addresses: [127.0.0.1]\n",
         )
         .unwrap();
         assert!(config.warnings().iter().any(|warning| {
@@ -2759,41 +2706,18 @@ mod tests {
 
     #[test]
     fn authentication_tables_are_structurally_validated_before_startup() {
-        for contents in [
-            "gateway.security.authentication: password\n\
-             gateway.security.users: alice\n",
-            "gateway.security.authentication: password\n\
-             gateway.security.users: :secret\n",
-            "gateway.security.authentication: password\n\
-             gateway.security.users: alice:first,alice:second\n",
-            "gateway.security.authentication: password\n\
-             gateway.security.users: alice:bcrypt:not-a-hash\n",
-            "gateway.security.authentication: token\n\
-             gateway.security.tokens: token-only\n",
-            "gateway.security.authentication: token\n\
-             gateway.security.tokens: token:\n",
-            "gateway.security.authentication: token\n\
-             gateway.security.tokens: token:alice,token:bob\n",
-            "gateway.security.authentication: token\n\
-             gateway.security.tokens: sha256:not-a-digest:alice\n",
+        for (mode, key, valid) in [
+            ("password", "users", "alice:secret"),
+            ("token", "tokens", "secret:alice"),
         ] {
-            assert!(load_file(contents).is_err(), "accepted: {contents}");
+            let prefix = format!("gateway.security.authentication: {mode}\n");
+            let key = format!("gateway.security.{key}");
+            assert!(load_file(&format!("{prefix}{key}: {valid}\n")).is_ok());
+            let error = load_file(&format!("{prefix}{key}: invalid\n"))
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains(&key), "{error}");
         }
-
-        assert!(
-            load_file(
-                "gateway.security.authentication: password\n\
-                 gateway.security.users: alice:plain-secret,bob:bcrypt:$2b$12$abcdefghijklmnopqrstuuuuuuuuuuuuuuuuuuuuuuuuuuu\n"
-            )
-            .is_ok()
-        );
-        assert!(
-            load_file(
-                "gateway.security.authentication: token\n\
-                 gateway.security.tokens: token:with:colons:alice,sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef:bob\n"
-            )
-            .is_ok()
-        );
     }
 
     #[test]
@@ -2926,7 +2850,9 @@ mod tests {
             }
 
             let (file_value, env_value) = match entry.key {
-                METRICS_ENABLED_KEY | REST_WRITE_RATE_LIMIT_ENABLED_KEY => ("true", "false"),
+                METRICS_ENABLED_KEY | REST_WRITE_RATE_LIMIT_ENABLED_KEY | SECURITY_INSECURE_KEY => {
+                    ("true", "false")
+                }
                 REST_WRITE_MAX_ROWS_KEY
                 | REST_METADATA_MAX_CONCURRENT_REQUESTS_KEY
                 | REST_WRITE_MAX_CONCURRENT_REQUESTS_KEY
@@ -2945,15 +2871,28 @@ mod tests {
                 REST_HEADER_READ_TIMEOUT_KEY | SHUTDOWN_DRAIN_TIMEOUT_KEY => ("11s", "22s"),
                 // Both modes must be valid on their own: the file value is loaded without the
                 // environment override, and password and token modes need a credential table.
-                SECURITY_AUTHENTICATION_KEY => ("trusted-header", "trust"),
+                SECURITY_AUTHENTICATION_KEY => ("password", "trust"),
+                SECURITY_PROXY_ADDRESSES_KEY => ("127.0.0.1", "::1"),
                 _ => ("file-value", "env-value"),
             };
 
-            let file = write_temp_config(&format!("{}: \"{file_value}\"\n", entry.key));
+            let credentials = if entry.key == SECURITY_AUTHENTICATION_KEY {
+                "gateway.security.users: alice:fixture-secret\n"
+            } else {
+                ""
+            };
+            let file =
+                write_temp_config(&format!("{credentials}{}: \"{file_value}\"\n", entry.key));
             let from_file = load(Some(file.path()), &no_env(), &CliOverrides::default())
                 .unwrap_or_else(|error| panic!("{}: {error}", entry.key));
             let mut env = no_env();
             env.insert(environment_variable(entry.key), env_value.to_string());
+            if entry.key == SECURITY_AUTHENTICATION_KEY {
+                env.insert(
+                    environment_variable(SECURITY_USERS_KEY),
+                    "alice:fixture-secret".to_owned(),
+                );
+            }
             let from_env = load(Some(file.path()), &env, &CliOverrides::default())
                 .unwrap_or_else(|error| panic!("{}: {error}", entry.key));
 

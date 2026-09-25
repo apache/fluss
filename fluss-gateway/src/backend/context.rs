@@ -64,8 +64,7 @@ pub struct RequestContext {
     deadline: Instant,
     /// Cancelled when the caller goes away or the process drains.
     cancellation: CancellationToken,
-    /// `None` means the request has not been authenticated. It is not represented by a reserved
-    /// principal name, so a real caller named `anonymous` remains unambiguous.
+    /// `None` means the request has not passed an authentication policy.
     principal: Option<Principal>,
 }
 
@@ -130,7 +129,7 @@ impl RequestContext {
         &self.cancellation
     }
 
-    /// The authenticated caller, once authentication is implemented.
+    /// The caller admitted by the Gateway authentication policy.
     pub fn principal(&self) -> Option<&Principal> {
         self.principal.as_ref()
     }
@@ -143,7 +142,6 @@ impl RequestContext {
         &self.request_id
     }
 
-    /// An anonymous context with `budget` left, for the tests of the layers below the adapter.
     #[cfg(test)]
     pub(crate) fn for_test(cluster: &str, budget: Duration) -> Self {
         Self::new(
