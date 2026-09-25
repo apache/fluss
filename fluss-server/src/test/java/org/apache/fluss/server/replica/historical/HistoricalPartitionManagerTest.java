@@ -89,6 +89,8 @@ import org.apache.fluss.utils.types.Tuple2;
 import com.github.benmanes.caffeine.cache.Scheduler;
 import com.github.benmanes.caffeine.cache.Ticker;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.rocksdb.FlushOptions;
 
 import javax.annotation.Nullable;
@@ -752,6 +754,49 @@ class HistoricalPartitionManagerTest extends ReplicaTestBase {
                                     ChangeType.DELETE,
                                     new Object[] {2, "eu", deletePartition, "lake-v1"})),
                     schemaGetter(tableInfo));
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void testLakeNotificationsAdvanceLogRetentionOnLeaderAndFollower(boolean leader)
+            throws Exception {
+        TableInfo tableInfo = registerHistoricalTableAndBecomeLeader(ChangelogImage.WAL);
+        Replica replica = replicaManager.getReplicaOrException(TABLE_BUCKET);
+        try (HistoricalPartitionManager historicalPartitionManager =
+                createHistoricalPartitionManager(
+                        new TestingHistoricalLakeLookupManager(lookupConfiguration()))) {
+            writeBatch(
+                    historicalPartitionManager,
+                    replica,
+                    ORIGINAL_PARTITION,
+                    batch(
+                            tableInfo.getRowType(),
+                            upsert(1, "us", ORIGINAL_PARTITION, "v1"),
+                            upsert(2, "eu", ORIGINAL_PARTITION, "v2")));
+        }
+
+        if (!leader) {
+            assertThat(replica.makeFollower(followerState())).isTrue();
+            assertThat(replica.getKvTablet()).isNull();
+        }
+        assertThat(replica.getLogTablet().getMinRetainOffset()).isZero();
+
+        // Followers have no local KV state or snapshot callbacks, but must still advance their
+        // WAL retention boundary. Repeated and stale notifications must not move it backwards.
+        long expectedRetainOffset = 0L;
+        for (long lakeOffset : new long[] {1L, 1L, 0L, 2L}) {
+            CompletableFuture<NotifyLakeTableOffsetResponse> future = new CompletableFuture<>();
+            replicaManager.notifyLakeTableOffset(
+                    new NotifyLakeTableOffsetData(
+                            INITIAL_COORDINATOR_EPOCH,
+                            Collections.singletonMap(
+                                    TABLE_BUCKET,
+                                    new LakeBucketOffset(10L, null, lakeOffset, null))),
+                    future::complete);
+            future.get(10, TimeUnit.SECONDS);
+            expectedRetainOffset = Math.max(expectedRetainOffset, lakeOffset);
+            assertThat(replica.getLogTablet().getMinRetainOffset()).isEqualTo(expectedRetainOffset);
         }
     }
 
