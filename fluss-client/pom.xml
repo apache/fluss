@@ -131,6 +131,28 @@
                                     <include>*:*</include>
                                 </includes>
                             </artifactSet>
+                            <relocations>
+                                <!-- commons-lang3 and commons-math3 are compile dependencies of
+                                     fluss-common, so they land in this uber-jar at their original
+                                     package. On an engine classpath they shadow the engine's own
+                                     copies; #3960 fixed exactly that for the filesystem plugins
+                                     after Spark hit NoSuchMethodError on a shadowed commons class.
+
+                                     Named individually rather than as org.apache.commons: the
+                                     shade plugin rewrites every reference matching a pattern,
+                                     including ones to classes this jar does not bundle. Only
+                                     lang3 and math3 are bundled; commons-codec and
+                                     commons-logging are referenced but come from elsewhere, and
+                                     relocating them would leave links that resolve nowhere. -->
+                                <relocation>
+                                    <pattern>org.apache.commons.lang3</pattern>
+                                    <shadedPattern>org.apache.fluss.shaded.org.apache.commons.lang3</shadedPattern>
+                                </relocation>
+                                <relocation>
+                                    <pattern>org.apache.commons.math3</pattern>
+                                    <shadedPattern>org.apache.fluss.shaded.org.apache.commons.math3</shadedPattern>
+                                </relocation>
+                            </relocations>
                         </configuration>
                     </execution>
                 </executions>
