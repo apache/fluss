@@ -1514,6 +1514,11 @@ class ReplicaManagerTest extends ReplicaTestBase {
         PutKvResultForBucket putResult = putFuture.get().get(0);
         assertThat(putResult.failed()).isFalse();
 
+        // Lookups read RocksDB only, never the kv pre-write buffer, so wait until the
+        // asynchronous flush has published the just-written value.
+        flushAndWait(
+                replicaManager.getReplicaOrException(tableBucket).getKvTablet(), Long.MAX_VALUE);
+
         CompactedKeyEncoder keyEncoder = new CompactedKeyEncoder(DATA1_ROW_TYPE, new int[] {0});
         byte[] keyBytes = keyEncoder.encodeKey(row(DATA_1_WITH_KEY_AND_VALUE.get(0).f0));
 
