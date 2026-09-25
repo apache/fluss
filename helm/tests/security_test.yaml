@@ -70,7 +70,7 @@ tests:
       security.client.sasl.plain.users: []
     asserts:
       - failedTemplate:
-          errorMessage: "VALUES VALIDATION:\nsecurity.client.sasl.plain.users must contain at least one user when security.client.sasl.mechanism is plain"
+          errorMessage: "VALUES VALIDATION:\nsecurity.client.sasl.plain.users must contain at least one user when the matching mechanism is plain"
 
 ---
 
