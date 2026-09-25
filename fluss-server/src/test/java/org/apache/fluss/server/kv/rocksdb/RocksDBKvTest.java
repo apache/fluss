@@ -30,8 +30,10 @@ import org.rocksdb.FlushOptions;
 import org.rocksdb.RocksDBException;
 
 import java.io.File;
+import java.io.IOException;
 import java.nio.file.Path;
 import java.util.Arrays;
+import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
@@ -355,6 +357,48 @@ class RocksDBKvTest {
 
         // Pressure sampling must degrade gracefully once the native handle is gone.
         assertThat(kv.currentPressure()).isEqualTo(0f);
+    }
+
+    /**
+     * Regression test for #4484: {@code db.multiGetAsList()} reports a key that could not be read
+     * as {@code null}, exactly like a genuine miss, so a corrupted SST turned a read error into a
+     * silent "key not found". {@link RocksDBKv#multiGet(List)} must instead fail, consistently with
+     * {@link RocksDBKv#get(byte[])}.
+     *
+     * <p>The failure is injected through {@code get()}, the method {@code multiGet()} uses to
+     * re-check every {@code null} returned by {@code multiGetAsList()}. Corrupting an SST on disk
+     * does not work here: RocksDB opens a database with {@code paranoid_checks} enabled by default,
+     * so the instance would fail to open at all and the read path would never be reached.
+     */
+    @Test
+    void testMultiGetFailsOnReadError(@TempDir Path tempDir) throws Exception {
+        byte[] key = new byte[] {1, 2, 3, 4, 5};
+        byte[] val = new byte[] {10, 20, 30, 40, 50};
+        // A key that is never written, so multiGetAsList reports it as null - the same value it
+        // uses both for a genuine miss and for a key whose read failed.
+        byte[] failingKey = new byte[] {7, 7, 7};
+
+        RocksDBKv realKv = buildRocksDBKv(tempDir.toFile());
+        realKv.put(key, val);
+        RocksDBKv rocksDBKv = spy(realKv);
+
+        try {
+            // The missed key is one whose underlying read actually failed: make the re-check raise
+            // the error, as a real corrupted block does. multiGet() must not swallow it.
+            doThrow(new IOException("Fail to get key.")).when(rocksDBKv).get(failingKey);
+
+            assertThatThrownBy(() -> rocksDBKv.multiGet(Arrays.asList(key, failingKey)))
+                    .isInstanceOf(IOException.class)
+                    .hasMessageContaining("Fail to get key");
+
+            // A key that really does not exist is a genuine miss: the re-check returns null and
+            // multiGet() must still report it as null instead of turning it into an error.
+            byte[] missingKey = new byte[] {9, 9, 9};
+            assertThat(rocksDBKv.multiGet(Arrays.asList(key, missingKey)))
+                    .containsExactly(val, null);
+        } finally {
+            rocksDBKv.close();
+        }
     }
 
     @Test
