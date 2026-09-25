@@ -203,12 +203,35 @@ public class RocksDBKv implements AutoCloseable {
         }
     }
 
+    /**
+     * Gets the values for the given keys in the same order as the input keys.
+     *
+     * <p>{@link RocksDB#multiGetAsList(List)} reports a key that could not be read (for example
+     * because of a block checksum mismatch on a corrupted SST file) as {@code null} - the very same
+     * value it uses to signal a genuine miss. Reporting a read error as "key not found" would
+     * silently hide data loss, so every {@code null} is re-checked with {@link #get(byte[])}, which
+     * throws on read errors. A genuine miss only pays for one extra lookup and stays cheap as it is
+     * served from the bloom filter / block cache.
+     *
+     * @throws IOException if any key failed to be read from RocksDB
+     */
     public List<byte[]> multiGet(List<byte[]> keys) throws IOException {
+        List<byte[]> values;
         try {
-            return db.multiGetAsList(keys);
+            values = db.multiGetAsList(keys);
         } catch (RocksDBException e) {
             throw new IOException("Fail to get keys.", e);
         }
+
+        for (int i = 0; i < values.size(); i++) {
+            if (values.get(i) == null) {
+                // Either the key really does not exist, or the underlying read failed. get() throws
+                // on the latter, which is the whole point of this re-check; if it returns, the key
+                // is a genuine miss and null is the correct answer.
+                values.set(i, get(keys.get(i)));
+            }
+        }
+        return values;
     }
 
     /**
@@ -299,7 +322,7 @@ public class RocksDBKv implements AutoCloseable {
         }
     }
 
-    public List<byte[]> limitScan(Integer limit) {
+    public List<byte[]> limitScan(Integer limit) throws IOException {
         List<byte[]> pkList = new ArrayList<>();
         ReadOptions readOptions = new ReadOptions();
         RocksIterator iterator = db.newIterator(defaultColumnFamilyHandle, readOptions);
@@ -317,7 +340,21 @@ public class RocksDBKv implements AutoCloseable {
             iterator.close();
         }
 
+        // Same reasoning as in prefixLookup(): never turn a read error into an empty/short result.
+        checkIteratorStatus(iterator);
+
         return pkList;
+    }
+
+    /**
+     * Fails the current operation if the iterator was stopped by an error instead of end-of-range.
+     */
+    private static void checkIteratorStatus(RocksIterator iterator) throws IOException {
+        try {
+            iterator.status();
+        } catch (RocksDBException e) {
+            throw new IOException("Fail to iterate RocksDB.", e);
+        }
     }
 
     public void put(byte[] key, byte[] value) throws IOException {
