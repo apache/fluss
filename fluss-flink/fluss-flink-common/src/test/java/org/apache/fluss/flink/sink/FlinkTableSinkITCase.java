@@ -1320,6 +1320,40 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
     }
 
     @Test
+    void testUpdateIfChangedMergeEngineSupportsMutations() throws Exception {
+        String tableName = "updateIfChangedMergeEngineTable";
+        tBatchEnv.executeSql(
+                String.format(
+                        "create table %s ("
+                                + " a int not null,"
+                                + " b bigint null, "
+                                + " c string null, "
+                                + " primary key (a) not enforced"
+                                + ") with ('table.merge-engine' = 'update_if_changed')",
+                        tableName));
+
+        tBatchEnv
+                .executeSql(
+                        String.format(
+                                "INSERT INTO %s VALUES (1, 10, 'initial'), (2, 20, 'delete')",
+                                tableName))
+                .await();
+
+        // Verify that the Flink sink accepts partial updates for this merge engine.
+        tBatchEnv
+                .executeSql(String.format("INSERT INTO %s (a, c) VALUES (1, 'partial')", tableName))
+                .await();
+
+        // Verify that row-level UPDATE and DELETE statements are accepted as well.
+        tBatchEnv.executeSql(String.format("UPDATE %s SET b = 11 WHERE a = 1", tableName)).await();
+        tBatchEnv.executeSql(String.format("DELETE FROM %s WHERE a = 2", tableName)).await();
+
+        CloseableIterator<Row> rowIter =
+                tBatchEnv.executeSql(String.format("SELECT * FROM %s", tableName)).collect();
+        assertResultsIgnoreOrder(rowIter, Collections.singletonList("+I[1, 11, partial]"), true);
+    }
+
+    @Test
     void testVersionMergeEngineWithTypeBigint() throws Exception {
         tEnv.executeSql(
                 "create table merge_engine_with_version (a int not null primary key not enforced,"

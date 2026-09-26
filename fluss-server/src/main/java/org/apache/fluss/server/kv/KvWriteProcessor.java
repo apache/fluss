@@ -374,6 +374,11 @@ public final class KvWriteProcessor {
 
         BinaryValue newValue = currentMerger.delete(oldValue);
 
+        if (newValue == oldValue) {
+            // no actual change, skip this record
+            return logOffset;
+        }
+
         // if newValue is null, it means the row should be deleted
         if (newValue == null) {
             return applyDelete(

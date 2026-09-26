@@ -156,7 +156,9 @@ public class FlinkTableSink
                             "Fluss table sink does not support partial updates for table without primary key. Please make sure the "
                                     + "number of specified columns in INSERT INTO matches columns of the Fluss table.");
                 }
-                if (mergeEngineType != null && mergeEngineType != MergeEngineType.AGGREGATION) {
+                if (mergeEngineType != null
+                        && mergeEngineType != MergeEngineType.AGGREGATION
+                        && mergeEngineType != MergeEngineType.UPDATE_IF_CHANGED) {
                     throw new ValidationException(
                             String.format(
                                     "Table %s uses the '%s' merge engine which does not support partial updates. Please make sure the "
@@ -376,7 +378,7 @@ public class FlinkTableSink
                             "Table %s is a Log Table. Log Table doesn't support DELETE and UPDATE statements.",
                             tablePath));
         }
-        if (mergeEngineType != null) {
+        if (mergeEngineType != null && mergeEngineType != MergeEngineType.UPDATE_IF_CHANGED) {
             throw new UnsupportedOperationException(
                     String.format(
                             "Table %s uses the '%s' merge engine which does not support DELETE or UPDATE statements.",
