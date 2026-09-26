@@ -241,6 +241,39 @@ public class ConfigOptions {
                                             + "TableLifecycleThrottler scans in-flight drops for "
                                             + "timeouts.");
 
+    public static final ConfigOption<Duration> COORDINATOR_REBALANCE_TARGET_UNAVAILABLE_TIMEOUT =
+            key("coordinator.rebalance.target-unavailable-timeout")
+                    .durationType()
+                    .defaultValue(Duration.ofMinutes(30))
+                    .withDescription(
+                            "The time after which a timed-out bucket migration is marked FAILED "
+                                    + "if its target tablet servers remain unavailable and no "
+                                    + "bucket-state progress is observed. Observed progress or all "
+                                    + "target servers becoming live resets this timer. Must be at "
+                                    + "least 1 ms and fit in a signed 64-bit millisecond value.");
+
+    public static final ConfigOption<Duration> COORDINATOR_REBALANCE_NO_PROGRESS_TIMEOUT =
+            key("coordinator.rebalance.no-progress-timeout")
+                    .durationType()
+                    .defaultValue(Duration.ofHours(24))
+                    .withDescription(
+                            "The time after which a timed-out bucket migration is marked FAILED "
+                                    + "if no bucket-state progress is observed, even when its target "
+                                    + "tablet servers are live. Observed progress resets this timer; "
+                                    + "this does not limit the total migration duration. Must be at "
+                                    + "least 1 ms and fit in a signed 64-bit millisecond value.");
+
+    public static final ConfigOption<Integer> COORDINATOR_REBALANCE_MAX_TRACKED_TIMED_OUT_TASKS =
+            key("coordinator.rebalance.max-tracked-timed-out-tasks")
+                    .intType()
+                    .defaultValue(8)
+                    .withDescription(
+                            "The maximum number of non-final timed-out bucket migrations tracked "
+                                    + "before the coordinator stops admitting new bucket migrations. "
+                                    + "Admission resumes when a tracked migration reaches a final "
+                                    + "status. This limits concurrent migrations and reconciliation "
+                                    + "work on the coordinator and ZooKeeper. Must be at least 1.");
+
     public static final ConfigOption<Duration> COORDINATOR_OFFLINE_LEADER_RETRY_DELAY =
             key("coordinator.offline-leader.retry-delay")
                     .durationType()

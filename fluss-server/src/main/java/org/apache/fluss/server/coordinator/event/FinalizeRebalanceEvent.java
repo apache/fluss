@@ -17,22 +17,20 @@
 
 package org.apache.fluss.server.coordinator.event;
 
-import org.apache.fluss.server.zk.data.RebalanceTask;
+/** An event that retries persisting the final state of a rebalance. */
+public final class FinalizeRebalanceEvent implements CoordinatorEvent {
+    private final String rebalanceId;
 
-/** An event that recovers and reconciles a persisted rebalance task. */
-public final class RecoverRebalanceEvent implements CoordinatorEvent {
-    private final RebalanceTask rebalanceTask;
-
-    public RecoverRebalanceEvent(RebalanceTask rebalanceTask) {
-        this.rebalanceTask = rebalanceTask;
+    public FinalizeRebalanceEvent(String rebalanceId) {
+        this.rebalanceId = rebalanceId;
     }
 
-    public RebalanceTask getRebalanceTask() {
-        return rebalanceTask;
+    public String getRebalanceId() {
+        return rebalanceId;
     }
 
     @Override
     public String toString() {
-        return "RecoverRebalanceEvent{rebalanceTask=" + rebalanceTask + "}";
+        return "FinalizeRebalanceEvent{rebalanceId='" + rebalanceId + "'}";
     }
 }
