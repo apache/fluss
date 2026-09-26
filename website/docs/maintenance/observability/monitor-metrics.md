@@ -807,7 +807,7 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
   <tbody>
     <tr>
       <th rowspan="41"><strong>tabletserver</strong></th>
-      <td rowspan="22">table</td>
+      <td rowspan="24">table</td>
       <td>messagesInPerSecond</td>
       <td>The number of messages written per second to this table.</td>
       <td>Meter</td>
@@ -911,6 +911,16 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
       <td>remoteKvCopyBytesPerSecond</td>
       <td>The bytes of kv snapshot data uploaded to remote per second for this table. Only available for primary key tables.</td>
       <td>Meter</td>
+    </tr>
+    <tr>
+      <td>localKvSnapshotRestores</td>
+      <td>The number of KV snapshots successfully loaded from retained local checkpoints, before log replay. Only available for primary key tables.</td>
+      <td>Counter</td>
+    </tr>
+    <tr>
+      <td>localKvSnapshotFallbacks</td>
+      <td>The number of local KV snapshot recovery attempts falling back to remote storage because the checkpoint is missing, invalid, or cannot be opened. Only counted when local recovery is enabled.</td>
+      <td>Counter</td>
     </tr>
     <tr>
       <td rowspan="6">table_historical</td>

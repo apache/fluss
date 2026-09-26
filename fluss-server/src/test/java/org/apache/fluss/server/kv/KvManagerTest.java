@@ -48,6 +48,9 @@ import org.apache.fluss.server.utils.ResourceGuard;
 import org.apache.fluss.server.zk.NOPErrorHandler;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.ZooKeeperExtension;
+import org.apache.fluss.server.zk.data.BucketAssignment;
+import org.apache.fluss.server.zk.data.PartitionAssignment;
+import org.apache.fluss.server.zk.data.TableAssignment;
 import org.apache.fluss.server.zk.data.TableRegistration;
 import org.apache.fluss.testutils.common.AllCallbackWrapper;
 import org.apache.fluss.types.RowType;
@@ -93,6 +96,9 @@ import static org.apache.fluss.testutils.common.CommonTestUtils.waitUntil;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assumptions.assumeThat;
+import static org.mockito.ArgumentMatchers.anyCollection;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.spy;
 
 /** Test for {@link KvManager} . */
 final class KvManagerTest {
@@ -179,6 +185,92 @@ final class KvManagerTest {
 
     static List<String> partitionProvider() {
         return Arrays.asList(null, "2024");
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void testLocalRecoveryStartupCleansUnassignedDirectories(boolean partitioned) throws Exception {
+        conf.set(ConfigOptions.KV_SNAPSHOT_LOCAL_RECOVERY_ENABLED, true);
+        long tableId = 16001;
+        Long partitionId = partitioned ? 16002L : null;
+        PhysicalTablePath path = PhysicalTablePath.of("db1", "retained", partitioned ? "p1" : null);
+        TableAssignment assignment =
+                TableAssignment.builder()
+                        .add(0, BucketAssignment.of(1))
+                        .add(1, BucketAssignment.of(2))
+                        .build();
+        if (partitioned) {
+            zkClient.registerPartitionAssignmentAndMetadata(
+                    partitionId,
+                    "p1",
+                    new PartitionAssignment(tableId, assignment.getBucketAssignments()),
+                    tempDir.getPath(),
+                    path.getTablePath(),
+                    tableId,
+                    2);
+        } else {
+            zkClient.registerTableAssignment(tableId, assignment);
+        }
+
+        Path retained =
+                FlussPaths.kvTabletDir(tempDir, path, new TableBucket(tableId, partitionId, 0))
+                        .toPath();
+        Path retainedSst =
+                Files.write(
+                        Files.createDirectories(retained.resolve("snap-0")).resolve("000001.sst"),
+                        new byte[] {1, 2, 3});
+        Path logDir = Files.createDirectories(retained.resolveSibling("log-0"));
+        Path reassigned = Files.createDirectories(retained.resolveSibling("kv-1"));
+        Path unassigned = Files.createDirectories(retained.resolveSibling("kv-2"));
+        Path invalid = Files.createDirectories(retained.resolveSibling("kv-invalid"));
+        Path pendingDeletion =
+                Files.createDirectories(
+                        retained.resolveSibling("kv-0.old" + FlussPaths.DELETED_FILE_SUFFIX));
+        Path missingTable =
+                Files.createDirectories(tempDir.toPath().resolve("db1/dropped-16003/kv-0"));
+
+        kvManager.startup();
+
+        assertThat(retainedSst).hasBinaryContent(new byte[] {1, 2, 3});
+        assertThat(logDir).isDirectory();
+        assertThat(reassigned).doesNotExist();
+        assertThat(unassigned).doesNotExist();
+        assertThat(invalid).doesNotExist();
+        assertThat(pendingDeletion).doesNotExist();
+        assertThat(missingTable).doesNotExist();
+
+        // The files must also be reclaimed if this bucket is never assigned back to the server.
+        if (partitioned) {
+            zkClient.deletePartitionAssignment(partitionId);
+        } else {
+            zkClient.deleteTableAssignment(tableId);
+        }
+        kvManager.startup();
+        assertThat(retained).doesNotExist();
+        assertThat(logDir).isDirectory();
+    }
+
+    @Test
+    void testLocalRecoveryStartupPreservesFilesWhenAssignmentsCannotBeRead() throws Exception {
+        kvManager.shutdown();
+        conf.set(ConfigOptions.KV_SNAPSHOT_LOCAL_RECOVERY_ENABLED, true);
+        ZooKeeperClient failingClient = spy(zkClient);
+        doThrow(new IOException("Injected assignment read failure"))
+                .when(failingClient)
+                .getTablesAssignments(anyCollection());
+        kvManager =
+                KvManager.create(
+                        conf,
+                        failingClient,
+                        logManager,
+                        TestingMetricGroups.TABLET_SERVER_METRICS,
+                        localDiskManager);
+        Path retained = Files.createDirectories(tempDir.toPath().resolve("db1/table-16001/kv-0"));
+        Path retainedFile = Files.write(retained.resolve("data"), new byte[] {1, 2, 3});
+
+        kvManager.startup();
+
+        assertThat(retainedFile).hasBinaryContent(new byte[] {1, 2, 3});
     }
 
     @Test

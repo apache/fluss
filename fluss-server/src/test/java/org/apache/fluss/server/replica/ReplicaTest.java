@@ -56,7 +56,9 @@ import org.apache.fluss.server.log.LogAppendInfo;
 import org.apache.fluss.server.log.LogReadInfo;
 import org.apache.fluss.server.metrics.group.TestingMetricGroups;
 import org.apache.fluss.server.testutils.KvTestUtils;
+import org.apache.fluss.server.zk.data.BucketAssignment;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
+import org.apache.fluss.server.zk.data.TableAssignment;
 import org.apache.fluss.testutils.DataTestUtils;
 import org.apache.fluss.testutils.common.ManuallyTriggeredScheduledExecutorService;
 import org.apache.fluss.types.RowType;
@@ -68,6 +70,8 @@ import org.apache.fluss.utils.types.Tuple2;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.io.File;
 import java.io.FileNotFoundException;
@@ -595,7 +599,7 @@ final class ReplicaTest extends ReplicaTestBase {
 
     @Test
     void testKvReplicaSnapshot(@TempDir File snapshotKvTabletDir) throws Exception {
-        conf.set(ConfigOptions.KV_SNAPSHOT_LOCAL_RECOVERY_ENABLED, true);
+        enableLocalRecovery();
         TableBucket tableBucket = new TableBucket(DATA1_TABLE_ID_PK, 1);
 
         // create test context
@@ -698,8 +702,14 @@ final class ReplicaTest extends ReplicaTestBase {
         kvSnapshotStore = testKvSnapshotContext.testKvSnapshotStore;
 
         // Recover as leader after the in-place restart, without an intervening role transition.
+        long localRestores = kvReplica.tableMetrics().localKvSnapshotRestores().getCount();
+        long localFallbacks = kvReplica.tableMetrics().localKvSnapshotFallbacks().getCount();
         makeKvReplicaAsLeader(kvReplica, 2);
         assertThat(downloadedRemoteSnapshot).isFalse();
+        assertThat(kvReplica.tableMetrics().localKvSnapshotRestores().getCount())
+                .isEqualTo(localRestores + 1);
+        assertThat(kvReplica.tableMetrics().localKvSnapshotFallbacks().getCount())
+                .isEqualTo(localFallbacks);
         assertThat(retainedLocalSnapshot).isDirectory();
 
         // put some data
@@ -737,8 +747,11 @@ final class ReplicaTest extends ReplicaTestBase {
 
         downloadedRemoteSnapshot.set(false);
         kvReplica = makeKvReplica(DATA1_PHYSICAL_TABLE_PATH_PK, tableBucket, testKvSnapshotContext);
+        localFallbacks = kvReplica.tableMetrics().localKvSnapshotFallbacks().getCount();
         makeKvReplicaAsLeader(kvReplica, 3);
         assertThat(downloadedRemoteSnapshot).isTrue();
+        assertThat(kvReplica.tableMetrics().localKvSnapshotFallbacks().getCount())
+                .isEqualTo(localFallbacks + 1);
         assertThat(finalLocalSnapshot).doesNotExist();
         verifyGetKeyValues(checkNotNull(kvReplica.getKvTablet()), expectedKeyValues);
 
@@ -750,7 +763,7 @@ final class ReplicaTest extends ReplicaTestBase {
     @Test
     void testLocalSnapshotLoadFailureFallsBackToRemote(@TempDir File snapshotKvTabletDir)
             throws Exception {
-        conf.set(ConfigOptions.KV_SNAPSHOT_LOCAL_RECOVERY_ENABLED, true);
+        enableLocalRecovery();
         TableBucket tableBucket = new TableBucket(DATA1_TABLE_ID_PK, 1);
         TestSnapshotContext testKvSnapshotContext =
                 new TestSnapshotContext(snapshotKvTabletDir.getPath());
@@ -1266,6 +1279,81 @@ final class ReplicaTest extends ReplicaTestBase {
                 ((AbstractMetricGroup) physicalStorageMetricGroup)
                         .getMetrics()
                         .get(MetricNames.BUCKET_PHYSICAL_STORAGE_LOCAL_LOG_SIZE);
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void testRestartedReplicaDeletesRetainedKv(boolean becomeFollower) throws Exception {
+        enableLocalRecovery();
+        TableBucket bucket = new TableBucket(DATA1_TABLE_ID_PK, 1);
+        Replica replica = makeKvReplica(DATA1_PHYSICAL_TABLE_PATH_PK, bucket);
+        makeKvReplicaAsLeader(replica);
+        File tabletDir = replica.getKvTablet().getKvTabletDir();
+        Files.createDirectories(tabletDir.toPath().resolve("snap-0"));
+        File logDir = replica.getLogTablet().getLogDir();
+
+        restartKvManager();
+        assertThat(tabletDir.toPath().resolve("db")).isDirectory();
+        assertThat(tabletDir.toPath().resolve("snap-0")).isDirectory();
+        replica = makeKvReplica(DATA1_PHYSICAL_TABLE_PATH_PK, bucket);
+        assertThat(replica.getKvTablet()).isNull();
+        if (becomeFollower) {
+            makeKvReplicaAsFollower(replica, 1);
+            assertThat(tabletDir).doesNotExist();
+            assertThat(logDir).isDirectory();
+        }
+        replica.delete();
+        assertThat(tabletDir).doesNotExist();
+        assertThat(logDir).doesNotExist();
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void testSnapshotRecoveryRetriesAfterLogReplayFailure(
+            boolean localRecovery, @TempDir File snapshotDir) throws Exception {
+        if (localRecovery) {
+            enableLocalRecovery();
+        }
+        TableBucket bucket = new TableBucket(DATA1_TABLE_ID_PK, 1);
+        TestSnapshotContext snapshotContext = new TestSnapshotContext(snapshotDir.getPath());
+        Replica replica = makeKvReplica(DATA1_PHYSICAL_TABLE_PATH_PK, bucket, snapshotContext);
+        makeKvReplicaAsLeader(replica);
+        putRecordsToLeader(replica, genKvRecordBatch(new Object[] {1, "before"}));
+        snapshotContext.scheduledExecutorService.triggerAllNonPeriodicTasks();
+        snapshotContext.testKvSnapshotStore.waitUntilSnapshotComplete(bucket, 0);
+        putRecordsToLeader(replica, genKvRecordBatch(new Object[] {1, "after"}));
+
+        restartKvManager();
+        AtomicBoolean failRecovery = new AtomicBoolean(true);
+        TestSnapshotContext retryContext =
+                new TestSnapshotContext(
+                        snapshotDir.getPath(), snapshotContext.testKvSnapshotStore) {
+                    @Override
+                    public int maxFetchLogSizeInRecoverKv() {
+                        // Called after the restored RocksDB has been opened and registered.
+                        if (failRecovery.compareAndSet(true, false)) {
+                            throw new IllegalStateException("Injected log recovery failure");
+                        }
+                        return super.maxFetchLogSizeInRecoverKv();
+                    }
+                };
+        replica = makeKvReplica(DATA1_PHYSICAL_TABLE_PATH_PK, bucket, retryContext);
+        long localFallbacks = replica.tableMetrics().localKvSnapshotFallbacks().getCount();
+        makeKvReplicaAsLeader(replica, 1);
+        assertThat(failRecovery).isFalse();
+        assertThat(kvManager.getKv(bucket)).contains(replica.getKvTablet());
+        assertThat(replica.getKvTablet().getRowCount()).isEqualTo(1);
+        verifyGetKeyValues(
+                replica.getKvTablet(), getKeyValuePairs(genKvRecords(new Object[] {1, "after"})));
+        assertThat(replica.tableMetrics().localKvSnapshotFallbacks().getCount())
+                .isEqualTo(localFallbacks + (localRecovery ? 1 : 0));
+    }
+
+    private void enableLocalRecovery() throws Exception {
+        conf.set(ConfigOptions.KV_SNAPSHOT_LOCAL_RECOVERY_ENABLED, true);
+        zkClient.registerTableAssignment(
+                DATA1_TABLE_ID_PK,
+                TableAssignment.builder().add(1, BucketAssignment.of(TABLET_SERVER_ID)).build());
     }
 
     private void restartKvManager() throws IOException {

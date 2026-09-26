@@ -102,8 +102,9 @@ public final class LocalKvSnapshotUtils {
     static void retainOnly(File kvTabletDir, long snapshotId) {
         File retainedSnapshot = getSnapshotDirectory(kvTabletDir, snapshotId);
         for (File snapshotDirectory : FileUtils.listDirectories(kvTabletDir)) {
-            if (isSnapshotDirectory(snapshotDirectory)
-                    && !snapshotDirectory.equals(retainedSnapshot)) {
+            if ((isSnapshotDirectory(snapshotDirectory)
+                            && !snapshotDirectory.equals(retainedSnapshot))
+                    || snapshotDirectory.getName().startsWith(RESTORE_DIRECTORY_PREFIX)) {
                 deleteQuietly(snapshotDirectory);
             }
         }

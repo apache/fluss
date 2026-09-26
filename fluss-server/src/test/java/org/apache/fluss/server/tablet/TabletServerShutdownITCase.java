@@ -212,8 +212,10 @@ public class TabletServerShutdownITCase {
         FLUSS_CLUSTER_EXTENSION.startTabletServer(leader, true);
     }
 
-    @Test
-    void testControlledShutdownCleansKvWhenRestartedAsFollower() throws Exception {
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void testControlledShutdownCleansKvWhenRestartedAsFollower(boolean localRecovery)
+            throws Exception {
         TablePath tablePath = TablePath.of("test_shutdown", "kv_orphan_cleanup");
         long tableId =
                 createTable(
@@ -238,14 +240,20 @@ public class TabletServerShutdownITCase {
         File kvDir = replica.getKvTablet().getKvTabletDir();
         File logDir = replica.getLogTablet().getLogDir();
 
-        FLUSS_CLUSTER_EXTENSION.stopTabletServer(oldLeader);
-        try {
-            // Controlled shutdown closes the old leader's RocksDB without deleting its files.
-            assertThat(kvDir).isDirectory();
-            assertThat(kvDir.toPath().resolve("db"))
-                    .isDirectoryContaining(path -> path.toString().endsWith(".sst"));
-        } finally {
-            FLUSS_CLUSTER_EXTENSION.startTabletServer(oldLeader);
+        if (localRecovery) {
+            Configuration restartConf = new Configuration();
+            restartConf.set(ConfigOptions.KV_SNAPSHOT_LOCAL_RECOVERY_ENABLED, true);
+            FLUSS_CLUSTER_EXTENSION.restartTabletServer(oldLeader, restartConf);
+        } else {
+            FLUSS_CLUSTER_EXTENSION.stopTabletServer(oldLeader);
+            try {
+                // Controlled shutdown closes the old leader's RocksDB without deleting its files.
+                assertThat(kvDir).isDirectory();
+                assertThat(kvDir.toPath().resolve("db"))
+                        .isDirectoryContaining(path -> path.toString().endsWith(".sst"));
+            } finally {
+                FLUSS_CLUSTER_EXTENSION.startTabletServer(oldLeader);
+            }
         }
 
         Replica follower =

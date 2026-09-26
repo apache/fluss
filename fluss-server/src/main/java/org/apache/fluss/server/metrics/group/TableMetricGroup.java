@@ -178,6 +178,16 @@ public class TableMetricGroup extends AbstractMetricGroup {
         }
     }
 
+    /** Returns the number of snapshots loaded locally, before log replay. */
+    public Counter localKvSnapshotRestores() {
+        return kvMetrics == null ? NoOpCounter.INSTANCE : kvMetrics.localKvSnapshotRestores;
+    }
+
+    /** Returns the number of enabled local recovery attempts falling back to remote storage. */
+    public Counter localKvSnapshotFallbacks() {
+        return kvMetrics == null ? NoOpCounter.INSTANCE : kvMetrics.localKvSnapshotFallbacks;
+    }
+
     public void incKvMessageIn(long n) {
         if (kvMetrics == null) {
             NoOpCounter.INSTANCE.inc(n);
@@ -602,6 +612,8 @@ public class TableMetricGroup extends AbstractMetricGroup {
         private static final String LOOKUP_FILE_DOWNLOADED = "lookup_file_downloaded";
 
         private final Counter remoteKvCopyBytes;
+        private final Counter localKvSnapshotRestores;
+        private final Counter localKvSnapshotFallbacks;
 
         private final Counter totalLookupRequests;
         private final Counter failedLookupRequests;
@@ -624,6 +636,10 @@ public class TableMetricGroup extends AbstractMetricGroup {
             // for kv snapshot upload
             remoteKvCopyBytes = new ThreadSafeSimpleCounter();
             meter(MetricNames.REMOTE_KV_COPY_BYTES_RATE, new MeterView(remoteKvCopyBytes));
+            localKvSnapshotRestores =
+                    counter(MetricNames.LOCAL_KV_SNAPSHOT_RESTORES, new ThreadSafeSimpleCounter());
+            localKvSnapshotFallbacks =
+                    counter(MetricNames.LOCAL_KV_SNAPSHOT_FALLBACKS, new ThreadSafeSimpleCounter());
 
             // for lookup request
             totalLookupRequests = new ThreadSafeSimpleCounter();

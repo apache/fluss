@@ -46,6 +46,9 @@ import org.apache.fluss.server.log.LogTablet;
 import org.apache.fluss.server.metrics.group.TabletServerMetricGroup;
 import org.apache.fluss.server.storage.LocalDiskManager;
 import org.apache.fluss.server.zk.ZooKeeperClient;
+import org.apache.fluss.server.zk.data.BucketAssignment;
+import org.apache.fluss.server.zk.data.PartitionAssignment;
+import org.apache.fluss.server.zk.data.TableAssignment;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.BufferAllocator;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.BufferAllocatorUtil;
 import org.apache.fluss.utils.FileUtils;
@@ -78,10 +81,14 @@ import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Predicate;
@@ -372,8 +379,9 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
     }
 
     /**
-     * Starts the manager. Local recovery retains KV directories so assigned replicas can validate
-     * their checkpoints against committed snapshots. Unassigned directories remain on disk.
+     * Starts the manager. Local recovery retains only KV directories assigned to this server so
+     * replicas can validate their checkpoints against committed snapshots. Followers discard the
+     * retained directories when their role is assigned.
      *
      * <p>When local recovery is disabled, delete directories left by a previous TabletServer
      * process before accepting assignments. Scan the disk rather than registered tablets so that
@@ -383,9 +391,7 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
      * reopened as a live KV tablet.
      */
     public void startup() {
-        if (!conf.get(ConfigOptions.KV_SNAPSHOT_LOCAL_RECOVERY_ENABLED)) {
-            cleanupStaleKvDirectories();
-        }
+        cleanupStaleKvDirectories();
     }
 
     private void cleanupStaleKvDirectories() {
@@ -402,8 +408,15 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
                             List<File> staleDirs =
                                     listTabletsToLoad(
                                             realDataDir.toFile(), this::listCleanupDirectories);
+                            Set<File> retainedDirs =
+                                    conf.get(ConfigOptions.KV_SNAPSHOT_LOCAL_RECOVERY_ENABLED)
+                                            ? getAssignedKvDirectories(staleDirs)
+                                            : Collections.emptySet();
                             int deletedDirectories = 0;
                             for (File tabletDir : staleDirs) {
+                                if (retainedDirs.contains(tabletDir)) {
+                                    continue;
+                                }
                                 try {
                                     deleteStaleKvDirectory(tabletDir.toPath(), realDataDir);
                                     deletedDirectories++;
@@ -420,12 +433,83 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
                                     deletedDirectories,
                                     staleDirs.size(),
                                     dataDir);
-                        } catch (IOException e) {
+                        } catch (Exception e) {
                             LOG.warn(
                                     "Failed to clean stale KV directories in {}. Skipping remaining "
                                             + "cleanup for this data directory; startup will continue.",
                                     dataDir,
                                     e);
+                        }
+                    }
+                });
+    }
+
+    private Set<File> getAssignedKvDirectories(List<File> tabletDirs) throws Exception {
+        Map<File, TableBucket> buckets = new HashMap<>();
+        Set<Long> tableIds = new HashSet<>();
+        Set<Long> partitionIds = new HashSet<>();
+        for (File tabletDir : tabletDirs) {
+            if (tabletDir.getName().endsWith(FlussPaths.DELETED_FILE_SUFFIX)) {
+                continue;
+            }
+            final TableBucket bucket;
+            try {
+                bucket = FlussPaths.parseTabletDir(tabletDir).f1;
+            } catch (IllegalArgumentException | IllegalStateException e) {
+                LOG.warn("Cleaning invalid KV tablet directory {}.", tabletDir, e);
+                continue;
+            }
+            buckets.put(tabletDir, bucket);
+            if (bucket.getPartitionId() == null) {
+                tableIds.add(bucket.getTableId());
+            } else {
+                partitionIds.add(bucket.getPartitionId());
+            }
+        }
+
+        // Batch metadata reads before deleting anything. If ZK is unavailable, the caller keeps
+        // the directories on this disk rather than mistaking unknown assignments for orphans.
+        Map<Long, TableAssignment> tables = zkClient.getTablesAssignments(tableIds);
+        Map<Long, PartitionAssignment> partitions = zkClient.getPartitionsAssignments(partitionIds);
+        Set<File> retainedDirs = new HashSet<>();
+        for (Map.Entry<File, TableBucket> entry : buckets.entrySet()) {
+            TableBucket bucket = entry.getValue();
+            TableAssignment assignment;
+            if (bucket.getPartitionId() == null) {
+                assignment = tables.get(bucket.getTableId());
+            } else {
+                PartitionAssignment partition = partitions.get(bucket.getPartitionId());
+                assignment =
+                        partition != null && partition.getTableId() == bucket.getTableId()
+                                ? partition
+                                : null;
+            }
+            BucketAssignment bucketAssignment =
+                    assignment == null ? null : assignment.getBucketAssignment(bucket.getBucket());
+            if (bucketAssignment != null
+                    && bucketAssignment
+                            .getReplicas()
+                            .contains(conf.get(ConfigOptions.TABLET_SERVER_ID))) {
+                retainedDirs.add(entry.getKey());
+            }
+        }
+        return retainedDirs;
+    }
+
+    /** Deletes retained KV files for a replica without an open KV tablet. */
+    public void deleteRetainedKv(
+            File dataDir, PhysicalTablePath tablePath, TableBucket tableBucket) {
+        inLock(
+                tabletCreationOrDeletionLock,
+                () -> {
+                    checkState(!currentKvs.containsKey(tableBucket), "KV tablet is still open.");
+                    Path tabletDir = getTabletDir(dataDir, tablePath, tableBucket).toPath();
+                    if (Files.exists(tabletDir, LinkOption.NOFOLLOW_LINKS)) {
+                        try {
+                            deleteStaleKvDirectory(tabletDir, dataDir.toPath().toRealPath());
+                        } catch (IOException e) {
+                            throw new KvStorageException(
+                                    "Failed to delete retained KV directory " + tabletDir, e);
                         }
                     }
                 });

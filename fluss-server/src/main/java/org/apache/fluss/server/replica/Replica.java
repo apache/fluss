@@ -234,8 +234,8 @@ public final class Replica {
 
     /**
      * Server-wide {@link ScannerManager}. Active sessions for this bucket are closed in {@link
-     * #dropKv()} under the {@code leaderIsrUpdateLock} write lock; {@link #openScan} registers
-     * under the read lock, so registration cannot race a leadership flip.
+     * #dropKv(boolean)} under the {@code leaderIsrUpdateLock} write lock; {@link #openScan}
+     * registers under the read lock, so registration cannot race a leadership flip.
      */
     private final ScannerManager scannerManager;
 
@@ -620,7 +620,7 @@ public final class Replica {
                 leaderIsrUpdateLock,
                 () -> {
                     if (isKvTable()) {
-                        dropKv();
+                        dropKv(true);
                     }
                     // drop log then
                     logManager.dropLog(tableBucket);
@@ -655,7 +655,7 @@ public final class Replica {
             // if it's become new leader, we must
             // first destroy the old kv tablet
             // if exist. Otherwise, it'll use still the old kv tablet which will cause data loss
-            dropKv();
+            dropKv(false);
             // now, we can create a new kv tablet
             createKv();
         }
@@ -704,7 +704,7 @@ public final class Replica {
             }
 
             // it should be from leader to follower, we need to destroy the kv tablet
-            dropKv();
+            dropKv(true);
         }
 
         if (lakeTieringMetricGroup != null) {
@@ -792,7 +792,7 @@ public final class Replica {
         }
         if (lastError != null) {
             try {
-                dropKv();
+                dropKv(true);
             } catch (Exception cleanupError) {
                 lastError.addSuppressed(cleanupError);
             }
@@ -807,7 +807,7 @@ public final class Replica {
         }
     }
 
-    private void dropKv() {
+    private void dropKv(boolean deleteRetainedState) {
         // Release scanner leases first; otherwise resourceGuard.close() inside kvTablet.close()
         // blocks waiting for them. Runs under leaderIsrUpdateLock(W), so no concurrent register.
         scannerManager.closeScannersForBucket(tableBucket);
@@ -821,6 +821,9 @@ public final class Replica {
             checkNotNull(kvManager);
             kvManager.dropKv(tableBucket);
             kvTablet = null;
+        } else if (deleteRetainedState) {
+            checkNotNull(kvManager);
+            kvManager.deleteRetainedKv(logTablet.getDataDir(), physicalPath, tableBucket);
         }
     }
 
@@ -878,6 +881,12 @@ public final class Replica {
                         tableBucket,
                         physicalPath);
                 CompletedSnapshot completedSnapshot = optCompletedSnapshot.get();
+                // A previous attempt may have opened RocksDB before failing during log replay.
+                // Close it before replacing its files and opening the restored snapshot again.
+                if (kvTablet != null) {
+                    kvManager.dropKv(tableBucket);
+                    kvTablet = null;
+                }
                 kvTablet = restoreKvTablet(completedSnapshot);
 
                 checkNotNull(kvTablet, "kv tablet should not be null.");
@@ -955,7 +964,7 @@ public final class Replica {
 
     private KvTablet restoreKvTablet(CompletedSnapshot completedSnapshot) throws Exception {
         checkNotNull(kvManager);
-        long start = System.currentTimeMillis();
+        long start = clock.milliseconds();
         Optional<File> optionalTabletDir =
                 snapshotContext.isLocalRecoveryEnabled()
                         ? kvManager.restoreKvFromLocalSnapshot(
@@ -969,12 +978,13 @@ public final class Replica {
                 KvTablet restoredKvTablet =
                         kvManager.loadKv(
                                 optionalTabletDir.get(), schemaGetter, this::onKvFlushComplete);
+                tableMetrics().localKvSnapshotRestores().inc();
                 LOG.info(
                         "Rebuilt kv tablet for {} of table {} from retained local snapshot {} that costs {} ms.",
                         tableBucket,
                         physicalPath,
                         completedSnapshot.getSnapshotID(),
-                        System.currentTimeMillis() - start);
+                        clock.milliseconds() - start);
                 return restoredKvTablet;
             } catch (KvBuildingException localRecoveryException) {
                 LOG.warn(
@@ -985,6 +995,7 @@ public final class Replica {
                         physicalPath,
                         localRecoveryException);
                 try {
+                    tableMetrics().localKvSnapshotFallbacks().inc();
                     return downloadAndLoadKvSnapshot(completedSnapshot);
                 } catch (Exception remoteRecoveryException) {
                     remoteRecoveryException.addSuppressed(localRecoveryException);
@@ -993,6 +1004,9 @@ public final class Replica {
             }
         }
 
+        if (snapshotContext.isLocalRecoveryEnabled()) {
+            tableMetrics().localKvSnapshotFallbacks().inc();
+        }
         return downloadAndLoadKvSnapshot(completedSnapshot);
     }
 

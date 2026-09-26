@@ -53,6 +53,8 @@ class LocalKvSnapshotUtilsTest {
                 LocalKvSnapshotUtils.getSnapshotDirectory(tabletDir.toFile(), 1L).toPath();
         Files.createDirectories(staleSnapshot);
         Files.write(staleSnapshot.resolve("stale"), new byte[] {1});
+        Path staleRestore = Files.createDirectories(tabletDir.resolve(".db-restore-1"));
+        Files.write(staleRestore.resolve("000001.sst"), new byte[] {1});
 
         Path snapshotDirectory =
                 LocalKvSnapshotUtils.getSnapshotDirectory(tabletDir.toFile(), snapshotId).toPath();
@@ -75,6 +77,7 @@ class LocalKvSnapshotUtilsTest {
         assertThat(activeDb.resolve("CURRENT")).hasBinaryContent(currentBytes);
         assertThat(snapshotDirectory).isDirectory();
         assertThat(staleSnapshot).doesNotExist();
+        assertThat(staleRestore).doesNotExist();
 
         // Mutable RocksDB metadata must be copied rather than linked back into the checkpoint.
         Files.write(activeDb.resolve("CURRENT"), "MANIFEST-2".getBytes(StandardCharsets.UTF_8));

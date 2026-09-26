@@ -2120,6 +2120,12 @@ public class ConfigOptions {
                     .defaultValue(false)
                     .withDescription(
                             "Whether to retain the latest completed KV snapshot locally and use it for recovery. "
+                                    + "Recovery requires a local checkpoint matching the latest committed snapshot "
+                                    + "and primarily benefits restarts without a leader change, for example with "
+                                    + "a single replica or no other eligible in-sync replica. Retained files are "
+                                    + "discarded when the replica becomes a follower. Snapshot hard links can "
+                                    + "keep obsolete SST files on disk after compaction until a newer snapshot "
+                                    + "completes and the old checkpoint is removed. "
                                     + "By default, local recovery is disabled and KV snapshots are restored from remote storage.");
 
     public static final ConfigOption<Integer> KV_SNAPSHOT_SCHEDULER_THREAD_NUM =
