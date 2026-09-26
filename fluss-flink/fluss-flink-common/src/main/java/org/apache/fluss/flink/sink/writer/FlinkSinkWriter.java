@@ -60,6 +60,7 @@ public abstract class FlinkSinkWriter<InputT> implements SinkWriter<InputT> {
     private final TablePath tablePath;
     private final Configuration flussConfig;
     protected final RowType tableRowType;
+    protected final RowType consumedRowType;
     protected final @Nullable int[] targetColumnIndexes;
     private final MailboxExecutor mailboxExecutor;
     private final FlussSerializationSchema<InputT> serializationSchema;
@@ -80,13 +81,21 @@ public abstract class FlinkSinkWriter<InputT> implements SinkWriter<InputT> {
             RowType tableRowType,
             MailboxExecutor mailboxExecutor,
             FlussSerializationSchema<InputT> serializationSchema) {
-        this(tablePath, flussConfig, tableRowType, null, mailboxExecutor, serializationSchema);
+        this(
+                tablePath,
+                flussConfig,
+                tableRowType,
+                tableRowType,
+                null,
+                mailboxExecutor,
+                serializationSchema);
     }
 
     public FlinkSinkWriter(
             TablePath tablePath,
             Configuration flussConfig,
             RowType tableRowType,
+            RowType consumedRowType,
             @Nullable int[] targetColumns,
             MailboxExecutor mailboxExecutor,
             FlussSerializationSchema<InputT> serializationSchema) {
@@ -94,6 +103,7 @@ public abstract class FlinkSinkWriter<InputT> implements SinkWriter<InputT> {
         this.flussConfig = flussConfig;
         this.targetColumnIndexes = targetColumns;
         this.tableRowType = tableRowType;
+        this.consumedRowType = consumedRowType;
         this.mailboxExecutor = mailboxExecutor;
         this.serializationSchema = serializationSchema;
     }
@@ -119,7 +129,7 @@ public abstract class FlinkSinkWriter<InputT> implements SinkWriter<InputT> {
         try {
             this.serializationSchema.open(
                     new SerializerInitContextImpl(
-                            table.getTableInfo().getRowType(), tableRowType, false));
+                            table.getTableInfo().getRowType(), consumedRowType, false));
         } catch (Exception e) {
             throw new FlussRuntimeException(e);
         }

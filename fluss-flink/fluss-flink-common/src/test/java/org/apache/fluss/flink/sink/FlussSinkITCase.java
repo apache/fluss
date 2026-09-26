@@ -134,7 +134,7 @@ public class FlussSinkITCase extends FlinkTestBase {
         RowDataSerializationSchema serializationSchema =
                 new RowDataSerializationSchema(false, true);
 
-        DataStream<RowData> stream = env.fromData(inputRows);
+        DataStream<RowData> stream = env.fromCollection(inputRows);
 
         FlinkSink<RowData> flussSink =
                 FlussSink.<RowData>builder()
@@ -207,7 +207,7 @@ public class FlussSinkITCase extends FlinkTestBase {
 
         RowDataSerializationSchema serializationSchema = new RowDataSerializationSchema(true, true);
 
-        DataStream<RowData> stream = env.fromData(inputRows);
+        DataStream<RowData> stream = env.fromCollection(inputRows);
 
         FlinkSink<RowData> flussSink =
                 FlussSink.<RowData>builder()
@@ -262,7 +262,7 @@ public class FlussSinkITCase extends FlinkTestBase {
         orders.add(new TestOrder(900, 240, 603, "addr4", RowKind.UPDATE_AFTER));
 
         // Create a DataStream from the FlussSource
-        DataStream<TestOrder> stream = env.fromData(orders);
+        DataStream<TestOrder> stream = env.fromCollection(orders);
 
         FlinkSink<TestOrder> flussSink =
                 FlussSink.<TestOrder>builder()
@@ -320,7 +320,7 @@ public class FlussSinkITCase extends FlinkTestBase {
         initialOrders.add(new TestOrder(2002, 3002, null, null, RowKind.INSERT));
         initialOrders.add(new TestOrder(2003, 3003, null, null, RowKind.INSERT));
 
-        DataStream<TestOrder> initialStream = env.fromData(initialOrders);
+        DataStream<TestOrder> initialStream = env.fromCollection(initialOrders);
 
         FlinkSink<TestOrder> initialSink =
                 FlussSink.<TestOrder>builder()
@@ -338,7 +338,7 @@ public class FlussSinkITCase extends FlinkTestBase {
         itemIdUpdates.add(new TestOrder(2001, -1, 100, "addr1", RowKind.UPDATE_AFTER));
         itemIdUpdates.add(new TestOrder(2003, -1, 300, "addr3", RowKind.UPDATE_AFTER));
 
-        DataStream<TestOrder> updateStream = env.fromData(itemIdUpdates);
+        DataStream<TestOrder> updateStream = env.fromCollection(itemIdUpdates);
 
         FlinkSink<TestOrder> updateSink =
                 FlussSink.<TestOrder>builder()
@@ -449,7 +449,7 @@ public class FlussSinkITCase extends FlinkTestBase {
 
         // Execute initial inserts in a dedicated, synchronous Flink job to ensure they land first
         StreamExecutionEnvironment insertEnv = StreamExecutionEnvironment.getExecutionEnvironment();
-        DataStream<RowData> insertStream = insertEnv.fromData(inserts);
+        DataStream<RowData> insertStream = insertEnv.fromCollection(inserts);
         RowDataSerializationSchema insertSerializationSchema =
                 new RowDataSerializationSchema(false, true);
         FlinkSink<RowData> insertSink =
@@ -467,8 +467,8 @@ public class FlussSinkITCase extends FlinkTestBase {
         // Now start partial updates in a separate async job to avoid racing with inserts
         StreamExecutionEnvironment updatesEnv =
                 StreamExecutionEnvironment.getExecutionEnvironment();
-        DataStream<RowData> streamWriter1 = updatesEnv.fromData(updatesWriter1);
-        DataStream<RowData> streamWriter2 = updatesEnv.fromData(updatesWriter2);
+        DataStream<RowData> streamWriter1 = updatesEnv.fromCollection(updatesWriter1);
+        DataStream<RowData> streamWriter2 = updatesEnv.fromCollection(updatesWriter2);
 
         RowDataSerializationSchema updatesSerializationSchema =
                 new RowDataSerializationSchema(false, true);
@@ -582,7 +582,7 @@ public class FlussSinkITCase extends FlinkTestBase {
 
         // Stage 1: run inserts in a dedicated synchronous job to avoid race with partial updates
         StreamExecutionEnvironment insertEnv = StreamExecutionEnvironment.getExecutionEnvironment();
-        DataStream<RowData> insertStream = insertEnv.fromData(inserts);
+        DataStream<RowData> insertStream = insertEnv.fromCollection(inserts);
         RowDataSerializationSchema insertSerializationSchema =
                 new RowDataSerializationSchema(false, true);
         FlinkSink<RowData> insertSink =
@@ -597,7 +597,7 @@ public class FlussSinkITCase extends FlinkTestBase {
 
         // Stage 2: start partial updates in a separate async job
         StreamExecutionEnvironment updateEnv = StreamExecutionEnvironment.getExecutionEnvironment();
-        DataStream<RowData> updateStream = updateEnv.fromData(updates);
+        DataStream<RowData> updateStream = updateEnv.fromCollection(updates);
         RowDataSerializationSchema updateSerializationSchema =
                 new RowDataSerializationSchema(false, true);
         FlinkSink<RowData> partialSink =
