@@ -65,7 +65,7 @@ public final class LogSegmentRule implements FileRule {
             return Decision.KEEP_ACTIVE;
         }
 
-        return file.modificationTime() < cutoffMillis ? Decision.DELETE : Decision.DEFER;
+        return MtimePolicy.evaluateInactiveFile(file.modificationTime(), cutoffMillis);
     }
 
     static boolean isSegmentDir(String dirName) {

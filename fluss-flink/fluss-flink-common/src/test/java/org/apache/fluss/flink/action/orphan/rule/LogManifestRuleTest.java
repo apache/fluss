@@ -71,6 +71,14 @@ class LogManifestRuleTest {
     }
 
     @Test
+    void keepsInactiveManifestWhenMtimeIsUnavailable() {
+        FileMeta file = file("/log/db/t-1/0/metadata/orphan.manifest", Long.MAX_VALUE);
+
+        assertThat(optInRule.evaluate(file, BucketActiveRefs.empty(), CUTOFF_MS))
+                .isEqualTo(Decision.MTIME_UNAVAILABLE);
+    }
+
+    @Test
     void skipsUnknownFileInMetadataDirectory() {
         FileMeta file = file("/log/db/t-1/0/metadata/readme.txt", NOW - 2 * DAY_MS);
 
