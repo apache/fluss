@@ -29,7 +29,6 @@ import org.apache.fluss.row.ProjectedRow;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.AllocationManager;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.BufferAllocator;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.BufferAllocatorUtil;
-import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.ChunkedAllocationManager;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.VectorSchemaRoot;
 import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.RowType;
@@ -173,8 +172,10 @@ public class LogRecordReadContext
             @Nullable ReadTarget target,
             boolean projectionPushDowned,
             SchemaGetter schemaGetter,
-            AllocationManager.Factory allocationManagerFactory) {
+            @Nullable AllocationManager.Factory allocationManagerFactory) {
         // TODO: use a more reasonable memory limit
+        // When allocationManagerFactory is null, the RootAllocator falls back to Arrow's default
+        // Netty-based allocator, so the context owns nothing beyond the allocator it closes.
         BufferAllocator allocator =
                 BufferAllocatorUtil.createBufferAllocator(allocationManagerFactory);
         return new LogRecordReadContext(
@@ -199,7 +200,8 @@ public class LogRecordReadContext
 
     /**
      * Creates a LogRecordReadContext for ARROW log format, that underlying Arrow resources are not
-     * reused.
+     * reused. The context uses Arrow's default Netty-based allocator, so no external allocation
+     * factory needs to be tracked or closed by the caller.
      *
      * @param rowType the schema of the table
      * @param schemaId the schemaId of the table
@@ -210,8 +212,7 @@ public class LogRecordReadContext
             RowType rowType, int schemaId, SchemaGetter schemaGetter) {
         int[] selectedFields = IntStream.range(0, rowType.getFieldCount()).toArray();
         ReadTarget target = new ReadTarget(schemaId, rowType, selectedFields);
-        return createArrowReadContext(
-                -1L, target, false, schemaGetter, new ChunkedAllocationManager.ChunkedFactory());
+        return createArrowReadContext(-1L, target, false, schemaGetter, null);
     }
 
     @VisibleForTesting
@@ -222,12 +223,7 @@ public class LogRecordReadContext
             boolean projectionPushDowned) {
         int[] selectedFields = IntStream.range(0, rowType.getFieldCount()).toArray();
         ReadTarget target = new ReadTarget(schemaId, rowType, selectedFields);
-        return createArrowReadContext(
-                -1L,
-                target,
-                projectionPushDowned,
-                schemaGetter,
-                new ChunkedAllocationManager.ChunkedFactory());
+        return createArrowReadContext(-1L, target, projectionPushDowned, schemaGetter, null);
     }
 
     /**
