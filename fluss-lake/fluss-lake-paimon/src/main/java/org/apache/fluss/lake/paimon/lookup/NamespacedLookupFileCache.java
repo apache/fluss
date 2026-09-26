@@ -22,6 +22,7 @@ import org.apache.paimon.shade.caffeine2.com.github.benmanes.caffeine.cache.Cach
 import org.apache.paimon.shade.caffeine2.com.github.benmanes.caffeine.cache.Policy;
 import org.apache.paimon.shade.caffeine2.com.github.benmanes.caffeine.cache.stats.CacheStats;
 
+import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
 
 import java.util.AbstractMap;
@@ -47,18 +48,19 @@ final class NamespacedLookupFileCache implements Cache<String, LookupFile> {
     }
 
     @Override
-    public @Nullable LookupFile getIfPresent(Object fileName) {
+    public @Nullable LookupFile getIfPresent(@Nonnull Object fileName) {
         return fileName instanceof String ? sharedCache.getIfPresent(key((String) fileName)) : null;
     }
 
     @Override
-    public LookupFile get(
-            String fileName, Function<? super String, ? extends LookupFile> mappingFunction) {
+    public @Nullable LookupFile get(
+            @Nonnull String fileName,
+            @Nonnull Function<? super String, ? extends LookupFile> mappingFunction) {
         return sharedCache.get(key(fileName), ignored -> mappingFunction.apply(fileName));
     }
 
     @Override
-    public Map<String, LookupFile> getAllPresent(Iterable<?> fileNames) {
+    public @Nonnull Map<String, LookupFile> getAllPresent(@Nonnull Iterable<?> fileNames) {
         Map<String, LookupFile> result = new LinkedHashMap<>();
         for (Object fileName : fileNames) {
             LookupFile lookupFile = getIfPresent(fileName);
@@ -70,24 +72,24 @@ final class NamespacedLookupFileCache implements Cache<String, LookupFile> {
     }
 
     @Override
-    public void put(String fileName, LookupFile lookupFile) {
+    public void put(@Nonnull String fileName, @Nonnull LookupFile lookupFile) {
         sharedCache.put(key(fileName), lookupFile);
     }
 
     @Override
-    public void putAll(Map<? extends String, ? extends LookupFile> entries) {
+    public void putAll(@Nonnull Map<? extends String, ? extends LookupFile> entries) {
         entries.forEach(this::put);
     }
 
     @Override
-    public void invalidate(Object fileName) {
+    public void invalidate(@Nonnull Object fileName) {
         if (fileName instanceof String) {
             sharedCache.invalidate(key((String) fileName));
         }
     }
 
     @Override
-    public void invalidateAll(Iterable<?> fileNames) {
+    public void invalidateAll(@Nonnull Iterable<?> fileNames) {
         for (Object fileName : fileNames) {
             invalidate(fileName);
         }
@@ -95,8 +97,8 @@ final class NamespacedLookupFileCache implements Cache<String, LookupFile> {
 
     @Override
     public void invalidateAll() {
-        // ponytail: O(n) namespace scan; add a namespace index if cache cardinality makes close
-        // slow.
+        // This view owns only its namespace; never invalidate the entire shared cache.
+        // ponytail: O(n) scan of all cached files; add a namespace index if close becomes slow.
         Set<SharedLookupFileCache.Key> keys = new HashSet<>();
         for (SharedLookupFileCache.Key key : sharedCache.asMap().keySet()) {
             if (key.namespace.equals(namespace)) {
@@ -114,12 +116,12 @@ final class NamespacedLookupFileCache implements Cache<String, LookupFile> {
     }
 
     @Override
-    public CacheStats stats() {
+    public @Nonnull CacheStats stats() {
         return sharedCache.stats();
     }
 
     @Override
-    public ConcurrentMap<String, LookupFile> asMap() {
+    public @Nonnull ConcurrentMap<String, LookupFile> asMap() {
         return new NamespacedMap();
     }
 
@@ -129,7 +131,7 @@ final class NamespacedLookupFileCache implements Cache<String, LookupFile> {
     }
 
     @Override
-    public Policy<String, LookupFile> policy() {
+    public @Nonnull Policy<String, LookupFile> policy() {
         throw new UnsupportedOperationException(
                 "Policy access is not supported by the namespaced cache view.");
     }

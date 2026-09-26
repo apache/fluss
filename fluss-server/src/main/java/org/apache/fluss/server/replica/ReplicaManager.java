@@ -479,9 +479,9 @@ public class ReplicaManager implements ServerReconfigurable {
         historicalMetrics.gauge(
                 MetricNames.HISTORICAL_LOOKUP_CACHE_TABLE_COUNT,
                 historicalPartitionManager::cachedTableCount);
-        historicalMetrics.counter(
-                MetricNames.HISTORICAL_LOOKUP_CACHE_CAPACITY_EVICTIONS,
-                historicalPartitionManager.capacityEvictions());
+        historicalMetrics.gauge(
+                MetricNames.HISTORICAL_LOOKUP_CACHE_FILE_CAPACITY_EVICTIONS,
+                historicalPartitionManager::fileCacheCapacityEvictions);
 
         serverMetricGroup.gauge(
                 MetricNames.REPLICA_LEADER_COUNT,
