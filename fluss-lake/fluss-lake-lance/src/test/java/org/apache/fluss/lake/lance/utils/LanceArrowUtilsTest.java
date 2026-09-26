@@ -20,6 +20,7 @@ package org.apache.fluss.lake.lance.utils;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.types.RowType;
 
+import org.apache.arrow.vector.types.TimeUnit;
 import org.apache.arrow.vector.types.pojo.ArrowType;
 import org.apache.arrow.vector.types.pojo.Field;
 import org.apache.arrow.vector.types.pojo.Schema;
@@ -297,5 +298,69 @@ class LanceArrowUtilsTest {
         assertThat(tagsChildren).hasSize(1);
         assertThat(tagsChildren.get(0).getName()).isEqualTo("element");
         assertThat(tagsChildren.get(0).getType()).isEqualTo(ArrowType.Utf8.INSTANCE);
+    }
+
+    @Test
+    void testToArrowSchemaWithDecimal() {
+        RowType rowType =
+                DataTypes.ROW(
+                        DataTypes.FIELD("small_dec", DataTypes.DECIMAL(9, 2)),
+                        DataTypes.FIELD("large_dec", DataTypes.DECIMAL(20, 4)));
+
+        Schema schema = LanceArrowUtils.toArrowSchema(rowType);
+
+        Field smallField = schema.findField("small_dec");
+        assertThat(smallField.getType()).isInstanceOf(ArrowType.Decimal.class);
+        ArrowType.Decimal smallDec = (ArrowType.Decimal) smallField.getType();
+        assertThat(smallDec.getPrecision()).isEqualTo(9);
+        assertThat(smallDec.getScale()).isEqualTo(2);
+
+        Field largeField = schema.findField("large_dec");
+        assertThat(largeField.getType()).isInstanceOf(ArrowType.Decimal.class);
+        ArrowType.Decimal largeDec = (ArrowType.Decimal) largeField.getType();
+        assertThat(largeDec.getPrecision()).isEqualTo(20);
+        assertThat(largeDec.getScale()).isEqualTo(4);
+    }
+
+    @Test
+    void testToArrowSchemaWithTimestampLtz() {
+        RowType rowType =
+                DataTypes.ROW(
+                        DataTypes.FIELD("ts_sec", DataTypes.TIMESTAMP_LTZ(0)),
+                        DataTypes.FIELD("ts_ms", DataTypes.TIMESTAMP_LTZ(3)),
+                        DataTypes.FIELD("ts_us", DataTypes.TIMESTAMP_LTZ(6)),
+                        DataTypes.FIELD("ts_ns", DataTypes.TIMESTAMP_LTZ(9)));
+
+        Schema schema = LanceArrowUtils.toArrowSchema(rowType);
+
+        assertThat(((ArrowType.Timestamp) schema.findField("ts_sec").getType()).getUnit())
+                .isEqualTo(TimeUnit.SECOND);
+        assertThat(((ArrowType.Timestamp) schema.findField("ts_ms").getType()).getUnit())
+                .isEqualTo(TimeUnit.MILLISECOND);
+        assertThat(((ArrowType.Timestamp) schema.findField("ts_us").getType()).getUnit())
+                .isEqualTo(TimeUnit.MICROSECOND);
+        assertThat(((ArrowType.Timestamp) schema.findField("ts_ns").getType()).getUnit())
+                .isEqualTo(TimeUnit.NANOSECOND);
+    }
+
+    @Test
+    void testToArrowSchemaWithTimestampNtz() {
+        RowType rowType =
+                DataTypes.ROW(
+                        DataTypes.FIELD("ts_sec", DataTypes.TIMESTAMP(0)),
+                        DataTypes.FIELD("ts_ms", DataTypes.TIMESTAMP(3)),
+                        DataTypes.FIELD("ts_us", DataTypes.TIMESTAMP(6)),
+                        DataTypes.FIELD("ts_ns", DataTypes.TIMESTAMP(9)));
+
+        Schema schema = LanceArrowUtils.toArrowSchema(rowType);
+
+        assertThat(((ArrowType.Timestamp) schema.findField("ts_sec").getType()).getUnit())
+                .isEqualTo(TimeUnit.SECOND);
+        assertThat(((ArrowType.Timestamp) schema.findField("ts_ms").getType()).getUnit())
+                .isEqualTo(TimeUnit.MILLISECOND);
+        assertThat(((ArrowType.Timestamp) schema.findField("ts_us").getType()).getUnit())
+                .isEqualTo(TimeUnit.MICROSECOND);
+        assertThat(((ArrowType.Timestamp) schema.findField("ts_ns").getType()).getUnit())
+                .isEqualTo(TimeUnit.NANOSECOND);
     }
 }
