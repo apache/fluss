@@ -17,7 +17,7 @@
 
 package org.apache.fluss.spark
 
-import org.apache.fluss.spark.procedure.{GetClusterConfigsProcedure, ProcedureBuilder}
+import org.apache.fluss.spark.procedure.{GetClusterConfigsProcedure, ProcedureBuilder, ResetClusterConfigsProcedure, SetClusterConfigsProcedure}
 
 import java.util.Locale
 
@@ -34,7 +34,9 @@ object SparkProcedures {
 
   private def initProcedureBuilders(): Map[String, () => ProcedureBuilder] = {
     Map(
-      "get_cluster_configs" -> (() => GetClusterConfigsProcedure.builder())
+      "get_cluster_configs" -> (() => GetClusterConfigsProcedure.builder()),
+      "set_cluster_configs" -> (() => SetClusterConfigsProcedure.builder()),
+      "reset_cluster_configs" -> (() => ResetClusterConfigsProcedure.builder())
     )
   }
 }
