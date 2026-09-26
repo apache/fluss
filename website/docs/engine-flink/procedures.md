@@ -38,10 +38,10 @@ CALL [catalog_name.]sys.add_acl(
 
 **Parameters:**
 
-- `resource` (required): The resource to grant permissions on. Can be `'CLUSTER'` for cluster-level permissions or a specific resource name (e.g., database or table name).
-- `permission` (required): The permission type to grant. Valid values are `'ALLOW'` or `'DENY'`.
+- `resource` (required): The resource to grant permissions on. Must be `'cluster'` for cluster-level permissions, `'cluster.<database>'` for a database, or `'cluster.<database>.<table>'` for a table.
+- `permission` (required): The permission type to grant. Currently only `'ALLOW'` is supported.
 - `principal` (required): The principal to grant permissions to, in the format `'Type:Name'` (e.g., `'User:Alice'`).
-- `operation` (required): The operation type to grant. Valid values include `'READ'`, `'WRITE'`, `'CREATE'`, `'DELETE'`, `'ALTER'`, `'DESCRIBE'`, `'CLUSTER_ACTION'`, `'IDEMPOTENT_WRITE'`.
+- `operation` (required): The operation type to grant. Valid values are `'READ'`, `'WRITE'`, `'CREATE'`, `'DROP'`, `'ALTER'`, `'DESCRIBE'`, and `'ALL'`. `'ANY'` is only for filters and should not be used when adding ACLs.
 - `host` (optional): The host from which the principal can access the resource. Defaults to `'*'` (all hosts).
 
 **Example:**
@@ -52,7 +52,7 @@ USE fluss_catalog;
 
 -- Grant read permission to user Alice from any host
 CALL sys.add_acl(
-  resource => 'CLUSTER',
+  resource => 'cluster',
   permission => 'ALLOW',
   principal => 'User:Alice',
   operation => 'READ',
@@ -61,7 +61,7 @@ CALL sys.add_acl(
 
 -- Grant write permission to user Bob from a specific host
 CALL sys.add_acl(
-  resource => 'my_database.my_table',
+  resource => 'cluster.my_database.my_table',
   permission => 'ALLOW',
   principal => 'User:Bob',
   operation => 'WRITE',
@@ -97,7 +97,7 @@ USE fluss_catalog;
 
 -- Remove a specific ACL entry
 CALL sys.drop_acl(
-  resource => 'CLUSTER',
+  resource => 'cluster',
   permission => 'ALLOW',
   principal => 'User:Alice',
   operation => 'READ',
