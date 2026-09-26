@@ -29,6 +29,7 @@ import org.apache.fluss.client.utils.ClientUtils;
 import org.apache.fluss.cluster.Cluster;
 import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.cluster.rebalance.GoalType;
+import org.apache.fluss.cluster.rebalance.RebalanceInfo;
 import org.apache.fluss.cluster.rebalance.RebalanceProgress;
 import org.apache.fluss.cluster.rebalance.ServerTag;
 import org.apache.fluss.config.cluster.AlterConfig;
@@ -95,6 +96,7 @@ import org.apache.fluss.rpc.messages.ListOffsetsResponse;
 import org.apache.fluss.rpc.messages.ListPartitionInfosRequest;
 import org.apache.fluss.rpc.messages.ListPartitionInfosResponse;
 import org.apache.fluss.rpc.messages.ListRebalanceProgressRequest;
+import org.apache.fluss.rpc.messages.ListRebalancesRequest;
 import org.apache.fluss.rpc.messages.ListRemoteLogManifestsRequest;
 import org.apache.fluss.rpc.messages.ListTablesRequest;
 import org.apache.fluss.rpc.messages.ListTablesResponse;
@@ -928,6 +930,12 @@ public class FlussAdmin implements Admin {
         }
 
         return gateway.cancelRebalance(request).thenApply(r -> null);
+    }
+
+    @Override
+    public CompletableFuture<List<RebalanceInfo>> listRebalances() {
+        ListRebalancesRequest request = new ListRebalancesRequest();
+        return gateway.listRebalances(request).thenApply(ClientRpcMessageUtils::toRebalanceInfos);
     }
 
     // ==================================================================================
