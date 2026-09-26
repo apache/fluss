@@ -54,6 +54,24 @@ mvn clean install -DskipTests -T 1C
 - For local testing, it's recommend to use directory `${project}/build-target` in project.
 - For deploying distributed cluster, it's recommend to use binary file named `fluss-xxx-bin.tgz`, the file is in directory `${project}/fluss-dist/target`.
 
+## Shaded dependencies
+
+Fluss shades its third-party dependencies (Guava, Jackson, Netty, Arrow,
+ZooKeeper) into the `org.apache.fluss.shaded.*` packages. Never import the
+unshaded originals in module code — the complete list of forbidden imports is in
+[AGENTS.md](https://github.com/apache/fluss/blob/main/AGENTS.md).
+
+Two shading pitfalls to know when touching the build:
+
+- The Maven Shade Plugin **does not relocate Multi-Release JAR entries**
+  (`META-INF/versions/**`). Dependencies that ship MRJ classes (e.g. Jackson)
+  will leak unshaded classes into the uber-jar unless the shade configuration
+  adds an explicit exclusion filter for that path.
+- `combine.children="append"` on the shade plugin configuration **appends** child
+  filters to the parent's instead of replacing them. A cross-module exclusion
+  therefore has to live in the root `pom.xml` shade configuration to apply to
+  every module.
+
 ## Building the Rust client (fluss-rust)
 
 The Rust client, language bindings, and examples live under `fluss-rust/` and build with Cargo. You need **Rust** (the toolchain pinned in `fluss-rust/rust-toolchain.toml`, currently 1.85+). The code generated from the canonical `fluss-rpc/src/main/proto/FlussApi.proto` is checked in, so **protoc** is only needed when the proto changes — run `fluss-rust/crates/fluss/regen.sh` and commit the result.
