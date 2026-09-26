@@ -164,6 +164,56 @@ abstract class OrphanFilesCleanITCase extends AbstractTestBase {
     private static final Duration OLD_ENOUGH = Duration.ofDays(2);
 
     @Test
+    void emptyScopeEmitsCompleteResultsForEverySubtask() throws Exception {
+        String runId = "empty-" + System.nanoTime();
+        runCleanerForDatabase(
+                true,
+                newDatabaseName("absent"),
+                "--parallelism",
+                "3",
+                "--conf",
+                "audit.run-id=" + runId,
+                "--conf",
+                "audit.cluster-id=test-cluster");
+        List<String> events =
+                auditMessages().stream()
+                        .filter(message -> message.contains("run_id=" + runId + " "))
+                        .collect(java.util.stream.Collectors.toList());
+        assertThat(events)
+                .allMatch(
+                        message ->
+                                message.contains("audit_version=1")
+                                        && message.contains("cluster_id=test-cluster"));
+        assertThat(events.stream().filter(message -> message.contains("action=scope_plan ")))
+                .singleElement()
+                .asString()
+                .contains("bucket_tasks=0", "orphan_dir_tasks=0");
+        List<String> scans =
+                events.stream()
+                        .filter(message -> message.contains("action=scan_subtask_summary "))
+                        .collect(java.util.stream.Collectors.toList());
+        assertThat(scans)
+                .hasSize(3)
+                .allMatch(
+                        message ->
+                                message.contains("tasks_completed=0")
+                                        && message.contains("attempt=0")
+                                        && message.contains("dry_run=true"));
+        for (int subtask = 0; subtask < 3; subtask++) {
+            final String expected = "subtask=" + subtask + " ";
+            assertThat(scans).anyMatch(message -> message.contains(expected));
+        }
+        assertThat(events.stream().filter(message -> message.contains("action=audit_integrity ")))
+                .singleElement()
+                .asString()
+                .doesNotContain("=false");
+        assertThat(events.stream().filter(message -> message.contains("action=summary ")))
+                .singleElement()
+                .asString()
+                .contains("scanned=0", "deleted_files=0", "dry_run=true");
+    }
+
+    @Test
     @MultiVersionTest
     void mixedOrphanAndActiveFilesInSameBucket() throws Exception {
         String dbName = newDatabaseName("mixed");
@@ -275,15 +325,76 @@ abstract class OrphanFilesCleanITCase extends AbstractTestBase {
                                         && m.contains(activeSegment.toString()));
     }
 
+    @Test
+    void cleansOldSnapshotWhenBucketHasNoActiveSnapshots() throws Exception {
+        String dbName = newDatabaseName("no_snapshot");
+        TablePath tablePath = createPrimaryKeyTable(dbName, "partial_first_snapshot");
+        TableInfo tableInfo = admin.getTableInfo(tablePath).get();
+        TableBucket tableBucket = new TableBucket(tableInfo.getTableId(), 0);
+        FsPath remoteKvTabletDir =
+                FlussPaths.remoteKvTabletDir(
+                        new FsPath(remoteDataRoot().resolve("kv").toUri().toString()),
+                        PhysicalTablePath.of(tablePath),
+                        tableBucket);
+        Path orphan =
+                localPath(FlussPaths.remoteKvSnapshotDir(remoteKvTabletDir, 99L))
+                        .resolve("_METADATA");
+        Files.createDirectories(orphan.getParent());
+        Files.write(orphan, new byte[] {0x55});
+        makeOld(orphan);
+        makeOld(orphan.getParent());
+
+        runCleanerForDatabase(false, dbName);
+
+        assertThat(Files.exists(orphan)).isFalse();
+        assertThat(auditMessages())
+                .anyMatch(
+                        message ->
+                                message.contains("action=scan_kv_bucket_without_active_snapshots")
+                                        && message.contains("reason=no_active_snapshots"));
+        assertThat(auditMessages())
+                .anyMatch(
+                        message ->
+                                message.contains("action=deleted")
+                                        && message.contains("rule=kv-snapshot-file")
+                                        && message.contains(orphan.toString()));
+        assertThat(auditMessages())
+                .anyMatch(
+                        message ->
+                                message.contains("action=coverage_summary")
+                                        && message.contains("no_remote_manifest_targets=0")
+                                        && message.contains("empty_active_set_targets=0"));
+    }
+
+    @Test
+    void cleansOldLogSegmentWhenBucketHasNoRemoteManifest() throws Exception {
+        String dbName = newDatabaseName("nomanifest");
+        TablePath tablePath = createLogTable(dbName, "partial_first_tiering");
+        Path orphan = createOldSegmentFile(tablePath, "99999999999999999999.log");
+
+        runCleanerForDatabase(false, dbName);
+
+        assertThat(Files.exists(orphan)).isFalse();
+        assertThat(auditMessages())
+                .anyMatch(
+                        message ->
+                                message.contains("action=scan_log_bucket_without_manifest")
+                                        && message.contains("reason=no_remote_manifest"));
+        assertThat(auditMessages())
+                .anyMatch(
+                        message ->
+                                message.contains("action=coverage_summary")
+                                        && message.contains("no_remote_manifest_targets=0")
+                                        && message.contains("empty_active_set_targets=0"));
+    }
+
     /**
      * Seeds a remote log manifest + matching active segment under a freshly-allocated UUID so the
      * active-file cleanup reaches {@code ManifestReadStatus.RESOLVED} for bucket 0 of the given log
      * table. Returns the active segment's {@code .log} path so callers can assert it survives
      * cleanup.
      *
-     * <p>Without a manifest the bucket falls back to {@code ManifestReadStatus.NOT_LISTED} and the
-     * active-file cleanup skips the entire bucket (see §4.3.1 of the design doc) — which would
-     * prevent any orphan file under the bucket from being visited at all.
+     * <p>The helper installs a manifest so the bucket is included in remote log cleanup.
      */
     private Path seedActiveBucketManifest(TablePath tablePath) throws Exception {
         TableInfo tableInfo = admin.getTableInfo(tablePath).get();
@@ -357,7 +468,171 @@ abstract class OrphanFilesCleanITCase extends AbstractTestBase {
     }
 
     @Test
-    void pkOrphanTableRetainsSharedSstEvenWithOptIn() throws Exception {
+    void optInCleansOrphanTableDirUnderUnknownDatabase() throws Exception {
+        long orphanTableId = allocateDroppedTableId(newDatabaseName("unknowndbseed"), "seed_table");
+        createLogTable(newDatabaseName("unknowndbanchor"), "live_anchor");
+
+        String unknownDbName = newDatabaseName("unknowndb");
+        OrphanTableLayout layout =
+                createOldOrphanTableLayout(
+                        remoteDataRoot(),
+                        unknownDbName,
+                        orphanTableId,
+                        "ghost_table",
+                        "99999999999999999999.log");
+
+        runCleanerForAllDatabases(false, "--allow-clean-orphan-tables");
+
+        assertThat(Files.exists(layout.orphanFile)).isFalse();
+        assertThat(Files.exists(layout.tableDir)).isFalse();
+        assertThat(auditMessages())
+                .anyMatch(
+                        m ->
+                                m.contains("action=deleted")
+                                        && m.contains("rule=log-segment")
+                                        && m.contains(layout.orphanFile.toString()));
+    }
+
+    @Test
+    void sharedSstOrphanCleaned() throws Exception {
+        String dbName = newDatabaseName("sharedsst");
+        TablePath tablePath = createPrimaryKeyTable(dbName, "sst_pk");
+        TableInfo tableInfo = admin.getTableInfo(tablePath).get();
+        TableBucket tableBucket = new TableBucket(tableInfo.getTableId(), 0);
+        FsPath remoteKvTabletDir =
+                FlussPaths.remoteKvTabletDir(
+                        new FsPath(remoteDataRoot().resolve("kv").toUri().toString()),
+                        PhysicalTablePath.of(tablePath),
+                        tableBucket);
+
+        // Seed two active snapshots with valid _METADATA referencing shared SSTs
+        seedKvSnapshotsWithSharedSst(
+                tableBucket,
+                remoteKvTabletDir,
+                new long[] {1L, 2L},
+                new String[][] {
+                    {"active-001.sst", "shared-both.sst"},
+                    {"active-002.sst", "shared-both.sst"}
+                });
+
+        // Plant shared SST files: some active, some orphan
+        Path sharedDir = localPath(new FsPath(remoteKvTabletDir, "shared"));
+        Files.createDirectories(sharedDir);
+        Path active1 = Files.write(sharedDir.resolve("active-001.sst"), new byte[] {0x42});
+        Path active2 = Files.write(sharedDir.resolve("active-002.sst"), new byte[] {0x42});
+        Path sharedBoth = Files.write(sharedDir.resolve("shared-both.sst"), new byte[] {0x42});
+        Path orphan1 = Files.write(sharedDir.resolve("orphan-999.sst"), new byte[] {0x42});
+        Path orphan2 = Files.write(sharedDir.resolve("orphan-888.sst"), new byte[] {0x42});
+        makeOld(active1);
+        makeOld(active2);
+        makeOld(sharedBoth);
+        makeOld(orphan1);
+        makeOld(orphan2);
+        makeOld(sharedDir);
+
+        // Also seed a log manifest so the bucket gets a valid BucketCleanTask.
+        seedActiveBucketManifest(tablePath);
+
+        runCleanerForDatabase(false, dbName);
+
+        // Active SST files must survive
+        assertThat(Files.exists(active1)).as("active-001.sst must survive").isTrue();
+        assertThat(Files.exists(active2)).as("active-002.sst must survive").isTrue();
+        assertThat(Files.exists(sharedBoth)).as("shared-both.sst must survive").isTrue();
+
+        // Orphan SST files must be deleted
+        assertThat(Files.exists(orphan1)).as("orphan-999.sst must be deleted").isFalse();
+        assertThat(Files.exists(orphan2)).as("orphan-888.sst must be deleted").isFalse();
+
+        // Audit confirms deletions
+        assertThat(auditMessages())
+                .anyMatch(
+                        m ->
+                                m.contains("action=deleted")
+                                        && m.contains("rule=kv-shared-sst")
+                                        && m.contains("orphan-999.sst"));
+        assertThat(auditMessages())
+                .anyMatch(
+                        m ->
+                                m.contains("action=deleted")
+                                        && m.contains("rule=kv-shared-sst")
+                                        && m.contains("orphan-888.sst"));
+    }
+
+    @Test
+    void sharedSstPreservedWhenYoung() throws Exception {
+        String dbName = newDatabaseName("sstfresh");
+        TablePath tablePath = createPrimaryKeyTable(dbName, "sst_fresh_pk");
+        TableInfo tableInfo = admin.getTableInfo(tablePath).get();
+        TableBucket tableBucket = new TableBucket(tableInfo.getTableId(), 0);
+        FsPath remoteKvTabletDir =
+                FlussPaths.remoteKvTabletDir(
+                        new FsPath(remoteDataRoot().resolve("kv").toUri().toString()),
+                        PhysicalTablePath.of(tablePath),
+                        tableBucket);
+
+        // Seed an active snapshot with valid _METADATA referencing only one file
+        seedKvSnapshotsWithSharedSst(
+                tableBucket, remoteKvTabletDir, new long[] {1L}, new String[][] {{"active.sst"}});
+
+        // Plant shared SST: an unreferenced but YOUNG file
+        Path sharedDir = localPath(new FsPath(remoteKvTabletDir, "shared"));
+        Files.createDirectories(sharedDir);
+        Path activeSst = Files.write(sharedDir.resolve("active.sst"), new byte[] {0x42});
+        Path youngOrphan = Files.write(sharedDir.resolve("young-orphan.sst"), new byte[] {0x42});
+        makeOld(activeSst);
+        // youngOrphan keeps its default (fresh) mtime — within cutoff
+        makeOld(sharedDir);
+
+        seedActiveBucketManifest(tablePath);
+
+        runCleanerForDatabase(false, dbName);
+
+        // Young orphan must be deferred (not deleted)
+        assertThat(Files.exists(youngOrphan)).as("young orphan must be deferred").isTrue();
+        assertThat(Files.exists(activeSst)).as("active.sst must survive").isTrue();
+        assertThat(auditMessages())
+                .noneMatch(m -> m.contains("action=deleted") && m.contains("young-orphan.sst"));
+    }
+
+    @Test
+    void sharedSstCleanupSkippedOnMetadataReadFailure() throws Exception {
+        String dbName = newDatabaseName("sstfail");
+        TablePath tablePath = createPrimaryKeyTable(dbName, "sst_fail_pk");
+        TableInfo tableInfo = admin.getTableInfo(tablePath).get();
+        TableBucket tableBucket = new TableBucket(tableInfo.getTableId(), 0);
+        FsPath remoteKvTabletDir =
+                FlussPaths.remoteKvTabletDir(
+                        new FsPath(remoteDataRoot().resolve("kv").toUri().toString()),
+                        PhysicalTablePath.of(tablePath),
+                        tableBucket);
+
+        // Seed snapshot with INVALID _METADATA (causes parse failure)
+        seedKvSnapshots(tableBucket, remoteKvTabletDir, new long[] {1L});
+
+        // Plant shared SST files
+        Path sharedDir = localPath(new FsPath(remoteKvTabletDir, "shared"));
+        Files.createDirectories(sharedDir);
+        Path sst1 = Files.write(sharedDir.resolve("might-be-orphan.sst"), new byte[] {0x42});
+        Path sst2 = Files.write(sharedDir.resolve("might-be-active.sst"), new byte[] {0x42});
+        makeOld(sst1);
+        makeOld(sst2);
+        makeOld(sharedDir);
+
+        seedActiveBucketManifest(tablePath);
+
+        runCleanerForDatabase(false, dbName);
+
+        // All shared SST files must be preserved (conservative: metadata read failure)
+        assertThat(Files.exists(sst1)).as("sst1 must be preserved on failure").isTrue();
+        assertThat(Files.exists(sst2)).as("sst2 must be preserved on failure").isTrue();
+
+        // Skip audit must fire
+        assertThat(auditMessages()).anyMatch(m -> m.contains("action=skip_kv_shared_sst"));
+    }
+
+    @Test
+    void pkOrphanTableCleansSharedSstWithOptIn() throws Exception {
         String dbName = newDatabaseName("orphankv");
         long tableId = allocateDroppedPrimaryKeyTableId(dbName, "seed_pk_table");
         createLogTable(dbName, "live_anchor");
@@ -371,13 +646,42 @@ abstract class OrphanFilesCleanITCase extends AbstractTestBase {
 
         runCleanerForDatabase(false, dbName, "--allow-clean-orphan-tables");
 
-        assertThat(Files.exists(layout.orphanFile)).isTrue();
-        assertThat(Files.exists(layout.tableDir)).isTrue();
+        assertThat(Files.exists(layout.orphanFile)).isFalse();
+        assertThat(Files.exists(layout.tableDir)).isFalse();
         assertThat(auditMessages())
-                .noneMatch(
+                .anyMatch(
                         m ->
-                                m.contains("rule=kv-shared-sst")
+                                m.contains("action=deleted")
+                                        && m.contains("rule=kv-shared-sst")
                                         && m.contains(layout.orphanFile.toString()));
+    }
+
+    @Test
+    void pkBucketWithoutActiveSnapshotsCleansExpiredSharedSst() throws Exception {
+        String dbName = newDatabaseName("emptykv");
+        TablePath tablePath = createPrimaryKeyTable(dbName, "empty_snapshot_pk");
+        TableInfo tableInfo = admin.getTableInfo(tablePath).get();
+        TableBucket tableBucket = new TableBucket(tableInfo.getTableId(), 0);
+        FsPath remoteKvTabletDir =
+                FlussPaths.remoteKvTabletDir(
+                        new FsPath(remoteDataRoot().resolve("kv").toUri().toString()),
+                        PhysicalTablePath.of(tablePath),
+                        tableBucket);
+        Path sharedDir = localPath(FlussPaths.remoteKvSharedDir(remoteKvTabletDir));
+        Files.createDirectories(sharedDir);
+        Path orphan = Files.write(sharedDir.resolve("unreferenced.sst"), new byte[] {0x42});
+        makeOld(orphan);
+        makeOld(sharedDir);
+
+        runCleanerForDatabase(false, dbName);
+
+        assertThat(Files.exists(orphan)).isFalse();
+        assertThat(auditMessages())
+                .anyMatch(
+                        m ->
+                                m.contains("action=deleted")
+                                        && m.contains("rule=kv-shared-sst")
+                                        && m.contains("unreferenced.sst"));
     }
 
     @Test
@@ -956,6 +1260,55 @@ abstract class OrphanFilesCleanITCase extends AbstractTestBase {
             Path dataFile = localSnapshotDir.resolve(snapshotId + ".sst");
             Files.write(dataFile, new byte[] {0x44});
             makeOld(dataFile);
+
+            makeOld(localSnapshotDir);
+
+            zk.registerTableBucketSnapshot(
+                    tableBucket,
+                    new BucketSnapshot(
+                            snapshotId, snapshotId, snapshotDir.toString() + "/_METADATA"));
+        }
+    }
+
+    /**
+     * Seeds KV snapshots with valid {@code _METADATA} JSON referencing the given shared SST file
+     * names per snapshot. This enables the shared SST cleanup to build a proper active set.
+     */
+    private void seedKvSnapshotsWithSharedSst(
+            TableBucket tableBucket,
+            FsPath remoteKvTabletDir,
+            long[] snapshotIds,
+            String[][] sharedSstFilesPerSnapshot)
+            throws Exception {
+        ZooKeeperClient zk = FLUSS_CLUSTER_EXTENSION.getZooKeeperClient();
+        for (int i = 0; i < snapshotIds.length; i++) {
+            long snapshotId = snapshotIds[i];
+            FsPath snapshotDir = FlussPaths.remoteKvSnapshotDir(remoteKvTabletDir, snapshotId);
+            Path localSnapshotDir = localPath(snapshotDir);
+            Files.createDirectories(localSnapshotDir);
+
+            // Build valid _METADATA JSON with shared_file_handles
+            StringBuilder json = new StringBuilder();
+            json.append("{\"kv_snapshot_handle\":{\"shared_file_handles\":[");
+            String[] sharedFiles = sharedSstFilesPerSnapshot[i];
+            for (int j = 0; j < sharedFiles.length; j++) {
+                if (j > 0) {
+                    json.append(",");
+                }
+                FsPath remoteSharedSst =
+                        new FsPath(FlussPaths.remoteKvSharedDir(remoteKvTabletDir), sharedFiles[j]);
+                json.append("{\"kv_file_handle\":{\"path\":\"")
+                        .append(remoteSharedSst)
+                        .append("\",\"size\":1024},")
+                        .append("\"local_path\":\"local-")
+                        .append(j)
+                        .append(".sst\"}");
+            }
+            json.append("]}}");
+
+            Path metadataFile = localSnapshotDir.resolve("_METADATA");
+            Files.write(metadataFile, json.toString().getBytes(StandardCharsets.UTF_8));
+            makeOld(metadataFile);
 
             makeOld(localSnapshotDir);
 

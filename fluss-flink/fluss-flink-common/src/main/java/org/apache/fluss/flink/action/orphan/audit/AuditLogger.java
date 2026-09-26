@@ -18,6 +18,7 @@
 package org.apache.fluss.flink.action.orphan.audit;
 
 import org.apache.fluss.annotation.Internal;
+import org.apache.fluss.exception.PartitionNotExistException;
 import org.apache.fluss.flink.action.orphan.rule.RuleId;
 import org.apache.fluss.fs.FsPath;
 
@@ -57,6 +58,15 @@ public final class AuditLogger {
                 "action=cutoff older_than_iso={} older_than_ms={} ts={}",
                 CUTOFF_FORMATTER.format(Instant.ofEpochMilli(olderThanMillis)),
                 olderThanMillis,
+                Instant.now());
+    }
+
+    /** Records a table or partition that disappeared while enumerating its references. */
+    public void logScopeTargetDisappeared(long tableId, Long partitionId) {
+        AUDIT.info(
+                "action=scope_target_disappeared table_id={} partition_id={} ts={}",
+                tableId,
+                partitionId,
                 Instant.now());
     }
 
@@ -144,6 +154,33 @@ public final class AuditLogger {
                 Instant.now());
     }
 
+    /** Scan a KV bucket after metadata authoritatively reports no active snapshots. */
+    public void logScanKvBucketWithoutActiveSnapshots(
+            long tableId, Long partitionId, int bucketId) {
+        AUDIT.info(
+                "action=scan_kv_bucket_without_active_snapshots reason=no_active_snapshots"
+                        + " table_id={} partition_id={} bucket_id={} ts={}",
+                tableId,
+                partitionId,
+                bucketId,
+                Instant.now());
+    }
+
+    /**
+     * Skip shared SST cleanup for a single bucket because the active set could not be determined
+     * (metadata read failure). The bucket's snap-private and log cleanup proceed normally.
+     */
+    public void logSkipKvSharedSst(long tableId, Long partitionId, int bucketId, String reason) {
+        AUDIT.warn(
+                "action=skip_kv_shared_sst reason={} table_id={} partition_id={}"
+                        + " bucket_id={} ts={}",
+                reason,
+                tableId,
+                partitionId,
+                bucketId,
+                Instant.now());
+    }
+
     /**
      * Skip log cleanup for one (tableId, partitionId) target — emitted when {@code
      * ListRemoteLogManifests} fails after retries. {@code partitionId} is null for non-partitioned
@@ -155,6 +192,23 @@ public final class AuditLogger {
                 reason,
                 tableId,
                 partitionId,
+                Instant.now());
+    }
+
+    /** Record a table or partition that disappeared after metadata scope enumeration. */
+    public void logScopeTargetDisappeared(
+            long tableId, Long partitionId, long expectedBuckets, Throwable cause) {
+        String reason =
+                cause instanceof PartitionNotExistException
+                        ? "partition_not_exist"
+                        : "table_not_exist";
+        AUDIT.info(
+                "action=scope_target_disappeared reason={} table_id={} partition_id={}"
+                        + " expected_buckets={} ts={}",
+                reason,
+                tableId,
+                partitionId,
+                expectedBuckets,
                 Instant.now());
     }
 
@@ -208,29 +262,14 @@ public final class AuditLogger {
                 Instant.now());
     }
 
-    /**
-     * Final summary event emitted once at the end of a run, carrying the headline counters that
-     * operators query most often ("how many files were removed and how much space was reclaimed").
-     * Routed through the dedicated audit logger so the result is queryable from the same sink as
-     * the per-file {@code action=deleted} / {@code action=skip_*} lines.
-     */
-    public void logSummary(
-            long scanned,
-            long deletedFiles,
-            long emptyDirsRemoved,
-            long deleteFailures,
-            long bytesReclaimed,
-            boolean dryRun) {
+    /** Scan a log bucket for which metadata reports no committed remote manifest. */
+    public void logScanLogBucketWithoutManifest(long tableId, Long partitionId, int bucketId) {
         AUDIT.info(
-                "action=summary scanned={} deleted_total={} deleted_files={} empty_dirs_removed={}"
-                        + " delete_failures={} bytes_reclaimed={} dry_run={} ts={}",
-                scanned,
-                deletedFiles + emptyDirsRemoved,
-                deletedFiles,
-                emptyDirsRemoved,
-                deleteFailures,
-                bytesReclaimed,
-                dryRun,
+                "action=scan_log_bucket_without_manifest reason=no_remote_manifest"
+                        + " table_id={} partition_id={} bucket_id={} ts={}",
+                tableId,
+                partitionId,
+                bucketId,
                 Instant.now());
     }
 }
