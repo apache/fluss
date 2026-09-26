@@ -97,7 +97,9 @@ class UpsertWriterImpl extends AbstractTableWriter implements UpsertWriter {
 
         this.kvFormat = tableInfo.getTableConfig().getKvFormat();
         this.writeFormat = WriteFormat.fromKvFormat(this.kvFormat);
-        this.rowEncoder = RowEncoder.create(kvFormat, rowType);
+        this.rowEncoder =
+                RowEncoder.create(
+                        kvFormat, tableInfo.getSchema(), tableInfo.getProperties().toMap());
         this.fieldGetters = InternalRow.createFieldGetters(rowType);
 
         this.tableInfo = tableInfo;
@@ -217,10 +219,14 @@ class UpsertWriterImpl extends AbstractTableWriter implements UpsertWriter {
         return sendWithResult(record, DeleteResult::new);
     }
 
-    private BinaryRow encodeRow(InternalRow row) {
-        if (kvFormat == KvFormat.INDEXED && row instanceof IndexedRow) {
+    BinaryRow encodeRow(InternalRow row) {
+        if (!rowEncoder.hasColumnValueEncoding()
+                && kvFormat == KvFormat.INDEXED
+                && row instanceof IndexedRow) {
             return (IndexedRow) row;
-        } else if (kvFormat == KvFormat.COMPACTED && row instanceof CompactedRow) {
+        } else if (!rowEncoder.hasColumnValueEncoding()
+                && kvFormat == KvFormat.COMPACTED
+                && row instanceof CompactedRow) {
             return (CompactedRow) row;
         }
 
