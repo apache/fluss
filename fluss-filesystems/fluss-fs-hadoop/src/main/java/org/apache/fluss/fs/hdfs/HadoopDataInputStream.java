@@ -19,6 +19,8 @@ package org.apache.fluss.fs.hdfs;
 
 import org.apache.fluss.fs.FSDataInputStream;
 
+import org.apache.hadoop.io.IOUtils;
+
 import javax.annotation.Nonnull;
 
 import java.io.IOException;
@@ -72,7 +74,7 @@ public final class HadoopDataInputStream extends FSDataInputStream {
 
         if (delta > 0L && delta <= MIN_SKIP_BYTES) {
             // Instead of a small forward seek, we skip over the gap
-            skipFully(delta);
+            IOUtils.skipFully(fsDataInputStream, delta);
         } else if (delta != 0L) {
             // For larger gaps and backward seeks, we do a real seek
             forceSeek(seekPos);
@@ -121,17 +123,5 @@ public final class HadoopDataInputStream extends FSDataInputStream {
      */
     public void forceSeek(long seekPos) throws IOException {
         fsDataInputStream.seek(seekPos);
-    }
-
-    /**
-     * Skips over a given amount of bytes in the stream.
-     *
-     * @param bytes the number of bytes to skip.
-     * @throws IOException
-     */
-    public void skipFully(long bytes) throws IOException {
-        while (bytes > 0) {
-            bytes -= fsDataInputStream.skip(bytes);
-        }
     }
 }
