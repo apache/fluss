@@ -33,6 +33,8 @@ import org.apache.fluss.types.MapType;
 import org.apache.fluss.types.RowType;
 import org.apache.fluss.types.TimeType;
 import org.apache.fluss.types.TimestampType;
+import org.apache.fluss.types.VectorElementType;
+import org.apache.fluss.types.VectorType;
 
 import java.io.IOException;
 import java.util.ArrayList;
@@ -72,6 +74,10 @@ public class DataTypeJsonSerde implements JsonSerializer<DataType>, JsonDeserial
     static final String FIELD_NAME_FIELD_TYPE = "field_type";
     static final String FIELD_NAME_FIELD_ID = "field_id";
     static final String FIELD_NAME_FIELD_DESCRIPTION = "description";
+
+    // VECTOR
+    static final String FIELD_NAME_DIMENSION = "dimension";
+    static final String FIELD_NAME_VECTOR_ELEMENT_TYPE = "elementType";
 
     @Override
     public void serialize(DataType dataType, JsonGenerator generator) throws IOException {
@@ -138,6 +144,12 @@ public class DataTypeJsonSerde implements JsonSerializer<DataType>, JsonDeserial
                 break;
             case ROW:
                 serializeRow((RowType) dataType, jsonGenerator);
+                break;
+            case VECTOR:
+                final VectorType vectorType = (VectorType) dataType;
+                jsonGenerator.writeNumberField(FIELD_NAME_DIMENSION, vectorType.getDimension());
+                jsonGenerator.writeStringField(
+                        FIELD_NAME_VECTOR_ELEMENT_TYPE, vectorType.getElementType().name());
                 break;
             default:
                 throw new UnsupportedOperationException(
@@ -256,6 +268,18 @@ public class DataTypeJsonSerde implements JsonSerializer<DataType>, JsonDeserial
                 return deserializeMap(dataTypeNode);
             case ROW:
                 return deserializeRow(dataTypeNode);
+            case VECTOR:
+                final int vectorDimension = dataTypeNode.get(FIELD_NAME_DIMENSION).asInt();
+                // elementType defaults to FLOAT32 for forward compatibility
+                final String elementTypeName =
+                        dataTypeNode.has(FIELD_NAME_VECTOR_ELEMENT_TYPE)
+                                ? dataTypeNode.get(FIELD_NAME_VECTOR_ELEMENT_TYPE).asText()
+                                : VectorElementType.FLOAT32.name();
+                if (!VectorElementType.FLOAT32.name().equals(elementTypeName)) {
+                    throw new UnsupportedOperationException(
+                            "Unsupported vector element type: " + elementTypeName);
+                }
+                return DataTypes.VECTOR(vectorDimension);
             default:
                 throw new UnsupportedOperationException("Unsupported type root: " + typeRoot);
         }

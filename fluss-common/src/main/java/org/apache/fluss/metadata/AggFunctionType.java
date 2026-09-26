@@ -136,8 +136,20 @@ public enum AggFunctionType {
             case LAST_VALUE_IGNORE_NULLS:
             case FIRST_VALUE:
             case FIRST_VALUE_IGNORE_NULLS:
-                // all data types are supported
-                return DataTypeRoot.values();
+                // All data types are supported except VECTOR. VECTOR has no well-defined
+                // value-selection semantics in an aggregation context (dense vectors are
+                // typically compared by distance, not equality), so it is excluded here to
+                // prevent accidental misuse.
+                DataTypeRoot[] allRoots = DataTypeRoot.values();
+                int vectorOrdinal = DataTypeRoot.VECTOR.ordinal();
+                DataTypeRoot[] nonVectorRoots = new DataTypeRoot[allRoots.length - 1];
+                int idx = 0;
+                for (int i = 0; i < allRoots.length; i++) {
+                    if (i != vectorOrdinal) {
+                        nonVectorRoots[idx++] = allRoots[i];
+                    }
+                }
+                return nonVectorRoots;
             default:
                 throw new IllegalStateException("Unsupported aggregation function type: " + this);
         }
