@@ -210,12 +210,21 @@ public class ClusterModel {
     }
 
     public void createReplica(int serverId, TableBucket tableBucket, int index, boolean isLeader) {
+        createReplica(serverId, tableBucket, index, isLeader, true);
+    }
+
+    public void createReplica(
+            int serverId,
+            TableBucket tableBucket,
+            int index,
+            boolean isLeader,
+            boolean isLeaderEligible) {
         ServerModel server = server(serverId);
         if (server == null) {
             throw new IllegalArgumentException("Server is not in the cluster.");
         }
 
-        ReplicaModel replica = new ReplicaModel(tableBucket, server, isLeader);
+        ReplicaModel replica = new ReplicaModel(tableBucket, server, isLeader, isLeaderEligible);
         server.putReplica(tableBucket, replica);
 
         if (!bucketsByTableBucket.containsKey(tableBucket)) {

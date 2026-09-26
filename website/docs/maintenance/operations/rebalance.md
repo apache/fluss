@@ -72,6 +72,23 @@ Available rebalance goals:
 - **RACK_AWARE**: Ensures replicas of the same bucket are distributed across different racks. This goal is essential for high availability in multi-rack deployments, as it prevents data loss when an entire rack fails.
 - **REPLICA_DISTRIBUTION**: Ensures the number of replicas on each TabletServer is near balanced
 - **LEADER_DISTRIBUTION**: Ensures the number of leader replicas on each TabletServer is near balanced
+- **PREFERRED_LEADER_ELECTION**: Moves each bucket's leadership to the first replica in its persisted assignment without changing the replica set. Buckets are skipped when the preferred replica is unavailable, offline, outside the ISR, or tagged `TEMPORARY_OFFLINE` or `PERMANENT_OFFLINE`.
+
+`PREFERRED_LEADER_ELECTION` must be requested by itself:
+
+```java
+String rebalanceId = admin.rebalance(
+    Collections.singletonList(GoalType.PREFERRED_LEADER_ELECTION)
+).get();
+```
+
+The same operation is available through Flink SQL:
+
+```sql
+CALL sys.rebalance('PREFERRED_LEADER_ELECTION');
+```
+
+Combining this goal with another rebalance goal is rejected.
 
 :::tip Goal Priority
 Goals are processed in the order specified. When using `RACK_AWARE`, always place it first to ensure subsequent goals (like `REPLICA_DISTRIBUTION`) respect rack constraints. If `RACK_AWARE` is not the first goal, replica movements may violate rack awareness requirements.
