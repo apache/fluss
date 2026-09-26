@@ -646,6 +646,74 @@ CALL sys.cancel_rebalance();
 CALL sys.cancel_rebalance('rebalance-12345');
 ```
 
+## Bucket Procedures
+
+Fluss provides procedures to inspect the replica placement and leader state of table buckets.
+
+### describe_buckets
+
+Describe the bucket metadata of a table. For a non-partitioned table, the procedure returns all
+table buckets. For a partitioned table, it returns all partition buckets unless a partition spec is
+provided.
+
+**Syntax:**
+
+```sql
+-- Describe a non-partitioned table or every partition of a partitioned table
+CALL [catalog_name.]sys.describe_buckets(
+  table_path => 'database.table'
+)
+
+-- Describe buckets matching a complete or partial partition spec
+CALL [catalog_name.]sys.describe_buckets(
+  table_path => 'database.table',
+  partition_spec => 'key1=value1/key2=value2'
+)
+```
+
+**Parameters:**
+
+- `table_path` (required): The table path in `database.table` format.
+- `partition_spec` (optional): A complete or partial partition spec in
+  `key=value[/key=value...]` format. This parameter is only valid for partitioned tables.
+
+**Returns:** One row per bucket, containing:
+
+- `table_path`: The table path.
+- `table_id`: The unique table ID.
+- `partition_id`: The partition ID, or `NULL` for a non-partitioned table.
+- `partition_name`: The partition name, or `NULL` for a non-partitioned table.
+- `bucket_id`: The bucket ID.
+- `leader_id`: The leader TabletServer ID, or `NULL` if no leader is elected.
+- `leader_epoch`: The leader epoch, or `NULL` if no leader is elected.
+- `bucket_epoch`: The generation of the complete leader/ISR state. `NULL` indicates legacy
+  metadata, while `-1` indicates that no leader/ISR state exists.
+- `replicas`: An `ARRAY<INT>` containing the replica TabletServer IDs.
+- `isr`: An `ARRAY<INT>` containing the in-sync replica TabletServer IDs.
+
+**Important Notes:**
+
+- The caller must have `DESCRIBE` permission on the table.
+- A partial partition spec matches every partition containing the specified key-value pairs.
+- For a table with many partitions, provide a partition spec to avoid returning metadata for every
+  bucket in a single call.
+
+**Example:**
+
+```sql title="Flink SQL"
+-- Use the Fluss catalog (replace 'fluss_catalog' with your catalog name if different)
+USE fluss_catalog;
+
+-- Describe every bucket of my_db.orders
+CALL sys.describe_buckets('my_db.orders');
+
+-- Describe buckets in every CN partition
+CALL sys.describe_buckets('my_db.orders', 'region=cn');
+
+-- Describe buckets in one specific partition
+CALL sys.describe_buckets('my_db.orders', 'region=cn/dt=2026-09-16');
+```
+
 ## Partition Procedures
 
 Fluss provides procedures to inspect partition-level metadata of partitioned tables.

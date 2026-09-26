@@ -68,6 +68,7 @@ public class ProcedureManager {
 
     private enum ProcedureEnum {
         ADD_ACL("sys.add_acl", AddAclProcedure.class),
+        DESCRIBE_BUCKETS("sys.describe_buckets", DescribeBucketsProcedure.class),
         DROP_ACL("sys.drop_acl", DropAclProcedure.class),
         List_ACL("sys.list_acl", ListAclProcedure.class),
         SET_CLUSTER_CONFIGS("sys.set_cluster_configs", SetClusterConfigsProcedure.class),
