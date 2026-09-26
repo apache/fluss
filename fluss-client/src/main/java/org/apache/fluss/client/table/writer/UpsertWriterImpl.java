@@ -21,6 +21,7 @@ import org.apache.fluss.client.write.WriteFormat;
 import org.apache.fluss.client.write.WriteRecord;
 import org.apache.fluss.client.write.WriterClient;
 import org.apache.fluss.metadata.KvFormat;
+import org.apache.fluss.metadata.MergeEngineType;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.row.BinaryRow;
@@ -35,6 +36,7 @@ import org.apache.fluss.types.RowType;
 
 import javax.annotation.Nullable;
 
+import java.util.Arrays;
 import java.util.BitSet;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
@@ -57,6 +59,9 @@ class UpsertWriterImpl extends AbstractTableWriter implements UpsertWriter {
     /** The merge mode for this writer. This controls how the server handles data merging. */
     private final MergeMode mergeMode;
 
+    /** Indexes of the NOT NULL target columns, empty when there is nothing to check. */
+    private final int[] notNullTargetColumns;
+
     UpsertWriterImpl(
             TablePath tablePath,
             TableInfo tableInfo,
@@ -77,7 +82,9 @@ class UpsertWriterImpl extends AbstractTableWriter implements UpsertWriter {
                 rowType,
                 tableInfo.getPrimaryKeys(),
                 tableInfo.getSchema().getAutoIncrementColumnNames(),
-                partialUpdateColumns);
+                partialUpdateColumns,
+                tableInfo.getTableConfig().getMergeEngineType().orElse(null),
+                mergeMode);
 
         this.targetColumns = partialUpdateColumns;
         // encode primary key using physical primary key
@@ -102,13 +109,30 @@ class UpsertWriterImpl extends AbstractTableWriter implements UpsertWriter {
 
         this.tableInfo = tableInfo;
         this.mergeMode = mergeMode;
+        this.notNullTargetColumns = findNotNullTargetColumns(rowType, partialUpdateColumns);
+    }
+
+    private static int[] findNotNullTargetColumns(RowType rowType, @Nullable int[] targetColumns) {
+        if (targetColumns == null) {
+            return new int[0];
+        }
+        int[] indexes = new int[targetColumns.length];
+        int count = 0;
+        for (int targetColumn : targetColumns) {
+            if (!rowType.getTypeAt(targetColumn).isNullable()) {
+                indexes[count++] = targetColumn;
+            }
+        }
+        return Arrays.copyOf(indexes, count);
     }
 
     private static void sanityCheck(
             RowType rowType,
             List<String> primaryKeys,
             List<String> autoIncrementColumnNames,
-            @Nullable int[] targetColumns) {
+            @Nullable int[] targetColumns,
+            @Nullable MergeEngineType mergeEngineType,
+            MergeMode mergeMode) {
         // skip check when target columns is null
         if (targetColumns == null) {
             if (!autoIncrementColumnNames.isEmpty()) {
@@ -126,7 +150,6 @@ class UpsertWriterImpl extends AbstractTableWriter implements UpsertWriter {
             targetColumnsSet.set(targetColumnIndex);
         }
 
-        BitSet pkColumnSet = new BitSet();
         // check the target columns contains the primary key
         for (String key : primaryKeys) {
             int pkIndex = rowType.getFieldIndex(key);
@@ -136,7 +159,6 @@ class UpsertWriterImpl extends AbstractTableWriter implements UpsertWriter {
                                 "The target write columns %s must contain the primary key columns %s.",
                                 rowType.project(targetColumns).getFieldNames(), primaryKeys));
             }
-            pkColumnSet.set(pkIndex);
         }
 
         BitSet autoIncrementColumnSet = new BitSet();
@@ -152,15 +174,62 @@ class UpsertWriterImpl extends AbstractTableWriter implements UpsertWriter {
             autoIncrementColumnSet.set(autoIncrementColumnIndex);
         }
 
-        // check the columns not in targetColumns should be nullable
-        for (int i = 0; i < rowType.getFieldCount(); i++) {
-            // column not in primary key and not in auto increment column
-            if (!pkColumnSet.get(i) && !autoIncrementColumnSet.get(i)) {
-                // the column should be nullable
-                if (!rowType.getTypeAt(i).isNullable()) {
+        // the first_row and versioned mergers reject partial update outright on the server, at
+        // the first write, so fail at writer creation instead. OVERWRITE is exempt, since the
+        // server merges it with the default merger.
+        if (mergeMode != MergeMode.OVERWRITE) {
+            if (mergeEngineType == MergeEngineType.FIRST_ROW) {
+                throw new IllegalArgumentException(
+                        "Partial update is not supported for the first_row merge engine.");
+            } else if (mergeEngineType == MergeEngineType.VERSIONED) {
+                throw new IllegalArgumentException(
+                        "Partial update is not supported for the versioned merge engine.");
+            }
+        }
+
+        // the aggregation merge engine does not fill omitted columns with null on the first
+        // write, so it keeps requiring every column except the primary key to be nullable, like
+        // the server. OVERWRITE is exempt, since the server merges it with the default merger.
+        if (mergeEngineType == MergeEngineType.AGGREGATION && mergeMode != MergeMode.OVERWRITE) {
+            for (int i = 0; i < rowType.getFieldCount(); i++) {
+                if (!primaryKeys.contains(rowType.getFieldNames().get(i))
+                        && !rowType.getTypeAt(i).isNullable()) {
                     throw new IllegalArgumentException(
                             String.format(
-                                    "Partial Update requires all columns except primary key to be nullable, but column %s is NOT NULL.",
+                                    "Partial aggregate requires all columns except primary key to be nullable, but column %s is NOT NULL.",
+                                    rowType.getFieldNames().get(i)));
+                }
+            }
+        }
+
+        // an omitted column is written as null, so it must be nullable. auto increment columns
+        // are always omitted and only get their value on the server.
+        for (int i = 0; i < rowType.getFieldCount(); i++) {
+            if (!targetColumnsSet.get(i) && !rowType.getTypeAt(i).isNullable()) {
+                String columnName = rowType.getFieldNames().get(i);
+                if (autoIncrementColumnSet.get(i)) {
+                    throw new IllegalArgumentException(
+                            String.format(
+                                    "Partial Update requires the auto increment column %s to be nullable, since it is always omitted from the target columns and assigned by the server.",
+                                    columnName));
+                }
+                throw new IllegalArgumentException(
+                        String.format(
+                                "Partial Update requires all columns omitted from the target columns to be nullable, but omitted column %s is NOT NULL.",
+                                columnName));
+            }
+        }
+
+        // the auto increment column is always set, so a partial delete could never collapse
+        // the row and would always fail on a NOT NULL non-primary-key target column.
+        if (!autoIncrementColumnSet.isEmpty()) {
+            for (int i = 0; i < rowType.getFieldCount(); i++) {
+                if (targetColumnsSet.get(i)
+                        && !primaryKeys.contains(rowType.getFieldNames().get(i))
+                        && !rowType.getTypeAt(i).isNullable()) {
+                    throw new IllegalArgumentException(
+                            String.format(
+                                    "Partial Update on a table with an auto increment column requires all target columns except the primary key to be nullable, but target column %s is NOT NULL, since the auto increment column is always set and a partial delete could therefore never succeed.",
                                     rowType.getFieldNames().get(i)));
                 }
             }
@@ -176,6 +245,7 @@ class UpsertWriterImpl extends AbstractTableWriter implements UpsertWriter {
     @Override
     public CompletableFuture<UpsertResult> upsert(InternalRow row) {
         checkFieldCount(row);
+        checkNotNullTargetColumns(row);
         byte[] key = primaryKeyEncoder.encodeKey(row);
         byte[] bucketKey =
                 bucketKeyEncoder == primaryKeyEncoder ? key : bucketKeyEncoder.encodeKey(row);
@@ -215,6 +285,23 @@ class UpsertWriterImpl extends AbstractTableWriter implements UpsertWriter {
                         targetColumns,
                         mergeMode);
         return sendWithResult(record, DeleteResult::new);
+    }
+
+    /**
+     * Rejects a null in a NOT NULL target column. Runs before any field getter or encoding, which
+     * would fail with a bare NullPointerException. When the target columns cover every schema
+     * column the server skips the PartialUpdater and this check is the only guard, and the encoders
+     * would reject the null anyway, so it never changes which rows are accepted.
+     */
+    private void checkNotNullTargetColumns(InternalRow row) {
+        for (int index : notNullTargetColumns) {
+            if (row.isNullAt(index)) {
+                throw new IllegalArgumentException(
+                        String.format(
+                                "Target column %s is NOT NULL but the written row has no value for it.",
+                                tableInfo.getRowType().getFieldNames().get(index)));
+            }
+        }
     }
 
     private BinaryRow encodeRow(InternalRow row) {
