@@ -41,6 +41,7 @@ Usage:
 {{- $messages = append $messages (include "fluss.security.validateError" .) -}}
 {{- $messages = append $messages (include "fluss.metrics.validateError" .) -}}
 {{- $messages = append $messages (include "fluss.secrets.validateError" .) -}}
+{{- $messages = append $messages (include "fluss.names.validateError" .) -}}
 
 {{- $messages = without $messages "" -}}
 {{- join "\n" $messages -}}
@@ -72,4 +73,22 @@ Usage:
 {{-   printf "\nVALUES VALIDATION:\n%s" $errMessage | fail -}}
 {{- end -}}
 
+{{- end -}}
+
+{{/*
+Validates that the generated resource names stay within the 63 character limit
+Kubernetes imposes on DNS labels. Only applies with releaseScopedResourceNames,
+where the longest generated name adds 30 characters to the release prefix.
+Usage:
+  include "fluss.names.validateError" .
+*/}}
+{{- define "fluss.names.validateError" -}}
+{{- if .Values.releaseScopedResourceNames -}}
+{{- $prefix := include "fluss.fullname" . -}}
+{{- $longestSuffix := 30 -}}
+{{- $maxPrefix := sub 63 $longestSuffix -}}
+{{- if gt (len $prefix) (int $maxPrefix) -}}
+{{- printf "resource name prefix %q is %d characters, but generated names must stay within 63 characters. Use a release name of at most %d characters, or set fullnameOverride." $prefix (len $prefix) (int $maxPrefix) -}}
+{{- end -}}
+{{- end -}}
 {{- end -}}

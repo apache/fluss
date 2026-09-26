@@ -19,7 +19,7 @@
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
-  name: tablet-server
+  name: {{ include "fluss.tablet.fullname" . }}
   labels:
   {{- include "fluss.labels" . | nindent 4 }}
   {{- with .Values.tablet.annotations }}
@@ -27,7 +27,7 @@ metadata:
     {{- toYaml . | nindent 4 }}
   {{- end }}
 spec:
-  serviceName: tablet-server-hs
+  serviceName: {{ include "fluss.tablet.serviceName" . }}
   replicas: {{ .Values.tablet.numberOfReplicas }}
   updateStrategy:
     type: RollingUpdate
@@ -121,7 +121,7 @@ spec:
               cp /opt/conf/server.yaml $FLUSS_HOME/conf && \
 
               BIND_LISTENERS="INTERNAL://${POD_IP}:{{ .Values.listeners.internal.port }}, CLIENT://${POD_IP}:{{ .Values.listeners.client.port }}" && \
-              ADVERTISED_LISTENERS="CLIENT://${POD_NAME}.tablet-server-hs.${POD_NAMESPACE}.svc.cluster.local:{{ .Values.listeners.client.port }}" && \
+              ADVERTISED_LISTENERS="CLIENT://${POD_NAME}.{{ include "fluss.tablet.serviceName" . }}.${POD_NAMESPACE}.svc.cluster.local:{{ .Values.listeners.client.port }}" && \
 
               echo "" >> $FLUSS_HOME/conf/server.yaml && \
               echo "tablet-server.id: ${FLUSS_SERVER_ID}" >> $FLUSS_HOME/conf/server.yaml && \
@@ -180,7 +180,7 @@ spec:
       volumes:
         - name: fluss-conf
           configMap:
-            name: fluss-conf-file
+            name: {{ include "fluss.configMapName" . }}
         {{- if not .Values.tablet.storage.enabled }}
         - name: data
           emptyDir: {}
