@@ -73,12 +73,6 @@ In this case, when automatic partitioning occurs (Fluss will periodically operat
 
 Before using historical partition access, make sure the [Paimon server-side setup](../../streaming-lakehouse/datalake-formats/paimon.md#historical-partition-access-setup) is completed.
 
-:::warning
-**After changing `table.datalake.historical-partition.enabled`, restart existing writer and lookup
-jobs that need historical partition access so that their clients load the updated table
-configuration.**
-:::
-
 Auto partitioning eventually removes partitions that fall outside the configured retention window.
 After an original Fluss partition is removed, late records cannot be written to it and primary-key
 lookups cannot find its rows in Fluss, even when the existing data has already been tiered to
@@ -93,6 +87,12 @@ ALTER TABLE my_partitioned_table SET (
   'table.datalake.historical-partition.enabled' = 'true'
 );
 ```
+
+:::warning
+After enabling or disabling `table.datalake.historical-partition.enabled`, restart any existing
+writer and lookup jobs that require historical partition access so that their clients reload the
+updated table configuration.
+:::
 
 When enabled, the Coordinator creates and retains an internal `__historical__` system partition:
 
