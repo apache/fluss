@@ -232,8 +232,17 @@ public final class NettyServer implements RpcServer {
             NetworkProtocolPlugin kafkaPlugin =
                     loadProtocolPlugin(NetworkProtocolPlugin.KAFKA_PROTOCOL_NAME);
             kafkaPlugin.setup(conf);
-            listeners.removeAll(kafkaPlugin.listenerNames());
-            protocolPlugins.add(kafkaPlugin);
+            List<String> kafkaListenerNames = kafkaPlugin.listenerNames();
+            boolean hasKafkaEndpoint =
+                    endpoints.stream()
+                            .anyMatch(
+                                    endpoint ->
+                                            kafkaListenerNames.contains(
+                                                    endpoint.getListenerName()));
+            if (hasKafkaEndpoint) {
+                listeners.removeAll(kafkaListenerNames);
+                protocolPlugins.add(kafkaPlugin);
+            }
         }
 
         // Add the Fluss protocol plugin in the end to allow other protocol
