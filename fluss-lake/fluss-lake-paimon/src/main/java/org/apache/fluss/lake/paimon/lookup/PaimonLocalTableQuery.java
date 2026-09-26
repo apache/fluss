@@ -66,8 +66,13 @@ import static org.apache.paimon.lookup.LookupStoreFactory.bloomFilterBuilderFact
 import static org.apache.paimon.mergetree.LookupFile.localFilePrefix;
 
 /**
- * Fluss-owned fork of Paimon 2.0.0's {@code LocalTableQuery}, using a shared namespaced lookup
- * cache.
+ * Adapted from Paimon 2.0.0's <a
+ * href="https://github.com/apache/paimon/blob/604e6d5e131c74a8d127333a2a3ad6d0319732bf/paimon-core/src/main/java/org/apache/paimon/table/query/LocalTableQuery.java">LocalTableQuery</a>.
+ *
+ * <p>Accepts a shared lookup-file cache and an instance namespace, passing that namespace's view to
+ * {@link LookupLevels}. This replaces the lazy, query-owned cache built from table retention and
+ * disk-size options. Closing a query only invalidates its namespace; the shared cache and I/O
+ * manager belong to the lake table lookuper manager.
  */
 final class PaimonLocalTableQuery implements TableQuery {
 

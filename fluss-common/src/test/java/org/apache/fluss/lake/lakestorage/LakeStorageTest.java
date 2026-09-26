@@ -20,7 +20,7 @@ package org.apache.fluss.lake.lakestorage;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.TableAlreadyExistException;
 import org.apache.fluss.exception.TableNotExistException;
-import org.apache.fluss.lake.lakestorage.LakeTableLookupRuntime.LookupRuntimeOptions;
+import org.apache.fluss.lake.lakestorage.LakeTableLookuperManager.LookupRuntimeOptions;
 import org.apache.fluss.lake.source.LakeSource;
 import org.apache.fluss.lake.writer.LakeTieringFactory;
 import org.apache.fluss.metadata.TableChange;
@@ -30,6 +30,7 @@ import org.apache.fluss.plugin.PluginManager;
 
 import org.junit.jupiter.api.Test;
 
+import java.time.Duration;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.Iterator;
@@ -42,6 +43,18 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 /** Tests for the {@link LakeStorage} base class. */
 class LakeStorageTest {
     private static final String TEST_LAKE_PLUGIN_FORMAT = "test-plugin";
+
+    @Test
+    void testLookupRuntimeOptionsRejectInvalidResourceLimits() {
+        assertThatThrownBy(() -> new LookupRuntimeOptions(0L, Duration.ofHours(1)))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new LookupRuntimeOptions(1024L, Duration.ZERO))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new LookupRuntimeOptions(1024L, Duration.ofSeconds(-1)))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new LookupRuntimeOptions(1024L, null))
+                .isInstanceOf(NullPointerException.class);
+    }
 
     @Test
     void testContextWithoutCurrentLakeTablePath() {
@@ -98,19 +111,24 @@ class LakeStorageTest {
                                 .getWrappedDelegate())
                 .isInstanceOf(TestPaimonLakeCatalog.class);
 
-        LakeTableLookupRuntime lookupRuntime =
-                lakeStorage.createLakeTableLookupRuntime(
-                        "lookup-dir", new LookupRuntimeOptions(1024L));
-        assertThat(lookupRuntime)
+        LakeTableLookuperManager lookuperManager =
+                lakeStorage.createLakeTableLookuperManager(
+                        "lookup-dir", new LookupRuntimeOptions(1024L, Duration.ofHours(3)));
+        assertThat(lookuperManager)
                 .isInstanceOf(
-                        PluginLakeStorageWrapper.ClassLoaderFixingLakeTableLookupRuntime.class);
-        TestLakeTableLookupRuntime innerLookupRuntime =
-                (TestLakeTableLookupRuntime)
-                        ((PluginLakeStorageWrapper.ClassLoaderFixingLakeTableLookupRuntime)
-                                        lookupRuntime)
+                        PluginLakeStorageWrapper.ClassLoaderFixingLakeTableLookuperManager.class);
+        TestLakeTableLookuperManager innerLookuperManager =
+                (TestLakeTableLookuperManager)
+                        ((PluginLakeStorageWrapper.ClassLoaderFixingLakeTableLookuperManager)
+                                        lookuperManager)
                                 .getWrappedDelegate();
-        lookupRuntime.close();
-        assertThat(innerLookupRuntime.closed).isTrue();
+        LookupRuntimeOptions updatedOptions =
+                new LookupRuntimeOptions(2048L, Duration.ofMinutes(30));
+        lookuperManager.reconfigure(updatedOptions);
+        assertThat(innerLookuperManager.options).isSameAs(updatedOptions);
+        assertThat(lookuperManager.fileCacheCapacityEvictions()).isEqualTo(3L);
+        lookuperManager.close();
+        assertThat(innerLookuperManager.closed).isTrue();
     }
 
     private static class TestingPluginManager implements PluginManager {
@@ -162,15 +180,16 @@ class LakeStorageTest {
         }
 
         @Override
-        public LakeTableLookupRuntime createLakeTableLookupRuntime(
+        public LakeTableLookuperManager createLakeTableLookuperManager(
                 String ioTmpDir, LookupRuntimeOptions options) {
-            return new TestLakeTableLookupRuntime();
+            return new TestLakeTableLookuperManager();
         }
     }
 
-    private static class TestLakeTableLookupRuntime implements LakeTableLookupRuntime {
+    private static class TestLakeTableLookuperManager implements LakeTableLookuperManager {
 
         private boolean closed;
+        private LookupRuntimeOptions options;
 
         @Override
         public LakeTableLookuper createLakeTableLookuper(TablePath tablePath, Context context) {
@@ -178,7 +197,14 @@ class LakeStorageTest {
         }
 
         @Override
-        public void reconfigure(LookupRuntimeOptions options) {}
+        public void reconfigure(LookupRuntimeOptions options) {
+            this.options = options;
+        }
+
+        @Override
+        public long fileCacheCapacityEvictions() {
+            return 3L;
+        }
 
         @Override
         public void close() {

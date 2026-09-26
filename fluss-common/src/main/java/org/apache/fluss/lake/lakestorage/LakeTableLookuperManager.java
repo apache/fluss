@@ -22,12 +22,21 @@ import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.TableConfig;
 import org.apache.fluss.metadata.TablePath;
 
+import java.time.Duration;
+
 import static org.apache.fluss.utils.Preconditions.checkArgument;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
-/** TabletServer-scoped runtime managing shared resources and creating lake table lookupers. */
+/**
+ * Creates lake table lookupers and manages their shared resources within one TabletServer.
+ *
+ * <p>The caller must close all created lookupers after their requests have finished before closing
+ * this manager. Closing a lookuper must not release resources shared with other lookupers.
+ *
+ * @since 1.1
+ */
 @PublicEvolving
-public interface LakeTableLookupRuntime extends AutoCloseable {
+public interface LakeTableLookuperManager extends AutoCloseable {
 
     /**
      * Creates a table-level point lookuper for the specified lake table.
@@ -50,6 +59,11 @@ public interface LakeTableLookupRuntime extends AutoCloseable {
      */
     void reconfigure(LookupRuntimeOptions options);
 
+    /** Returns the cumulative number of lookup files evicted by the shared disk-space budget. */
+    default long fileCacheCapacityEvictions() {
+        return 0L;
+    }
+
     /**
      * Immutable snapshot of the format-independent resource settings for a lookup runtime.
      *
@@ -59,6 +73,7 @@ public interface LakeTableLookupRuntime extends AutoCloseable {
     final class LookupRuntimeOptions {
 
         private final long localCacheMaxBytes;
+        private final Duration expireAfterAccess;
 
         /**
          * Creates runtime resource settings.
@@ -66,15 +81,26 @@ public interface LakeTableLookupRuntime extends AutoCloseable {
          * @param localCacheMaxBytes positive disk-space budget in bytes for local caches shared by
          *     all lookupers in the runtime; implementations without local disk caches may ignore
          *     this budget
+         * @param expireAfterAccess positive idle expiration for individual cached lookup files
          */
-        public LookupRuntimeOptions(long localCacheMaxBytes) {
+        public LookupRuntimeOptions(long localCacheMaxBytes, Duration expireAfterAccess) {
             checkArgument(localCacheMaxBytes > 0, "localCacheMaxBytes must be greater than 0.");
             this.localCacheMaxBytes = localCacheMaxBytes;
+            this.expireAfterAccess =
+                    checkNotNull(expireAfterAccess, "expireAfterAccess must not be null.");
+            checkArgument(
+                    !expireAfterAccess.isNegative() && !expireAfterAccess.isZero(),
+                    "expireAfterAccess must be greater than 0.");
         }
 
         /** Returns the runtime-wide disk-space budget for local caches, in bytes. */
         public long localCacheMaxBytes() {
             return localCacheMaxBytes;
+        }
+
+        /** Returns the idle expiration applied independently to each cached lookup file. */
+        public Duration expireAfterAccess() {
+            return expireAfterAccess;
         }
     }
 

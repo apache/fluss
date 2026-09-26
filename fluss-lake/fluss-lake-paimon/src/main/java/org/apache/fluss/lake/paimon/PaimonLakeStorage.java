@@ -19,9 +19,9 @@ package org.apache.fluss.lake.paimon;
 
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.lake.lakestorage.LakeStorage;
-import org.apache.fluss.lake.lakestorage.LakeTableLookupRuntime;
-import org.apache.fluss.lake.lakestorage.LakeTableLookupRuntime.LookupRuntimeOptions;
 import org.apache.fluss.lake.lakestorage.LakeTableLookuper;
+import org.apache.fluss.lake.lakestorage.LakeTableLookuperManager;
+import org.apache.fluss.lake.lakestorage.LakeTableLookuperManager.LookupRuntimeOptions;
 import org.apache.fluss.lake.paimon.lookup.PaimonLakeTableLookuper;
 import org.apache.fluss.lake.paimon.lookup.PaimonScanBasedTableLookuper;
 import org.apache.fluss.lake.paimon.lookup.SharedLookupFileCache;
@@ -36,7 +36,6 @@ import org.apache.fluss.metadata.LakeLookupMode;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.utils.IOUtils;
 
-import org.apache.paimon.CoreOptions;
 import org.apache.paimon.disk.IOManager;
 import org.apache.paimon.options.MemorySize;
 
@@ -67,22 +66,22 @@ public class PaimonLakeStorage implements LakeStorage {
     }
 
     @Override
-    public LakeTableLookupRuntime createLakeTableLookupRuntime(
+    public LakeTableLookuperManager createLakeTableLookuperManager(
             String ioTmpDir, LookupRuntimeOptions options) {
-        return new PaimonLakeTableLookupRuntime(ioTmpDir, options);
+        return new PaimonLakeTableLookuperManager(ioTmpDir, options);
     }
 
-    /** Paimon lookup runtime sharing one I/O manager across table lookupers. */
-    private static final class PaimonLakeTableLookupRuntime implements LakeTableLookupRuntime {
+    /** Owns the shared I/O manager and file cache used by Paimon table lookupers. */
+    private static final class PaimonLakeTableLookuperManager implements LakeTableLookuperManager {
         private final IOManager ioManager;
         private final SharedLookupFileCache lookupFileCache;
 
-        private PaimonLakeTableLookupRuntime(String ioTmpDir, LookupRuntimeOptions options) {
+        private PaimonLakeTableLookuperManager(String ioTmpDir, LookupRuntimeOptions options) {
             checkNotNull(options, "options must not be null.");
             this.ioManager = IOManager.create(checkNotNull(ioTmpDir, "ioTmpDir must not be null."));
             this.lookupFileCache =
                     new SharedLookupFileCache(
-                            CoreOptions.LOOKUP_CACHE_FILE_RETENTION.defaultValue(),
+                            options.expireAfterAccess(),
                             new MemorySize(options.localCacheMaxBytes()));
         }
 
@@ -108,6 +107,12 @@ public class PaimonLakeStorage implements LakeStorage {
         public void reconfigure(LookupRuntimeOptions options) {
             checkNotNull(options, "options must not be null.");
             lookupFileCache.updateMaxDiskSize(new MemorySize(options.localCacheMaxBytes()));
+            lookupFileCache.updateExpireAfterAccess(options.expireAfterAccess());
+        }
+
+        @Override
+        public long fileCacheCapacityEvictions() {
+            return lookupFileCache.capacityEvictions();
         }
 
         @Override

@@ -18,12 +18,14 @@
 package org.apache.fluss.lake.paimon.lookup;
 
 import org.apache.fluss.annotation.Internal;
+import org.apache.fluss.annotation.VisibleForTesting;
 
 import org.apache.paimon.mergetree.LookupFile;
 import org.apache.paimon.options.MemorySize;
 import org.apache.paimon.shade.caffeine2.com.github.benmanes.caffeine.cache.Cache;
 import org.apache.paimon.shade.caffeine2.com.github.benmanes.caffeine.cache.Caffeine;
 import org.apache.paimon.shade.caffeine2.com.github.benmanes.caffeine.cache.RemovalCause;
+import org.apache.paimon.shade.caffeine2.com.github.benmanes.caffeine.cache.Ticker;
 
 import javax.annotation.Nullable;
 
@@ -31,6 +33,8 @@ import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.time.Duration;
 import java.util.Objects;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
 
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 import static org.apache.paimon.mergetree.LookupUtils.fileKibiBytes;
@@ -40,9 +44,15 @@ import static org.apache.paimon.mergetree.LookupUtils.fileKibiBytes;
 public final class SharedLookupFileCache implements AutoCloseable {
 
     private final Cache<Key, LookupFile> cache;
+    private final AtomicLong capacityEvictions = new AtomicLong();
 
     /** Creates a shared lookup-file cache. */
     public SharedLookupFileCache(Duration fileRetention, MemorySize maxDiskSize) {
+        this(fileRetention, maxDiskSize, Ticker.systemTicker());
+    }
+
+    @VisibleForTesting
+    SharedLookupFileCache(Duration fileRetention, MemorySize maxDiskSize, Ticker ticker) {
         checkNotNull(fileRetention, "fileRetention must not be null.");
         checkNotNull(maxDiskSize, "maxDiskSize must not be null.");
         this.cache =
@@ -52,7 +62,8 @@ public final class SharedLookupFileCache implements AutoCloseable {
                         .weigher(
                                 (Key key, LookupFile lookupFile) ->
                                         Math.max(1, fileKibiBytes(lookupFile.localFile())))
-                        .removalListener(SharedLookupFileCache::removeLookupFile)
+                        .ticker(checkNotNull(ticker, "ticker must not be null."))
+                        .removalListener(this::removeLookupFile)
                         .executor(Runnable::run)
                         .build();
     }
@@ -66,15 +77,31 @@ public final class SharedLookupFileCache implements AutoCloseable {
         cache.policy().eviction().get().setMaximum(Math.max(1L, maxDiskSize.getKibiBytes()));
     }
 
+    /** Updates idle expiration without replacing cached lookup files. */
+    public void updateExpireAfterAccess(Duration expireAfterAccess) {
+        cache.policy()
+                .expireAfterAccess()
+                .get()
+                .setExpiresAfter(expireAfterAccess.toNanos(), TimeUnit.NANOSECONDS);
+    }
+
+    /** Returns the number of files evicted to enforce the shared disk-space budget. */
+    public long capacityEvictions() {
+        return capacityEvictions.get();
+    }
+
     @Override
     public void close() {
         cache.invalidateAll();
         cache.cleanUp();
     }
 
-    private static void removeLookupFile(
+    private void removeLookupFile(
             @Nullable Key key, @Nullable LookupFile lookupFile, RemovalCause cause) {
         if (lookupFile != null) {
+            if (cause == RemovalCause.SIZE) {
+                capacityEvictions.incrementAndGet();
+            }
             try {
                 lookupFile.close(cause);
             } catch (IOException e) {

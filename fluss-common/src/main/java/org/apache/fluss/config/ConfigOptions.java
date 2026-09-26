@@ -429,7 +429,7 @@ public class ConfigOptions {
                             .defaultValue(0.10)
                             .withDescription(
                                     "The maximum fraction of the total capacity of the volume containing the first available data directory allocated to historical partition lookup caches on a TabletServer. "
-                                            + "Up to ten table lookupers share this capacity. Historical lookup cache files are stored under that data directory; additional data volumes are not used. "
+                                            + "All table lookupers share this capacity, with eviction at file granularity. Historical lookup cache files are stored under that data directory; additional data volumes are not used. "
                                             + "The valid range is (0.0, 1.0].");
 
     public static final ConfigOption<Duration>
@@ -438,7 +438,9 @@ public class ConfigOptions {
                             .durationType()
                             .defaultValue(Duration.ofHours(3))
                             .withDescription(
-                                    "The duration after which an idle historical partition table lookuper is removed from the cache.");
+                                    "The duration after which an idle historical partition table lookuper or an idle lookup file is removed from its cache. "
+                                            + "Lookuper and file access times are tracked independently. This setting replaces the Paimon table-level lookup.cache-file-retention option for historical lookups. "
+                                            + "Dynamic changes apply to both caches without replacing active lookupers.");
 
     public static final ConfigOption<Double> SERVER_DATA_DISK_WRITE_LIMIT_RATIO =
             key("server.data-disk.write-limit-ratio")
