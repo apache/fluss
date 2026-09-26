@@ -27,6 +27,7 @@ import org.apache.fluss.metrics.util.NOPMetricsGroup;
 import org.apache.fluss.rpc.TestingGatewayService;
 import org.apache.fluss.rpc.messages.ApiMessage;
 import org.apache.fluss.rpc.messages.ApiVersionsRequest;
+import org.apache.fluss.rpc.messages.ApiVersionsResponse;
 import org.apache.fluss.rpc.messages.GetTableInfoRequest;
 import org.apache.fluss.rpc.messages.LookupRequest;
 import org.apache.fluss.rpc.messages.PbLookupReqForBucket;
@@ -43,6 +44,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.net.ConnectException;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -51,6 +53,9 @@ import java.util.List;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.apache.fluss.utils.NetUtils.getAvailablePort;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -97,6 +102,44 @@ final class NettyClientTest {
                 .isInstanceOf(ExecutionException.class)
                 .hasMessageContaining("Failed to encode request for 'GET_TABLE_INFO(1007)'")
                 .hasRootCauseMessage("Some required fields are missing");
+    }
+
+    @Test
+    void testClientRequestTimeout() throws Exception {
+        nettyClient.close();
+        nettyServer.close();
+
+        conf.set(ConfigOptions.CLIENT_REQUEST_TIMEOUT, Duration.ofMillis(100));
+        conf.set(ConfigOptions.NETTY_CONNECTION_MAX_IDLE_TIME, Duration.ofSeconds(2));
+        nettyClient = new NettyClient(conf, TestingClientMetricGroup.newInstance());
+
+        AtomicInteger apiVersionsRequests = new AtomicInteger();
+        buildNettyServer(
+                1,
+                new TestingGatewayService() {
+                    @Override
+                    public CompletableFuture<ApiVersionsResponse> apiVersions(
+                            ApiVersionsRequest request) {
+                        if (apiVersionsRequests.incrementAndGet() == 1) {
+                            return super.apiVersions(request);
+                        }
+                        return new CompletableFuture<>();
+                    }
+                });
+
+        ApiVersionsRequest request =
+                new ApiVersionsRequest()
+                        .setClientSoftwareName("testing_client")
+                        .setClientSoftwareVersion("1.0");
+        CompletableFuture<ApiMessage> response =
+                nettyClient.sendRequest(serverNode, ApiKeys.API_VERSIONS, request);
+
+        assertThatThrownBy(() -> response.get(1, TimeUnit.SECONDS))
+                .isInstanceOf(ExecutionException.class)
+                .hasRootCauseInstanceOf(TimeoutException.class)
+                .rootCause()
+                .hasMessageContaining("Timed out waiting for response from node");
+        assertThat(nettyClient.connections().get(serverNode.uid()).numInflightRequests()).isZero();
     }
 
     @Test
@@ -254,11 +297,16 @@ final class NettyClientTest {
     }
 
     private void buildNettyServer(int serverId) throws Exception {
+        buildNettyServer(serverId, new TestingGatewayService());
+    }
+
+    private void buildNettyServer(int serverId, TestingGatewayService gatewayService)
+            throws Exception {
         try (NetUtils.Port availablePort = getAvailablePort()) {
             serverNode =
                     new ServerNode(
                             serverId, "localhost", availablePort.getPort(), ServerType.COORDINATOR);
-            service = new TestingGatewayService();
+            service = gatewayService;
             MetricGroup metricGroup = NOPMetricsGroup.newInstance();
             nettyServer =
                     new NettyServer(
