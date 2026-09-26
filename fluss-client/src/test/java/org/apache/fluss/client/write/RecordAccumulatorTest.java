@@ -32,6 +32,8 @@ import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.metrics.Gauge;
+import org.apache.fluss.metrics.MetricNames;
 import org.apache.fluss.record.ChangeType;
 import org.apache.fluss.record.DefaultKvRecord;
 import org.apache.fluss.record.IndexedLogRecord;
@@ -147,6 +149,60 @@ class RecordAccumulatorTest {
 
     // TODO Add more tests to test lingMs, retryBackoffMs, deliveryTimeoutMs and
     //  nextBatchExpiryTimeMs if we introduced.
+
+    @Test
+    void testAccumulatorMemoryMetrics() throws Exception {
+        int batchSize = 1024;
+        TestingWriterMetricGroup metrics = TestingWriterMetricGroup.newInstance();
+        RecordAccumulator accum =
+                createTestRecordAccumulator(
+                        5000, batchSize, 256, 10L * batchSize, bucketAssigner, metrics);
+
+        try {
+            assertThat(metrics.getMetrics())
+                    .containsKeys(
+                            MetricNames.WRITER_ACCUMULATOR_HEAP_MEMORY_USED_BYTES,
+                            MetricNames.WRITER_ACCUMULATOR_ARROW_MEMORY_USED_BYTES,
+                            MetricNames.WRITER_ACCUMULATOR_DIRECT_MEMORY_ALLOCATED_BYTES);
+
+            Gauge<?> heapMemoryUsed =
+                    (Gauge<?>)
+                            metrics.getMetrics()
+                                    .get(MetricNames.WRITER_ACCUMULATOR_HEAP_MEMORY_USED_BYTES);
+            Gauge<?> arrowMemoryUsed =
+                    (Gauge<?>)
+                            metrics.getMetrics()
+                                    .get(MetricNames.WRITER_ACCUMULATOR_ARROW_MEMORY_USED_BYTES);
+            Gauge<?> directMemoryAllocatedBytes =
+                    (Gauge<?>)
+                            metrics.getMetrics()
+                                    .get(
+                                            MetricNames
+                                                    .WRITER_ACCUMULATOR_DIRECT_MEMORY_ALLOCATED_BYTES);
+
+            assertThat(((Number) heapMemoryUsed.getValue()).longValue()).isZero();
+            assertThat(((Number) arrowMemoryUsed.getValue()).longValue()).isZero();
+            assertThat(((Number) directMemoryAllocatedBytes.getValue()).longValue()).isZero();
+
+            bucketAssigner.setBucketId(0);
+            accum.append(
+                    WriteRecord.forArrowAppend(
+                            DATA1_TABLE_INFO, DATA1_PHYSICAL_TABLE_PATH, row(1, "a"), null),
+                    (bucket, offset, exception) -> {},
+                    cluster);
+
+            long heapMemory = ((Number) heapMemoryUsed.getValue()).longValue();
+            long arrowMemory = ((Number) arrowMemoryUsed.getValue()).longValue();
+            long directMemory = ((Number) directMemoryAllocatedBytes.getValue()).longValue();
+            assertThat(heapMemory).isPositive();
+            assertThat(arrowMemory).isPositive();
+            assertThat(directMemory).isGreaterThanOrEqualTo(arrowMemory);
+        } finally {
+            accum.close();
+            accum.abortAllBatches(new RuntimeException("test cleanup"));
+            accum.destroyResources();
+        }
+    }
 
     @Test
     void testDrainBatches() throws Exception {
@@ -815,6 +871,22 @@ class RecordAccumulatorTest {
             int pageSize,
             long totalSize,
             BucketAssigner assigner) {
+        return createTestRecordAccumulator(
+                batchTimeoutMs,
+                batchSize,
+                pageSize,
+                totalSize,
+                assigner,
+                TestingWriterMetricGroup.newInstance());
+    }
+
+    private RecordAccumulator createTestRecordAccumulator(
+            int batchTimeoutMs,
+            int batchSize,
+            int pageSize,
+            long totalSize,
+            BucketAssigner assigner,
+            TestingWriterMetricGroup metrics) {
         conf.set(ConfigOptions.CLIENT_WRITER_BATCH_TIMEOUT, Duration.ofMillis(batchTimeoutMs));
         // TODO client writer buffer maybe removed.
         conf.set(ConfigOptions.CLIENT_WRITER_BUFFER_MEMORY_SIZE, new MemorySize(totalSize));
@@ -832,7 +904,7 @@ class RecordAccumulatorTest {
                                 RpcClient.create(conf, TestingClientMetricGroup.newInstance()),
                                 TabletServerGateway.class),
                         null),
-                TestingWriterMetricGroup.newInstance(),
+                metrics,
                 clock,
                 (tableInfo, path) -> assigner);
     }

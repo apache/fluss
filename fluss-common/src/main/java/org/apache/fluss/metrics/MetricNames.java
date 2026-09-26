@@ -339,6 +339,14 @@ public class MetricNames {
     public static final String WRITER_RECORDS_PER_BATCH = "recordsPerBatch";
     public static final String WRITER_SEND_LATENCY_MS = "sendLatencyMs";
 
+    // for record accumulator memory
+    public static final String WRITER_ACCUMULATOR_HEAP_MEMORY_USED_BYTES =
+            "accumulatorHeapMemoryUsedBytes";
+    public static final String WRITER_ACCUMULATOR_ARROW_MEMORY_USED_BYTES =
+            "accumulatorArrowMemoryUsedBytes";
+    public static final String WRITER_ACCUMULATOR_DIRECT_MEMORY_ALLOCATED_BYTES =
+            "accumulatorDirectMemoryAllocatedBytes";
+
     // for scanner
     public static final String SCANNER_TIME_MS_BETWEEN_POLL = "timeMsBetweenPoll";
     public static final String SCANNER_LAST_POLL_SECONDS_AGO = "lastPollSecondsAgo";

@@ -106,7 +106,7 @@ public final class RecordAccumulator {
     /** The arrow buffer allocator to allocate memory for arrow log write batch. */
     private final BufferAllocator bufferAllocator;
 
-    /** The chunked allocation manager factory, stored for explicit native memory release. */
+    /** The chunked allocation manager factory, stored for explicit direct memory release. */
     private final ChunkedAllocationManager.ChunkedFactory chunkedFactory;
 
     /** Coordinates batch memory deallocation with resource destruction. */
@@ -206,6 +206,15 @@ public final class RecordAccumulator {
         // The number of user threads blocked waiting for buffer memory to enqueue their records
         writerMetricGroup.gauge(
                 MetricNames.WRITER_BUFFER_WAITING_THREADS, writerBufferPool::queued);
+        writerMetricGroup.gauge(
+                MetricNames.WRITER_ACCUMULATOR_HEAP_MEMORY_USED_BYTES,
+                () -> writerBufferPool.totalSize() - writerBufferPool.availableMemory());
+        writerMetricGroup.gauge(
+                MetricNames.WRITER_ACCUMULATOR_ARROW_MEMORY_USED_BYTES,
+                bufferAllocator::getAllocatedMemory);
+        writerMetricGroup.gauge(
+                MetricNames.WRITER_ACCUMULATOR_DIRECT_MEMORY_ALLOCATED_BYTES,
+                chunkedFactory::getDirectMemoryAllocatedBytes);
     }
 
     /** Assigns and appends a record using the layout owned by its write context. */
