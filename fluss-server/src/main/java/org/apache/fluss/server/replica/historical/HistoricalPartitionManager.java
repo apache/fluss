@@ -26,7 +26,6 @@ import org.apache.fluss.lake.lakestorage.LakeTableLookuper;
 import org.apache.fluss.metadata.ResolvedPartitionSpec;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
-import org.apache.fluss.metrics.Counter;
 import org.apache.fluss.plugin.PluginManager;
 import org.apache.fluss.row.encode.KvValueLayout;
 import org.apache.fluss.rpc.entity.LookupResultForBucket;
@@ -211,9 +210,9 @@ public final class HistoricalPartitionManager implements AutoCloseable {
         return lakeLookupManager.cachedTableCount();
     }
 
-    /** Returns the counter for lookuper evictions caused by the table cache capacity. */
-    public Counter capacityEvictions() {
-        return lakeLookupManager.capacityEvictions();
+    /** Returns the cumulative number of lookup files evicted by the shared disk-space budget. */
+    public long fileCacheCapacityEvictions() {
+        return lakeLookupManager.fileCacheCapacityEvictions();
     }
 
     @VisibleForTesting

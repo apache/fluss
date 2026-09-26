@@ -112,8 +112,8 @@ public class MetricNames {
     // for historical lookup cache
     public static final String HISTORICAL_LOOKUP_CACHE_DISK_SIZE = "lookupCacheDiskSize";
     public static final String HISTORICAL_LOOKUP_CACHE_TABLE_COUNT = "lookupCacheTableCount";
-    public static final String HISTORICAL_LOOKUP_CACHE_CAPACITY_EVICTIONS =
-            "lookupCacheCapacityEvictions";
+    public static final String HISTORICAL_LOOKUP_CACHE_FILE_CAPACITY_EVICTIONS =
+            "lookupCacheFileCapacityEvictions";
 
     // --------------------------------------------------------------------------------------------
     // metrics for user
