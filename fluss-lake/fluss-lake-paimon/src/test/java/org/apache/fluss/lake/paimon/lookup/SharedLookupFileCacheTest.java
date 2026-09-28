@@ -29,7 +29,11 @@ import java.io.File;
 import java.io.IOException;
 import java.io.RandomAccessFile;
 import java.time.Duration;
+import java.util.AbstractMap;
 import java.util.Arrays;
+import java.util.Collections;
+import java.util.Map;
+import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -39,6 +43,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Tests for {@link SharedLookupFileCache}. */
 class SharedLookupFileCacheTest {
@@ -101,6 +106,90 @@ class SharedLookupFileCacheTest {
             assertThat(secondFile).doesNotExist();
             assertThat(sharedCache.capacityEvictions()).isOne();
         }
+    }
+
+    @Test
+    void testNamespacedMapKeepsMutationsWithinItsNamespace() throws Exception {
+        File firstFile = lookupFile("map-first.lookup");
+        File secondFile = lookupFile("map-second.lookup");
+        File replacementFile = lookupFile("map-replacement.lookup");
+        File finalFile = lookupFile("map-final.lookup");
+        File additionalFile = lookupFile("map-additional.lookup");
+
+        try (SharedLookupFileCache sharedCache =
+                new SharedLookupFileCache(Duration.ofHours(1), MemorySize.ofKibiBytes(8))) {
+            ConcurrentMap<String, LookupFile> firstMap = sharedCache.namespaced("first").asMap();
+            ConcurrentMap<String, LookupFile> secondMap = sharedCache.namespaced("second").asMap();
+            LookupFile firstLookupFile = lookupFile(firstFile);
+            LookupFile secondLookupFile = lookupFile(secondFile);
+            LookupFile replacementLookupFile = lookupFile(replacementFile);
+            LookupFile finalLookupFile = lookupFile(finalFile);
+
+            assertThat(firstMap.putIfAbsent("same", firstLookupFile)).isNull();
+            assertThat(secondMap.put("same", secondLookupFile)).isNull();
+            assertThat(firstMap.get("same")).isSameAs(firstLookupFile);
+            assertThat(firstMap.get(1)).isNull();
+            assertThat(firstMap.entrySet())
+                    .containsOnly(new AbstractMap.SimpleImmutableEntry<>("same", firstLookupFile));
+
+            assertThat(firstMap.replace("same", secondLookupFile, replacementLookupFile)).isFalse();
+            assertThat(firstMap.replace("same", firstLookupFile, replacementLookupFile)).isTrue();
+            assertThat(firstFile).doesNotExist();
+            assertThat(firstMap.replace("same", finalLookupFile)).isSameAs(replacementLookupFile);
+            assertThat(replacementFile).doesNotExist();
+            assertThat(firstMap.putIfAbsent("same", firstLookupFile)).isSameAs(finalLookupFile);
+            assertThat(firstMap.remove("same", secondLookupFile)).isFalse();
+            assertThat(firstMap.remove("same", finalLookupFile)).isTrue();
+            assertThat(finalFile).doesNotExist();
+            assertThat(firstMap.remove("same")).isNull();
+
+            assertThat(firstMap.put("additional", lookupFile(additionalFile))).isNull();
+            firstMap.clear();
+            assertThat(additionalFile).doesNotExist();
+            assertThat(secondMap.get("same")).isSameAs(secondLookupFile);
+            assertThat(secondFile).exists();
+        }
+
+        assertThat(secondFile).doesNotExist();
+    }
+
+    @Test
+    void testNamespacedCacheBulkOperationsAndPolicy() throws Exception {
+        File bulkFile = lookupFile("bulk.lookup");
+        File createdFile = lookupFile("created.lookup");
+        File otherFile = lookupFile("other.lookup");
+
+        try (SharedLookupFileCache sharedCache =
+                new SharedLookupFileCache(Duration.ofHours(1), MemorySize.ofKibiBytes(8))) {
+            Cache<String, LookupFile> first = sharedCache.namespaced("first");
+            Cache<String, LookupFile> second = sharedCache.namespaced("second");
+            LookupFile bulkLookupFile = lookupFile(bulkFile);
+            LookupFile createdLookupFile = lookupFile(createdFile);
+            LookupFile otherLookupFile = lookupFile(otherFile);
+            first.putAll(Collections.singletonMap("bulk", bulkLookupFile));
+            second.put("bulk", otherLookupFile);
+
+            assertThat(first.get("created", ignored -> createdLookupFile))
+                    .isSameAs(createdLookupFile);
+            Map<String, LookupFile> present =
+                    first.getAllPresent(Arrays.asList("bulk", "created", "missing", 1));
+            assertThat(present)
+                    .containsOnlyKeys("bulk", "created")
+                    .containsEntry("bulk", bulkLookupFile)
+                    .containsEntry("created", createdLookupFile);
+            assertThat(first.getIfPresent(1)).isNull();
+            assertThat(first.stats()).isNotNull();
+            assertThatThrownBy(first::policy).isInstanceOf(UnsupportedOperationException.class);
+
+            first.invalidate("bulk");
+            assertThat(bulkFile).doesNotExist();
+            first.invalidateAll(Collections.singletonList("created"));
+            assertThat(createdFile).doesNotExist();
+            assertThat(second.getIfPresent("bulk")).isSameAs(otherLookupFile);
+            assertThat(otherFile).exists();
+        }
+
+        assertThat(otherFile).doesNotExist();
     }
 
     @Test
