@@ -481,13 +481,13 @@ impl RecordBatchLogReader {
             }
 
             let scan_batches = self.scanner.poll(timeout - elapsed).await?;
+            let polled_nothing = scan_batches.is_empty();
 
-            if scan_batches.is_empty() {
-                return Ok(RecordBatchReadOutcome::TimedOut);
-            }
-
-            let completed =
+            let mut completed =
                 filter_batches(scan_batches, &mut self.stopping_offsets, &mut self.buffer);
+            completed.extend(complete_at_position(&mut self.stopping_offsets, |bucket| {
+                self.scanner.bucket_offset(bucket)
+            }));
 
             // Use the `_sync` unsubscribe variants here: the active-reader
             // guard rejects calls to the async `unsubscribe*` methods, but
@@ -503,6 +503,10 @@ impl RecordBatchLogReader {
                 } else {
                     self.scanner.unsubscribe_sync(tb.bucket_id());
                 }
+            }
+
+            if polled_nothing && !self.stopping_offsets.is_empty() {
+                return Ok(RecordBatchReadOutcome::TimedOut);
             }
         }
     }
@@ -986,6 +990,23 @@ fn filter_batches(
     completed
 }
 
+/// Removes and returns the buckets whose scanner position reached their stop,
+/// since a tail pruned by a filter never yields a batch at the stop.
+fn complete_at_position(
+    stopping_offsets: &mut HashMap<TableBucket, i64>,
+    position: impl Fn(&TableBucket) -> Option<i64>,
+) -> Vec<TableBucket> {
+    let mut completed = Vec::new();
+    stopping_offsets.retain(|bucket, stop_at| {
+        let reached = position(bucket).is_some_and(|offset| offset >= *stop_at);
+        if reached {
+            completed.push(bucket.clone());
+        }
+        !reached
+    });
+    completed
+}
+
 // Rust-level end-to-end coverage for `new_until_latest`, partitioned tables,
 // and `new_until_offsets` stopping semantics lives in
 // `crates/fluss/tests/integration/record_batch_log_reader.rs`. Drop cleanup and the
@@ -1325,5 +1346,40 @@ mod tests {
         let sb = &buffer[0];
         assert_eq!(sb.base_offset(), 10);
         assert_eq!(*sb.bucket(), bucket(0));
+    }
+
+    #[test]
+    fn position_at_or_past_stop_completes_bucket() {
+        let mut offsets = HashMap::from([(bucket(0), 10), (bucket(1), 10)]);
+        let positions = HashMap::from([(bucket(0), 10), (bucket(1), 25)]);
+
+        let mut completed = complete_at_position(&mut offsets, |b| positions.get(b).copied());
+        completed.sort_by_key(|b| b.bucket_id());
+
+        assert!(offsets.is_empty());
+        assert_eq!(completed, vec![bucket(0), bucket(1)]);
+    }
+
+    #[test]
+    fn position_before_stop_keeps_bucket() {
+        let mut offsets = HashMap::from([(bucket(0), 10)]);
+
+        let completed = complete_at_position(&mut offsets, |_| Some(9));
+
+        assert!(completed.is_empty());
+        assert!(offsets.contains_key(&bucket(0)));
+    }
+
+    #[test]
+    fn unresolved_position_keeps_bucket() {
+        let mut offsets = HashMap::from([(bucket(0), 10)]);
+
+        let completed =
+            complete_at_position(&mut offsets, |_| Some(crate::client::EARLIEST_OFFSET));
+        assert!(completed.is_empty());
+
+        let completed = complete_at_position(&mut offsets, |_| None);
+        assert!(completed.is_empty());
+        assert!(offsets.contains_key(&bucket(0)));
     }
 }

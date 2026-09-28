@@ -1204,6 +1204,11 @@ impl RecordBatchLogScanner {
         self.inner.num_buckets
     }
 
+    /// Next fetch offset of `bucket`, which moves past batches the server pruned.
+    pub(crate) fn bucket_offset(&self, bucket: &TableBucket) -> Option<i64> {
+        self.inner.log_scanner_status.get_bucket_offset(bucket)
+    }
+
     /// Subscribes non-partitioned ranges while the caller holds the active
     /// reader guard.
     pub(crate) async fn subscribe_buckets_for_reader(
