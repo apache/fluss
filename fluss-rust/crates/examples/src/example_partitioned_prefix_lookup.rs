@@ -93,7 +93,7 @@ pub async fn main() -> Result<()> {
     upsert_writer.flush().await?;
 
     println!("\n=== Prefix lookup by (region, user_id, session_id) ===");
-    let mut prefix_lookuper = table
+    let prefix_lookuper = table
         .new_lookup()?
         .lookup_by(vec![
             "region".to_string(),

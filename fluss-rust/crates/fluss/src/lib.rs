@@ -63,7 +63,7 @@
 //!     upsert_writer.upsert(&row)?;
 //!     upsert_writer.flush().await?;
 //!
-//!     let mut lookuper = kv_table.new_lookup()?.create_lookuper()?;
+//!     let lookuper = kv_table.new_lookup()?.create_lookuper()?;
 //!     let mut key = GenericRow::new(1);
 //!     key.set_field(0, 1i32);
 //!     let result = lookuper.lookup(&key).await?;

@@ -31,7 +31,7 @@ use crate::row::{FixedSchemaDecoder, InternalRow, LookupRow};
 use arrow::array::RecordBatch;
 use byteorder::{ByteOrder, LittleEndian};
 use futures::future::try_join_all;
-use parking_lot::RwLock;
+use parking_lot::{Mutex, RwLock};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -341,8 +341,8 @@ impl TableLookup {
             metadata: self.metadata,
             lookup_client: self.lookup_client,
             bucketing_function,
-            primary_key_encoder,
-            bucket_key_encoder,
+            primary_key_encoder: Mutex::new(primary_key_encoder),
+            bucket_key_encoder: bucket_key_encoder.map(Mutex::new),
             partition_getter,
             num_buckets,
             schema_ctx,
@@ -367,8 +367,8 @@ pub struct Lookuper {
     metadata: Arc<Metadata>,
     lookup_client: Arc<LookupClient>,
     bucketing_function: Box<dyn BucketingFunction>,
-    primary_key_encoder: Box<dyn KeyEncoder>,
-    bucket_key_encoder: Option<Box<dyn KeyEncoder>>,
+    primary_key_encoder: Mutex<Box<dyn KeyEncoder>>,
+    bucket_key_encoder: Option<Mutex<Box<dyn KeyEncoder>>>,
     partition_getter: Option<PartitionGetter>,
     num_buckets: i32,
     schema_ctx: LookupSchemaCtx,
@@ -387,10 +387,10 @@ impl Lookuper {
     /// # Returns
     /// * `Ok(LookupResult)` - The lookup result (may be empty if key not found)
     /// * `Err(Error)` - If the lookup fails
-    pub async fn lookup(&mut self, row: &dyn InternalRow) -> Result<LookupResult> {
-        let pk_bytes = self.primary_key_encoder.encode_key(row)?;
-        let bk_bytes = match &mut self.bucket_key_encoder {
-            Some(encoder) => encoder.encode_key(row)?,
+    pub async fn lookup(&self, row: &dyn InternalRow) -> Result<LookupResult> {
+        let pk_bytes = self.primary_key_encoder.lock().encode_key(row)?;
+        let bk_bytes = match &self.bucket_key_encoder {
+            Some(encoder) => encoder.lock().encode_key(row)?,
             None => pk_bytes.clone(),
         };
 
@@ -507,8 +507,8 @@ impl TablePrefixLookup {
             metadata: self.metadata,
             lookup_client: self.lookup_client,
             bucketing_function,
-            prefix_lookup_key_encoder,
-            bucket_key_encoder,
+            prefix_lookup_key_encoder: Mutex::new(prefix_lookup_key_encoder),
+            bucket_key_encoder: bucket_key_encoder.map(Mutex::new),
             partition_getter,
             num_buckets,
             schema_ctx,
@@ -613,21 +613,21 @@ pub struct PrefixKeyLookuper {
     bucketing_function: Box<dyn BucketingFunction>,
     /// Encodes the lookup row into the prefix bytes sent to the server for
     /// byte-prefix matching against stored primary keys.
-    prefix_lookup_key_encoder: Box<dyn KeyEncoder>,
+    prefix_lookup_key_encoder: Mutex<Box<dyn KeyEncoder>>,
     /// Optional lake-aligned encoder used solely to compute the bucket id.
     /// `None` when the bucket key equals the primary key, in which case the
     /// prefix lookup key bytes are reused for bucketing.
-    bucket_key_encoder: Option<Box<dyn KeyEncoder>>,
+    bucket_key_encoder: Option<Mutex<Box<dyn KeyEncoder>>>,
     partition_getter: Option<PartitionGetter>,
     num_buckets: i32,
     schema_ctx: LookupSchemaCtx,
 }
 
 impl PrefixKeyLookuper {
-    pub async fn lookup(&mut self, row: &dyn InternalRow) -> Result<LookupResult> {
-        let prefix_bytes = self.prefix_lookup_key_encoder.encode_key(row)?;
-        let bk_bytes = match &mut self.bucket_key_encoder {
-            Some(encoder) => encoder.encode_key(row)?,
+    pub async fn lookup(&self, row: &dyn InternalRow) -> Result<LookupResult> {
+        let prefix_bytes = self.prefix_lookup_key_encoder.lock().encode_key(row)?;
+        let bk_bytes = match &self.bucket_key_encoder {
+            Some(encoder) => encoder.lock().encode_key(row)?,
             None => prefix_bytes.clone(),
         };
 
