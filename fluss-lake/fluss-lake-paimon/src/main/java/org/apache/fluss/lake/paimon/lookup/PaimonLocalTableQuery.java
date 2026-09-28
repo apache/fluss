@@ -73,6 +73,9 @@ import static org.apache.paimon.mergetree.LookupFile.localFilePrefix;
  * {@link LookupLevels}. This replaces the lazy, query-owned cache built from table retention and
  * disk-size options. Closing a query only invalidates its namespace; the shared cache and I/O
  * manager belong to the lake table lookuper manager.
+ *
+ * <p>TODO: Once Paimon's {@code LocalTableQuery} supports an externally managed shared lookup-file
+ * cache, use Paimon's implementation directly and remove this copy.
  */
 final class PaimonLocalTableQuery implements TableQuery {
 
