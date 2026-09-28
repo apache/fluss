@@ -92,8 +92,8 @@ import static org.apache.fluss.utils.Preconditions.checkNotNull;
  * registered partition-bucket and updates its file set in place. Paimon keeps lookup files for data
  * files that remain active and lazily downloads lookup files only for newly added data files.
  *
- * <p>Calls to {@link PaimonLocalTableQuery#lookup} are serialized because Paimon 2.0 shares mutable
- * lookup-store comparator state across local lookup files.
+ * <p>Calls to {@link PaimonLocalTableQuery#lookup} can run concurrently. The local query isolates
+ * Paimon 2.0's mutable lookup-store comparator by thread.
  *
  * <p>Close is expected only after the owner has drained active lookups. It is synchronized with
  * lazy initialization and file-set updates, but deliberately does not add a lifecycle lock to every
@@ -114,7 +114,6 @@ public class PaimonLakeTableLookuper implements LakeTableLookuper {
     private final Runnable diskWriteGuard;
 
     private final ThreadLocal<Boolean> lookupFileDownloaded;
-    private final Object paimonLookupLock;
     // Guards lazy initialization, close, and registered file-set updates.
     private final Object lookupStateLock;
     private final Map<PaimonPartitionBucket, List<DataFileMeta>> registeredFiles;
@@ -152,7 +151,6 @@ public class PaimonLakeTableLookuper implements LakeTableLookuper {
         this.tableConfig = checkNotNull(tableConfig, "tableConfig must not be null.");
         this.diskWriteGuard = checkNotNull(diskWriteGuard, "diskWriteGuard must not be null.");
         this.lookupFileDownloaded = new ThreadLocal<>();
-        this.paimonLookupLock = new Object();
         this.lookupStateLock = new Object();
         this.ioManager =
                 new TrackingIOManager(checkNotNull(ioManager, "ioManager must not be null."));
@@ -474,13 +472,7 @@ public class PaimonLakeTableLookuper implements LakeTableLookuper {
             int bucket,
             org.apache.paimon.data.InternalRow key)
             throws IOException {
-        // TODO: Remove this lock once https://github.com/apache/paimon/issues/9483 is fixed in the
-        // Paimon version used by Fluss. If concurrent lookup is needed sooner, bring Paimon's
-        // LocalTableQuery implementation into Fluss and make it thread-safe, following the approach
-        // in https://github.com/apache/fluss/pull/4113.
-        synchronized (paimonLookupLock) {
-            return localTableQuery.lookup(partition, bucket, key);
-        }
+        return localTableQuery.lookup(partition, bucket, key);
     }
 
     private List<DataFileMeta> getOrInitializeFiles(PaimonPartitionBucket partitionBucket) {

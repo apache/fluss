@@ -34,6 +34,7 @@ import org.apache.paimon.io.DataFileMeta;
 import org.apache.paimon.io.KeyValueFileReaderFactory;
 import org.apache.paimon.io.cache.CacheManager;
 import org.apache.paimon.lookup.LookupStoreFactory;
+import org.apache.paimon.memory.MemorySlice;
 import org.apache.paimon.mergetree.Levels;
 import org.apache.paimon.mergetree.LookupFile;
 import org.apache.paimon.mergetree.LookupLevels;
@@ -123,13 +124,20 @@ final class PaimonLocalTableQuery implements TableQuery {
         this.fileIO = table.fileIO();
         RowType keyType = readerFactoryBuilder.keyType();
         this.keyComparatorSupplier = new KeyComparatorSupplier(readerFactoryBuilder.keyType());
+        // Paimon 2.0.0's slice comparator reuses mutable RowReaders. The lookup store factory
+        // shares its comparator across all lookup files, so each lookup thread needs its own.
+        ThreadLocal<Comparator<MemorySlice>> threadLocalComparator =
+                ThreadLocal.withInitial(
+                        () -> new RowCompactedSerializer(keyType).createSliceComparator());
+        Comparator<MemorySlice> keySliceComparator =
+                (left, right) -> threadLocalComparator.get().compare(left, right);
         this.lookupStoreFactory =
                 LookupStoreFactory.create(
                         options,
                         new CacheManager(
                                 options.lookupCacheMaxMemory(),
                                 options.lookupCacheHighPrioPoolRatio()),
-                        new RowCompactedSerializer(keyType).createSliceComparator());
+                        keySliceComparator);
         startLevel = options.needLookup() ? 1 : 0;
     }
 
