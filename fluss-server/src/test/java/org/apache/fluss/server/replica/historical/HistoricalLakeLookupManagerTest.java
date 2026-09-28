@@ -42,7 +42,6 @@ import com.github.benmanes.caffeine.cache.Scheduler;
 import com.github.benmanes.caffeine.cache.Ticker;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
-import org.mockito.ArgumentCaptor;
 
 import java.io.File;
 import java.io.RandomAccessFile;
@@ -64,9 +63,6 @@ import static org.apache.fluss.record.TestData.PARTITION_TABLE_ID;
 import static org.apache.fluss.record.TestData.PARTITION_TABLE_INFO;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.when;
 
 /** Tests for {@link HistoricalLakeLookupManager}. */
 class HistoricalLakeLookupManagerTest {
@@ -373,11 +369,10 @@ class HistoricalLakeLookupManagerTest {
         assertThat(manager.lookupCacheMaxDiskBytes()).isEqualTo(20L);
         assertThat(lookuper.closed).isFalse();
         assertThat(manager.cachedTableCount()).isOne();
-        ArgumentCaptor<LookupCacheOptions> options =
-                ArgumentCaptor.forClass(LookupCacheOptions.class);
-        verify(manager.sharedManager).reconfigure(options.capture());
-        assertThat(options.getValue().localCacheMaxBytes()).isEqualTo(20L);
-        assertThat(options.getValue().expireAfterAccess()).isEqualTo(Duration.ofHours(3));
+        assertThat(manager.sharedManager.reconfigureCount).isOne();
+        assertThat(manager.sharedManager.options.localCacheMaxBytes()).isEqualTo(20L);
+        assertThat(manager.sharedManager.options.expireAfterAccess())
+                .isEqualTo(Duration.ofHours(3));
     }
 
     @Test
@@ -386,12 +381,11 @@ class HistoricalLakeLookupManagerTest {
         lookup(manager, PARTITION_TABLE_INFO);
         manager.reconfigure(confWithExpiration(Duration.ofMinutes(30)));
 
-        ArgumentCaptor<LookupCacheOptions> options =
-                ArgumentCaptor.forClass(LookupCacheOptions.class);
-        verify(manager.sharedManager).reconfigure(options.capture());
-        assertThat(options.getValue().expireAfterAccess()).isEqualTo(Duration.ofMinutes(30));
+        assertThat(manager.sharedManager.reconfigureCount).isOne();
+        assertThat(manager.sharedManager.options.expireAfterAccess())
+                .isEqualTo(Duration.ofMinutes(30));
         assertThat(manager.createdLookupers).hasSize(1).noneMatch(lookuper -> lookuper.closed);
-        when(manager.sharedManager.fileCacheCapacityEvictions()).thenReturn(7L);
+        manager.sharedManager.capacityEvictions = 7L;
         assertThat(manager.fileCacheCapacityEvictions()).isEqualTo(7L);
     }
 
@@ -430,7 +424,7 @@ class HistoricalLakeLookupManagerTest {
             manager.close();
             assertThat(oldLookuper.closed).isFalse();
             assertThat(manager.createdLookupers.get(1).closed).isTrue();
-            verify(manager.sharedManager).close();
+            assertThat(manager.sharedManager.closeCount).isOne();
             assertThat(manager.hasLookuperManager()).isFalse();
             assertThatThrownBy(() -> lookup(manager, PARTITION_TABLE_INFO))
                     .isInstanceOf(IllegalStateException.class)
@@ -546,7 +540,8 @@ class HistoricalLakeLookupManagerTest {
         private final List<String> createdCacheNamespaces = new ArrayList<>();
         private final List<Configuration> createdClusterConfigs = new ArrayList<>();
         private final long lookupCacheFileBytes;
-        private final LakeTableLookuperManager sharedManager = mock(LakeTableLookuperManager.class);
+        private final TestingLakeTableLookuperManager sharedManager =
+                new TestingLakeTableLookuperManager();
 
         private TestingHistoricalLakeLookupManager(Configuration conf) {
             super(
@@ -617,6 +612,35 @@ class HistoricalLakeLookupManagerTest {
             createdCacheNamespaces.add(cacheNamespace);
             createdClusterConfigs.add(clusterConf);
             return lookuper;
+        }
+    }
+
+    private static final class TestingLakeTableLookuperManager implements LakeTableLookuperManager {
+        private LookupCacheOptions options;
+        private long capacityEvictions;
+        private int reconfigureCount;
+        private int closeCount;
+
+        @Override
+        public LakeTableLookuper createLakeTableLookuper(TablePath tablePath, Context context) {
+            throw new UnsupportedOperationException(
+                    "Lookuper creation is handled by the test manager.");
+        }
+
+        @Override
+        public void reconfigure(LookupCacheOptions options) {
+            this.options = options;
+            reconfigureCount++;
+        }
+
+        @Override
+        public long fileCacheCapacityEvictions() {
+            return capacityEvictions;
+        }
+
+        @Override
+        public void close() {
+            closeCount++;
         }
     }
 
