@@ -144,6 +144,35 @@ class PeriodicSnapshotManagerTest {
     }
 
     @Test
+    void testScheduleNextSnapshotAfterInitFailure() {
+        // use local filesystem to make the FileSystem plugin happy
+        String snapshotDir = "file:/test/snapshot1";
+        TestSnapshotTarget target = new TestSnapshotTarget(new FsPath(snapshotDir));
+        // the first snapshot initialization fails (e.g. transient backend outage),
+        // all subsequent ones succeed.
+        target.failNextInitSnapshot();
+        periodicSnapshotManager = createSnapshotManager(target);
+        periodicSnapshotManager.start();
+        checkOnlyOneScheduledTasks();
+
+        // trigger the first snapshot, whose initialization fails. The scheduling chain must
+        // still be re-armed, otherwise this bucket would never take a snapshot again.
+        scheduledExecutorService.triggerNonPeriodicScheduledTasks();
+        assertThat(target.getInitSnapshotCount()).isEqualTo(1);
+        checkOnlyOneScheduledTasks();
+
+        // the backend has recovered, the next attempt should succeed
+        scheduledExecutorService.triggerNonPeriodicScheduledTasks();
+        asyncSnapshotExecutorService.trigger();
+        assertThat(target.getInitSnapshotCount()).isEqualTo(2);
+        assertThat(target.getCollectedRemoteDirs())
+                .isEqualTo(Collections.singletonList(snapshotDir));
+        assertThat(target.getCause()).isNull();
+        // still exactly one task in flight for the next snapshot
+        checkOnlyOneScheduledTasks();
+    }
+
+    @Test
     void testDynamicSnapshotInterval() {
         long initialInterval = 10_000L;
         long updatedInterval = 5_000L;
@@ -244,6 +273,8 @@ class PeriodicSnapshotManagerTest {
         private final List<String> collectedRemoteDirs;
         private final String exceptionMessage;
         private Throwable cause;
+        private int initSnapshotCount;
+        private boolean failNextInitSnapshot;
 
         public TestSnapshotTarget(FsPath snapshotPath) {
             this(snapshotPath, null);
@@ -269,6 +300,11 @@ class PeriodicSnapshotManagerTest {
 
         @Override
         public Optional<PeriodicSnapshotManager.SnapshotRunnable> initSnapshot() {
+            initSnapshotCount++;
+            if (failNextInitSnapshot) {
+                failNextInitSnapshot = false;
+                throw new FlussRuntimeException("transient failure while initializing snapshot");
+            }
             RunnableFuture<SnapshotResult> runnableFuture =
                     new FutureTask<>(
                             () -> {
@@ -318,6 +354,14 @@ class PeriodicSnapshotManagerTest {
 
         private Throwable getCause() {
             return this.cause;
+        }
+
+        private void failNextInitSnapshot() {
+            this.failNextInitSnapshot = true;
+        }
+
+        private int getInitSnapshotCount() {
+            return initSnapshotCount;
         }
     }
 }

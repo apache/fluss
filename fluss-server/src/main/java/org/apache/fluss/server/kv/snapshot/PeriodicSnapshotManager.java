@@ -209,8 +209,20 @@ public class PeriodicSnapshotManager implements Closeable {
                         Optional<SnapshotRunnable> snapshotRunnableOptional;
                         try {
                             snapshotRunnableOptional = target.initSnapshot();
+                            numberOfConsecutiveFailures.set(0);
                         } catch (Exception e) {
-                            LOG.error("Fail to init snapshot during triggering snapshot.", e);
+                            // A failed snapshot initialization is typically caused by a transient
+                            // backend (e.g. remote storage) outage. Re-arm the scheduling chain
+                            // instead of returning silently, otherwise snapshots of this bucket
+                            // would never be triggered again until the server restarts.
+                            int retryTime = numberOfConsecutiveFailures.incrementAndGet();
+                            LOG.warn(
+                                    "Fail to init snapshot during triggering snapshot for the {} time, "
+                                            + "will retry in {} seconds.",
+                                    retryTime,
+                                    snapshotIntervalSupplier.getAsLong() / 1000,
+                                    e);
+                            scheduleNextSnapshot();
                             return;
                         }
                         if (snapshotRunnableOptional.isPresent()) {
