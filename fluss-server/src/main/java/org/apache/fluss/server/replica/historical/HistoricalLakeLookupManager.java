@@ -66,7 +66,6 @@ import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.stream.Stream;
@@ -117,11 +116,9 @@ class HistoricalLakeLookupManager implements AutoCloseable {
     private volatile long lakeConfigVersion;
     private final @Nullable PluginManager pluginManager;
     private volatile @Nullable LakeTableLookuperManager lookuperManager;
-    // Acquisitions may run concurrently. Closing first prevents any new cache entries, then
-    // invalidates existing ones without holding this lock. In-flight lookups drain independently.
+    // Acquisitions may run concurrently. Lifecycle changes exclude new acquisitions, while
+    // in-flight lookups release their table lookupers independently.
     private final ReentrantReadWriteLock lifecycleLock = new ReentrantReadWriteLock();
-    // Includes invalidated lookupers until their close operation has actually finished.
-    private final AtomicInteger openLookupers = new AtomicInteger();
     private final AtomicLong lookuperIdSequence;
     private final Cache<Long, CachedLakeTableLookuper> lakeTableLookupers;
     private final ConcurrentMap<Long, Long> requiredLakeSnapshotIds = new ConcurrentHashMap<>();
@@ -211,35 +208,40 @@ class HistoricalLakeLookupManager implements AutoCloseable {
      * <p>The cache root under this server's first data directory is removed and recreated before
      * lookups are accepted.
      */
-    synchronized void startup(Scheduler scheduler) {
+    void startup(Scheduler scheduler) {
         checkNotNull(scheduler, "scheduler must not be null.");
-        checkState(!closed, "Historical lake lookup manager is closed.");
-        if (started) {
-            return;
-        }
+        lifecycleLock.writeLock().lock();
         try {
-            FileUtils.deleteDirectory(historicalLookupCacheRootDir);
-        } catch (IOException e) {
-            LOG.warn(
-                    "Failed to clean historical lookup cache directory {}.",
-                    historicalLookupCacheRootDir,
-                    e);
+            checkState(!closed, "Historical lake lookup manager is closed.");
+            if (started) {
+                return;
+            }
+            try {
+                FileUtils.deleteDirectory(historicalLookupCacheRootDir);
+            } catch (IOException e) {
+                LOG.warn(
+                        "Failed to clean historical lookup cache directory {}.",
+                        historicalLookupCacheRootDir,
+                        e);
+            }
+            try {
+                Files.createDirectories(historicalLookupCacheRootDir.toPath());
+            } catch (IOException e) {
+                throw new FlussRuntimeException(
+                        "Failed to create historical lookup cache directory: "
+                                + historicalLookupCacheRootDir,
+                        e);
+            }
+            lookuperManager = createLookuperManager(conf);
+            scheduler.schedule(
+                    LOOKUP_CACHE_DISK_SIZE_TASK_NAME,
+                    this::updateLookupCacheDiskSize,
+                    0L,
+                    LOOKUP_CACHE_DISK_SIZE_CHECK_INTERVAL.toMillis());
+            started = true;
+        } finally {
+            lifecycleLock.writeLock().unlock();
         }
-        try {
-            Files.createDirectories(historicalLookupCacheRootDir.toPath());
-        } catch (IOException e) {
-            throw new FlussRuntimeException(
-                    "Failed to create historical lookup cache directory: "
-                            + historicalLookupCacheRootDir,
-                    e);
-        }
-        lookuperManager = createLookuperManager(conf);
-        scheduler.schedule(
-                LOOKUP_CACHE_DISK_SIZE_TASK_NAME,
-                this::updateLookupCacheDiskSize,
-                0L,
-                LOOKUP_CACHE_DISK_SIZE_CHECK_INTERVAL.toMillis());
-        started = true;
     }
 
     /** Looks up a batch of keys from one historical lake partition. */
@@ -274,33 +276,25 @@ class HistoricalLakeLookupManager implements AutoCloseable {
 
     @Override
     public void close() {
+        LakeTableLookuperManager manager;
         lifecycleLock.writeLock().lock();
         try {
-            synchronized (this) {
-                if (closed) {
-                    return;
-                }
-                closed = true;
+            if (closed) {
+                return;
             }
+            closed = true;
+            manager = lookuperManager;
+            lookuperManager = null;
         } finally {
             lifecycleLock.writeLock().unlock();
         }
-        lakeTableLookupers.invalidateAll();
-        lakeTableLookupers.cleanUp();
-        requiredLakeSnapshotIds.clear();
-        closeSharedResourcesIfUnused();
-    }
-
-    private void closeSharedResourcesIfUnused() {
-        LakeTableLookuperManager manager;
-        synchronized (this) {
-            if (!closed || openLookupers.get() != 0) {
-                return;
-            }
-            manager = lookuperManager;
-            lookuperManager = null;
+        try {
+            lakeTableLookupers.invalidateAll();
+            lakeTableLookupers.cleanUp();
+            requiredLakeSnapshotIds.clear();
+        } finally {
+            IOUtils.closeQuietly(manager, "historical lake lookuper manager");
         }
-        IOUtils.closeQuietly(manager, "historical lake lookuper manager");
     }
 
     /** Invalidates the cached lake lookuper for the given table. */
@@ -345,7 +339,8 @@ class HistoricalLakeLookupManager implements AutoCloseable {
                 newConf.get(
                         ConfigOptions
                                 .SERVER_HISTORICAL_PARTITION_LOOKUPER_CACHE_EXPIRE_AFTER_ACCESS);
-        synchronized (this) {
+        lifecycleLock.writeLock().lock();
+        try {
             checkState(!closed, "Historical lake lookup manager is closed.");
             long newMaxDiskBytes =
                     cacheBytes(
@@ -373,18 +368,19 @@ class HistoricalLakeLookupManager implements AutoCloseable {
             if (lakeConfigChanged) {
                 lakeConfigVersion++;
             }
-        }
-        if (expirationChanged) {
-            lakeTableLookupers
-                    .policy()
-                    .expireAfterAccess()
-                    .get()
-                    .setExpiresAfter(newExpiration.toMillis(), TimeUnit.MILLISECONDS);
+            if (expirationChanged) {
+                lakeTableLookupers
+                        .policy()
+                        .expireAfterAccess()
+                        .get()
+                        .setExpiresAfter(newExpiration.toMillis(), TimeUnit.MILLISECONDS);
+            }
+        } finally {
+            lifecycleLock.writeLock().unlock();
         }
         if (lakeConfigChanged) {
-            // Do not invalidate while holding this monitor: closing a lookuper may need it to
-            // release shared resources. Inactive lookupers close immediately; active lookupers
-            // close after their last lookup releases them.
+            // Inactive lookupers close immediately; active lookupers close after their last lookup
+            // releases them.
             lakeTableLookupers.invalidateAll();
             lakeTableLookupers.cleanUp();
         }
@@ -536,12 +532,7 @@ class HistoricalLakeLookupManager implements AutoCloseable {
     }
 
     private void closeLookuper(CachedLakeTableLookuper cachedLookuper) {
-        try {
-            IOUtils.closeQuietly(cachedLookuper.lookuper, "historical lake table lookuper");
-        } finally {
-            openLookupers.decrementAndGet();
-            closeSharedResourcesIfUnused();
-        }
+        IOUtils.closeQuietly(cachedLookuper.lookuper, "historical lake table lookuper");
     }
 
     private CachedLakeTableLookuper acquireLookuper(LookupContext context, TableInfo tableInfo) {
@@ -639,7 +630,6 @@ class HistoricalLakeLookupManager implements AutoCloseable {
             this.lakeConfigVersion = lakeConfigVersion;
             this.lakeSnapshotId = lakeSnapshotId;
             this.lookuper = lookuper;
-            openLookupers.incrementAndGet();
         }
 
         private synchronized void acquire(@Nullable Long requiredLakeSnapshotId) {

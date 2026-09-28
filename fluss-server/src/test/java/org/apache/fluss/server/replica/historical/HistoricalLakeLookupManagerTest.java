@@ -64,9 +64,7 @@ import static org.apache.fluss.record.TestData.PARTITION_TABLE_ID;
 import static org.apache.fluss.record.TestData.PARTITION_TABLE_INFO;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -398,7 +396,7 @@ class HistoricalLakeLookupManagerTest {
     }
 
     @Test
-    void testClosesSharedResourcesAfterInvalidatedLookuperFinishes() throws Exception {
+    void testClosesSharedResourcesWhileInvalidatedLookuperIsActive() throws Exception {
         TestingHistoricalLakeLookupManager manager = createTestingManager();
         CountDownLatch lookupStarted = new CountDownLatch(1);
         CountDownLatch releaseLookup = new CountDownLatch(1);
@@ -428,20 +426,12 @@ class HistoricalLakeLookupManagerTest {
             lookup(manager, PARTITION_TABLE_INFO);
             assertThat(manager.createdCacheNamespaces).doesNotHaveDuplicates();
             assertThat(manager.createdLookupers).hasSize(2);
-            doAnswer(
-                            invocation -> {
-                                assertThat(manager.createdLookupers)
-                                        .allMatch(lookuper -> lookuper.closed);
-                                return null;
-                            })
-                    .when(manager.sharedManager)
-                    .close();
-
             manager.close();
             manager.close();
             assertThat(oldLookuper.closed).isFalse();
             assertThat(manager.createdLookupers.get(1).closed).isTrue();
-            verify(manager.sharedManager, never()).close();
+            verify(manager.sharedManager).close();
+            assertThat(manager.hasLookuperManager()).isFalse();
             assertThatThrownBy(() -> lookup(manager, PARTITION_TABLE_INFO))
                     .isInstanceOf(IllegalStateException.class)
                     .hasMessageContaining("closed");
@@ -450,9 +440,7 @@ class HistoricalLakeLookupManagerTest {
                     .hasMessageContaining("closed");
             releaseLookup.countDown();
             lookup.get(30, TimeUnit.SECONDS);
-            verify(manager.sharedManager).close();
             assertThat(manager.createdLookupers).allMatch(lookuper -> lookuper.closed);
-            assertThat(manager.hasLookuperManager()).isFalse();
         } finally {
             releaseLookup.countDown();
             executor.shutdownNow();
