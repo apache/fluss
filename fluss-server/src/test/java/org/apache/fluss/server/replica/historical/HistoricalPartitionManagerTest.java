@@ -88,8 +88,8 @@ import org.apache.fluss.utils.types.Tuple2;
 
 import com.github.benmanes.caffeine.cache.Scheduler;
 import com.github.benmanes.caffeine.cache.Ticker;
+import io.github.fluss_contrib.rocksdb.FlushOptions;
 import org.junit.jupiter.api.Test;
-import org.rocksdb.FlushOptions;
 
 import javax.annotation.Nullable;
 
