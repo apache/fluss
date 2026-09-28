@@ -22,56 +22,89 @@ import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import io.trino.spi.connector.ConnectorSplit;
 
-import static io.airlift.slice.SizeOf.instanceSize;
-import static org.apache.fluss.utils.Preconditions.checkArgument;
+import java.util.Optional;
 
-/** A fixed, exclusive-end log range for one Fluss bucket. */
+import static io.airlift.slice.SizeOf.instanceSize;
+import static io.airlift.slice.SizeOf.sizeOf;
+import static org.apache.fluss.utils.Preconditions.checkArgument;
+import static org.apache.fluss.utils.Preconditions.checkNotNull;
+
+/** A storage scan for one Fluss bucket, with an exclusive-end range for log scans. */
 public final class FlussSplit implements ConnectorSplit {
     private static final int INSTANCE_SIZE = instanceSize(FlussSplit.class);
 
-    private final int bucketId;
-    private final long startOffset;
-    private final long stoppingOffset;
+    private final FlussScanType scanType;
+    private final FlussBucketHandle bucket;
+    private final Optional<FlussLogRange> logRange;
 
-    /** Creates a bucket range; an empty range is valid. */
     @JsonCreator
     public FlussSplit(
-            @JsonProperty("bucketId") int bucketId,
-            @JsonProperty("startOffset") long startOffset,
-            @JsonProperty("stoppingOffset") long stoppingOffset) {
-        checkArgument(bucketId >= 0, "bucketId must be non-negative");
-        checkArgument(startOffset >= 0, "startOffset must be non-negative");
-        checkArgument(stoppingOffset >= startOffset, "stoppingOffset must not precede startOffset");
-        this.bucketId = bucketId;
-        this.startOffset = startOffset;
-        this.stoppingOffset = stoppingOffset;
+            @JsonProperty("scanType") FlussScanType scanType,
+            @JsonProperty("bucket") FlussBucketHandle bucket,
+            @JsonProperty("logRange") Optional<FlussLogRange> logRange) {
+        this.scanType = checkNotNull(scanType, "scanType is null");
+        this.bucket = checkNotNull(bucket, "bucket is null");
+        this.logRange = checkNotNull(logRange, "logRange is null");
+
+        switch (scanType) {
+            case LOG:
+                checkArgument(logRange.isPresent(), "LOG split requires a log range");
+                break;
+            case KV:
+                checkArgument(!logRange.isPresent(), "KV split cannot have a log range");
+                break;
+            default:
+                throw new IllegalArgumentException("Unsupported scanType: " + scanType);
+        }
     }
 
-    /** Returns the bucket to scan. */
-    @JsonProperty
-    public int getBucketId() {
-        return bucketId;
+    static FlussSplit forLog(FlussBucketHandle bucket, long startOffset, long stoppingOffset) {
+        return new FlussSplit(
+                FlussScanType.LOG,
+                bucket,
+                Optional.of(new FlussLogRange(startOffset, stoppingOffset)));
     }
 
-    /** Returns the inclusive starting offset. */
-    @JsonProperty
-    public long getStartOffset() {
-        return startOffset;
+    static FlussSplit forKv(FlussBucketHandle bucket) {
+        return new FlussSplit(FlussScanType.KV, bucket, Optional.empty());
     }
 
-    /** Returns the exclusive stopping offset. */
     @JsonProperty
-    public long getStoppingOffset() {
-        return stoppingOffset;
+    public FlussScanType getScanType() {
+        return scanType;
+    }
+
+    @JsonProperty
+    public FlussBucketHandle getBucket() {
+        return bucket;
+    }
+
+    @JsonProperty
+    public Optional<FlussLogRange> getLogRange() {
+        return logRange;
+    }
+
+    FlussLogRange getRequiredLogRange() {
+        return logRange.orElseThrow(
+                () -> new IllegalStateException("Split does not contain a log range"));
     }
 
     @Override
     public long getRetainedSizeInBytes() {
-        return INSTANCE_SIZE;
+        return INSTANCE_SIZE
+                + bucket.getRetainedSizeInBytes()
+                + sizeOf(logRange, FlussLogRange::getRetainedSizeInBytes);
     }
 
     @Override
     public String toString() {
-        return bucketId + ":[" + startOffset + "," + stoppingOffset + ")";
+        switch (scanType) {
+            case LOG:
+                return "LOG " + bucket + ":" + getRequiredLogRange();
+            case KV:
+                return "KV " + bucket;
+            default:
+                throw new IllegalStateException("Unknown scan type: " + scanType);
+        }
     }
 }

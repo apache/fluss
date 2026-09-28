@@ -37,12 +37,8 @@ public final class FlussTableHandle implements ConnectorTableHandle {
     // Physical Fluss identity.
     private final String flussDatabaseName;
     private final String flussTableName;
-
-    // Stable Fluss identity used for stale-handle detection.
     private final long tableId;
     private final int schemaId;
-    private final int bucketCount;
-    private final long bucketCountEpoch;
 
     @JsonCreator
     public FlussTableHandle(
@@ -51,9 +47,7 @@ public final class FlussTableHandle implements ConnectorTableHandle {
             @JsonProperty("flussDatabaseName") String flussDatabaseName,
             @JsonProperty("flussTableName") String flussTableName,
             @JsonProperty("tableId") long tableId,
-            @JsonProperty("schemaId") int schemaId,
-            @JsonProperty("bucketCount") int bucketCount,
-            @JsonProperty("bucketCountEpoch") long bucketCountEpoch) {
+            @JsonProperty("schemaId") int schemaId) {
         this.schemaName = checkNotNull(schemaName, "schemaName is null");
         this.tableName = checkNotNull(tableName, "tableName is null");
         this.flussDatabaseName = checkNotNull(flussDatabaseName, "flussDatabaseName is null");
@@ -62,10 +56,6 @@ public final class FlussTableHandle implements ConnectorTableHandle {
         checkArgument(schemaId >= 0, "schemaId must be non-negative");
         this.tableId = tableId;
         this.schemaId = schemaId;
-        checkArgument(bucketCount > 0, "bucketCount must be positive");
-        checkArgument(bucketCountEpoch >= 0, "bucketCountEpoch must be non-negative");
-        this.bucketCount = bucketCount;
-        this.bucketCountEpoch = bucketCountEpoch;
     }
 
     @JsonProperty
@@ -98,58 +88,45 @@ public final class FlussTableHandle implements ConnectorTableHandle {
         return schemaId;
     }
 
-    /** Returns the planned number of buckets. */
-    @JsonProperty
-    public int getBucketCount() {
-        return bucketCount;
-    }
-
-    /** Returns the bucket layout epoch used to reject stale handles. */
-    @JsonProperty
-    public long getBucketCountEpoch() {
-        return bucketCountEpoch;
-    }
-
     @Override
-    public boolean equals(Object obj) {
-        if (this == obj) {
-            return true;
-        }
-
-        if (!(obj instanceof FlussTableHandle)) {
+    public boolean equals(Object o) {
+        if (o == null || getClass() != o.getClass()) {
             return false;
         }
-
-        FlussTableHandle that = (FlussTableHandle) obj;
+        FlussTableHandle that = (FlussTableHandle) o;
         return tableId == that.tableId
                 && schemaId == that.schemaId
-                && bucketCount == that.bucketCount
-                && bucketCountEpoch == that.bucketCountEpoch
-                && schemaName.equals(that.schemaName)
-                && tableName.equals(that.tableName)
-                && flussDatabaseName.equals(that.flussDatabaseName)
-                && flussTableName.equals(that.flussTableName);
+                && Objects.equals(schemaName, that.schemaName)
+                && Objects.equals(tableName, that.tableName)
+                && Objects.equals(flussDatabaseName, that.flussDatabaseName)
+                && Objects.equals(flussTableName, that.flussTableName);
     }
 
     @Override
     public int hashCode() {
         return Objects.hash(
-                schemaName,
-                tableName,
-                flussDatabaseName,
-                flussTableName,
-                tableId,
-                schemaId,
-                bucketCount,
-                bucketCountEpoch);
+                schemaName, tableName, flussDatabaseName, flussTableName, tableId, schemaId);
     }
 
     @Override
     public String toString() {
-        if (schemaName.equals(flussDatabaseName) && tableName.equals(flussTableName)) {
-            return schemaName + ":" + tableName;
-        }
-
-        return schemaName + ":" + tableName + " -> " + flussDatabaseName + ":" + flussTableName;
+        return "FlussTableHandle{"
+                + "schemaName='"
+                + schemaName
+                + '\''
+                + ", tableName='"
+                + tableName
+                + '\''
+                + ", flussDatabaseName='"
+                + flussDatabaseName
+                + '\''
+                + ", flussTableName='"
+                + flussTableName
+                + '\''
+                + ", tableId="
+                + tableId
+                + ", schemaId="
+                + schemaId
+                + '}';
     }
 }

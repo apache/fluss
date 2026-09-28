@@ -18,28 +18,8 @@
 
 package org.apache.fluss.trino;
 
-import io.trino.spi.ErrorCode;
-import io.trino.spi.ErrorCodeSupplier;
-import io.trino.spi.ErrorType;
-
-import static io.trino.spi.ErrorType.EXTERNAL;
-
-/** Error codes reported by the Fluss connector. */
-enum FlussErrorCode implements ErrorCodeSupplier {
-    FLUSS_METADATA_ERROR(0, EXTERNAL),
-    FLUSS_SPLIT_ERROR(1, EXTERNAL),
-    FLUSS_READ_ERROR(2, EXTERNAL);
-
-    private static final int ERROR_CODE_BASE = 0x7F00_0000;
-
-    private final ErrorCode errorCode;
-
-    FlussErrorCode(int code, ErrorType type) {
-        errorCode = new ErrorCode(ERROR_CODE_BASE + code, name(), type);
-    }
-
-    @Override
-    public ErrorCode toErrorCode() {
-        return errorCode;
-    }
+/** Identifies the storage scan performed for a Fluss bucket split. */
+public enum FlussScanType {
+    LOG,
+    KV
 }

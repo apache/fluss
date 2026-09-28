@@ -228,6 +228,7 @@ final class FlussRowDecoder {
                     }
                 }
                 ((MapBlockBuilder) block)
+                        .strictNotDistinctFrom()
                         .buildEntry(
                                 (keyBlock, valueBlock) -> {
                                     for (int i = 0; i < map.size(); i++) {

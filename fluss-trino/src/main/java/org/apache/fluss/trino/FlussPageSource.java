@@ -19,39 +19,38 @@
 package org.apache.fluss.trino;
 
 import org.apache.fluss.client.table.Table;
-import org.apache.fluss.client.table.scanner.ScanRecord;
-import org.apache.fluss.client.table.scanner.log.LogScanner;
-import org.apache.fluss.client.table.scanner.log.ScanRecords;
-import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.shaded.guava32.com.google.common.collect.ImmutableList;
-import org.apache.fluss.utils.IOUtils;
 
 import io.trino.spi.Page;
 import io.trino.spi.PageBuilder;
 import io.trino.spi.TrinoException;
+import io.trino.spi.block.DuplicateMapKeyException;
 import io.trino.spi.connector.ConnectorPageSource;
 import io.trino.spi.connector.MemoryContext;
 import io.trino.spi.connector.SourcePage;
 
 import java.time.Duration;
-import java.util.Collections;
 import java.util.List;
 import java.util.OptionalLong;
 
-import static io.trino.spi.StandardErrorCode.EXCEEDED_LOCAL_MEMORY_LIMIT;
 import static io.trino.spi.StandardErrorCode.GENERIC_INTERNAL_ERROR;
-import static org.apache.fluss.trino.FlussTableScanValidator.validateIdentity;
-import static org.apache.fluss.trino.FlussTableScanValidator.validateSupportedTable;
-import static org.apache.fluss.utils.Preconditions.checkArgument;
+import static org.apache.fluss.trino.FlussErrorCode.FLUSS_READ_ERROR;
+import static org.apache.fluss.trino.FlussTableScanValidator.validateSplit;
+import static org.apache.fluss.trino.FlussTableScanValidator.validateTable;
+import static org.apache.fluss.utils.ExceptionUtils.firstOrSuppressed;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
 /**
- * Synchronous, exclusive-end reader for one Fluss bucket range.
+ * Synchronous bounded page source for one physical Fluss split.
  *
- * <p>Each page request performs at most one poll; its timeout bounds the data wait, not
- * initialization or metadata RPCs.
+ * <p>The page source owns table and reader lifecycle, converts Fluss rows into Trino pages, and
+ * reports reader and page-builder memory. Storage-specific LOG/KV semantics are encapsulated by
+ * {@link FlussSplitReader}.
+ *
+ * <p>Each page request polls the underlying Fluss scanner at most once. A poll may yield without
+ * completing the split.
  */
 final class FlussPageSource implements ConnectorPageSource {
 
@@ -59,24 +58,17 @@ final class FlussPageSource implements ConnectorPageSource {
 
     private static final int MAX_PAGE_ROWS = 1024;
     private static final int MAX_PAGE_BYTES = 1024 * 1024;
-    private static final long MAX_ESTIMATED_RETAINED_BYTES = 64L * 1024 * 1024;
 
     private final FlussClientManager clients;
     private final FlussTableHandle handle;
     private final FlussSplit split;
     private final List<FlussColumnHandle> columns;
     private final MemoryContext memory;
-    private final TableBucket bucket;
 
     private Table table;
-    private LogScanner scanner;
     private FlussRowDecoder decoder;
+    private FlussSplitReader reader;
 
-    private List<ScanRecord> records = Collections.emptyList();
-    private int recordIndex;
-    private long batchBytes;
-
-    private boolean stopReached;
     private boolean closed;
 
     private long completedBytes;
@@ -94,16 +86,6 @@ final class FlussPageSource implements ConnectorPageSource {
         this.split = checkNotNull(split, "split is null");
         this.columns = ImmutableList.copyOf(checkNotNull(columns, "columns is null"));
         this.memory = checkNotNull(memory, "memory is null");
-
-        checkArgument(
-                split.getBucketId() < handle.getBucketCount(),
-                "bucketId exceeds table bucket count");
-
-        this.bucket = new TableBucket(handle.getTableId(), split.getBucketId());
-
-        if (split.getStartOffset() == split.getStoppingOffset()) {
-            closed = true;
-        }
     }
 
     @Override
@@ -111,56 +93,96 @@ final class FlussPageSource implements ConnectorPageSource {
         if (closed) {
             return null;
         }
-
         try {
             initialize();
-
-            if (records.isEmpty() && !stopReached) {
-                pollNextBatch();
-            }
-
-            if (records.isEmpty()) {
-                if (stopReached) {
+            if (!reader.hasNext()) {
+                if (reader.isFinished()) {
                     close();
+                    return null;
                 }
-                return null;
+                FlussSplitReader.PollResult pollResult = pollReader();
+                // Polling may acquire or release reader-owned input buffers.
+                memory.setBytes(reader.getRetainedSizeInBytes());
+                switch (pollResult) {
+                    case AVAILABLE:
+                        if (!reader.hasNext()) {
+                            throw new TrinoException(
+                                    GENERIC_INTERNAL_ERROR,
+                                    "Fluss reader reported available data without a buffered row");
+                        }
+                        break;
+                    case YIELD:
+                        if (reader.hasNext() || reader.isFinished()) {
+                            throw new TrinoException(
+                                    GENERIC_INTERNAL_ERROR,
+                                    "Fluss reader returned an invalid yield state");
+                        }
+                        return null;
+                    case FINISHED:
+                        if (!reader.isFinished()) {
+                            throw new TrinoException(
+                                    GENERIC_INTERNAL_ERROR,
+                                    "Fluss reader reported completion without being finished");
+                        }
+                        close();
+                        return null;
+                    default:
+                        throw new TrinoException(
+                                GENERIC_INTERNAL_ERROR,
+                                "Unknown Fluss reader poll result: " + pollResult);
+                }
             }
 
             PageBuilder builder = PageBuilder.withMaxPageSize(MAX_PAGE_BYTES, decoder.getTypes());
-
-            while (recordIndex < records.size()
-                    && !builder.isFull()
-                    && builder.getPositionCount() < MAX_PAGE_ROWS) {
-                appendRecord(records.get(recordIndex++), builder);
+            reportMemory(builder);
+            /*
+             * Consume only the currently buffered Fluss scanner batch. If the batch is exhausted
+             * before the page is full, the next scanner poll happens on the next Trino page-source
+             * request.
+             */
+            while (!builder.isFull()
+                    && builder.getPositionCount() < MAX_PAGE_ROWS
+                    && reader.hasNext()) {
+                decoder.append(reader.next(), builder);
+                // Report allocation growth as rows are appended instead of only after page build.
+                reportMemory(builder);
             }
-
-            if (recordIndex == records.size()) {
-                clearBatch();
-            }
-            updateMemory(builder);
+            // reader.next() may have released the exhausted scanner batch.
+            reportMemory(builder);
 
             if (builder.isEmpty()) {
-                if (stopReached && records.isEmpty()) {
+                // The PageBuilder becomes unreachable when this method returns.
+                memory.setBytes(reader.getRetainedSizeInBytes());
+                if (reader.isFinished()) {
                     close();
                 }
                 return null;
             }
-
-            Page page = builder.build();
+            Page page;
+            try {
+                page = builder.build();
+            } catch (DuplicateMapKeyException e) {
+                throw new TrinoException(
+                        FLUSS_READ_ERROR,
+                        "Fluss map contains duplicate keys under Trino semantics for "
+                                + handle
+                                + ", split "
+                                + split,
+                        e);
+            }
             completedPositions += page.getPositionCount();
-
-            // The returned page is owned by Trino. The page source only retains
-            // the unconsumed Fluss batch from this point.
-            memory.setBytes(batchBytes);
-
-            if (stopReached && records.isEmpty()) {
+            /*
+             * Ownership of the built page transfers to Trino. Only reader-owned input memory
+             * remains attributable to this page source.
+             */
+            memory.setBytes(reader.getRetainedSizeInBytes());
+            if (reader.isFinished()) {
                 close();
             }
-
             return SourcePage.create(page);
-        } catch (RuntimeException | Error e) {
-            closeWithSuppression(e);
-            throw e;
+        } catch (RuntimeException | Error failure) {
+            closeWithSuppression(failure);
+            throw failure;
         }
     }
 
@@ -172,38 +194,46 @@ final class FlussPageSource implements ConnectorPageSource {
 
         closed = true;
 
-        LogScanner scannerToClose = scanner;
+        FlussSplitReader readerToClose = reader;
         Table tableToClose = table;
 
-        scanner = null;
+        reader = null;
         table = null;
         decoder = null;
-        records = Collections.emptyList();
-        recordIndex = 0;
-        batchBytes = 0;
 
         Throwable failure = null;
-        try {
-            IOUtils.closeAll(scannerToClose, tableToClose);
-        } catch (Exception | Error e) {
-            failure = e;
+
+        if (readerToClose != null) {
+            try {
+                completedBytes = readerToClose.getCompletedBytes();
+                readerToClose.close();
+            } catch (Exception | Error e) {
+                failure = firstOrSuppressed(e, failure);
+            }
         }
+
+        if (tableToClose != null) {
+            try {
+                tableToClose.close();
+            } catch (Exception | Error e) {
+                failure = firstOrSuppressed(e, failure);
+            }
+        }
+
         try {
             memory.setBytes(0);
         } catch (RuntimeException | Error e) {
-            if (failure == null) {
-                failure = e;
-            } else if (failure != e) {
-                failure.addSuppressed(e);
-            }
+            failure = firstOrSuppressed(e, failure);
         }
+
         if (failure instanceof Error) {
             throw (Error) failure;
         }
+
         if (failure != null) {
             throw new TrinoException(
                     GENERIC_INTERNAL_ERROR,
-                    "Failed closing Fluss reader for bucket " + split.getBucketId(),
+                    "Failed closing Fluss reader for " + handle + ", split " + split,
                     failure);
         }
     }
@@ -215,6 +245,10 @@ final class FlussPageSource implements ConnectorPageSource {
 
     @Override
     public long getCompletedBytes() {
+        if (reader != null) {
+            return reader.getCompletedBytes();
+        }
+
         return completedBytes;
     }
 
@@ -229,7 +263,7 @@ final class FlussPageSource implements ConnectorPageSource {
     }
 
     private void initialize() {
-        if (scanner != null) {
+        if (reader != null) {
             return;
         }
 
@@ -239,100 +273,27 @@ final class FlussPageSource implements ConnectorPageSource {
 
         TableInfo tableInfo = table.getTableInfo();
 
-        validateIdentity(handle, tableInfo);
-        validateSupportedTable(tableInfo);
+        validateTable(handle, tableInfo);
+        validateSplit(split, tableInfo);
 
         decoder = new FlussRowDecoder(tableInfo.getSchema(), columns);
 
-        scanner = table.newScan().createLogScanner();
-        scanner.subscribe(split.getBucketId(), split.getStartOffset());
+        reader = FlussSplitReaderFactory.create(table, split);
     }
 
-    private void pollNextBatch() {
+    private FlussSplitReader.PollResult pollReader() {
         long started = System.nanoTime();
 
         try {
-            ScanRecords batch = scanner.poll(POLL_TIMEOUT);
-            List<ScanRecord> batchRecords = batch.records(bucket);
-
-            long retainedBytes = 0;
-
-            for (ScanRecord record : batchRecords) {
-                long recordBytes = Math.max(0, record.getSizeInBytes());
-
-                // Encoded size plus object overhead is only an estimate. Client prefetch and
-                // decoded buffers are not exposed by LogScanner and are not included here.
-                retainedBytes += 128L + recordBytes;
-
-                if (retainedBytes > MAX_ESTIMATED_RETAINED_BYTES) {
-                    throw new TrinoException(
-                            EXCEEDED_LOCAL_MEMORY_LIMIT,
-                            "Fluss scan batch exceeds estimated memory budget");
-                }
-            }
-
-            records = batchRecords;
-            recordIndex = 0;
-            batchBytes = retainedBytes;
-
-            Long progress = batch.consumedUpToOffset(bucket);
-            if (progress != null && progress >= split.getStoppingOffset()) {
-                stopReached = true;
-            }
-
-            memory.setBytes(batchBytes);
+            return reader.poll(POLL_TIMEOUT);
         } finally {
             readNanos += System.nanoTime() - started;
         }
     }
 
-    private void appendRecord(ScanRecord record, PageBuilder builder) {
-        long offset = record.logOffset();
-
-        if (offset < split.getStartOffset()) {
-            throw new TrinoException(
-                    GENERIC_INTERNAL_ERROR,
-                    "Fluss offset invariant failed for bucket "
-                            + split.getBucketId()
-                            + ": "
-                            + offset
-                            + " outside "
-                            + split);
-        }
-
-        if (offset >= split.getStoppingOffset()) {
-            stopReached = true;
-            return;
-        }
-
-        if (record.getTableId() != handle.getTableId()) {
-            throw new TrinoException(
-                    GENERIC_INTERNAL_ERROR,
-                    "Fluss record table identity changed for bucket " + split.getBucketId());
-        }
-
-        decoder.append(record.getRow(), builder);
-        completedBytes += Math.max(0, record.getSizeInBytes());
-
-        if (offset == split.getStoppingOffset() - 1) {
-            stopReached = true;
-        }
-    }
-
-    private void clearBatch() {
-        records = Collections.emptyList();
-        recordIndex = 0;
-        batchBytes = 0;
-    }
-
-    private void updateMemory(PageBuilder builder) {
-        long retainedBytes = batchBytes + builder.getRetainedSizeInBytes();
-
-        if (retainedBytes > MAX_ESTIMATED_RETAINED_BYTES) {
-            throw new TrinoException(
-                    EXCEEDED_LOCAL_MEMORY_LIMIT,
-                    "Fluss page source exceeds estimated memory budget");
-        }
+    private void reportMemory(PageBuilder builder) {
+        long retainedBytes =
+                Math.addExact(reader.getRetainedSizeInBytes(), builder.getRetainedSizeInBytes());
 
         memory.setBytes(retainedBytes);
     }
@@ -341,7 +302,7 @@ final class FlussPageSource implements ConnectorPageSource {
         try {
             close();
         } catch (RuntimeException | Error closeFailure) {
-            if (closeFailure != failure) {
+            if (failure != closeFailure) {
                 failure.addSuppressed(closeFailure);
             }
         }

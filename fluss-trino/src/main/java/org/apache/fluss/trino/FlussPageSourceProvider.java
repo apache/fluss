@@ -35,10 +35,12 @@ import io.trino.spi.connector.MemoryContext;
 import java.util.List;
 import java.util.Optional;
 
+import static org.apache.fluss.shaded.guava32.com.google.common.collect.ImmutableList.toImmutableList;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
-/** Creates an independent bounded reader for each scheduled bucket split. */
+/** Creates an independent bounded page source for each scheduled Fluss split. */
 public final class FlussPageSourceProvider implements ConnectorPageSourceProvider {
+
     private final FlussClientManager clients;
 
     @Inject
@@ -56,15 +58,17 @@ public final class FlussPageSourceProvider implements ConnectorPageSourceProvide
             List<ColumnHandle> columns,
             DynamicFilter dynamicFilter,
             MemoryContext memoryContext) {
-        ImmutableList.Builder<FlussColumnHandle> handles = ImmutableList.builder();
-        for (ColumnHandle column : columns) {
-            handles.add((FlussColumnHandle) column);
-        }
+        FlussTableHandle handle = (FlussTableHandle) table;
+        FlussSplit flussSplit = (FlussSplit) split;
+
+        ImmutableList<FlussColumnHandle> projectedColumns =
+                columns.stream().map(FlussColumnHandle.class::cast).collect(toImmutableList());
+
         return new FlussPageSource(
                 clients,
-                (FlussTableHandle) table,
-                (FlussSplit) split,
-                handles.build(),
+                handle,
+                flussSplit,
+                projectedColumns,
                 checkNotNull(memoryContext, "memoryContext is null"));
     }
 }

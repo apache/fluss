@@ -53,7 +53,11 @@ final class FlussTableProperties {
                     columnListProperty(PRIMARY_KEY, "Ordered Fluss primary key columns"),
                     columnListProperty(PARTITIONED_BY, "Ordered Fluss partition key columns"),
                     columnListProperty(BUCKET_KEY, "Ordered Fluss bucket key columns"),
-                    integerProperty(BUCKET_COUNT, "Fluss table bucket count", null, false),
+                    integerProperty(
+                            BUCKET_COUNT,
+                            "Configured Fluss bucket count; used as the default for new partitions",
+                            null,
+                            false),
                     integerProperty(REPLICATION_FACTOR, "Fluss replication factor", null, false),
                     integerProperty(KV_FORMAT_VERSION, "Fluss KV format version", null, false),
                     integerProperty(

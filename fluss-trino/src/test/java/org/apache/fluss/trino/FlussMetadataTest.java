@@ -74,7 +74,7 @@ final class FlussMetadataTest {
         ConnectorTableHandle handle =
                 metadata.getTableHandle(session, USERS, Optional.empty(), Optional.empty());
         assertThat(handle)
-                .isEqualTo(new FlussTableHandle("sales", "users", "Sales", "Users", 42, 3, 4, 0));
+                .isEqualTo(new FlussTableHandle("sales", "users", "Sales", "Users", 42, 3));
         assertThat(metadata.getTableName(session, handle)).isEqualTo(USERS);
     }
 
@@ -119,8 +119,7 @@ final class FlussMetadataTest {
     @Test
     void testTableMetadataAndColumnHandles() {
         when(admin.getTableInfo(PHYSICAL_USERS)).thenReturn(completedFuture(usersTable()));
-        FlussTableHandle handle =
-                new FlussTableHandle("sales", "users", "Sales", "Users", 42, 3, 4, 0);
+        FlussTableHandle handle = new FlussTableHandle("sales", "users", "Sales", "Users", 42, 3);
         ConnectorTableMetadata table = metadata.getTableMetadata(session, handle);
         assertThat(table.getTable()).isEqualTo(USERS);
         assertThat(table.getComment()).contains("Registered users");
@@ -147,8 +146,7 @@ final class FlussMetadataTest {
     @Test
     void testRejectInvalidColumnHandle() {
         when(admin.getTableInfo(PHYSICAL_USERS)).thenReturn(completedFuture(usersTable()));
-        FlussTableHandle table =
-                new FlussTableHandle("sales", "users", "Sales", "Users", 42, 3, 4, 0);
+        FlussTableHandle table = new FlussTableHandle("sales", "users", "Sales", "Users", 42, 3);
         assertThatThrownBy(
                         () ->
                                 metadata.getColumnMetadata(
@@ -176,8 +174,7 @@ final class FlussMetadataTest {
                                 .distributedBy(1)
                                 .build());
         when(admin.getTableInfo(PHYSICAL_USERS)).thenReturn(completedFuture(info));
-        FlussTableHandle table =
-                new FlussTableHandle("sales", "users", "Sales", "Users", 42, 3, 1, 0);
+        FlussTableHandle table = new FlussTableHandle("sales", "users", "Sales", "Users", 42, 3);
         assertThatThrownBy(() -> metadata.getTableMetadata(session, table))
                 .isInstanceOf(TrinoException.class)
                 .hasMessageContaining("Ambiguous Fluss columns");

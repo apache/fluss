@@ -20,6 +20,7 @@ package org.apache.fluss.trino;
 import org.apache.fluss.client.admin.Admin;
 import org.apache.fluss.client.admin.ListOffsetsResult;
 import org.apache.fluss.client.admin.OffsetSpec;
+import org.apache.fluss.metadata.BucketInfo;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
@@ -53,6 +54,7 @@ import static io.trino.spi.StandardErrorCode.GENERIC_INTERNAL_ERROR;
 import static io.trino.spi.StandardErrorCode.NOT_SUPPORTED;
 import static io.trino.spi.StandardErrorCode.UNSUPPORTED_TABLE_TYPE;
 import static java.util.concurrent.CompletableFuture.completedFuture;
+import static org.apache.fluss.trino.FlussErrorCode.FLUSS_SPLIT_ERROR;
 import static org.apache.fluss.trino.TestingFlussMetadata.metadataAccess;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -72,13 +74,16 @@ final class FlussSplitManagerTest {
     private static final TablePath PATH = TablePath.of("Sales", "Users");
     private static final List<Integer> BUCKETS = Arrays.asList(0, 1, 2);
     private static final FlussTableHandle HANDLE =
-            new FlussTableHandle("sales", "users", "Sales", "Users", 42, 3, 3, 0);
+            new FlussTableHandle("sales", "users", "Sales", "Users", 42, 3);
     private final Admin admin = mock(Admin.class);
-    private final FlussSplitManager manager = new FlussSplitManager(metadataAccess(admin));
+    private final FlussMetadataAccess access = metadataAccess(admin);
+    private final FlussSplitManager manager =
+            new FlussSplitManager(access, new FlussSplitPlanner(access));
 
     @BeforeEach
     void setUp() {
         when(admin.getTableInfo(PATH)).thenReturn(completedFuture(logTable(42, 3, 3, 0)));
+        when(admin.describeBuckets(PATH)).thenReturn(completedFuture(buckets()));
         when(admin.listOffsets(eq(PATH), eq(BUCKETS), isA(OffsetSpec.EarliestSpec.class)))
                 .thenReturn(offsets(5, 8, 12));
         when(admin.listOffsets(eq(PATH), eq(BUCKETS), isA(OffsetSpec.LatestSpec.class)))
@@ -93,9 +98,10 @@ final class FlussSplitManagerTest {
         assertRange(splits.get(1), 2, 12, 20);
         InOrder calls = inOrder(admin);
         calls.verify(admin).getTableInfo(PATH);
+        calls.verify(admin).describeBuckets(PATH);
         calls.verify(admin).listOffsets(eq(PATH), eq(BUCKETS), isA(OffsetSpec.EarliestSpec.class));
         calls.verify(admin).listOffsets(eq(PATH), eq(BUCKETS), isA(OffsetSpec.LatestSpec.class));
-        calls.verify(admin).getTableInfo(PATH);
+        calls.verify(admin).describeBuckets(PATH);
         calls.verifyNoMoreInteractions();
     }
 
@@ -152,13 +158,19 @@ final class FlussSplitManagerTest {
     void testRejectsMissingAndInvalidOffsets() {
         when(admin.listOffsets(eq(PATH), eq(BUCKETS), isA(OffsetSpec.LatestSpec.class)))
                 .thenReturn(offsets(10, 8));
-        assertPlanningFailure("bucket 2");
+        assertPlanningFailure("bucketId=2");
         when(admin.listOffsets(eq(PATH), eq(BUCKETS), isA(OffsetSpec.LatestSpec.class)))
                 .thenReturn(offsets(4, 8, 20));
-        assertPlanningFailure("bucket 0");
+        assertThatThrownBy(this::plan)
+                .isInstanceOfSatisfying(
+                        TrinoException.class,
+                        failure ->
+                                assertThat(failure.getErrorCode())
+                                        .isEqualTo(FLUSS_SPLIT_ERROR.toErrorCode()))
+                .hasMessageContaining("bucketId=0");
         when(admin.listOffsets(eq(PATH), eq(BUCKETS), isA(OffsetSpec.EarliestSpec.class)))
                 .thenReturn(offsets(-1, 8, 12));
-        assertPlanningFailure("bucket 0");
+        assertPlanningFailure("bucketId=0");
     }
 
     @Test
@@ -189,34 +201,25 @@ final class FlussSplitManagerTest {
                                                 .property("table.datalake.enabled", "true")
                                                 .build())));
         assertUnsupportedTableType("Lakehouse");
-        when(admin.getTableInfo(PATH))
-                .thenReturn(
-                        completedFuture(
-                                tableInfo(
-                                        TableDescriptor.builder()
-                                                .schema(
-                                                        Schema.newBuilder()
-                                                                .column("id", DataTypes.INT())
-                                                                .primaryKey("id")
-                                                                .build())
-                                                .distributedBy(3)
-                                                .build())));
-        assertUnsupportedTableType("primary key");
-        when(admin.getTableInfo(PATH))
-                .thenReturn(
-                        completedFuture(
-                                tableInfo(
-                                        TableDescriptor.builder()
-                                                .schema(
-                                                        Schema.newBuilder()
-                                                                .column("id", DataTypes.INT())
-                                                                .build())
-                                                .partitionedBy("id")
-                                                .distributedBy(3)
-                                                .build())));
-        assertUnsupportedTableType("partitioned");
         verify(admin, never())
                 .listOffsets(any(TablePath.class), anyCollection(), any(OffsetSpec.class));
+    }
+
+    @Test
+    void testPlansEveryPrimaryKeyBucketWithoutOffsetsOrStatistics() throws Exception {
+        when(admin.getTableInfo(PATH)).thenReturn(completedFuture(primaryKeyTable()));
+        List<ConnectorSplit> splits = plan();
+        assertThat(splits).hasSize(3);
+        for (int bucket = 0; bucket < 3; bucket++) {
+            FlussSplit split = (FlussSplit) splits.get(bucket);
+            assertThat(split.getScanType()).isEqualTo(FlussScanType.KV);
+            assertThat(split.getBucket().getBucketId()).isEqualTo(bucket);
+            assertThat(split.getLogRange()).isEmpty();
+        }
+        InOrder calls = inOrder(admin);
+        calls.verify(admin).getTableInfo(PATH);
+        calls.verify(admin).describeBuckets(PATH);
+        calls.verifyNoMoreInteractions();
     }
 
     @Test
@@ -230,12 +233,98 @@ final class FlussSplitManagerTest {
     }
 
     @Test
-    void testRejectsChangedIdentityAfterOffsets() {
-        for (TableInfo changed : changedTables()) {
-            when(admin.getTableInfo(PATH))
-                    .thenReturn(completedFuture(logTable(42, 3, 3, 0)), completedFuture(changed));
-            assertTableChanged("changed during query planning");
-        }
+    void testRejectsDisappearingBucketAfterOffsets() {
+        when(admin.describeBuckets(PATH))
+                .thenReturn(completedFuture(buckets()), completedFuture(Collections.emptyList()));
+        assertThatThrownBy(this::plan)
+                .isInstanceOfSatisfying(
+                        TrinoException.class,
+                        failure ->
+                                assertThat(failure.getErrorCode())
+                                        .isEqualTo(FLUSS_SPLIT_ERROR.toErrorCode()))
+                .hasMessageContaining("topology changed");
+    }
+
+    @Test
+    void testRejectsDuplicateOrMismatchedBucketLayout() {
+        BucketInfo bucket = buckets().get(0);
+        when(admin.describeBuckets(PATH))
+                .thenReturn(completedFuture(Arrays.asList(bucket, bucket)));
+        assertPlanningFailure("Duplicate");
+        when(admin.describeBuckets(PATH))
+                .thenReturn(
+                        completedFuture(Collections.singletonList(bucket(42, 7L, "region=7", 0))));
+        assertPlanningFailure("partition layout");
+    }
+
+    @Test
+    void testPartitionedLogPlanningGroupsOffsetsByPartition() throws Exception {
+        when(admin.getTableInfo(PATH)).thenReturn(completedFuture(partitionedTable(false)));
+        when(admin.describeBuckets(PATH))
+                .thenReturn(
+                        completedFuture(
+                                Arrays.asList(
+                                        bucket(42, 10L, "region=10", 0),
+                                        bucket(42, 10L, "region=10", 1),
+                                        bucket(42, 20L, "region=20", 0))));
+        when(admin.listOffsets(
+                        eq(PATH),
+                        eq("region=10"),
+                        eq(Arrays.asList(0, 1)),
+                        isA(OffsetSpec.EarliestSpec.class)))
+                .thenReturn(offsets(2, 5));
+        when(admin.listOffsets(
+                        eq(PATH),
+                        eq("region=10"),
+                        eq(Arrays.asList(0, 1)),
+                        isA(OffsetSpec.LatestSpec.class)))
+                .thenReturn(offsets(4, 5));
+        when(admin.listOffsets(
+                        eq(PATH),
+                        eq("region=20"),
+                        eq(Collections.singletonList(0)),
+                        isA(OffsetSpec.EarliestSpec.class)))
+                .thenReturn(offsets(8));
+        when(admin.listOffsets(
+                        eq(PATH),
+                        eq("region=20"),
+                        eq(Collections.singletonList(0)),
+                        isA(OffsetSpec.LatestSpec.class)))
+                .thenReturn(offsets(11));
+        List<ConnectorSplit> splits = plan();
+        assertThat(splits).hasSize(2);
+        assertRange(splits.get(0), 0, 2, 4);
+        assertRange(splits.get(1), 0, 8, 11);
+        assertThat(((FlussSplit) splits.get(0)).getBucket().getPartitionId()).contains(10L);
+        assertThat(((FlussSplit) splits.get(1)).getBucket().getPartitionId()).contains(20L);
+        verify(admin, never()).listOffsets(eq(PATH), anyCollection(), any(OffsetSpec.class));
+        verify(admin, times(2)).describeBuckets(PATH);
+    }
+
+    @Test
+    void testPartitionedPrimaryKeyAndNoPartitions() throws Exception {
+        when(admin.getTableInfo(PATH)).thenReturn(completedFuture(partitionedTable(true)));
+        when(admin.describeBuckets(PATH))
+                .thenReturn(
+                        completedFuture(
+                                Arrays.asList(
+                                        bucket(42, 10L, "region=10", 0),
+                                        bucket(42, 20L, "region=20", 0))));
+        List<ConnectorSplit> splits = plan();
+        assertThat(splits).hasSize(2);
+        assertThat(((FlussSplit) splits.get(0)).getScanType()).isEqualTo(FlussScanType.KV);
+        assertThat(((FlussSplit) splits.get(0)).getBucket().getPartitionId()).contains(10L);
+        assertThat(((FlussSplit) splits.get(1)).getBucket().getPartitionId()).contains(20L);
+        when(admin.describeBuckets(PATH)).thenReturn(completedFuture(Collections.emptyList()));
+        assertThat(plan()).isEmpty();
+        verify(admin, never())
+                .listOffsets(any(TablePath.class), anyCollection(), any(OffsetSpec.class));
+        verify(admin, never())
+                .listOffsets(
+                        any(TablePath.class),
+                        any(String.class),
+                        anyCollection(),
+                        any(OffsetSpec.class));
     }
 
     @Test
@@ -293,9 +382,10 @@ final class FlussSplitManagerTest {
     private static void assertRange(ConnectorSplit split, int bucket, long start, long stop) {
         assertThat(split).isInstanceOf(FlussSplit.class);
         FlussSplit range = (FlussSplit) split;
-        assertThat(range.getBucketId()).isEqualTo(bucket);
-        assertThat(range.getStartOffset()).isEqualTo(start);
-        assertThat(range.getStoppingOffset()).isEqualTo(stop);
+        assertThat(range.getScanType()).isEqualTo(FlussScanType.LOG);
+        assertThat(range.getBucket().getBucketId()).isEqualTo(bucket);
+        assertThat(range.getRequiredLogRange().getStartOffset()).isEqualTo(start);
+        assertThat(range.getRequiredLogRange().getStoppingOffset()).isEqualTo(stop);
     }
 
     private static ListOffsetsResult offsets(long... offsets) {
@@ -307,11 +397,53 @@ final class FlussSplitManagerTest {
     }
 
     private static List<TableInfo> changedTables() {
+        return Arrays.asList(logTable(43, 3, 3, 0), logTable(42, 4, 3, 0));
+    }
+
+    private static List<BucketInfo> buckets() {
         return Arrays.asList(
-                logTable(43, 3, 3, 0),
-                logTable(42, 4, 3, 0),
-                logTable(42, 3, 4, 0),
-                logTable(42, 3, 3, 1));
+                bucket(42, null, null, 0), bucket(42, null, null, 1), bucket(42, null, null, 2));
+    }
+
+    private static BucketInfo bucket(
+            long tableId, Long partitionId, String partitionName, int bucketId) {
+        return new BucketInfo(
+                PATH,
+                tableId,
+                partitionId,
+                partitionName,
+                bucketId,
+                null,
+                null,
+                null,
+                Collections.emptyList(),
+                Collections.emptyList());
+    }
+
+    private static TableInfo partitionedTable(boolean primaryKey) {
+        Schema.Builder schema =
+                Schema.newBuilder().column("id", DataTypes.INT()).column("region", DataTypes.INT());
+        if (primaryKey) {
+            schema.primaryKey("id", "region");
+        }
+        return tableInfo(
+                TableDescriptor.builder()
+                        .schema(schema.build())
+                        .partitionedBy("region")
+                        .distributedBy(3)
+                        .build());
+    }
+
+    private static TableInfo primaryKeyTable() {
+        return tableInfo(
+                TableDescriptor.builder()
+                        .schema(
+                                Schema.newBuilder()
+                                        .column("id", DataTypes.INT())
+                                        .primaryKey("id")
+                                        .build())
+                        .distributedBy(3)
+                        .build());
     }
 
     private static TableInfo tableInfo(TableDescriptor descriptor) {

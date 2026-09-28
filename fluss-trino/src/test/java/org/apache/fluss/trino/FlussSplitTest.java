@@ -20,40 +20,79 @@ package org.apache.fluss.trino;
 import io.airlift.json.JsonCodec;
 import org.junit.jupiter.api.Test;
 
+import java.util.Arrays;
+import java.util.Optional;
+
 import static io.airlift.json.JsonCodec.jsonCodec;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-/** Tests the bounded bucket range sent to workers. */
+/** Tests the complete physical split protocol sent to workers. */
 final class FlussSplitTest {
     @Test
     void testJsonRoundTrip() {
-        FlussSplit split = new FlussSplit(2, 11, Long.MAX_VALUE);
         JsonCodec<FlussSplit> codec = jsonCodec(FlussSplit.class);
-        FlussSplit copy = codec.fromJson(codec.toJson(split));
-        assertThat(copy.getBucketId()).isEqualTo(2);
-        assertThat(copy.getStartOffset()).isEqualTo(11);
-        assertThat(copy.getStoppingOffset()).isEqualTo(Long.MAX_VALUE);
-        assertThat(copy.isRemotelyAccessible()).isTrue();
-        assertThat(copy.getAddresses()).isEmpty();
+        for (Optional<Long> partition : Arrays.asList(Optional.<Long>empty(), Optional.of(9L))) {
+            FlussBucketHandle bucket = new FlussBucketHandle(42, partition, 2);
+            for (FlussSplit split :
+                    Arrays.asList(
+                            FlussSplit.forLog(bucket, 11, Long.MAX_VALUE),
+                            FlussSplit.forKv(bucket))) {
+                FlussSplit copy = codec.fromJson(codec.toJson(split));
+                assertThat(copy.getScanType()).isEqualTo(split.getScanType());
+                assertThat(copy.getBucket()).isEqualTo(bucket);
+                assertThat(copy.getLogRange()).isEqualTo(split.getLogRange());
+                assertThat(copy.isRemotelyAccessible()).isTrue();
+                assertThat(copy.getAddresses()).isEmpty();
+                assertThat(copy.getRetainedSizeInBytes()).isPositive();
+            }
+        }
     }
 
     @Test
-    void testEmptyRangeIsValid() {
-        FlussSplit split = new FlussSplit(0, 5, 5);
-        assertThat(split.getStartOffset()).isEqualTo(split.getStoppingOffset());
+    void testScanTypeRequiresMatchingRange() {
+        FlussBucketHandle bucket = new FlussBucketHandle(42, Optional.empty(), 0);
+        assertThatThrownBy(() -> new FlussSplit(FlussScanType.LOG, bucket, Optional.empty()))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(
+                        () ->
+                                new FlussSplit(
+                                        FlussScanType.KV,
+                                        bucket,
+                                        Optional.of(new FlussLogRange(0, 1))))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> FlussSplit.forKv(bucket).getRequiredLogRange())
+                .isInstanceOf(IllegalStateException.class);
+        assertThat(FlussSplit.forLog(bucket, 1000, 1000).getRequiredLogRange().isEmpty()).isTrue();
     }
 
     @Test
-    void testInvalidRanges() {
-        assertThatThrownBy(() -> new FlussSplit(-1, 0, 1))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("bucketId");
-        assertThatThrownBy(() -> new FlussSplit(0, -1, 1))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("startOffset");
-        assertThatThrownBy(() -> new FlussSplit(0, 2, 1))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("stoppingOffset");
+    void testInvalidJson() {
+        JsonCodec<FlussSplit> codec = jsonCodec(FlussSplit.class);
+        String bucket = "\"bucket\":{\"tableId\":42,\"partitionId\":null,\"bucketId\":0}";
+        for (String json :
+                Arrays.asList(
+                        "{" + bucket + "}",
+                        "{\"scanType\":\"UNKNOWN\"," + bucket + "}",
+                        "{\"scanType\":\"LOG\"," + bucket + "}",
+                        "{\"scanType\":\"KV\",\"bucket\":null}",
+                        "{\"scanType\":\"KV\","
+                                + bucket
+                                + ",\"logRange\":{\"startOffset\":0,\"stoppingOffset\":1}}")) {
+            assertThatThrownBy(() -> codec.fromJson(json))
+                    .as(json)
+                    .isInstanceOf(IllegalArgumentException.class);
+        }
+        assertThat(codec.fromJson("{\"scanType\":\"KV\"," + bucket + "}").getLogRange()).isEmpty();
+    }
+
+    @Test
+    void testLogJsonRequiresBothOffsets() {
+        JsonCodec<FlussSplit> codec = jsonCodec(FlussSplit.class);
+        assertThatThrownBy(
+                        () ->
+                                codec.fromJson(
+                                        "{\"scanType\":\"LOG\",\"bucket\":{\"tableId\":42,\"bucketId\":0},\"logRange\":{\"stoppingOffset\":1}}"))
+                .isInstanceOf(IllegalArgumentException.class);
     }
 }

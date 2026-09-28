@@ -47,9 +47,14 @@ public class FlussConnectorModule extends AbstractConfigurationAwareModule {
                 .to(ClassLoaderSafeConnectorPageSourceProvider.class)
                 .in(Scopes.SINGLETON);
 
+        binder.bind(FlussMetadataAccess.class).in(Scopes.SINGLETON);
+
         binder.bind(ConnectorMetadata.class)
                 .annotatedWith(ForClassLoaderSafe.class)
                 .to(FlussMetadata.class)
+                .in(Scopes.SINGLETON);
+        binder.bind(ConnectorMetadata.class)
+                .to(ClassLoaderSafeConnectorMetadata.class)
                 .in(Scopes.SINGLETON);
 
         binder.bind(ConnectorSplitManager.class)
@@ -60,10 +65,6 @@ public class FlussConnectorModule extends AbstractConfigurationAwareModule {
                 .to(ClassLoaderSafeConnectorSplitManager.class)
                 .in(Scopes.SINGLETON);
 
-        binder.bind(FlussMetadataAccess.class).in(Scopes.SINGLETON);
-
-        binder.bind(ConnectorMetadata.class)
-                .to(ClassLoaderSafeConnectorMetadata.class)
-                .in(Scopes.SINGLETON);
+        binder.bind(FlussSplitPlanner.class).in(Scopes.SINGLETON);
     }
 }

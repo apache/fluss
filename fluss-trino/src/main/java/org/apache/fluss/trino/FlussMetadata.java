@@ -113,9 +113,7 @@ public final class FlussMetadata implements ConnectorMetadata {
                 resolved.getFlussDatabaseName(),
                 resolved.getFlussTableName(),
                 info.getTableId(),
-                info.getSchemaId(),
-                info.getNumBuckets(),
-                info.getBucketCountEpoch());
+                info.getSchemaId());
     }
 
     @Override

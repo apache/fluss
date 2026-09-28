@@ -18,28 +18,27 @@
 
 package org.apache.fluss.trino;
 
-import io.trino.spi.ErrorCode;
-import io.trino.spi.ErrorCodeSupplier;
-import io.trino.spi.ErrorType;
+import org.apache.fluss.client.table.Table;
 
-import static io.trino.spi.ErrorType.EXTERNAL;
+import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
-/** Error codes reported by the Fluss connector. */
-enum FlussErrorCode implements ErrorCodeSupplier {
-    FLUSS_METADATA_ERROR(0, EXTERNAL),
-    FLUSS_SPLIT_ERROR(1, EXTERNAL),
-    FLUSS_READ_ERROR(2, EXTERNAL);
+final class FlussSplitReaderFactory {
 
-    private static final int ERROR_CODE_BASE = 0x7F00_0000;
+    private FlussSplitReaderFactory() {}
 
-    private final ErrorCode errorCode;
+    static FlussSplitReader create(Table table, FlussSplit split) {
+        checkNotNull(table, "table is null");
+        checkNotNull(split, "split is null");
 
-    FlussErrorCode(int code, ErrorType type) {
-        errorCode = new ErrorCode(ERROR_CODE_BASE + code, name(), type);
-    }
-
-    @Override
-    public ErrorCode toErrorCode() {
-        return errorCode;
+        switch (split.getScanType()) {
+            case LOG:
+                return new FlussLogSplitReader(
+                        table, split.getBucket(), split.getRequiredLogRange());
+            case KV:
+                return new FlussKvSplitReader(table, split.getBucket());
+            default:
+                throw new IllegalArgumentException(
+                        "Unsupported Fluss scan type: " + split.getScanType());
+        }
     }
 }

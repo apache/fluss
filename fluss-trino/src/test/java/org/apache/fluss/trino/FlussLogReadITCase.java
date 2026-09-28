@@ -22,9 +22,11 @@ import org.apache.fluss.client.ConnectionFactory;
 import org.apache.fluss.client.admin.Admin;
 import org.apache.fluss.client.table.Table;
 import org.apache.fluss.client.table.writer.AppendWriter;
+import org.apache.fluss.client.table.writer.UpsertWriter;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.metadata.LogFormat;
+import org.apache.fluss.metadata.PartitionSpec;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableChange;
@@ -332,12 +334,69 @@ class FlussLogReadITCase {
                                 .build(),
                         false)
                 .get(30, TimeUnit.SECONDS);
-        for (String name : Arrays.asList("partitioned", "primary_key", "lakehouse")) {
+        assertThat(rows("DESCRIBE primary_key")).hasSize(1);
+        assertThat(runner.execute("SHOW CREATE TABLE primary_key").getOnlyValue().toString())
+                .contains("primary_key =");
+        assertThat(
+                        runner.execute(
+                                        "SELECT primary_key_position FROM \"primary_key$columns\" WHERE column_name = 'id'")
+                                .getOnlyValue())
+                .isEqualTo(1L);
+        assertThat(rows("DESCRIBE partitioned")).hasSize(1);
+        assertThat(rows("SELECT * FROM partitioned")).isEmpty();
+        for (String name : Collections.singletonList("lakehouse")) {
             assertThat(rows("DESCRIBE " + name)).hasSize(1);
             assertThat(rows("SHOW CREATE TABLE " + name)).hasSize(1);
             assertThat(rows("SELECT * FROM \"" + name + "$columns\"")).hasSize(1);
             assertThatThrownBy(() -> runner.execute("SELECT * FROM " + name))
                     .hasMessageContaining("not supported");
+        }
+    }
+
+    @Test
+    void testPartitionedLogAndPrimaryKeyReads() throws Exception {
+        for (boolean primaryKey : new boolean[] {false, true}) {
+            String name = primaryKey ? "partitioned_users" : "partitioned_events";
+            TablePath path = TablePath.of("fluss", name);
+            Schema.Builder schema =
+                    Schema.newBuilder()
+                            .column("id", DataTypes.INT())
+                            .column("region", DataTypes.STRING());
+            if (primaryKey) {
+                schema.primaryKey("id", "region");
+            }
+            admin.createTable(
+                            path,
+                            TableDescriptor.builder()
+                                    .schema(schema.build())
+                                    .partitionedBy("region")
+                                    .distributedBy(2, "id")
+                                    .build(),
+                            false)
+                    .get(30, TimeUnit.SECONDS);
+            for (String region : Arrays.asList("east", "west", "empty")) {
+                admin.createPartition(
+                                path,
+                                new PartitionSpec(Collections.singletonMap("region", region)),
+                                false)
+                        .get(30, TimeUnit.SECONDS);
+            }
+            try (Table table = connection.getTable(path)) {
+                GenericRow east = GenericRow.of(1, BinaryString.fromString("east"));
+                GenericRow west = GenericRow.of(1, BinaryString.fromString("west"));
+                if (primaryKey) {
+                    UpsertWriter writer = table.newUpsert().createWriter();
+                    writer.upsert(east).get(30, TimeUnit.SECONDS);
+                    writer.upsert(west).get(30, TimeUnit.SECONDS);
+                } else {
+                    AppendWriter writer = table.newAppend().createWriter();
+                    writer.append(east).get(30, TimeUnit.SECONDS);
+                    writer.append(west).get(30, TimeUnit.SECONDS);
+                }
+            }
+            assertThat(rows("SELECT * FROM " + name))
+                    .containsExactlyInAnyOrder(Arrays.asList(1, "east"), Arrays.asList(1, "west"));
+            assertThat(runner.execute("SELECT count(*) FROM " + name).getOnlyValue()).isEqualTo(2L);
         }
     }
 

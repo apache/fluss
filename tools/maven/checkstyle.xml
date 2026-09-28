@@ -62,7 +62,7 @@ This file is based on the checkstyle file of Apache Beam.
     <!-- Trino serializes these SPI DTOs with its own Jackson implementation. -->
     <module name="SuppressionSingleFilter">
         <property name="id" value="unshadedJackson"/>
-        <property name="files" value="[/\\]fluss-trino[/\\]src[/\\]main[/\\]java[/\\]org[/\\]apache[/\\]fluss[/\\]trino[/\\]Fluss(TableHandle|ColumnHandle|Split)\.java$"/>
+        <property name="files" value="[/\\]fluss-trino[/\\]src[/\\]main[/\\]java[/\\]org[/\\]apache[/\\]fluss[/\\]trino[/\\]Fluss(TableHandle|ColumnHandle|Split|BucketHandle|LogRange)\.java$"/>
         <property name="message" value="^com\.fasterxml\.jackson\.annotation\.(JsonCreator|JsonProperty);.*"/>
     </module>
 

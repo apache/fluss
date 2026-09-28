@@ -18,17 +18,17 @@
 
 package org.apache.fluss.trino;
 
+import com.google.inject.Inject;
+import jakarta.annotation.PreDestroy;
 import org.apache.fluss.client.Connection;
 import org.apache.fluss.client.ConnectionFactory;
 import org.apache.fluss.client.admin.Admin;
 import org.apache.fluss.client.table.Table;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.metadata.TablePath;
-import org.apache.fluss.utils.IOUtils;
 
-import com.google.inject.Inject;
-import jakarta.annotation.PreDestroy;
-
+import static org.apache.fluss.utils.ExceptionUtils.firstOrSuppressed;
+import static org.apache.fluss.utils.ExceptionUtils.rethrowException;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
 /** Owns the shared Fluss connection and Admin client. */
@@ -62,25 +62,39 @@ public final class FlussClientManager {
         } catch (RuntimeException | Error failure) {
             try {
                 connection.close();
-            } catch (Exception closeFailure) {
-                failure.addSuppressed(closeFailure);
+            } catch (Throwable closeFailure) {
+                firstOrSuppressed(closeFailure, failure);
             }
             throw failure;
         }
     }
 
-    /** Returns the shared Admin client. Callers must not close it. */
     Admin getAdmin() {
         return admin;
     }
 
-    /** Opens an independently owned table; the caller must close it. */
     Table openTable(TablePath tablePath) {
         return connection.getTable(tablePath);
     }
 
     @PreDestroy
     public void close() throws Exception {
-        IOUtils.closeAll(admin, connection);
+        Throwable failure = null;
+
+        try {
+            admin.close();
+        } catch (Exception | Error e) {
+            failure = firstOrSuppressed(e, null);
+        }
+
+        try {
+            connection.close();
+        } catch (Exception | Error e) {
+            failure = firstOrSuppressed(e, failure);
+        }
+
+        if (failure != null) {
+            rethrowException(failure, "Failed closing Fluss client resources");
+        }
     }
 }

@@ -27,44 +27,34 @@ import java.util.Collections;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verifyNoInteractions;
 
-/** Verifies provider validation without starting network reads. */
+/** Verifies that provider creation leaves reading and validation to the lazy page source. */
 final class FlussPageSourceProviderTest {
     @Test
-    void testEmptySplitAndInvalidBucket() throws Exception {
+    void testCreatesLazyPageSourceForBothScanTypes() throws Exception {
         FlussClientManager clients = mock(FlussClientManager.class);
-        FlussTableHandle table =
-                new FlussTableHandle("sales", "events", "Sales", "Events", 42, 1, 1, 0);
+        FlussTableHandle table = new FlussTableHandle("sales", "users", "Sales", "Users", 42, 1);
+        FlussBucketHandle bucket = new FlussBucketHandle(42, Optional.empty(), 0);
         FlussPageSourceProvider provider = new FlussPageSourceProvider(clients);
-        try (ConnectorPageSource source =
-                provider.createPageSource(
-                        FlussTransactionHandle.INSTANCE,
-                        mock(ConnectorSession.class),
-                        new FlussSplit(0, 0, 0),
-                        table,
-                        Optional.empty(),
-                        Collections.emptyList(),
-                        DynamicFilter.EMPTY,
-                        MemoryContext.NO_LIMIT)) {
-            assertThat(source.isFinished()).isTrue();
-            assertThat(source.isBlocked().isDone()).isTrue();
+        for (FlussSplit split :
+                new FlussSplit[] {FlussSplit.forLog(bucket, 0, 0), FlussSplit.forKv(bucket)}) {
+            try (ConnectorPageSource source =
+                    provider.createPageSource(
+                            FlussTransactionHandle.INSTANCE,
+                            mock(ConnectorSession.class),
+                            split,
+                            table,
+                            Optional.empty(),
+                            Collections.emptyList(),
+                            DynamicFilter.EMPTY,
+                            MemoryContext.NO_LIMIT)) {
+                assertThat(source).isInstanceOf(FlussPageSource.class);
+                assertThat(source.isFinished()).isFalse();
+                assertThat(source.isBlocked().isDone()).isTrue();
+            }
         }
-        assertThatThrownBy(
-                        () ->
-                                provider.createPageSource(
-                                        FlussTransactionHandle.INSTANCE,
-                                        mock(ConnectorSession.class),
-                                        new FlussSplit(1, 0, 1),
-                                        table,
-                                        Optional.empty(),
-                                        Collections.emptyList(),
-                                        DynamicFilter.EMPTY,
-                                        MemoryContext.NO_LIMIT))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("bucketId");
         verifyNoInteractions(clients);
     }
 }

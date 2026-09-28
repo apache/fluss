@@ -34,6 +34,7 @@ import io.trino.spi.Page;
 import io.trino.spi.PageBuilder;
 import io.trino.spi.TrinoException;
 import io.trino.spi.block.Block;
+import io.trino.spi.block.DuplicateMapKeyException;
 import io.trino.spi.block.SqlMap;
 import io.trino.spi.block.SqlRow;
 import io.trino.spi.type.ArrayType;
@@ -383,5 +384,21 @@ final class FlussRowDecoderTest {
                                         Collections.singletonList(
                                                 new FlussColumnHandle("other", 0))))
                 .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    void testRejectsMapKeysEqualUnderTrinoSemantics() {
+        Map<Double, Integer> entries = new HashMap<>();
+        entries.put(0.0, 1);
+        entries.put(-0.0, 2);
+
+        assertThat(entries).hasSize(2);
+
+        assertThatThrownBy(
+                        () ->
+                                value(
+                                        DataTypes.MAP(DataTypes.DOUBLE(), DataTypes.INT()),
+                                        new GenericMap(entries)))
+                .isInstanceOf(DuplicateMapKeyException.class);
     }
 }

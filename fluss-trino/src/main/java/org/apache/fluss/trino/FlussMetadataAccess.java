@@ -22,6 +22,7 @@ import org.apache.fluss.client.admin.Admin;
 import org.apache.fluss.client.admin.OffsetSpec;
 import org.apache.fluss.exception.DatabaseNotExistException;
 import org.apache.fluss.exception.TableNotExistException;
+import org.apache.fluss.metadata.BucketInfo;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.shaded.guava32.com.google.common.collect.ImmutableList;
@@ -34,13 +35,14 @@ import io.trino.spi.connector.SchemaTableName;
 import io.trino.spi.connector.TableNotFoundException;
 
 import java.util.ArrayList;
-import java.util.Collection;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 
@@ -162,48 +164,155 @@ final class FlussMetadataAccess {
      * identity.
      */
     TableInfo getTableInfo(FlussTableHandle table) {
+        checkNotNull(table, "table is null");
         try {
             TableInfo info = loadTableInfo(table.getFlussDatabaseName(), table.getFlussTableName());
             validateIdentity(table, info);
             return info;
         } catch (TableNotExistException | DatabaseNotExistException e) {
-            throw new TableNotFoundException(
-                    new SchemaTableName(table.getSchemaName(), table.getTableName()), e);
+            throw tableNotFound(table, e);
         }
     }
 
-    /** Returns one validated offset for every requested bucket. */
-    Map<Integer, Long> listOffsets(
-            FlussTableHandle table, Collection<Integer> buckets, OffsetSpec offsetSpec) {
+    List<FlussPhysicalBucket> listScanBuckets(FlussTableHandle table) {
+        checkNotNull(table, "table is null");
+        TablePath tablePath = TablePath.of(table.getFlussDatabaseName(), table.getFlussTableName());
         try {
-            TablePath tablePath =
-                    TablePath.of(table.getFlussDatabaseName(), table.getFlussTableName());
-
-            Map<Integer, Long> offsets =
+            List<BucketInfo> bucketInfos =
                     await(
-                            admin.listOffsets(tablePath, buckets, offsetSpec).all(),
+                            admin.describeBuckets(tablePath),
                             FLUSS_SPLIT_ERROR,
-                            "Failed to list Fluss offsets for " + table);
+                            "Failed to describe Fluss buckets for " + table);
 
-            for (int bucket : buckets) {
-                Long offset = offsets.get(bucket);
-                if (offset == null || offset < 0) {
+            ImmutableList.Builder<FlussPhysicalBucket> buckets = ImmutableList.builder();
+
+            for (BucketInfo info : bucketInfos) {
+                if (info.getTableId() != table.getTableId()) {
                     throw new TrinoException(
-                            GENERIC_INTERNAL_ERROR,
-                            "Missing or invalid Fluss offset for "
-                                    + table
-                                    + " bucket "
-                                    + bucket
-                                    + ": "
-                                    + offset);
+                            FLUSS_SPLIT_ERROR,
+                            "Fluss bucket metadata refers to an unexpected table ID");
                 }
+
+                Optional<Long> partitionId =
+                        info.getPartitionId().isPresent()
+                                ? Optional.of(info.getPartitionId().getAsLong())
+                                : Optional.empty();
+
+                buckets.add(
+                        new FlussPhysicalBucket(
+                                new FlussBucketHandle(
+                                        info.getTableId(), partitionId, info.getBucketId()),
+                                Optional.ofNullable(info.getPartitionName())));
             }
 
-            return ImmutableMap.copyOf(offsets);
+            return buckets.build();
         } catch (TableNotExistException | DatabaseNotExistException e) {
-            throw new TableNotFoundException(
-                    new SchemaTableName(table.getSchemaName(), table.getTableName()), e);
+            throw tableNotFound(table, e);
         }
+    }
+
+    Map<FlussBucketHandle, Long> resolveOffsets(
+            FlussTableHandle table, List<FlussPhysicalBucket> buckets, OffsetSpec offsetSpec) {
+        checkNotNull(table, "table is null");
+        checkNotNull(buckets, "buckets is null");
+        checkNotNull(offsetSpec, "offsetSpec is null");
+
+        if (buckets.isEmpty()) {
+            return ImmutableMap.of();
+        }
+
+        validatePhysicalBuckets(table, buckets);
+        TablePath tablePath = TablePath.of(table.getFlussDatabaseName(), table.getFlussTableName());
+
+        try {
+            if (!buckets.get(0).getBucket().isPartitioned()) {
+                return listNonPartitionedOffsets(tablePath, table, buckets, offsetSpec);
+            }
+            return listPartitionedOffsets(tablePath, table, buckets, offsetSpec);
+        } catch (TableNotExistException | DatabaseNotExistException e) {
+            throw tableNotFound(table, e);
+        }
+    }
+
+    void validateCurrentBuckets(FlussTableHandle table, List<FlussPhysicalBucket> expectedBuckets) {
+        Set<FlussPhysicalBucket> currentBuckets = new HashSet<>(listScanBuckets(table));
+        for (FlussPhysicalBucket expected : expectedBuckets) {
+            if (!currentBuckets.contains(expected)) {
+                throw new TrinoException(
+                        FLUSS_SPLIT_ERROR,
+                        "Fluss bucket topology changed during split planning; retry the query: missing "
+                                + expected);
+            }
+        }
+    }
+
+    private Map<FlussBucketHandle, Long> listNonPartitionedOffsets(
+            TablePath tablePath,
+            FlussTableHandle table,
+            List<FlussPhysicalBucket> buckets,
+            OffsetSpec offsetSpec) {
+        List<Integer> bucketIds =
+                buckets.stream()
+                        .map(FlussPhysicalBucket::getBucket)
+                        .map(FlussBucketHandle::getBucketId)
+                        .collect(ImmutableList.toImmutableList());
+
+        Map<Integer, Long> rawOffsets =
+                await(
+                        admin.listOffsets(tablePath, bucketIds, offsetSpec).all(),
+                        FLUSS_SPLIT_ERROR,
+                        "Failed to list Fluss offsets for " + table);
+
+        ImmutableMap.Builder<FlussBucketHandle, Long> result = ImmutableMap.builder();
+
+        for (FlussPhysicalBucket physicalBucket : buckets) {
+            FlussBucketHandle bucket = physicalBucket.getBucket();
+            result.put(bucket, requireOffset(table, bucket, rawOffsets));
+        }
+
+        return result.buildOrThrow();
+    }
+
+    private Map<FlussBucketHandle, Long> listPartitionedOffsets(
+            TablePath tablePath,
+            FlussTableHandle table,
+            List<FlussPhysicalBucket> buckets,
+            OffsetSpec offsetSpec) {
+        Map<String, List<FlussPhysicalBucket>> bucketsByPartition = groupByPartition(buckets);
+        Map<String, CompletableFuture<Map<Integer, Long>>> futures = new LinkedHashMap<>();
+
+        for (Map.Entry<String, List<FlussPhysicalBucket>> entry : bucketsByPartition.entrySet()) {
+            String partitionName = entry.getKey();
+            List<Integer> bucketIds =
+                    entry.getValue().stream()
+                            .map(FlussPhysicalBucket::getBucket)
+                            .map(FlussBucketHandle::getBucketId)
+                            .collect(ImmutableList.toImmutableList());
+            futures.put(
+                    partitionName,
+                    admin.listOffsets(tablePath, partitionName, bucketIds, offsetSpec).all());
+        }
+
+        ImmutableMap.Builder<FlussBucketHandle, Long> result = ImmutableMap.builder();
+
+        for (Map.Entry<String, List<FlussPhysicalBucket>> entry : bucketsByPartition.entrySet()) {
+            String partitionName = entry.getKey();
+            Map<Integer, Long> rawOffsets =
+                    await(
+                            futures.get(partitionName),
+                            FLUSS_SPLIT_ERROR,
+                            "Failed to list Fluss offsets for "
+                                    + table
+                                    + " partition "
+                                    + partitionName);
+
+            for (FlussPhysicalBucket physicalBucket : entry.getValue()) {
+                FlussBucketHandle bucket = physicalBucket.getBucket();
+                result.put(bucket, requireOffset(table, bucket, rawOffsets));
+            }
+        }
+
+        return result.buildOrThrow();
     }
 
     private Map<String, List<String>> loadSchemaNameMapping() {
@@ -220,6 +329,68 @@ final class FlussMetadataAccess {
                 admin.getTableInfo(tablePath),
                 FLUSS_METADATA_ERROR,
                 "Failed to get Fluss table metadata for " + tablePath);
+    }
+
+    private static Map<String, List<FlussPhysicalBucket>> groupByPartition(
+            List<FlussPhysicalBucket> buckets) {
+        Map<String, List<FlussPhysicalBucket>> result = new LinkedHashMap<>();
+
+        for (FlussPhysicalBucket bucket : buckets) {
+            result.computeIfAbsent(bucket.getRequiredPartitionName(), ignored -> new ArrayList<>())
+                    .add(bucket);
+        }
+
+        return result;
+    }
+
+    private static TableNotFoundException tableNotFound(FlussTableHandle table, Throwable cause) {
+        return new TableNotFoundException(
+                new SchemaTableName(table.getSchemaName(), table.getTableName()), cause);
+    }
+
+    private static long requireOffset(
+            FlussTableHandle table, FlussBucketHandle bucket, Map<Integer, Long> offsets) {
+        Long offset = offsets.get(bucket.getBucketId());
+        if (offset == null || offset < 0) {
+            throw new TrinoException(
+                    GENERIC_INTERNAL_ERROR,
+                    "Missing or invalid Fluss offset for "
+                            + table
+                            + " bucket "
+                            + bucket
+                            + ": "
+                            + offset);
+        }
+        return offset;
+    }
+
+    private static void validatePhysicalBuckets(
+            FlussTableHandle table, List<FlussPhysicalBucket> buckets) {
+        boolean partitioned = buckets.get(0).getBucket().isPartitioned();
+
+        Set<FlussBucketHandle> seen = new HashSet<>();
+
+        for (FlussPhysicalBucket physicalBucket : buckets) {
+            FlussBucketHandle bucket = physicalBucket.getBucket();
+
+            if (bucket.getTableId() != table.getTableId()) {
+                throw new TrinoException(
+                        GENERIC_INTERNAL_ERROR,
+                        "Fluss bucket " + bucket + " does not belong to table " + table);
+            }
+
+            if (bucket.isPartitioned() != partitioned) {
+                throw new TrinoException(
+                        GENERIC_INTERNAL_ERROR,
+                        "Fluss bucket list mixes partitioned and non-partitioned buckets");
+            }
+
+            if (!seen.add(bucket)) {
+                throw new TrinoException(
+                        GENERIC_INTERNAL_ERROR,
+                        "Duplicate Fluss bucket in scan planning: " + bucket);
+            }
+        }
     }
 
     private static String canonicalize(String name) {

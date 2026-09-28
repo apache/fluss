@@ -20,6 +20,7 @@ package org.apache.fluss.trino;
 import org.apache.fluss.client.admin.Admin;
 import org.apache.fluss.exception.DatabaseNotExistException;
 import org.apache.fluss.exception.TableNotExistException;
+import org.apache.fluss.metadata.BucketInfo;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.utils.concurrent.FutureUtils;
@@ -36,6 +37,7 @@ import java.util.Optional;
 import static io.trino.spi.StandardErrorCode.NOT_SUPPORTED;
 import static java.util.concurrent.CompletableFuture.completedFuture;
 import static org.apache.fluss.trino.FlussErrorCode.FLUSS_METADATA_ERROR;
+import static org.apache.fluss.trino.FlussErrorCode.FLUSS_SPLIT_ERROR;
 import static org.apache.fluss.trino.TestingFlussMetadata.metadataAccess;
 import static org.apache.fluss.trino.TestingFlussMetadata.usersTable;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -183,7 +185,7 @@ final class FlussMetadataAccessTest {
                         () ->
                                 access.getTableInfo(
                                         new FlussTableHandle(
-                                                "sales", "users", "Sales", "Users", 42, 3, 4, 0)))
+                                                "sales", "users", "Sales", "Users", 42, 3)))
                 .isInstanceOf(TableNotFoundException.class)
                 .hasCause(failure)
                 .hasMessageContaining("sales.users");
@@ -195,14 +197,13 @@ final class FlussMetadataAccessTest {
         when(admin.getTableInfo(TablePath.of("Sales", "Users"))).thenReturn(completedFuture(info));
         assertThat(
                         access.getTableInfo(
-                                new FlussTableHandle(
-                                        "sales", "users", "Sales", "Users", 42, 3, 4, 0)))
+                                new FlussTableHandle("sales", "users", "Sales", "Users", 42, 3)))
                 .isSameAs(info);
         assertThatThrownBy(
                         () ->
                                 access.getTableInfo(
                                         new FlussTableHandle(
-                                                "sales", "users", "Sales", "Users", 41, 3, 4, 0)))
+                                                "sales", "users", "Sales", "Users", 41, 3)))
                 .isInstanceOfSatisfying(
                         TrinoException.class,
                         failure ->
@@ -213,9 +214,70 @@ final class FlussMetadataAccessTest {
                         () ->
                                 access.getTableInfo(
                                         new FlussTableHandle(
-                                                "sales", "users", "Sales", "Users", 42, 2, 4, 0)))
+                                                "sales", "users", "Sales", "Users", 42, 2)))
                 .isInstanceOf(TrinoException.class)
                 .hasMessageContaining("changed during query planning");
+    }
+
+    @Test
+    void testDescribeBucketsPreservesPhysicalPartitionIdentity() {
+        TablePath path = TablePath.of("Sales", "Users");
+        when(admin.describeBuckets(path))
+                .thenReturn(
+                        completedFuture(
+                                Collections.singletonList(
+                                        new BucketInfo(
+                                                path,
+                                                42,
+                                                17L,
+                                                "region=west",
+                                                2,
+                                                null,
+                                                null,
+                                                null,
+                                                Collections.emptyList(),
+                                                Collections.emptyList()))));
+        assertThat(
+                        access.listScanBuckets(
+                                new FlussTableHandle("sales", "users", "Sales", "Users", 42, 3)))
+                .singleElement()
+                .satisfies(
+                        bucket -> {
+                            assertThat(bucket.getBucket())
+                                    .isEqualTo(new FlussBucketHandle(42, Optional.of(17L), 2));
+                            assertThat(bucket.getRequiredPartitionName()).isEqualTo("region=west");
+                        });
+    }
+
+    @Test
+    void testDescribeBucketsRejectsRecreatedTable() {
+        TablePath path = TablePath.of("Sales", "Users");
+        when(admin.describeBuckets(path))
+                .thenReturn(
+                        completedFuture(
+                                Collections.singletonList(
+                                        new BucketInfo(
+                                                path,
+                                                43,
+                                                null,
+                                                null,
+                                                0,
+                                                null,
+                                                null,
+                                                null,
+                                                Collections.emptyList(),
+                                                Collections.emptyList()))));
+        assertThatThrownBy(
+                        () ->
+                                access.listScanBuckets(
+                                        new FlussTableHandle(
+                                                "sales", "users", "Sales", "Users", 42, 3)))
+                .isInstanceOfSatisfying(
+                        TrinoException.class,
+                        failure ->
+                                assertThat(failure.getErrorCode())
+                                        .isEqualTo(FLUSS_SPLIT_ERROR.toErrorCode()))
+                .hasMessageContaining("unexpected table ID");
     }
 
     @Test
