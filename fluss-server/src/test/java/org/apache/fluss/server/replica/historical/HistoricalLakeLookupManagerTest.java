@@ -23,7 +23,7 @@ import org.apache.fluss.config.MemorySize;
 import org.apache.fluss.config.TableConfig;
 import org.apache.fluss.lake.lakestorage.LakeTableLookuper;
 import org.apache.fluss.lake.lakestorage.LakeTableLookuperManager;
-import org.apache.fluss.lake.lakestorage.LakeTableLookuperManager.LookupRuntimeOptions;
+import org.apache.fluss.lake.lakestorage.LakeTableLookuperManager.LookupCacheOptions;
 import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.LakeLookupMode;
@@ -375,8 +375,8 @@ class HistoricalLakeLookupManagerTest {
         assertThat(manager.lookupCacheMaxDiskBytes()).isEqualTo(20L);
         assertThat(lookuper.closed).isFalse();
         assertThat(manager.cachedTableCount()).isOne();
-        ArgumentCaptor<LookupRuntimeOptions> options =
-                ArgumentCaptor.forClass(LookupRuntimeOptions.class);
+        ArgumentCaptor<LookupCacheOptions> options =
+                ArgumentCaptor.forClass(LookupCacheOptions.class);
         verify(manager.sharedManager).reconfigure(options.capture());
         assertThat(options.getValue().localCacheMaxBytes()).isEqualTo(20L);
         assertThat(options.getValue().expireAfterAccess()).isEqualTo(Duration.ofHours(3));
@@ -388,8 +388,8 @@ class HistoricalLakeLookupManagerTest {
         lookup(manager, PARTITION_TABLE_INFO);
         manager.reconfigure(confWithExpiration(Duration.ofMinutes(30)));
 
-        ArgumentCaptor<LookupRuntimeOptions> options =
-                ArgumentCaptor.forClass(LookupRuntimeOptions.class);
+        ArgumentCaptor<LookupCacheOptions> options =
+                ArgumentCaptor.forClass(LookupCacheOptions.class);
         verify(manager.sharedManager).reconfigure(options.capture());
         assertThat(options.getValue().expireAfterAccess()).isEqualTo(Duration.ofMinutes(30));
         assertThat(manager.createdLookupers).hasSize(1).noneMatch(lookuper -> lookuper.closed);

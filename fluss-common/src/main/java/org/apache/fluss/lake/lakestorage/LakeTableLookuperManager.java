@@ -57,7 +57,7 @@ public interface LakeTableLookuperManager extends AutoCloseable {
      *
      * @param options the new runtime resource settings
      */
-    void reconfigure(LookupRuntimeOptions options);
+    void reconfigure(LookupCacheOptions options);
 
     /** Returns the cumulative number of lookup files evicted by the shared disk-space budget. */
     default long fileCacheCapacityEvictions() {
@@ -70,7 +70,7 @@ public interface LakeTableLookuperManager extends AutoCloseable {
      * <p>These settings apply to resources shared by all table lookupers in one runtime.
      * Lake-format and table-specific configuration is supplied separately when creating a lookuper.
      */
-    final class LookupRuntimeOptions {
+    final class LookupCacheOptions {
 
         private final long localCacheMaxBytes;
         private final Duration expireAfterAccess;
@@ -83,7 +83,7 @@ public interface LakeTableLookuperManager extends AutoCloseable {
          *     this budget
          * @param expireAfterAccess positive idle expiration for individual cached lookup files
          */
-        public LookupRuntimeOptions(long localCacheMaxBytes, Duration expireAfterAccess) {
+        public LookupCacheOptions(long localCacheMaxBytes, Duration expireAfterAccess) {
             checkArgument(localCacheMaxBytes > 0, "localCacheMaxBytes must be greater than 0.");
             this.localCacheMaxBytes = localCacheMaxBytes;
             this.expireAfterAccess =

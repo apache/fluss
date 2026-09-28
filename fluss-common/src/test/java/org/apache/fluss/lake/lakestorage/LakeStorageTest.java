@@ -20,7 +20,7 @@ package org.apache.fluss.lake.lakestorage;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.TableAlreadyExistException;
 import org.apache.fluss.exception.TableNotExistException;
-import org.apache.fluss.lake.lakestorage.LakeTableLookuperManager.LookupRuntimeOptions;
+import org.apache.fluss.lake.lakestorage.LakeTableLookuperManager.LookupCacheOptions;
 import org.apache.fluss.lake.source.LakeSource;
 import org.apache.fluss.lake.writer.LakeTieringFactory;
 import org.apache.fluss.metadata.TableChange;
@@ -45,14 +45,14 @@ class LakeStorageTest {
     private static final String TEST_LAKE_PLUGIN_FORMAT = "test-plugin";
 
     @Test
-    void testLookupRuntimeOptionsRejectInvalidResourceLimits() {
-        assertThatThrownBy(() -> new LookupRuntimeOptions(0L, Duration.ofHours(1)))
+    void testLookupCacheOptionsRejectInvalidResourceLimits() {
+        assertThatThrownBy(() -> new LookupCacheOptions(0L, Duration.ofHours(1)))
                 .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> new LookupRuntimeOptions(1024L, Duration.ZERO))
+        assertThatThrownBy(() -> new LookupCacheOptions(1024L, Duration.ZERO))
                 .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> new LookupRuntimeOptions(1024L, Duration.ofSeconds(-1)))
+        assertThatThrownBy(() -> new LookupCacheOptions(1024L, Duration.ofSeconds(-1)))
                 .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> new LookupRuntimeOptions(1024L, null))
+        assertThatThrownBy(() -> new LookupCacheOptions(1024L, null))
                 .isInstanceOf(NullPointerException.class);
     }
 
@@ -113,7 +113,7 @@ class LakeStorageTest {
 
         LakeTableLookuperManager lookuperManager =
                 lakeStorage.createLakeTableLookuperManager(
-                        "lookup-dir", new LookupRuntimeOptions(1024L, Duration.ofHours(3)));
+                        "lookup-dir", new LookupCacheOptions(1024L, Duration.ofHours(3)));
         assertThat(lookuperManager)
                 .isInstanceOf(
                         PluginLakeStorageWrapper.ClassLoaderFixingLakeTableLookuperManager.class);
@@ -122,8 +122,7 @@ class LakeStorageTest {
                         ((PluginLakeStorageWrapper.ClassLoaderFixingLakeTableLookuperManager)
                                         lookuperManager)
                                 .getWrappedDelegate();
-        LookupRuntimeOptions updatedOptions =
-                new LookupRuntimeOptions(2048L, Duration.ofMinutes(30));
+        LookupCacheOptions updatedOptions = new LookupCacheOptions(2048L, Duration.ofMinutes(30));
         lookuperManager.reconfigure(updatedOptions);
         assertThat(innerLookuperManager.options).isSameAs(updatedOptions);
         assertThat(lookuperManager.fileCacheCapacityEvictions()).isEqualTo(3L);
@@ -181,7 +180,7 @@ class LakeStorageTest {
 
         @Override
         public LakeTableLookuperManager createLakeTableLookuperManager(
-                String ioTmpDir, LookupRuntimeOptions options) {
+                String ioTmpDir, LookupCacheOptions options) {
             return new TestLakeTableLookuperManager();
         }
     }
@@ -189,7 +188,7 @@ class LakeStorageTest {
     private static class TestLakeTableLookuperManager implements LakeTableLookuperManager {
 
         private boolean closed;
-        private LookupRuntimeOptions options;
+        private LookupCacheOptions options;
 
         @Override
         public LakeTableLookuper createLakeTableLookuper(TablePath tablePath, Context context) {
@@ -197,7 +196,7 @@ class LakeStorageTest {
         }
 
         @Override
-        public void reconfigure(LookupRuntimeOptions options) {
+        public void reconfigure(LookupCacheOptions options) {
             this.options = options;
         }
 

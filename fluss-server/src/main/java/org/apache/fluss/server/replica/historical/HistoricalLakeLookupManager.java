@@ -28,7 +28,7 @@ import org.apache.fluss.lake.lakestorage.LakeStoragePlugin;
 import org.apache.fluss.lake.lakestorage.LakeStoragePluginSetUp;
 import org.apache.fluss.lake.lakestorage.LakeTableLookuper;
 import org.apache.fluss.lake.lakestorage.LakeTableLookuperManager;
-import org.apache.fluss.lake.lakestorage.LakeTableLookuperManager.LookupRuntimeOptions;
+import org.apache.fluss.lake.lakestorage.LakeTableLookuperManager.LookupCacheOptions;
 import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.LakeLookupMode;
 import org.apache.fluss.metadata.ResolvedPartitionSpec;
@@ -365,8 +365,7 @@ class HistoricalLakeLookupManager implements AutoCloseable {
                 lookuperManager = createLookuperManager(newConf);
             }
             if ((cacheLimitChanged || expirationChanged) && lookuperManager != null) {
-                lookuperManager.reconfigure(
-                        new LookupRuntimeOptions(newMaxDiskBytes, newExpiration));
+                lookuperManager.reconfigure(new LookupCacheOptions(newMaxDiskBytes, newExpiration));
             }
             // Publish the configuration before its version. A lookup that observes the new version
             // must also observe the matching configuration snapshot.
@@ -475,7 +474,7 @@ class HistoricalLakeLookupManager implements AutoCloseable {
                 lakeStoragePlugin.createLakeStorage(Configuration.fromMap(lakeProperties));
         return lakeStorage.createLakeTableLookuperManager(
                 historicalLookupCacheRootDir.getAbsolutePath(),
-                new LookupRuntimeOptions(
+                new LookupCacheOptions(
                         lookupCacheMaxDiskBytes,
                         configuration.get(
                                 ConfigOptions

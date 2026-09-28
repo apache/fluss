@@ -21,7 +21,7 @@ import org.apache.fluss.config.Configuration;
 import org.apache.fluss.lake.lakestorage.LakeStorage;
 import org.apache.fluss.lake.lakestorage.LakeTableLookuper;
 import org.apache.fluss.lake.lakestorage.LakeTableLookuperManager;
-import org.apache.fluss.lake.lakestorage.LakeTableLookuperManager.LookupRuntimeOptions;
+import org.apache.fluss.lake.lakestorage.LakeTableLookuperManager.LookupCacheOptions;
 import org.apache.fluss.lake.paimon.lookup.PaimonLakeTableLookuper;
 import org.apache.fluss.lake.paimon.lookup.PaimonScanBasedTableLookuper;
 import org.apache.fluss.lake.paimon.lookup.SharedLookupFileCache;
@@ -67,7 +67,7 @@ public class PaimonLakeStorage implements LakeStorage {
 
     @Override
     public LakeTableLookuperManager createLakeTableLookuperManager(
-            String ioTmpDir, LookupRuntimeOptions options) {
+            String ioTmpDir, LookupCacheOptions options) {
         return new PaimonLakeTableLookuperManager(ioTmpDir, options);
     }
 
@@ -76,7 +76,7 @@ public class PaimonLakeStorage implements LakeStorage {
         private final IOManager ioManager;
         private final SharedLookupFileCache lookupFileCache;
 
-        private PaimonLakeTableLookuperManager(String ioTmpDir, LookupRuntimeOptions options) {
+        private PaimonLakeTableLookuperManager(String ioTmpDir, LookupCacheOptions options) {
             checkNotNull(options, "options must not be null.");
             this.ioManager = IOManager.create(checkNotNull(ioTmpDir, "ioTmpDir must not be null."));
             this.lookupFileCache =
@@ -104,7 +104,7 @@ public class PaimonLakeStorage implements LakeStorage {
         }
 
         @Override
-        public void reconfigure(LookupRuntimeOptions options) {
+        public void reconfigure(LookupCacheOptions options) {
             checkNotNull(options, "options must not be null.");
             lookupFileCache.updateMaxDiskSize(new MemorySize(options.localCacheMaxBytes()));
             lookupFileCache.updateExpireAfterAccess(options.expireAfterAccess());

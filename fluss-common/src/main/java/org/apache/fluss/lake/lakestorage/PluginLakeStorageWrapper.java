@@ -20,7 +20,7 @@ package org.apache.fluss.lake.lakestorage;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.TableAlreadyExistException;
 import org.apache.fluss.exception.TableNotExistException;
-import org.apache.fluss.lake.lakestorage.LakeTableLookuperManager.LookupRuntimeOptions;
+import org.apache.fluss.lake.lakestorage.LakeTableLookuperManager.LookupCacheOptions;
 import org.apache.fluss.lake.source.LakeSource;
 import org.apache.fluss.lake.writer.LakeTieringFactory;
 import org.apache.fluss.metadata.TableChange;
@@ -141,7 +141,7 @@ public class PluginLakeStorageWrapper implements LakeStoragePlugin {
 
         @Override
         public LakeTableLookuperManager createLakeTableLookuperManager(
-                String ioTmpDir, LookupRuntimeOptions options) {
+                String ioTmpDir, LookupCacheOptions options) {
             try (TemporaryClassLoaderContext ignored = TemporaryClassLoaderContext.of(loader)) {
                 return new ClassLoaderFixingLakeTableLookuperManager(
                         inner.createLakeTableLookuperManager(ioTmpDir, options), loader);
@@ -170,7 +170,7 @@ public class PluginLakeStorageWrapper implements LakeStoragePlugin {
         }
 
         @Override
-        public void reconfigure(LookupRuntimeOptions options) {
+        public void reconfigure(LookupCacheOptions options) {
             try (TemporaryClassLoaderContext ignored = TemporaryClassLoaderContext.of(loader)) {
                 inner.reconfigure(options);
             }

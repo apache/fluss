@@ -27,7 +27,7 @@ import org.apache.fluss.exception.KvStorageException;
 import org.apache.fluss.exception.RetriableException;
 import org.apache.fluss.lake.lakestorage.LakeTableLookuper;
 import org.apache.fluss.lake.lakestorage.LakeTableLookuperManager;
-import org.apache.fluss.lake.lakestorage.LakeTableLookuperManager.LookupRuntimeOptions;
+import org.apache.fluss.lake.lakestorage.LakeTableLookuperManager.LookupCacheOptions;
 import org.apache.fluss.lake.lakestorage.TestingLakeCatalogContext;
 import org.apache.fluss.lake.paimon.PaimonLakeCatalog;
 import org.apache.fluss.lake.paimon.PaimonLakeStorage;
@@ -134,7 +134,7 @@ class PaimonLakeTableLookuperTest {
                 new PaimonLakeStorage(paimonConfig)
                         .createLakeTableLookuperManager(
                                 tempWarehouseDir.getAbsolutePath(),
-                                new LookupRuntimeOptions(
+                                new LookupCacheOptions(
                                         LOOKUP_CACHE_MAX_DISK_BYTES, Duration.ofHours(3)));
     }
 
@@ -504,7 +504,7 @@ class PaimonLakeTableLookuperTest {
                 new PaimonLakeStorage(paimonConfig)
                         .createLakeTableLookuperManager(
                                 lookupDir.getAbsolutePath(),
-                                new LookupRuntimeOptions(
+                                new LookupCacheOptions(
                                         LOOKUP_CACHE_MAX_DISK_BYTES, Duration.ofHours(3)));
         try {
             try (LakeTableLookuper firstLookuper =

@@ -18,7 +18,7 @@
 package org.apache.fluss.lake.lakestorage;
 
 import org.apache.fluss.annotation.PublicEvolving;
-import org.apache.fluss.lake.lakestorage.LakeTableLookuperManager.LookupRuntimeOptions;
+import org.apache.fluss.lake.lakestorage.LakeTableLookuperManager.LookupCacheOptions;
 import org.apache.fluss.lake.source.LakeSource;
 import org.apache.fluss.lake.writer.LakeTieringFactory;
 import org.apache.fluss.metadata.TablePath;
@@ -60,7 +60,7 @@ public interface LakeStorage {
      * @return the lookuper manager
      */
     default LakeTableLookuperManager createLakeTableLookuperManager(
-            String ioTmpDir, LookupRuntimeOptions options) {
+            String ioTmpDir, LookupCacheOptions options) {
         throw new UnsupportedOperationException(
                 "Point lookup is not supported for this lake storage.");
     }
