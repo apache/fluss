@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::client::metadata::Metadata;
-use crate::cluster::ServerNode;
+use crate::cluster::{Cluster, ServerNode};
 use crate::metadata::{
     AclFilter, AclInfo, AcquireKvSnapshotLeaseResult, ActiveKvSnapshots, AlterConfig,
     AlterTableChanges, BucketStatsRequest, ClusterHealth, CreateAclResult, DatabaseDescriptor,
@@ -46,6 +46,7 @@ use crate::rpc::{RpcClient, ServerConnection};
 use crate::error::{Error, Result};
 use crate::proto::GetTableInfoResponse;
 use crate::{BucketId, PartitionId, SnapshotId, TableId};
+use futures::future::try_join_all;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use tokio::task::JoinHandle;
@@ -562,22 +563,73 @@ impl FlussAdmin {
     }
 
     /// Get table statistics for buckets. Pass empty `target_columns` to request stats for all columns.
+    ///
+    /// The table must be in the metadata cache, as it is after [`Self::get_table_info`].
     pub async fn get_table_stats(
         &self,
         table_id: TableId,
         buckets_req: Vec<BucketStatsRequest>,
         target_columns: Vec<i32>,
     ) -> Result<TableStats> {
-        let response = self
-            .admin_gateway()
-            .await?
-            .request(GetTableStatsRequest::new(
-                table_id,
-                buckets_req,
-                target_columns,
-            ))
+        if buckets_req.is_empty() {
+            return Ok(TableStats {
+                buckets: Vec::new(),
+            });
+        }
+        let table_path = self
+            .metadata
+            .get_cluster()
+            .get_table_path_by_id(table_id)
+            .cloned()
+            .ok_or_else(|| Error::IllegalArgument {
+                message: format!("Table id {table_id} is not in the metadata cache."),
+            })?;
+        // Nothing else refreshes a cached partition's leaders, so refresh them with the table.
+        let partition_ids: Vec<PartitionId> = buckets_req
+            .iter()
+            .filter_map(|bucket| bucket.partition_id)
+            .collect::<HashSet<_>>()
+            .into_iter()
+            .collect();
+        self.metadata
+            .update_tables_metadata(
+                &HashSet::from([&table_path]),
+                &HashSet::new(),
+                partition_ids,
+            )
             .await?;
-        Ok(TableStats::from_pb(&response))
+
+        let cluster = self.metadata.get_cluster();
+        let mut requests = Vec::new();
+        for (leader_id, buckets) in group_stats_requests_by_leader(&cluster, table_id, buckets_req)?
+        {
+            let tablet_server = cluster
+                .get_tablet_server(leader_id)
+                .cloned()
+                .ok_or_else(|| {
+                    Error::leader_not_available(format!(
+                        "Tablet server {leader_id} is not found in metadata cache."
+                    ))
+                })?;
+            let request = GetTableStatsRequest::new(table_id, buckets, target_columns.clone());
+            requests.push((tablet_server, request));
+        }
+        let responses = try_join_all(requests.into_iter().map(
+            |(tablet_server, request)| async move {
+                self.rpc_client
+                    .get_connection(&tablet_server)
+                    .await?
+                    .request(request)
+                    .await
+            },
+        ))
+        .await?;
+        Ok(TableStats {
+            buckets: responses
+                .iter()
+                .flat_map(|response| TableStats::from_pb(response).buckets)
+                .collect(),
+        })
     }
 
     /// Get the latest KV snapshots for a table (optionally scoped to one partition).
@@ -887,10 +939,108 @@ impl FlussAdmin {
     }
 }
 
+fn group_stats_requests_by_leader(
+    cluster: &Cluster,
+    table_id: TableId,
+    buckets: Vec<BucketStatsRequest>,
+) -> Result<HashMap<i32, Vec<BucketStatsRequest>>> {
+    let mut buckets_by_leader: HashMap<i32, Vec<BucketStatsRequest>> = HashMap::new();
+    for bucket in buckets {
+        let table_bucket =
+            TableBucket::new_with_partition(table_id, bucket.partition_id, bucket.bucket_id);
+        let leader = cluster.leader_for(&table_bucket).ok_or_else(|| {
+            Error::leader_not_available(format!(
+                "No leader found for table bucket: {table_bucket}."
+            ))
+        })?;
+        buckets_by_leader
+            .entry(leader.id())
+            .or_default()
+            .push(bucket);
+    }
+    Ok(buckets_by_leader)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::parse_table_descriptor;
-    use crate::error::Error;
+    use super::{group_stats_requests_by_leader, parse_table_descriptor};
+    use crate::cluster::{BucketLocation, Cluster, ServerNode, ServerType};
+    use crate::error::{Error, FlussError};
+    use crate::metadata::{BucketStatsRequest, PhysicalTablePath, TableBucket, TablePath};
+    use crate::test_utils::build_table_info;
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
+    const TABLE_ID: i64 = 1;
+
+    fn cluster(leaders: [Option<i32>; 4]) -> Cluster {
+        let table_path = TablePath::new("db", "tbl");
+        let physical_path = Arc::new(PhysicalTablePath::of(Arc::new(table_path.clone())));
+        let servers: HashMap<i32, ServerNode> = (1..=2)
+            .map(|id| {
+                let node =
+                    ServerNode::new(id, "127.0.0.1".to_string(), 9000, ServerType::TabletServer);
+                (id, node)
+            })
+            .collect();
+        let locations: Vec<BucketLocation> = leaders
+            .iter()
+            .enumerate()
+            .map(|(bucket, leader)| {
+                BucketLocation::new(
+                    TableBucket::new(TABLE_ID, bucket as i32),
+                    leader.map(|id| servers[&id].clone()),
+                    Arc::clone(&physical_path),
+                )
+            })
+            .collect();
+        Cluster::new(
+            None,
+            servers,
+            HashMap::from([(physical_path, locations.clone())]),
+            locations
+                .into_iter()
+                .map(|location| (location.table_bucket.clone(), location))
+                .collect(),
+            HashMap::from([(table_path.clone(), TABLE_ID)]),
+            HashMap::from([(
+                table_path.clone(),
+                build_table_info(table_path, TABLE_ID, 4),
+            )]),
+            HashMap::new(),
+        )
+    }
+
+    fn all_buckets() -> Vec<BucketStatsRequest> {
+        (0..4)
+            .map(|bucket| BucketStatsRequest::new(None, bucket))
+            .collect()
+    }
+
+    #[test]
+    fn table_stats_requests_are_grouped_by_bucket_leader() {
+        let cluster = cluster([Some(1), Some(2), Some(1), Some(2)]);
+        let grouped = group_stats_requests_by_leader(&cluster, TABLE_ID, all_buckets()).unwrap();
+        let bucket_ids = |leader: i32| -> Vec<i32> {
+            grouped[&leader]
+                .iter()
+                .map(|bucket| bucket.bucket_id)
+                .collect()
+        };
+        assert_eq!(grouped.len(), 2);
+        assert_eq!(bucket_ids(1), vec![0, 2]);
+        assert_eq!(bucket_ids(2), vec![1, 3]);
+    }
+
+    #[test]
+    fn a_bucket_without_a_leader_fails_the_table_stats_request() {
+        let cluster = cluster([Some(1), None, Some(1), Some(1)]);
+        let error = group_stats_requests_by_leader(&cluster, TABLE_ID, all_buckets()).unwrap_err();
+        assert_eq!(
+            error.api_error(),
+            Some(FlussError::LeaderNotAvailableException)
+        );
+    }
 
     #[test]
     fn test_parse_table_descriptor_rejects_malformed_json() {
