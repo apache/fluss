@@ -17,36 +17,6 @@
 #
 
 {{/*
-Expand the name of the chart.
-*/}}
-{{- define "fluss.name" -}}
-{{- default .Chart.Name .Values.nameOverride | trunc 63 | trimSuffix "-" }}
-{{- end }}
-
-{{/*
-Create a default fully qualified app name.
-*/}}
-{{- define "fluss.fullname" -}}
-{{- if .Values.fullnameOverride -}}
-{{- .Values.fullnameOverride | trunc 63 | trimSuffix "-" -}}
-{{- else -}}
-{{- $name := default .Chart.Name .Values.nameOverride -}}
-{{- if contains $name .Release.Name -}}
-{{- .Release.Name | trunc 63 | trimSuffix "-" -}}
-{{- else -}}
-{{- printf "%s-%s" .Release.Name $name | trunc 63 | trimSuffix "-" -}}
-{{- end -}}
-{{- end -}}
-{{- end -}}
-
-{{/*
-Create chart name and version as used by the chart label.
-*/}}
-{{- define "fluss.chart" -}}
-{{- printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" | trunc 63 | trimSuffix "-" }}
-{{- end }}
-
-{{/*
 Common labels
 */}}
 {{- define "fluss.labels" -}}
@@ -128,68 +98,5 @@ imagePullSecrets:
 {{- $errMessage := join "\n" $errMessages -}}
 {{- if $errMessage -}}
 {{-   printf "\nPDB VALIDATION:\n%s" $errMessage | fail -}}
-{{- end -}}
-{{- end -}}
-
-{{/*
-Component resource names.
-
-Fixed by default, prefixed with "fluss.fullname" when uniqueResourceNames is
-set. The default is expected to flip once the option has been available for a
-release cycle.
-*/}}
-
-{{/*
-Name of the coordinator StatefulSet and PodDisruptionBudget.
-*/}}
-{{- define "fluss.coordinator.name" -}}
-{{- if .Values.uniqueResourceNames -}}
-{{- printf "%s-coordinator-server" (include "fluss.fullname" .) | trunc 63 | trimSuffix "-" -}}
-{{- else -}}
-{{- "coordinator-server" -}}
-{{- end -}}
-{{- end -}}
-
-{{/*
-Name of the coordinator headless Service.
-*/}}
-{{- define "fluss.coordinator.serviceName" -}}
-{{- if .Values.uniqueResourceNames -}}
-{{- printf "%s-coordinator-server-hs" (include "fluss.fullname" .) | trunc 63 | trimSuffix "-" -}}
-{{- else -}}
-{{- "coordinator-server-hs" -}}
-{{- end -}}
-{{- end -}}
-
-{{/*
-Name of the tablet StatefulSet and PodDisruptionBudget.
-*/}}
-{{- define "fluss.tablet.name" -}}
-{{- if .Values.uniqueResourceNames -}}
-{{- printf "%s-tablet-server" (include "fluss.fullname" .) | trunc 63 | trimSuffix "-" -}}
-{{- else -}}
-{{- "tablet-server" -}}
-{{- end -}}
-{{- end -}}
-
-{{/*
-Name of the tablet headless Service.
-*/}}
-{{- define "fluss.tablet.serviceName" -}}
-{{- if .Values.uniqueResourceNames -}}
-{{- printf "%s-tablet-server-hs" (include "fluss.fullname" .) | trunc 63 | trimSuffix "-" -}}
-{{- else -}}
-{{- "tablet-server-hs" -}}
-{{- end -}}
-{{- end -}}
-
-{{/*
-Name of the ConfigMap holding server.yaml.
-*/}}
-{{- define "fluss.configMapName" -}}
-{{- if .Values.uniqueResourceNames -}}
-{{- printf "%s-conf-file" (include "fluss.fullname" .) | trunc 63 | trimSuffix "-" -}}
-{{- else -}}
-{{- "fluss-conf-file" -}}
 {{- end -}}
 {{- end -}}

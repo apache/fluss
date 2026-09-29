@@ -74,22 +74,3 @@ Usage:
 {{- end -}}
 
 {{- end -}}
-
-{{/*
-Validates that the generated resource names stay within the 63 character limit
-Kubernetes imposes on DNS labels. Only applies with uniqueResourceNames. The
-longest generated name is a coordinator pod, which adds 19 characters for the
-StatefulSet name plus up to 4 for the ordinal suffix.
-Usage:
-  include "fluss.names.validateError" .
-*/}}
-{{- define "fluss.names.validateError" -}}
-{{- if .Values.uniqueResourceNames -}}
-{{- $prefix := include "fluss.fullname" . -}}
-{{- $longestSuffix := 23 -}}
-{{- $maxPrefix := sub 63 $longestSuffix -}}
-{{- if gt (len $prefix) (int $maxPrefix) -}}
-{{- printf "resource name prefix %q is %d characters, but generated names must stay within 63 characters. Use a release name of at most %d characters, or set fullnameOverride." $prefix (len $prefix) (int $maxPrefix) -}}
-{{- end -}}
-{{- end -}}
-{{- end -}}
