@@ -43,6 +43,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 
+import java.lang.reflect.Field;
 import java.net.InetAddress;
 import java.time.Duration;
 import java.util.ArrayList;
@@ -53,10 +54,12 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Collectors;
 
 import static org.apache.fluss.record.TestData.DEFAULT_REMOTE_DATA_DIR;
@@ -527,6 +530,62 @@ public class DefaultAuthorizerTest {
         addAcls(authorizer, commonResource, Collections.singleton(acl2));
         assertThat(listAcls(authorizer, commonResource))
                 .isEqualTo(new HashSet<>(Arrays.asList(acl1, acl2)));
+    }
+
+    @Test
+    void testAclCacheReadsUseCacheLock() throws Exception {
+        Resource resource = Resource.database("foo-" + UUID.randomUUID());
+        FlussPrincipal principal = new FlussPrincipal("user1", "User");
+        AccessControlEntry acl =
+                new AccessControlEntry(principal, "host-1", READ, PermissionType.ALLOW);
+        addAcls(authorizer, resource, Collections.singleton(acl));
+
+        Field lockField = DefaultAuthorizer.class.getDeclaredField("aclCacheLock");
+        lockField.setAccessible(true);
+        Object cacheLock = lockField.get(authorizer);
+
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+        try {
+            CountDownLatch readersStarted = new CountDownLatch(2);
+            AtomicReference<Thread> authorizationThread = new AtomicReference<>();
+            AtomicReference<Thread> listThread = new AtomicReference<>();
+            Future<Boolean> authorizationFuture;
+            Future<Collection<AclBinding>> listFuture;
+
+            synchronized (cacheLock) {
+                authorizationFuture =
+                        executor.submit(
+                                () -> {
+                                    authorizationThread.set(Thread.currentThread());
+                                    readersStarted.countDown();
+                                    return authorizer.aclsAllowAccess(
+                                            resource, principal, READ, "host-1");
+                                });
+                listFuture =
+                        executor.submit(
+                                () -> {
+                                    listThread.set(Thread.currentThread());
+                                    readersStarted.countDown();
+                                    return authorizer.listAcls(
+                                            createRootUserSession(), AclBindingFilter.ANY);
+                                });
+
+                assertThat(readersStarted.await(10, TimeUnit.SECONDS)).isTrue();
+                retry(
+                        Duration.ofSeconds(10),
+                        () -> {
+                            assertThat(authorizationThread.get().getState())
+                                    .isEqualTo(Thread.State.BLOCKED);
+                            assertThat(listThread.get().getState()).isEqualTo(Thread.State.BLOCKED);
+                        });
+            }
+
+            assertThat(authorizationFuture.get(10, TimeUnit.SECONDS)).isTrue();
+            assertThat(listFuture.get(10, TimeUnit.SECONDS))
+                    .contains(new AclBinding(resource, acl));
+        } finally {
+            executor.shutdownNow();
+        }
     }
 
     @Test

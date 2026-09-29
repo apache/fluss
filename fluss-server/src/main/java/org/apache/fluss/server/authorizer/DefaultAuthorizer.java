@@ -44,6 +44,9 @@ import org.apache.fluss.utils.types.Tuple2;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import javax.annotation.Nullable;
+import javax.annotation.concurrent.GuardedBy;
+
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
@@ -124,12 +127,15 @@ public class DefaultAuthorizer extends AbstractAuthorizer implements FatalErrorH
     private final ZooKeeperClient zooKeeperClient;
     private final ZkNodeChangeNotificationWatcher aclChangeNotificationWatcher;
     private final Object lock = new Object();
+    private final Object aclCacheLock = new Object();
 
     // Main cache: Stores the mapping between resources and access control entries, sorted by
     // resource.
+    @GuardedBy("aclCacheLock")
     private final TreeMap<Resource, VersionedAcls> aclCache = new TreeMap<>(new ResourceOrdering());
 
     // Reverse index cache: Maps access control entry types to resources for quick lookups.
+    @GuardedBy("aclCacheLock")
     private final HashMap<ResourceTypeKey, Set<String>> resourceCache = new HashMap<>();
 
     public DefaultAuthorizer(AuthorizationPlugin.Context context) {
@@ -243,7 +249,10 @@ public class DefaultAuthorizer extends AbstractAuthorizer implements FatalErrorH
                         .collect(Collectors.toList());
 
         synchronized (lock) {
-            Set<Resource> resources = new HashSet<>(aclCache.keySet());
+            Set<Resource> resources;
+            synchronized (aclCacheLock) {
+                resources = new HashSet<>(aclCache.keySet());
+            }
             Map<Resource, List<Tuple2<AclBindingFilter, Integer>>> resourcesToUpdate =
                     new HashMap<>();
             for (Resource resource : resources) {
@@ -315,22 +324,24 @@ public class DefaultAuthorizer extends AbstractAuthorizer implements FatalErrorH
 
     @Override
     public Collection<AclBinding> listAcls(Session session, AclBindingFilter aclBindingFilter) {
-        Set<AclBinding> aclBindings = new HashSet<>();
+        synchronized (aclCacheLock) {
+            Set<AclBinding> aclBindings = new HashSet<>();
 
-        aclCache.forEach(
-                (resource, aclSet) -> {
-                    if (isAuthorized(session, OperationType.DESCRIBE, resource)) {
-                        aclSet.acls.forEach(
-                                acl -> {
-                                    AclBinding aclBinding = new AclBinding(resource, acl);
-                                    if (aclBindingFilter.matches(aclBinding)) {
-                                        aclBindings.add(aclBinding);
-                                    }
-                                });
-                    }
-                });
+            aclCache.forEach(
+                    (resource, aclSet) -> {
+                        if (isAuthorized(session, OperationType.DESCRIBE, resource)) {
+                            aclSet.acls.forEach(
+                                    acl -> {
+                                        AclBinding aclBinding = new AclBinding(resource, acl);
+                                        if (aclBindingFilter.matches(aclBinding)) {
+                                            aclBindings.add(aclBinding);
+                                        }
+                                    });
+                        }
+                    });
 
-        return aclBindings;
+            return aclBindings;
+        }
     }
 
     private void loadCache() throws Exception {
@@ -374,10 +385,10 @@ public class DefaultAuthorizer extends AbstractAuthorizer implements FatalErrorH
         int retries = 0;
         Throwable lastException = null;
 
-        VersionedAcls currentVersionedAcls =
-                aclCache.containsKey(resource)
-                        ? getAclsFromCache(resource)
-                        : getAclsFromZk(resource);
+        VersionedAcls currentVersionedAcls = getAclsFromCache(resource);
+        if (currentVersionedAcls == null) {
+            currentVersionedAcls = getAclsFromZk(resource);
+        }
         VersionedAcls newVersionedAcls = null;
         Set<AccessControlEntry> newAces;
         long backoffMs = INIT_RETRY_BACKOFF_MS;
@@ -435,36 +446,40 @@ public class DefaultAuthorizer extends AbstractAuthorizer implements FatalErrorH
     }
 
     private void updateCache(Resource resource, VersionedAcls versionedAcls) {
-        Set<AccessControlEntry> currentAces =
-                aclCache.containsKey(resource) ? aclCache.get(resource).acls : new HashSet<>();
-        Set<AccessControlEntry> acesToAdd = new HashSet<>(versionedAcls.acls);
-        acesToAdd.removeAll(currentAces);
-        Set<AccessControlEntry> acesToRemove = new HashSet<>(currentAces);
-        acesToRemove.removeAll(versionedAcls.acls);
+        synchronized (aclCacheLock) {
+            Set<AccessControlEntry> currentAces =
+                    aclCache.containsKey(resource) ? aclCache.get(resource).acls : new HashSet<>();
+            Set<AccessControlEntry> acesToAdd = new HashSet<>(versionedAcls.acls);
+            acesToAdd.removeAll(currentAces);
+            Set<AccessControlEntry> acesToRemove = new HashSet<>(currentAces);
+            acesToRemove.removeAll(versionedAcls.acls);
 
-        acesToAdd.forEach(
-                ace -> {
-                    ResourceTypeKey resourceTypeKey = new ResourceTypeKey(ace, resource.getType());
-                    resourceCache
-                            .computeIfAbsent(resourceTypeKey, k -> new HashSet<>())
-                            .add(resource.getName());
-                });
+            acesToAdd.forEach(
+                    ace -> {
+                        ResourceTypeKey resourceTypeKey =
+                                new ResourceTypeKey(ace, resource.getType());
+                        resourceCache
+                                .computeIfAbsent(resourceTypeKey, k -> new HashSet<>())
+                                .add(resource.getName());
+                    });
 
-        acesToRemove.forEach(
-                ace -> {
-                    ResourceTypeKey resourceTypeKey = new ResourceTypeKey(ace, resource.getType());
-                    resourceCache.computeIfPresent(
-                            resourceTypeKey,
-                            (k, v) -> {
-                                v.remove(resource.getName());
-                                return v.isEmpty() ? null : v;
-                            });
-                });
+            acesToRemove.forEach(
+                    ace -> {
+                        ResourceTypeKey resourceTypeKey =
+                                new ResourceTypeKey(ace, resource.getType());
+                        resourceCache.computeIfPresent(
+                                resourceTypeKey,
+                                (k, v) -> {
+                                    v.remove(resource.getName());
+                                    return v.isEmpty() ? null : v;
+                                });
+                    });
 
-        if (versionedAcls.acls.isEmpty()) {
-            aclCache.remove(resource);
-        } else {
-            aclCache.put(resource, versionedAcls);
+            if (versionedAcls.acls.isEmpty()) {
+                aclCache.remove(resource);
+            } else {
+                aclCache.put(resource, versionedAcls);
+            }
         }
     }
 
@@ -552,39 +567,38 @@ public class DefaultAuthorizer extends AbstractAuthorizer implements FatalErrorH
     }
 
     private Set<AccessControlEntry> matchingAcls(Resource resource) {
-        TreeMap<Resource, VersionedAcls> aclCacheSnapshot = aclCache;
-        Set<AccessControlEntry> wildcard =
-                Optional.ofNullable(
-                                aclCacheSnapshot.get(
-                                        new Resource(
-                                                resource.getType(), Resource.WILDCARD_RESOURCE)))
+        synchronized (aclCacheLock) {
+            Set<AccessControlEntry> wildcard =
+                    Optional.ofNullable(
+                                    aclCache.get(
+                                            new Resource(
+                                                    resource.getType(),
+                                                    Resource.WILDCARD_RESOURCE)))
+                            .map(versionedAcls -> versionedAcls.acls)
+                            .orElse(Collections.emptySet());
+
+            Set<Resource> allowResources =
+                    RESOURCE_MAPPING
+                            .getOrDefault(resource.getType(), r -> Collections.emptySet())
+                            .apply(resource);
+
+            Set<AccessControlEntry> literal = new HashSet<>();
+            for (Resource allowResource : allowResources) {
+                Optional.ofNullable(aclCache.get(allowResource))
                         .map(versionedAcls -> versionedAcls.acls)
-                        .orElse(Collections.emptySet());
-
-        Set<Resource> allowResources =
-                RESOURCE_MAPPING
-                        .getOrDefault(resource.getType(), r -> Collections.emptySet())
-                        .apply(resource);
-
-        Set<AccessControlEntry> literal = new HashSet<>();
-        for (Resource allowResource : allowResources) {
-            Optional.ofNullable(aclCacheSnapshot.get(allowResource))
-                    .map(versionedAcls -> versionedAcls.acls)
-                    .ifPresent(literal::addAll);
+                        .ifPresent(literal::addAll);
+            }
+            return Stream.of(wildcard, literal).flatMap(Set::stream).collect(Collectors.toSet());
         }
-        return Stream.of(wildcard, literal).flatMap(Set::stream).collect(Collectors.toSet());
     }
 
     @Override
     public void onFatalError(Throwable exception) {}
 
-    private VersionedAcls getAclsFromCache(Resource resource) {
-        if (aclCache.containsKey(resource)) {
+    private @Nullable VersionedAcls getAclsFromCache(Resource resource) {
+        synchronized (aclCacheLock) {
             return aclCache.get(resource);
         }
-
-        throw new IllegalArgumentException(
-                String.format("ACLs do not exist in the cache for resource %s", resource));
     }
 
     private VersionedAcls getAclsFromZk(Resource resource) throws Exception {
