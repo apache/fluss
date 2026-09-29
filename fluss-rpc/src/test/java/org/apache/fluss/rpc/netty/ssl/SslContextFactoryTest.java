@@ -415,14 +415,28 @@ class SslContextFactoryTest {
     }
 
     @Test
-    void testMtlsListenerWithoutTlsNeedsNoTruststore() {
+    void testMtlsListenerWithoutTlsIsRejected() {
         Configuration conf = new Configuration();
         TestSslUtils.setServerSslConfig(conf, keyStore, null);
-        // INTERNAL is an mTLS listener but TLS is not enabled for it, so it imposes nothing here.
+        // INTERNAL authenticates clients by certificate but carries no TLS to present one over.
         conf.setString(ConfigOptions.SERVER_SECURITY_PROTOCOL_MAP.key(), "INTERNAL:mTLS");
 
-        SslConfig config = SslConfig.fromServerConfig(conf).get();
-        assertThat(config.clientAuthListeners()).isEmpty();
+        assertThatThrownBy(() -> SslConfig.fromServerConfig(conf))
+                .isInstanceOf(IllegalConfigurationException.class)
+                .hasMessageContaining("INTERNAL")
+                .hasMessageContaining(ConfigOptions.SERVER_SSL_ENABLED_LISTENERS.key());
+    }
+
+    @Test
+    void testMtlsListenerWithoutAnyTlsAtAllIsRejected() {
+        Configuration conf = new Configuration();
+        // no TLS anywhere: the config would otherwise be reported as simply having no TLS.
+        conf.setString(ConfigOptions.SERVER_SECURITY_PROTOCOL_MAP.key(), "CLIENT:mTLS");
+
+        assertThatThrownBy(() -> SslConfig.fromServerConfig(conf))
+                .isInstanceOf(IllegalConfigurationException.class)
+                .hasMessageContaining("CLIENT")
+                .hasMessageContaining(ConfigOptions.SERVER_SSL_ENABLED_LISTENERS.key());
     }
 
     @Test

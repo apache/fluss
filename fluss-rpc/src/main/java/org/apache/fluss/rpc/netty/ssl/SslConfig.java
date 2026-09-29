@@ -58,13 +58,16 @@ import java.util.stream.Collectors;
  * factory methods so misconfiguration fails fast with a clear message, instead of surfacing later
  * as an engine-level error on every connection.
  *
- * <p>The per-listener client-certificate requirement <b>is</b> held here: a TLS listener whose
- * {@code security.protocol.map} entry is {@code mTLS} (matched by an exact listener name) requires
- * a client certificate, which the server can only validate against an explicitly configured
- * truststore — so such a listener without {@code security.ssl.truststore.path} is rejected here
- * rather than silently falling back to the JVM default truststore. The server pipeline reads the
- * requirement per listener via {@link #requiresClientAuth(String)} instead of re-deriving it from
- * the raw configuration.
+ * <p>The per-listener client-certificate requirement <b>is</b> held here: a listener whose {@code
+ * security.protocol.map} entry is {@code mTLS} (matched by an exact listener name) must also be
+ * listed in {@code security.ssl.enabled.listeners}, since certificate authentication has no
+ * transport to run on otherwise. That relationship is validated even when no listener enables TLS,
+ * so {@link #fromServerConfig} can reject a configuration it would otherwise report as having no
+ * TLS at all. Such a listener requires a client certificate, which the server can only validate
+ * against an explicitly configured truststore — so such a listener without {@code
+ * security.ssl.truststore.path} is rejected here rather than silently falling back to the JVM
+ * default truststore. The server pipeline reads the requirement per listener via {@link
+ * #requiresClientAuth(String)} instead of re-deriving it from the raw configuration.
  */
 @Internal
 public final class SslConfig {
@@ -136,6 +139,36 @@ public final class SslConfig {
     public static Optional<SslConfig> fromServerConfig(Configuration conf) {
         List<String> enabledListeners =
                 orEmpty(conf.get(ConfigOptions.SERVER_SSL_ENABLED_LISTENERS));
+
+        // The listener name is looked up exactly and the protocol name compared ignoring case,
+        // because that is how each is resolved at runtime: FlussProtocolPlugin selects a listener's
+        // authenticator with a plain map lookup on security.protocol.map, while
+        // AuthenticationFactory matches a plugin to a protocol name with equalsIgnoreCase.
+        // Matching listener names loosely here would classify a listener as mTLS that the server
+        // then authenticates as PLAINTEXT.
+        Set<String> clientAuthListeners =
+                conf.get(ConfigOptions.SERVER_SECURITY_PROTOCOL_MAP).entrySet().stream()
+                        .filter(
+                                entry ->
+                                        MUTUAL_TLS_AUTH_PROTOCOL.equalsIgnoreCase(entry.getValue()))
+                        .map(Map.Entry::getKey)
+                        .collect(Collectors.toCollection(LinkedHashSet::new));
+
+        // Checked before TLS is known to be enabled at all: a listener that authenticates clients
+        // by certificate has no way to obtain one without TLS transport underneath it.
+        Set<String> withoutTls = new LinkedHashSet<>(clientAuthListeners);
+        withoutTls.removeAll(enabledListeners);
+        if (!withoutTls.isEmpty()) {
+            throw new IllegalConfigurationException(
+                    "Listener(s) %s use the %s authentication protocol but are not listed in '%s'. "
+                            + "%s requires TLS transport, so those listeners can neither present "
+                            + "nor validate certificates.",
+                    withoutTls,
+                    MUTUAL_TLS_AUTH_PROTOCOL,
+                    ConfigOptions.SERVER_SSL_ENABLED_LISTENERS.key(),
+                    MUTUAL_TLS_AUTH_PROTOCOL);
+        }
+
         if (enabledListeners.isEmpty()) {
             return Optional.empty();
         }
@@ -148,21 +181,6 @@ public final class SslConfig {
                     ConfigOptions.SERVER_SSL_ENABLED_LISTENERS.key());
         }
 
-        // The listener name is looked up exactly and the protocol name compared ignoring case,
-        // because that is how each is resolved at runtime: FlussProtocolPlugin selects a listener's
-        // authenticator with a plain map lookup on security.protocol.map, while
-        // AuthenticationFactory
-        // matches a plugin to a protocol name with equalsIgnoreCase. Matching listener names
-        // loosely
-        // here would classify a listener as mTLS that the server then authenticates as PLAINTEXT.
-        Map<String, String> protocolMap = conf.get(ConfigOptions.SERVER_SECURITY_PROTOCOL_MAP);
-        Set<String> clientAuthListeners =
-                enabledListeners.stream()
-                        .filter(
-                                listener ->
-                                        MUTUAL_TLS_AUTH_PROTOCOL.equalsIgnoreCase(
-                                                protocolMap.get(listener)))
-                        .collect(Collectors.toCollection(LinkedHashSet::new));
         String truststorePath = conf.getString(ConfigOptions.SERVER_SSL_TRUSTSTORE_PATH);
         if (!clientAuthListeners.isEmpty() && truststorePath == null) {
             throw new IllegalConfigurationException(
