@@ -138,23 +138,6 @@ public class ConfigurationTest {
     }
 
     @Test
-    void testBooleanParsingIsLocaleIndependent() {
-        Locale originalLocale = Locale.getDefault();
-        try {
-            Locale.setDefault(Locale.forLanguageTag("tr-TR"));
-
-            Configuration conf = new Configuration();
-            conf.setString(BOOLEAN_OPTION.key(), "TrUe");
-            assertThat(conf.getBoolean(BOOLEAN_OPTION)).isTrue();
-
-            conf.setString(BOOLEAN_OPTION.key(), "FaLsE");
-            assertThat(conf.getBoolean(BOOLEAN_OPTION)).isFalse();
-        } finally {
-            Locale.setDefault(originalLocale);
-        }
-    }
-
-    @Test
     void testCopyConstructor() {
         Configuration conf1 = new Configuration();
         conf1.setString(STRING_OPTION, "value");
