@@ -29,11 +29,7 @@ image:
 
 # Gives every resource a name unique to this release, and scopes the ZooKeeper
 # root path to the release too, so several Fluss clusters can share a namespace.
-# Off by default: renaming a StatefulSet makes Helm replace it and orphans its
-# PersistentVolumeClaims, so an existing release must opt in deliberately. See
-# "Running several Fluss clusters in one namespace" in the Fluss Helm
-# deployment documentation. This default is expected to flip in a later
-# release, after which the option is deprecated.
+# Off by default, an existing release must opt in deliberately.
 uniqueResourceNames: false
 
 # Fluss server configuration options
