@@ -246,6 +246,16 @@ resources: {}
   #   limits:
   #     cpu: 100m
   #     memory: 128Mi
+  # Resources for the `render-jaas-config` init container, rendered into both
+  # StatefulSets when SASL is enabled. Set requests equal to limits (and do the
+  # same for the server containers) to get the Guaranteed QoS class.
+  # jaasInitContainer:
+  #   requests:
+  #     cpu: 100m
+  #     memory: 128Mi
+  #   limits:
+  #     cpu: 100m
+  #     memory: 128Mi
 
 serviceAccount:
   create: false
