@@ -1352,6 +1352,10 @@ class PartitionInfo:
     def partition_name(self) -> str:
         """Get the partition name."""
         ...
+    @property
+    def bucket_count(self) -> Optional[int]:
+        """Get the partition's bucket count, or ``None`` from a server older than 1.0."""
+        ...
     def __repr__(self) -> str: ...
 
 @final
@@ -1424,7 +1428,23 @@ class ErrorCode:
     INELIGIBLE_REPLICA_EXCEPTION: int
     INVALID_ALTER_TABLE_EXCEPTION: int
     DELETION_DISABLED_EXCEPTION: int
+    SERVER_NOT_EXIST_EXCEPTION: int
+    SERVER_TAG_ALREADY_EXIST_EXCEPTION: int
+    SERVER_TAG_NOT_EXIST_EXCEPTION: int
+    REBALANCE_FAILURE_EXCEPTION: int
+    NO_REBALANCE_IN_PROGRESS_EXCEPTION: int
+    INVALID_PRODUCER_ID_EXCEPTION: int
+    CONFIG_EXCEPTION: int
+    NOT_COORDINATOR_LEADER_EXCEPTION: int
+    SCANNER_EXPIRED: int
+    UNKNOWN_SCANNER_ID: int
+    INVALID_SCAN_REQUEST: int
+    TOO_MANY_SCANNERS: int
+    DISK_WRITE_LOCKED: int
+    INSUFFICIENT_KV_LEADER_REPLICA_CAPACITY: int
     STORAGE_BACKPRESSURE_EXCEPTION: int
+    HISTORICAL_PARTITION_THROTTLED: int
+    INVALID_BUCKET_ROUTING: int
 
 @final
 class OffsetSpec:

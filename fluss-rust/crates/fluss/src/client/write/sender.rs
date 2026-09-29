@@ -779,6 +779,10 @@ impl Sender {
             return Ok(Self::is_invalid_metadata_error(error).then_some(physical_table_path));
         }
 
+        if error == FlussError::InvalidBucketRouting {
+            self.accumulator.invalidate_routing(&physical_table_path);
+        }
+
         // Generic error path. handle_failed_batch will detect remaining
         // OutOfOrderSequence (not already committed) / UnknownWriterId cases and
         // reset all writer state internally (matching Java).
@@ -1011,6 +1015,7 @@ impl Sender {
                 | FlussError::UnknownTableOrBucketException
                 | FlussError::LeaderNotAvailableException
                 | FlussError::NetworkException
+                | FlussError::InvalidBucketRouting
         )
     }
 
@@ -1030,6 +1035,8 @@ impl Sender {
                 | FlussError::NotEnoughReplicasException
                 | FlussError::CorruptMessage
                 | FlussError::CorruptRecordException
+                | FlussError::DiskWriteLocked
+                | FlussError::HistoricalPartitionThrottled
         )
     }
 

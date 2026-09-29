@@ -1176,6 +1176,7 @@ pub struct TableInfo {
     /// Resolved once at construction. The failure is held rather than raised so
     /// that a malformed property only breaks writers, not metadata loading.
     stats_index_mapping: std::result::Result<Vec<usize>, String>,
+    bucket_count_epoch: i64,
 }
 
 impl TableInfo {
@@ -1431,7 +1432,13 @@ impl TableInfo {
             created_time,
             modified_time,
             stats_index_mapping,
+            bucket_count_epoch: 0,
         }
+    }
+
+    pub fn with_bucket_count_epoch(mut self, bucket_count_epoch: i64) -> Self {
+        self.bucket_count_epoch = bucket_count_epoch;
+        self
     }
 
     pub fn get_table_path(&self) -> &TablePath {
@@ -1500,6 +1507,11 @@ impl TableInfo {
 
     pub fn get_num_buckets(&self) -> i32 {
         self.num_buckets
+    }
+
+    /// Above 0, `bucket.num` has changed and partitions may differ from `num_buckets`.
+    pub fn get_bucket_count_epoch(&self) -> i64 {
+        self.bucket_count_epoch
     }
 
     pub fn get_properties(&self) -> &HashMap<String, String> {
@@ -1593,6 +1605,23 @@ impl Display for TableInfo {
     }
 }
 
+/// The owner of a bucket layout: a non-partitioned table, or one partition of a partitioned table.
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
+pub enum TableOrPartition {
+    Table(TableId),
+    Partition(PartitionId),
+}
+
+impl TableOrPartition {
+    /// Returns the partition when `partition_id` is set, otherwise the table.
+    pub fn of(table_id: TableId, partition_id: Option<PartitionId>) -> Self {
+        match partition_id {
+            Some(partition_id) => TableOrPartition::Partition(partition_id),
+            None => TableOrPartition::Table(table_id),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Hash, PartialEq, Eq)]
 pub struct TableBucket {
     table_id: TableId,
@@ -1631,6 +1660,10 @@ impl TableBucket {
 
     pub fn partition_id(&self) -> Option<PartitionId> {
         self.partition_id
+    }
+
+    pub fn table_or_partition(&self) -> TableOrPartition {
+        TableOrPartition::of(self.table_id, self.partition_id)
     }
 
     pub fn to_pb(&self) -> crate::proto::PbTableBucket {

@@ -139,6 +139,12 @@ async fn run_limit_scan(pending: &PendingScan, bucket: &TableBucket) -> Result<S
         bucket.partition_id(),
         bucket.bucket_id(),
         pending.limit,
+    )
+    .with_routing_bucket_count(
+        pending
+            .metadata
+            .get_cluster()
+            .bucket_count(bucket.table_or_partition()),
     );
     let response = connection.request(request).await?;
 

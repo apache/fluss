@@ -268,6 +268,7 @@ impl Display for ResolvedPartitionSpec {
 pub struct PartitionInfo {
     partition_id: PartitionId,
     partition_spec: ResolvedPartitionSpec,
+    bucket_count: Option<i32>,
 }
 
 impl PartitionInfo {
@@ -275,7 +276,18 @@ impl PartitionInfo {
         Self {
             partition_id,
             partition_spec,
+            bucket_count: None,
         }
+    }
+
+    pub fn with_bucket_count(mut self, bucket_count: Option<i32>) -> Self {
+        self.bucket_count = bucket_count;
+        self
+    }
+
+    /// Get the partition's bucket count, or `None` from a server older than 1.0.
+    pub fn get_bucket_count(&self) -> Option<i32> {
+        self.bucket_count
     }
 
     /// Get the partition id. The id is globally unique in the Fluss cluster.
@@ -301,7 +313,7 @@ impl PartitionInfo {
             partition_id: self.partition_id,
             partition_spec: self.partition_spec.to_pb(),
             remote_data_dir: None,
-            bucket_count: None,
+            bucket_count: self.bucket_count,
         }
     }
 
@@ -309,6 +321,7 @@ impl PartitionInfo {
         Self {
             partition_id: pb.partition_id,
             partition_spec: ResolvedPartitionSpec::from_pb(&pb.partition_spec),
+            bucket_count: pb.bucket_count.filter(|count| *count > 0),
         }
     }
 }

@@ -126,7 +126,7 @@ impl RenameColumn {
     }
 }
 
-/// Bundle of column-level changes for a single `alter_table` call. Empty `Vec`s
+/// Bundle of changes for a single `alter_table` call. Empty `Vec`s and `None`
 /// mean "no change of that kind"; pass `Default::default()` to send only
 /// config changes.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -136,6 +136,9 @@ pub struct AlterTableChanges {
     pub drop_columns: Vec<DropColumn>,
     pub rename_columns: Vec<RenameColumn>,
     pub modify_columns: Vec<ModifyColumn>,
+    /// A new default bucket count for a partitioned table. Existing partitions keep their
+    /// bucket counts; partitions created afterwards use this one.
+    pub new_bucket_count: Option<i32>,
 }
 
 /// Modify a column's type/comment/position. Mirrors the `ModifyColumn` variant of

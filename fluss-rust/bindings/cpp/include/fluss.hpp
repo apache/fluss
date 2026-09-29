@@ -195,8 +195,40 @@ struct ErrorCode {
     static constexpr int INVALID_ALTER_TABLE_EXCEPTION = 56;
     /// Deletion operations are disabled on this table.
     static constexpr int DELETION_DISABLED_EXCEPTION = 57;
+    /// The server does not exist.
+    static constexpr int SERVER_NOT_EXIST_EXCEPTION = 58;
+    /// The server tag already exists.
+    static constexpr int SERVER_TAG_ALREADY_EXIST_EXCEPTION = 59;
+    /// The server tag does not exist.
+    static constexpr int SERVER_TAG_NOT_EXIST_EXCEPTION = 60;
+    /// The rebalance task failed.
+    static constexpr int REBALANCE_FAILURE_EXCEPTION = 61;
+    /// No rebalance task is in progress.
+    static constexpr int NO_REBALANCE_IN_PROGRESS_EXCEPTION = 62;
+    /// The client used an invalid producer ID.
+    static constexpr int INVALID_PRODUCER_ID_EXCEPTION = 63;
+    /// A configuration error occurred.
+    static constexpr int CONFIG_EXCEPTION = 64;
+    /// The coordinator is not the leader and cannot process the request.
+    static constexpr int NOT_COORDINATOR_LEADER_EXCEPTION = 65;
+    /// The scanner session expired due to inactivity.
+    static constexpr int SCANNER_EXPIRED = 66;
+    /// The server does not recognize the scanner id.
+    static constexpr int UNKNOWN_SCANNER_ID = 67;
+    /// The scan request is invalid.
+    static constexpr int INVALID_SCAN_REQUEST = 68;
+    /// The per-bucket or per-server scanner session limit has been reached.
+    static constexpr int TOO_MANY_SCANNERS = 69;
+    /// The tablet server rejected writes because its data disk reached the write-limit ratio.
+    static constexpr int DISK_WRITE_LOCKED = 70;
+    /// The cluster does not have enough KV leader replica capacity.
+    static constexpr int INSUFFICIENT_KV_LEADER_REPLICA_CAPACITY = 71;
     /// The server rejected a write due to storage backpressure.
     static constexpr int STORAGE_BACKPRESSURE_EXCEPTION = 72;
+    /// The historical partition request was throttled because too many are in flight.
+    static constexpr int HISTORICAL_PARTITION_THROTTLED = 73;
+    /// The request's bucket routing is missing or stale; refresh metadata and rebuild it.
+    static constexpr int INVALID_BUCKET_ROUTING = 74;
 
     /// Returns true if retrying the request may succeed. Mirrors Java's RetriableException hierarchy.
     static constexpr bool IsRetriable(int32_t code) {
@@ -208,7 +240,8 @@ struct ErrorCode {
                code == STORAGE_EXCEPTION ||
                code == NOT_ENOUGH_REPLICAS_AFTER_APPEND_EXCEPTION ||
                code == NOT_ENOUGH_REPLICAS_EXCEPTION || code == LEADER_NOT_AVAILABLE_EXCEPTION ||
-               code == STORAGE_BACKPRESSURE_EXCEPTION;
+               code == STORAGE_BACKPRESSURE_EXCEPTION || code == DISK_WRITE_LOCKED ||
+               code == HISTORICAL_PARTITION_THROTTLED;
     }
 };
 
@@ -1465,6 +1498,8 @@ struct LakeSnapshot {
 struct PartitionInfo {
     int64_t partition_id;
     std::string partition_name;
+    /// Empty when the server predates per-partition bucket counts.
+    std::optional<int32_t> bucket_count{};
 };
 
 struct ServerNode {

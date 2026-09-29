@@ -60,6 +60,8 @@ append_writer.flush().await?;
 ### Reading from Partitioned Log Tables
 
 For partitioned tables, use partition-aware subscribe methods.
+A partition keeps the bucket count it was created with, so a change to `bucket.num` leaves older partitions with a different count than the table.
+Read each partition's count from its `PartitionInfo`.
 
 ```rust
 use std::time::Duration;
@@ -73,7 +75,9 @@ let log_scanner = table.new_scan().create_log_scanner()?;
 // Subscribe to each partition's buckets
 for partition_info in &partitions {
     let partition_id = partition_info.get_partition_id();
-    let num_buckets = table.get_table_info().get_num_buckets();
+    let num_buckets = partition_info
+        .get_bucket_count()
+        .unwrap_or(table.get_table_info().get_num_buckets());
     for bucket_id in 0..num_buckets {
         log_scanner.subscribe_partition(partition_id, bucket_id, 0).await?;
     }

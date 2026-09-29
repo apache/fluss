@@ -442,10 +442,11 @@ A schema together with its server-assigned version id. Returned by [`FlussAdmin:
 
 ## `PartitionInfo`
 
-| Method                                   |  Description       |
-|------------------------------------------|--------------------|
-| `fn get_partition_id(&self) -> i64`      | Get partition ID   |
-| `fn get_partition_name(&self) -> String` | Get partition name |
+| Method                                         |  Description                                         |
+|------------------------------------------------|------------------------------------------------------|
+| `fn get_partition_id(&self) -> i64`            | Get partition ID                                     |
+| `fn get_partition_name(&self) -> String`       | Get partition name                                   |
+| `fn get_bucket_count(&self) -> Option<i32>`    | Bucket count, or `None` from a server older than 1.0 |
 
 ## `DatabaseDescriptor`
 

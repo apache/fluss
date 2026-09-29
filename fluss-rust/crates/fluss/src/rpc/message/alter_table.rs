@@ -15,7 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::metadata::{AddColumn, AlterConfig, DropColumn, ModifyColumn, RenameColumn, TablePath};
+use crate::metadata::{
+    AddColumn, AlterConfig, AlterTableChanges, DropColumn, ModifyColumn, RenameColumn, TablePath,
+};
 use crate::rpc::api_key::ApiKey;
 use crate::rpc::convert::to_table_path;
 use crate::rpc::frame::{ReadError, WriteError};
@@ -33,22 +35,32 @@ impl AlterTableRequest {
     pub fn new(
         table_path: &TablePath,
         ignore_if_not_exists: bool,
-        config_changes: Vec<AlterConfig>,
-        add_columns: Vec<AddColumn>,
-        drop_columns: Vec<DropColumn>,
-        rename_columns: Vec<RenameColumn>,
-        modify_columns: Vec<ModifyColumn>,
+        changes: AlterTableChanges,
     ) -> Self {
         AlterTableRequest {
             inner_request: proto::AlterTableRequest {
                 table_path: to_table_path(table_path),
                 ignore_if_not_exists,
-                config_changes: config_changes.iter().map(AlterConfig::to_pb).collect(),
-                add_columns: add_columns.iter().map(AddColumn::to_pb).collect(),
-                drop_columns: drop_columns.iter().map(DropColumn::to_pb).collect(),
-                rename_columns: rename_columns.iter().map(RenameColumn::to_pb).collect(),
-                modify_columns: modify_columns.iter().map(ModifyColumn::to_pb).collect(),
-                modify_bucket_count: None,
+                config_changes: changes
+                    .config_changes
+                    .iter()
+                    .map(AlterConfig::to_pb)
+                    .collect(),
+                add_columns: changes.add_columns.iter().map(AddColumn::to_pb).collect(),
+                drop_columns: changes.drop_columns.iter().map(DropColumn::to_pb).collect(),
+                rename_columns: changes
+                    .rename_columns
+                    .iter()
+                    .map(RenameColumn::to_pb)
+                    .collect(),
+                modify_columns: changes
+                    .modify_columns
+                    .iter()
+                    .map(ModifyColumn::to_pb)
+                    .collect(),
+                modify_bucket_count: changes
+                    .new_bucket_count
+                    .map(|new_bucket_count| proto::PbModifyBucketCount { new_bucket_count }),
             },
         }
     }

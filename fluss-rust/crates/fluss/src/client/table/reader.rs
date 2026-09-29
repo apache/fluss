@@ -182,7 +182,7 @@ impl RecordBatchLogReader {
         validate_read_buckets(
             scanner.table_id(),
             scanner.is_partitioned(),
-            scanner.num_buckets(),
+            |bucket| scanner.bucket_count(bucket.partition_id()),
             subscribed.iter().map(|(bucket, _)| bucket),
         )?;
 
@@ -227,7 +227,7 @@ impl RecordBatchLogReader {
         validate_read_buckets(
             scanner.table_id(),
             scanner.is_partitioned(),
-            scanner.num_buckets(),
+            |bucket| scanner.bucket_count(bucket.partition_id()),
             stopping_offsets.keys(),
         )?;
         let completed =
@@ -268,7 +268,7 @@ impl RecordBatchLogReader {
         validate_read_ranges(
             scanner.table_id(),
             scanner.is_partitioned(),
-            scanner.num_buckets(),
+            |bucket| scanner.bucket_count(bucket.partition_id()),
             &ranges,
         )?;
         if !scanner.get_subscribed_buckets().is_empty() {
@@ -342,7 +342,7 @@ impl RecordBatchLogReader {
         validate_read_buckets(
             scanner.table_id(),
             scanner.is_partitioned(),
-            scanner.num_buckets(),
+            |bucket| scanner.bucket_count(bucket.partition_id()),
             buckets,
         )?;
         if buckets.is_empty() {
@@ -626,11 +626,11 @@ impl arrow::record_batch::RecordBatchReader for SyncRecordBatchLogReader {
 }
 
 /// Validate that every bucket in a bounded read belongs to the scanned table
-/// and appears exactly once.
+/// and appears exactly once. An unknown bucket count leaves the range check to the server.
 fn validate_read_buckets<'a>(
     table_id: TableId,
     is_partitioned: bool,
-    num_buckets: i32,
+    bucket_count_of: impl Fn(&TableBucket) -> Option<i32>,
     buckets: impl IntoIterator<Item = &'a TableBucket>,
 ) -> Result<()> {
     let mut seen = HashSet::new();
@@ -651,11 +651,17 @@ fn validate_read_buckets<'a>(
                 },
             });
         }
-        if bucket.bucket_id() < 0 || bucket.bucket_id() >= num_buckets {
+        let bucket_count = bucket_count_of(bucket);
+        if bucket.bucket_id() < 0
+            || bucket_count.is_some_and(|bucket_count| bucket.bucket_id() >= bucket_count)
+        {
             return Err(Error::IllegalArgument {
                 message: format!(
-                    "Bounded read bucket id {} is out of range for a table with {num_buckets} buckets.",
-                    bucket.bucket_id()
+                    "Bounded read bucket id {} is out of range{}.",
+                    bucket.bucket_id(),
+                    bucket_count
+                        .map(|count| format!(" for {count} buckets"))
+                        .unwrap_or_default()
                 ),
             });
         }
@@ -673,13 +679,13 @@ fn validate_read_buckets<'a>(
 fn validate_read_ranges(
     table_id: TableId,
     is_partitioned: bool,
-    num_buckets: i32,
+    bucket_count_of: impl Fn(&TableBucket) -> Option<i32>,
     ranges: &[BoundedLogReadRange],
 ) -> Result<()> {
     validate_read_buckets(
         table_id,
         is_partitioned,
-        num_buckets,
+        bucket_count_of,
         ranges.iter().map(|range| &range.bucket),
     )?;
     for range in ranges {
@@ -1063,14 +1069,14 @@ mod tests {
     fn validate_read_ranges_accepts_empty_and_non_empty_ranges() {
         let ranges = vec![range(bucket(0), 5, 5), range(bucket(1), 0, 10)];
 
-        validate_read_ranges(1, false, 2, &ranges).unwrap();
+        validate_read_ranges(1, false, |_| Some(2), &ranges).unwrap();
     }
 
     #[test]
     fn validate_read_ranges_rejects_bucket_of_another_table() {
         let ranges = vec![range(TableBucket::new(2, 0), 0, 10)];
 
-        let result = validate_read_ranges(1, false, 1, &ranges);
+        let result = validate_read_ranges(1, false, |_| Some(1), &ranges);
 
         assert!(matches!(result, Err(Error::IllegalArgument { .. })));
     }
@@ -1081,11 +1087,11 @@ mod tests {
         let partitioned = vec![range(TableBucket::new_with_partition(1, Some(7), 0), 0, 10)];
 
         assert!(matches!(
-            validate_read_ranges(1, true, 1, &unpartitioned),
+            validate_read_ranges(1, true, |_| Some(1), &unpartitioned),
             Err(Error::IllegalArgument { .. })
         ));
         assert!(matches!(
-            validate_read_ranges(1, false, 1, &partitioned),
+            validate_read_ranges(1, false, |_| Some(1), &partitioned),
             Err(Error::IllegalArgument { .. })
         ));
     }
@@ -1094,7 +1100,7 @@ mod tests {
     fn validate_read_ranges_rejects_out_of_range_bucket() {
         let ranges = vec![range(bucket(2), 0, 10)];
 
-        let result = validate_read_ranges(1, false, 2, &ranges);
+        let result = validate_read_ranges(1, false, |_| Some(2), &ranges);
 
         assert!(matches!(result, Err(Error::IllegalArgument { .. })));
     }
@@ -1103,7 +1109,7 @@ mod tests {
     fn validate_read_ranges_rejects_duplicate_bucket() {
         let ranges = vec![range(bucket(0), 0, 10), range(bucket(0), 10, 20)];
 
-        let result = validate_read_ranges(1, false, 1, &ranges);
+        let result = validate_read_ranges(1, false, |_| Some(1), &ranges);
 
         assert!(matches!(result, Err(Error::IllegalArgument { .. })));
     }
@@ -1112,7 +1118,7 @@ mod tests {
     fn validate_read_ranges_rejects_inverted_range() {
         let ranges = vec![range(bucket(0), 20, 10)];
 
-        let result = validate_read_ranges(1, false, 1, &ranges);
+        let result = validate_read_ranges(1, false, |_| Some(1), &ranges);
 
         assert!(matches!(result, Err(Error::IllegalArgument { .. })));
     }
@@ -1121,7 +1127,7 @@ mod tests {
     fn validate_read_ranges_rejects_negative_stopping_offset() {
         let ranges = vec![range(bucket(0), crate::client::EARLIEST_OFFSET, -1)];
 
-        let result = validate_read_ranges(1, false, 1, &ranges);
+        let result = validate_read_ranges(1, false, |_| Some(1), &ranges);
 
         assert!(matches!(result, Err(Error::IllegalArgument { .. })));
     }
@@ -1130,7 +1136,7 @@ mod tests {
     fn validate_read_ranges_rejects_unknown_negative_starting_offset() {
         let ranges = vec![range(bucket(0), -1, 10)];
 
-        let result = validate_read_ranges(1, false, 1, &ranges);
+        let result = validate_read_ranges(1, false, |_| Some(1), &ranges);
 
         assert!(matches!(result, Err(Error::IllegalArgument { .. })));
     }

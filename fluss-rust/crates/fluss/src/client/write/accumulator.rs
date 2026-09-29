@@ -25,7 +25,7 @@ use crate::cluster::{BucketLocation, Cluster, ServerNode};
 use crate::compression::ArrowCompressionRatioEstimator;
 use crate::config::Config;
 use crate::error::{Error, FlussError, Result};
-use crate::metadata::{PhysicalTablePath, TableBucket, TablePath};
+use crate::metadata::{PhysicalTablePath, TableBucket, TableOrPartition, TablePath};
 use crate::record::{ArrowBatchConfig, NO_BATCH_SEQUENCE, NO_WRITER_ID};
 use crate::util::current_time_ms;
 use crate::{BucketId, PartitionId, TableId};
@@ -267,12 +267,16 @@ impl RecordAccumulator {
     fn try_append(
         &self,
         record: &WriteRecord,
+        bucket_count: i32,
         dq: &mut VecDeque<WriteBatch>,
     ) -> Result<Option<RecordAppendResult>> {
         let dq_size = dq.len();
         if let Some(last_batch) = dq.back_mut() {
             // A recreated path shares one queue, so keep table instances apart.
             if last_batch.table_id() != record.table_info.table_id {
+                return Ok(None);
+            }
+            if last_batch.routing_bucket_count() != Some(bucket_count) {
                 return Ok(None);
             }
             return if let Some(result_handle) = last_batch.try_append(record)? {
@@ -289,6 +293,7 @@ impl RecordAccumulator {
         Ok(None)
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn append_new_batch(
         &self,
         cluster: &Cluster,
@@ -296,6 +301,7 @@ impl RecordAccumulator {
         dq: &mut VecDeque<WriteBatch>,
         permit: MemoryPermit,
         alloc_size: usize,
+        bucket_count: i32,
         compression_ratio_estimator: Arc<ArrowCompressionRatioEstimator>,
     ) -> Result<RecordAppendResult> {
         let physical_table_path = &record.physical_table_path;
@@ -344,6 +350,7 @@ impl RecordAccumulator {
             )),
         };
 
+        batch.set_routing_bucket_count(bucket_count);
         let batch_id = batch.batch_id();
 
         let result_handle = batch
@@ -364,6 +371,59 @@ impl RecordAccumulator {
         ))
     }
 
+    /// Returns the bucket count that routes `physical_table_path`, creating its write context.
+    pub fn routing_bucket_count(
+        &self,
+        physical_table_path: &Arc<PhysicalTablePath>,
+        cluster: &Cluster,
+    ) -> Result<i32> {
+        if let Some(context) = self.write_batches.get(physical_table_path) {
+            return Ok(context.routing.current());
+        }
+        let context = self.new_context(physical_table_path, cluster)?;
+        Ok(self
+            .write_batches
+            .entry(Arc::clone(physical_table_path))
+            .or_insert(context)
+            .routing
+            .current())
+    }
+
+    fn new_context(
+        &self,
+        physical_table_path: &PhysicalTablePath,
+        cluster: &Cluster,
+    ) -> Result<BucketAndWriteBatches> {
+        let table_info = cluster.get_table(physical_table_path.get_table_path())?;
+        let table_bucket_count = cluster
+            .bucket_count(TableOrPartition::Table(table_info.table_id))
+            .unwrap_or(table_info.num_buckets);
+        if !table_info.is_partitioned() {
+            return Ok(BucketAndWriteBatches::new(
+                false,
+                None,
+                BucketRouting::resolved(table_bucket_count),
+                table_info.has_bucket_key(),
+                &self.config,
+            ));
+        }
+        let partition_id = cluster.get_partition_id(physical_table_path);
+        let routing = match partition_id
+            .and_then(|id| cluster.bucket_count(TableOrPartition::Partition(id)))
+        {
+            Some(count) => BucketRouting::resolved(count),
+            None => BucketRouting::provisional(table_bucket_count),
+        };
+        Ok(BucketAndWriteBatches::new(
+            true,
+            partition_id,
+            routing,
+            table_info.has_bucket_key(),
+            &self.config,
+        ))
+    }
+
+    /// Appends `record` to `bucket_id`, routed with the table's current bucket count.
     pub fn append(
         &self,
         record: &WriteRecord<'_>,
@@ -371,24 +431,37 @@ impl RecordAccumulator {
         cluster: &Cluster,
         abort_if_batch_full: bool,
     ) -> Result<RecordAppendResult> {
+        let bucket_count = self.routing_bucket_count(&record.physical_table_path, cluster)?;
+        self.append_with_bucket_count(
+            record,
+            bucket_id,
+            bucket_count,
+            cluster,
+            abort_if_batch_full,
+        )
+    }
+
+    /// Sets `routing_changed` and appends nothing when the count is no longer `bucket_count`.
+    pub fn append_with_bucket_count(
+        &self,
+        record: &WriteRecord<'_>,
+        bucket_id: BucketId,
+        bucket_count: i32,
+        cluster: &Cluster,
+        abort_if_batch_full: bool,
+    ) -> Result<RecordAppendResult> {
         let physical_table_path = &record.physical_table_path;
-        let table_path = physical_table_path.get_table_path();
-        let table_info = cluster.get_table(table_path)?;
-        let is_partitioned_table = table_info.is_partitioned();
-
-        let partition_id = if is_partitioned_table {
-            cluster.get_partition_id(physical_table_path)
-        } else {
-            None
-        };
-
-        let (dq, compression_ratio_estimator, dynamic_target) = {
-            let mut binding = self
-                .write_batches
+        if !self.write_batches.contains_key(physical_table_path) {
+            let context = self.new_context(physical_table_path, cluster)?;
+            self.write_batches
                 .entry(Arc::clone(physical_table_path))
-                .or_insert_with(|| {
-                    BucketAndWriteBatches::new(is_partitioned_table, partition_id, &self.config)
-                });
+                .or_insert(context);
+        }
+
+        let (dq, routing, compression_ratio_estimator, dynamic_target) = {
+            let Some(mut binding) = self.write_batches.get_mut(physical_table_path) else {
+                return Ok(RecordAppendResult::routing_changed());
+            };
             let bucket_and_batches = binding.value_mut();
             let dq = bucket_and_batches
                 .batches
@@ -401,13 +474,18 @@ impl RecordAccumulator {
                 .map(|est| est.current());
             (
                 dq,
+                Arc::clone(&bucket_and_batches.routing),
                 Arc::clone(&bucket_and_batches.compression_ratio_estimator),
                 dynamic_target,
             )
         };
 
         let mut dq_guard = dq.lock();
-        if let Some(append_result) = self.try_append(record, &mut dq_guard)? {
+        // Under the deque lock, so `resolve_routing` sees every batch built with an older count.
+        if routing.current() != bucket_count {
+            return Ok(RecordAppendResult::routing_changed());
+        }
+        if let Some(append_result) = self.try_append(record, bucket_count, &mut dq_guard)? {
             return Ok(append_result);
         }
 
@@ -430,8 +508,11 @@ impl RecordAccumulator {
 
         // Re-acquire dq lock after memory is available
         let mut dq_guard = dq.lock();
+        if routing.current() != bucket_count {
+            return Ok(RecordAppendResult::routing_changed());
+        }
         // Re-try: another thread may have created a batch while we waited
-        if let Some(append_result) = self.try_append(record, &mut dq_guard)? {
+        if let Some(append_result) = self.try_append(record, bucket_count, &mut dq_guard)? {
             return Ok(append_result); // permit drops here, memory released
         }
 
@@ -441,6 +522,7 @@ impl RecordAccumulator {
             &mut dq_guard,
             permit,
             alloc_size,
+            bucket_count,
             compression_ratio_estimator,
         )
     }
@@ -452,19 +534,23 @@ impl RecordAccumulator {
             .retain(|_, expiry| *expiry > now);
 
         // Snapshot just the Arcs we need, avoiding cloning the entire BucketAndWriteBatches struct
-        let entries: Vec<(Arc<PhysicalTablePath>, Option<PartitionId>, BucketBatches)> = self
+        let entries: Vec<ReadyEntry> = self
             .write_batches
             .iter()
             .map(|entry| {
-                let physical_table_path = Arc::clone(entry.key());
-                let partition_id = entry.value().partition_id;
-                let bucket_batches: Vec<_> = entry
-                    .value()
+                let context = entry.value();
+                let bucket_batches: Vec<_> = context
                     .batches
                     .iter()
                     .map(|(bucket_id, batch_arc)| (*bucket_id, batch_arc.clone()))
                     .collect();
-                (physical_table_path, partition_id, bucket_batches)
+                ReadyEntry {
+                    physical_table_path: Arc::clone(entry.key()),
+                    partition_id: context.partition_id,
+                    routing: Arc::clone(&context.routing),
+                    has_bucket_key: context.has_bucket_key,
+                    bucket_batches,
+                }
             })
             .collect();
 
@@ -473,12 +559,9 @@ impl RecordAccumulator {
         let mut unknown_leader_tables = HashSet::new();
         let exhausted = self.memory_limiter.has_waiters();
 
-        for (physical_table_path, mut partition_id, bucket_batches) in entries {
+        for mut entry in entries {
             next_ready_check_delay_ms = self.bucket_ready(
-                &physical_table_path,
-                physical_table_path.get_partition_name().is_some(),
-                &mut partition_id,
-                bucket_batches,
+                &mut entry,
                 &mut ready_nodes,
                 &mut unknown_leader_tables,
                 cluster,
@@ -494,13 +577,9 @@ impl RecordAccumulator {
         })
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn bucket_ready(
         &self,
-        physical_table_path: &Arc<PhysicalTablePath>,
-        is_partitioned_table: bool,
-        partition_id: &mut Option<PartitionId>,
-        bucket_batches: BucketBatches,
+        entry: &mut ReadyEntry,
         ready_nodes: &mut HashSet<ServerNode>,
         unknown_leader_tables: &mut HashSet<Arc<PhysicalTablePath>>,
         cluster: &Cluster,
@@ -508,15 +587,18 @@ impl RecordAccumulator {
         exhausted: bool,
     ) -> Result<i64> {
         let mut next_delay = next_ready_check_delay_ms;
+        let physical_table_path = &entry.physical_table_path;
+        let is_partitioned_table = physical_table_path.get_partition_name().is_some();
+        let partition_id = &mut entry.partition_id;
 
         // First check this table has partitionId.
         if is_partitioned_table && partition_id.is_none() {
-            let partition_id = cluster.get_partition_id(physical_table_path);
+            *partition_id = cluster.get_partition_id(physical_table_path);
 
             if partition_id.is_some() {
                 // Update the cached partition_id
                 if let Some(mut entry) = self.write_batches.get_mut(physical_table_path) {
-                    entry.partition_id = partition_id;
+                    entry.partition_id = *partition_id;
                 }
             } else {
                 log::debug!(
@@ -531,7 +613,22 @@ impl RecordAccumulator {
             }
         }
 
-        for (bucket_id, batch) in bucket_batches {
+        if !entry.routing.is_resolved() {
+            let bucket_count =
+                partition_id.and_then(|id| cluster.bucket_count(TableOrPartition::Partition(id)));
+            let Some(bucket_count) = bucket_count else {
+                unknown_leader_tables.insert(Arc::clone(physical_table_path));
+                return Ok(next_delay);
+            };
+            self.resolve_routing(
+                physical_table_path,
+                &entry.routing,
+                entry.has_bucket_key,
+                bucket_count,
+            );
+        }
+
+        for (bucket_id, batch) in std::mem::take(&mut entry.bucket_batches) {
             let batch_guard = batch.lock();
             if batch_guard.is_empty() {
                 continue;
@@ -572,6 +669,87 @@ impl RecordAccumulator {
             }
         }
         Ok(next_delay)
+    }
+
+    /// Relabels batches routed with the provisional count, or fails them when their buckets moved.
+    fn resolve_routing(
+        &self,
+        physical_table_path: &Arc<PhysicalTablePath>,
+        routing: &BucketRouting,
+        has_bucket_key: bool,
+        bucket_count: i32,
+    ) {
+        let Some(provisional) = routing.resolve(bucket_count) else {
+            return;
+        };
+        if provisional == bucket_count {
+            return;
+        }
+        // Read after `resolve`, so a deque created later only holds batches with the new count.
+        let deques: BucketBatches = match self.write_batches.get(physical_table_path) {
+            Some(context) => context
+                .batches
+                .iter()
+                .map(|(bucket_id, dq)| (*bucket_id, Arc::clone(dq)))
+                .collect(),
+            None => return,
+        };
+        let fail = has_bucket_key
+            || deques.iter().any(|(bucket_id, dq)| {
+                *bucket_id >= bucket_count
+                    && dq
+                        .lock()
+                        .iter()
+                        .any(|batch| batch.routing_bucket_count() == Some(provisional))
+            });
+        let mut failed = Vec::new();
+        for (_, dq) in &deques {
+            let mut dq = dq.lock();
+            if fail {
+                let mut kept = VecDeque::with_capacity(dq.len());
+                while let Some(batch) = dq.pop_front() {
+                    if batch.routing_bucket_count() == Some(provisional) {
+                        failed.push(batch);
+                    } else {
+                        kept.push_back(batch);
+                    }
+                }
+                *dq = kept;
+            } else {
+                for batch in dq.iter_mut() {
+                    if batch.routing_bucket_count() == Some(provisional) {
+                        batch.set_routing_bucket_count(bucket_count);
+                    }
+                }
+            }
+        }
+        if failed.is_empty() {
+            return;
+        }
+        log::warn!(
+            "{} has {bucket_count} buckets, but {} batches were routed with {provisional} before its layout was known. Failing them.",
+            physical_table_path.as_ref(),
+            failed.len()
+        );
+        let error = broadcast::Error::WriteFailed {
+            code: FlussError::InvalidBucketRouting.code(),
+            message: format!(
+                "{} has {bucket_count} buckets, but these records were routed with {provisional} before its layout was known. Retry them with the same writer.",
+                physical_table_path.as_ref()
+            ),
+        };
+        for batch in failed {
+            if batch.complete(Err(error.clone())) {
+                self.release_idempotence_slot(&batch);
+                self.incomplete_batches.write().remove(&batch.batch_id());
+            }
+        }
+    }
+
+    pub(crate) fn invalidate_routing(&self, physical_table_path: &PhysicalTablePath) {
+        if let Some(context) = self.write_batches.get(physical_table_path) {
+            context.routing.invalidate();
+        }
     }
 
     fn batch_ready(
@@ -771,9 +949,11 @@ impl RecordAccumulator {
             last_processed_index = current_index;
             current_index = (current_index + 1) % buckets.len();
 
+            // An unresolved routing count may still fail its batches in `ready`.
             let deque = self
                 .write_batches
                 .get(table_path)
+                .filter(|bucket_and_write_batches| bucket_and_write_batches.routing.is_resolved())
                 .and_then(|bucket_and_write_batches| {
                     bucket_and_write_batches
                         .batches
@@ -1013,12 +1193,22 @@ impl RecordAccumulator {
         let bucket_id = ready_write_batch.table_bucket.bucket_id();
         let partition_id = ready_write_batch.table_bucket.partition_id();
         let is_partitioned_table = partition_id.is_some();
+        let bucket_count = ready_write_batch
+            .write_batch
+            .routing_bucket_count()
+            .unwrap_or(bucket_id + 1);
 
         let mut binding = self
             .write_batches
             .entry(Arc::clone(physical_table_path))
             .or_insert_with(|| {
-                BucketAndWriteBatches::new(is_partitioned_table, partition_id, &self.config)
+                BucketAndWriteBatches::new(
+                    is_partitioned_table,
+                    partition_id,
+                    BucketRouting::resolved(bucket_count),
+                    false,
+                    &self.config,
+                )
             });
         let bucket_and_batches = binding.value_mut();
         bucket_and_batches
@@ -1254,11 +1444,70 @@ impl ReadyWriteBatch {
     }
 }
 
+/// A partition whose layout is not cached routes with a provisional count until `ready` resolves
+/// it. A resolved count of 0 means unresolved.
+struct BucketRouting {
+    provisional: AtomicI32,
+    resolved: AtomicI32,
+}
+
+impl BucketRouting {
+    fn resolved(bucket_count: i32) -> Arc<Self> {
+        Arc::new(Self {
+            provisional: AtomicI32::new(bucket_count),
+            resolved: AtomicI32::new(bucket_count),
+        })
+    }
+
+    fn provisional(bucket_count: i32) -> Arc<Self> {
+        Arc::new(Self {
+            provisional: AtomicI32::new(bucket_count),
+            resolved: AtomicI32::new(0),
+        })
+    }
+
+    fn current(&self) -> i32 {
+        match self.resolved.load(Ordering::Acquire) {
+            0 => self.provisional.load(Ordering::Acquire),
+            resolved => resolved,
+        }
+    }
+
+    fn is_resolved(&self) -> bool {
+        self.resolved.load(Ordering::Acquire) > 0
+    }
+
+    /// Returns the provisional count it replaces, or `None` if already resolved.
+    fn resolve(&self, bucket_count: i32) -> Option<i32> {
+        self.resolved
+            .compare_exchange(0, bucket_count, Ordering::AcqRel, Ordering::Acquire)
+            .ok()
+            .map(|_| self.provisional.load(Ordering::Acquire))
+    }
+
+    fn invalidate(&self) {
+        let current = self.current();
+        self.provisional.store(current, Ordering::Release);
+        self.resolved.store(0, Ordering::Release);
+    }
+}
+
+/// A snapshot of one write context taken by `ready`.
+struct ReadyEntry {
+    physical_table_path: Arc<PhysicalTablePath>,
+    partition_id: Option<PartitionId>,
+    routing: Arc<BucketRouting>,
+    has_bucket_key: bool,
+    bucket_batches: BucketBatches,
+}
+
 struct BucketAndWriteBatches {
     // Kept for symmetry with the Java accumulator; `ready` derives this from the path.
     #[allow(dead_code)]
     is_partitioned_table: bool,
     partition_id: Option<PartitionId>,
+    routing: Arc<BucketRouting>,
+    has_bucket_key: bool,
     batches: HashMap<BucketId, Arc<Mutex<VecDeque<WriteBatch>>>>,
     /// Compression ratio estimator shared across Arrow log batches for this table.
     compression_ratio_estimator: Arc<ArrowCompressionRatioEstimator>,
@@ -1267,7 +1516,13 @@ struct BucketAndWriteBatches {
 }
 
 impl BucketAndWriteBatches {
-    fn new(is_partitioned_table: bool, partition_id: Option<PartitionId>, config: &Config) -> Self {
+    fn new(
+        is_partitioned_table: bool,
+        partition_id: Option<PartitionId>,
+        routing: Arc<BucketRouting>,
+        has_bucket_key: bool,
+        config: &Config,
+    ) -> Self {
         let dynamic_batch_size = config.writer_dynamic_batch_size_enabled.then(|| {
             DynamicWriteBatchSizeEstimator::new(
                 config.writer_dynamic_batch_size_min as usize,
@@ -1277,6 +1532,8 @@ impl BucketAndWriteBatches {
         Self {
             is_partitioned_table,
             partition_id,
+            routing,
+            has_bucket_key,
             batches: Default::default(),
             compression_ratio_estimator: Arc::new(ArrowCompressionRatioEstimator::default()),
             dynamic_batch_size,
@@ -1288,6 +1545,7 @@ pub struct RecordAppendResult {
     pub batch_is_full: bool,
     pub new_batch_created: bool,
     pub abort_record_for_new_batch: bool,
+    pub routing_changed: bool,
     pub result_handle: Option<ResultHandle>,
 }
 
@@ -1302,6 +1560,7 @@ impl RecordAppendResult {
             batch_is_full,
             new_batch_created,
             abort_record_for_new_batch,
+            routing_changed: false,
             result_handle: Some(result_handle),
         }
     }
@@ -1315,6 +1574,17 @@ impl RecordAppendResult {
             batch_is_full,
             new_batch_created,
             abort_record_for_new_batch,
+            routing_changed: false,
+            result_handle: None,
+        }
+    }
+
+    fn routing_changed() -> Self {
+        Self {
+            batch_is_full: false,
+            new_batch_created: false,
+            abort_record_for_new_batch: false,
+            routing_changed: true,
             result_handle: None,
         }
     }
@@ -2678,5 +2948,216 @@ mod tests {
             let batch = batches.pop().expect("batch");
             accumulator.remove_incomplete_batches(batch.write_batch.batch_id());
         }
+    }
+
+    fn partitioned_table(
+        table_buckets: i32,
+        bucket_key: bool,
+    ) -> (Arc<crate::metadata::TableInfo>, Arc<PhysicalTablePath>) {
+        use crate::metadata::{DataTypes, Schema, TableDescriptor, TableInfo};
+        let table_path = TablePath::new("db".to_string(), "parts".to_string());
+        let schema = Schema::builder()
+            .column("id", DataTypes::int())
+            .column("p", DataTypes::string())
+            .build()
+            .expect("schema");
+        let bucket_keys = if bucket_key {
+            vec!["id".to_string()]
+        } else {
+            vec![]
+        };
+        let descriptor = TableDescriptor::builder()
+            .schema(schema)
+            .partitioned_by(vec!["p"])
+            .distributed_by(Some(table_buckets), bucket_keys)
+            .build()
+            .expect("descriptor");
+        let table_info = TableInfo::of(table_path.clone(), 1, 1, descriptor, 0, 0);
+        let partition_path =
+            PhysicalTablePath::of_partitioned(Arc::new(table_path), Some("p1".to_string()));
+        (Arc::new(table_info), Arc::new(partition_path))
+    }
+
+    fn partitioned_cluster(
+        table_info: &crate::metadata::TableInfo,
+        partition_path: &Arc<PhysicalTablePath>,
+        partition_buckets: Option<i32>,
+    ) -> Arc<Cluster> {
+        let server = ServerNode::new(
+            1,
+            "127.0.0.1".to_string(),
+            9092,
+            crate::cluster::ServerType::TabletServer,
+        );
+        let mut locations_by_path = HashMap::new();
+        let mut locations_by_bucket = HashMap::new();
+        let mut partitions = HashMap::new();
+        let mut bucket_counts = HashMap::new();
+        if let Some(buckets) = partition_buckets {
+            let locations: Vec<BucketLocation> = (0..buckets)
+                .map(|bucket_id| {
+                    BucketLocation::new(
+                        TableBucket::new_with_partition(1, Some(10), bucket_id),
+                        Some(server.clone()),
+                        Arc::clone(partition_path),
+                    )
+                })
+                .collect();
+            for location in &locations {
+                locations_by_bucket.insert(location.table_bucket.clone(), location.clone());
+            }
+            locations_by_path.insert(Arc::clone(partition_path), locations);
+            partitions.insert(Arc::clone(partition_path), 10);
+            bucket_counts.insert(TableOrPartition::Partition(10), buckets);
+        }
+        Arc::new(Cluster::new(
+            None,
+            HashMap::from([(server.id(), server)]),
+            locations_by_path,
+            locations_by_bucket,
+            HashMap::from([(table_info.table_path.clone(), 1)]),
+            HashMap::from([(table_info.table_path.clone(), table_info.clone())]),
+            partitions,
+            bucket_counts,
+        ))
+    }
+
+    fn partition_row() -> GenericRow<'static> {
+        GenericRow {
+            values: vec![Datum::Int32(1), Datum::String("p1".into())],
+        }
+    }
+
+    #[test]
+    fn provisional_hash_routing_fails_when_the_partition_count_differs() -> Result<()> {
+        use futures::FutureExt;
+        let accumulator = RecordAccumulator::new(Config::default(), disabled_idempotence());
+        let (table_info, partition_path) = partitioned_table(8, true);
+        let cold = partitioned_cluster(&table_info, &partition_path, None);
+        let warm = partitioned_cluster(&table_info, &partition_path, Some(4));
+        let row = partition_row();
+        let record = WriteRecord::for_append(table_info, Arc::clone(&partition_path), 1, &row);
+
+        assert_eq!(accumulator.routing_bucket_count(&partition_path, &cold)?, 8);
+        let handle = accumulator
+            .append(&record, 1, &cold, false)?
+            .result_handle
+            .expect("appended");
+
+        accumulator.ready(&warm)?;
+
+        assert_eq!(accumulator.routing_bucket_count(&partition_path, &warm)?, 4);
+        assert!(matches!(
+            handle.wait().now_or_never().expect("failed by ready")?,
+            Err(broadcast::Error::WriteFailed { code, .. })
+                if code == FlussError::InvalidBucketRouting.code()
+        ));
+        assert!(!accumulator.has_undrained());
+        assert!(!accumulator.has_incomplete());
+        Ok(())
+    }
+
+    #[test]
+    fn provisional_keyless_routing_is_relabelled_when_its_buckets_still_exist() -> Result<()> {
+        let accumulator = RecordAccumulator::new(Config::default(), disabled_idempotence());
+        let (table_info, partition_path) = partitioned_table(8, false);
+        let cold = partitioned_cluster(&table_info, &partition_path, None);
+        let warm = partitioned_cluster(&table_info, &partition_path, Some(4));
+        let row = partition_row();
+        let record = WriteRecord::for_append(table_info, Arc::clone(&partition_path), 1, &row);
+        accumulator.append(&record, 3, &cold, false)?;
+
+        accumulator.ready(&warm)?;
+        let nodes = HashSet::from([warm.get_tablet_server(1).expect("server").clone()]);
+        let mut drained = accumulator.drain(Arc::clone(&warm), &nodes, 1024 * 1024)?;
+
+        let batch = drained.remove(&1).expect("drained").pop().expect("batch");
+        assert_eq!(batch.table_bucket.bucket_id(), 3);
+        assert_eq!(batch.write_batch.routing_bucket_count(), Some(4));
+        Ok(())
+    }
+
+    #[test]
+    fn provisional_keyless_routing_fails_when_a_bucket_disappears() -> Result<()> {
+        use futures::FutureExt;
+        let accumulator = RecordAccumulator::new(Config::default(), disabled_idempotence());
+        let (table_info, partition_path) = partitioned_table(8, false);
+        let cold = partitioned_cluster(&table_info, &partition_path, None);
+        let warm = partitioned_cluster(&table_info, &partition_path, Some(4));
+        let row = partition_row();
+        let record = WriteRecord::for_append(table_info, Arc::clone(&partition_path), 1, &row);
+        let in_range = accumulator
+            .append(&record, 1, &cold, false)?
+            .result_handle
+            .expect("appended");
+        let out_of_range = accumulator
+            .append(&record, 6, &cold, false)?
+            .result_handle
+            .expect("appended");
+
+        accumulator.ready(&warm)?;
+
+        for handle in [in_range, out_of_range] {
+            assert!(matches!(
+                handle.wait().now_or_never().expect("failed by ready")?,
+                Err(broadcast::Error::WriteFailed { code, .. })
+                    if code == FlussError::InvalidBucketRouting.code()
+            ));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn append_with_a_stale_bucket_count_appends_nothing() -> Result<()> {
+        let accumulator = RecordAccumulator::new(Config::default(), disabled_idempotence());
+        let (table_info, partition_path) = partitioned_table(8, true);
+        let warm = partitioned_cluster(&table_info, &partition_path, Some(4));
+        let row = partition_row();
+        let record = WriteRecord::for_append(table_info, Arc::clone(&partition_path), 1, &row);
+
+        let result = accumulator.append_with_bucket_count(&record, 5, 8, &warm, false)?;
+
+        assert!(result.routing_changed);
+        assert!(result.result_handle.is_none());
+        assert!(!accumulator.has_undrained());
+        Ok(())
+    }
+
+    #[test]
+    fn drain_waits_for_the_routing_count_to_resolve() -> Result<()> {
+        let accumulator = RecordAccumulator::new(Config::default(), disabled_idempotence());
+        let (table_info, partition_path) = partitioned_table(4, false);
+        let cold = partitioned_cluster(&table_info, &partition_path, None);
+        let warm = partitioned_cluster(&table_info, &partition_path, Some(4));
+        let row = partition_row();
+        let record = WriteRecord::for_append(table_info, Arc::clone(&partition_path), 1, &row);
+        accumulator.append(&record, 0, &cold, false)?;
+
+        let nodes = HashSet::from([warm.get_tablet_server(1).expect("server").clone()]);
+        assert!(
+            accumulator
+                .drain(Arc::clone(&warm), &nodes, 1024 * 1024)?
+                .is_empty()
+        );
+
+        accumulator.ready(&warm)?;
+        let mut drained = accumulator.drain(warm, &nodes, 1024 * 1024)?;
+        let batch = drained.remove(&1).expect("drained").pop().expect("batch");
+        assert_eq!(batch.write_batch.routing_bucket_count(), Some(4));
+        Ok(())
+    }
+
+    #[test]
+    fn non_partitioned_routing_uses_the_table_bucket_count() -> Result<()> {
+        let accumulator = RecordAccumulator::new(Config::default(), disabled_idempotence());
+        let table_path = TablePath::new("db".to_string(), "tbl".to_string());
+        let cluster = build_cluster(&table_path, 1, 3);
+        let physical_table_path = Arc::new(PhysicalTablePath::of(Arc::new(table_path)));
+
+        assert_eq!(
+            accumulator.routing_bucket_count(&physical_table_path, &cluster)?,
+            3
+        );
+        Ok(())
     }
 }

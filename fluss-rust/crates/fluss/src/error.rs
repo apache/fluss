@@ -169,6 +169,15 @@ impl Error {
         }
     }
 
+    pub fn invalid_bucket_routing(message: impl Into<String>) -> Self {
+        Error::FlussAPIError {
+            api_error: ApiError {
+                code: FlussError::InvalidBucketRouting.code(),
+                message: message.into(),
+            },
+        }
+    }
+
     pub fn leader_not_available(message: impl Into<String>) -> Self {
         Error::FlussAPIError {
             api_error: ApiError {

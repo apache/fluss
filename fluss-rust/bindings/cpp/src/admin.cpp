@@ -27,6 +27,12 @@
 
 namespace fluss {
 
+static PartitionInfo to_partition_info(const ffi::FfiPartitionInfo& pi) {
+    return PartitionInfo{
+        pi.partition_id, std::string(pi.partition_name),
+        pi.bucket_count > 0 ? std::optional<int32_t>(pi.bucket_count) : std::nullopt};
+}
+
 Admin::Admin() noexcept = default;
 
 Admin::Admin(ffi::Admin* admin) noexcept : admin_(admin) {}
@@ -176,7 +182,7 @@ Result Admin::ListPartitionInfos(const TablePath& table_path, std::vector<Partit
         out.clear();
         out.reserve(ffi_result.partition_infos.size());
         for (const auto& pi : ffi_result.partition_infos) {
-            out.push_back({pi.partition_id, std::string(pi.partition_name)});
+            out.push_back(to_partition_info(pi));
         }
     }
 
@@ -207,7 +213,7 @@ Result Admin::ListPartitionInfos(const TablePath& table_path,
         out.clear();
         out.reserve(ffi_result.partition_infos.size());
         for (const auto& pi : ffi_result.partition_infos) {
-            out.push_back({pi.partition_id, std::string(pi.partition_name)});
+            out.push_back(to_partition_info(pi));
         }
     }
 

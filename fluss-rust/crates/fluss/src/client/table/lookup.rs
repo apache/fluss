@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::PartitionId;
 use crate::bucketing::BucketingFunction;
 use crate::client::ClientSchemaGetter;
 use crate::client::lookup::LookupClient;
@@ -22,7 +23,8 @@ use crate::client::metadata::Metadata;
 use crate::client::table::partition_getter::PartitionGetter;
 use crate::error::{Error, Result};
 use crate::metadata::{
-    KvFormat, PhysicalTablePath, RowType, Schema, TableBucket, TableInfo, TablePath,
+    KvFormat, PhysicalTablePath, RowType, Schema, TableBucket, TableInfo, TableOrPartition,
+    TablePath,
 };
 use crate::record::RowAppendRecordBatchBuilder;
 use crate::record::kv::SCHEMA_ID_LENGTH;
@@ -292,8 +294,6 @@ impl TableLookup {
     /// operations together to reduce network round trips. This achieves parity
     /// with the Java client implementation for improved throughput.
     pub fn create_lookuper(self) -> Result<Lookuper> {
-        let num_buckets = self.table_info.get_num_buckets();
-
         // Get data lake format from table config for bucketing function
         let data_lake_format = self.table_info.get_table_config().get_datalake_format()?;
         let bucketing_function = <dyn BucketingFunction>::of(data_lake_format.as_ref());
@@ -344,7 +344,6 @@ impl TableLookup {
             primary_key_encoder,
             bucket_key_encoder,
             partition_getter,
-            num_buckets,
             schema_ctx,
         })
     }
@@ -370,7 +369,6 @@ pub struct Lookuper {
     primary_key_encoder: Box<dyn KeyEncoder>,
     bucket_key_encoder: Option<Box<dyn KeyEncoder>>,
     partition_getter: Option<PartitionGetter>,
-    num_buckets: i32,
     schema_ctx: LookupSchemaCtx,
 }
 
@@ -394,27 +392,33 @@ impl Lookuper {
             None => pk_bytes.clone(),
         };
 
-        let partition_id = if let Some(ref partition_getter) = self.partition_getter {
-            let partition_name = partition_getter.get_partition(row)?;
-            let physical_table_path = PhysicalTablePath::of_partitioned(
-                Arc::clone(&self.table_path),
-                Some(partition_name),
-            );
-            match self
-                .metadata
-                .check_and_update_partition_metadata(&physical_table_path)
-                .await?
-            {
-                Some(id) => Some(id),
-                None => return Ok(self.schema_ctx.empty_result()),
-            }
-        } else {
-            None
-        };
+        let (physical_table_path, partition_id) =
+            if let Some(ref partition_getter) = self.partition_getter {
+                let partition_name = partition_getter.get_partition(row)?;
+                let physical_table_path = PhysicalTablePath::of_partitioned(
+                    Arc::clone(&self.table_path),
+                    Some(partition_name),
+                );
+                match self
+                    .metadata
+                    .check_and_update_partition_metadata(&physical_table_path)
+                    .await?
+                {
+                    Some(id) => (physical_table_path, Some(id)),
+                    None => return Ok(self.schema_ctx.empty_result()),
+                }
+            } else {
+                (PhysicalTablePath::of(Arc::clone(&self.table_path)), None)
+            };
 
-        let bucket_id = self
-            .bucketing_function
-            .bucketing(&bk_bytes, self.num_buckets)?;
+        let bucket_count = routing_bucket_count(
+            &self.metadata,
+            &self.table_info,
+            physical_table_path,
+            partition_id,
+        )
+        .await?;
+        let bucket_id = self.bucketing_function.bucketing(&bk_bytes, bucket_count)?;
 
         let table_id = self.table_info.get_table_id();
         let table_bucket = TableBucket::new_with_partition(table_id, partition_id, bucket_id);
@@ -422,7 +426,12 @@ impl Lookuper {
         // Use the batched lookup client
         let result = self
             .lookup_client
-            .lookup(self.table_path.as_ref().clone(), table_bucket, pk_bytes)
+            .lookup(
+                self.table_path.as_ref().clone(),
+                table_bucket,
+                bucket_count,
+                pk_bytes,
+            )
             .await?;
 
         let rows = match result {
@@ -450,7 +459,6 @@ impl TablePrefixLookup {
     pub fn create_lookuper(self) -> Result<PrefixKeyLookuper> {
         validate_prefix_lookup(&self.table_info, &self.lookup_column_names)?;
 
-        let num_buckets = self.table_info.get_num_buckets();
         let data_lake_format = self.table_info.get_table_config().get_datalake_format()?;
         let bucketing_function = <dyn BucketingFunction>::of(data_lake_format.as_ref());
 
@@ -510,7 +518,6 @@ impl TablePrefixLookup {
             prefix_lookup_key_encoder,
             bucket_key_encoder,
             partition_getter,
-            num_buckets,
             schema_ctx,
         })
     }
@@ -619,7 +626,6 @@ pub struct PrefixKeyLookuper {
     /// prefix lookup key bytes are reused for bucketing.
     bucket_key_encoder: Option<Box<dyn KeyEncoder>>,
     partition_getter: Option<PartitionGetter>,
-    num_buckets: i32,
     schema_ctx: LookupSchemaCtx,
 }
 
@@ -631,34 +637,45 @@ impl PrefixKeyLookuper {
             None => prefix_bytes.clone(),
         };
 
-        let partition_id = if let Some(ref partition_getter) = self.partition_getter {
-            let partition_name = partition_getter.get_partition(row)?;
-            let physical_table_path = PhysicalTablePath::of_partitioned(
-                Arc::clone(&self.table_path),
-                Some(partition_name),
-            );
-            match self
-                .metadata
-                .check_and_update_partition_metadata(&physical_table_path)
-                .await?
-            {
-                Some(id) => Some(id),
-                None => return Ok(self.schema_ctx.empty_result()),
-            }
-        } else {
-            None
-        };
+        let (physical_table_path, partition_id) =
+            if let Some(ref partition_getter) = self.partition_getter {
+                let partition_name = partition_getter.get_partition(row)?;
+                let physical_table_path = PhysicalTablePath::of_partitioned(
+                    Arc::clone(&self.table_path),
+                    Some(partition_name),
+                );
+                match self
+                    .metadata
+                    .check_and_update_partition_metadata(&physical_table_path)
+                    .await?
+                {
+                    Some(id) => (physical_table_path, Some(id)),
+                    None => return Ok(self.schema_ctx.empty_result()),
+                }
+            } else {
+                (PhysicalTablePath::of(Arc::clone(&self.table_path)), None)
+            };
 
-        let bucket_id = self
-            .bucketing_function
-            .bucketing(&bk_bytes, self.num_buckets)?;
+        let bucket_count = routing_bucket_count(
+            &self.metadata,
+            &self.table_info,
+            physical_table_path,
+            partition_id,
+        )
+        .await?;
+        let bucket_id = self.bucketing_function.bucketing(&bk_bytes, bucket_count)?;
 
         let table_id = self.table_info.get_table_id();
         let table_bucket = TableBucket::new_with_partition(table_id, partition_id, bucket_id);
 
         let rows = self
             .lookup_client
-            .prefix_lookup(self.table_path.as_ref().clone(), table_bucket, prefix_bytes)
+            .prefix_lookup(
+                self.table_path.as_ref().clone(),
+                table_bucket,
+                bucket_count,
+                prefix_bytes,
+            )
             .await?;
 
         self.schema_ctx.build_result(rows).await
@@ -667,6 +684,25 @@ impl PrefixKeyLookuper {
     pub fn table_info(&self) -> &TableInfo {
         &self.table_info
     }
+}
+
+/// Refreshes the partition's metadata when its bucket count is not cached.
+async fn routing_bucket_count(
+    metadata: &Metadata,
+    table_info: &TableInfo,
+    physical_table_path: PhysicalTablePath,
+    partition_id: Option<PartitionId>,
+) -> Result<i32> {
+    let table_or_partition = TableOrPartition::of(table_info.table_id, partition_id);
+    if let Some(count) = metadata.get_cluster().bucket_count(table_or_partition) {
+        return Ok(count);
+    }
+    metadata
+        .update_physical_table_metadata(&[Arc::new(physical_table_path)])
+        .await?;
+    metadata
+        .get_cluster()
+        .bucket_count_or_fallback(table_info, partition_id)
 }
 
 #[cfg(test)]

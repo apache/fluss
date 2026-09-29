@@ -44,5 +44,6 @@ def test_writer_retry_backoff_configuration():
 
 def test_storage_backpressure_error_is_retriable():
     assert fluss.ErrorCode.STORAGE_BACKPRESSURE_EXCEPTION == 72
+    assert fluss.ErrorCode.INVALID_BUCKET_ROUTING == 74
     error = fluss.FlussError("backpressure", 72)
     assert error.is_retriable

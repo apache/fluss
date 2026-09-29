@@ -24,7 +24,7 @@ use crate::metadata::{
     KvSnapshotLeaseForTable, KvSnapshotMetadata, LakeSnapshot, LakeSnapshotInfo, LatestKvSnapshots,
     PartitionInfo, PartitionSpec, PhysicalTablePath, ProducerOffsets, ProducerTableOffsets,
     RebalanceProgress, RegisterProducerResult, RemoteLogManifestEntry, Schema, SchemaInfo,
-    ServerTag, TableBucket, TableDescriptor, TableInfo, TablePath, TableStats,
+    ServerTag, TableBucket, TableDescriptor, TableInfo, TableOrPartition, TablePath, TableStats,
 };
 use crate::rpc::message::{
     AcquireKvSnapshotLeaseRequest, AddServerTagRequest, AlterClusterConfigsRequest,
@@ -171,6 +171,7 @@ impl FlussAdmin {
             table_json,
             created_time,
             modified_time,
+            bucket_count_epoch,
             ..
         } = response;
         let table_descriptor = parse_table_descriptor(&table_json)?;
@@ -181,7 +182,8 @@ impl FlussAdmin {
             table_descriptor,
             created_time,
             modified_time,
-        ))
+        )
+        .with_bucket_count_epoch(bucket_count_epoch.unwrap_or(0)))
     }
 
     /// List all tables in the given database
@@ -468,10 +470,13 @@ impl FlussAdmin {
                 .push(*bucket_id);
         }
 
+        let routing_bucket_count =
+            cluster.bucket_count(TableOrPartition::of(table_id, partition_id));
         let mut list_offsets_requests = HashMap::new();
         for (leader_id, bucket_ids) in node_for_bucket_list {
             let request =
-                ListOffsetsRequest::new(table_id, partition_id, bucket_ids, offset_spec.clone());
+                ListOffsetsRequest::new(table_id, partition_id, bucket_ids, offset_spec.clone())
+                    .with_routing_bucket_count(routing_bucket_count);
             list_offsets_requests.insert(leader_id, request);
         }
         Ok(list_offsets_requests)
@@ -552,11 +557,7 @@ impl FlussAdmin {
             .request(AlterTableRequest::new(
                 table_path,
                 ignore_if_not_exists,
-                changes.config_changes,
-                changes.add_columns,
-                changes.drop_columns,
-                changes.rename_columns,
-                changes.modify_columns,
+                changes,
             ))
             .await?;
         Ok(())
@@ -611,7 +612,10 @@ impl FlussAdmin {
                         "Tablet server {leader_id} is not found in metadata cache."
                     ))
                 })?;
-            let request = GetTableStatsRequest::new(table_id, buckets, target_columns.clone());
+            let request = GetTableStatsRequest::new(table_id, buckets, target_columns.clone())
+                .with_routing_bucket_counts(|partition_id| {
+                    cluster.bucket_count(TableOrPartition::of(table_id, partition_id))
+                });
             requests.push((tablet_server, request));
         }
         let responses = try_join_all(requests.into_iter().map(
@@ -1007,6 +1011,7 @@ mod tests {
                 table_path.clone(),
                 build_table_info(table_path, TABLE_ID, 4),
             )]),
+            HashMap::new(),
             HashMap::new(),
         )
     }

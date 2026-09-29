@@ -18,7 +18,8 @@
 use crate::cluster::{BucketLocation, ServerNode, ServerType};
 use crate::error::{Error, Result};
 use crate::metadata::{
-    JsonSerde, PhysicalTablePath, TableBucket, TableDescriptor, TableInfo, TablePath,
+    JsonSerde, PhysicalTablePath, TableBucket, TableDescriptor, TableInfo, TableOrPartition,
+    TablePath,
 };
 use crate::proto::{MetadataResponse, PbBucketMetadata};
 use crate::rpc::{from_pb_server_node, from_pb_table_path};
@@ -42,6 +43,7 @@ pub struct Cluster {
     table_info_by_path: HashMap<TablePath, TableInfo>,
     partitions_id_by_path: HashMap<Arc<PhysicalTablePath>, PartitionId>,
     partition_name_by_id: HashMap<PartitionId, String>,
+    bucket_count_by_table_or_partition: HashMap<TableOrPartition, i32>,
 }
 
 impl Cluster {
@@ -54,6 +56,7 @@ impl Cluster {
         table_id_by_path: HashMap<TablePath, TableId>,
         table_info_by_path: HashMap<TablePath, TableInfo>,
         partitions_id_by_path: HashMap<Arc<PhysicalTablePath>, PartitionId>,
+        bucket_count_by_table_or_partition: HashMap<TableOrPartition, i32>,
     ) -> Self {
         let alive_tablet_servers = alive_tablet_servers_by_id.values().cloned().collect();
         let table_path_by_id = table_id_by_path
@@ -75,6 +78,7 @@ impl Cluster {
             table_info_by_path,
             partitions_id_by_path,
             partition_name_by_id,
+            bucket_count_by_table_or_partition,
         }
     }
 
@@ -102,6 +106,7 @@ impl Cluster {
             self.table_id_by_path.clone(),
             self.table_info_by_path.clone(),
             self.partitions_id_by_path.clone(),
+            self.bucket_count_by_table_or_partition.clone(),
         )
     }
 
@@ -112,6 +117,7 @@ impl Cluster {
         let (available_locations_by_path, available_locations_by_bucket) =
             self.filter_bucket_locations_by_physical_path(physical_tables_to_invalid);
 
+        // A table or partition id keeps one bucket count for life, so the counts stay cached.
         Cluster::new(
             self.coordinator_server.clone(),
             self.alive_tablet_servers_by_id.clone(),
@@ -120,6 +126,7 @@ impl Cluster {
             self.table_id_by_path.clone(),
             self.table_info_by_path.clone(),
             self.partitions_id_by_path.clone(),
+            self.bucket_count_by_table_or_partition.clone(),
         )
     }
 
@@ -151,6 +158,22 @@ impl Cluster {
             .map(|(path, partition_id)| (Arc::clone(path), *partition_id))
             .collect();
 
+        let mut evicted: HashSet<TableOrPartition> = self
+            .partitions_id_by_path
+            .iter()
+            .filter(|&(path, _)| path.get_table_path() == table_path)
+            .map(|(_, partition_id)| TableOrPartition::Partition(*partition_id))
+            .collect();
+        if let Some(table_id) = self.get_table_id(table_path) {
+            evicted.insert(TableOrPartition::Table(table_id));
+        }
+        let bucket_count_by_table_or_partition = self
+            .bucket_count_by_table_or_partition
+            .iter()
+            .filter(|(key, _)| !evicted.contains(key))
+            .map(|(key, count)| (*key, *count))
+            .collect();
+
         Cluster::new(
             self.coordinator_server.clone(),
             self.alive_tablet_servers_by_id.clone(),
@@ -159,6 +182,7 @@ impl Cluster {
             table_id_by_path,
             table_info_by_path,
             partitions_id_by_path,
+            bucket_count_by_table_or_partition,
         )
     }
 
@@ -174,6 +198,7 @@ impl Cluster {
             table_info_by_path,
             partitions_id_by_path,
             partition_name_by_id,
+            bucket_count_by_table_or_partition,
         } = cluster;
         self.coordinator_server = coordinator_server;
         self.alive_tablet_servers_by_id = alive_tablet_servers_by_id;
@@ -185,6 +210,7 @@ impl Cluster {
         self.table_info_by_path = table_info_by_path;
         self.partitions_id_by_path = partitions_id_by_path;
         self.partition_name_by_id = partition_name_by_id;
+        self.bucket_count_by_table_or_partition = bucket_count_by_table_or_partition;
     }
 
     fn filter_bucket_locations_by_path(
@@ -259,6 +285,7 @@ impl Cluster {
         let mut partitions_id_by_path = HashMap::new();
         let mut tmp_available_locations_by_path = HashMap::new();
         let mut tmp_available_location_by_bucket = HashMap::new();
+        let mut bucket_count_by_table_or_partition = HashMap::new();
 
         if let Some(origin) = origin_cluster {
             table_info_by_path.extend(origin.get_table_info_by_path().clone());
@@ -266,6 +293,8 @@ impl Cluster {
             partitions_id_by_path.extend(origin.partitions_id_by_path.clone());
             tmp_available_locations_by_path.extend(origin.available_locations_by_path.clone());
             tmp_available_location_by_bucket.extend(origin.available_locations_by_bucket.clone());
+            bucket_count_by_table_or_partition
+                .extend(origin.bucket_count_by_table_or_partition.clone());
         }
 
         // iterate all table metadata
@@ -288,11 +317,19 @@ impl Cluster {
                 table_descriptor,
                 table_metadata.created_time,
                 table_metadata.modified_time,
-            );
+            )
+            .with_bucket_count_epoch(table_metadata.bucket_count_epoch.unwrap_or(0));
             table_info_by_path.insert(table_path.clone(), table_info);
             table_id_by_path.insert(table_path.clone(), table_id);
 
             let bucket_metadata = table_metadata.bucket_metadata;
+            // An empty assignment means the layout is not generated yet, not zero buckets.
+            if !bucket_metadata.is_empty() {
+                bucket_count_by_table_or_partition.insert(
+                    TableOrPartition::Table(table_id),
+                    bucket_metadata.len() as i32,
+                );
+            }
             let physical_table_path = Arc::new(PhysicalTablePath::of(Arc::new(table_path.clone())));
 
             let bucket_locations = get_bucket_locations(
@@ -320,6 +357,16 @@ impl Cluster {
                 ));
 
                 partitions_id_by_path.insert(Arc::clone(&physical_table_path), partition_id);
+
+                // Servers before per-partition bucket counts only send the assignment.
+                let bucket_count = partition_metadata
+                    .bucket_count
+                    .filter(|count| *count > 0)
+                    .unwrap_or(partition_metadata.bucket_metadata.len() as i32);
+                if bucket_count > 0 {
+                    bucket_count_by_table_or_partition
+                        .insert(TableOrPartition::Partition(partition_id), bucket_count);
+                }
 
                 let bucket_locations = get_bucket_locations(
                     &mut servers,
@@ -350,6 +397,7 @@ impl Cluster {
             table_id_by_path,
             table_info_by_path,
             partitions_id_by_path,
+            bucket_count_by_table_or_partition,
         ))
     }
 
@@ -465,6 +513,32 @@ impl Cluster {
             .num_buckets
     }
 
+    pub fn bucket_count(&self, table_or_partition: TableOrPartition) -> Option<i32> {
+        self.bucket_count_by_table_or_partition
+            .get(&table_or_partition)
+            .copied()
+    }
+
+    /// Falls back to `num_buckets` only while the table has never changed `bucket.num`.
+    pub fn bucket_count_or_fallback(
+        &self,
+        table_info: &TableInfo,
+        partition_id: Option<PartitionId>,
+    ) -> Result<i32> {
+        let table_or_partition = TableOrPartition::of(table_info.table_id, partition_id);
+        if let Some(count) = self.bucket_count(table_or_partition) {
+            return Ok(count);
+        }
+        let epoch = table_info.get_bucket_count_epoch();
+        if epoch > 0 {
+            return Err(Error::invalid_bucket_routing(format!(
+                "Routing bucket count is unavailable for {table_or_partition:?} at bucket count \
+                 epoch {epoch}; refusing to fall back to the table-level count."
+            )));
+        }
+        Ok(table_info.num_buckets)
+    }
+
     pub fn get_table(&self, table_path: &TablePath) -> Result<&TableInfo> {
         self.table_info_by_path
             .get(table_path)
@@ -573,6 +647,7 @@ mod tests {
             HashMap::new(),
             HashMap::new(),
             HashMap::new(),
+            HashMap::new(),
         );
 
         let nodes = cluster.get_server_nodes();
@@ -596,6 +671,7 @@ mod tests {
         let cluster = Cluster::new(
             None,
             make_tablet_servers(),
+            HashMap::new(),
             HashMap::new(),
             HashMap::new(),
             HashMap::new(),
@@ -653,10 +729,16 @@ mod tests {
                 (Arc::clone(&partition_1), 10),
                 (Arc::clone(&partition_2), 20),
             ]),
+            HashMap::from([(TableOrPartition::Partition(10), 4)]),
         );
 
         let updated_cluster =
             cluster.invalidate_physical_table_meta(&HashSet::from([partition_1.as_ref().clone()]));
+
+        assert_eq!(
+            updated_cluster.bucket_count(TableOrPartition::Partition(10)),
+            Some(4)
+        );
 
         assert!(updated_cluster.leader_for(&bucket_1).is_none());
         assert!(updated_cluster.leader_for(&bucket_2).is_some());
@@ -721,9 +803,22 @@ mod tests {
                 ),
             ]),
             HashMap::from([(Arc::clone(&partition_a), 10)]),
+            HashMap::from([
+                (TableOrPartition::Partition(10), 1),
+                (TableOrPartition::Table(2), 1),
+            ]),
         );
 
         let updated_cluster = cluster.evict_table(table_path_a.as_ref());
+
+        assert_eq!(
+            updated_cluster.bucket_count(TableOrPartition::Partition(10)),
+            None
+        );
+        assert_eq!(
+            updated_cluster.bucket_count(TableOrPartition::Table(2)),
+            Some(1)
+        );
 
         assert!(
             updated_cluster
@@ -769,5 +864,160 @@ mod tests {
         let cluster = Cluster::default();
         let nodes = cluster.get_server_nodes();
         assert!(nodes.is_empty());
+    }
+
+    fn partitioned_table_info(num_buckets: i32, bucket_count_epoch: i64) -> TableInfo {
+        use crate::metadata::{DataTypes, Schema};
+        let descriptor = TableDescriptor::builder()
+            .schema(
+                Schema::builder()
+                    .column("id", DataTypes::int())
+                    .column("p", DataTypes::string())
+                    .build()
+                    .unwrap(),
+            )
+            .partitioned_by(vec!["p"])
+            .distributed_by(Some(num_buckets), vec!["id".to_string()])
+            .build()
+            .unwrap();
+        TableInfo::of(TablePath::new("db", "parts"), 1, 1, descriptor, 0, 0)
+            .with_bucket_count_epoch(bucket_count_epoch)
+    }
+
+    #[test]
+    fn bucket_count_or_fallback_refuses_the_table_count_after_a_rescale() {
+        let cluster = Cluster::new(
+            None,
+            HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+            HashMap::from([(TableOrPartition::Partition(10), 4)]),
+        );
+
+        let never_rescaled = partitioned_table_info(8, 0);
+        assert_eq!(
+            cluster
+                .bucket_count_or_fallback(&never_rescaled, Some(10))
+                .unwrap(),
+            4
+        );
+        assert_eq!(
+            cluster
+                .bucket_count_or_fallback(&never_rescaled, Some(20))
+                .unwrap(),
+            8
+        );
+
+        let rescaled = partitioned_table_info(8, 1);
+        assert_eq!(
+            cluster
+                .bucket_count_or_fallback(&rescaled, Some(10))
+                .unwrap(),
+            4
+        );
+        let err = cluster
+            .bucket_count_or_fallback(&rescaled, Some(20))
+            .unwrap_err();
+        assert_eq!(
+            err.api_error(),
+            Some(crate::rpc::FlussError::InvalidBucketRouting)
+        );
+    }
+
+    #[test]
+    fn from_metadata_response_reads_bucket_counts_and_epoch() {
+        use crate::proto::{PbPartitionMetadata, PbServerNode, PbTableMetadata, PbTablePath};
+        let table_info = partitioned_table_info(8, 0);
+        let table_json = serde_json::to_vec(
+            &TableDescriptor::builder()
+                .schema(table_info.schema.clone())
+                .partitioned_by(vec!["p"])
+                .distributed_by(Some(8), vec!["id".to_string()])
+                .build()
+                .unwrap()
+                .serialize_json()
+                .unwrap(),
+        )
+        .unwrap();
+        let bucket = |bucket_id| PbBucketMetadata {
+            bucket_id,
+            leader_id: Some(1),
+            replica_id: vec![1],
+            leader_epoch: None,
+            bucket_epoch: None,
+            isr: vec![1],
+        };
+        let server = PbServerNode {
+            node_id: 1,
+            host: "ts1".to_string(),
+            port: 9123,
+            listeners: None,
+            rack: None,
+        };
+        let table_response = MetadataResponse {
+            coordinator_server: None,
+            tablet_servers: vec![server.clone()],
+            table_metadata: vec![PbTableMetadata {
+                table_path: PbTablePath {
+                    database_name: "db".to_string(),
+                    table_name: "parts".to_string(),
+                },
+                table_id: 1,
+                schema_id: 1,
+                table_json,
+                bucket_metadata: vec![],
+                created_time: 0,
+                modified_time: 0,
+                remote_data_dir: None,
+                bucket_count_epoch: Some(2),
+            }],
+            partition_metadata: vec![],
+        };
+        let table_cluster = Cluster::from_metadata_response(table_response, None).unwrap();
+        assert_eq!(
+            table_cluster
+                .get_table(&TablePath::new("db", "parts"))
+                .unwrap()
+                .get_bucket_count_epoch(),
+            2
+        );
+        // A partitioned table has no table-level assignment.
+        assert_eq!(table_cluster.bucket_count(TableOrPartition::Table(1)), None);
+
+        let partition_response = MetadataResponse {
+            coordinator_server: None,
+            tablet_servers: vec![server],
+            table_metadata: vec![],
+            partition_metadata: vec![
+                PbPartitionMetadata {
+                    table_id: 1,
+                    partition_name: "p1".to_string(),
+                    partition_id: 10,
+                    bucket_metadata: vec![bucket(0)],
+                    bucket_count: Some(4),
+                },
+                // An older server sends only the assignment.
+                PbPartitionMetadata {
+                    table_id: 1,
+                    partition_name: "p2".to_string(),
+                    partition_id: 20,
+                    bucket_metadata: vec![bucket(0), bucket(1), bucket(2)],
+                    bucket_count: None,
+                },
+            ],
+        };
+        let cluster =
+            Cluster::from_metadata_response(partition_response, Some(&table_cluster)).unwrap();
+        assert_eq!(
+            cluster.bucket_count(TableOrPartition::Partition(10)),
+            Some(4)
+        );
+        assert_eq!(
+            cluster.bucket_count(TableOrPartition::Partition(20)),
+            Some(3)
+        );
     }
 }

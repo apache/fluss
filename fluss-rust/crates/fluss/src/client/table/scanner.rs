@@ -186,12 +186,22 @@ impl<'a> TableScan<'a> {
                 ),
             });
         }
-        let num_buckets = self.table_info.get_num_buckets();
-        if table_bucket.bucket_id() < 0 || table_bucket.bucket_id() >= num_buckets {
+        // An unknown count after a `bucket.num` change is left to the server to check.
+        let bucket_count = self
+            .metadata
+            .get_cluster()
+            .bucket_count_or_fallback(&self.table_info, table_bucket.partition_id())
+            .ok();
+        if table_bucket.bucket_id() < 0
+            || bucket_count.is_some_and(|bucket_count| table_bucket.bucket_id() >= bucket_count)
+        {
             return Err(Error::IllegalArgument {
                 message: format!(
-                    "Bucket id {} out of range for table with {num_buckets} buckets",
-                    table_bucket.bucket_id()
+                    "Bucket id {} out of range{}",
+                    table_bucket.bucket_id(),
+                    bucket_count
+                        .map(|count| format!(" for {count} buckets"))
+                        .unwrap_or_default()
                 ),
             });
         }
@@ -449,7 +459,7 @@ pub struct RecordBatchLogScanner {
 struct LogScannerInner {
     table_path: TablePath,
     table_id: TableId,
-    num_buckets: i32,
+    table_info: TableInfo,
     metadata: Arc<Metadata>,
     log_scanner_status: Arc<LogScannerStatus>,
     log_fetcher: LogFetcher,
@@ -647,7 +657,7 @@ impl LogScannerInner {
         Ok(Self {
             table_path: table_info.table_path.clone(),
             table_id: table_info.table_id,
-            num_buckets: table_info.get_num_buckets(),
+            table_info: table_info.clone(),
             is_partitioned_table: table_info.is_partitioned(),
             metadata: metadata.clone(),
             log_scanner_status: log_scanner_status.clone(),
@@ -1200,8 +1210,12 @@ impl RecordBatchLogScanner {
         self.inner.table_id
     }
 
-    pub(crate) fn num_buckets(&self) -> i32 {
-        self.inner.num_buckets
+    pub(crate) fn bucket_count(&self, partition_id: Option<PartitionId>) -> Option<i32> {
+        self.inner
+            .metadata
+            .get_cluster()
+            .bucket_count_or_fallback(&self.inner.table_info, partition_id)
+            .ok()
     }
 
     /// Next fetch offset of `bucket`, which moves past batches the server pruned.
@@ -1499,6 +1513,13 @@ impl LogFetcher {
                     "Received unknown table or bucket error in fetch for bucket {table_bucket}"
                 ),
             },
+            FlussError::InvalidBucketRouting => FetchErrorContext {
+                action: FetchErrorAction::Ignore,
+                log_level: FetchErrorLogLevel::Warn,
+                log_message: format!(
+                    "Invalid bucket routing in fetch for bucket {table_bucket}, refreshing metadata: {error_message}"
+                ),
+            },
             FlussError::LogOffsetOutOfRangeException => FetchErrorContext {
                 action: FetchErrorAction::LogOffsetOutOfRange,
                 log_level: FetchErrorLogLevel::Debug,
@@ -1545,6 +1566,7 @@ impl LogFetcher {
                 | FlussError::FencedLeaderEpochException
                 | FlussError::UnknownTableOrBucketException
                 | FlussError::InvalidCoordinatorException
+                | FlussError::InvalidBucketRouting
         )
     }
 
@@ -2362,7 +2384,10 @@ impl LogFetcher {
                             bucket_id: bucket.bucket_id(),
                             fetch_offset: offset,
                             max_fetch_bytes: self.fetch_max_bytes_for_bucket,
-                            routing_bucket_count: None,
+                            routing_bucket_count: self
+                                .metadata
+                                .get_cluster()
+                                .bucket_count(bucket.table_or_partition()),
                         };
 
                         fetch_log_req_for_buckets

@@ -96,7 +96,23 @@ defmodule Fluss.Error do
           | :ineligible_replica_exception
           | :invalid_alter_table_exception
           | :deletion_disabled_exception
+          | :server_not_exist_exception
+          | :server_tag_already_exist_exception
+          | :server_tag_not_exist_exception
+          | :rebalance_failure_exception
+          | :no_rebalance_in_progress_exception
+          | :invalid_producer_id_exception
+          | :config_exception
+          | :not_coordinator_leader_exception
+          | :scanner_expired
+          | :unknown_scanner_id
+          | :invalid_scan_request
+          | :too_many_scanners
+          | :disk_write_locked
+          | :insufficient_kv_leader_replica_capacity
           | :storage_backpressure_exception
+          | :historical_partition_throttled
+          | :invalid_bucket_routing
           | :client_error
 
   @type t :: %__MODULE__{code: code(), error_code: integer(), message: String.t()}
@@ -115,7 +131,9 @@ defmodule Fluss.Error do
     :not_enough_replicas_after_append_exception,
     :not_enough_replicas_exception,
     :leader_not_available_exception,
-    :storage_backpressure_exception
+    :storage_backpressure_exception,
+    :disk_write_locked,
+    :historical_partition_throttled
   ]
 
   @impl true
