@@ -1247,6 +1247,14 @@ public class ConfigOptions {
                                     + "By default, inner clients (server-to-server) use false "
                                     + "and non-inner clients (external) use true.");
 
+    public static final ConfigOption<Boolean> NETTY_CLIENT_SKIP_SHUTDOWN_QUIET_PERIOD =
+            key("netty.client.skip-shutdown-quiet-period")
+                    .booleanType()
+                    .defaultValue(false)
+                    .withDescription(
+                            "Whether to skip Netty's quiet period when shutting down a client. "
+                                    + "The default retains Netty's graceful shutdown behavior.");
+
     // ------------------------------------------------------------------------
     //  Client Settings
     // ------------------------------------------------------------------------
