@@ -167,17 +167,6 @@ Name of the coordinator headless Service.
 {{- end -}}
 
 {{/*
-Name of the coordinator metrics headless Service.
-*/}}
-{{- define "fluss.coordinator.metricsServiceName" -}}
-{{- if .Values.uniqueResourceNames -}}
-{{- printf "%s-coordinator-server-metrics-hs" (include "fluss.fullname" .) | trunc 63 | trimSuffix "-" -}}
-{{- else -}}
-{{- printf "%s-coordinator-server-metrics-hs" .Release.Name | trunc 63 | trimSuffix "-" -}}
-{{- end -}}
-{{- end -}}
-
-{{/*
 Name of the tablet StatefulSet and PodDisruptionBudget.
 */}}
 {{- define "fluss.tablet.name" -}}
@@ -196,17 +185,6 @@ Name of the tablet headless Service.
 {{- printf "%s-tablet-server-hs" (include "fluss.fullname" .) | trunc 63 | trimSuffix "-" -}}
 {{- else -}}
 {{- "tablet-server-hs" -}}
-{{- end -}}
-{{- end -}}
-
-{{/*
-Name of the tablet metrics headless Service.
-*/}}
-{{- define "fluss.tablet.metricsServiceName" -}}
-{{- if .Values.uniqueResourceNames -}}
-{{- printf "%s-tablet-server-metrics-hs" (include "fluss.fullname" .) | trunc 63 | trimSuffix "-" -}}
-{{- else -}}
-{{- printf "%s-tablet-server-metrics-hs" .Release.Name | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
 {{- end -}}
 

@@ -162,11 +162,11 @@ tests:
         template: templates/pdb-tablet.yaml
       - equal:
           path: metadata.name
-          value: alpha-fluss-coordinator-server-metrics-hs
+          value: alpha-coordinator-server-metrics-hs
         template: templates/svc-metrics-coordinator.yaml
       - equal:
           path: metadata.name
-          value: alpha-fluss-tablet-server-metrics-hs
+          value: alpha-tablet-server-metrics-hs
         template: templates/svc-metrics-tablet.yaml
 
   - it: should point the StatefulSets at the unique headless Services
@@ -254,6 +254,25 @@ tests:
       uniqueResourceNames: true
     asserts:
       - notFailedTemplate: {}
+
+  # 34 characters, which the "-fluss" suffix takes to the 40 character maximum.
+  - it: should accept a release name at the limit
+    release:
+      name: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+    set:
+      uniqueResourceNames: true
+    asserts:
+      - notFailedTemplate: {}
+
+  # One character more, which pushes the prefix to 41.
+  - it: should reject a release name one character over the limit
+    release:
+      name: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+    set:
+      uniqueResourceNames: true
+    asserts:
+      - failedTemplate:
+          errorPattern: "at most 40 characters"
 
   - it: should not apply the length check with fixed names
     release:

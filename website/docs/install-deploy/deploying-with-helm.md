@@ -591,7 +591,7 @@ Two things still need attention:
   so give each one its own path. The chart default,
   `/tmp/fluss/remote-data`, is a path inside each pod's own container
   filesystem and is not shared.
-- The release name becomes part of every generated name. Keep it to 33
+- The release name becomes part of every generated name. Keep it to 40
   characters or fewer, or set `fullnameOverride` to something shorter. The
   chart fails the render with an explicit message when the limit is exceeded.
 
