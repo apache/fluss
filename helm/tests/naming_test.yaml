@@ -104,7 +104,7 @@ tests:
 
 ---
 
-suite: release-scoped-names
+suite: unique-resource-names
 templates:
   - templates/configmap.yaml
   - templates/sts-coordinator.yaml
@@ -118,7 +118,7 @@ templates:
 release:
   name: alpha
 set:
-  releaseScopedResourceNames: true
+  uniqueResourceNames: true
   coordinator.podDisruptionBudget:
     enabled: true
     maxUnavailable: 1
@@ -169,7 +169,7 @@ tests:
           value: alpha-fluss-tablet-server-metrics-hs
         template: templates/svc-metrics-tablet.yaml
 
-  - it: should point the StatefulSets at the release-scoped headless Services
+  - it: should point the StatefulSets at the unique headless Services
     asserts:
       - equal:
           path: spec.serviceName
@@ -180,7 +180,7 @@ tests:
           value: alpha-fluss-tablet-server-hs
         template: templates/sts-tablet.yaml
 
-  - it: should mount the release-scoped ConfigMap
+  - it: should mount the unique ConfigMap
     asserts:
       - contains:
           path: spec.template.spec.volumes
@@ -197,7 +197,7 @@ tests:
               name: alpha-fluss-conf-file
         template: templates/sts-tablet.yaml
 
-  - it: should advertise the release-scoped Service FQDN
+  - it: should advertise the unique Service FQDN
     asserts:
       - matchRegex:
           path: spec.template.spec.containers[0].command[2]
@@ -225,7 +225,7 @@ tests:
 
   - it: should scope the ZooKeeper root path to the release when opted in
     set:
-      releaseScopedResourceNames: true
+      uniqueResourceNames: true
     asserts:
       - matchRegex:
           path: data["server.yaml"]
@@ -242,7 +242,7 @@ tests:
     release:
       name: a-very-long-fluss-release-name-that-will-not-fit
     set:
-      releaseScopedResourceNames: true
+      uniqueResourceNames: true
     asserts:
       - failedTemplate:
           errorPattern: "must stay within 63 characters"
@@ -251,7 +251,7 @@ tests:
     release:
       name: alpha
     set:
-      releaseScopedResourceNames: true
+      uniqueResourceNames: true
     asserts:
       - notFailedTemplate: {}
 

@@ -19,7 +19,7 @@
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
-  name: {{ include "fluss.coordinator.fullname" . }}
+  name: {{ include "fluss.coordinator.name" . }}
   labels:
   {{- include "fluss.labels" . | nindent 4 }}
   {{- with .Values.coordinator.annotations }}

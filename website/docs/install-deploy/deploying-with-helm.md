@@ -165,7 +165,7 @@ The following table lists the configurable parameters of the Fluss chart, and th
 |-----------|-------------|---------|
 | `nameOverride` | Override the name of the chart | `""` |
 | `fullnameOverride` | Override the full name of the resources | `""` |
-| `releaseScopedResourceNames` | Prefix every resource name with the release name and scope the ZooKeeper root path to it, so that several Fluss clusters can share a namespace. See [Running several Fluss clusters in one namespace](#running-several-fluss-clusters-in-one-namespace). | `false` |
+| `uniqueResourceNames` | Give every resource a name unique to the release, and scope the ZooKeeper root path to the release too, so that several Fluss clusters can share a namespace. See [Running several Fluss clusters in one namespace](#running-several-fluss-clusters-in-one-namespace). | `false` |
 
 ### Image Parameters
 
@@ -378,7 +378,7 @@ The same pattern works with Sealed Secrets, HashiCorp Vault Agent Injector (prod
 |-----------|-------------|---------|
 | `configurationOverrides.default.bucket.number` | Default number of buckets for tables | `3` |
 | `configurationOverrides.default.replication.factor` | Default replication factor | `3` |
-| `configurationOverrides.zookeeper.path.root` | ZooKeeper root path for Fluss. Becomes `/fluss/<release>` when `releaseScopedResourceNames` is enabled | `/fluss` |
+| `configurationOverrides.zookeeper.path.root` | ZooKeeper root path for Fluss. Becomes `/fluss/<release>` when `uniqueResourceNames` is enabled | `/fluss` |
 | `configurationOverrides.zookeeper.address` | ZooKeeper ensemble address | `zk-zookeeper.{{ .Release.Namespace }}.svc.cluster.local:2181` |
 | `configurationOverrides.remote.data.dir` | Remote data directory for snapshots | `/tmp/fluss/remote-data` |
 | `configurationOverrides.data.dir` | Local data directory | `/tmp/fluss/data` |
@@ -570,12 +570,12 @@ By default the chart gives each resource a fixed name (`coordinator-server`,
 puts every cluster on the ZooKeeper root path `/fluss`. Two releases in the
 same namespace would therefore collide on both.
 
-Set `releaseScopedResourceNames` to prefix every resource with the release
-name and move the ZooKeeper root path to `/fluss/<release>`:
+Set `uniqueResourceNames` to give every resource a name unique to the release
+and move the ZooKeeper root path to `/fluss/<release>`:
 
 ```bash
-helm install orders ./helm --set releaseScopedResourceNames=true
-helm install payments ./helm --set releaseScopedResourceNames=true
+helm install orders ./helm --set uniqueResourceNames=true
+helm install payments ./helm --set uniqueResourceNames=true
 ```
 
 This gives you `orders-fluss-coordinator-server` alongside
@@ -583,16 +583,20 @@ This gives you `orders-fluss-coordinator-server` alongside
 `/fluss/payments`. It is useful when namespace creation is restricted and one
 team needs more than one cluster.
 
-Two things are still shared and need attention:
+Two things still need attention:
 
-- `configurationOverrides.remote.data.dir` points both releases at the same
-  path. Give each release its own directory.
+- `configurationOverrides.remote.data.dir` holds kv snapshots and tiered log
+  segments. Whenever it points at a real remote filesystem, such as
+  `s3://bucket/fluss` or an HDFS path, both releases write to the same place,
+  so give each one its own path. The chart default,
+  `/tmp/fluss/remote-data`, is a path inside each pod's own container
+  filesystem and is not shared.
 - The release name becomes part of every generated name. Keep it to 33
   characters or fewer, or set `fullnameOverride` to something shorter. The
   chart fails the render with an explicit message when the limit is exceeded.
 
 To enable the option on a cluster that already exists, read
-[Enabling release-scoped names on an existing release](#enabling-release-scoped-names-on-an-existing-release)
+[Enabling unique resource names on an existing release](#enabling-unique-resource-names-on-an-existing-release)
 first: it is not an in-place change.
 
 ### Network Configuration
@@ -870,46 +874,85 @@ helm upgrade fluss ./helm
 helm upgrade fluss ./helm -f values-new.yaml
 ```
 
-### Enabling release-scoped names on an existing release
+### Enabling unique resource names on an existing release
 
-Turning on `releaseScopedResourceNames` renames every resource. A StatefulSet
-cannot be renamed in place, so Helm deletes the old one and creates a new one,
-which means:
+Turning on `uniqueResourceNames` renames the StatefulSets, and a StatefulSet
+cannot be renamed in place. Treat this as replacing the cluster rather than
+upgrading it.
 
-- Pods are replaced rather than rolled.
-- With `storage.enabled: true`, the PersistentVolumeClaims created from
-  `volumeClaimTemplates` are named after the StatefulSet
-  (`data-tablet-server-0` becomes `data-<release>-fluss-tablet-server-0`).
-  Kubernetes does not delete the old claims, so they stay behind as orphans and
-  the new pods start with empty volumes.
-- The ZooKeeper root path moves from `/fluss` to `/fluss/<release>`, so the new
-  pods do not see the existing cluster metadata.
+#### Recommended: migrate side by side
 
-To keep the existing cluster state while taking the new names, pin the old root
-path in the same upgrade:
+Because the old and new names do not collide, install a second release with
+`uniqueResourceNames` enabled next to the existing one, copy the data across
+with a Flink job that reads from the old cluster and writes to the new one,
+then uninstall the old release.
+
+This is the only path that keeps the old cluster serving throughout, and the
+only one that does not depend on how much data has been tiered to remote
+storage. If your `remote.data.dir` is a real remote filesystem, point the new
+release at its own path there.
+
+#### Replacing in place
+
+Helm applies the upgrade in this order:
+
+1. It creates the new StatefulSets, Services, and ConfigMap under the new
+   names. The old ones are still running at this point.
+2. It deletes the resources that are no longer part of the release, which
+   includes the old StatefulSets and, with them, their pods.
+
+Helm does not wait between the two steps, so the two generations overlap
+briefly. Two consequences follow.
+
+**Server IDs collide during the overlap.** A tablet server takes its id from
+its pod ordinal, so the old `tablet-server-0` and the new
+`<release>-fluss-tablet-server-0` both claim id `0`. Registration creates an
+ephemeral ZooKeeper znode, so whichever server arrives second gets a
+`NodeExistsException` and retries every 3 seconds for up to 60 seconds.
+
+This usually resolves on its own: the old pod terminates, its ZooKeeper session
+closes, the znode disappears, and the new server registers on a later retry. It
+is tight, though. A pod that dies without closing its session leaves the znode
+in place until the session times out, and `zookeeper.client.session-timeout`
+also defaults to 60 seconds. A server that exhausts its retry budget exits, and
+the pod restarts and tries again, so it recovers — but expect errors in the log
+while it settles.
+
+**Local data does not come across.** With `storage.enabled: true`, the claims
+created from `volumeClaimTemplates` are named after the StatefulSet, so
+`data-tablet-server-0` becomes `data-<release>-fluss-tablet-server-0`.
+Kubernetes never deletes the old claims, so nothing is destroyed, but nothing
+is carried over either: the new pods start on fresh, empty volumes and the old
+claims sit unreferenced, still consuming storage.
+
+Every replica is replaced at once, so a replication factor of 3 does not help
+the way it does during a rolling restart. What survives is what has already
+been tiered to `remote.data.dir`.
+
+To have the new cluster inherit the existing metadata, pin the old ZooKeeper
+root path in the same upgrade:
 
 ```yaml
-releaseScopedResourceNames: true
+uniqueResourceNames: true
 configurationOverrides:
   zookeeper.path.root: /fluss
 ```
 
-Then delete the orphaned claims once the new pods are healthy:
+Without that pin, the new pods start against an empty `/fluss/<release>` and
+the old cluster's metadata is left behind.
+
+Once the new pods are healthy, remove the old claims. Both generations carry
+the same labels, so tell them apart by name: the old claims have no release
+prefix.
 
 ```bash
 kubectl get pvc -l app.kubernetes.io/name=fluss
-kubectl delete pvc data-coordinator-server-0 data-tablet-server-0
+kubectl delete pvc data-coordinator-server-0 \
+  data-tablet-server-0 data-tablet-server-1 data-tablet-server-2
 ```
 
-How much data the replacement costs depends on your replication factor and on
-what has been tiered to `remote.data.dir`, so rehearse the upgrade on a
+Adjust the list to your replica counts, and rehearse the whole upgrade on a
 non-production cluster first.
-
-Because the old and new names do not collide, the alternative is to install a
-second release next to the existing one with the option enabled, move data
-across at the Fluss level, and then uninstall the old release. That is the only
-path that keeps the old cluster serving throughout. Give the new release its
-own `remote.data.dir`.
 
 ### Rolling Updates
 

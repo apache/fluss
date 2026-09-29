@@ -135,8 +135,8 @@ imagePullSecrets:
 Component resource names.
 
 By default every resource uses a fixed name, so a namespace can hold only one
-Fluss release. Setting releaseScopedResourceNames=true prefixes every resource
-with "fluss.fullname", which lets several releases coexist in one namespace.
+Fluss release. Setting uniqueResourceNames=true prefixes every resource with
+"fluss.fullname", which lets several releases coexist in one namespace.
 
 Fixed names are the default so that an existing release keeps upgrading in
 place: renaming a StatefulSet makes Helm replace it and orphans its
@@ -147,8 +147,8 @@ been available for a release cycle.
 {{/*
 Name of the coordinator StatefulSet and PodDisruptionBudget.
 */}}
-{{- define "fluss.coordinator.fullname" -}}
-{{- if .Values.releaseScopedResourceNames -}}
+{{- define "fluss.coordinator.name" -}}
+{{- if .Values.uniqueResourceNames -}}
 {{- printf "%s-coordinator-server" (include "fluss.fullname" .) | trunc 63 | trimSuffix "-" -}}
 {{- else -}}
 {{- "coordinator-server" -}}
@@ -159,7 +159,7 @@ Name of the coordinator StatefulSet and PodDisruptionBudget.
 Name of the coordinator headless Service.
 */}}
 {{- define "fluss.coordinator.serviceName" -}}
-{{- if .Values.releaseScopedResourceNames -}}
+{{- if .Values.uniqueResourceNames -}}
 {{- printf "%s-coordinator-server-hs" (include "fluss.fullname" .) | trunc 63 | trimSuffix "-" -}}
 {{- else -}}
 {{- "coordinator-server-hs" -}}
@@ -170,7 +170,7 @@ Name of the coordinator headless Service.
 Name of the coordinator metrics headless Service.
 */}}
 {{- define "fluss.coordinator.metricsServiceName" -}}
-{{- if .Values.releaseScopedResourceNames -}}
+{{- if .Values.uniqueResourceNames -}}
 {{- printf "%s-coordinator-server-metrics-hs" (include "fluss.fullname" .) | trunc 63 | trimSuffix "-" -}}
 {{- else -}}
 {{- printf "%s-coordinator-server-metrics-hs" .Release.Name | trunc 63 | trimSuffix "-" -}}
@@ -180,8 +180,8 @@ Name of the coordinator metrics headless Service.
 {{/*
 Name of the tablet StatefulSet and PodDisruptionBudget.
 */}}
-{{- define "fluss.tablet.fullname" -}}
-{{- if .Values.releaseScopedResourceNames -}}
+{{- define "fluss.tablet.name" -}}
+{{- if .Values.uniqueResourceNames -}}
 {{- printf "%s-tablet-server" (include "fluss.fullname" .) | trunc 63 | trimSuffix "-" -}}
 {{- else -}}
 {{- "tablet-server" -}}
@@ -192,7 +192,7 @@ Name of the tablet StatefulSet and PodDisruptionBudget.
 Name of the tablet headless Service.
 */}}
 {{- define "fluss.tablet.serviceName" -}}
-{{- if .Values.releaseScopedResourceNames -}}
+{{- if .Values.uniqueResourceNames -}}
 {{- printf "%s-tablet-server-hs" (include "fluss.fullname" .) | trunc 63 | trimSuffix "-" -}}
 {{- else -}}
 {{- "tablet-server-hs" -}}
@@ -203,7 +203,7 @@ Name of the tablet headless Service.
 Name of the tablet metrics headless Service.
 */}}
 {{- define "fluss.tablet.metricsServiceName" -}}
-{{- if .Values.releaseScopedResourceNames -}}
+{{- if .Values.uniqueResourceNames -}}
 {{- printf "%s-tablet-server-metrics-hs" (include "fluss.fullname" .) | trunc 63 | trimSuffix "-" -}}
 {{- else -}}
 {{- printf "%s-tablet-server-metrics-hs" .Release.Name | trunc 63 | trimSuffix "-" -}}
@@ -214,7 +214,7 @@ Name of the tablet metrics headless Service.
 Name of the ConfigMap holding server.yaml.
 */}}
 {{- define "fluss.configMapName" -}}
-{{- if .Values.releaseScopedResourceNames -}}
+{{- if .Values.uniqueResourceNames -}}
 {{- printf "%s-conf-file" (include "fluss.fullname" .) | trunc 63 | trimSuffix "-" -}}
 {{- else -}}
 {{- "fluss-conf-file" -}}

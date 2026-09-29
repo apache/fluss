@@ -77,13 +77,13 @@ Usage:
 
 {{/*
 Validates that the generated resource names stay within the 63 character limit
-Kubernetes imposes on DNS labels. Only applies with releaseScopedResourceNames,
+Kubernetes imposes on DNS labels. Only applies with uniqueResourceNames,
 where the longest generated name adds 30 characters to the release prefix.
 Usage:
   include "fluss.names.validateError" .
 */}}
 {{- define "fluss.names.validateError" -}}
-{{- if .Values.releaseScopedResourceNames -}}
+{{- if .Values.uniqueResourceNames -}}
 {{- $prefix := include "fluss.fullname" . -}}
 {{- $longestSuffix := 30 -}}
 {{- $maxPrefix := sub 63 $longestSuffix -}}

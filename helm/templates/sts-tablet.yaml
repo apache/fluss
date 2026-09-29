@@ -19,7 +19,7 @@
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
-  name: {{ include "fluss.tablet.fullname" . }}
+  name: {{ include "fluss.tablet.name" . }}
   labels:
   {{- include "fluss.labels" . | nindent 4 }}
   {{- with .Values.tablet.annotations }}
