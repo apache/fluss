@@ -1658,6 +1658,58 @@ final class SenderTest {
     }
 
     @Test
+    void testLowerKvPressureWakesSenderWaitingOnPreviousDeadline() throws Exception {
+        TableBucket tableBucket = new TableBucket(DATA1_TABLE_ID_PK, 0);
+        CompletableFuture<Exception> first = appendDiskTestRecord(true, tableBucket, 1);
+        sender.runOnce();
+        CompletableFuture<Exception> second = appendDiskTestRecord(true, tableBucket, 2);
+        sender.runOnce();
+        CompletableFuture<Exception> queued = appendDiskTestRecord(true, tableBucket, 3);
+
+        // The first response installs a 2430 ms gate (3000 * 0.9^2) while another request remains
+        // in flight and the third batch waits in the accumulator.
+        finishRequest(tableBucket, 0, createPutKvResponse(tableBucket, 1L, 0.9f));
+        assertThat(first.get()).isNull();
+
+        CompletableFuture<Void> finished = new CompletableFuture<>();
+        Thread thread =
+                new Thread(
+                        () -> {
+                            try {
+                                sender.runOnce();
+                                finished.complete(null);
+                            } catch (Throwable t) {
+                                finished.completeExceptionally(t);
+                            }
+                        },
+                        "kv-pressure-wakeup-test");
+        thread.start();
+        try {
+            retry(
+                    Duration.ofSeconds(10),
+                    () -> assertThat(thread.getState()).isEqualTo(Thread.State.TIMED_WAITING));
+
+            // Latest-wins pressure shortens the KV gate to about 30 ms. The response must wake the
+            // sender from its old 2430 ms wait after completing the corresponding in-flight batch.
+            finishRequest(tableBucket, 0, createPutKvResponse(tableBucket, 2L, 0.1f));
+            assertThat(second.get()).isNull();
+            finished.get(1, TimeUnit.SECONDS);
+            assertThat(queued).isNotDone();
+
+            // One iteration consumes any remaining 30 ms gate; the next sends the queued batch.
+            sender.runOnce();
+            sender.runOnce();
+            assertThat(pendingRequestSize(tableBucket)).isOne();
+            finishRequest(tableBucket, 0, createPutKvResponse(tableBucket, 3L));
+            assertThat(queued.get()).isNull();
+        } finally {
+            sender.wakeup();
+            thread.join(10000);
+            accumulator.abortAllBatches(new RuntimeException("test cleanup"));
+        }
+    }
+
+    @Test
     void testPutKvStorageBackpressureResponseAppliesRetryBackoff() throws Exception {
         TableBucket tableBucket = new TableBucket(DATA1_TABLE_ID_PK, 0);
         CompletableFuture<Exception> future = new CompletableFuture<>();

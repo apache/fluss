@@ -1380,8 +1380,8 @@ public final class RecordAccumulator {
         return throttle.diskBackoffCount();
     }
 
-    void updateThrottle(TableBucket tableBucket, float pressure) {
-        throttle.updateKvPressure(tableBucket, pressure);
+    boolean updateThrottle(TableBucket tableBucket, float pressure) {
+        return throttle.updateKvPressure(tableBucket, pressure);
     }
 
     void maybeEvictStaleThrottles(Cluster cluster) {

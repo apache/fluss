@@ -632,6 +632,7 @@ public class Sender implements Runnable {
             long tableId,
             Map<WriteBatchKey, ReadyWriteBatch> writeBatchesByKey) {
         Set<PhysicalTablePath> invalidMetadataTablesSet = new HashSet<>();
+        boolean eligibilityAdvanced = false;
         for (PbPutKvRespForBucket respForBucket : putKvResponse.getBucketsRespsList()) {
             TableBucket tb =
                     new TableBucket(
@@ -641,7 +642,7 @@ public class Sender implements Runnable {
 
             // Update backpressure throttle from pressure signal
             if (respForBucket.hasPressure()) {
-                accumulator.updateThrottle(tb, respForBucket.getPressure());
+                eligibilityAdvanced |= accumulator.updateThrottle(tb, respForBucket.getPressure());
             }
 
             ReadyWriteBatch writeBatch =
@@ -667,6 +668,12 @@ public class Sender implements Runnable {
             }
         }
         metadataUpdater.invalidPhysicalTableBucketMeta(invalidMetadataTablesSet);
+        // A fresher latest-wins KV pressure signal may shorten the effective gate. Wake only after
+        // the whole response is applied so the sender observes completed batches and invalidated
+        // metadata together with the new deadline.
+        if (eligibilityAdvanced) {
+            wakeup();
+        }
     }
 
     private void handleWriteRequestException(Throwable t, List<ReadyWriteBatch> writeBatches) {

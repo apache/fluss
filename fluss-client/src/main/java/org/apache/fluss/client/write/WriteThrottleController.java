@@ -124,26 +124,37 @@ final class WriteThrottleController {
      *     values trigger a throttle window. {@code 1.0f} is reserved as the internal hard-rejection
      *     value (never sent by the server): the Sender passes it when the server rejected the write
      *     outright, and it installs the full {@link #maxThrottleMs} window directly.
+     * @return whether this update moved the effective eligibility time earlier, after accounting
+     *     for both the KV and disk gates
      */
-    void updateKvPressure(TableBucket tableBucket, float pressure) {
+    boolean updateKvPressure(TableBucket tableBucket, float pressure) {
+        long nowMs = clock.milliseconds();
+        long newKvRemainingMs = 0;
         if (pressure >= 1f) {
             // Hard rejection: stall the bucket for the full max throttle window, bypassing the
             // quadratic curve to avoid long-to-float rounding.
-            kvThrottleExpiryMs.put(tableBucket, clock.milliseconds() + maxThrottleMs);
-            return;
+            newKvRemainingMs = maxThrottleMs;
+        } else if (pressure > 0f) {
+            newKvRemainingMs = (long) (maxThrottleMs * pressure * pressure);
         }
-        if (pressure > 0f) {
-            long delay = (long) (maxThrottleMs * pressure * pressure);
-            if (delay > 0) {
-                kvThrottleExpiryMs.put(tableBucket, clock.milliseconds() + delay);
-                return;
-            }
+
+        Long previousExpiryMs;
+        if (newKvRemainingMs > 0) {
+            previousExpiryMs = kvThrottleExpiryMs.put(tableBucket, nowMs + newKvRemainingMs);
+        } else {
+            // Recovered or below the meaningful resolution: remove throttle.
+            // Note: in production, recovery relies on the last throttle window expiring naturally
+            // (server stops sending the pressure field once p reaches 0). This branch exists as
+            // defensive completeness and is exercised by unit tests.
+            previousExpiryMs = kvThrottleExpiryMs.remove(tableBucket);
         }
-        // Recovered or below the meaningful resolution: remove throttle.
-        // Note: in production, recovery relies on the last throttle window expiring naturally
-        // (server stops sending the pressure field once p reaches 0). This branch exists as
-        // defensive completeness and is exercised by unit tests.
-        kvThrottleExpiryMs.remove(tableBucket);
+
+        long previousKvRemainingMs =
+                previousExpiryMs == null ? 0 : Math.max(0, previousExpiryMs - nowMs);
+        long diskRemainingMs = diskRemainingMs(tableBucket);
+        long previousEffectiveRemainingMs = Math.max(previousKvRemainingMs, diskRemainingMs);
+        long newEffectiveRemainingMs = Math.max(newKvRemainingMs, diskRemainingMs);
+        return newEffectiveRemainingMs < previousEffectiveRemainingMs;
     }
 
     boolean isKvThrottled(TableBucket tableBucket) {

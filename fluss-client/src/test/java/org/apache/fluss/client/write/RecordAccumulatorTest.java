@@ -1089,11 +1089,15 @@ class RecordAccumulatorTest {
         ReadyWriteBatch batch = appendAndDrain(accum, 0);
         accum.backoffAfterDiskWriteLocked(batch);
         accum.reEnqueue(batch);
-        accum.updateThrottle(tb1, 1.0f); // KV default is three seconds.
+        // Installing a new gate cannot advance eligibility.
+        assertThat(accum.updateThrottle(tb1, 1.0f)).isFalse();
         assertThat(accum.ready(cluster).nextReadyCheckDelayMs).isEqualTo(3000);
-        accum.updateThrottle(tb1, 0.1f);
+        // Shortening KV from three seconds to 30 ms advances the effective gate to the one-second
+        // disk deadline.
+        assertThat(accum.updateThrottle(tb1, 0.1f)).isTrue();
         assertThat(accum.ready(cluster).nextReadyCheckDelayMs).isEqualTo(1000);
-        accum.updateThrottle(tb1, 0f);
+        // Clearing KV does not advance eligibility again while the disk gate still dominates.
+        assertThat(accum.updateThrottle(tb1, 0f)).isFalse();
         accum.beginFlush();
         accum.close();
         assertThat(accum.ready(cluster).readyNodes).isEmpty();
