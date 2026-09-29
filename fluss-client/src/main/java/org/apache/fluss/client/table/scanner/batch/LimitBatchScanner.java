@@ -58,6 +58,7 @@ import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /** A {@link BatchScanner} implementation that scans a limited number of records from a table. */
 public class LimitBatchScanner implements BatchScanner {
@@ -67,6 +68,7 @@ public class LimitBatchScanner implements BatchScanner {
     private final int limit;
     private final InternalRow.FieldGetter[] fieldGetters;
     private final CompletableFuture<LimitScanResponse> scanFuture;
+    private final AtomicBoolean responseReleased = new AtomicBoolean(false);
     private final SchemaGetter schemaGetter;
     private final KvFormat kvFormat;
     private final int targetSchemaId;
@@ -145,7 +147,6 @@ public class LimitBatchScanner implements BatchScanner {
             throw new IOException(e);
         }
 
-        ByteBuf parsedByteBuf = response.getParsedByteBuf();
         try {
             List<InternalRow> scanRows = parseLimitScanResponse(response);
             endOfInput = true;
@@ -153,9 +154,7 @@ public class LimitBatchScanner implements BatchScanner {
         } catch (Exception e) {
             throw new IOException(e);
         } finally {
-            if (parsedByteBuf != null) {
-                parsedByteBuf.release();
-            }
+            releaseResponse(response);
         }
     }
 
@@ -230,8 +229,18 @@ public class LimitBatchScanner implements BatchScanner {
 
     @Override
     public void close() throws IOException {
-        scanFuture.cancel(true);
+        endOfInput = true;
+        scanFuture.whenComplete((response, throwable) -> releaseResponse(response));
         // Release off-heap memory held by the chunked allocation manager factory.
         chunkedFactory.close();
+    }
+
+    private void releaseResponse(@Nullable LimitScanResponse response) {
+        if (response != null && responseReleased.compareAndSet(false, true)) {
+            ByteBuf parsedByteBuf = response.getParsedByteBuf();
+            if (parsedByteBuf != null) {
+                parsedByteBuf.release();
+            }
+        }
     }
 }
