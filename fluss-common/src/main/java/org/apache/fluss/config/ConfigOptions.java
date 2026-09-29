@@ -1493,6 +1493,25 @@ public class ConfigOptions {
                             "Setting a value greater than zero will cause the client to resend any record whose "
                                     + "send fails with a potentially transient error.");
 
+    public static final ConfigOption<Duration> CLIENT_WRITER_RETRY_BACKOFF =
+            key("client.writer.retry-backoff")
+                    .durationType()
+                    .defaultValue(Duration.ofMillis(100))
+                    .withDescription(
+                            "The initial delay before retrying a write that failed with a retriable error. "
+                                    + "The delay doubles with the batch retry count and uses 20% jitter, "
+                                    + "up to client.writer.retry-backoff-max. Set to 0 to disable this backoff.");
+
+    public static final ConfigOption<Duration> CLIENT_WRITER_RETRY_BACKOFF_MAX =
+            key("client.writer.retry-backoff-max")
+                    .durationType()
+                    .defaultValue(Duration.ofSeconds(1))
+                    .withDescription(
+                            "The maximum delay before retrying a write that failed with a retriable error. "
+                                    + "Must be between the initial backoff and 2147483647ms. "
+                                    + "The backoff applies per physical table bucket and is independent of "
+                                    + "KV backpressure and disk-write protection.");
+
     public static final ConfigOption<Duration> CLIENT_WRITER_DISK_WRITE_LOCKED_BACKOFF =
             key("client.writer.disk-write-locked.backoff")
                     .durationType()

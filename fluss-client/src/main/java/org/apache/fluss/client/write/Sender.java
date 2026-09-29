@@ -248,7 +248,7 @@ public class Sender implements Runnable {
         // Refresh per-bucket throttle entries against the current cluster snapshot,
         // dropping any whose bucket has disappeared from metadata.
         accumulator.maybeEvictStaleThrottles(clusterSnapshot);
-        accumulator.maybeEvictExpiredDiskWriteBackoffs();
+        accumulator.maybeEvictExpiredWriteBackoffs();
 
         // get the list of buckets with data ready to send.
         ReadyCheckResult readyCheckResult = accumulator.ready(clusterSnapshot);
@@ -810,19 +810,23 @@ public class Sender implements Runnable {
     }
 
     private void prepareWriteRetry(ReadyWriteBatch batch, ApiError error) {
+        long retryBackoffMs = accumulator.backoffAfterRetriableWrite(batch);
         if (error.error() == Errors.DISK_WRITE_LOCKED) {
-            long backoffMs = accumulator.backoffAfterDiskWriteLocked(batch);
+            long diskBackoffMs = accumulator.backoffAfterDiskWriteLocked(batch);
             LOG.warn(
-                    "Get error write response on table bucket {}, disk backoff {} ms "
-                            + "({} attempts left). Error: {}",
+                    "Get error write response on table bucket {}, disk backoff {} ms and "
+                            + "retry backoff {} ms ({} attempts left). Error: {}",
                     batch.tableBucket(),
-                    backoffMs,
+                    diskBackoffMs,
+                    retryBackoffMs,
                     retries - batch.writeBatch().attempts(),
                     error.formatErrMsg());
         } else {
             LOG.warn(
-                    "Get error write response on table bucket {}, retrying ({} attempts left). Error: {}",
+                    "Get error write response on table bucket {}, retrying after {} ms "
+                            + "({} attempts left). Error: {}",
                     batch.tableBucket(),
+                    retryBackoffMs,
                     retries - batch.writeBatch().attempts(),
                     error.formatErrMsg());
         }

@@ -32,15 +32,17 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
 /**
- * Unifies the write-throttling gates that can delay a bucket from being sent: KV backpressure and
- * disk-write backoff. Both gates are per-{@link TableBucket}.
+ * Unifies the write-throttling gates that can delay a bucket from being sent: KV backpressure,
+ * retriable-write backoff, and disk-write backoff. All gates are per-{@link TableBucket}.
  *
- * <p>The two reasons are stored and installed separately because their semantics genuinely differ:
+ * <p>The reasons are stored and installed separately because their semantics genuinely differ:
  *
  * <ul>
  *   <li><b>KV backpressure</b> uses wall-clock deadlines, is <i>latest-wins</i> (a fresher pressure
  *       signal may shorten or clear the window), and derives its delay quadratically from the
  *       pressure value.
+ *   <li><b>Retriable-write backoff</b> uses monotonic deadlines, is <i>never-shortened</i> under
+ *       concurrency, and applies an exponential delay to every retriable write failure.
  *   <li><b>Disk-write backoff</b> uses monotonic deadlines (immune to wall-clock shifts), is
  *       <i>never-shortened</i> under concurrency, and derives its delay from an exponential backoff
  *       keyed on the batch retry count.
@@ -60,13 +62,19 @@ final class WriteThrottleController {
     private final ConcurrentMap<TableBucket, Long> kvThrottleExpiryMs = new ConcurrentHashMap<>();
     private final long maxThrottleMs;
 
+    // General retry pacing is independent of policy-specific gates. It covers transient failures
+    // such as NOT_ENOUGH_REPLICAS and prevents a re-enqueued batch from being resent immediately.
+    private final ConcurrentMap<TableBucket, Long> retryBackoffDeadlineNanos =
+            new ConcurrentHashMap<>();
+    private final ExponentialBackoff retryBackoff;
+
     // Disk protection is independent of KV pressure, whose responses may shorten or clear a
     // throttle. Deadlines use monotonic time and are shared by all queues targeting a bucket.
     private final ConcurrentMap<TableBucket, Long> diskBackoffDeadlineNanos =
             new ConcurrentHashMap<>();
     private final ExponentialBackoff diskBackoff;
     // Only the sender thread performs periodic sweeps.
-    private long lastDiskSweepNanos;
+    private long lastBackoffSweepNanos;
 
     // Latest Cluster snapshot fed to the metadata-driven throttle sweep. Identity equality against
     // this reference short-circuits the sweep when metadata hasn't changed.
@@ -79,14 +87,16 @@ final class WriteThrottleController {
 
     WriteThrottleController(
             long maxThrottleMs,
+            ExponentialBackoff retryBackoff,
             ExponentialBackoff diskBackoff,
             Clock clock,
             AtomicBoolean resourcesDestroyed) {
         this.maxThrottleMs = maxThrottleMs;
+        this.retryBackoff = checkNotNull(retryBackoff);
         this.diskBackoff = checkNotNull(diskBackoff);
         this.clock = clock;
         this.resourcesDestroyed = resourcesDestroyed;
-        this.lastDiskSweepNanos = clock.nanoseconds();
+        this.lastBackoffSweepNanos = clock.nanoseconds();
     }
 
     // ------------------------------------------------------------------------
@@ -95,12 +105,14 @@ final class WriteThrottleController {
 
     /**
      * Remaining delay before the bucket may be sent, i.e. the latest deadline across all active
-     * gates. Both reasons express their remainder in milliseconds from now, so the maximum is well
+     * gates. All reasons express their remainder in milliseconds from now, so the maximum is well
      * defined even though they track different clocks internally. Expired entries are evicted
      * lazily as a side effect.
      */
     long remainingDelayMs(TableBucket tableBucket) {
-        return Math.max(kvRemainingMs(tableBucket), diskRemainingMs(tableBucket));
+        return Math.max(
+                kvRemainingMs(tableBucket),
+                Math.max(retryBackoffRemainingMs(tableBucket), diskRemainingMs(tableBucket)));
     }
 
     /** Whether any gate currently blocks the bucket from being sent. */
@@ -125,7 +137,7 @@ final class WriteThrottleController {
      *     value (never sent by the server): the Sender passes it when the server rejected the write
      *     outright, and it installs the full {@link #maxThrottleMs} window directly.
      * @return whether this update moved the effective eligibility time earlier, after accounting
-     *     for both the KV and disk gates
+     *     for the KV, retriable-write, and disk gates
      */
     boolean updateKvPressure(TableBucket tableBucket, float pressure) {
         long nowMs = clock.milliseconds();
@@ -151,9 +163,10 @@ final class WriteThrottleController {
 
         long previousKvRemainingMs =
                 previousExpiryMs == null ? 0 : Math.max(0, previousExpiryMs - nowMs);
-        long diskRemainingMs = diskRemainingMs(tableBucket);
-        long previousEffectiveRemainingMs = Math.max(previousKvRemainingMs, diskRemainingMs);
-        long newEffectiveRemainingMs = Math.max(newKvRemainingMs, diskRemainingMs);
+        long otherRemainingMs =
+                Math.max(retryBackoffRemainingMs(tableBucket), diskRemainingMs(tableBucket));
+        long previousEffectiveRemainingMs = Math.max(previousKvRemainingMs, otherRemainingMs);
+        long newEffectiveRemainingMs = Math.max(newKvRemainingMs, otherRemainingMs);
         return newEffectiveRemainingMs < previousEffectiveRemainingMs;
     }
 
@@ -195,6 +208,28 @@ final class WriteThrottleController {
     }
 
     // ------------------------------------------------------------------------
+    // General retriable-write backoff (monotonic nanos, never-shorten, exponential).
+    // ------------------------------------------------------------------------
+
+    /**
+     * Installs general retry backoff before the batch retry count is increased by re-enqueueing.
+     * Concurrent installs never shorten an existing deadline.
+     *
+     * @param tableBucket the bucket whose write failed with a retriable error
+     * @param attempts the batch retry count used to derive the exponential backoff
+     * @return the effective remaining backoff in milliseconds, or zero when disabled
+     */
+    long backoffAfterRetriableWrite(TableBucket tableBucket, int attempts) {
+        return installNeverShorterBackoff(
+                retryBackoffDeadlineNanos, tableBucket, retryBackoff.backoff(attempts));
+    }
+
+    /** Returns the remaining general retry backoff without changing its deadline. */
+    long retryBackoffRemainingMs(TableBucket tableBucket) {
+        return remainingBackoffMs(retryBackoffDeadlineNanos, tableBucket);
+    }
+
+    // ------------------------------------------------------------------------
     // Disk protection (monotonic nanos, never-shorten, exponential backoff).
     // ------------------------------------------------------------------------
 
@@ -207,14 +242,24 @@ final class WriteThrottleController {
      * @return the effective remaining backoff in milliseconds
      */
     long backoffAfterDiskWrite(TableBucket tableBucket, int attempts) {
-        if (resourcesDestroyed.get()) {
+        return installNeverShorterBackoff(
+                diskBackoffDeadlineNanos, tableBucket, Math.max(1L, diskBackoff.backoff(attempts)));
+    }
+
+    /** Returns the remaining disk backoff without changing its deadline. */
+    long diskRemainingMs(TableBucket tableBucket) {
+        return remainingBackoffMs(diskBackoffDeadlineNanos, tableBucket);
+    }
+
+    private long installNeverShorterBackoff(
+            ConcurrentMap<TableBucket, Long> deadlines, TableBucket tableBucket, long delayMs) {
+        if (delayMs <= 0 || resourcesDestroyed.get()) {
             return 0;
         }
         long now = clock.nanoseconds();
-        long delayNanos =
-                TimeUnit.MILLISECONDS.toNanos(Math.max(1L, diskBackoff.backoff(attempts)));
+        long delayNanos = TimeUnit.MILLISECONDS.toNanos(delayMs);
         Long deadline =
-                diskBackoffDeadlineNanos.compute(
+                deadlines.compute(
                         tableBucket,
                         (bucket, previous) ->
                                 previous != null && previous - now > delayNanos
@@ -222,15 +267,15 @@ final class WriteThrottleController {
                                         : now + delayNanos);
         // A late RPC callback must not retain state after final resource destruction.
         if (resourcesDestroyed.get()) {
-            diskBackoffDeadlineNanos.remove(tableBucket, deadline);
+            deadlines.remove(tableBucket, deadline);
             return 0;
         }
         return nanosToCeilMillis(deadline - now);
     }
 
-    /** Returns the remaining disk backoff without changing its deadline. */
-    long diskRemainingMs(TableBucket tableBucket) {
-        Long deadline = diskBackoffDeadlineNanos.get(tableBucket);
+    private long remainingBackoffMs(
+            ConcurrentMap<TableBucket, Long> deadlines, TableBucket tableBucket) {
+        Long deadline = deadlines.get(tableBucket);
         if (deadline == null) {
             return 0;
         }
@@ -238,31 +283,42 @@ final class WriteThrottleController {
         if (remainingNanos > 0) {
             return nanosToCeilMillis(remainingNanos);
         }
-        diskBackoffDeadlineNanos.remove(tableBucket, deadline);
+        deadlines.remove(tableBucket, deadline);
         return 0;
     }
 
-    /** Reclaims expired entries even when their queues no longer contain any batches. */
-    void maybeEvictExpiredDiskBackoffs() {
-        if (diskBackoffDeadlineNanos.isEmpty()) {
+    /** Reclaims expired backoff entries even when their queues no longer contain any batches. */
+    void maybeEvictExpiredBackoffs() {
+        if (retryBackoffDeadlineNanos.isEmpty() && diskBackoffDeadlineNanos.isEmpty()) {
             return;
         }
         long now = clock.nanoseconds();
-        if (now - lastDiskSweepNanos < TimeUnit.SECONDS.toNanos(1)) {
+        if (now - lastBackoffSweepNanos < TimeUnit.SECONDS.toNanos(1)) {
             return;
         }
-        lastDiskSweepNanos = now;
-        diskBackoffDeadlineNanos.forEach(
+        lastBackoffSweepNanos = now;
+        evictExpiredBackoffs(retryBackoffDeadlineNanos, now);
+        evictExpiredBackoffs(diskBackoffDeadlineNanos, now);
+    }
+
+    private static void evictExpiredBackoffs(ConcurrentMap<TableBucket, Long> deadlines, long now) {
+        deadlines.forEach(
                 (bucket, deadline) -> {
                     if (deadline - now <= 0) {
-                        diskBackoffDeadlineNanos.remove(bucket, deadline);
+                        deadlines.remove(bucket, deadline);
                     }
                 });
     }
 
-    /** Drops all disk-backoff state; mirrors the accumulator's resource destruction. */
-    void clearDiskBackoffs() {
+    /** Drops all backoff state; mirrors the accumulator's resource destruction. */
+    void clearBackoffs() {
+        retryBackoffDeadlineNanos.clear();
         diskBackoffDeadlineNanos.clear();
+    }
+
+    @VisibleForTesting
+    int retryBackoffCount() {
+        return retryBackoffDeadlineNanos.size();
     }
 
     @VisibleForTesting
