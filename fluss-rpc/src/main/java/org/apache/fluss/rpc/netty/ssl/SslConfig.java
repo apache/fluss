@@ -227,6 +227,28 @@ public final class SslConfig {
      * disabled (i.e. {@code client.security.ssl.enabled} is false).
      */
     public static Optional<SslConfig> fromClientConfig(Configuration conf) {
+        // Mirrors the server side: a client that authenticates with a certificate needs TLS to
+        // present it over, and a keystore to present it from. Both are checked before TLS is known
+        // to be enabled, so the combination that disables TLS outright is rejected too.
+        boolean mutualTls =
+                MUTUAL_TLS_AUTH_PROTOCOL.equalsIgnoreCase(
+                        conf.getString(ConfigOptions.CLIENT_SECURITY_PROTOCOL));
+        if (mutualTls && !conf.get(ConfigOptions.CLIENT_SSL_ENABLED)) {
+            throw new IllegalConfigurationException(
+                    "'%s' is '%s', which requires TLS transport, but '%s' is false.",
+                    ConfigOptions.CLIENT_SECURITY_PROTOCOL.key(),
+                    MUTUAL_TLS_AUTH_PROTOCOL,
+                    ConfigOptions.CLIENT_SSL_ENABLED.key());
+        }
+        if (mutualTls && conf.getString(ConfigOptions.CLIENT_SSL_KEYSTORE_PATH) == null) {
+            throw new IllegalConfigurationException(
+                    "'%s' is '%s', but '%s' is not configured, so the client has no certificate "
+                            + "to present to the server.",
+                    ConfigOptions.CLIENT_SECURITY_PROTOCOL.key(),
+                    MUTUAL_TLS_AUTH_PROTOCOL,
+                    ConfigOptions.CLIENT_SSL_KEYSTORE_PATH.key());
+        }
+
         if (!conf.get(ConfigOptions.CLIENT_SSL_ENABLED)) {
             return Optional.empty();
         }

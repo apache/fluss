@@ -551,6 +551,40 @@ class SslContextFactoryTest {
     }
 
     @Test
+    void testClientMutualTlsRequiresTlsEnabled() {
+        Configuration conf = new Configuration();
+        conf.setString(ConfigOptions.CLIENT_SECURITY_PROTOCOL.key(), "mTLS");
+        conf.setString(ConfigOptions.CLIENT_SSL_KEYSTORE_PATH.key(), keyStore.toString());
+
+        assertThatThrownBy(() -> SslConfig.fromClientConfig(conf))
+                .isInstanceOf(IllegalConfigurationException.class)
+                .hasMessageContaining(ConfigOptions.CLIENT_SECURITY_PROTOCOL.key())
+                .hasMessageContaining(ConfigOptions.CLIENT_SSL_ENABLED.key());
+    }
+
+    @Test
+    void testClientMutualTlsRequiresKeystore() {
+        Configuration conf = new Configuration();
+        // trusts the server and speaks TLS, but has no certificate of its own to present.
+        TestSslUtils.setClientSslConfig(conf, trustStore, null);
+        conf.setString(ConfigOptions.CLIENT_SECURITY_PROTOCOL.key(), "mTLS");
+
+        assertThatThrownBy(() -> SslConfig.fromClientConfig(conf))
+                .isInstanceOf(IllegalConfigurationException.class)
+                .hasMessageContaining(ConfigOptions.CLIENT_SSL_KEYSTORE_PATH.key());
+    }
+
+    @Test
+    void testClientMutualTlsWithTlsAndKeystoreIsAccepted() {
+        Configuration conf = new Configuration();
+        TestSslUtils.setClientSslConfig(conf, trustStore, keyStore);
+        conf.setString(ConfigOptions.CLIENT_SECURITY_PROTOCOL.key(), "MTLS");
+
+        // protocol names are compared ignoring case, as AuthenticationFactory compares them.
+        assertThat(SslConfig.fromClientConfig(conf)).isPresent();
+    }
+
+    @Test
     void testClientConfigRejectsUnsupportedTruststoreType() {
         Configuration conf = new Configuration();
         TestSslUtils.setClientSslConfig(conf, trustStore, null);
