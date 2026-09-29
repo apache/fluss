@@ -79,6 +79,10 @@ public final class SslConfig {
      */
     private static final String MUTUAL_TLS_AUTH_PROTOCOL = "mTLS";
 
+    /** The endpoint identification algorithms the JDK implements for TLS. */
+    private static final List<String> ENDPOINT_IDENTIFICATION_ALGORITHMS =
+            Arrays.asList("https", "ldaps");
+
     /** Server-only: the listener names for which TLS is enabled (empty for a client config). */
     private final List<String> enabledListeners;
 
@@ -262,6 +266,10 @@ public final class SslConfig {
                 cipherSuites,
                 ConfigOptions.CLIENT_SSL_CIPHER_SUITES);
 
+        String endpointIdentificationAlgorithm =
+                conf.getString(ConfigOptions.CLIENT_SSL_ENDPOINT_IDENTIFICATION_ALGORITHM);
+        validateEndpointIdentificationAlgorithm(endpointIdentificationAlgorithm);
+
         String keystorePath = conf.getString(ConfigOptions.CLIENT_SSL_KEYSTORE_PATH);
         String keystoreType = conf.getString(ConfigOptions.CLIENT_SSL_KEYSTORE_TYPE);
         String truststorePath = conf.getString(ConfigOptions.CLIENT_SSL_TRUSTSTORE_PATH);
@@ -282,8 +290,7 @@ public final class SslConfig {
                         truststorePath,
                         conf.getString(ConfigOptions.CLIENT_SSL_TRUSTSTORE_PASSWORD),
                         truststoreType,
-                        conf.getString(
-                                ConfigOptions.CLIENT_SSL_ENDPOINT_IDENTIFICATION_ALGORITHM)));
+                        endpointIdentificationAlgorithm));
     }
 
     /**
@@ -328,6 +335,30 @@ public final class SslConfig {
                     cipherSuitesOption.key(),
                     unsupportedCipherSuites,
                     Arrays.asList(probe.getSupportedCipherSuites()));
+        }
+    }
+
+    /**
+     * Reject an endpoint identification algorithm the JDK does not implement. An unknown name is
+     * accepted by {@code SSLParameters} and only rejected once a handshake runs, as "Unknown
+     * identification algorithm", i.e. on every connection. An empty value is valid and disables
+     * hostname verification.
+     */
+    private static void validateEndpointIdentificationAlgorithm(@Nullable String algorithm) {
+        if (algorithm == null || algorithm.trim().isEmpty()) {
+            return;
+        }
+        boolean known =
+                ENDPOINT_IDENTIFICATION_ALGORITHMS.stream()
+                        .anyMatch(supported -> supported.equalsIgnoreCase(algorithm));
+        if (!known) {
+            throw new IllegalConfigurationException(
+                    "'%s' is set to '%s', which the JDK does not implement, so every handshake "
+                            + "would fail. Supported: %s, or empty to disable hostname "
+                            + "verification.",
+                    ConfigOptions.CLIENT_SSL_ENDPOINT_IDENTIFICATION_ALGORITHM.key(),
+                    algorithm,
+                    ENDPOINT_IDENTIFICATION_ALGORITHMS);
         }
     }
 

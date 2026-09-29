@@ -609,6 +609,33 @@ class SslContextFactoryTest {
     }
 
     @Test
+    void testClientConfigRejectsUnknownEndpointIdentificationAlgorithm() {
+        Configuration conf = new Configuration();
+        TestSslUtils.setClientSslConfig(conf, trustStore, null);
+        conf.setString(ConfigOptions.CLIENT_SSL_ENDPOINT_IDENTIFICATION_ALGORITHM.key(), "htps");
+
+        // the JDK accepts the name and then fails every handshake with
+        // "Unknown identification algorithm: htps".
+        assertThatThrownBy(() -> SslConfig.fromClientConfig(conf))
+                .isInstanceOf(IllegalConfigurationException.class)
+                .hasMessageContaining(
+                        ConfigOptions.CLIENT_SSL_ENDPOINT_IDENTIFICATION_ALGORITHM.key())
+                .hasMessageContaining("htps");
+    }
+
+    @Test
+    void testClientConfigAcceptsKnownEndpointIdentificationAlgorithms() {
+        for (String algorithm : new String[] {"https", "HTTPS", "ldaps", ""}) {
+            Configuration conf = new Configuration();
+            TestSslUtils.setClientSslConfig(conf, trustStore, null);
+            conf.setString(
+                    ConfigOptions.CLIENT_SSL_ENDPOINT_IDENTIFICATION_ALGORITHM.key(), algorithm);
+
+            assertThat(SslConfig.fromClientConfig(conf)).isPresent();
+        }
+    }
+
+    @Test
     void testClientConfigRejectsUnsupportedTruststoreType() {
         Configuration conf = new Configuration();
         TestSslUtils.setClientSslConfig(conf, trustStore, null);
