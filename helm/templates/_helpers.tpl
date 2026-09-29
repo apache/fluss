@@ -134,14 +134,9 @@ imagePullSecrets:
 {{/*
 Component resource names.
 
-By default every resource uses a fixed name, so a namespace can hold only one
-Fluss release. Setting uniqueResourceNames=true prefixes every resource with
-"fluss.fullname", which lets several releases coexist in one namespace.
-
-Fixed names are the default so that an existing release keeps upgrading in
-place: renaming a StatefulSet makes Helm replace it and orphans its
-PersistentVolumeClaims. The default is expected to flip once the option has
-been available for a release cycle.
+Fixed by default, prefixed with "fluss.fullname" when uniqueResourceNames is
+set. The default is expected to flip once the option has been available for a
+release cycle.
 */}}
 
 {{/*
