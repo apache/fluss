@@ -220,6 +220,23 @@ The logging-related environment options (`env.log.dir`, `env.log.level`, `env.lo
 | kv.scanner.max-per-server                         | Integer    | 200                           | The maximum total number of concurrent KV scanner sessions allowed across all buckets on a single tablet server. New scan requests that exceed this limit will be rejected with an error. The default value is 200.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 | kv.scanner.max-batch-size                         | MemorySize | 10mb                          | Server-side cap on the per-batch payload size for KV full-scan responses. The effective batch size is min(client-requested batch_size_bytes, this value). Protects the tablet server from out-of-memory if a client passes an excessively large batch size. The default value is 10mb.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 
+## Client writer retry backoff
+
+| Key | Default | Type | Description |
+| :--- | :--- | :--- | :--- |
+| `client.writer.retry-backoff` | `100 ms` | Duration | The initial delay before retrying a write that failed with a retriable error. The delay doubles with the batch retry count and uses 20% jitter. Set to `0` to disable this backoff. |
+| `client.writer.retry-backoff-max` | `1 s` | Duration | The maximum retry delay. Must be between the initial backoff and `2147483647ms`. |
+
+The retry backoff applies per physical table bucket to both Log and KV writes. It covers transient
+failures such as `NOT_ENOUGH_REPLICAS_EXCEPTION`, preventing a re-enqueued batch from being resent
+on every sender cycle while the TabletServer is still rejecting writes. Other buckets remain
+eligible for normal scheduling.
+
+The backoff is installed before the failed batch is re-enqueued. It uses the batch retry count for
+exponential growth, preserves the longest active deadline when several failures race for the same
+bucket, and remains subject to `client.writer.retries`. Setting `client.writer.retry-backoff` to `0`
+restores immediate retry behavior.
+
 ## Client disk write protection backoff
 
 | Key | Default | Type | Description |
@@ -239,12 +256,13 @@ and `2147483647ms`. The backoff doubles with the existing batch retry count, wit
 and a cap at the maximum. Setting the two values equal selects a fixed delay without jitter.
 Actual delays are always at least `1ms`.
 
-Disk backoff is independent of `client.writer.kv-backpressure.max-throttle`; when both apply,
-the writer waits for the longer remaining duration. A successful in-flight write or a KV
-pressure value of zero does not clear an active disk wait. Writes retry automatically after
-the wait, subject to `client.writer.retries`. Flush and graceful close respect the wait;
-the existing close timeout still applies. After disk protection is lifted, the next retry
-can take up to the remaining backoff window, plus normal scheduling and RPC time.
+Disk backoff is independent of `client.writer.retry-backoff` and
+`client.writer.kv-backpressure.max-throttle`; when several gates apply, the writer waits for the
+longest remaining duration. A successful in-flight write or a KV pressure value of zero does not
+clear an active disk wait. Writes retry automatically after the wait, subject to
+`client.writer.retries`. Flush and graceful close respect the wait; the existing close timeout
+still applies. After disk protection is lifted, the next retry can take up to the remaining
+backoff window, plus normal scheduling and RPC time.
 
 This behavior requires upgrading the Java client or the connector that bundles it.
 It uses the existing server error code and requires no server protocol upgrade.
