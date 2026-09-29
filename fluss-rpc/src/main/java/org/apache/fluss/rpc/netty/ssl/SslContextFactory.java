@@ -40,7 +40,9 @@ import java.nio.file.NoSuchFileException;
 import java.nio.file.Paths;
 import java.security.GeneralSecurityException;
 import java.security.KeyStore;
+import java.security.KeyStoreException;
 import java.security.UnrecoverableKeyException;
+import java.util.Enumeration;
 import java.util.Optional;
 
 /**
@@ -185,6 +187,7 @@ public final class SslContextFactory {
             @Nullable String storePassword,
             @Nullable String keyPassword) {
         KeyStore keyStore = loadKeyStore(store, path, type, storePassword);
+        checkHoldsPrivateKey(store, keyStore, path);
         try {
             KeyManagerFactory kmf =
                     KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm());
@@ -220,6 +223,33 @@ public final class SslContextFactory {
                             store.what, path),
                     e);
         }
+    }
+
+    /**
+     * Reject a keystore that carries no private key, which a truststore pointed at by mistake does.
+     * Such a store loads and builds a context without complaint, and then fails every handshake
+     * with "No available authentication scheme" - on the server side only, so the client sees a
+     * dropped connection with no cause at all.
+     */
+    private static void checkHoldsPrivateKey(Store store, KeyStore keyStore, String path) {
+        try {
+            Enumeration<String> aliases = keyStore.aliases();
+            while (aliases.hasMoreElements()) {
+                if (keyStore.isKeyEntry(aliases.nextElement())) {
+                    return;
+                }
+            }
+        } catch (KeyStoreException e) {
+            throw new FlussRuntimeException(
+                    String.format("Failed to read the %s at '%s'.", store.what, path), e);
+        }
+        throw new FlussRuntimeException(
+                String.format(
+                        "The %s at '%s', configured by '%s', holds no private key, only trusted "
+                                + "certificates. A truststore is the usual thing to find there by "
+                                + "mistake. Every TLS handshake would fail with \"No available "
+                                + "authentication scheme\".",
+                        store.what, path, store.pathKey));
     }
 
     /**

@@ -469,6 +469,30 @@ class SslContextFactoryTest {
     }
 
     @Test
+    void testKeystoreWithoutPrivateKeyIsRejected() {
+        Configuration conf = new Configuration();
+        // the truststore holds a trusted certificate and no key, a plausible copy-paste mistake.
+        TestSslUtils.setServerSslConfig(conf, trustStore, null);
+
+        assertThatThrownBy(() -> SslContextFactory.createServerSslContext(conf))
+                .isInstanceOf(FlussRuntimeException.class)
+                .hasMessageContaining("no private key")
+                .hasMessageContaining(trustStore.toString())
+                .hasMessageContaining(ConfigOptions.SERVER_SSL_KEYSTORE_PATH.key());
+    }
+
+    @Test
+    void testClientKeystoreWithoutPrivateKeyIsRejected() {
+        Configuration conf = new Configuration();
+        TestSslUtils.setClientSslConfig(conf, trustStore, trustStore);
+
+        assertThatThrownBy(() -> SslContextFactory.createClientSslContext(conf))
+                .isInstanceOf(FlussRuntimeException.class)
+                .hasMessageContaining("no private key")
+                .hasMessageContaining(ConfigOptions.CLIENT_SSL_KEYSTORE_PATH.key());
+    }
+
+    @Test
     void testWrongKeystorePasswordNamesThePasswordOption() {
         Configuration conf = new Configuration();
         TestSslUtils.setServerSslConfig(conf, keyStore, null);
