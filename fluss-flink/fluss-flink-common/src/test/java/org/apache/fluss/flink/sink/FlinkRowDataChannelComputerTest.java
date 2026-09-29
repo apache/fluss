@@ -44,6 +44,19 @@ class FlinkRowDataChannelComputerTest {
     }
 
     @Test
+    void testSelectChannelIsAlwaysNonNegative() {
+        int numChannels = 7;
+        String minimumHashPartition = "polygenelubricants";
+        assertThat(minimumHashPartition.hashCode()).isEqualTo(Integer.MIN_VALUE);
+
+        assertThat(ChannelComputer.select(minimumHashPartition, 0, numChannels))
+                .isBetween(0, numChannels - 1);
+        assertThat(ChannelComputer.select(-1, numChannels)).isEqualTo(numChannels - 1);
+        assertThat(ChannelComputer.select(Long.MIN_VALUE, numChannels))
+                .isBetween(0, numChannels - 1);
+    }
+
+    @Test
     void testSelectChanel() {
 
         FlinkRowDataChannelComputer<RowData> channelComputer =
