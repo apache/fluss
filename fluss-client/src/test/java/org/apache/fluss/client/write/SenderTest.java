@@ -1753,8 +1753,9 @@ final class SenderTest {
         // The batch is re-enqueued for retry rather than completed with an exception.
         assertThat(future.isDone()).isFalse();
 
-        // Unlike STORAGE_BACKPRESSURE_EXCEPTION, no throttle is installed, so the retried batch
-        // is sent out again immediately and completes once the server recovers.
+        // Generic retry backoff is disabled by this test fixture. Unlike
+        // STORAGE_BACKPRESSURE_EXCEPTION, no policy-specific gate is installed, so the retried
+        // batch is sent again immediately and completes once the server recovers.
         sender.runOnce();
         assertThat(sender.numOfInFlightBatches(tableBucket)).isEqualTo(1);
         finishRequest(tableBucket, 0, createPutKvResponse(tableBucket, 1L));
@@ -2316,6 +2317,39 @@ final class SenderTest {
 
     @ParameterizedTest
     @ValueSource(booleans = {false, true})
+    void testNotEnoughReplicasUsesRetriableWriteBackoff(boolean idempotent) throws Exception {
+        sender.destroyResources();
+        ManualClock manualClock = new ManualClock();
+        clock = manualClock;
+        IdempotenceManager manager = createIdempotenceManager(idempotent);
+        manager.setWriterId(42L);
+        sender = setupWithIdempotenceState(manager, Integer.MAX_VALUE, 0, Duration.ofMillis(100));
+        CompletableFuture<Exception> result = appendDiskTestRecord(false, tb1, 1);
+        sender.runOnce();
+
+        finishRequest(tb1, 0, createProduceLogResponse(tb1, Errors.NOT_ENOUGH_REPLICAS_EXCEPTION));
+
+        assertThat(result).isNotDone();
+        assertThat(accumulator.retriableWriteBackoffRemainingMs(tb1)).isEqualTo(100);
+        assertThat(writerMetricGroup.recordsRetryTotal().getCount()).isOne();
+
+        // Consume the response wakeup. The re-enqueued batch remains blocked by the retry gate.
+        sender.runOnce();
+        assertThat(pendingRequestSize(tb1)).isZero();
+        manualClock.advanceTime(Duration.ofMillis(99));
+        sender.wakeup();
+        sender.runOnce();
+        assertThat(pendingRequestSize(tb1)).isZero();
+
+        manualClock.advanceTime(Duration.ofMillis(1));
+        sender.runOnce();
+        assertThat(pendingRequestSize(tb1)).isOne();
+        finishRequest(tb1, 0, createProduceLogResponse(tb1, 0L, 1L));
+        assertThat(result.get()).isNull();
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
     void testDiskWriteLockedFailsWhenRetryIsNotAllowed(boolean writerIdChanged) throws Exception {
         sender.destroyResources();
         clock = new ManualClock();
@@ -2518,11 +2552,21 @@ final class SenderTest {
 
     private Sender setupWithIdempotenceState(
             IdempotenceManager idempotenceManager, int reties, int batchTimeoutMs) {
+        return setupWithIdempotenceState(idempotenceManager, reties, batchTimeoutMs, Duration.ZERO);
+    }
+
+    private Sender setupWithIdempotenceState(
+            IdempotenceManager idempotenceManager,
+            int reties,
+            int batchTimeoutMs,
+            Duration retryBackoff) {
         Configuration conf = new Configuration();
         conf.set(ConfigOptions.CLIENT_WRITER_BUFFER_MEMORY_SIZE, new MemorySize(TOTAL_MEMORY_SIZE));
         conf.set(ConfigOptions.CLIENT_WRITER_BATCH_SIZE, new MemorySize(BATCH_SIZE));
         conf.set(ConfigOptions.CLIENT_WRITER_BUFFER_PAGE_SIZE, new MemorySize(PAGE_SIZE));
         conf.set(ConfigOptions.CLIENT_WRITER_BATCH_TIMEOUT, Duration.ofMillis(batchTimeoutMs));
+        conf.set(ConfigOptions.CLIENT_WRITER_RETRY_BACKOFF, retryBackoff);
+        conf.set(ConfigOptions.CLIENT_WRITER_RETRY_BACKOFF_MAX, retryBackoff);
         bucketAssigner = new TestingBucketAssigner();
         accumulator =
                 new RecordAccumulator(

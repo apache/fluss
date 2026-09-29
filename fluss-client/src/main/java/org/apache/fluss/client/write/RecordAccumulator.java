@@ -137,12 +137,11 @@ public final class RecordAccumulator {
     private final Clock clock;
     private final DynamicWriteBatchSizeEstimator batchSizeEstimator;
 
-    // Unifies the per-bucket write-throttling gates (KV backpressure and disk-write backoff):
-    // both paths that decide sendability, ready() and drain(), consult it for the effective
-    // remaining delay so no single gate can be dropped.
+    // Unifies the per-bucket write-throttling gates (KV backpressure, general retry backoff, and
+    // disk-write backoff): both paths that decide sendability, ready() and drain(), consult it for
+    // the effective remaining delay so no single gate can be dropped.
     private final WriteThrottleController throttle;
 
-    // TODO add retryBackoffMs to retry the produce request upon receiving an error.
     // TODO add deliveryTimeoutMs to report success or failure on record delivery.
     // TODO add nextBatchExpiryTimeMs
 
@@ -156,6 +155,7 @@ public final class RecordAccumulator {
                 idempotenceManager,
                 writerMetricGroup,
                 clock,
+                createRetriableWriteBackoff(conf),
                 createDiskWriteBackoff(conf),
                 BucketAssignerFactory.defaultFactory(conf));
     }
@@ -172,6 +172,7 @@ public final class RecordAccumulator {
                 idempotenceManager,
                 writerMetricGroup,
                 clock,
+                createRetriableWriteBackoff(conf),
                 diskWriteBackoff,
                 BucketAssignerFactory.defaultFactory(conf));
     }
@@ -188,6 +189,7 @@ public final class RecordAccumulator {
                 idempotenceManager,
                 writerMetricGroup,
                 clock,
+                createRetriableWriteBackoff(conf),
                 createDiskWriteBackoff(conf),
                 bucketAssignerFactory);
     }
@@ -198,6 +200,25 @@ public final class RecordAccumulator {
             IdempotenceManager idempotenceManager,
             WriterMetricGroup writerMetricGroup,
             Clock clock,
+            ExponentialBackoff diskWriteBackoff,
+            BucketAssignerFactory bucketAssignerFactory) {
+        this(
+                conf,
+                idempotenceManager,
+                writerMetricGroup,
+                clock,
+                createRetriableWriteBackoff(conf),
+                diskWriteBackoff,
+                bucketAssignerFactory);
+    }
+
+    @VisibleForTesting
+    RecordAccumulator(
+            Configuration conf,
+            IdempotenceManager idempotenceManager,
+            WriterMetricGroup writerMetricGroup,
+            Clock clock,
+            ExponentialBackoff retryBackoff,
             ExponentialBackoff diskWriteBackoff,
             BucketAssignerFactory bucketAssignerFactory) {
         this.bucketAssignerFactory = checkNotNull(bucketAssignerFactory);
@@ -228,10 +249,25 @@ public final class RecordAccumulator {
                 new WriteThrottleController(
                         conf.get(ConfigOptions.CLIENT_WRITER_KV_BACKPRESSURE_MAX_THROTTLE)
                                 .toMillis(),
+                        checkNotNull(retryBackoff),
                         checkNotNull(diskWriteBackoff),
                         clock,
                         resourcesDestroyed);
         registerMetrics(writerMetricGroup);
+    }
+
+    private static ExponentialBackoff createRetriableWriteBackoff(Configuration conf) {
+        Duration initial = conf.get(ConfigOptions.CLIENT_WRITER_RETRY_BACKOFF);
+        Duration maximum = conf.get(ConfigOptions.CLIENT_WRITER_RETRY_BACKOFF_MAX);
+        checkArgument(
+                !initial.isNegative()
+                        && initial.compareTo(maximum) <= 0
+                        && maximum.compareTo(Duration.ofMillis(Integer.MAX_VALUE)) <= 0,
+                "%s and %s must satisfy 0ms <= initial <= maximum <= %sms.",
+                ConfigOptions.CLIENT_WRITER_RETRY_BACKOFF.key(),
+                ConfigOptions.CLIENT_WRITER_RETRY_BACKOFF_MAX.key(),
+                Integer.MAX_VALUE);
+        return new ExponentialBackoff(initial.toMillis(), 2, maximum.toMillis(), 0.2);
     }
 
     private static ExponentialBackoff createDiskWriteBackoff(Configuration conf) {
@@ -831,10 +867,10 @@ public final class RecordAccumulator {
                 continue;
             }
 
-            // A bucket blocked by any throttle gate (KV backpressure and/or disk-write backoff)
-            // cannot become ready until every gate clears, so wake no earlier than the latest of
-            // them. remainingDelayMs() already folds the reasons into a single per-bucket deadline
-            // via max(); across buckets we keep the earliest wake-up via min().
+            // A bucket blocked by any throttle gate cannot become ready until every gate clears,
+            // so wake no earlier than the latest of them. remainingDelayMs() already folds the
+            // reasons into a single per-bucket deadline via max(); across buckets we keep the
+            // earliest wake-up via min().
             long gateMs = throttle.remainingDelayMs(tableBucket);
             if (gateMs > 0) {
                 nextReadyCheckDelayMs = Math.min(nextReadyCheckDelayMs, gateMs);
@@ -1360,6 +1396,19 @@ public final class RecordAccumulator {
         return throttle.isKvThrottled(tableBucket);
     }
 
+    /**
+     * Installs general retry backoff before the batch retry count is increased by re-enqueueing.
+     */
+    long backoffAfterRetriableWrite(ReadyWriteBatch batch) {
+        return throttle.backoffAfterRetriableWrite(
+                batch.tableBucket(), batch.writeBatch().attempts());
+    }
+
+    /** Returns the remaining general retry backoff without changing its deadline. */
+    long retriableWriteBackoffRemainingMs(TableBucket tableBucket) {
+        return throttle.retryBackoffRemainingMs(tableBucket);
+    }
+
     /** Installs disk backoff before the batch retry count is increased by re-enqueueing. */
     long backoffAfterDiskWriteLocked(ReadyWriteBatch batch) {
         return throttle.backoffAfterDiskWrite(batch.tableBucket(), batch.writeBatch().attempts());
@@ -1370,9 +1419,14 @@ public final class RecordAccumulator {
         return throttle.diskRemainingMs(tableBucket);
     }
 
-    /** Reclaims expired entries even when their queues no longer contain any batches. */
-    void maybeEvictExpiredDiskWriteBackoffs() {
-        throttle.maybeEvictExpiredDiskBackoffs();
+    /** Reclaims expired backoff entries even when their queues no longer contain any batches. */
+    void maybeEvictExpiredWriteBackoffs() {
+        throttle.maybeEvictExpiredBackoffs();
+    }
+
+    @VisibleForTesting
+    int retriableWriteBackoffCount() {
+        return throttle.retryBackoffCount();
     }
 
     @VisibleForTesting
@@ -1609,7 +1663,7 @@ public final class RecordAccumulator {
             bufferAllocator.close();
             chunkedFactory.close();
         }
-        throttle.clearDiskBackoffs();
+        throttle.clearBackoffs();
     }
 
     /** Per table bucket and write batches. */
