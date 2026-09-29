@@ -324,24 +324,53 @@ public class DefaultAuthorizer extends AbstractAuthorizer implements FatalErrorH
 
     @Override
     public Collection<AclBinding> listAcls(Session session, AclBindingFilter aclBindingFilter) {
+        Map<Resource, VersionedAcls> aclCacheSnapshot = getAclCacheSnapshot();
+        Set<AclBinding> aclBindings = new HashSet<>();
+
+        aclCacheSnapshot.forEach(
+                (resource, aclSet) -> {
+                    if (isAuthorized(session, OperationType.DESCRIBE, resource, aclCacheSnapshot)) {
+                        aclSet.acls.forEach(
+                                acl -> {
+                                    AclBinding aclBinding = new AclBinding(resource, acl);
+                                    if (aclBindingFilter.matches(aclBinding)) {
+                                        aclBindings.add(aclBinding);
+                                    }
+                                });
+                    }
+                });
+
+        return aclBindings;
+    }
+
+    private Map<Resource, VersionedAcls> getAclCacheSnapshot() {
         synchronized (aclCacheLock) {
-            Set<AclBinding> aclBindings = new HashSet<>();
-
+            Map<Resource, VersionedAcls> snapshot = new TreeMap<>(new ResourceOrdering());
             aclCache.forEach(
-                    (resource, aclSet) -> {
-                        if (isAuthorized(session, OperationType.DESCRIBE, resource)) {
-                            aclSet.acls.forEach(
-                                    acl -> {
-                                        AclBinding aclBinding = new AclBinding(resource, acl);
-                                        if (aclBindingFilter.matches(aclBinding)) {
-                                            aclBindings.add(aclBinding);
-                                        }
-                                    });
-                        }
-                    });
-
-            return aclBindings;
+                    (resource, versionedAcls) ->
+                            snapshot.put(
+                                    resource,
+                                    new VersionedAcls(
+                                            versionedAcls.zkVersion,
+                                            new HashSet<>(versionedAcls.acls))));
+            return snapshot;
         }
+    }
+
+    private boolean isAuthorized(
+            Session session,
+            OperationType operationType,
+            Resource resource,
+            Map<Resource, VersionedAcls> aclCacheSnapshot) {
+        FlussPrincipal principal = session.getPrincipal();
+        return session.isInternal()
+                || isSuperUser(principal)
+                || aclsAllowAccess(
+                        resource,
+                        principal,
+                        operationType,
+                        session.getInetAddress().getHostAddress(),
+                        matchingAcls(resource, aclCacheSnapshot));
     }
 
     private void loadCache() throws Exception {
@@ -496,7 +525,15 @@ public class DefaultAuthorizer extends AbstractAuthorizer implements FatalErrorH
     @VisibleForTesting
     public boolean aclsAllowAccess(
             Resource resource, FlussPrincipal principal, OperationType operation, String host) {
-        Set<AccessControlEntry> accessControlEntries = matchingAcls(resource);
+        return aclsAllowAccess(resource, principal, operation, host, matchingAcls(resource));
+    }
+
+    private boolean aclsAllowAccess(
+            Resource resource,
+            FlussPrincipal principal,
+            OperationType operation,
+            String host,
+            Set<AccessControlEntry> accessControlEntries) {
         return isEmptyAclAndAuthorized(resource, accessControlEntries)
                 || allowAclExists(resource, principal, operation, host, accessControlEntries);
     }
@@ -568,28 +605,32 @@ public class DefaultAuthorizer extends AbstractAuthorizer implements FatalErrorH
 
     private Set<AccessControlEntry> matchingAcls(Resource resource) {
         synchronized (aclCacheLock) {
-            Set<AccessControlEntry> wildcard =
-                    Optional.ofNullable(
-                                    aclCache.get(
-                                            new Resource(
-                                                    resource.getType(),
-                                                    Resource.WILDCARD_RESOURCE)))
-                            .map(versionedAcls -> versionedAcls.acls)
-                            .orElse(Collections.emptySet());
-
-            Set<Resource> allowResources =
-                    RESOURCE_MAPPING
-                            .getOrDefault(resource.getType(), r -> Collections.emptySet())
-                            .apply(resource);
-
-            Set<AccessControlEntry> literal = new HashSet<>();
-            for (Resource allowResource : allowResources) {
-                Optional.ofNullable(aclCache.get(allowResource))
-                        .map(versionedAcls -> versionedAcls.acls)
-                        .ifPresent(literal::addAll);
-            }
-            return Stream.of(wildcard, literal).flatMap(Set::stream).collect(Collectors.toSet());
+            return matchingAcls(resource, aclCache);
         }
+    }
+
+    private Set<AccessControlEntry> matchingAcls(
+            Resource resource, Map<Resource, VersionedAcls> cache) {
+        Set<AccessControlEntry> wildcard =
+                Optional.ofNullable(
+                                cache.get(
+                                        new Resource(
+                                                resource.getType(), Resource.WILDCARD_RESOURCE)))
+                        .map(versionedAcls -> versionedAcls.acls)
+                        .orElse(Collections.emptySet());
+
+        Set<Resource> allowResources =
+                RESOURCE_MAPPING
+                        .getOrDefault(resource.getType(), r -> Collections.emptySet())
+                        .apply(resource);
+
+        Set<AccessControlEntry> literal = new HashSet<>();
+        for (Resource allowResource : allowResources) {
+            Optional.ofNullable(cache.get(allowResource))
+                    .map(versionedAcls -> versionedAcls.acls)
+                    .ifPresent(literal::addAll);
+        }
+        return Stream.of(wildcard, literal).flatMap(Set::stream).collect(Collectors.toSet());
     }
 
     @Override

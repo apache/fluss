@@ -43,7 +43,6 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 
-import java.lang.reflect.Field;
 import java.net.InetAddress;
 import java.time.Duration;
 import java.util.ArrayList;
@@ -59,7 +58,6 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Collectors;
 
 import static org.apache.fluss.record.TestData.DEFAULT_REMOTE_DATA_DIR;
@@ -533,57 +531,59 @@ public class DefaultAuthorizerTest {
     }
 
     @Test
-    void testAclCacheReadsUseCacheLock() throws Exception {
+    void testListAclsDoesNotBlockCacheUpdatesOrAuthorization() throws Exception {
         Resource resource = Resource.database("foo-" + UUID.randomUUID());
         FlussPrincipal principal = new FlussPrincipal("user1", "User");
-        AccessControlEntry acl =
+        AccessControlEntry originalAcl =
                 new AccessControlEntry(principal, "host-1", READ, PermissionType.ALLOW);
-        addAcls(authorizer, resource, Collections.singleton(acl));
+        AccessControlEntry addedAcl =
+                new AccessControlEntry(
+                        new FlussPrincipal("user2", "User"), "host-2", WRITE, PermissionType.ALLOW);
+        addAcls(authorizer, resource, Collections.singleton(originalAcl));
 
-        Field lockField = DefaultAuthorizer.class.getDeclaredField("aclCacheLock");
-        lockField.setAccessible(true);
-        Object cacheLock = lockField.get(authorizer);
+        CountDownLatch filterEntered = new CountDownLatch(1);
+        CountDownLatch continueListing = new CountDownLatch(1);
+        AclBindingFilter blockingFilter =
+                new AclBindingFilter(ResourceFilter.ANY, AccessControlEntryFilter.ANY) {
+                    @Override
+                    public boolean matches(AclBinding binding) {
+                        filterEntered.countDown();
+                        try {
+                            if (!continueListing.await(10, TimeUnit.SECONDS)) {
+                                throw new AssertionError(
+                                        "Timed out waiting to continue ACL listing");
+                            }
+                        } catch (InterruptedException e) {
+                            Thread.currentThread().interrupt();
+                            throw new AssertionError("Interrupted while listing ACLs", e);
+                        }
+                        return true;
+                    }
+                };
 
-        ExecutorService executor = Executors.newFixedThreadPool(2);
+        ExecutorService executor = Executors.newFixedThreadPool(3);
         try {
-            CountDownLatch readersStarted = new CountDownLatch(2);
-            AtomicReference<Thread> authorizationThread = new AtomicReference<>();
-            AtomicReference<Thread> listThread = new AtomicReference<>();
-            Future<Boolean> authorizationFuture;
-            Future<Collection<AclBinding>> listFuture;
+            Future<Collection<AclBinding>> listFuture =
+                    executor.submit(
+                            () -> authorizer.listAcls(createRootUserSession(), blockingFilter));
+            assertThat(filterEntered.await(10, TimeUnit.SECONDS)).isTrue();
 
-            synchronized (cacheLock) {
-                authorizationFuture =
-                        executor.submit(
-                                () -> {
-                                    authorizationThread.set(Thread.currentThread());
-                                    readersStarted.countDown();
-                                    return authorizer.aclsAllowAccess(
-                                            resource, principal, READ, "host-1");
-                                });
-                listFuture =
-                        executor.submit(
-                                () -> {
-                                    listThread.set(Thread.currentThread());
-                                    readersStarted.countDown();
-                                    return authorizer.listAcls(
-                                            createRootUserSession(), AclBindingFilter.ANY);
-                                });
+            Future<?> updateFuture =
+                    executor.submit(
+                            () -> addAcls(authorizer, resource, Collections.singleton(addedAcl)));
+            Future<Boolean> authorizationFuture =
+                    executor.submit(
+                            () -> authorizer.aclsAllowAccess(resource, principal, READ, "host-1"));
 
-                assertThat(readersStarted.await(10, TimeUnit.SECONDS)).isTrue();
-                retry(
-                        Duration.ofSeconds(10),
-                        () -> {
-                            assertThat(authorizationThread.get().getState())
-                                    .isEqualTo(Thread.State.BLOCKED);
-                            assertThat(listThread.get().getState()).isEqualTo(Thread.State.BLOCKED);
-                        });
-            }
-
+            updateFuture.get(10, TimeUnit.SECONDS);
             assertThat(authorizationFuture.get(10, TimeUnit.SECONDS)).isTrue();
+            continueListing.countDown();
             assertThat(listFuture.get(10, TimeUnit.SECONDS))
-                    .contains(new AclBinding(resource, acl));
+                    .containsExactly(new AclBinding(resource, originalAcl));
+            assertThat(listAcls(authorizer, resource))
+                    .containsExactlyInAnyOrder(originalAcl, addedAcl);
         } finally {
+            continueListing.countDown();
             executor.shutdownNow();
         }
     }
