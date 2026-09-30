@@ -897,25 +897,24 @@ so `data-tablet-server-0` becomes `data-<release>-fluss-tablet-server-0`. Left
 alone, the new pods start on fresh empty volumes and the old claims are
 orphaned.
 
-The volumes themselves can be carried over, and the chart plays no part in it.
-Helm creates the StatefulSet; the claims are created by the StatefulSet
-controller from `volumeClaimTemplates`, and only when they are missing — it
-looks each one up by name first and skips any that already exists. So a claim
-you create yourself under the new name, already bound to the old volume, is
-what the new pod mounts. There is no chart value for this, and none is needed:
-the claims just have to exist before the upgrade runs.
+The volumes can be carried over, and the chart plays no part in it. Helm
+creates the StatefulSet; the claims are created by the StatefulSet controller
+from `volumeClaimTemplates`, and only when they are missing. So the job is to
+make sure each new claim binds to the volume its predecessor used, which you do
+from the volume rather than the claim: setting a PersistentVolume's `claimRef`
+[reserves it](https://kubernetes.io/docs/concepts/storage/persistent-volumes/#reserving-a-persistentvolume)
+for one claim, including a claim that does not exist yet. The new StatefulSet
+then creates its claims as usual and each one binds to the volume waiting for
+it.
+
+Keep the ordinals aligned as you go: a tablet server takes its id from its pod
+ordinal, so `data-tablet-server-0` must end up on
+`data-<release>-fluss-tablet-server-0` and not on some other ordinal.
 
 Back up or snapshot the volumes before you start. Then:
 
-1. Delete the old StatefulSets. This stops the pods and leaves the claims and
-   volumes in place.
-
-   ```bash
-   kubectl delete statefulset coordinator-server tablet-server
-   ```
-
-2. List the claims with the volumes behind them, and make each volume survive
-   its claim being deleted:
+1. Make each volume survive its claim being deleted, and note which volume
+   backs which claim:
 
    ```bash
    kubectl get pvc -l app.kubernetes.io/name=fluss \
@@ -924,40 +923,45 @@ Back up or snapshot the volumes before you start. Then:
    kubectl patch pv <volume> -p '{"spec":{"persistentVolumeReclaimPolicy":"Retain"}}'
    ```
 
-3. Delete the old claims, then clear each volume's `claimRef` to return it to
-   `Available`:
+2. Delete the old StatefulSets. This stops the pods and leaves the claims and
+   volumes in place.
+
+   ```bash
+   kubectl delete statefulset coordinator-server tablet-server
+   ```
+
+3. Delete the old claims. Each volume becomes `Released`.
 
    ```bash
    kubectl delete pvc data-coordinator-server-0 \
      data-tablet-server-0 data-tablet-server-1 data-tablet-server-2
-
-   kubectl patch pv <volume> -p '{"spec":{"claimRef":null}}'
    ```
 
-4. Apply one claim per new name yourself, bound to its volume with
-   `volumeName`. Match the storage class, access modes, and size of
-   `volumeClaimTemplates` — binding requires the storage class to agree with
-   the volume's.
+4. Point each volume at the claim the new StatefulSet will create. Replace the
+   whole `claimRef` rather than merging into it, so the old claim's `uid` does
+   not survive — the volume is only treated as reserved when the reference
+   carries no `uid`. It returns to `Available` once patched.
 
-   ```yaml
-   apiVersion: v1
-   kind: PersistentVolumeClaim
-   metadata:
-     name: data-<release>-fluss-tablet-server-0
-   spec:
-     volumeName: <volume>
-     storageClassName: <tablet.storage.storageClass>
-     accessModes: ["ReadWriteOnce"]
-     resources:
-       requests:
-         storage: <tablet.storage.size>
+   ```bash
+   kubectl patch pv <volume> --type json -p '[{
+     "op": "replace",
+     "path": "/spec/claimRef",
+     "value": {
+       "namespace": "<namespace>",
+       "name": "data-<release>-fluss-tablet-server-0"
+     }
+   }]'
    ```
 
-5. Run the upgrade. The new StatefulSets find the claims already present and
-   skip creating their own, so the pods come up on the original volumes.
+5. Run the upgrade. The new StatefulSets create their claims, each binds to the
+   volume reserved for it, and the pods come up on the original disks.
 
 Restore each volume's original reclaim policy afterwards if it was not
 `Retain`.
+
+Nothing here leaves you owning extra objects: the claims are still created and
+labelled by the StatefulSet controller, and `volumeClaimTemplates` is immutable
+once a StatefulSet exists, so no later upgrade revisits them.
 
 With `storage.enabled: false`, the default, the pods use `emptyDir` and there
 is nothing to preserve: run the upgrade and let them come back empty. One
