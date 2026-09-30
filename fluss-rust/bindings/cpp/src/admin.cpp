@@ -28,9 +28,7 @@
 namespace fluss {
 
 static PartitionInfo to_partition_info(const ffi::FfiPartitionInfo& pi) {
-    return PartitionInfo{
-        pi.partition_id, std::string(pi.partition_name),
-        pi.bucket_count > 0 ? std::optional<int32_t>(pi.bucket_count) : std::nullopt};
+    return PartitionInfo{pi.partition_id, std::string(pi.partition_name), pi.bucket_count};
 }
 
 Admin::Admin() noexcept = default;

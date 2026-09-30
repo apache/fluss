@@ -229,10 +229,7 @@ impl FlussConnection {
                 .list_partition_infos(&table_info.table_path)
                 .await?
                 .into_iter()
-                .filter(|info| {
-                    info.get_bucket_count()
-                        .is_some_and(|count| count != table_info.num_buckets)
-                })
+                .filter(|info| info.get_bucket_count() != table_info.num_buckets)
                 .map(|info| (info.get_partition_id(), info.get_partition_name()))
                 .collect();
             let uncached: Vec<Arc<PhysicalTablePath>> = rescaled

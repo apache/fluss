@@ -19,7 +19,7 @@ use super::{LookupQueue, QueuedLookup};
 use crate::client::lookup::lookup_query::LookupQuery;
 use crate::client::metadata::Metadata;
 use crate::error::{Error, FlussError, Result};
-use crate::metadata::{TableBucket, TablePath};
+use crate::metadata::{PhysicalTablePath, TableBucket, TablePath};
 use crate::proto::{LookupResponse, PrefixLookupResponse};
 use crate::rpc::message::{
     BucketLookupKeys, LookupRequest, PrefixLookupRequest, ReadType, RequestBody, WriteType,
@@ -575,6 +575,9 @@ impl LookupSender {
 
             if let Some(api_error) = bucket_error(bucket_resp.error_code, bucket_resp.error_message)
             {
+                if FlussError::for_code(api_error.code).invalidates_metadata() {
+                    self.invalidate_bucket_metadata(&table_bucket);
+                }
                 let is_retriable = api_error.is_retriable();
                 self.handle_batch_error(&Error::FlussAPIError { api_error }, is_retriable, batch);
                 continue;
@@ -584,6 +587,27 @@ impl LookupSender {
         }
 
         self.fail_unprocessed_batches(&processed, batches, destination, P::OP_NAME);
+    }
+
+    /// Drops the cached leaders of `table_bucket`'s table or partition, so the next lookup
+    /// for it waits for a metadata refresh.
+    fn invalidate_bucket_metadata(&self, table_bucket: &TableBucket) {
+        let cluster = self.metadata.get_cluster();
+        let Some(table_path) = cluster.get_table_path_by_id(table_bucket.table_id()) else {
+            return;
+        };
+        let table_path = Arc::new(table_path.clone());
+        let physical_table_path = match table_bucket.partition_id() {
+            Some(partition_id) => match cluster.get_partition_name(partition_id) {
+                Some(partition_name) => {
+                    PhysicalTablePath::of_partitioned(table_path, Some(partition_name.clone()))
+                }
+                None => return,
+            },
+            None => PhysicalTablePath::of(table_path),
+        };
+        self.metadata
+            .invalidate_physical_table_meta(&HashSet::from([physical_table_path]));
     }
 
     fn fail_unprocessed_batches<T>(
@@ -745,7 +769,7 @@ mod tests {
         LookupSender::new(metadata, queue, re_enqueue_tx, 1, max_retries, shutdown_rx)
     }
 
-    fn fail_with_bucket_error(max_retries: i32, error_code: i32) -> Error {
+    fn fail_with_bucket_error(sender: &LookupSender, error_code: i32) -> Error {
         let table_bucket = TableBucket::new(TABLE_ID, 0);
         let (result_tx, mut result_rx) = oneshot::channel();
         let mut batch = LookupBatch::new(table_bucket.clone());
@@ -764,12 +788,7 @@ mod tests {
                 ..Default::default()
             }],
         };
-        sender(max_retries).handle_response::<Primary>(
-            TABLE_ID,
-            1,
-            response,
-            std::slice::from_mut(&mut batch),
-        );
+        sender.handle_response::<Primary>(TABLE_ID, 1, response, std::slice::from_mut(&mut batch));
         result_rx
             .try_recv()
             .expect("lookup completed")
@@ -778,14 +797,37 @@ mod tests {
 
     #[test]
     fn a_bucket_error_fails_its_lookups_with_the_api_error() {
-        let error = fail_with_bucket_error(3, FlussError::InvalidBucketRouting.code());
+        let error = fail_with_bucket_error(&sender(3), FlussError::InvalidBucketRouting.code());
         assert_eq!(error.api_error(), Some(FlussError::InvalidBucketRouting));
         assert!(error.to_string().contains("from the server"), "{error}");
     }
 
     #[test]
     fn a_retriable_bucket_error_keeps_its_code_once_retries_run_out() {
-        let error = fail_with_bucket_error(0, FlussError::NotLeaderOrFollower.code());
+        let error = fail_with_bucket_error(&sender(0), FlussError::NotLeaderOrFollower.code());
         assert_eq!(error.api_error(), Some(FlussError::NotLeaderOrFollower));
+    }
+
+    #[test]
+    fn a_routing_error_drops_the_cached_leaders() {
+        let sender = sender(3);
+        let table_bucket = TableBucket::new(TABLE_ID, 0);
+        assert!(
+            sender
+                .metadata
+                .get_cluster()
+                .leader_for(&table_bucket)
+                .is_some()
+        );
+
+        fail_with_bucket_error(&sender, FlussError::InvalidBucketRouting.code());
+
+        assert!(
+            sender
+                .metadata
+                .get_cluster()
+                .leader_for(&table_bucket)
+                .is_none()
+        );
     }
 }

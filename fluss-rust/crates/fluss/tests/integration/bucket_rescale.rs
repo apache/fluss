@@ -25,11 +25,11 @@ mod bucket_rescale_test {
         wait_for_partitions_ready,
     };
     use fluss::PartitionId;
-    use fluss::client::{FlussAdmin, FlussTable};
-    use fluss::error::FlussError;
+    use fluss::client::{BoundedLogReadRange, FlussAdmin, FlussTable, RecordBatchLogReader};
+    use fluss::error::{Error, FlussError};
     use fluss::metadata::{
-        AlterConfig, AlterConfigOpType, AlterTableChanges, DataTypes, PartitionInfo, PartitionSpec,
-        Schema, TableBucket, TableDescriptor, TablePath,
+        AlterConfig, AlterConfigOpType, AlterTableChanges, BucketStatsRequest, DataTypes,
+        PartitionInfo, PartitionSpec, Schema, TableBucket, TableDescriptor, TablePath,
     };
     use fluss::row::{DataGetters, GenericRow};
     use fluss::rpc::message::OffsetSpec;
@@ -145,12 +145,7 @@ mod bucket_rescale_test {
     fn bucket_count_by_name(partition_infos: &[PartitionInfo]) -> HashMap<String, i32> {
         partition_infos
             .iter()
-            .map(|p| {
-                (
-                    p.get_partition_name(),
-                    p.get_bucket_count().expect("bucket count"),
-                )
-            })
+            .map(|p| (p.get_partition_name(), p.get_bucket_count()))
             .collect()
     }
 
@@ -169,7 +164,7 @@ mod bucket_rescale_test {
     ) -> Vec<(PartitionId, i32, i32, String)> {
         let scanner = table.new_scan().create_log_scanner().expect("log scanner");
         for info in partition_infos {
-            for bucket in 0..info.get_bucket_count().expect("bucket count") {
+            for bucket in 0..info.get_bucket_count() {
                 scanner
                     .subscribe_partition(info.get_partition_id(), bucket, 0)
                     .await
@@ -369,6 +364,29 @@ mod bucket_rescale_test {
                 "limit scan of partition {partition}"
             );
         }
+
+        let buckets = partition_infos
+            .iter()
+            .flat_map(|info| {
+                (0..info.get_bucket_count())
+                    .map(|bucket| BucketStatsRequest::new(Some(info.get_partition_id()), bucket))
+            })
+            .collect();
+        let stats = admin
+            .get_table_stats(table_id, buckets, vec![])
+            .await
+            .expect("table stats");
+        for bucket in &stats.buckets {
+            assert_eq!(bucket.error, None, "stats of {bucket:?}");
+        }
+        assert_eq!(
+            stats
+                .buckets
+                .iter()
+                .map(|bucket| bucket.row_count.unwrap_or(0))
+                .sum::<i64>(),
+            PARTITIONS.len() as i64 * RECORDS_PER_PARTITION as i64
+        );
 
         admin.drop_table(&table_path, false).await.expect("drop");
     }
@@ -577,6 +595,140 @@ mod bucket_rescale_test {
                 .num_buckets,
             OLD_BUCKET_NUM
         );
+
+        admin.drop_table(&table_path, false).await.expect("drop");
+    }
+
+    /// A handle opened before the change reads every bucket of a partition created after it.
+    #[tokio::test]
+    async fn limit_scan_through_a_stale_handle_checks_the_partition_bucket_count() {
+        let cluster = get_shared_cluster();
+        let admin_connection = cluster.get_fluss_connection().await;
+        let admin = admin_connection.get_admin().expect("admin");
+        let table_path = TablePath::new("fluss", "test_rescale_stale_limit_scan");
+        create_partitioned_table(&admin, &table_path, pk_schema(&["a", "c"]), &[]).await;
+
+        let stale_connection = cluster.get_fluss_connection().await;
+        let stale_table = stale_connection
+            .get_table(&table_path)
+            .await
+            .expect("table");
+        alter_bucket_num(&admin, &table_path, NEW_BUCKET_NUM).await;
+        create_partition(&admin, &table_path, "later").await;
+        wait_for_partitions_ready(&admin, &table_path, &["later"]).await;
+
+        let table = admin_connection
+            .get_table(&table_path)
+            .await
+            .expect("table");
+        let writer = table
+            .new_upsert()
+            .expect("upsert")
+            .create_writer()
+            .expect("writer");
+        for a in 0..RECORDS_PER_PARTITION {
+            writer.upsert(&row(a, "v", "later")).expect("upsert");
+        }
+        writer.flush().await.expect("flush");
+
+        let table_id = stale_table.get_table_info().table_id;
+        let partition_id = partition_id(
+            &admin
+                .list_partition_infos(&table_path)
+                .await
+                .expect("partitions"),
+            "later",
+        );
+        let limit_scan = |bucket| {
+            stale_table
+                .new_scan()
+                .limit(RECORDS_PER_PARTITION)
+                .expect("limit")
+                .create_bucket_batch_scanner(TableBucket::new_with_partition(
+                    table_id,
+                    Some(partition_id),
+                    bucket,
+                ))
+                .expect("batch scanner")
+        };
+
+        // The stale connection has not cached the partition yet, so the scan checks the range
+        // once it fetches the partition's metadata.
+        let error = limit_scan(NEW_BUCKET_NUM)
+            .collect_all_batches()
+            .await
+            .expect_err("bucket outside the partition");
+        assert!(
+            matches!(&error, Error::IllegalArgument { message } if message.contains("out of range")),
+            "{error}"
+        );
+
+        let mut rows = 0;
+        for bucket in 0..NEW_BUCKET_NUM {
+            let batches = limit_scan(bucket)
+                .collect_all_batches()
+                .await
+                .expect("limit scan");
+            rows += batches.iter().map(|b| b.batch().num_rows()).sum::<usize>();
+        }
+        assert_eq!(rows, RECORDS_PER_PARTITION as usize);
+
+        admin.drop_table(&table_path, false).await.expect("drop");
+    }
+
+    #[tokio::test]
+    async fn bounded_reader_checks_the_partition_bucket_count() {
+        let cluster = get_shared_cluster();
+        let admin_connection = cluster.get_fluss_connection().await;
+        let admin = admin_connection.get_admin().expect("admin");
+        let table_path = TablePath::new("fluss", "test_rescale_bounded_reader");
+        create_partitioned_table(&admin, &table_path, log_schema(), &[]).await;
+
+        let stale_connection = cluster.get_fluss_connection().await;
+        let stale_table = stale_connection
+            .get_table(&table_path)
+            .await
+            .expect("table");
+        alter_bucket_num(&admin, &table_path, NEW_BUCKET_NUM).await;
+        create_partition(&admin, &table_path, "later").await;
+        wait_for_partitions_ready(&admin, &table_path, &["later"]).await;
+
+        let table_id = stale_table.get_table_info().table_id;
+        let partition_id = partition_id(
+            &admin
+                .list_partition_infos(&table_path)
+                .await
+                .expect("partitions"),
+            "later",
+        );
+        let range = |bucket| BoundedLogReadRange {
+            bucket: TableBucket::new_with_partition(table_id, Some(partition_id), bucket),
+            starting_offset: 0,
+            stopping_offset: 0,
+        };
+
+        let stale_scanner = stale_table
+            .new_scan()
+            .create_record_batch_log_scanner()
+            .expect("scanner");
+        RecordBatchLogReader::new_from_ranges(stale_scanner, vec![range(NEW_BUCKET_NUM - 1)])
+            .await
+            .expect("a valid bucket of the later partition");
+
+        let fresh_connection = cluster.get_fluss_connection().await;
+        let fresh_scanner = fresh_connection
+            .get_table(&table_path)
+            .await
+            .expect("table")
+            .new_scan()
+            .create_record_batch_log_scanner()
+            .expect("scanner");
+        let error =
+            RecordBatchLogReader::new_from_ranges(fresh_scanner, vec![range(NEW_BUCKET_NUM)])
+                .await
+                .err()
+                .expect("bucket outside the partition");
+        assert!(matches!(error, Error::IllegalArgument { .. }), "{error}");
 
         admin.drop_table(&table_path, false).await.expect("drop");
     }

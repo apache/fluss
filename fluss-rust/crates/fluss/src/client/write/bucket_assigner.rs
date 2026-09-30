@@ -91,6 +91,13 @@ impl StickyBucketAssigner {
                     .compare_exchange(old_bucket, new_bucket, Ordering::Relaxed, Ordering::Relaxed)
                     .ok();
             }
+            // Another producer may have stored a bucket chosen for a larger count.
+            let current = self.current_bucket_id.load(Ordering::Relaxed);
+            return if (0..bucket_count).contains(&current) {
+                current
+            } else {
+                new_bucket
+            };
         }
         self.current_bucket_id.load(Ordering::Relaxed)
     }
@@ -353,5 +360,36 @@ mod tests {
             assert!((0..4).contains(&bucket));
             sticky.on_new_batch(&cluster, 4, bucket);
         }
+    }
+
+    #[test]
+    fn sticky_assigner_stays_within_the_count_while_another_producer_uses_a_larger_one() {
+        let table_path = TablePath::new("db".to_string(), "tbl".to_string());
+        let cluster = Arc::new(build_cluster(&table_path, 1, 8));
+        let sticky = Arc::new(StickyBucketAssigner::new(Arc::new(PhysicalTablePath::of(
+            Arc::new(table_path),
+        ))));
+        let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let provisional = {
+            let (cluster, sticky, stop) =
+                (Arc::clone(&cluster), Arc::clone(&sticky), Arc::clone(&stop));
+            std::thread::spawn(move || {
+                while !stop.load(Ordering::Relaxed) {
+                    let bucket = sticky.assign_bucket(None, &cluster, 8).expect("bucket");
+                    sticky.on_new_batch(&cluster, 8, bucket);
+                }
+            })
+        };
+        let mut out_of_range = 0;
+        for _ in 0..200_000 {
+            let bucket = sticky.assign_bucket(None, &cluster, 2).expect("bucket");
+            if !(0..2).contains(&bucket) {
+                out_of_range += 1;
+            }
+            sticky.on_new_batch(&cluster, 2, bucket);
+        }
+        stop.store(true, Ordering::Relaxed);
+        provisional.join().expect("provisional producer");
+        assert_eq!(out_of_range, 0);
     }
 }

@@ -265,6 +265,9 @@ impl RecordBatchLogReader {
         // public subscription check that intentionally rejects active readers.
         let activation = ReaderActivationGuard::acquire(&scanner)?;
 
+        scanner
+            .cache_bucket_counts(ranges.iter().map(|range| &range.bucket))
+            .await?;
         validate_read_ranges(
             scanner.table_id(),
             scanner.is_partitioned(),
@@ -339,6 +342,7 @@ impl RecordBatchLogReader {
             });
         }
 
+        scanner.cache_bucket_counts(buckets).await?;
         validate_read_buckets(
             scanner.table_id(),
             scanner.is_partitioned(),

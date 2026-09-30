@@ -542,7 +542,7 @@ impl FlussAdmin {
 pub struct PartitionInfo {
     partition_id: i64,
     partition_name: String,
-    bucket_count: Option<i32>,
+    bucket_count: i32,
 }
 
 #[pymethods]
@@ -559,19 +559,16 @@ impl PartitionInfo {
         &self.partition_name
     }
 
-    /// Get the partition's bucket count, or `None` from a server older than 1.0.
+    /// Get the partition's bucket count
     #[getter]
-    fn bucket_count(&self) -> Option<i32> {
+    fn bucket_count(&self) -> i32 {
         self.bucket_count
     }
 
     fn __repr__(&self) -> String {
         format!(
             "PartitionInfo(partition_id={}, partition_name='{}', bucket_count={})",
-            self.partition_id,
-            self.partition_name,
-            self.bucket_count
-                .map_or_else(|| "None".to_string(), |count| count.to_string())
+            self.partition_id, self.partition_name, self.bucket_count
         )
     }
 }

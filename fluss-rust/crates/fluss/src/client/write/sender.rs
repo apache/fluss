@@ -787,7 +787,9 @@ impl Sender {
         // OutOfOrderSequence (not already committed) / UnknownWriterId cases and
         // reset all writer state internally (matching Java).
         // For other errors, only adjust sequences if the batch didn't exhaust its retries.
-        let can_adjust = ready_write_batch.write_batch.attempts() < self.retries;
+        // A batch rejected for its routing was never written, so its sequence is always reclaimed.
+        let can_adjust = error == FlussError::InvalidBucketRouting
+            || ready_write_batch.write_batch.attempts() < self.retries;
         self.fail_batch(
             ready_write_batch,
             broadcast::Error::WriteFailed {
@@ -2043,6 +2045,54 @@ mod tests {
             Err(broadcast::Error::WriteFailed { code, .. })
                 if code == FlussError::UnknownWriterIdException.code()
         ));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn invalid_bucket_routing_reclaims_the_batch_sequence() -> Result<()> {
+        let table_path = Arc::new(TablePath::new("db".to_string(), "tbl".to_string()));
+        let cluster = build_cluster_arc(table_path.as_ref(), 1, 1);
+        let metadata = Arc::new(Metadata::new_for_test(cluster.clone()));
+        let idempotence = enabled_idempotence();
+        let accumulator = Arc::new(RecordAccumulator::new(
+            Config::default(),
+            Arc::clone(&idempotence),
+        ));
+        idempotence.set_writer_id(42);
+        // retries=0, so no other error would give the sequence back.
+        let sender = Sender::new(
+            metadata,
+            accumulator.clone(),
+            1024 * 1024,
+            1000,
+            -1,
+            0,
+            100,
+            1000,
+            Arc::clone(&idempotence),
+            Arc::new(crate::metrics::WriterMetrics::new()),
+        );
+
+        let (batch, handle) = build_ready_batch(
+            accumulator.as_ref(),
+            cluster.clone(),
+            Arc::clone(&table_path),
+        )?;
+        assert_eq!(batch.write_batch.batch_sequence(), 0);
+
+        sender.handle_write_batch_error(
+            batch,
+            FlussError::InvalidBucketRouting,
+            "invalid routing".to_string(),
+            &mut Vec::new(),
+        )?;
+        assert!(handle.wait().await?.is_err());
+        assert!(idempotence.has_writer_id());
+
+        // The next batch reuses the sequence, leaving no hole the server would reject.
+        accumulator.ready(&cluster)?;
+        let (next, _) = build_ready_batch(accumulator.as_ref(), cluster, table_path)?;
+        assert_eq!(next.write_batch.batch_sequence(), 0);
         Ok(())
     }
 

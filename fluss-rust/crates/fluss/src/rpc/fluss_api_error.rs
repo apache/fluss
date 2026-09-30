@@ -236,6 +236,20 @@ impl FlussError {
         )
     }
 
+    /// Whether the client's metadata for the failed bucket is stale, so it must be refreshed
+    /// before a retry can reach the right leader with the right bucket count.
+    pub(crate) fn invalidates_metadata(&self) -> bool {
+        matches!(
+            self,
+            FlussError::NotLeaderOrFollower
+                | FlussError::LeaderNotAvailableException
+                | FlussError::FencedLeaderEpochException
+                | FlussError::UnknownTableOrBucketException
+                | FlussError::InvalidCoordinatorException
+                | FlussError::InvalidBucketRouting
+        )
+    }
+
     /// Returns a friendly description of the error.
     pub fn message(&self) -> &'static str {
         match self {

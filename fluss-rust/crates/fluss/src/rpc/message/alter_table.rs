@@ -15,10 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::error::Error;
 use crate::metadata::{
     AddColumn, AlterConfig, AlterTableChanges, DropColumn, ModifyColumn, RenameColumn, TablePath,
 };
 use crate::rpc::api_key::ApiKey;
+use crate::rpc::api_version::ApiVersion;
 use crate::rpc::convert::to_table_path;
 use crate::rpc::frame::{ReadError, WriteError};
 use crate::rpc::message::{ReadType, RequestBody, WriteType};
@@ -66,10 +68,58 @@ impl AlterTableRequest {
     }
 }
 
+/// Older servers ignore `modify_bucket_count` and still report success.
+const MODIFY_BUCKET_COUNT_MIN_VERSION: ApiVersion = ApiVersion(1);
+
 impl RequestBody for AlterTableRequest {
     type ResponseBody = proto::AlterTableResponse;
     const API_KEY: ApiKey = ApiKey::AlterTable;
+
+    fn check_version(&self, version: ApiVersion) -> Result<(), Error> {
+        if self.inner_request.modify_bucket_count.is_some()
+            && version < MODIFY_BUCKET_COUNT_MIN_VERSION
+        {
+            return Err(Error::UnsupportedVersion {
+                message: format!(
+                    "Modifying the bucket count requires ALTER_TABLE version {} or newer, but the server negotiated version {}.",
+                    MODIFY_BUCKET_COUNT_MIN_VERSION.0, version.0
+                ),
+            });
+        }
+        Ok(())
+    }
 }
 
 impl_write_type!(AlterTableRequest);
 impl_read_type!(proto::AlterTableResponse);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn request(new_bucket_count: Option<i32>) -> AlterTableRequest {
+        AlterTableRequest::new(
+            &TablePath::new("db", "tbl"),
+            false,
+            AlterTableChanges {
+                new_bucket_count,
+                ..Default::default()
+            },
+        )
+    }
+
+    #[test]
+    fn bucket_count_change_needs_alter_table_v1() {
+        let request = request(Some(4));
+        assert!(matches!(
+            request.check_version(ApiVersion(0)),
+            Err(Error::UnsupportedVersion { .. })
+        ));
+        assert!(request.check_version(ApiVersion(1)).is_ok());
+    }
+
+    #[test]
+    fn other_changes_still_work_on_alter_table_v0() {
+        assert!(request(None).check_version(ApiVersion(0)).is_ok());
+    }
+}

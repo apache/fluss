@@ -30,7 +30,8 @@ use crate::config::Config;
 use crate::error::Error::UnsupportedOperation;
 use crate::error::{ApiError, Error, FlussError, Result};
 use crate::metadata::{
-    LogFormat, PhysicalTablePath, RowType, SchemaInfo, TableBucket, TableInfo, TablePath,
+    LogFormat, PhysicalTablePath, RowType, SchemaInfo, TableBucket, TableInfo, TableOrPartition,
+    TablePath,
 };
 use crate::metrics::ScannerMetrics;
 use crate::predicate::{Predicate, to_pb_predicate};
@@ -186,12 +187,11 @@ impl<'a> TableScan<'a> {
                 ),
             });
         }
-        // An unknown count after a `bucket.num` change is left to the server to check.
+        // An uncached count is checked by the scan once it fetches the partition's metadata.
         let bucket_count = self
             .metadata
             .get_cluster()
-            .bucket_count_or_fallback(&self.table_info, table_bucket.partition_id())
-            .ok();
+            .bucket_count(table_bucket.table_or_partition());
         if table_bucket.bucket_id() < 0
             || bucket_count.is_some_and(|bucket_count| table_bucket.bucket_id() >= bucket_count)
         {
@@ -1214,8 +1214,39 @@ impl RecordBatchLogScanner {
         self.inner
             .metadata
             .get_cluster()
-            .bucket_count_or_fallback(&self.inner.table_info, partition_id)
-            .ok()
+            .bucket_count(TableOrPartition::of(
+                self.inner.table_info.table_id,
+                partition_id,
+            ))
+    }
+
+    /// Fetches the metadata of the partitions of `buckets` whose bucket count is not cached.
+    pub(crate) async fn cache_bucket_counts<'a>(
+        &self,
+        buckets: impl IntoIterator<Item = &'a TableBucket>,
+    ) -> Result<()> {
+        let cluster = self.inner.metadata.get_cluster();
+        let partition_ids: Vec<PartitionId> = buckets
+            .into_iter()
+            .filter(|bucket| {
+                bucket.table_id() == self.inner.table_info.table_id
+                    && cluster.bucket_count(bucket.table_or_partition()).is_none()
+            })
+            .filter_map(|bucket| bucket.partition_id())
+            .collect::<HashSet<_>>()
+            .into_iter()
+            .collect();
+        if partition_ids.is_empty() {
+            return Ok(());
+        }
+        self.inner
+            .metadata
+            .update_tables_metadata(
+                &HashSet::from([&self.inner.table_path]),
+                &HashSet::new(),
+                partition_ids,
+            )
+            .await
     }
 
     /// Next fetch offset of `bucket`, which moves past batches the server pruned.
@@ -1558,18 +1589,6 @@ impl LogFetcher {
         }
     }
 
-    fn should_invalidate_table_meta(error: FlussError) -> bool {
-        matches!(
-            error,
-            FlussError::NotLeaderOrFollower
-                | FlussError::LeaderNotAvailableException
-                | FlussError::FencedLeaderEpochException
-                | FlussError::UnknownTableOrBucketException
-                | FlussError::InvalidCoordinatorException
-                | FlussError::InvalidBucketRouting
-        )
-    }
-
     async fn check_and_update_metadata(&self, table_buckets: &[TableBucket]) -> Result<()> {
         let mut partition_ids = Vec::new();
         let mut need_update = false;
@@ -1774,7 +1793,7 @@ impl LogFetcher {
                     .into();
 
                     let error = FlussError::for_code(error_code);
-                    if Self::should_invalidate_table_meta(error) {
+                    if error.invalidates_metadata() {
                         let table_id = table_bucket.table_id();
                         let cluster = metadata.get_cluster();
                         if let Some(table_path) = cluster.get_table_path_by_id(table_id) {

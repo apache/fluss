@@ -1498,8 +1498,7 @@ struct LakeSnapshot {
 struct PartitionInfo {
     int64_t partition_id;
     std::string partition_name;
-    /// Empty when the server predates per-partition bucket counts.
-    std::optional<int32_t> bucket_count{};
+    int32_t bucket_count{0};
 };
 
 struct ServerNode {

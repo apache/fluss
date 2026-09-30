@@ -554,6 +554,7 @@ where
         R::ResponseBody: ReadType<Cursor<Vec<u8>>>,
     {
         let api_version = self.resolve_api_version(R::API_KEY)?;
+        msg.check_version(api_version)?;
         let request_id = self.request_id.fetch_add(1, Ordering::SeqCst) & 0x7FFFFFFF;
         let header = RequestHeader {
             request_api_key: R::API_KEY,
@@ -1201,6 +1202,11 @@ mod tests {
         assert_eq!(
             resolve_api_version_for(None, ApiKey::PutKv).unwrap(),
             ApiVersion(3)
+        );
+
+        assert_eq!(
+            resolve_api_version_for(None, ApiKey::AlterTable).unwrap(),
+            ApiVersion(1)
         );
 
         let server_versions = vec![

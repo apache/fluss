@@ -352,7 +352,6 @@ mod ffi {
     struct FfiPartitionInfo {
         partition_id: i64,
         partition_name: String,
-        /// 0 when the server predates per-partition bucket counts.
         bucket_count: i32,
     }
 
@@ -1644,7 +1643,7 @@ impl Admin {
                     .map(|info| ffi::FfiPartitionInfo {
                         partition_id: info.get_partition_id(),
                         partition_name: info.get_partition_name(),
-                        bucket_count: info.get_bucket_count().unwrap_or(0),
+                        bucket_count: info.get_bucket_count(),
                     })
                     .collect();
                 ffi::FfiListPartitionInfosResult {

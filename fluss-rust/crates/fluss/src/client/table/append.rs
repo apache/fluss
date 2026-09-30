@@ -225,7 +225,7 @@ impl AppendWriter {
         // Group rows by bucket, keeping one key per bucket (it hashes back there).
         let num_buckets = self
             .writer_client
-            .routing_bucket_count(&physical_table_path)?;
+            .routing_bucket_count(&physical_table_path, &self.table_info)?;
         let batch_arc = Arc::new(batch.clone());
         let row_type = Arc::new(self.table_info.row_type.clone());
         let mut groups: HashMap<i32, (Vec<u32>, Bytes)> = HashMap::new();

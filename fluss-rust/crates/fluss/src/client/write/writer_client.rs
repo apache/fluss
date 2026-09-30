@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::TableId;
 use crate::bucketing::BucketingFunction;
 use crate::client::metadata::Metadata;
 use crate::client::write::IdempotenceManager;
@@ -24,10 +25,11 @@ use crate::client::write::bucket_assigner::{
 };
 use crate::client::write::sender::Sender;
 use crate::client::{RecordAccumulator, ResultHandle, WriteRecord};
+use crate::cluster::Cluster;
 use crate::config::Config;
 use crate::config::NoKeyAssigner;
 use crate::error::{Error, FlussError, Result};
-use crate::metadata::{PhysicalTablePath, TableInfo};
+use crate::metadata::{PhysicalTablePath, TableInfo, TablePath};
 use crate::metrics::WriterMetrics;
 use dashmap::DashMap;
 use log::warn;
@@ -45,7 +47,8 @@ pub struct WriterClient {
     shutdown_tx: Mutex<Option<mpsc::Sender<()>>>,
     sender_join_handle: Mutex<Option<JoinHandle<()>>>,
     metadata: Arc<Metadata>,
-    bucket_assigners: DashMap<Arc<PhysicalTablePath>, Arc<dyn BucketAssigner>>,
+    /// Each path's assigner, with the table it was built for.
+    bucket_assigners: DashMap<Arc<PhysicalTablePath>, (TableId, Arc<dyn BucketAssigner>)>,
     idempotence_manager: Arc<IdempotenceManager>,
 }
 
@@ -118,9 +121,24 @@ impl WriterClient {
     pub(crate) fn routing_bucket_count(
         &self,
         physical_table_path: &Arc<PhysicalTablePath>,
+        table_info: &TableInfo,
     ) -> Result<i32> {
+        let cluster = self.metadata.get_cluster();
+        Self::check_table_cached(&cluster, physical_table_path.get_table_path())?;
         self.accumulate
-            .routing_bucket_count(physical_table_path, &self.metadata.get_cluster())
+            .routing_bucket_count(physical_table_path, table_info, &cluster)
+    }
+
+    /// Fails with `TableNotExist` once a dropped table's metadata is evicted, the error its
+    /// pending writes got.
+    fn check_table_cached(cluster: &Cluster, table_path: &TablePath) -> Result<()> {
+        cluster.get_table(table_path).map(|_| ()).map_err(|e| {
+            if e.api_error() == Some(FlussError::InvalidTableException) {
+                Error::table_not_exist(format!("Table not found: {table_path}"))
+            } else {
+                e
+            }
+        })
     }
 
     /// Fails with `InvalidBucketRouting` when the routing count is no longer `bucket_count`.
@@ -144,24 +162,18 @@ impl WriterClient {
         }
         let physical_table_path = &record.physical_table_path;
         let cluster = self.metadata.get_cluster();
-        // A dropped table is missing here once its metadata is evicted. Report the
-        // same error its pending writes got, before the bucket assigner panics.
-        let table_path = physical_table_path.get_table_path();
-        cluster.get_table(table_path).map_err(|e| {
-            if e.api_error() == Some(FlussError::InvalidTableException) {
-                Error::table_not_exist(format!("Table not found: {table_path}"))
-            } else {
-                e
-            }
-        })?;
+        // Before the bucket assigner panics on a missing table.
+        Self::check_table_cached(&cluster, physical_table_path.get_table_path())?;
         let bucket_key = record.bucket_key.as_ref();
         let bucket_assigner = self.bucket_assigner(&record.table_info, physical_table_path)?;
 
         // A provisional routing count resolves once, so this settles after a retry at most.
         loop {
-            let bucket_count = self
-                .accumulate
-                .routing_bucket_count(physical_table_path, &cluster)?;
+            let bucket_count = self.accumulate.routing_bucket_count(
+                physical_table_path,
+                &record.table_info,
+                &cluster,
+            )?;
             if let Some(expected) = expected_bucket_count {
                 if expected != bucket_count {
                     return Err(Error::invalid_bucket_routing(format!(
@@ -210,13 +222,19 @@ impl WriterClient {
         table_info: &Arc<TableInfo>,
         table_path: &Arc<PhysicalTablePath>,
     ) -> Result<Arc<dyn BucketAssigner>> {
-        if let Some(assigner) = self.bucket_assigners.get(table_path) {
-            return Ok(assigner.clone());
+        if let Some(entry) = self.bucket_assigners.get(table_path) {
+            let (table_id, assigner) = entry.value();
+            // A table recreated under the same path can change its bucket key.
+            if table_info.table_id <= *table_id {
+                return Ok(Arc::clone(assigner));
+            }
         }
         let assigner =
             Self::create_bucket_assigner(table_info, Arc::clone(table_path), &self.config)?;
-        self.bucket_assigners
-            .insert(Arc::clone(table_path), Arc::clone(&assigner));
+        self.bucket_assigners.insert(
+            Arc::clone(table_path),
+            (table_info.table_id, Arc::clone(&assigner)),
+        );
         Ok(assigner)
     }
 
@@ -297,5 +315,65 @@ impl WriterClient {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::metadata::{DataTypes, Schema, TableDescriptor};
+    use crate::test_utils::{build_cluster, build_table_info};
+
+    #[tokio::test]
+    async fn a_recreated_table_gets_an_assigner_for_its_bucket_key() -> Result<()> {
+        let table_path = TablePath::new("db", "tbl");
+        let cluster = Arc::new(build_cluster(&table_path, 1, 2));
+        let writer =
+            WriterClient::new(Config::default(), Arc::new(Metadata::new_for_test(cluster)))?;
+        let physical_table_path = Arc::new(PhysicalTablePath::of(Arc::new(table_path.clone())));
+        let keyless = Arc::new(build_table_info(table_path.clone(), 1, 2));
+        let keyed = {
+            let descriptor = TableDescriptor::builder()
+                .schema(
+                    Schema::builder()
+                        .column("id", DataTypes::int())
+                        .build()
+                        .expect("schema"),
+                )
+                .distributed_by(Some(2), vec!["id".to_string()])
+                .build()
+                .expect("descriptor");
+            Arc::new(TableInfo::of(table_path, 2, 1, descriptor, 0, 0))
+        };
+
+        // Only the sticky assigner of a keyless table aborts full batches.
+        assert!(
+            writer
+                .bucket_assigner(&keyless, &physical_table_path)?
+                .abort_if_batch_full()
+        );
+        assert!(
+            !writer
+                .bucket_assigner(&keyed, &physical_table_path)?
+                .abort_if_batch_full()
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn routing_a_dropped_table_reports_table_not_exist() -> Result<()> {
+        let table_path = TablePath::new("db", "dropped");
+        let cluster = Arc::new(build_cluster(&TablePath::new("db", "other"), 1, 2));
+        let writer =
+            WriterClient::new(Config::default(), Arc::new(Metadata::new_for_test(cluster)))?;
+        let physical_table_path = Arc::new(PhysicalTablePath::of(Arc::new(table_path.clone())));
+        let table_info = build_table_info(table_path, 2, 2);
+
+        let error = writer
+            .routing_bucket_count(&physical_table_path, &table_info)
+            .expect_err("dropped table");
+
+        assert_eq!(error.api_error(), Some(FlussError::TableNotExist));
+        Ok(())
     }
 }

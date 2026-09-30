@@ -215,7 +215,15 @@ impl FlussAdmin {
                 partial_partition_spec,
             ))
             .await?;
-        Ok(response.get_partitions_info())
+        let partitions = response.get_partitions_info();
+        if partitions
+            .iter()
+            .all(|partition| partition.get_bucket_count() > 0)
+        {
+            return Ok(partitions);
+        }
+        let table_info = self.get_table_info(table_path).await?;
+        fill_bucket_counts(partitions, &table_info)
     }
 
     /// Create a new partition for a partitioned table.
@@ -551,6 +559,7 @@ impl FlussAdmin {
         ignore_if_not_exists: bool,
         changes: AlterTableChanges,
     ) -> Result<()> {
+        changes.validate()?;
         let _response = self
             .admin_gateway()
             .await?
@@ -965,12 +974,39 @@ fn group_stats_requests_by_leader(
     Ok(buckets_by_leader)
 }
 
+/// Gives the table's bucket count to partitions from a server that sent none, which is only
+/// correct while the table has never changed `bucket.num`.
+fn fill_bucket_counts(
+    partitions: Vec<PartitionInfo>,
+    table_info: &TableInfo,
+) -> Result<Vec<PartitionInfo>> {
+    if table_info.get_bucket_count_epoch() > 0 {
+        return Err(Error::UnexpectedError {
+            message: format!(
+                "The server sent no partition bucket counts for {}, whose bucket count changed.",
+                table_info.table_path
+            ),
+            source: None,
+        });
+    }
+    Ok(partitions
+        .into_iter()
+        .map(|partition| match partition.get_bucket_count() {
+            0 => partition.with_bucket_count(table_info.num_buckets),
+            _ => partition,
+        })
+        .collect())
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{group_stats_requests_by_leader, parse_table_descriptor};
+    use super::{fill_bucket_counts, group_stats_requests_by_leader, parse_table_descriptor};
     use crate::cluster::{BucketLocation, Cluster, ServerNode, ServerType};
     use crate::error::{Error, FlussError};
-    use crate::metadata::{BucketStatsRequest, PhysicalTablePath, TableBucket, TablePath};
+    use crate::metadata::{
+        BucketStatsRequest, PartitionInfo, PhysicalTablePath, ResolvedPartitionSpec, TableBucket,
+        TablePath,
+    };
     use crate::test_utils::build_table_info;
     use std::collections::HashMap;
     use std::sync::Arc;
@@ -1045,6 +1081,24 @@ mod tests {
             error.api_error(),
             Some(FlussError::LeaderNotAvailableException)
         );
+    }
+
+    fn partition(id: i64, bucket_count: i32) -> PartitionInfo {
+        let spec = ResolvedPartitionSpec::new(Arc::from(["p".to_string()]), vec![id.to_string()])
+            .expect("spec");
+        PartitionInfo::new(id, spec).with_bucket_count(bucket_count)
+    }
+
+    #[test]
+    fn partitions_without_a_count_get_the_table_count_while_never_rescaled() {
+        let table_info = build_table_info(TablePath::new("db", "tbl"), 1, 4);
+        let filled = fill_bucket_counts(vec![partition(1, 0), partition(2, 8)], &table_info)
+            .expect("filled");
+        let counts: Vec<i32> = filled.iter().map(|p| p.get_bucket_count()).collect();
+        assert_eq!(counts, vec![4, 8]);
+
+        let rescaled = table_info.with_bucket_count_epoch(1);
+        assert!(fill_bucket_counts(vec![partition(1, 0)], &rescaled).is_err());
     }
 
     #[test]

@@ -668,11 +668,11 @@ Read-only handle for a complex (`ARRAY` / `MAP` / `ROW`) column value, obtained 
 
 ## `PartitionInfo`
 
-| Field            | Type                     |  Description                                      |
-|------------------|--------------------------|---------------------------------------------------|
-| `partition_id`   | `int64_t`                | Partition ID                                      |
-| `partition_name` | `std::string`            | Partition name                                    |
-| `bucket_count`   | `std::optional<int32_t>` | Bucket count, empty from a server older than 1.0  |
+| Field            | Type          |  Description           |
+|------------------|---------------|------------------------|
+| `partition_id`   | `int64_t`     | Partition ID           |
+| `partition_name` | `std::string` | Partition name         |
+| `bucket_count`   | `int32_t`     | Partition bucket count |
 
 ## `DatabaseDescriptor`
 

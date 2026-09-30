@@ -1353,8 +1353,8 @@ class PartitionInfo:
         """Get the partition name."""
         ...
     @property
-    def bucket_count(self) -> Optional[int]:
-        """Get the partition's bucket count, or ``None`` from a server older than 1.0."""
+    def bucket_count(self) -> int:
+        """Get the partition's bucket count."""
         ...
     def __repr__(self) -> str: ...
 

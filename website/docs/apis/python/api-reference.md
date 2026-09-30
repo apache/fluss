@@ -371,11 +371,11 @@ for record in scan_records:
 
 ## `PartitionInfo`
 
-| Property                        |  Description                                         |
-|---------------------------------|------------------------------------------------------|
-| `.partition_id -> int`          | Partition ID                                         |
-| `.partition_name -> str`        | Partition name                                       |
-| `.bucket_count -> int \| None` | Bucket count, or `None` from a server older than 1.0 |
+| Property                 |  Description           |
+|--------------------------|------------------------|
+| `.partition_id -> int`   | Partition ID           |
+| `.partition_name -> str` | Partition name         |
+| `.bucket_count -> int`   | Partition bucket count |
 
 ## `DatabaseDescriptor`
 
