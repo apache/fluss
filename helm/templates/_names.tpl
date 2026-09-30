@@ -130,7 +130,7 @@ Usage:
 {{- $longestSuffix := 23 -}}
 {{- $maxPrefix := sub 63 $longestSuffix -}}
 {{- if gt (len $prefix) (int $maxPrefix) -}}
-{{- printf "resource name prefix %q is %d characters, but generated names must stay within 63 characters. Use a release name of at most %d characters, or set fullnameOverride." $prefix (len $prefix) (int $maxPrefix) -}}
+{{- printf "resource name prefix %q is %d characters, but generated names must stay within 63, so the prefix must be at most %d. Shorten the release name or set fullnameOverride." $prefix (len $prefix) (int $maxPrefix) -}}
 {{- end -}}
 {{- end -}}
 {{- end -}}

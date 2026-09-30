@@ -591,9 +591,12 @@ Two things still need attention:
   so give each one its own path. The chart default,
   `/tmp/fluss/remote-data`, is a path inside each pod's own container
   filesystem and is not shared.
-- The release name becomes part of every generated name. Keep it to 40
-  characters or fewer, or set `fullnameOverride` to something shorter. The
-  chart fails the render with an explicit message when the limit is exceeded.
+- The release name becomes part of every generated name through
+  `fluss.fullname`, which is the release name plus `-fluss`, or the release
+  name on its own when it already contains `fluss`. That prefix has to stay
+  within 40 characters, so a release name without `fluss` in it is limited to
+  34. Set `fullnameOverride` for anything longer. The chart fails the render
+  with an explicit message when the prefix is too long.
 
 To enable the option on a cluster that already exists, read
 [Enabling unique resource names on an existing release](#enabling-unique-resource-names-on-an-existing-release)
@@ -892,10 +895,24 @@ configurationOverrides:
 Without the pin they start against an empty `/fluss/<release>` and the old
 cluster's metadata is left behind.
 
-The claims created from `volumeClaimTemplates` are named after the StatefulSet,
-so `data-tablet-server-0` becomes `data-<release>-fluss-tablet-server-0`. Left
-alone, the new pods start on fresh empty volumes and the old claims are
-orphaned.
+The claims created from `volumeClaimTemplates` are named
+`data-<statefulset>-<ordinal>`, so renaming the StatefulSets renames every
+claim. Left alone, the new pods start on fresh empty volumes and the old claims
+are orphaned.
+
+Read the new StatefulSet names off a render rather than assuming a prefix:
+`fluss.fullname` collapses to the release name on its own when that already
+contains `fluss`, and `fullnameOverride` replaces it outright.
+
+```bash
+helm template <release> ./helm --set uniqueResourceNames=true -f <your-values> \
+  | awk '/^kind: StatefulSet/{f=1} f&&/^  name:/{print $2; f=0}'
+```
+
+A release called `prod` prints `prod-fluss-coordinator-server` and
+`prod-fluss-tablet-server`, so its claims are `data-prod-fluss-tablet-server-0`
+and so on. A release called `fluss` prints `fluss-tablet-server`, and its claim
+is `data-fluss-tablet-server-0` — not `data-fluss-fluss-tablet-server-0`.
 
 The volumes can be carried over, and the chart plays no part in it. Helm
 creates the StatefulSet; the claims are created by the StatefulSet controller
@@ -955,13 +972,13 @@ Back up or snapshot the volumes before you start. Then:
      data-tablet-server-0 data-tablet-server-1 data-tablet-server-2
    ```
 
-4. Point each volume at the claim the new StatefulSet will create, working
-   from the mapping in step 1 and keeping the ordinal the same. The volume that
-   backed `data-tablet-server-1` is reserved for
-   `data-<release>-fluss-tablet-server-1`, and so on for every claim including
-   the coordinator's. Ordinals matter because a tablet server takes its id from
-   its pod ordinal: cross two of them over and a server boots on another
-   server's data, with nothing to warn you.
+4. Point each volume at the claim the new StatefulSet will create, using the
+   names from the render above and keeping the ordinal the same. The volume
+   that backed `data-tablet-server-1` is reserved for the new tablet claim
+   ending `-1`, and so on for every claim including the coordinator's. Ordinals
+   matter because a tablet server takes its id from its pod ordinal: cross two
+   of them over and a server boots on another server's data, with nothing to
+   warn you.
 
    The claim does not have to exist yet, and the patch does not fail for
    naming one that does not: a reference carrying no `uid` is what marks the
@@ -976,7 +993,7 @@ Back up or snapshot the volumes before you start. Then:
      "path": "/spec/claimRef",
      "value": {
        "namespace": "<namespace>",
-       "name": "data-<release>-fluss-tablet-server-0"
+       "name": "data-<new-statefulset>-0"
      }
    }]'
    ```

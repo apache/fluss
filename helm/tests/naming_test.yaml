@@ -245,7 +245,7 @@ tests:
       uniqueResourceNames: true
     asserts:
       - failedTemplate:
-          errorPattern: "must stay within 63 characters"
+          errorPattern: "must stay within 63"
 
   - it: should accept a release name that fits
     release:
@@ -272,7 +272,7 @@ tests:
       uniqueResourceNames: true
     asserts:
       - failedTemplate:
-          errorPattern: "at most 40 characters"
+          errorPattern: "prefix must be at most 40"
 
   - it: should not apply the length check with fixed names
     release:
