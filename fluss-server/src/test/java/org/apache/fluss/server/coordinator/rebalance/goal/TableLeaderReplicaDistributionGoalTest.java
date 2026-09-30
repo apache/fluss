@@ -42,6 +42,59 @@ import static org.assertj.core.api.Assertions.assertThat;
 public class TableLeaderReplicaDistributionGoalTest {
 
     @Test
+    void testExhaustsLeadershipTransfersBeforeMovingReplicas() {
+        ClusterModel cluster = cluster(false);
+        for (int bucket = 0; bucket < 12; bucket++) {
+            List<Integer> replicas =
+                    bucket < 6
+                            ? Arrays.asList(0, 1)
+                            : bucket < 9
+                                    ? Arrays.asList(1, 2)
+                                    : bucket < 10 ? Arrays.asList(2, 3) : Arrays.asList(3, 1);
+            addBucket(cluster, new TableBucket(1, bucket), replicas);
+        }
+        Map<TableBucket, HashSet<Integer>> before = replicaSets(cluster);
+
+        new TableLeaderReplicaDistributionGoal().optimize(cluster, Collections.<Goal>emptySet());
+
+        assertThat(replicaSets(cluster)).isEqualTo(before);
+        assertThat(cluster.servers())
+                .extracting(server -> server.numLeaderReplicas(1))
+                .containsExactly(4, 4, 2, 2);
+    }
+
+    @Test
+    void testReordersDestinationsAfterReplicaMovement() {
+        SortedSet<ServerModel> servers = new TreeSet<>();
+        for (int id = 0; id < 5; id++) {
+            servers.add(new ServerModel(id, "rack" + id, false));
+        }
+        ClusterModel cluster =
+                new ClusterModel(servers) {
+                    private int moves;
+
+                    @Override
+                    public void relocateReplica(TableBucket bucket, int source, int destination) {
+                        // All four empty destinations must be used before any receives a second
+                        // replica.
+                        if (moves++ < 4) {
+                            assertThat(server(destination).numReplicas(1)).isZero();
+                        }
+                        super.relocateReplica(bucket, source, destination);
+                    }
+                };
+        for (int bucket = 0; bucket < 20; bucket++) {
+            addBucket(cluster, new TableBucket(1, bucket), Collections.singletonList(0));
+        }
+
+        new TableLeaderReplicaDistributionGoal().optimize(cluster, Collections.<Goal>emptySet());
+
+        for (ServerModel server : cluster.servers()) {
+            assertThat(server.numReplicas(1)).isBetween(3, 5);
+        }
+    }
+
+    @Test
     void testBalancesSkewedLeadersWithoutMovingReplicaSets() {
         ClusterModel cluster = cluster(false);
         for (int i = 0; i < 8; i++) {
@@ -95,13 +148,16 @@ public class TableLeaderReplicaDistributionGoalTest {
     @Test
     void testGracefullyDegradesWhenClusterLeaderGoalBlocksTableMoves() {
         ClusterModel cluster = cluster(false);
-        for (int i = 0; i < 4; i++) {
-            addBucket(cluster, new TableBucket(1, i), Arrays.asList(0, 1, 2, 3));
+        for (int bucket = 0; bucket < 3; bucket++) {
+            addBucket(cluster, new TableBucket(1, bucket), Arrays.asList(0, 1, 2, 3));
         }
-        for (int i = 0; i < 4; i++) {
-            addBucket(cluster, new TableBucket(2, i), Arrays.asList(1, 0));
-            addBucket(cluster, new TableBucket(3, i), Arrays.asList(2, 0));
-            addBucket(cluster, new TableBucket(4, i), Arrays.asList(3, 0));
+        long tableId = 2;
+        for (int server = 1; server < 4; server++) {
+            int leaders = server == 1 ? 5 : 4;
+            for (int bucket = 0; bucket < leaders; bucket++) {
+                addBucket(
+                        cluster, new TableBucket(tableId++, 0), Collections.singletonList(server));
+            }
         }
 
         LeaderReplicaDistributionGoal clusterLeaderGoal = new LeaderReplicaDistributionGoal();
@@ -110,11 +166,11 @@ public class TableLeaderReplicaDistributionGoalTest {
                 new TableLeaderReplicaDistributionGoal();
         tableLeaderGoal.optimize(cluster, Collections.<Goal>singleton(clusterLeaderGoal));
 
-        // A standalone table cannot have every alive server at its upper limit: the upper limit
-        // is derived from that table's average. Here the already-satisfied cluster leader window
-        // is the realistic constraint that blocks the remaining table-level leadership movement.
-        assertThat(cluster.server(0).numLeaderReplicas(1)).isGreaterThan(2);
-        assertThat(cluster.server(0).numLeaderReplicas()).isGreaterThanOrEqualTo(3);
+        // Server 0 is at the cluster lower limit (3), so it cannot shed any of its three
+        // table-1 leaders despite the table upper limit (1). Each other table has one leader
+        // and is already balanced, so further passes cannot free cluster-level capacity.
+        assertThat(cluster.server(0).numLeaderReplicas(1)).isEqualTo(3);
+        assertThat(cluster.server(0).numLeaderReplicas()).isEqualTo(3);
         for (ServerModel server : cluster.servers()) {
             assertThat(server.numLeaderReplicas()).isBetween(3, 5);
         }

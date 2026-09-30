@@ -40,6 +40,37 @@ import static org.assertj.core.api.Assertions.assertThat;
 public class TableReplicaDistributionGoalTest {
 
     @Test
+    void testReordersDestinationsAfterReplicaMovement() {
+        SortedSet<ServerModel> servers = new TreeSet<>();
+        for (int id = 0; id < 5; id++) {
+            servers.add(new ServerModel(id, "rack" + id, false));
+        }
+        ClusterModel cluster =
+                new ClusterModel(servers) {
+                    private int moves;
+
+                    @Override
+                    public void relocateReplica(TableBucket bucket, int source, int destination) {
+                        // All four empty destinations must be used before any receives a second
+                        // replica.
+                        if (moves++ < 4) {
+                            assertThat(server(destination).numReplicas(1)).isZero();
+                        }
+                        super.relocateReplica(bucket, source, destination);
+                    }
+                };
+        for (int bucket = 0; bucket < 20; bucket++) {
+            addBucket(cluster, new TableBucket(1, bucket), Collections.singletonList(0));
+        }
+
+        new TableReplicaDistributionGoal().optimize(cluster, Collections.<Goal>emptySet());
+
+        for (ServerModel server : cluster.servers()) {
+            assertThat(server.numReplicas(1)).isBetween(3, 5);
+        }
+    }
+
+    @Test
     void testBalancesSkewedTableWhileClusterIsBalanced() {
         ClusterModel cluster = cluster(false);
         for (int i = 0; i < 8; i++) {

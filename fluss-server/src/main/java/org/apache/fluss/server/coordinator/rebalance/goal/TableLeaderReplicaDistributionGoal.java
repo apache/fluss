@@ -28,6 +28,7 @@ import org.apache.fluss.server.coordinator.rebalance.model.ReplicaModel;
 import org.apache.fluss.server.coordinator.rebalance.model.ServerModel;
 import org.apache.fluss.utils.MathUtils;
 
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashSet;
@@ -35,8 +36,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.PriorityQueue;
 import java.util.Set;
-import java.util.SortedSet;
-import java.util.TreeSet;
 
 import static org.apache.fluss.server.coordinator.rebalance.ActionAcceptance.ACCEPT;
 import static org.apache.fluss.server.coordinator.rebalance.ActionAcceptance.REPLICA_REJECT;
@@ -45,6 +44,28 @@ import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
 /** Soft goal to distribute leader replicas of every table across tablet servers. */
 public class TableLeaderReplicaDistributionGoal extends TableDistributionAbstractGoal {
+    private boolean leadershipOnlyPhase;
+    private boolean leadershipMovedInRound;
+
+    @Override
+    protected void initGoalState(ClusterModel clusterModel) throws RebalanceFailureException {
+        super.initGoalState(clusterModel);
+        leadershipOnlyPhase = true;
+        leadershipMovedInRound = false;
+    }
+
+    @Override
+    protected void updateGoalState(ClusterModel clusterModel) {
+        if (leadershipOnlyPhase) {
+            // Another server may free capacity for a transfer on the next full pass.
+            if (!leadershipMovedInRound) {
+                leadershipOnlyPhase = false;
+            }
+            leadershipMovedInRound = false;
+            return;
+        }
+        super.updateGoalState(clusterModel);
+    }
 
     @Override
     public ActionAcceptance actionAcceptance(RebalancingAction action, ClusterModel clusterModel) {
@@ -86,6 +107,7 @@ public class TableLeaderReplicaDistributionGoal extends TableDistributionAbstrac
                                 server, tableId, clusterModel, optimizedGoals);
                 boolean leadersNotMoved =
                         leadershipNotMoved
+                                && !leadershipOnlyPhase
                                 && rebalanceByMovingLeaderReplicasOut(
                                         server, tableId, clusterModel, optimizedGoals);
                 if (leadersNotMoved) {
@@ -97,11 +119,15 @@ public class TableLeaderReplicaDistributionGoal extends TableDistributionAbstrac
                                 server, tableId, clusterModel, optimizedGoals);
                 boolean leadersNotMoved =
                         leadershipNotMoved
+                                && !leadershipOnlyPhase
                                 && rebalanceByMovingLeaderReplicasIn(
                                         server, tableId, clusterModel, optimizedGoals);
                 if (leadersNotMoved) {
                     tablesBelowRebalanceLowerLimit.add(tableId);
                 }
+            }
+            if (leadershipOnlyPhase && numLeaders != server.numLeaderReplicas(tableId)) {
+                leadershipMovedInRound = true;
             }
         }
     }
@@ -175,16 +201,16 @@ public class TableLeaderReplicaDistributionGoal extends TableDistributionAbstrac
             long tableId,
             ClusterModel clusterModel,
             Set<Goal> optimizedGoals) {
-        SortedSet<ServerModel> candidates =
-                new TreeSet<>(
-                        Comparator.comparingInt(
-                                        (ServerModel server) -> server.numLeaderReplicas(tableId))
-                                .thenComparingInt(ServerModel::id));
+        Comparator<ServerModel> comparator =
+                Comparator.comparingInt((ServerModel server) -> server.numLeaderReplicas(tableId))
+                        .thenComparingInt(ServerModel::id);
+        List<ServerModel> candidates = new ArrayList<>();
         for (ServerModel server : clusterModel.aliveServers()) {
             if (server.numLeaderReplicas(tableId) < upperLimit(tableId, server)) {
                 candidates.add(server);
             }
         }
+        candidates.sort(comparator);
         for (ReplicaModel leader : sourceServer.leaderReplicas(tableId)) {
             ServerModel destination =
                     maybeApplyBalancingAction(
@@ -197,10 +223,10 @@ public class TableLeaderReplicaDistributionGoal extends TableDistributionAbstrac
                 if (sourceServer.numLeaderReplicas(tableId) <= upperLimit(tableId, sourceServer)) {
                     return false;
                 }
-                candidates.remove(destination);
-                if (destination.numLeaderReplicas(tableId) < upperLimit(tableId, destination)) {
-                    candidates.add(destination);
+                if (destination.numLeaderReplicas(tableId) >= upperLimit(tableId, destination)) {
+                    candidates.remove(destination);
                 }
+                candidates.sort(comparator);
             }
         }
         return sourceServer.numLeaderReplicas(tableId) > upperLimit(tableId, sourceServer);

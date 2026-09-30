@@ -27,14 +27,13 @@ import org.apache.fluss.server.coordinator.rebalance.model.ReplicaModel;
 import org.apache.fluss.server.coordinator.rebalance.model.ServerModel;
 import org.apache.fluss.utils.MathUtils;
 
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.PriorityQueue;
 import java.util.Set;
-import java.util.SortedSet;
-import java.util.TreeSet;
 
 import static org.apache.fluss.server.coordinator.rebalance.ActionAcceptance.ACCEPT;
 import static org.apache.fluss.server.coordinator.rebalance.ActionAcceptance.REPLICA_REJECT;
@@ -101,16 +100,17 @@ public class TableReplicaDistributionGoal extends TableDistributionAbstractGoal 
             long tableId,
             ClusterModel clusterModel,
             Set<Goal> optimizedGoals) {
-        SortedSet<ServerModel> candidates =
-                new TreeSet<>(
-                        Comparator.comparingInt((ServerModel server) -> server.numReplicas(tableId))
-                                .thenComparingInt(ServerModel::numReplicas)
-                                .thenComparingInt(ServerModel::id));
+        Comparator<ServerModel> comparator =
+                Comparator.comparingInt((ServerModel server) -> server.numReplicas(tableId))
+                        .thenComparingInt(ServerModel::numReplicas)
+                        .thenComparingInt(ServerModel::id);
+        List<ServerModel> candidates = new ArrayList<>();
         for (ServerModel server : clusterModel.aliveServers()) {
             if (server.numReplicas(tableId) < upperLimit(tableId, server)) {
                 candidates.add(server);
             }
         }
+        candidates.sort(comparator);
         for (ReplicaModel replica : sourceServer.replicas(tableId)) {
             ServerModel destination =
                     maybeApplyBalancingAction(
@@ -123,10 +123,10 @@ public class TableReplicaDistributionGoal extends TableDistributionAbstractGoal 
                 if (sourceServer.numReplicas(tableId) <= upperLimit(tableId, sourceServer)) {
                     return false;
                 }
-                candidates.remove(destination);
-                if (destination.numReplicas(tableId) < upperLimit(tableId, destination)) {
-                    candidates.add(destination);
+                if (destination.numReplicas(tableId) >= upperLimit(tableId, destination)) {
+                    candidates.remove(destination);
                 }
+                candidates.sort(comparator);
             }
         }
         return sourceServer.numReplicas(tableId) > upperLimit(tableId, sourceServer);
