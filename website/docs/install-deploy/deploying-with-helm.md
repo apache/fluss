@@ -597,7 +597,7 @@ Two things still need attention:
 
 To enable the option on a cluster that already exists, read
 [Enabling unique resource names on an existing release](#enabling-unique-resource-names-on-an-existing-release)
-first: the StatefulSets are replaced rather than updated.
+first.
 
 ### Network Configuration
 
@@ -880,8 +880,8 @@ Turning on `uniqueResourceNames` renames the StatefulSets, and a StatefulSet
 cannot be renamed in place. Helm creates the new one and deletes the old one,
 so the pods are replaced rather than rolled and the cluster restarts.
 
-In both cases below, pin the old ZooKeeper root path in the same upgrade so the
-new pods inherit the existing cluster metadata:
+Pin the old ZooKeeper root path in the same upgrade so the new pods inherit the
+existing cluster metadata:
 
 ```yaml
 uniqueResourceNames: true
@@ -892,33 +892,18 @@ configurationOverrides:
 Without the pin they start against an empty `/fluss/<release>` and the old
 cluster's metadata is left behind.
 
-#### Without persistent storage
-
-`coordinator.storage.enabled` and `tablet.storage.enabled` are `false` by
-default, so the pods use `emptyDir` and there is nothing on disk to carry over.
-Run the upgrade.
-
-Helm creates the new resources before deleting the old ones, so the two
-generations of pods overlap briefly, and a tablet server takes its id from its
-pod ordinal. The old `tablet-server-0` and the new
-`<release>-fluss-tablet-server-0` therefore both claim id `0`. Registration is
-an ephemeral ZooKeeper znode, so the second server retries every 3 seconds for
-up to 60 seconds, by which time the old pod has normally terminated and
-released the znode. A server that exhausts the budget exits and its pod
-restarts, so it recovers either way, but expect errors in the log while it
-settles. Deleting the old StatefulSets before the upgrade avoids the overlap.
-
-#### With persistent storage
-
 The claims created from `volumeClaimTemplates` are named after the StatefulSet,
 so `data-tablet-server-0` becomes `data-<release>-fluss-tablet-server-0`. Left
 alone, the new pods start on fresh empty volumes and the old claims are
 orphaned.
 
-The volumes themselves can be carried over. A StatefulSet looks each claim up
-by name and creates it only when it is missing, so a claim that already exists
-under the new name is adopted as it is. Bind the existing volumes to claims
-under the new names before the new StatefulSets appear.
+The volumes themselves can be carried over, and the chart plays no part in it.
+Helm creates the StatefulSet; the claims are created by the StatefulSet
+controller from `volumeClaimTemplates`, and only when they are missing — it
+looks each one up by name first and skips any that already exists. So a claim
+you create yourself under the new name, already bound to the old volume, is
+what the new pod mounts. There is no chart value for this, and none is needed:
+the claims just have to exist before the upgrade runs.
 
 Back up or snapshot the volumes before you start. Then:
 
@@ -949,8 +934,10 @@ Back up or snapshot the volumes before you start. Then:
    kubectl patch pv <volume> -p '{"spec":{"claimRef":null}}'
    ```
 
-4. Create one claim per new name, bound to its volume with `volumeName` and
-   matching the template's storage class, access modes, and size:
+4. Apply one claim per new name yourself, bound to its volume with
+   `volumeName`. Match the storage class, access modes, and size of
+   `volumeClaimTemplates` — binding requires the storage class to agree with
+   the volume's.
 
    ```yaml
    apiVersion: v1
@@ -967,10 +954,18 @@ Back up or snapshot the volumes before you start. Then:
    ```
 
 5. Run the upgrade. The new StatefulSets find the claims already present and
-   reuse them, so the pods come up on the original volumes.
+   skip creating their own, so the pods come up on the original volumes.
 
 Restore each volume's original reclaim policy afterwards if it was not
 `Retain`.
+
+With `storage.enabled: false`, the default, the pods use `emptyDir` and there
+is nothing to preserve: run the upgrade and let them come back empty. One
+detail if you do that without deleting the old StatefulSets first — Helm
+creates the new resources before deleting the old ones, so the two generations
+of pods overlap, and a tablet server takes its id from its pod ordinal. The new
+server finds its id already registered as an ephemeral ZooKeeper znode and
+retries every 3 seconds for up to 60 seconds until the old pod releases it.
 
 ### Rolling Updates
 
