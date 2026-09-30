@@ -956,14 +956,22 @@ Back up or snapshot the volumes before you start. Then:
    kubectl patch pv <volume> -p '{"spec":{"persistentVolumeReclaimPolicy":"Retain"}}'
    ```
 
-2. Delete the old StatefulSets. This stops the pods and leaves the claims and
-   volumes in place. Nothing recreates them: a StatefulSet is a top-level
-   object, and Helm only acts on the release when you run a command against
-   it. The release is simply without them until step 5.
+2. Delete the old StatefulSets, then wait for their pods to go. Nothing
+   recreates them: a StatefulSet is a top-level object, and Helm only acts on
+   the release when you run a command against it. The release is simply
+   without them until step 5.
 
    ```bash
    kubectl delete statefulset coordinator-server tablet-server
+   kubectl wait --for=delete pod -l app.kubernetes.io/instance=<release> --timeout=5m
    ```
+
+   Do not skip the wait. `kubectl delete` returns as soon as the deletion is
+   accepted, and a claim cannot be deleted while a pod object still references
+   it — the `kubernetes.io/pvc-protection` finalizer holds it in `Terminating`
+   instead. A StatefulSet that later finds a claim in that state refuses to
+   create the pod and reports `pvc ... is being deleted`, which turns step 5
+   into a failed upgrade.
 
 3. Delete the old claims. Each volume becomes `Released`.
 
@@ -998,6 +1006,13 @@ Back up or snapshot the volumes before you start. Then:
    }]'
    ```
 
+   Check the result before going on. Every volume should read `Available`
+   with its new claim name against it:
+
+   ```bash
+   kubectl get pv -o custom-columns=NAME:.metadata.name,PHASE:.status.phase,CLAIM:.spec.claimRef.name
+   ```
+
 5. Run the upgrade. The new StatefulSets create their claims, each binds to the
    volume reserved for it, and the pods come up on the original disks.
 
@@ -1014,12 +1029,20 @@ defaults to keeping them on both deletion and scale-down. Each `claimRef`
 becomes an ordinary binding once its claim appears and stays that way.
 
 With `storage.enabled: false`, the default, the pods use `emptyDir` and there
-is nothing to preserve: run the upgrade and let them come back empty. One
-detail if you do that without deleting the old StatefulSets first — Helm
-creates the new resources before deleting the old ones, so the two generations
-of pods overlap, and a tablet server takes its id from its pod ordinal. The new
-server finds its id already registered as an ephemeral ZooKeeper znode and
-retries every 3 seconds for up to 60 seconds until the old pod releases it.
+is nothing to preserve: run the upgrade and let the pods come back empty.
+
+Delete the old StatefulSets first even then, and wait for their pods. Helm
+creates the new resources before deleting the old ones, so a plain upgrade
+leaves the two generations running at once, both claiming the same identities
+in ZooKeeper — a tablet server takes its id from its pod ordinal, and the
+coordinator re-registers through the same retry loop. Whichever arrives second
+finds the identity held by a live ephemeral znode, and retries every 3 seconds
+for up to 60 seconds. If that budget runs out the server throws and the pod
+crash-loops until a later attempt succeeds. A pod that shuts down gracefully
+closes its ZooKeeper session and drops its znode at once, but one that is
+killed or partitioned leaves the znode until the session expires — and
+`zookeeper.client.session-timeout` defaults to 60 seconds too, so the retry
+budget has no margin over it.
 
 ### Rolling Updates
 
