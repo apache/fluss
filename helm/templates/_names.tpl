@@ -47,9 +47,8 @@ Create chart name and version as used by the chart label.
 {{- end }}
 
 {{/*
-Applies the naming scheme to a single resource: the bare name, or the name
-prefixed with "fluss.fullname" when uniqueResourceNames is set. Pass "fixed"
-when the unprefixed name is not simply the suffix.
+Name of a component resource: bare, or prefixed with "fluss.fullname" when
+uniqueResourceNames is set.
 Usage:
   include "fluss.resourceName" (dict "suffix" "coordinator-server" "context" .)
 */}}
@@ -57,7 +56,7 @@ Usage:
 {{- if .context.Values.uniqueResourceNames -}}
 {{- printf "%s-%s" (include "fluss.fullname" .context) .suffix | trunc 63 | trimSuffix "-" -}}
 {{- else -}}
-{{- default .suffix .fixed -}}
+{{- .suffix -}}
 {{- end -}}
 {{- end -}}
 
@@ -90,10 +89,31 @@ Name of the tablet headless Service.
 {{- end -}}
 
 {{/*
-Name of the ConfigMap holding server.yaml.
+Name of the ConfigMap holding server.yaml. This is the one resource whose bare
+name carries the chart name, so it does not follow "fluss.resourceName".
 */}}
 {{- define "fluss.configMapName" -}}
-{{- include "fluss.resourceName" (dict "suffix" "conf-file" "fixed" "fluss-conf-file" "context" .) -}}
+{{- if .Values.uniqueResourceNames -}}
+{{- printf "%s-conf-file" (include "fluss.fullname" .) | trunc 63 | trimSuffix "-" -}}
+{{- else -}}
+{{- "fluss-conf-file" -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+Name of the coordinator metrics headless Service. Already unique per release,
+so the naming scheme leaves it alone.
+*/}}
+{{- define "fluss.coordinator.metricsServiceName" -}}
+{{- printf "%s-coordinator-server-metrics-hs" .Release.Name | trunc 63 | trimSuffix "-" -}}
+{{- end -}}
+
+{{/*
+Name of the tablet metrics headless Service. Already unique per release, so the
+naming scheme leaves it alone.
+*/}}
+{{- define "fluss.tablet.metricsServiceName" -}}
+{{- printf "%s-tablet-server-metrics-hs" .Release.Name | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
 
 {{/*
