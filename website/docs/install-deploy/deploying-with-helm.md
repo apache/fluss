@@ -948,10 +948,10 @@ plan a maintenance window. If a GitOps controller syncs this release, suspend
 it first, or it will recreate the StatefulSets you delete in step 2.
 :::
 
-Rehearse this on a non-production cluster first. It has been checked against
-the Kubernetes source rather than run on every storage backend, and reserving a
-volume under a `WaitForFirstConsumer` storage class — the default on EKS and
-GKE — takes a different path through the scheduler than immediate binding does.
+Rehearse this on a non-production cluster first. Binding behaviour varies by
+storage class: reserving a volume under `WaitForFirstConsumer` — the default on
+EKS and GKE — takes a different path through the scheduler than immediate
+binding does.
 
 Leave `coordinator.storage.size` and `tablet.storage.size` alone in this
 upgrade. Binding checks capacity even for a reserved volume, so a template
