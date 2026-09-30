@@ -899,8 +899,8 @@ orphaned.
 
 The volumes can be carried over, and the chart plays no part in it. Helm
 creates the StatefulSet; the claims are created by the StatefulSet controller
-from `volumeClaimTemplates`, and only when they are missing. So the job is to
-make sure each new claim binds to the volume its predecessor used, which you do
+from `volumeClaimTemplates`, and only when they are missing. **So the job is to
+make sure each new claim binds to the volume its predecessor used.** You do that
 from the volume rather than the claim: setting a PersistentVolume's `claimRef`
 [reserves it](https://kubernetes.io/docs/concepts/storage/persistent-volumes/#reserving-a-persistentvolume)
 for one claim, including a claim that does not exist yet. The new StatefulSet
@@ -910,6 +910,14 @@ it.
 Keep the ordinals aligned as you go: a tablet server takes its id from its pod
 ordinal, so `data-tablet-server-0` must end up on
 `data-<release>-fluss-tablet-server-0` and not on some other ordinal.
+
+:::warning
+The cluster is down for the whole procedure, not just for the upgrade at the
+end. Any `helm upgrade` that enables this option replaces the pods rather than
+rolling them, but here the outage also covers the manual steps in between, so
+plan a maintenance window. If a GitOps controller syncs this release, suspend
+it first, or it will recreate the StatefulSets you delete in step 2.
+:::
 
 Back up or snapshot the volumes before you start. Then:
 
@@ -924,7 +932,9 @@ Back up or snapshot the volumes before you start. Then:
    ```
 
 2. Delete the old StatefulSets. This stops the pods and leaves the claims and
-   volumes in place.
+   volumes in place. Nothing recreates them: a StatefulSet is a top-level
+   object, and Helm only acts on the release when you run a command against
+   it. The release is simply without them until step 5.
 
    ```bash
    kubectl delete statefulset coordinator-server tablet-server
@@ -937,10 +947,13 @@ Back up or snapshot the volumes before you start. Then:
      data-tablet-server-0 data-tablet-server-1 data-tablet-server-2
    ```
 
-4. Point each volume at the claim the new StatefulSet will create. Replace the
-   whole `claimRef` rather than merging into it, so the old claim's `uid` does
-   not survive — the volume is only treated as reserved when the reference
-   carries no `uid`. It returns to `Available` once patched.
+4. Point each volume at the claim the new StatefulSet will create. The claim
+   does not have to exist yet, and the patch does not fail for naming one that
+   does not: a reference carrying no `uid` is what marks the volume as
+   reserved, and the volume waits at `Available` until that claim appears.
+   Replace the whole `claimRef` rather than merging into it, so the old claim's
+   `uid` does not survive — a stale `uid` makes the volume look bound to a
+   claim that is gone, which leaves it `Released` instead of reserved.
 
    ```bash
    kubectl patch pv <volume> --type json -p '[{
@@ -959,9 +972,14 @@ Back up or snapshot the volumes before you start. Then:
 Restore each volume's original reclaim policy afterwards if it was not
 `Retain`.
 
-Nothing here leaves you owning extra objects: the claims are still created and
-labelled by the StatefulSet controller, and `volumeClaimTemplates` is immutable
-once a StatefulSet exists, so no later upgrade revisits them.
+This needs no upkeep afterwards. The claims are created and labelled by the
+StatefulSet controller, exactly as they would have been on a fresh install, so
+you are not left owning extra objects. Later upgrades do not revisit them:
+`volumeClaimTemplates` is immutable once a StatefulSet exists, the controller
+only creates claims that are missing, and nothing deletes them — the claims are
+not part of the Helm release, and the StatefulSet's claim retention policy
+defaults to keeping them on both deletion and scale-down. Each `claimRef`
+becomes an ordinary binding once its claim appears and stays that way.
 
 With `storage.enabled: false`, the default, the pods use `emptyDir` and there
 is nothing to preserve: run the upgrade and let them come back empty. One
