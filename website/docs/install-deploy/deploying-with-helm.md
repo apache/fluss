@@ -907,10 +907,6 @@ for one claim, including a claim that does not exist yet. The new StatefulSet
 then creates its claims as usual and each one binds to the volume waiting for
 it.
 
-Keep the ordinals aligned as you go: a tablet server takes its id from its pod
-ordinal, so `data-tablet-server-0` must end up on
-`data-<release>-fluss-tablet-server-0` and not on some other ordinal.
-
 :::warning
 The cluster is down for the whole procedure, not just for the upgrade at the
 end. Any `helm upgrade` that enables this option replaces the pods rather than
@@ -921,13 +917,25 @@ it first, or it will recreate the StatefulSets you delete in step 2.
 
 Back up or snapshot the volumes before you start. Then:
 
-1. Make each volume survive its claim being deleted, and note which volume
-   backs which claim:
+1. Write down which volume backs which claim. You need this mapping in step 4,
+   and it is gone once the claims are deleted.
 
    ```bash
    kubectl get pvc -l app.kubernetes.io/name=fluss \
      -o custom-columns=CLAIM:.metadata.name,VOLUME:.spec.volumeName
+   ```
 
+   ```
+   CLAIM                      VOLUME
+   data-coordinator-server-0  pvc-8f3a1c02-...
+   data-tablet-server-0       pvc-b71e4d55-...
+   data-tablet-server-1       pvc-2c9f0ab8-...
+   data-tablet-server-2       pvc-5d84e719-...
+   ```
+
+   Then make each volume survive its claim being deleted:
+
+   ```bash
    kubectl patch pv <volume> -p '{"spec":{"persistentVolumeReclaimPolicy":"Retain"}}'
    ```
 
@@ -947,10 +955,17 @@ Back up or snapshot the volumes before you start. Then:
      data-tablet-server-0 data-tablet-server-1 data-tablet-server-2
    ```
 
-4. Point each volume at the claim the new StatefulSet will create. The claim
-   does not have to exist yet, and the patch does not fail for naming one that
-   does not: a reference carrying no `uid` is what marks the volume as
-   reserved, and the volume waits at `Available` until that claim appears.
+4. Point each volume at the claim the new StatefulSet will create, working
+   from the mapping in step 1 and keeping the ordinal the same. The volume that
+   backed `data-tablet-server-1` is reserved for
+   `data-<release>-fluss-tablet-server-1`, and so on for every claim including
+   the coordinator's. Ordinals matter because a tablet server takes its id from
+   its pod ordinal: cross two of them over and a server boots on another
+   server's data, with nothing to warn you.
+
+   The claim does not have to exist yet, and the patch does not fail for
+   naming one that does not: a reference carrying no `uid` is what marks the
+   volume as reserved, and it waits at `Available` until that claim appears.
    Replace the whole `claimRef` rather than merging into it, so the old claim's
    `uid` does not survive — a stale `uid` makes the volume look bound to a
    claim that is gone, which leaves it `Released` instead of reserved.
