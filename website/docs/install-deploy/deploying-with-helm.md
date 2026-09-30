@@ -380,7 +380,7 @@ The same pattern works with Sealed Secrets, HashiCorp Vault Agent Injector (prod
 |-----------|-------------|---------|
 | `configurationOverrides.default.bucket.number` | Default number of buckets for tables | `3` |
 | `configurationOverrides.default.replication.factor` | Default replication factor | `3` |
-| `configurationOverrides.zookeeper.path.root` | ZooKeeper root path for Fluss. Becomes `/fluss/<release>` when `uniqueResourceNames` is enabled | `/fluss` |
+| `configurationOverrides.zookeeper.path.root` | ZooKeeper root path for Fluss. Becomes `/fluss-<release>` when `uniqueResourceNames` is enabled | `/fluss` |
 | `configurationOverrides.zookeeper.address` | ZooKeeper ensemble address | `zk-zookeeper.{{ .Release.Namespace }}.svc.cluster.local:2181` |
 | `configurationOverrides.remote.data.dir` | Remote data directory for snapshots | `/tmp/fluss/remote-data` |
 | `configurationOverrides.data.dir` | Local data directory | `/tmp/fluss/data` |
@@ -574,7 +574,7 @@ ZooKeeper root path `/fluss`. Two releases in the
 same namespace would therefore collide on both.
 
 Set `uniqueResourceNames` to give every resource a name unique to the release
-and move the ZooKeeper root path to `/fluss/<release>`:
+and move the ZooKeeper root path to `/fluss-<release>`:
 
 ```bash
 helm install orders ./helm --set uniqueResourceNames=true
@@ -582,8 +582,8 @@ helm install payments ./helm --set uniqueResourceNames=true
 ```
 
 This gives you `orders-fluss-coordinator-server` alongside
-`payments-fluss-coordinator-server`, on ZooKeeper roots `/fluss/orders` and
-`/fluss/payments`. It is useful when namespace creation is restricted and one
+`payments-fluss-coordinator-server`, on ZooKeeper roots `/fluss-orders` and
+`/fluss-payments`. It is useful when namespace creation is restricted and one
 team needs more than one cluster.
 
 Two things still need attention:
@@ -897,17 +897,13 @@ configurationOverrides:
   zookeeper.path.root: /fluss
 ```
 
-Without the pin they start against an empty `/fluss/<release>` and the old
+Without the pin they start against an empty `/fluss-<release>` and the old
 cluster's metadata is left behind.
 
-The pin is permanent, and it costs this release the ZooKeeper half of the
-isolation. Fluss uses the root as a Curator namespace, so a second release left
-on the default `/fluss/<other-release>` lands *inside* this one's tree, and a
-release whose name happens to match one of Fluss's own root children —
-`config`, `tables`, `schemas`, `snapshots`, `partitions`, `buckets`,
-`producers`, `leases` among them — collides with its data outright. If you
-expect more than one cluster in this namespace, give each a sibling root such
-as `/fluss-<release>` instead of leaving any of them nested.
+The pin is permanent: this release keeps `/fluss` for good. That is safe to
+leave alongside others, because the scoped root is a sibling rather than a
+child — Fluss uses the root as a ZooKeeper namespace, so a release nested under
+this one would sit among its data.
 
 The claims created from `volumeClaimTemplates` are named
 `data-<statefulset>-<ordinal>`, so renaming the StatefulSets renames every

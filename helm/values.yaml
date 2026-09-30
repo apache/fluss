@@ -36,9 +36,11 @@ uniqueResourceNames: false
 configurationOverrides:
   default.bucket.number: 3
   default.replication.factor: 3
-  # Follows uniqueResourceNames: scoping the root to the release keeps
-  # two clusters sharing a ZooKeeper ensemble from overwriting each other.
-  zookeeper.path.root: /fluss{{ if .Values.uniqueResourceNames }}/{{ .Release.Name }}{{ end }}
+  # Follows uniqueResourceNames: scoping the root to the release keeps two
+  # clusters sharing a ZooKeeper ensemble from overwriting each other. The
+  # scoped root is a sibling of /fluss rather than a child, because a release
+  # still on /fluss uses it as a ZooKeeper namespace and would contain it.
+  zookeeper.path.root: /fluss{{ if .Values.uniqueResourceNames }}-{{ .Release.Name }}{{ end }}
   zookeeper.address: zk-zookeeper.{{ .Release.Namespace }}.svc.cluster.local:2181
   remote.data.dir: /tmp/fluss/remote-data
   data.dir: /tmp/fluss/data

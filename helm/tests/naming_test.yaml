@@ -229,7 +229,7 @@ tests:
     asserts:
       - matchRegex:
           path: data["server.yaml"]
-          pattern: 'zookeeper\.path\.root: /fluss/alpha'
+          pattern: 'zookeeper\.path\.root: /fluss-alpha'
 
 ---
 
