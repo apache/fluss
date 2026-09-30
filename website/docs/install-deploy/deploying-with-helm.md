@@ -566,8 +566,9 @@ configurationOverrides:
 ### Running several Fluss clusters in one namespace
 
 By default the chart gives each resource a fixed name (`coordinator-server`,
-`tablet-server`, `fluss-conf-file`, and the matching headless Services) and
-puts every cluster on the ZooKeeper root path `/fluss`. Two releases in the
+`tablet-server`, `fluss-conf-file`, and the matching headless Services — the
+metrics Services already carry the release name) and puts every cluster on the
+ZooKeeper root path `/fluss`. Two releases in the
 same namespace would therefore collide on both.
 
 Set `uniqueResourceNames` to give every resource a name unique to the release
@@ -596,7 +597,9 @@ Two things still need attention:
   name on its own when it already contains `fluss`. That prefix has to stay
   within 40 characters, so a release name without `fluss` in it is limited to
   34. Set `fullnameOverride` for anything longer. The chart fails the render
-  with an explicit message when the prefix is too long.
+  with an explicit message when the prefix is too long. That check covers the
+  resources named after `fluss.fullname`; the metrics Services are named from
+  the release name alone and are not covered by it.
 
 To enable the option on a cluster that already exists, read
 [Enabling unique resource names on an existing release](#enabling-unique-resource-names-on-an-existing-release)
@@ -895,6 +898,15 @@ configurationOverrides:
 Without the pin they start against an empty `/fluss/<release>` and the old
 cluster's metadata is left behind.
 
+The pin is permanent, and it costs this release the ZooKeeper half of the
+isolation. Fluss uses the root as a Curator namespace, so a second release left
+on the default `/fluss/<other-release>` lands *inside* this one's tree, and a
+release whose name happens to match one of Fluss's own root children —
+`config`, `tables`, `schemas`, `snapshots`, `partitions`, `buckets`,
+`producers`, `leases` among them — collides with its data outright. If you
+expect more than one cluster in this namespace, give each a sibling root such
+as `/fluss-<release>` instead of leaving any of them nested.
+
 The claims created from `volumeClaimTemplates` are named
 `data-<statefulset>-<ordinal>`, so renaming the StatefulSets renames every
 claim. Left alone, the new pods start on fresh empty volumes and the old claims
@@ -920,9 +932,11 @@ from `volumeClaimTemplates`, and only when they are missing. **So the job is to
 make sure each new claim binds to the volume its predecessor used.** You do that
 from the volume rather than the claim: setting a PersistentVolume's `claimRef`
 [reserves it](https://kubernetes.io/docs/concepts/storage/persistent-volumes/#reserving-a-persistentvolume)
-for one claim, including a claim that does not exist yet. The new StatefulSet
-then creates its claims as usual and each one binds to the volume waiting for
-it.
+so that no other claim can bind to it. The reservation holds for a claim that
+does not exist yet as well, which is controller behaviour rather than
+documented API — a `claimRef` carrying no `uid` leaves the volume `Available`
+until the claim it names appears. The new StatefulSet then creates its claims
+as usual and each one binds to the volume waiting for it.
 
 :::warning
 The cluster is down for the whole procedure, not just for the upgrade at the
@@ -931,6 +945,11 @@ rolling them, but here the outage also covers the manual steps in between, so
 plan a maintenance window. If a GitOps controller syncs this release, suspend
 it first, or it will recreate the StatefulSets you delete in step 2.
 :::
+
+Leave `coordinator.storage.size` and `tablet.storage.size` alone in this
+upgrade. Binding checks capacity even for a reserved volume, so a template
+asking for more than the volume provides leaves the claim and its pod
+`Pending`, with the volume still sitting at `Available` and nothing saying why.
 
 Back up or snapshot the volumes before you start. Then:
 
@@ -991,9 +1010,10 @@ Back up or snapshot the volumes before you start. Then:
    The claim does not have to exist yet, and the patch does not fail for
    naming one that does not: a reference carrying no `uid` is what marks the
    volume as reserved, and it waits at `Available` until that claim appears.
-   Replace the whole `claimRef` rather than merging into it, so the old claim's
-   `uid` does not survive — a stale `uid` makes the volume look bound to a
-   claim that is gone, which leaves it `Released` instead of reserved.
+   What matters is clearing the old `uid`: a stale one makes the volume look
+   bound to a claim that is gone, leaving it `Released` instead of reserved.
+   Replacing the whole `claimRef` does that, and so does a merge patch that
+   nulls `uid` explicitly. A merge patch that only sets `name` does not.
 
    ```bash
    kubectl patch pv <volume> --type json -p '[{
@@ -1027,6 +1047,12 @@ only creates claims that are missing, and nothing deletes them — the claims ar
 not part of the Helm release, and the StatefulSet's claim retention policy
 defaults to keeping them on both deletion and scale-down. Each `claimRef`
 becomes an ordinary binding once its claim appears and stays that way.
+
+Immutability cuts both ways, though. Once the new StatefulSets exist you cannot
+change `storage.size` or `storage.storageClass` through `helm upgrade` at all —
+it fails on the forbidden field — and getting out of that means
+`kubectl delete statefulset --cascade=orphan` and another pass of this
+procedure. Settle those values before you migrate.
 
 With `storage.enabled: false`, the default, the pods use `emptyDir` and there
 is nothing to preserve: run the upgrade and let the pods come back empty.
