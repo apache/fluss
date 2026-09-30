@@ -121,8 +121,10 @@ helm uninstall fluss
 # Uninstall ZooKeeper
 helm uninstall zk
 
-# Delete PVCs
-kubectl delete pvc -l app.kubernetes.io/name=fluss
+# Delete PVCs belonging to this release. Scope by instance: the
+# app.kubernetes.io/name label is shared by every Fluss release in the
+# namespace, and carries nameOverride when one is set.
+kubectl delete pvc -l app.kubernetes.io/instance=fluss
 
 # Stop Minikube
 minikube stop
@@ -946,6 +948,11 @@ plan a maintenance window. If a GitOps controller syncs this release, suspend
 it first, or it will recreate the StatefulSets you delete in step 2.
 :::
 
+Rehearse this on a non-production cluster first. It has been checked against
+the Kubernetes source rather than run on every storage backend, and reserving a
+volume under a `WaitForFirstConsumer` storage class — the default on EKS and
+GKE — takes a different path through the scheduler than immediate binding does.
+
 Leave `coordinator.storage.size` and `tablet.storage.size` alone in this
 upgrade. Binding checks capacity even for a reserved volume, so a template
 asking for more than the volume provides leaves the claim and its pod
@@ -957,9 +964,19 @@ Back up or snapshot the volumes before you start. Then:
    and it is gone once the claims are deleted.
 
    ```bash
-   kubectl get pvc -l app.kubernetes.io/name=fluss \
+   kubectl get pvc -l app.kubernetes.io/instance=<release> \
      -o custom-columns=CLAIM:.metadata.name,VOLUME:.spec.volumeName
    ```
+
+   Select on `instance`, not on `app.kubernetes.io/name`. The `name` label
+   carries `nameOverride` when one is set, so that selector can come back empty
+   on a cluster that does have volumes — and an empty listing here reads like
+   there is nothing to preserve. `instance` is always the release name. It also
+   keeps the listing to this release, which matters once a namespace holds more
+   than one: rows from a neighbour look almost identical, and carrying one into
+   step 4 hands its volume to this release's claim.
+
+   Check the output holds only this release's claims before continuing.
 
    ```
    CLAIM                      VOLUME
@@ -968,6 +985,12 @@ Back up or snapshot the volumes before you start. Then:
    data-tablet-server-1       pvc-2c9f0ab8-...
    data-tablet-server-2       pvc-5d84e719-...
    ```
+
+   The two storage flags are independent, and enabling only
+   `tablet.storage.enabled` is the common shape. Whatever this listing returns
+   is what you have; expect no coordinator row unless
+   `coordinator.storage.enabled` is also set, and leave the coordinator out of
+   the commands below in that case.
 
    Then make each volume survive its claim being deleted:
 
@@ -1033,8 +1056,15 @@ Back up or snapshot the volumes before you start. Then:
    kubectl get pv -o custom-columns=NAME:.metadata.name,PHASE:.status.phase,CLAIM:.spec.claimRef.name
    ```
 
-5. Run the upgrade. The new StatefulSets create their claims, each binds to the
-   volume reserved for it, and the pods come up on the original disks.
+5. Run the upgrade, repeating every `-f` and `--set` the release already had
+   alongside the two new settings. Do not reach for `--reuse-values`: it drops
+   values set on the command line, including the root path pin. The new
+   StatefulSets create their claims, each binds to the volume reserved for it,
+   and the pods come up on the original disks.
+
+If it goes wrong, the way back is the way in. The volumes are on `Retain`, so
+patch each `claimRef` to the old claim name instead and upgrade again without
+`uniqueResourceNames`.
 
 Restore each volume's original reclaim policy afterwards if it was not
 `Retain`.
