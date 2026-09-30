@@ -936,8 +936,8 @@ from the volume rather than the claim: setting a PersistentVolume's `claimRef`
 [reserves it](https://kubernetes.io/docs/concepts/storage/persistent-volumes/#reserving-a-persistentvolume)
 so that no other claim can bind to it, and the reservation holds for a claim
 that does not exist yet: a `claimRef` carrying no `uid` leaves the volume
-`Available` until the claim it names appears. The new StatefulSet then creates its claims
-as usual and each one binds to the volume waiting for it.
+`Available` until the claim it names appears. The new StatefulSet then creates
+its claims as usual and each one binds to the volume waiting for it.
 
 :::warning
 The cluster is down for the whole procedure, not just for the upgrade at the
