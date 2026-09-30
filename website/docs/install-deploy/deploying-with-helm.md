@@ -934,10 +934,9 @@ from `volumeClaimTemplates`, and only when they are missing. **So the job is to
 make sure each new claim binds to the volume its predecessor used.** You do that
 from the volume rather than the claim: setting a PersistentVolume's `claimRef`
 [reserves it](https://kubernetes.io/docs/concepts/storage/persistent-volumes/#reserving-a-persistentvolume)
-so that no other claim can bind to it. The reservation holds for a claim that
-does not exist yet as well, which is controller behaviour rather than
-documented API — a `claimRef` carrying no `uid` leaves the volume `Available`
-until the claim it names appears. The new StatefulSet then creates its claims
+so that no other claim can bind to it, and the reservation holds for a claim
+that does not exist yet: a `claimRef` carrying no `uid` leaves the volume
+`Available` until the claim it names appears. The new StatefulSet then creates its claims
 as usual and each one binds to the volume waiting for it.
 
 :::warning
