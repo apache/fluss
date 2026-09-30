@@ -928,16 +928,13 @@ A release called `prod` prints `prod-fluss-coordinator-server` and
 and so on. A release called `fluss` prints `fluss-tablet-server`, and its claim
 is `data-fluss-tablet-server-0` — not `data-fluss-fluss-tablet-server-0`.
 
-The volumes can be carried over, and the chart plays no part in it. Helm
-creates the StatefulSet; the claims are created by the StatefulSet controller
-from `volumeClaimTemplates`, and only when they are missing. **So the job is to
-make sure each new claim binds to the volume its predecessor used.** You do that
-from the volume rather than the claim: setting a PersistentVolume's `claimRef`
-[reserves it](https://kubernetes.io/docs/concepts/storage/persistent-volumes/#reserving-a-persistentvolume)
-so that no other claim can bind to it, and the reservation holds for a claim
-that does not exist yet: a `claimRef` carrying no `uid` leaves the volume
-`Available` until the claim it names appears. The new StatefulSet then creates
-its claims as usual and each one binds to the volume waiting for it.
+The volumes can be carried over. A StatefulSet creates a claim only when one of
+that name is missing, so **the job is to make sure each new claim binds to the
+volume its predecessor used.** You do that from the volume: a PersistentVolume
+whose `claimRef` names a claim is
+[reserved](https://kubernetes.io/docs/concepts/storage/persistent-volumes/#reserving-a-persistentvolume)
+for it, even before that claim exists. Reserve each volume for the claim the new
+StatefulSet is going to create, and the rest happens on its own.
 
 :::warning
 The cluster is down for the whole procedure, not just for the upgrade at the
@@ -952,10 +949,9 @@ storage class: reserving a volume under `WaitForFirstConsumer` — the default o
 EKS and GKE — takes a different path through the scheduler than immediate
 binding does.
 
-Leave `coordinator.storage.size` and `tablet.storage.size` alone in this
-upgrade. Binding checks capacity even for a reserved volume, so a template
-asking for more than the volume provides leaves the claim and its pod
-`Pending`, with the volume still sitting at `Available` and nothing saying why.
+Do not change `storage.size` in this upgrade. Each new claim has to fit the
+volume you reserve for it, and one that asks for more will not bind at all: the
+pod never starts and the data is never picked up.
 
 Back up or snapshot the volumes before you start. Then:
 
@@ -967,15 +963,8 @@ Back up or snapshot the volumes before you start. Then:
      -o custom-columns=CLAIM:.metadata.name,VOLUME:.spec.volumeName
    ```
 
-   Select on `instance`, not on `app.kubernetes.io/name`. The `name` label
-   carries `nameOverride` when one is set, so that selector can come back empty
-   on a cluster that does have volumes — and an empty listing here reads like
-   there is nothing to preserve. `instance` is always the release name. It also
-   keeps the listing to this release, which matters once a namespace holds more
-   than one: rows from a neighbour look almost identical, and carrying one into
-   step 4 hands its volume to this release's claim.
-
-   Check the output holds only this release's claims before continuing.
+   Select on `instance`, not on `app.kubernetes.io/name`: the `name` label
+   changes with `nameOverride`, and every release in the namespace shares it.
 
    ```
    CLAIM                      VOLUME
@@ -984,12 +973,6 @@ Back up or snapshot the volumes before you start. Then:
    data-tablet-server-1       pvc-2c9f0ab8-...
    data-tablet-server-2       pvc-5d84e719-...
    ```
-
-   The two storage flags are independent, and enabling only
-   `tablet.storage.enabled` is the common shape. Whatever this listing returns
-   is what you have; expect no coordinator row unless
-   `coordinator.storage.enabled` is also set, and leave the coordinator out of
-   the commands below in that case.
 
    Then make each volume survive its claim being deleted:
 
@@ -1007,12 +990,8 @@ Back up or snapshot the volumes before you start. Then:
    kubectl wait --for=delete pod -l app.kubernetes.io/instance=<release> --timeout=5m
    ```
 
-   Do not skip the wait. `kubectl delete` returns as soon as the deletion is
-   accepted, and a claim cannot be deleted while a pod object still references
-   it — the `kubernetes.io/pvc-protection` finalizer holds it in `Terminating`
-   instead. A StatefulSet that later finds a claim in that state refuses to
-   create the pod and reports `pvc ... is being deleted`, which turns step 5
-   into a failed upgrade.
+   Do not skip the wait: a claim cannot be deleted while a pod still refers to
+   it, and one left stuck in `Terminating` fails the upgrade at step 5.
 
 3. Delete the old claims. Each volume becomes `Released`.
 
@@ -1029,13 +1008,10 @@ Back up or snapshot the volumes before you start. Then:
    of them over and a server boots on another server's data, with nothing to
    warn you.
 
-   The claim does not have to exist yet, and the patch does not fail for
-   naming one that does not: a reference carrying no `uid` is what marks the
-   volume as reserved, and it waits at `Available` until that claim appears.
-   What matters is clearing the old `uid`: a stale one makes the volume look
-   bound to a claim that is gone, leaving it `Released` instead of reserved.
-   Replacing the whole `claimRef` does that, and so does a merge patch that
-   nulls `uid` explicitly. A merge patch that only sets `name` does not.
+   The claim need not exist yet. What matters is that the reference carries no
+   `uid` — a stale one leaves the volume `Released` rather than reserved. So
+   replace the whole `claimRef`, or null the `uid` explicitly; setting only
+   `name` keeps it.
 
    ```bash
    kubectl patch pv <volume> --type json -p '[{
@@ -1077,27 +1053,15 @@ not part of the Helm release, and the StatefulSet's claim retention policy
 defaults to keeping them on both deletion and scale-down. Each `claimRef`
 becomes an ordinary binding once its claim appears and stays that way.
 
-Immutability cuts both ways, though. Once the new StatefulSets exist you cannot
-change `storage.size` or `storage.storageClass` through `helm upgrade` at all —
-it fails on the forbidden field — and getting out of that means
-`kubectl delete statefulset --cascade=orphan` and another pass of this
-procedure. Settle those values before you migrate.
-
 With `storage.enabled: false`, the default, the pods use `emptyDir` and there
 is nothing to preserve: run the upgrade and let the pods come back empty.
 
 Delete the old StatefulSets first even then, and wait for their pods. Helm
-creates the new resources before deleting the old ones, so a plain upgrade
-leaves the two generations running at once, both claiming the same identities
-in ZooKeeper — a tablet server takes its id from its pod ordinal, and the
-coordinator re-registers through the same retry loop. Whichever arrives second
-finds the identity held by a live ephemeral znode, and retries every 3 seconds
-for up to 60 seconds. If that budget runs out the server throws and the pod
-crash-loops until a later attempt succeeds. A pod that shuts down gracefully
-closes its ZooKeeper session and drops its znode at once, but one that is
-killed or partitioned leaves the znode until the session expires — and
-`zookeeper.client.session-timeout` defaults to 60 seconds too, so the retry
-budget has no margin over it.
+creates the new resources before deleting the old ones, so the two generations
+overlap and collide on their ZooKeeper identities. The server that arrives
+second retries for 60 seconds and then crash-loops until a later attempt wins.
+An ungraceful exit holds the old identity until its session expires, which
+`zookeeper.client.session-timeout` also defaults to 60 seconds.
 
 ### Rolling Updates
 
