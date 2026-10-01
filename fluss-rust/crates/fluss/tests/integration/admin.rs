@@ -426,6 +426,28 @@ mod admin_test {
         );
     }
 
+    #[tokio::test]
+    async fn test_get_nonexistent_table_returns_table_not_exist() {
+        let cluster = get_shared_cluster();
+        let connection = cluster.get_fluss_connection().await;
+        let table_path = TablePath::new(
+            "fluss",
+            format!("nonexistent_table_{}", uuid::Uuid::new_v4().simple()),
+        );
+
+        let error = match connection.get_table(&table_path).await {
+            Ok(_) => panic!("getting a nonexistent table should fail"),
+            Err(error) => error,
+        };
+
+        assert_eq!(
+            error.api_error(),
+            Some(FlussError::TableNotExist),
+            "Expected TableNotExist error, got {:?}",
+            error
+        );
+    }
+
     /// Helper to assert that an error is a FlussAPIError with the expected code.
     fn assert_api_error(error: fluss::error::Error, expected: FlussError) {
         assert_eq!(

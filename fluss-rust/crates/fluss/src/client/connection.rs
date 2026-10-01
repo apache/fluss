@@ -21,7 +21,7 @@ use crate::client::lookup::LookupClient;
 use crate::client::metadata::Metadata;
 use crate::client::table::FlussTable;
 use crate::config::Config;
-use crate::error::{Error, FlussError, Result};
+use crate::error::{Error, Result};
 use crate::metadata::TablePath;
 
 #[cfg(feature = "integration_tests")]
@@ -183,19 +183,13 @@ impl FlussConnection {
     }
 
     pub async fn get_table(&self, table_path: &TablePath) -> Result<FlussTable<'_>> {
+        if self.metadata.fetch_table_id(table_path).await?.is_none() {
+            return Err(Error::table_not_exist(format!(
+                "Table not found: {table_path}"
+            )));
+        }
         self.metadata.update_table_metadata(table_path).await?;
-        let table_info = self
-            .metadata
-            .get_cluster()
-            .get_table(table_path)
-            .map_err(|e| {
-                if e.api_error() == Some(FlussError::InvalidTableException) {
-                    Error::table_not_exist(format!("Table not found: {table_path}"))
-                } else {
-                    e
-                }
-            })?
-            .clone();
+        let table_info = self.metadata.get_cluster().get_table(table_path)?.clone();
         Ok(FlussTable::new(self, self.metadata.clone(), table_info))
     }
 }
