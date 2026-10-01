@@ -277,7 +277,11 @@ public class CoordinatorEventProcessor implements EventProcessor {
         this.internalListenerName = conf.getString(ConfigOptions.INTERNAL_LISTENER_NAME);
         this.rebalanceManager =
                 new RebalanceManager(
-                        this, zooKeeperClient, coordinatorEventManager, SystemClock.getInstance());
+                        this,
+                        zooKeeperClient,
+                        coordinatorEventManager,
+                        SystemClock.getInstance(),
+                        coordinatorMetricGroup.getRebalanceMetrics());
         this.offlineLeaderRetryDelayMs =
                 conf.get(ConfigOptions.COORDINATOR_OFFLINE_LEADER_RETRY_DELAY).toMillis();
         if (offlineLeaderRetryDelayMs <= 0) {
@@ -342,10 +346,13 @@ public class CoordinatorEventProcessor implements EventProcessor {
     }
 
     public void shutdown() {
-        clearOfflineLeaderRetryTask();
-        // close the event manager
-        coordinatorEventManager.close();
-        rebalanceManager.close();
+        try {
+            clearOfflineLeaderRetryTask();
+            // close the event manager
+            coordinatorEventManager.close();
+        } finally {
+            rebalanceManager.close();
+        }
         onShutdown();
         coordinatorContext.resetContext();
         updateObservedKvLeaderReplicaCount();
