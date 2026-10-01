@@ -46,16 +46,29 @@ public class RebalanceProgress {
     /** The rebalance progress for each tabletBucket. */
     private final Map<TableBucket, RebalanceResultForBucket> progressForBucketMap;
 
+    /** The time when the rebalance was started, in epoch milliseconds. -1 if unknown. */
+    private final long startedAtMs;
+
+    /**
+     * The time when the rebalance reached a final status, in epoch milliseconds. -1 if the
+     * rebalance is still in progress or the completion time is unknown.
+     */
+    private final long completedAtMs;
+
     public RebalanceProgress(
             String rebalanceId,
             RebalanceStatus rebalanceStatus,
             double progress,
-            Map<TableBucket, RebalanceResultForBucket> progressForBucketMap) {
+            Map<TableBucket, RebalanceResultForBucket> progressForBucketMap,
+            long startedAtMs,
+            long completedAtMs) {
         this.rebalanceId = rebalanceId;
         // TODO: we may derive the overall progress and status from progressForBucketMap
         this.rebalanceStatus = checkNotNull(rebalanceStatus);
         this.progress = progress;
         this.progressForBucketMap = checkNotNull(progressForBucketMap);
+        this.startedAtMs = startedAtMs;
+        this.completedAtMs = completedAtMs;
     }
 
     public String rebalanceId() {
@@ -72,6 +85,19 @@ public class RebalanceProgress {
 
     public Map<TableBucket, RebalanceResultForBucket> progressForBucketMap() {
         return progressForBucketMap;
+    }
+
+    /** The time when the rebalance was started, in epoch milliseconds. -1 if unknown. */
+    public long startedAtMs() {
+        return startedAtMs;
+    }
+
+    /**
+     * The time when the rebalance reached a final status, in epoch milliseconds. -1 if the
+     * rebalance is still in progress or the completion time is unknown.
+     */
+    public long completedAtMs() {
+        return completedAtMs;
     }
 
     public String formatAsPercentage() {
