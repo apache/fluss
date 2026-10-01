@@ -26,6 +26,7 @@ on:
       - 'website/**'
       - 'helm/**'
       - 'fluss-rust/**'
+      - 'devkit/**'
       - 'fluss-gateway/**'
       - '**/*.md'
   pull_request:
@@ -33,6 +34,7 @@ on:
       - 'website/**'
       - 'helm/**'
       - 'fluss-rust/**'
+      - 'devkit/**'
       - 'fluss-gateway/**'
       - '**/*.md'
 
