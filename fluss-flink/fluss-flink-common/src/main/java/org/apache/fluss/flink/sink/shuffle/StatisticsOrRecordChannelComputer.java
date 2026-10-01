@@ -115,9 +115,9 @@ public class StatisticsOrRecordChannelComputer<InputT>
         try {
             if (wrapper.isStatistics()) {
                 this.delegatePartitioner = delegatePartitioner(wrapper.statistics());
-                return (int)
-                        (roundRobinCounter(downstreamNumChannels).getAndIncrement()
-                                % downstreamNumChannels);
+                return ChannelComputer.select(
+                        roundRobinCounter(downstreamNumChannels).getAndIncrement(),
+                        downstreamNumChannels);
             } else {
                 if (delegatePartitioner == null) {
                     delegatePartitioner = delegatePartitioner(null);
@@ -279,11 +279,11 @@ public class StatisticsOrRecordChannelComputer<InputT>
                         "Encountered new partition: {}.  choose {} subtasks for it.",
                         partitionName,
                         defaultSubtaskCount);
-                int randomStart = Math.abs(partitionName.hashCode()) % numChannels;
+                int randomStart = ChannelComputer.select(partitionName, 0, numChannels);
                 List<Integer> assignedSubtasks = new ArrayList<>(defaultSubtaskCount);
                 List<Long> subtaskWeights = new ArrayList<>(defaultSubtaskCount);
                 for (int i = 0; i < defaultSubtaskCount; i++) {
-                    assignedSubtasks.add((randomStart + i) % numChannels);
+                    assignedSubtasks.add(ChannelComputer.select(randomStart + i, numChannels));
                     subtaskWeights.add(1L);
                 }
                 keyAssignment =
