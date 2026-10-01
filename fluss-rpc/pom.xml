@@ -33,6 +33,10 @@
         The Fluss RPC framework and Netty-based implementation.
     </description>
 
+    <properties>
+        <bouncycastle.version>1.85</bouncycastle.version>
+    </properties>
+
     <dependencies>
         <dependency>
             <groupId>org.apache.fluss</groupId>
@@ -63,6 +67,35 @@
             <artifactId>fluss-common</artifactId>
             <version>${project.version}</version>
             <type>test-jar</type>
+            <scope>test</scope>
+        </dependency>
+
+        <!--
+        Netty's SelfSignedCertificate, used by the TLS tests to generate key material, prefers
+        BouncyCastle and only falls back to sun.security.x509 internals, which are inaccessible
+        on JDK 9+ and unusable from JDK 18 on. Test scope: no BouncyCastle is shipped.
+        bcutil and bcprov are bcpkix's own transitive dependencies, declared here only to pin
+        them: bcpkix depends on them through version ranges, which resolve differently over time
+        and make every build fetch their maven-metadata.xml.
+        -->
+        <dependency>
+            <groupId>org.bouncycastle</groupId>
+            <artifactId>bcpkix-jdk18on</artifactId>
+            <version>${bouncycastle.version}</version>
+            <scope>test</scope>
+        </dependency>
+
+        <dependency>
+            <groupId>org.bouncycastle</groupId>
+            <artifactId>bcutil-jdk18on</artifactId>
+            <version>${bouncycastle.version}</version>
+            <scope>test</scope>
+        </dependency>
+
+        <dependency>
+            <groupId>org.bouncycastle</groupId>
+            <artifactId>bcprov-jdk18on</artifactId>
+            <version>${bouncycastle.version}</version>
             <scope>test</scope>
         </dependency>
     </dependencies>
