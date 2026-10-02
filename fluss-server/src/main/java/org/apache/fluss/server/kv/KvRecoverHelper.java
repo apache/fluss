@@ -203,6 +203,8 @@ public class KvRecoverHelper {
                 autoIncIdRangeUpdater,
                 FetchIsolation.LOG_END,
                 resumeRecordApplier);
+        // the replayed records were accumulated locally; publish their accounting delta once
+        kvTablet.getKvPreWriteBuffer().publishPendingAccountingDelta();
 
         if (autoIncRange != null) {
             AutoIncIDRange newRange = autoIncIdRangeUpdater.getNewRange();

@@ -90,6 +90,9 @@ public class TabletServerMetricGroup extends AbstractMetricGroup {
 
     private volatile long sharedWriteBufferCapacity;
 
+    /** Supplier for the server-wide pre-write buffer memory usage, set by KvManager. */
+    private volatile LongSupplier kvPreWriteBufferMemoryUsageSupplier = () -> 0L;
+
     public TabletServerMetricGroup(
             MetricRegistry registry, String clusterId, String rack, String hostname, int serverId) {
         super(registry, new String[] {clusterId, hostname, NAME}, null);
@@ -151,6 +154,10 @@ public class TabletServerMetricGroup extends AbstractMetricGroup {
 
         // Register server-level RocksDB aggregated metrics
         registerServerRocksDBMetrics();
+
+        gauge(
+                MetricNames.KV_PRE_WRITE_BUFFER_MEMORY_USAGE_BYTES,
+                () -> kvPreWriteBufferMemoryUsageSupplier.getAsLong());
     }
 
     /**
@@ -213,6 +220,18 @@ public class TabletServerMetricGroup extends AbstractMetricGroup {
         this.sharedWriteBufferUsageSupplier =
                 checkNotNull(usageSupplier, "usageSupplier must not be null");
         this.sharedWriteBufferCapacity = capacity;
+    }
+
+    /**
+     * Sets the supplier for the server-wide pre-write buffer memory usage gauge. Called by
+     * KvManager, which owns the shared accounting counter.
+     *
+     * @param usageSupplier supplier for the current total estimated memory usage of all KV
+     *     pre-write buffers in bytes
+     */
+    public void setKvPreWriteBufferMemoryUsageMetrics(LongSupplier usageSupplier) {
+        this.kvPreWriteBufferMemoryUsageSupplier =
+                checkNotNull(usageSupplier, "usageSupplier must not be null");
     }
 
     /**

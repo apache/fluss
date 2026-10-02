@@ -31,6 +31,7 @@ import org.apache.fluss.server.metrics.group.TestingMetricGroups;
 
 import org.junit.jupiter.api.Test;
 
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Supplier;
 
 import static org.apache.fluss.record.TestData.DATA1_ROW_TYPE;
@@ -48,7 +49,8 @@ class KvStateAccessorTest {
     private final RocksDBKv rocksDBKv = mock(RocksDBKv.class);
     private final KvStateAccessor stateAccessor =
             new KvStateAccessor(
-                    new KvPreWriteBuffer(TestingMetricGroups.TABLET_SERVER_METRICS),
+                    new KvPreWriteBuffer(
+                            TestingMetricGroups.TABLET_SERVER_METRICS, new AtomicLong()),
                     rocksDBKv,
                     true);
     private final ValueDecoder valueDecoder =
