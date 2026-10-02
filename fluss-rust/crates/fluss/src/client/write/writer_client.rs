@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::BucketId;
 use crate::bucketing::BucketingFunction;
 use crate::client::metadata::Metadata;
 use crate::client::write::IdempotenceManager;
@@ -25,14 +24,11 @@ use crate::client::write::bucket_assigner::{
 };
 use crate::client::write::sender::Sender;
 use crate::client::{RecordAccumulator, ResultHandle, WriteRecord};
-use crate::cluster::Cluster;
 use crate::config::Config;
 use crate::config::NoKeyAssigner;
 use crate::error::{Error, FlussError, Result};
 use crate::metadata::{PhysicalTablePath, TableInfo};
 use crate::metrics::WriterMetrics;
-use bytes::Bytes;
-use dashmap::DashMap;
 use log::warn;
 use parking_lot::Mutex;
 use std::sync::Arc;
@@ -48,7 +44,6 @@ pub struct WriterClient {
     shutdown_tx: Mutex<Option<mpsc::Sender<()>>>,
     sender_join_handle: Mutex<Option<JoinHandle<()>>>,
     metadata: Arc<Metadata>,
-    bucket_assigners: DashMap<Arc<PhysicalTablePath>, Arc<dyn BucketAssigner>>,
     idempotence_manager: Arc<IdempotenceManager>,
 }
 
@@ -98,7 +93,6 @@ impl WriterClient {
             sender_join_handle: Mutex::new(Some(join_handle)),
             accumulate: accumulator,
             metadata,
-            bucket_assigners: Default::default(),
             idempotence_manager,
         })
     }
@@ -120,67 +114,26 @@ impl WriterClient {
                 message: "Cannot send: writer is closed".to_string(),
             });
         }
-        let physical_table_path = &record.physical_table_path;
         let cluster = self.metadata.get_cluster();
-        // A dropped table is missing here once its metadata is evicted. Report the
-        // same error its pending writes got, before the bucket assigner panics.
-        let table_path = physical_table_path.get_table_path();
-        cluster.get_table(table_path).map_err(|e| {
+        // Validate once against the same snapshot used for routing and append.
+        // Preserve the missing-table error before entering the bucket assigner.
+        let table_path = record.physical_table_path.get_table_path();
+        let table_info = cluster.get_table(table_path).map_err(|e| {
             if e.api_error() == Some(FlussError::InvalidTableException) {
                 Error::table_not_exist(format!("Table not found: {table_path}"))
             } else {
                 e
             }
         })?;
-        let bucket_key = record.bucket_key.as_ref();
-
-        let (bucket_assigner, bucket_id) = self.assign_bucket(
-            &record.table_info,
-            bucket_key,
-            physical_table_path,
-            &cluster,
-        )?;
-
-        let mut result = self.accumulate.append(
-            record,
-            bucket_id,
-            &cluster,
-            bucket_assigner.abort_if_batch_full(),
-        )?;
-
-        if result.abort_record_for_new_batch {
-            let prev_bucket_id = bucket_id;
-            bucket_assigner.on_new_batch(&cluster, prev_bucket_id);
-            let bucket_id = bucket_assigner.assign_bucket(bucket_key, &cluster)?;
-            result = self.accumulate.append(record, bucket_id, &cluster, false)?;
-        }
+        let result = self
+            .accumulate
+            .append_routed(record, &cluster, table_info)?;
 
         if result.batch_is_full || result.new_batch_created {
             self.accumulate.wakeup_sender();
         }
 
         Ok(result.result_handle.expect("result_handle should exist"))
-    }
-    fn assign_bucket(
-        &self,
-        table_info: &Arc<TableInfo>,
-        bucket_key: Option<&Bytes>,
-        table_path: &Arc<PhysicalTablePath>,
-        cluster: &Arc<Cluster>,
-    ) -> Result<(Arc<dyn BucketAssigner>, BucketId)> {
-        let bucket_assigner = {
-            if let Some(assigner) = self.bucket_assigners.get(table_path) {
-                assigner.clone()
-            } else {
-                let assigner =
-                    Self::create_bucket_assigner(table_info, Arc::clone(table_path), &self.config)?;
-                self.bucket_assigners
-                    .insert(Arc::clone(table_path), Arc::clone(&assigner));
-                assigner
-            }
-        };
-        let bucket_id = bucket_assigner.assign_bucket(bucket_key, cluster)?;
-        Ok((bucket_assigner, bucket_id))
     }
 
     /// Close the writer with a timeout. Matches Java's two-phase shutdown:
