@@ -17,7 +17,6 @@
 
 package org.apache.fluss.server.coordinator;
 
-import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.config.Configuration;
@@ -50,16 +49,18 @@ import org.slf4j.LoggerFactory;
 import javax.annotation.Nullable;
 
 import java.util.Collection;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
-import java.util.Optional;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.function.BiConsumer;
 import java.util.function.Function;
 import java.util.function.IntSupplier;
+import java.util.function.LongConsumer;
 
+import static org.apache.fluss.server.metadata.ServerInfo.UNKNOWN_TABLET_SERVER_EPOCH;
 import static org.apache.fluss.utils.Preconditions.checkState;
 
 /**
@@ -94,8 +95,15 @@ public class CoordinatorChannelManager {
     }
 
     public void startup(Collection<ServerNode> serverNodes) {
+        startup(serverNodes, Collections.emptyMap());
+    }
+
+    /** Starts channels for the currently registered tablet server incarnations. */
+    public void startup(Collection<ServerNode> serverNodes, Map<Integer, Long> tabletServerEpochs) {
         for (ServerNode serverNode : serverNodes) {
-            addNewTabletServer(serverNode);
+            addNewTabletServer(
+                    serverNode,
+                    tabletServerEpochs.getOrDefault(serverNode.id(), UNKNOWN_TABLET_SERVER_EPOCH));
         }
         synchronized (channelLock) {
             for (TabletServerChannelState state : channelStates.values()) {
@@ -111,7 +119,12 @@ public class CoordinatorChannelManager {
 
     /** Adds a tablet server and immediately starts its sender thread (runtime addition). */
     public void addTabletServer(ServerNode serverNode) {
-        addNewTabletServer(serverNode);
+        addTabletServer(serverNode, UNKNOWN_TABLET_SERVER_EPOCH);
+    }
+
+    /** Adds one tablet server incarnation and immediately starts its sender thread. */
+    public void addTabletServer(ServerNode serverNode, long tabletServerEpoch) {
+        addNewTabletServer(serverNode, tabletServerEpoch);
         synchronized (channelLock) {
             TabletServerChannelState state = channelStates.get(serverNode.id());
             if (state != null) {
@@ -120,7 +133,7 @@ public class CoordinatorChannelManager {
         }
     }
 
-    private void addNewTabletServer(ServerNode serverNode) {
+    private void addNewTabletServer(ServerNode serverNode, long tabletServerEpoch) {
         checkState(
                 serverNode.serverType().equals(ServerType.TABLET_SERVER),
                 "The server type should be TABLET_SERVER, but was " + serverNode.serverType());
@@ -147,7 +160,8 @@ public class CoordinatorChannelManager {
                             epochSupplier,
                             conf,
                             tsGroup);
-            channelStates.put(id, new TabletServerChannelState(queue, thread, tsGroup));
+            channelStates.put(
+                    id, new TabletServerChannelState(queue, thread, tsGroup, tabletServerEpoch));
         }
     }
 
@@ -210,27 +224,31 @@ public class CoordinatorChannelManager {
         }
     }
 
-    /** Send NotifyLeaderAndIsr request to the server and handle the response. */
+    /** Enqueue a NotifyLeaderAndIsr request and handle its response. */
     public void sendBucketLeaderAndIsrRequest(
             int receiveServerId,
             NotifyLeaderAndIsrRequest notifyLeaderAndIsrRequest,
             BiConsumer<NotifyLeaderAndIsrResponse, ? super Throwable> responseConsumer) {
-        sendRequest(
+        enqueueRequest(
                 receiveServerId,
-                notifyLeaderAndIsrRequest,
-                TabletServerGateway::notifyLeaderAndIsr,
+                ApiKeys.NOTIFY_LEADER_AND_ISR,
+                notifyLeaderAndIsrRequest.getCoordinatorEpoch(),
+                notifyLeaderAndIsrRequest::setTabletServerEpoch,
+                gateway -> gateway.notifyLeaderAndIsr(notifyLeaderAndIsrRequest),
                 responseConsumer);
     }
 
-    /** Send StopBucketReplicaRequest to the server and handle the response. */
+    /** Enqueue a StopReplica request and handle its response. */
     public void sendStopBucketReplicaRequest(
             int receiveServerId,
             StopReplicaRequest stopReplicaRequest,
             BiConsumer<StopReplicaResponse, ? super Throwable> responseConsumer) {
-        sendRequest(
+        enqueueRequest(
                 receiveServerId,
-                stopReplicaRequest,
-                TabletServerGateway::stopReplica,
+                ApiKeys.STOP_REPLICA,
+                stopReplicaRequest.getCoordinatorEpoch(),
+                stopReplicaRequest::setTabletServerEpoch,
+                gateway -> gateway.stopReplica(stopReplicaRequest),
                 responseConsumer);
     }
 
@@ -247,110 +265,105 @@ public class CoordinatorChannelManager {
             int coordinatorEpoch,
             Function<TabletServerGateway, CompletableFuture<ResponseT>> requestSender,
             @Nullable BiConsumer<ResponseT, ? super Throwable> responseConsumer) {
-        TabletServerChannelState state;
-        synchronized (channelLock) {
-            state = channelStates.get(targetServerId);
-        }
-        if (state == null) {
-            LOG.warn(
-                    "Cannot enqueue {} for tablet server {} because its channel does not exist.",
-                    apiKey,
-                    targetServerId);
-            return false;
-        }
+        return enqueueRequest(
+                targetServerId, apiKey, coordinatorEpoch, null, requestSender, responseConsumer);
+    }
 
-        try {
-            state.getQueue()
-                    .put(
-                            new QueueItem<>(
-                                    apiKey,
-                                    requestSender,
-                                    responseConsumer,
-                                    coordinatorEpoch,
-                                    System.currentTimeMillis()));
-            return true;
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            LOG.warn(
-                    "Interrupted while enqueueing {} for tablet server {}", apiKey, targetServerId);
-            return false;
+    /** Enqueues a control request and binds it to the current tablet server incarnation. */
+    protected <ResponseT extends ApiMessage> boolean enqueueRequest(
+            int targetServerId,
+            ApiKeys apiKey,
+            int coordinatorEpoch,
+            @Nullable LongConsumer tabletServerEpochSetter,
+            Function<TabletServerGateway, CompletableFuture<ResponseT>> requestSender,
+            @Nullable BiConsumer<ResponseT, ? super Throwable> responseConsumer) {
+        synchronized (channelLock) {
+            TabletServerChannelState state = channelStates.get(targetServerId);
+            if (state == null) {
+                LOG.warn(
+                        "Cannot enqueue {} for tablet server {} because its channel does not exist.",
+                        apiKey,
+                        targetServerId);
+                return false;
+            }
+
+            long tabletServerEpoch = state.getTabletServerEpoch();
+            if (tabletServerEpochSetter != null
+                    && tabletServerEpoch != UNKNOWN_TABLET_SERVER_EPOCH) {
+                tabletServerEpochSetter.accept(tabletServerEpoch);
+            }
+
+            try {
+                state.getQueue()
+                        .put(
+                                new QueueItem<>(
+                                        apiKey,
+                                        requestSender,
+                                        responseConsumer,
+                                        coordinatorEpoch,
+                                        System.currentTimeMillis()));
+                return true;
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                LOG.warn(
+                        "Interrupted while enqueueing {} for tablet server {}",
+                        apiKey,
+                        targetServerId);
+                return false;
+            }
         }
     }
 
-    /** Send UpdateMetadataRequest to the server and handle the response. */
+    /** Enqueue an UpdateMetadata request and handle its response. */
     public void sendUpdateMetadataRequest(
             int receiveServerId,
             UpdateMetadataRequest updateMetadataRequest,
             BiConsumer<UpdateMetadataResponse, ? super Throwable> responseConsumer) {
-        sendRequest(
+        enqueueRequest(
                 receiveServerId,
-                updateMetadataRequest,
-                TabletServerGateway::updateMetadata,
+                ApiKeys.UPDATE_METADATA,
+                updateMetadataRequest.getCoordinatorEpoch(),
+                updateMetadataRequest::setTabletServerEpoch,
+                gateway -> gateway.updateMetadata(updateMetadataRequest),
                 responseConsumer);
     }
 
-    /** Send NotifyRemoteLogOffsetsRequest to the server and handle the response. */
+    /** Enqueue a NotifyRemoteLogOffsets request and handle its response. */
     public void sendNotifyRemoteLogOffsetsRequest(
             int receiveServerId,
             NotifyRemoteLogOffsetsRequest notifyRemoteLogOffsetsRequest,
             BiConsumer<NotifyRemoteLogOffsetsResponse, ? super Throwable> responseConsumer) {
-        sendRequest(
+        enqueueRequest(
                 receiveServerId,
-                notifyRemoteLogOffsetsRequest,
-                TabletServerGateway::notifyRemoteLogOffsets,
+                ApiKeys.NOTIFY_REMOTE_LOG_OFFSETS,
+                notifyRemoteLogOffsetsRequest.getCoordinatorEpoch(),
+                gateway -> gateway.notifyRemoteLogOffsets(notifyRemoteLogOffsetsRequest),
                 responseConsumer);
     }
 
-    /** Send NotifyKvSnapshotOffsetRequest to the server and handle the response. */
+    /** Enqueue a NotifyKvSnapshotOffset request and handle its response. */
     public void sendNotifyKvSnapshotOffsetRequest(
             int receiveServerId,
             NotifyKvSnapshotOffsetRequest notifySnapshotOffsetRequest,
             BiConsumer<NotifyKvSnapshotOffsetResponse, ? super Throwable> responseConsumer) {
-        sendRequest(
+        enqueueRequest(
                 receiveServerId,
-                notifySnapshotOffsetRequest,
-                TabletServerGateway::notifyKvSnapshotOffset,
+                ApiKeys.NOTIFY_KV_SNAPSHOT_OFFSET,
+                notifySnapshotOffsetRequest.getCoordinatorEpoch(),
+                gateway -> gateway.notifyKvSnapshotOffset(notifySnapshotOffsetRequest),
                 responseConsumer);
     }
 
+    /** Enqueue a NotifyLakeTableOffset request and handle its response. */
     public void sendNotifyLakeTableOffsetRequest(
             int receiveServerId,
             NotifyLakeTableOffsetRequest notifyLakeTableOffsetRequest,
             BiConsumer<NotifyLakeTableOffsetResponse, ? super Throwable> responseConsumer) {
-        sendRequest(
+        enqueueRequest(
                 receiveServerId,
-                notifyLakeTableOffsetRequest,
-                TabletServerGateway::notifyLakeTableOffset,
+                ApiKeys.NOTIFY_LAKE_TABLE_OFFSET,
+                notifyLakeTableOffsetRequest.getCoordinatorEpoch(),
+                gateway -> gateway.notifyLakeTableOffset(notifyLakeTableOffsetRequest),
                 responseConsumer);
-    }
-
-    @VisibleForTesting
-    protected <Request extends ApiMessage, Response extends ApiMessage> void sendRequest(
-            int targetServerId,
-            Request request,
-            RequestSendFunction<Request, Response> requestFunction,
-            BiConsumer<Response, ? super Throwable> responseConsumer) {
-        Optional<TabletServerGateway> optionalTabletServerGateway =
-                getTabletServerGateway(targetServerId);
-        if (!optionalTabletServerGateway.isPresent()) {
-            LOG.warn(
-                    "Can't not send {} to the tablet server {} as the server is offline.",
-                    request.getClass().getSimpleName(),
-                    targetServerId);
-        } else {
-            TabletServerGateway tabletServerGateway = optionalTabletServerGateway.get();
-            requestFunction.apply(tabletServerGateway, request).whenComplete(responseConsumer);
-        }
-    }
-
-    protected Optional<TabletServerGateway> getTabletServerGateway(int targetServerId) {
-        return rpcGatewayManager.getRpcGateway(targetServerId);
-    }
-
-    /** A functional interface to send request via TabletServerGateway. */
-    @VisibleForTesting
-    @FunctionalInterface
-    interface RequestSendFunction<RequestT extends ApiMessage, ResponseT extends ApiMessage> {
-        CompletableFuture<ResponseT> apply(TabletServerGateway gateway, RequestT request);
     }
 }

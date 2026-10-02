@@ -229,6 +229,7 @@ message UpdateMetadataRequest {
   repeated PbTableMetadata table_metadata = 3;
   repeated PbPartitionMetadata partition_metadata = 4;
   optional int32 coordinator_epoch = 5;
+  optional int64 tablet_server_epoch = 6;
 }
 
 message UpdateMetadataResponse {
@@ -383,6 +384,7 @@ message GetTableStatsResponse {
 message NotifyLeaderAndIsrRequest {
   required int32 coordinator_epoch = 1;
   repeated PbNotifyLeaderAndIsrReqForBucket notify_buckets_leader_req = 2;
+  optional int64 tablet_server_epoch = 3;
 }
 
 // response for notify bucket leader and isr request
@@ -394,6 +396,7 @@ message NotifyLeaderAndIsrResponse {
 message StopReplicaRequest {
   required int32 coordinator_epoch = 1;
   repeated PbStopReplicaReqForBucket stop_replicas_req = 2;
+  optional int64 tablet_server_epoch = 3;
 }
 
 // response for stop bucket replica request
@@ -731,7 +734,7 @@ message LakeTieringHeartbeatResponse {
 
 message ControlledShutdownRequest {
   required int32 tablet_server_id = 1;
-  required int32 tablet_server_epoch = 2;
+  required int64 tablet_server_epoch = 2;
 }
 
 message ControlledShutdownResponse {

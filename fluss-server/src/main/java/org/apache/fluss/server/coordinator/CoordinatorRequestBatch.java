@@ -478,12 +478,10 @@ public class CoordinatorRequestBatch {
                                     "Failed to send notify leader and isr request to tablet server {}.",
                                     serverId,
                                     throwable);
-                            // todo: in FLUSS-55886145, we will introduce a sender thread to send
-                            // the request, and retry if encounter any error; It may happens that
-                            // the tablet server is offline and will always got error. But,
-                            // coordinator will remove the sender for the tablet server and mark all
-                            // replica in the tablet server as offline. so, in here, if encounter
-                            // any error, we just ignore it.
+                            // Transport failures are retried by the per-tablet-server sender. This
+                            // callback only receives an explicit, non-retriable failure. Keep the
+                            // existing behavior for now; a follow-up will classify the failure and
+                            // reconcile the affected replicas from current coordinator state.
 
                             // Clear pending state so the health API does not report stale
                             // RED. The coordinator will detect actual server death via
@@ -535,9 +533,9 @@ public class CoordinatorRequestBatch {
                     stopReplicaRequest,
                     (response, throwable) -> {
                         if (throwable != null) {
-                            // todo: in FLUSS-55886145, we will introduce a sender thread to send
-                            // the request.
-                            // in here, we just ignore the error.
+                            // Transport failures are retried by the per-tablet-server sender. A
+                            // follow-up will preserve and reconcile the affected deletion state for
+                            // explicit, non-retriable failures.
                             LOG.warn(
                                     "Failed to send stop replica request to tablet server {}.",
                                     serverId,
@@ -608,9 +606,10 @@ public class CoordinatorRequestBatch {
     }
 
     public void sendUpdateMetadataRequest() {
-        // Build updateMetadataRequest.
-        UpdateMetadataRequest updateMetadataRequest = buildUpdateMetadataRequest();
         for (Integer serverId : updateMetadataRequestTabletServerSet) {
+            // Each target needs its own request object because the channel manager binds the
+            // mutable RPC message to that tablet server's incarnation epoch.
+            UpdateMetadataRequest updateMetadataRequest = buildUpdateMetadataRequest();
             coordinatorChannelManager.sendUpdateMetadataRequest(
                     serverId,
                     updateMetadataRequest,

@@ -19,17 +19,29 @@ package org.apache.fluss.server.coordinator.event;
 
 import java.util.Objects;
 
+import static org.apache.fluss.server.metadata.ServerInfo.UNKNOWN_TABLET_SERVER_EPOCH;
+
 /** An event for tablet server became dead. */
 public class DeadTabletServerEvent implements CoordinatorEvent {
 
     private final int serverId;
+    private final long tabletServerEpoch;
 
     public DeadTabletServerEvent(int serverId) {
+        this(serverId, UNKNOWN_TABLET_SERVER_EPOCH);
+    }
+
+    public DeadTabletServerEvent(int serverId, long tabletServerEpoch) {
         this.serverId = serverId;
+        this.tabletServerEpoch = tabletServerEpoch;
     }
 
     public int getServerId() {
         return serverId;
+    }
+
+    public long getTabletServerEpoch() {
+        return tabletServerEpoch;
     }
 
     @Override
@@ -41,16 +53,21 @@ public class DeadTabletServerEvent implements CoordinatorEvent {
             return false;
         }
         DeadTabletServerEvent that = (DeadTabletServerEvent) o;
-        return serverId == that.serverId;
+        return serverId == that.serverId && tabletServerEpoch == that.tabletServerEpoch;
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(serverId);
+        return Objects.hash(serverId, tabletServerEpoch);
     }
 
     @Override
     public String toString() {
-        return "DeadTabletServerEvent{" + "serverId=" + serverId + '}';
+        return "DeadTabletServerEvent{"
+                + "serverId="
+                + serverId
+                + ", tabletServerEpoch="
+                + tabletServerEpoch
+                + '}';
     }
 }

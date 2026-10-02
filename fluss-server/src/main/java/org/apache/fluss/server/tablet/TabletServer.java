@@ -79,6 +79,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 
 import static org.apache.fluss.config.ConfigOptions.BACKGROUND_THREADS;
 import static org.apache.fluss.config.FlussConfigUtils.validateTabletConfigs;
@@ -114,6 +115,7 @@ public class TabletServer extends ServerBase {
     private final CompletableFuture<Result> terminationFuture;
 
     private final AtomicBoolean isShutDown = new AtomicBoolean(false);
+    private final AtomicLong tabletServerEpoch = new AtomicLong(-1L);
     private final String interListenerName;
     private final Clock clock;
 
@@ -325,6 +327,7 @@ public class TabletServer extends ServerBase {
                             replicaStateChangeExecutor,
                             scannerManager,
                             coordinatorGateway,
+                            tabletServerEpoch::get,
                             interListenerName);
 
             RequestsMetrics requestsMetrics =
@@ -390,13 +393,16 @@ public class TabletServer extends ServerBase {
 
     private void registerTabletServer() throws Exception {
         long startTime = System.currentTimeMillis();
+        long registrationEpoch =
+                tabletServerEpoch.updateAndGet(
+                        previousEpoch -> Math.max(startTime, previousEpoch + 1));
         List<Endpoint> bindEndpoints = rpcServer.getBindEndpoints();
         TabletServerResource tabletServerResource = new TabletServerResourceProbe(conf).probe();
         TabletServerRegistration tabletServerRegistration =
                 new TabletServerRegistration(
                         rack,
                         Endpoint.loadAdvertisedEndpoints(bindEndpoints, conf),
-                        startTime,
+                        registrationEpoch,
                         tabletServerResource);
 
         while (true) {
@@ -617,7 +623,7 @@ public class TabletServer extends ServerBase {
             ControlledShutdownRequest controlledShutdownRequest =
                     new ControlledShutdownRequest()
                             .setTabletServerId(serverId)
-                            .setTabletServerEpoch(-1); // TODO, set correct tabletServer epoch.
+                            .setTabletServerEpoch(tabletServerEpoch.get());
             try {
                 ControlledShutdownResponse response =
                         coordinatorGateway.controlledShutdown(controlledShutdownRequest).get();
