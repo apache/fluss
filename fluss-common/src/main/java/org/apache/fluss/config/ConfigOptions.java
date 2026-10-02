@@ -2703,6 +2703,15 @@ public class ConfigOptions {
                                     + ConfigOptions.TABLE_DATALAKE_AUTO_EXPIRE_SNAPSHOT
                                     + " is false.");
 
+    public static final ConfigOption<Boolean> LAKE_TIERING_PARTITION_MARK_DONE_ENABLED =
+            key("lake.tiering.partition.mark-done.enabled")
+                    .booleanType()
+                    .defaultValue(false)
+                    .withDescription(
+                            "Whether the tiering service marks idle partitions of tiered partitioned tables as done. "
+                                    + "Disabled by default. When enabled, mark-done uses the actual lake table's options "
+                                    + "(e.g. 'partition.idle-time-to-done' on the Paimon table).");
+
     public static final ConfigOption<String> LAKE_TIERING_IO_TMP_DIRS =
             key("lake.tiering.io.tmp.dirs")
                     .stringType()
