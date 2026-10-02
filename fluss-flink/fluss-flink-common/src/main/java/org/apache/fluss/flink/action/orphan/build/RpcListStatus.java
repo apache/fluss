@@ -17,6 +17,8 @@
 
 package org.apache.fluss.flink.action.orphan.build;
 
+import org.apache.fluss.flink.action.orphan.RpcErrorClassifier;
+
 import javax.annotation.Nullable;
 
 /**
@@ -29,14 +31,22 @@ import javax.annotation.Nullable;
  */
 final class RpcListStatus {
 
-    private static final RpcListStatus OK = new RpcListStatus(true, null);
+    private static final RpcListStatus OK = new RpcListStatus(true, null, null, null);
 
     private final boolean ok;
     @Nullable private final String reason;
+    @Nullable private final RpcErrorClassifier.Category category;
+    @Nullable private final Throwable cause;
 
-    private RpcListStatus(boolean ok, @Nullable String reason) {
+    private RpcListStatus(
+            boolean ok,
+            @Nullable String reason,
+            @Nullable RpcErrorClassifier.Category category,
+            @Nullable Throwable cause) {
         this.ok = ok;
         this.reason = reason;
+        this.category = category;
+        this.cause = cause;
     }
 
     static RpcListStatus ok() {
@@ -44,7 +54,12 @@ final class RpcListStatus {
     }
 
     static RpcListStatus listFailed(String reason) {
-        return new RpcListStatus(false, reason);
+        return new RpcListStatus(false, reason, null, null);
+    }
+
+    static RpcListStatus listFailed(
+            String reason, RpcErrorClassifier.Category category, Throwable cause) {
+        return new RpcListStatus(false, reason, category, cause);
     }
 
     boolean isOk() {
@@ -54,5 +69,15 @@ final class RpcListStatus {
     @Nullable
     String reason() {
         return reason;
+    }
+
+    @Nullable
+    RpcErrorClassifier.Category category() {
+        return category;
+    }
+
+    @Nullable
+    Throwable cause() {
+        return cause;
     }
 }

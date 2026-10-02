@@ -31,6 +31,7 @@ import org.apache.fluss.flink.action.orphan.RpcErrorClassifier;
 import org.apache.fluss.flink.action.orphan.audit.AuditLogger;
 import org.apache.fluss.flink.action.orphan.build.ActiveRefsFetcher;
 import org.apache.fluss.flink.action.orphan.build.KvActiveRefsFetchResult;
+import org.apache.fluss.flink.action.orphan.build.KvSharedSstFetchResult;
 import org.apache.fluss.flink.action.orphan.build.LogActiveRefsFetchResult;
 import org.apache.fluss.flink.action.orphan.build.MaxKnownIdsTracker;
 import org.apache.fluss.flink.action.orphan.config.OrphanCleanConfig;
@@ -56,6 +57,7 @@ import javax.annotation.Nullable;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -301,6 +303,9 @@ public final class ScopeEnumeratorFunction extends ProcessFunction<Integer, Clea
             tableInfo = admin.getTableInfo(tablePath).get();
         } catch (Exception e) {
             RpcErrorClassifier.Category category = RpcErrorClassifier.classify(e);
+            if (category == RpcErrorClassifier.Category.NOT_FOUND) {
+                audit.logSkipTable(dbState.dbName, tableName, "target-disappeared");
+            }
             if (category != RpcErrorClassifier.Category.NOT_FOUND || explicitTableTarget) {
                 audit.logSkipTable(dbState.dbName, tableName, category.name());
                 dbState.tableInfosComplete = false;
@@ -329,7 +334,12 @@ public final class ScopeEnumeratorFunction extends ProcessFunction<Integer, Clea
                 tracker.observePartitionId(partition.getPartitionId());
             }
         } catch (Exception e) {
-            audit.logSkipPartitionList(dbState.dbName, tableName, classifyName(e));
+            if (RpcErrorClassifier.classify(e) == RpcErrorClassifier.Category.NOT_FOUND) {
+                audit.logScopeTargetDisappeared(liveTable.tableId, null);
+                dbState.liveTables.remove(liveTable);
+            } else {
+                audit.logSkipPartitionList(dbState.dbName, tableName, classifyName(e));
+            }
             liveTable.partitionInfosComplete = false;
         }
     }
@@ -386,6 +396,10 @@ public final class ScopeEnumeratorFunction extends ProcessFunction<Integer, Clea
 
         LogActiveRefsFetchResult logResult =
                 fetcher.fetchLogActiveRefsByBucket(liveTable.tableId, partitionId);
+        if (logResult.listFailureCategory() == RpcErrorClassifier.Category.NOT_FOUND) {
+            audit.logScopeTargetDisappeared(liveTable.tableId, partitionId);
+            return;
+        }
         if (!logResult.listOk()) {
             audit.logSkipLogTarget(liveTable.tableId, partitionId, logResult.listFailureReason());
         }
@@ -395,8 +409,12 @@ public final class ScopeEnumeratorFunction extends ProcessFunction<Integer, Clea
         if (liveTable.tableInfo.hasPrimaryKey()) {
             KvActiveRefsFetchResult kvResult =
                     fetcher.fetchKvActiveSnapDirs(liveTable.tableId, partitionId);
+            if (kvResult.listFailureCategory() == RpcErrorClassifier.Category.NOT_FOUND) {
+                audit.logScopeTargetDisappeared(liveTable.tableId, partitionId);
+                return;
+            }
             if (kvResult.listOk()) {
-                kvActiveByBucket = kvResult.activeSnapDirsByBucket();
+                kvActiveByBucket = new HashMap<>(kvResult.activeSnapDirsByBucket());
                 kvTargetOk = true;
             } else {
                 audit.logSkipKvTarget(liveTable.tableId, partitionId, kvResult.listFailureReason());
@@ -435,8 +453,14 @@ public final class ScopeEnumeratorFunction extends ProcessFunction<Integer, Clea
                                 logResult.readFailureReason(bucketId));
                         break;
                     case NOT_LISTED:
-                        audit.logSkipLogBucket(
-                                liveTable.tableId, partitionId, bucketId, "no_remote_manifest");
+                        logTabletDir =
+                                FlussPaths.remoteLogTabletDir(
+                                                remoteLogDir,
+                                                physicalPath(liveTable.tablePath, partitionInfo),
+                                                tableBucket)
+                                        .toString();
+                        audit.logScanLogBucketWithoutManifest(
+                                liveTable.tableId, partitionId, bucketId);
                         break;
                     default:
                         break;
@@ -445,16 +469,39 @@ public final class ScopeEnumeratorFunction extends ProcessFunction<Integer, Clea
 
             String kvTabletDir = null;
             Set<String> kvActiveSnaps = Collections.emptySet();
-            if (kvTargetOk && kvActiveByBucket.containsKey(bucketId)) {
+            Set<String> kvSharedSstFileNames = Collections.emptySet();
+            boolean kvSharedSstRefsComplete = false;
+            if (kvTargetOk) {
                 kvTabletDir =
                         FlussPaths.remoteKvTabletDir(
                                         remoteKvDir,
                                         physicalPath(liveTable.tablePath, partitionInfo),
                                         tableBucket)
                                 .toString();
-                kvActiveSnaps = kvActiveByBucket.get(bucketId);
-            } else if (kvTargetOk) {
-                audit.logSkipKvBucket(liveTable.tableId, partitionId, bucketId, "empty_active_set");
+                kvActiveSnaps = kvActiveByBucket.getOrDefault(bucketId, Collections.emptySet());
+                KvSharedSstFetchResult sstResult =
+                        fetcher.fetchKvSharedSstFileNamesWithRefresh(
+                                liveTable.tableId,
+                                partitionId,
+                                bucketId,
+                                new FsPath(kvTabletDir),
+                                kvActiveByBucket);
+                if (sstResult.targetDisappeared()) {
+                    audit.logScopeTargetDisappeared(liveTable.tableId, partitionId);
+                    return;
+                }
+                kvActiveSnaps = kvActiveByBucket.getOrDefault(bucketId, Collections.emptySet());
+                if (kvActiveSnaps.isEmpty() && sstResult.allMetadataReadOk()) {
+                    audit.logScanKvBucketWithoutActiveSnapshots(
+                            liveTable.tableId, partitionId, bucketId);
+                }
+                if (sstResult.allMetadataReadOk()) {
+                    kvSharedSstFileNames = sstResult.sharedSstFileNames();
+                    kvSharedSstRefsComplete = true;
+                } else {
+                    audit.logSkipKvSharedSst(
+                            liveTable.tableId, partitionId, bucketId, sstResult.failureReason());
+                }
             }
 
             if (logTabletDir == null && kvTabletDir == null) {
@@ -468,6 +515,8 @@ public final class ScopeEnumeratorFunction extends ProcessFunction<Integer, Clea
                             logSegmentRelativePaths,
                             logActiveManifestPaths,
                             kvActiveSnaps,
+                            kvSharedSstFileNames,
+                            kvSharedSstRefsComplete,
                             config.olderThanMillis(),
                             config.dryRun(),
                             config.allowDeleteManifest()));
