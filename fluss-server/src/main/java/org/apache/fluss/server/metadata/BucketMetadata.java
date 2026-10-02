@@ -19,26 +19,50 @@ package org.apache.fluss.server.metadata;
 
 import javax.annotation.Nullable;
 
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
 import java.util.OptionalInt;
 
 /** This entity used to describe the bucket metadata. */
 public class BucketMetadata {
+    public static final int NO_LEADER_ISR_STATE_EPOCH = -1;
+
     private final int bucketId;
     private final @Nullable Integer leaderId;
     private final @Nullable Integer leaderEpoch;
     private final List<Integer> replicas;
+    private final List<Integer> isr;
+    private final @Nullable Integer bucketEpoch;
 
+    /**
+     * Creates legacy bucket metadata without authoritative leader/ISR state.
+     *
+     * <p>The empty ISR and absent bucket epoch distinguish this metadata from an authoritative
+     * state with an empty ISR.
+     */
     public BucketMetadata(
             int bucketId,
             @Nullable Integer leaderId,
             @Nullable Integer leaderEpoch,
             List<Integer> replicas) {
+        this(bucketId, leaderId, leaderEpoch, replicas, Collections.emptyList(), null);
+    }
+
+    public BucketMetadata(
+            int bucketId,
+            @Nullable Integer leaderId,
+            @Nullable Integer leaderEpoch,
+            List<Integer> replicas,
+            List<Integer> isr,
+            @Nullable Integer bucketEpoch) {
         this.bucketId = bucketId;
         this.leaderId = leaderId;
         this.leaderEpoch = leaderEpoch;
-        this.replicas = replicas;
+        this.replicas = Collections.unmodifiableList(new ArrayList<>(replicas));
+        this.isr = Collections.unmodifiableList(new ArrayList<>(isr));
+        this.bucketEpoch = bucketEpoch;
     }
 
     public int getBucketId() {
@@ -57,6 +81,26 @@ public class BucketMetadata {
         return replicas;
     }
 
+    /**
+     * Returns the in-sync replicas (ISR) for this bucket.
+     *
+     * <p>An empty list has no presence semantics by itself: it can represent legacy metadata that
+     * did not carry authoritative ISR information, a known absence of leader/ISR state, or an
+     * authoritative state whose ISR is empty. Callers that need to distinguish these cases must
+     * also inspect {@link #getBucketEpoch()}: {@code null} means legacy metadata, {@link
+     * #NO_LEADER_ISR_STATE_EPOCH} means that no leader/ISR state exists, and any other value is the
+     * generation of an authoritative leader/ISR state.
+     *
+     * @return the immutable ISR list
+     */
+    public List<Integer> getIsr() {
+        return isr;
+    }
+
+    public @Nullable Integer getBucketEpoch() {
+        return bucketEpoch;
+    }
+
     @Override
     public String toString() {
         return "BucketMetadata{"
@@ -68,6 +112,10 @@ public class BucketMetadata {
                 + leaderEpoch
                 + ", replicas="
                 + replicas
+                + ", isr="
+                + isr
+                + ", bucketEpoch="
+                + bucketEpoch
                 + '}';
     }
 
@@ -83,11 +131,13 @@ public class BucketMetadata {
         return bucketId == that.bucketId
                 && Objects.equals(leaderId, that.leaderId)
                 && Objects.equals(leaderEpoch, that.leaderEpoch)
-                && replicas.equals(that.replicas);
+                && replicas.equals(that.replicas)
+                && isr.equals(that.isr)
+                && Objects.equals(bucketEpoch, that.bucketEpoch);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(bucketId, leaderId, leaderEpoch, replicas);
+        return Objects.hash(bucketId, leaderId, leaderEpoch, replicas, isr, bucketEpoch);
     }
 }

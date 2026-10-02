@@ -48,6 +48,7 @@ impl AlterTableRequest {
                 drop_columns: drop_columns.iter().map(DropColumn::to_pb).collect(),
                 rename_columns: rename_columns.iter().map(RenameColumn::to_pb).collect(),
                 modify_columns: modify_columns.iter().map(ModifyColumn::to_pb).collect(),
+                modify_bucket_count: None,
             },
         }
     }

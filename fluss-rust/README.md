@@ -198,7 +198,7 @@ async fn main() -> Result<()> {
         .column("id", DataTypes::int())
         .column("name", DataTypes::string())
         .column("score", DataTypes::bigint())
-        .primary_key(vec!["id"])
+        .primary_key(vec!["id"])?
         .build()?;
     let descriptor = TableDescriptor::builder().schema(schema).build()?;
     admin.create_table(&table_path, &descriptor, true).await?;
@@ -262,7 +262,7 @@ cargo build --example example-table --release
 | `scanner_log_fetch_max_bytes`          | 16 MB             | Max bytes per fetch request                   |
 | `scanner_log_fetch_wait_max_time_ms`   | 500 ms            | Max wait time for fetch                       |
 | `scanner_remote_log_read_concurrency`  | 4                 | Concurrency for remote log reads              |
-| `connect_timeout_ms`                   | 120 s             | Connection timeout                            |
+| `connect_timeout_ms`                   | 15 s              | Connection timeout                            |
 | `security_sasl_username` / `security_sasl_password` | — | SASL PLAIN authentication             |
 
 Configuration can be set programmatically or via CLI flags (using [`clap`](https://docs.rs/clap)).

@@ -29,6 +29,7 @@ use bytes::Bytes;
 use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Instant;
 
 pub struct TableAppend {
     table_path: Arc<TablePath>,
@@ -137,6 +138,18 @@ impl AppendWriter {
     /// A [`WriteResultFuture`] that can be awaited to wait for server acknowledgment,
     /// or dropped for fire-and-forget behavior (use `flush()` to ensure delivery).
     pub fn append<R: InternalRow>(&self, row: &R) -> Result<WriteResultFuture> {
+        self.append_with_deadline(row, None)
+    }
+
+    /// Internal: bounds the buffer-memory wait by `deadline` so a language binding can share
+    /// one `client.writer.buffer.wait-timeout` budget with callback admission waits. Not a
+    /// public deadline API; use [`Self::append`], which passes `None` and defers to the config.
+    #[doc(hidden)]
+    pub fn append_with_deadline<R: InternalRow>(
+        &self,
+        row: &R,
+        deadline: Option<Instant>,
+    ) -> Result<WriteResultFuture> {
         self.check_field_count(row)?;
         let physical_table_path = Arc::new(get_physical_path(
             &self.table_path,
@@ -153,7 +166,8 @@ impl AppendWriter {
             self.table_info.schema_id,
             row,
         )
-        .with_bucket_key(bucket_key);
+        .with_bucket_key(bucket_key)
+        .with_submit_deadline(deadline);
         let result_handle = self.writer_client.send(&record)?;
         Ok(WriteResultFuture::new(result_handle))
     }
@@ -171,6 +185,18 @@ impl AppendWriter {
     /// A [`WriteResultFuture`] that can be awaited to wait for server acknowledgment,
     /// or dropped for fire-and-forget behavior (use `flush()` to ensure delivery).
     pub fn append_arrow_batch(&self, batch: RecordBatch) -> Result<WriteResultFuture> {
+        self.append_arrow_batch_with_deadline(batch, None)
+    }
+
+    /// Internal: bounds the buffer-memory wait by `deadline` so a language binding can share
+    /// one `client.writer.buffer.wait-timeout` budget with callback admission waits. Not a
+    /// public deadline API; use [`Self::append_arrow_batch`], which passes `None`.
+    #[doc(hidden)]
+    pub fn append_arrow_batch_with_deadline(
+        &self,
+        batch: RecordBatch,
+        deadline: Option<Instant>,
+    ) -> Result<WriteResultFuture> {
         if batch.num_rows() == 0 {
             // Nothing to write; also avoids a keyless send to a bucket-key table.
             return Ok(WriteResultFuture::join(Vec::new()));
@@ -193,7 +219,7 @@ impl AppendWriter {
         };
 
         let Some(router) = self.bucket_router.as_ref() else {
-            return self.send_arrow_batch(batch, physical_table_path, None);
+            return self.send_arrow_batch(batch, physical_table_path, None, deadline);
         };
 
         // Group rows by bucket, keeping one key per bucket (it hashes back there).
@@ -215,7 +241,7 @@ impl AppendWriter {
 
         if groups.len() == 1 {
             let (_, (_, rep_key)) = groups.into_iter().next().unwrap();
-            return self.send_arrow_batch(batch, physical_table_path, Some(rep_key));
+            return self.send_arrow_batch(batch, physical_table_path, Some(rep_key), deadline);
         }
 
         let mut handles = Vec::with_capacity(groups.len());
@@ -227,7 +253,8 @@ impl AppendWriter {
                 self.table_info.schema_id,
                 sub_batch,
             )
-            .with_bucket_key(Some(rep_key));
+            .with_bucket_key(Some(rep_key))
+            .with_submit_deadline(deadline);
             handles.push(self.writer_client.send(&record)?);
         }
         Ok(WriteResultFuture::join(handles))
@@ -238,6 +265,7 @@ impl AppendWriter {
         batch: RecordBatch,
         physical_table_path: Arc<PhysicalTablePath>,
         bucket_key: Option<Bytes>,
+        deadline: Option<Instant>,
     ) -> Result<WriteResultFuture> {
         let record = WriteRecord::for_append_record_batch(
             Arc::clone(&self.table_info),
@@ -245,7 +273,8 @@ impl AppendWriter {
             self.table_info.schema_id,
             batch,
         )
-        .with_bucket_key(bucket_key);
+        .with_bucket_key(bucket_key)
+        .with_submit_deadline(deadline);
         let result_handle = self.writer_client.send(&record)?;
         Ok(WriteResultFuture::new(result_handle))
     }

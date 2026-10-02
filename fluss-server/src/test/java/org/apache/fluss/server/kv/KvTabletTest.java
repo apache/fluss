@@ -113,6 +113,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
@@ -349,6 +350,7 @@ class KvTabletTest {
                 schemaGetter,
                 tableConf.getChangelogImage(),
                 KvManager.getDefaultRateLimiter(),
+                null,
                 kvFlushScheduler,
                 null,
                 autoIncrementManager,
@@ -2004,19 +2006,24 @@ class KvTabletTest {
                         new HashMap<>(),
                         manualScheduler);
 
-        // 1200 records force the prepared range to be written as multiple native segments
-        // (500 records each), exercising the per-segment completion of the scheduled flush.
+        // The 500-entry budget groups complete 400-entry batches into writes of 800 and 400.
         int recordCount = 1200;
         List<KvRecord> records = new ArrayList<>(recordCount);
         for (int i = 0; i < recordCount; i++) {
             records.add(kvRecordFactory.ofRecord("key" + i, new Object[] {i, "v" + i}));
         }
-        kvTablet.putAsLeader(kvRecordBatchFactory.ofRecords(records), null);
+        for (int start = 0; start < recordCount; start += 400) {
+            kvTablet.putAsLeader(
+                    kvRecordBatchFactory.ofRecords(records.subList(start, start + 400)), null);
+        }
+        AtomicInteger nativeWrites = new AtomicInteger();
+        kvTablet.setBeforeNativeWrite(nativeWrites::incrementAndGet);
         long flushOffset = logTablet.localLogEndOffset();
 
         kvTablet.requestFlush(flushOffset, NOPErrorHandler.INSTANCE);
         kvTablet.runScheduledFlush();
 
+        assertThat(nativeWrites.get()).isEqualTo(2);
         assertThat(kvTablet.getFlushedLogOffset()).isEqualTo(flushOffset);
         assertThat(kvTablet.getRowCount()).isEqualTo(recordCount);
         assertThat(kvTablet.getKvPreWriteBuffer().pendingFlushBytes()).isEqualTo(0);
@@ -2292,6 +2299,14 @@ class KvTabletTest {
         assertThat(statistics.getCompactionPending()).isEqualTo(0);
         assertThat(statistics.getTotalMemoryUsage())
                 .isGreaterThan(0); // Block cache is pre-allocated
+
+        kvTablet.getRocksDBKv().put("key".getBytes(), "value".getBytes());
+        assertThat(statistics.getMemTableUnFlushedMemoryUsage()).isPositive();
+        assertThat(statistics.getTotalMemoryUsage())
+                .isEqualTo(
+                        statistics.getMemTableMemoryUsage()
+                                + statistics.getTableReadersMemoryUsage()
+                                + statistics.getBlockCacheMemoryUsage());
 
         // ========== Phase 1: Write and Flush ==========
         int numRecords = 10000;

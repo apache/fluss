@@ -34,6 +34,7 @@ import org.apache.fluss.rpc.messages.PbKeyValue;
 import org.apache.fluss.rpc.messages.PbPartitionSpec;
 import org.apache.fluss.rpc.messages.PbRemoteLogFetchInfo;
 import org.apache.fluss.rpc.messages.PbRemoteLogSegment;
+import org.apache.fluss.rpc.messages.ProduceLogRequest;
 import org.apache.fluss.rpc.messages.PutKvRequest;
 import org.apache.fluss.rpc.protocol.ApiError;
 import org.apache.fluss.security.acl.AccessControlEntry;
@@ -81,6 +82,17 @@ public class CommonRpcMessageUtils {
     public static boolean hasHistoricalPut(PutKvRequest putKvRequest) {
         return putKvRequest.getBucketsReqsCount() > 0
                 && putKvRequest.getBucketsReqAt(0).hasOriginalPartitionName();
+    }
+
+    /**
+     * Returns whether the produce-log request is for historical partition writes.
+     *
+     * <p>Normal and historical write buckets cannot be mixed in the same request, so the first
+     * bucket determines the request type.
+     */
+    public static boolean hasHistoricalProduce(ProduceLogRequest produceLogRequest) {
+        return produceLogRequest.getBucketsReqsCount() > 0
+                && produceLogRequest.getBucketsReqAt(0).hasOriginalPartitionName();
     }
 
     public static List<PbAclInfo> toPbAclInfos(Collection<AclBinding> aclBindings) {
@@ -183,7 +195,7 @@ public class CommonRpcMessageUtils {
         FetchLogResultForBucket fetchLogResultForBucket;
         if (respForBucket.hasErrorCode()) {
             fetchLogResultForBucket =
-                    new FetchLogResultForBucket(tb, ApiError.fromErrorMessage(respForBucket));
+                    FetchLogResultForBucket.error(tb, ApiError.fromErrorMessage(respForBucket));
         } else {
             if (respForBucket.hasRemoteLogFetchInfo()) {
                 PbRemoteLogFetchInfo pbRlfInfo = respForBucket.getRemoteLogFetchInfo();
@@ -218,7 +230,7 @@ public class CommonRpcMessageUtils {
                                 remoteLogSegmentList,
                                 pbRlfInfo.getFirstStartPos());
                 fetchLogResultForBucket =
-                        new FetchLogResultForBucket(
+                        FetchLogResultForBucket.remote(
                                 tb, rlFetchInfo, respForBucket.getHighWatermark());
             } else {
                 ByteBuffer recordsBuffer = toByteBuffer(respForBucket.getRecordsSlice());
@@ -226,19 +238,18 @@ public class CommonRpcMessageUtils {
                         respForBucket.hasRecords()
                                 ? MemoryLogRecords.pointToByteBuffer(recordsBuffer)
                                 : MemoryLogRecords.EMPTY;
-                if (respForBucket.hasFilteredEndOffset()
-                        && respForBucket.getFilteredEndOffset() >= 0) {
-                    fetchLogResultForBucket =
-                            new FetchLogResultForBucket(
-                                    tb,
-                                    records,
-                                    respForBucket.getHighWatermark(),
-                                    respForBucket.getFilteredEndOffset());
-                } else {
-                    fetchLogResultForBucket =
-                            new FetchLogResultForBucket(
-                                    tb, records, respForBucket.getHighWatermark());
-                }
+                boolean hasFilteredEndOffset =
+                        respForBucket.hasFilteredEndOffset()
+                                && respForBucket.getFilteredEndOffset() >= 0;
+                fetchLogResultForBucket =
+                        FetchLogResultForBucket.records(
+                                tb,
+                                records,
+                                respForBucket.getHighWatermark(),
+                                hasFilteredEndOffset ? respForBucket.getFilteredEndOffset() : -1L,
+                                respForBucket.hasMinRetainOffset()
+                                        ? respForBucket.getMinRetainOffset()
+                                        : -1L);
             }
         }
 

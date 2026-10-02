@@ -58,7 +58,9 @@ defmodule Fluss.Config do
             writer_enable_idempotence: nil,
             writer_max_inflight_requests_per_bucket: nil,
             writer_request_max_size: nil,
-            writer_retries: nil
+            writer_retries: nil,
+            writer_retry_backoff_ms: nil,
+            writer_retry_max_backoff_ms: nil
 
   @type t :: %__MODULE__{
           bootstrap_servers: String.t(),
@@ -87,7 +89,9 @@ defmodule Fluss.Config do
           writer_enable_idempotence: boolean() | nil,
           writer_max_inflight_requests_per_bucket: non_neg_integer() | nil,
           writer_request_max_size: non_neg_integer() | nil,
-          writer_retries: non_neg_integer() | nil
+          writer_retries: non_neg_integer() | nil,
+          writer_retry_backoff_ms: non_neg_integer() | nil,
+          writer_retry_max_backoff_ms: non_neg_integer() | nil
         }
 
   defguardp is_non_neg_integer(n) when is_integer(n) and n >= 0
@@ -220,6 +224,14 @@ defmodule Fluss.Config do
   @spec set_writer_retries(t(), non_neg_integer()) :: t()
   def set_writer_retries(%__MODULE__{} = config, n) when is_non_neg_integer(n),
     do: %{config | writer_retries: n}
+
+  @spec set_writer_retry_backoff_ms(t(), non_neg_integer()) :: t()
+  def set_writer_retry_backoff_ms(%__MODULE__{} = config, ms) when is_non_neg_integer(ms),
+    do: %{config | writer_retry_backoff_ms: ms}
+
+  @spec set_writer_retry_max_backoff_ms(t(), non_neg_integer()) :: t()
+  def set_writer_retry_max_backoff_ms(%__MODULE__{} = config, ms) when is_non_neg_integer(ms),
+    do: %{config | writer_retry_max_backoff_ms: ms}
 
   @spec get_bootstrap_servers(t()) :: String.t()
   def get_bootstrap_servers(%__MODULE__{bootstrap_servers: servers}), do: servers

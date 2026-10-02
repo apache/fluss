@@ -243,7 +243,8 @@ class MultiTableWriterImpl implements MultiTableWriter {
                 base.getRemoteDataDir(),
                 base.getComment().orElse(null),
                 base.getCreatedTime(),
-                base.getModifiedTime());
+                base.getModifiedTime(),
+                base.getBucketCountEpoch());
     }
 
     private TableInfo getTableInfo(TablePath tablePath) {

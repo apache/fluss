@@ -21,13 +21,26 @@ import org.apache.fluss.client.write.KvWriteBatch;
 import org.apache.fluss.client.write.ReadyWriteBatch;
 import org.apache.fluss.memory.MemorySegment;
 import org.apache.fluss.memory.PreAllocatedPagedOutputView;
+import org.apache.fluss.metadata.BucketInfo;
 import org.apache.fluss.metadata.KvFormat;
+import org.apache.fluss.metadata.PartitionInfo;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.TableChange;
+import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.rpc.messages.AlterTableRequest;
+import org.apache.fluss.rpc.messages.DescribeBucketsResponse;
+import org.apache.fluss.rpc.messages.ListPartitionInfosResponse;
+import org.apache.fluss.rpc.messages.PbBucketInfo;
+import org.apache.fluss.rpc.messages.PbKeyValue;
+import org.apache.fluss.rpc.messages.PbPartitionInfo;
+import org.apache.fluss.rpc.messages.PbPartitionSpec;
 import org.apache.fluss.rpc.messages.PutKvRequest;
 import org.apache.fluss.rpc.protocol.MergeMode;
 
 import org.junit.jupiter.api.Test;
+
+import javax.annotation.Nullable;
 
 import java.util.Arrays;
 import java.util.Collections;
@@ -126,6 +139,114 @@ class ClientRpcMessageUtilsTest {
         assertThat(request.getAggMode()).isEqualTo(MergeMode.OVERWRITE.getProtoValue());
     }
 
+    @Test
+    void testMakeAlterTableRequestWithBucketCountChange() {
+        AlterTableRequest request =
+                ClientRpcMessageUtils.makeAlterTableRequest(
+                        DATA1_TABLE_PATH_PK,
+                        Collections.singletonList(TableChange.modifyBucketCount(8)),
+                        false);
+
+        assertThat(request.hasModifyBucketCount()).isTrue();
+        assertThat(request.getModifyBucketCount().getNewBucketCount()).isEqualTo(8);
+        assertThat(request.getConfigChangesList()).isEmpty();
+    }
+
+    @Test
+    void testToPartitionInfosParsesBucketCount() {
+        // one partition with bucket_count set, one without (simulating an old cluster / old
+        // partition that did not persist per-partition bucket count)
+        ListPartitionInfosResponse response =
+                new ListPartitionInfosResponse()
+                        .addAllPartitionsInfos(
+                                Arrays.asList(
+                                        makePbPartitionInfo(1L, "20240101", "file://dir1", 8),
+                                        makePbPartitionInfo(2L, "20240102", null, null)));
+
+        List<PartitionInfo> partitionInfos = ClientRpcMessageUtils.toPartitionInfos(response, 4);
+
+        assertThat(partitionInfos).hasSize(2);
+
+        PartitionInfo withBucketCount = partitionInfos.get(0);
+        assertThat(withBucketCount.getPartitionId()).isEqualTo(1L);
+        assertThat(withBucketCount.getPartitionName()).isEqualTo("20240101");
+        assertThat(withBucketCount.getRemoteDataDir()).isEqualTo("file://dir1");
+        assertThat(withBucketCount.getBucketCount()).isEqualTo(8);
+
+        // backward compatibility: missing bucket_count must resolve to the given table-level
+        // default, not the proto default 0
+        PartitionInfo withoutBucketCount = partitionInfos.get(1);
+        assertThat(withoutBucketCount.getPartitionId()).isEqualTo(2L);
+        assertThat(withoutBucketCount.getPartitionName()).isEqualTo("20240102");
+        assertThat(withoutBucketCount.getRemoteDataDir()).isNull();
+        assertThat(withoutBucketCount.getBucketCount()).isEqualTo(4);
+    }
+
+    private static PbPartitionInfo makePbPartitionInfo(
+            long partitionId,
+            String partitionValue,
+            @Nullable String remoteDataDir,
+            @Nullable Integer bucketCount) {
+        PbPartitionSpec partitionSpec = new PbPartitionSpec();
+        PbKeyValue keyValue = new PbKeyValue().setKey("dt").setValue(partitionValue);
+        partitionSpec.addAllPartitionKeyValues(Collections.singletonList(keyValue));
+
+        PbPartitionInfo pbPartitionInfo =
+                new PbPartitionInfo().setPartitionId(partitionId).setPartitionSpec(partitionSpec);
+        if (remoteDataDir != null) {
+            pbPartitionInfo.setRemoteDataDir(remoteDataDir);
+        }
+        if (bucketCount != null) {
+            pbPartitionInfo.setBucketCount(bucketCount);
+        }
+        return pbPartitionInfo;
+    }
+
+    @Test
+    void testToBucketInfos() {
+        DescribeBucketsResponse response = new DescribeBucketsResponse().setTableId(10L);
+        response.setTablePath().setDatabaseName("db").setTableName("table");
+        PbBucketInfo tableBucket = response.addBucketInfo().setBucketId(0).setLeaderId(1);
+        tableBucket.setLeaderEpoch(7);
+        tableBucket.setBucketEpoch(8);
+        tableBucket.addReplicaId(1);
+        tableBucket.addReplicaId(2);
+        tableBucket.addReplicaId(3);
+        tableBucket.addIsr(1);
+        tableBucket.addIsr(3);
+
+        PbBucketInfo partitionBucket = response.addBucketInfo().setBucketId(1);
+        partitionBucket.setPartitionId(100L).setPartitionName("p1");
+        partitionBucket.addReplicaId(2);
+        partitionBucket.addReplicaId(3);
+
+        List<BucketInfo> bucketInfos = ClientRpcMessageUtils.toBucketInfos(response);
+
+        assertThat(bucketInfos).hasSize(2);
+        BucketInfo tableBucketInfo = bucketInfos.get(0);
+        assertThat(tableBucketInfo.getTablePath()).isEqualTo(TablePath.of("db", "table"));
+        assertThat(tableBucketInfo.getTableId()).isEqualTo(10L);
+        assertThat(tableBucketInfo.getPartitionId()).isEmpty();
+        assertThat(tableBucketInfo.getPartitionName()).isNull();
+        assertThat(tableBucketInfo.getBucketId()).isEqualTo(0);
+        assertThat(tableBucketInfo.getLeaderId()).hasValue(1);
+        assertThat(tableBucketInfo.getLeaderEpoch()).hasValue(7);
+        assertThat(tableBucketInfo.getBucketEpoch()).hasValue(8);
+        assertThat(tableBucketInfo.getReplicas()).containsExactly(1, 2, 3);
+        assertThat(tableBucketInfo.getIsr()).containsExactly(1, 3);
+
+        BucketInfo partitionBucketInfo = bucketInfos.get(1);
+        assertThat(partitionBucketInfo.getTablePath()).isEqualTo(TablePath.of("db", "table"));
+        assertThat(partitionBucketInfo.getPartitionId()).hasValue(100L);
+        assertThat(partitionBucketInfo.getPartitionName()).isEqualTo("p1");
+        assertThat(partitionBucketInfo.getBucketId()).isEqualTo(1);
+        assertThat(partitionBucketInfo.getLeaderId()).isEmpty();
+        assertThat(partitionBucketInfo.getLeaderEpoch()).isEmpty();
+        assertThat(partitionBucketInfo.getBucketEpoch()).isEmpty();
+        assertThat(partitionBucketInfo.getReplicas()).containsExactly(2, 3);
+        assertThat(partitionBucketInfo.getIsr()).isEmpty();
+    }
+
     private KvWriteBatch createKvWriteBatch(int bucketId, MergeMode mergeMode) throws Exception {
         MemorySegment segment = MemorySegment.allocateHeapMemory(1024);
         PreAllocatedPagedOutputView outputView =
@@ -133,6 +254,7 @@ class ClientRpcMessageUtilsTest {
         return new KvWriteBatch(
                 DATA1_TABLE_ID_PK,
                 bucketId,
+                DATA1_TABLE_INFO_PK.getNumBuckets(),
                 PhysicalTablePath.of(DATA1_TABLE_PATH_PK),
                 DATA1_TABLE_INFO_PK.getSchemaId(),
                 KvFormat.COMPACTED,
@@ -140,6 +262,7 @@ class ClientRpcMessageUtilsTest {
                 outputView,
                 null,
                 mergeMode,
+                false,
                 System.currentTimeMillis());
     }
 }

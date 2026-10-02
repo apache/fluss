@@ -39,6 +39,7 @@ pub struct InnerWriteBatch {
     drained_ms: i64,
     batch_sequence: i32,
     writer_id: i64,
+    last_acked_sequence_at_send: i32,
 }
 
 impl InnerWriteBatch {
@@ -59,6 +60,7 @@ impl InnerWriteBatch {
             drained_ms: -1,
             batch_sequence: NO_BATCH_SEQUENCE,
             writer_id: NO_WRITER_ID,
+            last_acked_sequence_at_send: -1,
         }
     }
 
@@ -241,6 +243,16 @@ impl WriteBatch {
 
     pub fn has_batch_sequence(&self) -> bool {
         self.inner_batch().has_batch_sequence()
+    }
+
+    /// Last acknowledged sequence for this bucket when the current attempt was sent.
+    pub(crate) fn last_acked_sequence_at_send(&self) -> i32 {
+        self.inner_batch().last_acked_sequence_at_send
+    }
+
+    /// Refreshes the acknowledged-sequence snapshot on every send, including retries.
+    pub(crate) fn set_last_acked_sequence_at_send(&mut self, sequence: i32) {
+        self.inner_batch_mut().last_acked_sequence_at_send = sequence;
     }
 
     pub fn set_writer_state(&mut self, writer_id: i64, batch_base_sequence: i32) {

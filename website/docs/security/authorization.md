@@ -115,7 +115,9 @@ Below is a summary of the currently public protocols and their relationship with
 | DESCRIBE_CLUSTER_CONFIGS | DESCRIBE | Cluster | |
 | ALTER_CLUSTER_CONFIGS | ALTER | Cluster | |
 | ADD_SERVER_TAG | ALTER | Cluster | |
+| ADD_SERVER_TAG_BY_RACK | ALTER | Cluster | If no registered TabletServer matches, authorization is still checked and the request succeeds as a no-op. |
 | REMOVE_SERVER_TAG | ALTER | Cluster | |
+| REMOVE_SERVER_TAG_BY_RACK | ALTER | Cluster | If no registered TabletServer matches, authorization is still checked and the request succeeds as a no-op. |
 | REBALANCE | WRITE | Cluster | |
 | LIST_REBALANCE_PROGRESS | DESCRIBE | Cluster | |
 | CANCEL_REBALANCE | WRITE | Cluster | |

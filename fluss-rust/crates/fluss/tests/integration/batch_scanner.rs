@@ -363,6 +363,7 @@ mod batch_scanner_test {
                     .column("id", DataTypes::int())
                     .column("name", DataTypes::string())
                     .primary_key(vec!["id"])
+                    .unwrap()
                     .build()
                     .expect("schema"),
             )

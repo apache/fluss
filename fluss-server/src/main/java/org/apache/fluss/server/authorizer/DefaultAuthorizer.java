@@ -594,17 +594,7 @@ public class DefaultAuthorizer extends AbstractAuthorizer implements FatalErrorH
     private static Set<FlussPrincipal> parseSuperUsers(Configuration configuration) {
         return configuration
                 .getOptional(ConfigOptions.SUPER_USERS)
-                .map(
-                        config ->
-                                Arrays.stream(config.split(";"))
-                                        .map(String::trim)
-                                        .map(
-                                                user -> {
-                                                    String[] userInfo = user.split(":");
-                                                    return new FlussPrincipal(
-                                                            userInfo[1], userInfo[0]);
-                                                })
-                                        .collect(Collectors.toSet()))
+                .map(FlussPrincipal::parsePrincipals)
                 .orElse(Collections.emptySet());
     }
 

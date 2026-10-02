@@ -128,6 +128,7 @@ public class ArrowLogWriteBatchTest {
                 new ArrowLogWriteBatch(
                         tb.getTableId(),
                         tb.getBucket(),
+                        DATA1_TABLE_INFO.getNumBuckets(),
                         DATA1_PHYSICAL_TABLE_PATH,
                         DATA1_TABLE_INFO.getSchemaId(),
                         writerProvider.getOrCreateWriter(
@@ -137,6 +138,7 @@ public class ArrowLogWriteBatchTest {
                                 DATA1_ROW_TYPE,
                                 DEFAULT_COMPRESSION),
                         new PreAllocatedPagedOutputView(memorySegmentList),
+                        false,
                         System.currentTimeMillis(),
                         null);
         assertThat(arrowLogWriteBatch.pooledMemorySegments()).isEqualTo(memorySegmentList);
@@ -209,10 +211,12 @@ public class ArrowLogWriteBatchTest {
                     new ArrowLogWriteBatch(
                             tb.getTableId(),
                             tb.getBucket(),
+                            DATA1_TABLE_INFO.getNumBuckets(),
                             DATA1_PHYSICAL_TABLE_PATH,
                             DATA1_TABLE_INFO.getSchemaId(),
                             arrowWriter,
                             new PreAllocatedPagedOutputView(memorySegmentList),
+                            false,
                             System.currentTimeMillis(),
                             null);
 
@@ -306,6 +310,7 @@ public class ArrowLogWriteBatchTest {
         return new ArrowLogWriteBatch(
                 tb.getTableId(),
                 tb.getBucket(),
+                DATA1_TABLE_INFO.getNumBuckets(),
                 DATA1_PHYSICAL_TABLE_PATH,
                 DATA1_TABLE_INFO.getSchemaId(),
                 writerProvider.getOrCreateWriter(
@@ -315,6 +320,7 @@ public class ArrowLogWriteBatchTest {
                         DATA1_ROW_TYPE,
                         DEFAULT_COMPRESSION),
                 new UnmanagedPagedOutputView(128),
+                false,
                 System.currentTimeMillis(),
                 null);
     }

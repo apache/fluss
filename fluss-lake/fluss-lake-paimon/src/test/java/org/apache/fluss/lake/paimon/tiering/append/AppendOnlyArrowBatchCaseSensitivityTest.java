@@ -28,6 +28,7 @@ import org.apache.arrow.vector.IntVector;
 import org.apache.arrow.vector.VarCharVector;
 import org.apache.arrow.vector.VectorSchemaRoot;
 import org.apache.paimon.FileStore;
+import org.apache.paimon.data.BinaryRow;
 import org.apache.paimon.data.InternalRow;
 import org.apache.paimon.io.BundleRecords;
 import org.apache.paimon.table.BucketMode;
@@ -48,7 +49,6 @@ import static org.apache.fluss.metadata.TableDescriptor.OFFSET_COLUMN_NAME;
 import static org.apache.fluss.metadata.TableDescriptor.TIMESTAMP_COLUMN_NAME;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.eq;
-import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
@@ -150,10 +150,10 @@ class AppendOnlyArrowBatchCaseSensitivityTest {
                                 fileStoreTable, tableWrite, paimonRowType, 0, legacyTable);
                 ArrowBatchData batch =
                         new ArrowBatchData(root.slice(0, root.getRowCount()), 0L, 1L, 1)) {
-            helper.writeArrowBatch(batch, null);
+            helper.writeArrowBatch(batch, BinaryRow.EMPTY_ROW, false);
 
             ArgumentCaptor<BundleRecords> captor = ArgumentCaptor.forClass(BundleRecords.class);
-            verify(tableWrite).writeBundle(isNull(), eq(0), captor.capture());
+            verify(tableWrite).writeBundle(eq(BinaryRow.EMPTY_ROW), eq(0), captor.capture());
             Iterator<InternalRow> rows = captor.getValue().iterator();
             assertThat(rows.hasNext()).isTrue();
             InternalRow row = rows.next();

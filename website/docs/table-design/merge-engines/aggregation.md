@@ -16,6 +16,8 @@ Each field not part of the primary keys can be assigned an aggregate function. T
 
 If no function is specified for a field, it will use `last_value_ignore_nulls` aggregation as the default behavior.
 
+When using `aggregation` merge engine, `UPDATE` and `DELETE` SQL statements are not supported.
+
 This merge engine is useful for real-time aggregation scenarios such as:
 - Computing running totals and statistics
 - Maintaining counters and metrics

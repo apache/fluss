@@ -38,7 +38,7 @@ pub async fn main() -> Result<()> {
                 .column("region", DataTypes::string())
                 .column("zone", DataTypes::bigint())
                 .column("score", DataTypes::bigint())
-                .primary_key(vec!["id", "region", "zone"])
+                .primary_key(vec!["id", "region", "zone"])?
                 .build()?,
         )
         .partitioned_by(vec!["region", "zone"])

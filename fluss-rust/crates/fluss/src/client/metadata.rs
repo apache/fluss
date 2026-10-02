@@ -36,6 +36,7 @@ const BOOTSTRAP_RETRY_INTERVAL_MS: u64 = 100;
 
 pub struct Metadata {
     cluster: RwLock<Arc<Cluster>>,
+    unavailable_tablet_server_ids: RwLock<HashSet<i32>>,
     connections: Arc<RpcClient>,
     bootstrap: Arc<str>,
     cluster_version_tx: watch::Sender<u64>,
@@ -53,6 +54,7 @@ impl Metadata {
         let (cluster_version_tx, _) = watch::channel(0);
         Ok(Metadata {
             cluster: RwLock::new(Arc::new(cluster)),
+            unavailable_tablet_server_ids: RwLock::new(HashSet::new()),
             connections,
             bootstrap: bootstrap.into(),
             cluster_version_tx,
@@ -245,9 +247,18 @@ impl Metadata {
 
     pub(crate) async fn reinit_cluster(&self) -> Result<()> {
         let cluster = Self::init_cluster(&self.bootstrap, self.connections.clone()).await?;
-        *self.cluster.write() = cluster.into();
+        self.replace_cluster(cluster);
         self.notify_cluster_changed();
         Ok(())
+    }
+
+    fn replace_cluster(&self, cluster: Cluster) {
+        let mut guard = self.cluster.write();
+        // A successful refresh may advertise new addresses for previously failed servers.
+        self.unavailable_tablet_server_ids
+            .write()
+            .retain(|id| cluster.get_tablet_server(*id).is_none());
+        *guard = Arc::new(cluster);
     }
 
     pub fn invalidate_server(&self, server_id: &i32, table_ids: Vec<i64>) {
@@ -309,10 +320,7 @@ impl Metadata {
         let origin_cluster = self.cluster.read().clone();
         let new_cluster =
             Cluster::from_metadata_response(metadata_response, Some(&origin_cluster))?;
-        {
-            let mut cluster = self.cluster.write();
-            *cluster = Arc::new(new_cluster);
-        }
+        self.replace_cluster(new_cluster);
         self.notify_cluster_changed();
         Ok(())
     }
@@ -325,7 +333,9 @@ impl Metadata {
     ) -> Result<()> {
         let maybe_server = {
             let guard = self.cluster.read();
-            guard.get_one_available_server().cloned()
+            guard
+                .get_one_available_server_excluding(&self.unavailable_tablet_server_ids.read())
+                .cloned()
         };
 
         let server = match maybe_server {
@@ -339,17 +349,27 @@ impl Metadata {
             }
         };
 
-        let conn = self.connections.get_connection(&server).await?;
-
-        let response = conn
-            .request(UpdateMetadataRequest::new(
-                table_paths,
-                physical_table_paths,
-                partition_ids,
-            ))
-            .await?;
-        self.update(response).await?;
-        Ok(())
+        let result = async {
+            let conn = self.connections.get_connection(&server).await?;
+            let response = conn
+                .request(UpdateMetadataRequest::new(
+                    table_paths,
+                    physical_table_paths,
+                    partition_ids,
+                ))
+                .await?;
+            self.update(response).await
+        }
+        .await;
+        if let Err(err) = &result {
+            if err.is_retriable() {
+                self.unavailable_tablet_server_ids
+                    .write()
+                    .insert(server.id());
+                warn!("Tablet server {server:?} is unavailable for updating metadata: {err}");
+            }
+        }
+        result
     }
 
     pub async fn update_table_metadata(&self, table_path: &TablePath) -> Result<()> {
@@ -505,6 +525,7 @@ impl Metadata {
         let (cluster_version_tx, _) = watch::channel(0);
         Metadata {
             cluster: RwLock::new(cluster),
+            unavailable_tablet_server_ids: RwLock::new(HashSet::new()),
             connections: Arc::new(RpcClient::new()),
             bootstrap: Arc::from(""),
             cluster_version_tx,
@@ -517,8 +538,189 @@ mod tests {
     use super::*;
     use crate::error::ApiError;
     use crate::metadata::{TableBucket, TablePath};
+    use crate::proto::{ApiVersionsResponse, ErrorResponse, PbApiVersion, PbServerNode};
+    use crate::rpc::ApiKey;
     use crate::test_utils::build_cluster_arc;
+    use prost::Message;
     use std::sync::atomic::{AtomicUsize, Ordering};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+
+    fn server_metadata(ids: &[i32], port: u16) -> MetadataResponse {
+        MetadataResponse {
+            tablet_servers: ids
+                .iter()
+                .map(|id| PbServerNode {
+                    node_id: *id,
+                    host: "127.0.0.1".to_string(),
+                    port: i32::from(port),
+                    ..Default::default()
+                })
+                .collect(),
+            ..Default::default()
+        }
+    }
+
+    // Serve the API-version handshake followed by one metadata response.
+    async fn serve_metadata(
+        listener: TcpListener,
+        response: std::result::Result<MetadataResponse, FlussError>,
+    ) {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let versions = ApiVersionsResponse {
+            api_versions: vec![PbApiVersion {
+                api_key: i32::from(i16::from(ApiKey::MetaData)),
+                min_version: 0,
+                max_version: 0,
+            }],
+            server_type: Some(ServerType::TabletServer.to_type_id()),
+        };
+        for api_key in [ApiKey::ApiVersion, ApiKey::MetaData] {
+            let len = stream.read_u32().await.unwrap() as usize;
+            assert!((8..=1024 * 1024).contains(&len));
+            let mut request = vec![0; len];
+            stream.read_exact(&mut request).await.unwrap();
+            assert_eq!(
+                i16::from_be_bytes([request[0], request[1]]),
+                i16::from(api_key)
+            );
+            let mut reply = vec![0];
+            reply.extend_from_slice(&request[4..8]);
+            if api_key == ApiKey::ApiVersion {
+                versions.encode(&mut reply).unwrap();
+            } else {
+                match &response {
+                    Ok(metadata) => metadata.encode(&mut reply).unwrap(),
+                    Err(error) => {
+                        reply[0] = 1;
+                        ErrorResponse {
+                            error_code: error.code(),
+                            error_message: Some("metadata request failed".to_string()),
+                        }
+                        .encode(&mut reply)
+                        .unwrap();
+                    }
+                }
+            }
+            stream.write_u32(reply.len() as u32).await.unwrap();
+            stream.write_all(&reply).await.unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn metadata_refresh_recovers_when_all_cached_servers_are_unavailable() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        // Port zero cannot accept connections, so all cached addresses are stale.
+        let stale_cluster =
+            Cluster::from_metadata_response(server_metadata(&[1, 2, 3], 0), None).unwrap();
+        let mut metadata = Metadata::new_for_test(Arc::new(stale_cluster));
+        metadata.bootstrap = address.to_string().into();
+        let mut changes = metadata.subscribe_cluster_changes();
+
+        for failed_count in 1..=3 {
+            let error = metadata
+                .update_tables_metadata(&HashSet::new(), &HashSet::new(), vec![])
+                .await
+                .unwrap_err();
+            assert!(error.is_retriable());
+            assert_eq!(
+                metadata.unavailable_tablet_server_ids.read().len(),
+                failed_count
+            );
+            assert!(!changes.has_changed().unwrap());
+        }
+
+        let server = tokio::spawn(serve_metadata(
+            listener,
+            Ok(server_metadata(&[1, 2, 3], address.port())),
+        ));
+        metadata
+            .update_tables_metadata(&HashSet::new(), &HashSet::new(), vec![])
+            .await
+            .unwrap();
+        server.await.unwrap();
+        assert!(metadata.unavailable_tablet_server_ids.read().is_empty());
+        for id in 1..=3 {
+            assert_eq!(
+                metadata.get_cluster().get_tablet_server(id).unwrap().port(),
+                u32::from(address.port())
+            );
+        }
+        assert!(changes.has_changed().unwrap());
+        assert_eq!(*changes.borrow_and_update(), 1);
+    }
+
+    #[tokio::test]
+    async fn metadata_refresh_only_excludes_servers_on_retriable_request_errors() {
+        for error in [FlussError::RequestTimeOut, FlussError::PartitionNotExists] {
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let port = listener.local_addr().unwrap().port();
+            let cluster =
+                Cluster::from_metadata_response(server_metadata(&[1], port), None).unwrap();
+            let metadata = Metadata::new_for_test(Arc::new(cluster));
+            let server = tokio::spawn(serve_metadata(listener, Err(error)));
+            let result = metadata
+                .update_tables_metadata(&HashSet::new(), &HashSet::new(), vec![])
+                .await
+                .unwrap_err();
+            server.await.unwrap();
+            assert_eq!(result.api_error(), Some(error));
+            assert_eq!(
+                metadata.unavailable_tablet_server_ids.read().contains(&1),
+                result.is_retriable()
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn metadata_refresh_uses_remaining_server_and_clears_recovered_ids() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let mut response = server_metadata(&[1, 2], 0);
+        response.tablet_servers[1].port = i32::from(port);
+        let cluster = Cluster::from_metadata_response(response, None).unwrap();
+        let metadata = Metadata::new_for_test(Arc::new(cluster));
+        metadata
+            .unavailable_tablet_server_ids
+            .write()
+            .extend([1, 3]);
+        let server = tokio::spawn(serve_metadata(listener, Ok(server_metadata(&[1, 2], port))));
+
+        metadata
+            .update_tables_metadata(&HashSet::new(), &HashSet::new(), vec![])
+            .await
+            .unwrap();
+        server.await.unwrap();
+        assert_eq!(
+            *metadata.unavailable_tablet_server_ids.read(),
+            HashSet::from([3])
+        );
+        assert_eq!(
+            metadata.get_cluster().get_tablet_server(1).unwrap().port(),
+            u32::from(port)
+        );
+    }
+
+    #[tokio::test]
+    async fn failed_bootstrap_preserves_unavailable_servers_and_cached_metadata() {
+        let cluster =
+            Arc::new(Cluster::from_metadata_response(server_metadata(&[1], 0), None).unwrap());
+        let metadata = Metadata::new_for_test(cluster.clone());
+        metadata.unavailable_tablet_server_ids.write().insert(1);
+        let changes = metadata.subscribe_cluster_changes();
+        let error = metadata
+            .update_tables_metadata(&HashSet::new(), &HashSet::new(), vec![])
+            .await
+            .unwrap_err();
+        assert!(matches!(error, Error::IllegalArgument { .. }));
+        assert!(Arc::ptr_eq(&metadata.get_cluster(), &cluster));
+        assert_eq!(
+            *metadata.unavailable_tablet_server_ids.read(),
+            HashSet::from([1])
+        );
+        assert!(!changes.has_changed().unwrap());
+    }
 
     #[tokio::test(start_paused = true)]
     async fn bootstrap_retry_succeeds_after_retriable_failures() {

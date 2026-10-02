@@ -43,4 +43,9 @@ class ApiKeysTest {
     void testSnapshotMetadataSupportsLayoutAwareClient() {
         assertThat(ApiKeys.GET_KV_SNAPSHOT_METADATA.highestSupportedVersion).isEqualTo((short) 1);
     }
+
+    @Test
+    void testAlterTableSupportsBucketCountChange() {
+        assertThat(ApiKeys.ALTER_TABLE.highestSupportedVersion).isEqualTo((short) 1);
+    }
 }

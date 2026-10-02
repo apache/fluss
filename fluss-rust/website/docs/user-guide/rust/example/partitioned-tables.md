@@ -147,7 +147,7 @@ let table_descriptor = TableDescriptor::builder()
             .column("region", DataTypes::string())
             .column("zone", DataTypes::bigint())
             .column("score", DataTypes::bigint())
-            .primary_key(vec!["user_id", "region", "zone"])
+            .primary_key(vec!["user_id", "region", "zone"])?
             .build()?,
     )
     .partitioned_by(vec!["region", "zone"])

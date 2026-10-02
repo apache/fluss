@@ -134,7 +134,7 @@ final class TieredLocalSegmentTTLTest extends RemoteLogTestBase {
         LogTablet logTablet = replicaManager.getReplicaOrException(tb).getLogTablet();
 
         addMultiSegmentsToLogTablet(logTablet, 5);
-        logTablet.updateHighestCopiedEndOffset(40L);
+        logTablet.updateRemoteLogOffsets(Long.MAX_VALUE, -1L, 40L);
         manualClock.advanceTime(Duration.ofMinutes(90));
         logTablet.updateHighWatermark(logTablet.localLogEndOffset() - 1L);
         logManager.cleanupExpiredLocalLogSegments();
@@ -191,7 +191,8 @@ final class TieredLocalSegmentTTLTest extends RemoteLogTestBase {
 
         addMultiSegmentsToLogTablet(logTablet, 5);
         updateTableConfig(replica, ConfigOptions.TABLE_TIERED_LOG_LOCAL_SEGMENTS, "5");
-        logTablet.updateHighestCopiedEndOffset(20L);
+        logTablet.updateRemoteLogOffsets(Long.MAX_VALUE, -1L, 20L);
+        assertThat(logTablet.canFetchFromRemoteLog(0L)).isFalse();
 
         manualClock.advanceTime(Duration.ofMinutes(90));
         logManager.cleanupExpiredLocalLogSegments();
@@ -200,7 +201,7 @@ final class TieredLocalSegmentTTLTest extends RemoteLogTestBase {
         assertThat(logTablet.localLogStartOffset()).isEqualTo(20L);
         assertThat(logTablet.activeLogSegment().getBaseOffset()).isEqualTo(40L);
 
-        logTablet.updateRemoteLogEndOffset(40L);
+        logTablet.updateRemoteLogOffsets(0L, 40L, 40L);
         logManager.cleanupExpiredLocalLogSegments();
 
         assertThat(logTablet.getSegments()).hasSize(2);

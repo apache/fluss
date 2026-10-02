@@ -8,7 +8,7 @@ sidebar_position: 1
 ## Introduction
 
 [Apache Paimon](https://paimon.apache.org/) innovatively combines a lake format with an LSM (Log-Structured Merge-tree) structure, bringing efficient updates into the lake architecture. 
-To integrate Fluss with Paimon, you must enable lakehouse storage and configure Paimon as the lakehouse storage. For more details, see [Deploying Streaming Lakehouse](../../install-deploy/deploying-streaming-lakehouse.md).
+To integrate Fluss with Paimon, you must enable lakehouse storage and configure Paimon as the lakehouse storage. For more details, see [Deploying Lakestream](../../install-deploy/deploying-streaming-lakehouse.md).
 
 ## Dependencies
 
@@ -40,9 +40,31 @@ Verify downloaded JARs using the [verification instructions](/downloads#verifyin
 
 ## Configure Paimon as LakeHouse Storage
 
-For general guidance on configuring Paimon as the lakehouse storage, you can refer to [Deploying Streaming Lakehouse](../../install-deploy/deploying-streaming-lakehouse.md) documentation. When starting the tiering service, make sure to use Paimon-specific configurations as parameters.
+For general guidance on configuring Paimon as the lakehouse storage, you can refer to [Deploying Lakestream](../../install-deploy/deploying-streaming-lakehouse.md) documentation. When starting the tiering service, make sure to use Paimon-specific configurations as parameters.
 
-When a table is created or altered with the option `'table.datalake.enabled' = 'true'`, Fluss will automatically create a corresponding Paimon table with the same table path.
+### Historical Partition Access Setup
+
+Historical partition access supports both lookups and writes. Configure `datalake.format` and the
+related `datalake.paimon.*` options on every TabletServer, using the same Paimon catalog and
+warehouse as the tiering service, for example:
+
+```yaml title="server.yaml"
+datalake.enabled: true
+datalake.format: paimon
+datalake.paimon.metastore: filesystem
+datalake.paimon.warehouse: /path/to/paimon/warehouse
+```
+
+Download the [Fluss Paimon lake connector](#dependencies) and
+[paimon-bundle-$PAIMON_VERSION$.jar](https://repo.maven.apache.org/maven2/org/apache/paimon/paimon-bundle/$PAIMON_VERSION$/paimon-bundle-$PAIMON_VERSION$.jar),
+and place them in `${FLUSS_HOME}/plugins/paimon/` on every TabletServer. Add any
+[required catalog or storage JARs](../../install-deploy/deploying-streaming-lakehouse.md#fluss-server-jars)
+to the same directory. For example, when using OSS, add `paimon-oss-<version>.jar` matching your
+Paimon version. Restart the TabletServers after changing the configuration or JARs.
+
+### Create a Paimon Table
+
+When a table is created or altered with the option `'table.datalake.enabled' = 'true'`, Fluss will automatically create a corresponding Paimon table with the same table path by default.
 Newly created Paimon tables (**clean** tables) contain only the user-defined columns of the Fluss table. Fluss no longer appends the `__bucket`, `__offset`, and `__timestamp` system columns to the physical schema.
 
 :::note
@@ -71,8 +93,32 @@ CREATE TABLE fluss_order_with_lake (
 );
 ```
 
-Then, the datalake tiering service continuously tiers data from Fluss to Paimon. The parameter `table.datalake.freshness` controls the frequency that Fluss writes data to Paimon tables. By default, the data freshness is 3 minutes.  
+The datalake tiering service continuously tiers data from Fluss to Paimon. The parameter `table.datalake.freshness` controls the frequency that Fluss writes data to Paimon tables. By default, the data freshness is 3 minutes.
+
 For primary key tables, changelogs are also generated in the Paimon format, enabling stream-based consumption via Paimon APIs.
+
+### Configure a Custom Paimon Table Path
+
+To use a different database or table name for the Paimon table, set the following options when creating the Fluss table. These options are currently supported only for Paimon and map the Fluss table to the physical Paimon database and table name; they do not rename the Fluss table:
+
+```sql
+'table.datalake.database-name' = 'paimon_database',
+'table.datalake.table-name' = 'paimon_table'
+```
+
+Both options are optional. If either option is omitted, the corresponding Fluss database or table name is used. For a table created after datalake was configured for the Fluss cluster, the options can also be set in the same `ALTER TABLE` statement that enables datalake:
+
+```sql
+ALTER TABLE fluss_table SET (
+  'table.datalake.enabled' = 'true',
+  'table.datalake.database-name' = 'paimon_database',
+  'table.datalake.table-name' = 'paimon_table'
+);
+```
+
+Tables created before datalake was configured for the Fluss cluster do not support altering these options. Once the Paimon table has been created, including an automatically created Paimon table, the name mapping options cannot be modified.
+
+### Configure Paimon Table Properties
 
 Since Fluss version 0.7, you can also specify Paimon table properties when creating a datalake-enabled Fluss table by using the `paimon.` prefix within the Fluss table properties clause.
 
@@ -205,6 +251,10 @@ No data is lost or corrupted, and the records that could not be tiered remain re
 
 To recover, make the two schemas consistent again. To keep the externally added column, run a matching `ALTER TABLE ... ADD` statement on the Fluss table. When the Paimon table already contains the column in the expected position, Fluss completes the change without touching the Paimon table. If Fluss rejects the statement because the schemas cannot be reconciled, drop the externally added column from the Paimon table and, if you still need it, add it through Fluss afterwards. Once the schemas match, the tiering job recovers on its next automatic restart and the pending records are tiered completely. If you cancelled the tiering job in the meantime, resubmit it.
 :::
+
+## Rescaling Bucket Count
+
+For a datalake-enabled Fluss table with Paimon as the lake format, `ALTER TABLE ... SET ('bucket.num' = N)` is also propagated to the Paimon table: the `bucket` option of the Paimon table is updated as part of the same statement, before the Fluss-side metadata is committed (if the propagation fails, the whole `ALTER TABLE` fails and neither side is changed). As on the Fluss side, the new count applies only to partitions created afterwards — existing partitions keep their original bucket count, and no existing data or lake files are rewritten. See [Rescaling Bucket Count for Future Partitions](../../table-design/data-distribution/bucketing.md#rescaling-bucket-count-for-future-partitions) for the full semantics and constraints.
 
 ## Data Type Mapping
 

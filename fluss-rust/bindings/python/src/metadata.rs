@@ -153,12 +153,13 @@ pub struct Schema {
 
 #[pymethods]
 impl Schema {
-    /// Create a new Schema from PyArrow schema with optional primary keys
+    /// Create a new Schema from PyArrow schema with optional primary keys and auto increment column
     #[new]
-    #[pyo3(signature = (schema, primary_keys=None))]
+    #[pyo3(signature = (schema, primary_keys=None, auto_increment_column=None))]
     pub fn new(
         schema: Py<PyAny>, // PyArrow schema
         primary_keys: Option<Vec<String>>,
+        auto_increment_column: Option<String>,
     ) -> PyResult<Self> {
         let arrow_schema = crate::utils::Utils::pyarrow_to_arrow_schema(&schema)?;
 
@@ -175,8 +176,16 @@ impl Schema {
 
         if let Some(pk_columns) = primary_keys {
             if !pk_columns.is_empty() {
-                builder = builder.primary_key(pk_columns);
+                builder = builder
+                    .primary_key(pk_columns)
+                    .map_err(|e| FlussError::new_err(format!("Failed to build schema: {e}")))?;
             }
+        }
+
+        if let Some(auto_increment_column) = auto_increment_column {
+            builder = builder
+                .enable_auto_increment(auto_increment_column)
+                .map_err(|e| FlussError::new_err(format!("Failed to build schema: {e}")))?;
         }
 
         let fluss_schema = builder
@@ -226,6 +235,11 @@ impl Schema {
             .primary_key()
             .map(|pk| pk.column_names().to_vec())
             .unwrap_or_default()
+    }
+
+    /// Get auto increment column names, returns empty list if none is defined
+    fn get_auto_increment_columns(&self) -> Vec<String> {
+        self.__schema.auto_increment_col_names().clone()
     }
 
     fn __str__(&self) -> String {

@@ -26,6 +26,22 @@ def test_kv_backpressure_configuration():
     assert config.writer_kv_backpressure_max_throttle_ms == 750
 
 
+def test_writer_retry_backoff_configuration():
+    config = fluss.Config(
+        {
+            "writer.retry-backoff-ms": "250",
+            "writer.retry-max-backoff-ms": "5000",
+        }
+    )
+    assert config.writer_retry_backoff_ms == 250
+    assert config.writer_retry_max_backoff_ms == 5000
+
+    config.writer_retry_backoff_ms = 100
+    config.writer_retry_max_backoff_ms = 1000
+    assert config.writer_retry_backoff_ms == 100
+    assert config.writer_retry_max_backoff_ms == 1000
+
+
 def test_storage_backpressure_error_is_retriable():
     assert fluss.ErrorCode.STORAGE_BACKPRESSURE_EXCEPTION == 72
     error = fluss.FlussError("backpressure", 72)

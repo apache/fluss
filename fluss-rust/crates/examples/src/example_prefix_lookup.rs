@@ -40,7 +40,7 @@ pub async fn main() -> Result<()> {
                 .column("session_id", DataTypes::string())
                 .column("event_seq", DataTypes::bigint())
                 .column("event_data", DataTypes::string())
-                .primary_key(vec!["user_id", "session_id", "event_seq"])
+                .primary_key(vec!["user_id", "session_id", "event_seq"])?
                 .build()?,
         )
         .distributed_by(

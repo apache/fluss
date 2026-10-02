@@ -36,6 +36,7 @@ import org.slf4j.LoggerFactory;
 import javax.annotation.Nullable;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -43,6 +44,7 @@ import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
 import static org.apache.fluss.client.table.scanner.log.LogScanner.EARLIEST_OFFSET;
+import static org.apache.fluss.utils.PartitionUtils.HISTORICAL_PARTITION_VALUE;
 import static org.apache.fluss.utils.Preconditions.checkState;
 
 /** A generator for lake splits. */
@@ -85,16 +87,26 @@ public class TieringSplitGenerator {
         // partitioned table
         if (tableInfo.isPartitioned()) {
             List<PartitionInfo> partitionInfos =
-                    flussAdmin.listPartitionInfos(tableInfo.getTablePath()).get();
+                    flussAdmin.listPartitionInfos(tableInfo.getTablePath(), true).get();
             Map<Long, String> partitionNameById =
                     partitionInfos.stream()
                             .collect(
                                     Collectors.toMap(
                                             PartitionInfo::getPartitionId,
                                             PartitionInfo::getPartitionName));
+            Map<Long, Integer> bucketCountById =
+                    partitionInfos.stream()
+                            .collect(
+                                    Collectors.toMap(
+                                            PartitionInfo::getPartitionId,
+                                            PartitionInfo::getBucketCount));
 
             return generatePartitionTableSplit(
-                    tableInfo, partitionNameById, bucketOffsetsRetriever, lakeSnapshotInfo);
+                    tableInfo,
+                    partitionNameById,
+                    bucketCountById,
+                    bucketOffsetsRetriever,
+                    lakeSnapshotInfo);
         } else {
             // non-partitioned table
             return generateNonPartitionedTableSplit(
@@ -106,40 +118,54 @@ public class TieringSplitGenerator {
     private List<TieringSplit> generatePartitionTableSplit(
             TableInfo tableInfo,
             Map<Long, String> partitionNameById,
+            Map<Long, Integer> bucketCountById,
             BucketOffsetsRetriever bucketOffsetsRetriever,
             @Nullable LakeSnapshot lakeSnapshotInfo) {
         List<TieringSplit> splits = new ArrayList<>();
         for (Map.Entry<Long, String> partitionNameByIdEntry : partitionNameById.entrySet()) {
             long partitionId = partitionNameByIdEntry.getKey();
             String partitionName = partitionNameByIdEntry.getValue();
+            boolean historicalPartition = HISTORICAL_PARTITION_VALUE.equals(partitionName);
+            int partitionBucketCount = bucketCountById.get(partitionId);
             Map<Integer, Long> latestBucketsOffset =
                     bucketOffsetsRetriever.latestOffsets(
                             partitionName,
-                            IntStream.range(0, tableInfo.getNumBuckets())
+                            IntStream.range(0, partitionBucketCount)
                                     .boxed()
                                     .collect(Collectors.toList()));
             KvSnapshots latestKvSnapshots = null;
             if (tableInfo.hasPrimaryKey()) {
-                // get the table partition latest kv snapshot info
-                try {
+                if (historicalPartition) {
+                    // Historical KV replicas use the lake snapshot as their durable base and tier
+                    // only the retained WAL, so they have no local KV snapshots to tier.
                     latestKvSnapshots =
-                            flussAdmin
-                                    .getLatestKvSnapshots(tableInfo.getTablePath(), partitionName)
-                                    .get();
-                } catch (Exception e) {
-                    throw new FlinkRuntimeException(
-                            String.format(
-                                    "Failed to get table snapshot for table %s and partition %s",
-                                    tableInfo.getTablePath(), partitionName),
-                            ExceptionUtils.stripCompletionException(e));
+                            new KvSnapshots(
+                                    tableInfo.getTableId(),
+                                    partitionId,
+                                    Collections.emptyMap(),
+                                    Collections.emptyMap());
+                } else {
+                    try {
+                        latestKvSnapshots =
+                                flussAdmin
+                                        .getLatestKvSnapshots(
+                                                tableInfo.getTablePath(), partitionName)
+                                        .get();
+                    } catch (Exception e) {
+                        throw new FlinkRuntimeException(
+                                String.format(
+                                        "Failed to get table snapshot for table %s and partition %s",
+                                        tableInfo.getTablePath(), partitionName),
+                                ExceptionUtils.stripCompletionException(e));
+                    }
                 }
             }
-
             splits.addAll(
                     generateTableSplit(
                             tableInfo,
                             partitionId,
                             partitionName,
+                            partitionBucketCount,
                             lakeSnapshotInfo,
                             latestKvSnapshots,
                             latestBucketsOffset));
@@ -172,13 +198,20 @@ public class TieringSplitGenerator {
         }
 
         return generateTableSplit(
-                tableInfo, null, null, lakeSnapshotInfo, latestKvSnapshots, latestBucketsOffset);
+                tableInfo,
+                null,
+                null,
+                tableInfo.getNumBuckets(),
+                lakeSnapshotInfo,
+                latestKvSnapshots,
+                latestBucketsOffset);
     }
 
     private List<TieringSplit> generateTableSplit(
             TableInfo tableInfo,
             @Nullable Long partitionId,
             @Nullable String partitionName,
+            int numBuckets,
             @Nullable LakeSnapshot lakeSnapshotInfo,
             @Nullable KvSnapshots latestKvSnapshots,
             Map<Integer, Long> latestBucketsOffset) {
@@ -187,7 +220,7 @@ public class TieringSplitGenerator {
         if (tableInfo.hasPrimaryKey()) {
             // it's primary key table
             checkState(latestKvSnapshots != null);
-            for (int bucket = 0; bucket < tableInfo.getNumBuckets(); bucket++) {
+            for (int bucket = 0; bucket < numBuckets; bucket++) {
                 TableBucket tableBucket =
                         new TableBucket(tableInfo.getTableId(), partitionId, bucket);
                 Long lastCommittedBucketOffset =
@@ -217,7 +250,7 @@ public class TieringSplitGenerator {
 
         } else {
             // it's log table
-            for (int bucket = 0; bucket < tableInfo.getNumBuckets(); bucket++) {
+            for (int bucket = 0; bucket < numBuckets; bucket++) {
                 TableBucket tableBucket =
                         new TableBucket(tableInfo.getTableId(), partitionId, bucket);
                 Long lastCommittedOffset =

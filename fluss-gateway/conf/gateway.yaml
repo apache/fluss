@@ -32,6 +32,13 @@
 # does not invent a persistent identity.
 # gateway.instance-id: gateway-1
 
+# Optional identity shared by all processes serving one logical Gateway,
+# exposed as the gateway_id label on metrics.
+# gateway.id: gateway-production
+
+# Optional network location exposed as the host label on metrics.
+# gateway.host: 192.0.2.10
+
 #==============================================================================
 # REST Server
 #==============================================================================

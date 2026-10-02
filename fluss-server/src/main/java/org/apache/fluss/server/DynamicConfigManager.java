@@ -27,6 +27,7 @@ import org.apache.fluss.config.cluster.ConfigValidator;
 import org.apache.fluss.config.cluster.ServerReconfigurable;
 import org.apache.fluss.config.provider.ConfigProviders;
 import org.apache.fluss.exception.ConfigException;
+import org.apache.fluss.security.acl.FlussPrincipal;
 import org.apache.fluss.server.authorizer.ZkNodeChangeNotificationWatcher;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.ZkData.ConfigEntityChangeNotificationSequenceZNode;
@@ -35,6 +36,8 @@ import org.apache.fluss.utils.clock.SystemClock;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import javax.annotation.Nullable;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -88,7 +91,7 @@ public class DynamicConfigManager {
         try {
             configChangeListener.start();
             Map<String, String> entityConfigs = zooKeeperClient.fetchEntityConfig();
-            dynamicServerConfig.updateDynamicConfig(entityConfigs, true);
+            dynamicServerConfig.updateDynamicConfig(entityConfigs, true, null);
         } catch (Exception e) {
             LOG.error("Failed to update dynamic configs from zookeeper", e);
         }
@@ -135,7 +138,7 @@ public class DynamicConfigManager {
     public void resumeListening() throws Exception {
         listeningEnabled = true;
         Map<String, String> entityConfigs = zooKeeperClient.fetchEntityConfig();
-        dynamicServerConfig.updateDynamicConfig(entityConfigs, true);
+        dynamicServerConfig.updateDynamicConfig(entityConfigs, true, null);
     }
 
     public List<ConfigEntry> describeConfigs() {
@@ -168,9 +171,19 @@ public class DynamicConfigManager {
     }
 
     public void alterConfigs(List<AlterConfig> clusterConfigChanges) throws Exception {
+        alterConfigs(clusterConfigChanges, null);
+    }
+
+    /**
+     * Alters the cluster configs on behalf of the requester, which is null if the change is
+     * triggered by the server itself.
+     */
+    public void alterConfigs(
+            List<AlterConfig> clusterConfigChanges, @Nullable FlussPrincipal requester)
+            throws Exception {
         Map<String, String> persistentProps = zooKeeperClient.fetchEntityConfig();
         prepareIncrementalConfigs(clusterConfigChanges, persistentProps);
-        alterServerConfigs(persistentProps);
+        alterServerConfigs(persistentProps, requester);
     }
 
     private void prepareIncrementalConfigs(
@@ -359,8 +372,9 @@ public class DynamicConfigManager {
     }
 
     @VisibleForTesting
-    protected void alterServerConfigs(Map<String, String> configsProps) throws Exception {
-        dynamicServerConfig.updateDynamicConfig(configsProps, false);
+    protected void alterServerConfigs(
+            Map<String, String> configsProps, @Nullable FlussPrincipal requester) throws Exception {
+        dynamicServerConfig.updateDynamicConfig(configsProps, false, requester);
 
         // Apply to zookeeper only after verification.
         zooKeeperClient.upsertServerEntityConfig(configsProps);
@@ -400,7 +414,7 @@ public class DynamicConfigManager {
             }
 
             Map<String, String> entityConfig = zooKeeperClient.fetchEntityConfig();
-            dynamicServerConfig.updateDynamicConfig(entityConfig, true);
+            dynamicServerConfig.updateDynamicConfig(entityConfig, true, null);
         }
     }
 }

@@ -32,6 +32,7 @@ import org.apache.fluss.flink.tiering.source.split.TieringSplitGenerator;
 import org.apache.fluss.lake.writer.LakeTieringFactory;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableChange;
+import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.rpc.messages.CommitLakeTableSnapshotRequest;
@@ -599,13 +600,17 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
 
     @Test
     void testHandleReaderFailOver() throws Throwable {
+        TableDescriptor tableDescriptor =
+                TableDescriptor.builder(DEFAULT_LOG_TABLE_DESCRIPTOR)
+                        .distributedBy(4, "id")
+                        .build();
         TablePath tablePath1 = TablePath.of(DEFAULT_DB, "tiering-failover-test-log-table1");
-        createTable(tablePath1, DEFAULT_LOG_TABLE_DESCRIPTOR);
-        appendRow(tablePath1, DEFAULT_LOG_TABLE_DESCRIPTOR, 0, 10);
+        createTable(tablePath1, tableDescriptor);
+        appendRow(tablePath1, tableDescriptor, 0, 10);
 
         TablePath tablePath2 = TablePath.of(DEFAULT_DB, "tiering-failover-test-log-table2");
-        createTable(tablePath2, DEFAULT_LOG_TABLE_DESCRIPTOR);
-        appendRow(tablePath2, DEFAULT_LOG_TABLE_DESCRIPTOR, 0, 10);
+        createTable(tablePath2, tableDescriptor);
+        appendRow(tablePath2, tableDescriptor, 0, 10);
 
         try (FlussMockSplitEnumeratorContext<TieringSplit> context =
                 new FlussMockSplitEnumeratorContext<>(3)) {
@@ -617,8 +622,13 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
             // register readers and handle split requests for attempt 0
             registerReaderAndHandleSplitRequests(context, enumerator, 3, 0);
 
-            // should get one tiering split, and the split is for tablePath1
+            // Assign three of the four splits, leaving one pending when failover starts.
             verifyTieringSplitAssignment(context, 3, tablePath1);
+            assertThat(context.getSplitsAssignmentSequence())
+                    .flatExtracting(assignment -> assignment.assignment().values())
+                    .flatExtracting(splits -> splits)
+                    .extracting(TieringSplit::getNumberOfSplits)
+                    .containsOnly(4);
 
             // clean assignment
             context.getSplitsAssignmentSequence().clear();
@@ -627,8 +637,7 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
             // register readers and handle split requests (attempt 1)
             registerReaderAndHandleSplitRequests(context, enumerator, 3, 1);
 
-            // now, should get another one tiering split, the split is for tablePath2 since all
-            // pending split for tablePath1 is clear
+            // Only tablePath2 splits are assigned; the pending tablePath1 split was cleared.
             verifyTieringSplitAssignment(context, 3, tablePath2);
 
             // clean assignment
@@ -642,8 +651,7 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
             // tablePath2 is clear and there still one sub-task is not registered
             verifyTieringSplitAssignment(context, 0, tablePath2);
 
-            // register reader 2 again, should get tiering split for table1 since the failover is
-            // finished, and reader2 request tiering split
+            // Once reader 2 restarts, failover completes and tablePath1 splits can be assigned.
             registerSingleReaderAndHandleSplitRequests(context, enumerator, 2, 2);
             verifyTieringSplitAssignment(context, 3, tablePath1);
         }

@@ -70,7 +70,20 @@ impl MemoryLimiter {
     /// Try to acquire `size` bytes. Blocks until memory is available,
     /// the timeout expires, or the limiter is closed.
     /// Returns a `MemoryPermit` on success.
+    #[cfg(test)]
     pub fn acquire(self: &Arc<Self>, size: usize) -> Result<MemoryPermit> {
+        self.acquire_within(size, None)
+    }
+
+    /// Like [`acquire`], but bounds the wait by `deadline` when provided instead of
+    /// the limiter's configured `wait_timeout`. A deadline already in the past makes
+    /// this non-blocking (fail fast if memory is unavailable), which callers use to
+    /// share the buffer wait budget with callback admission, not bound the whole API call.
+    pub fn acquire_within(
+        self: &Arc<Self>,
+        size: usize,
+        deadline: Option<Instant>,
+    ) -> Result<MemoryPermit> {
         if self.closed.load(Ordering::Acquire) {
             return Err(Error::WriterClosed {
                 message: "Memory limiter is closed".to_string(),
@@ -87,7 +100,7 @@ impl MemoryLimiter {
         }
 
         let mut used = self.state.lock();
-        let deadline = Instant::now() + self.wait_timeout;
+        let deadline = deadline.unwrap_or_else(|| Instant::now() + self.wait_timeout);
         while *used + size > self.max_memory {
             self.waiting_count.fetch_add(1, Ordering::Relaxed);
             let result = self.cond.wait_until(&mut used, deadline);
@@ -101,10 +114,9 @@ impl MemoryLimiter {
             if result.timed_out() && *used + size > self.max_memory {
                 return Err(Error::BufferExhausted {
                     message: format!(
-                        "Failed to allocate {} bytes for write batch within {}ms. \
+                        "Failed to allocate {} bytes for write batch within the buffer wait budget. \
                          {} of {} bytes in use, {} threads waiting.",
                         size,
-                        self.wait_timeout.as_millis(),
                         *used,
                         self.max_memory,
                         self.waiting_count.load(Ordering::Relaxed),
@@ -202,6 +214,10 @@ pub struct RecordAccumulator {
     /// Per-bucket backpressure throttle expiry timestamps in milliseconds.
     throttle_expiry_ms: DashMap<TableBucket, i64>,
     max_throttle_ms: i64,
+    /// Per-bucket retry backoff expiry timestamps in milliseconds. Kept separate
+    /// from `throttle_expiry_ms` so that a short retry backoff can never shorten a
+    /// server-driven backpressure throttle, nor the other way round.
+    retry_backoff_expiry_ms: DashMap<TableBucket, i64>,
 }
 
 impl RecordAccumulator {
@@ -229,6 +245,7 @@ impl RecordAccumulator {
             sender_wakeup: Notify::new(),
             throttle_expiry_ms: Default::default(),
             max_throttle_ms,
+            retry_backoff_expiry_ms: Default::default(),
         }
     }
 
@@ -407,7 +424,9 @@ impl RecordAccumulator {
         let batch_size = dynamic_target.unwrap_or(self.config.writer_batch_size as usize);
         let record_size = record.estimated_record_size();
         let alloc_size = batch_size.max(record_size);
-        let permit = self.memory_limiter.acquire(alloc_size)?;
+        let permit = self
+            .memory_limiter
+            .acquire_within(alloc_size, record.submit_deadline)?;
 
         // Re-acquire dq lock after memory is available
         let mut dq_guard = dq.lock();
@@ -429,6 +448,8 @@ impl RecordAccumulator {
     pub fn ready(&self, cluster: &Arc<Cluster>) -> Result<ReadyCheckResult> {
         let now = current_time_ms();
         self.throttle_expiry_ms.retain(|_, expiry| *expiry > now);
+        self.retry_backoff_expiry_ms
+            .retain(|_, expiry| *expiry > now);
 
         // Snapshot just the Arcs we need, avoiding cloning the entire BucketAndWriteBatches struct
         let entries: Vec<(Arc<PhysicalTablePath>, Option<PartitionId>, BucketBatches)> = self
@@ -532,6 +553,11 @@ impl RecordAccumulator {
                     continue;
                 }
             }
+            let retry_backoff_remaining = self.retry_backoff_remaining_ms(&table_bucket);
+            if retry_backoff_remaining > 0 {
+                next_delay = next_delay.min(retry_backoff_remaining);
+                continue;
+            }
             if let Some(leader) = cluster.leader_for(&table_bucket) {
                 next_delay = self.batch_ready(
                     leader,
@@ -605,6 +631,9 @@ impl RecordAccumulator {
         if self.is_throttled(table_bucket) {
             return true;
         }
+        if self.retry_backoff_remaining_ms(table_bucket) > 0 {
+            return true;
+        }
         if !self.idempotence_manager.is_enabled() {
             return false;
         }
@@ -649,6 +678,44 @@ impl RecordAccumulator {
         }
         self.throttle_expiry_ms.remove(table_bucket);
         false
+    }
+
+    /// Stalls a bucket for `delay_ms` so the sender spaces out retries of a failed
+    /// batch instead of resending it on every poll cycle. The batch keeps its place
+    /// at the head of the bucket deque, so batch sequence ordering -- and therefore
+    /// idempotence -- is unaffected.
+    ///
+    /// The window is keyed per bucket, but several batches can be in flight for one
+    /// bucket and a node-level failure re-enqueues all of them, each with its own
+    /// per-batch backoff. We keep the latest expiry so a fresh batch's short backoff
+    /// can never shorten an escalated one already set for the bucket.
+    pub(crate) fn set_retry_backoff(&self, table_bucket: &TableBucket, delay_ms: i64) {
+        if delay_ms <= 0 {
+            return;
+        }
+        let expiry = current_time_ms().saturating_add(delay_ms);
+        self.retry_backoff_expiry_ms
+            .entry(table_bucket.clone())
+            .and_modify(|current| *current = (*current).max(expiry))
+            .or_insert(expiry);
+    }
+
+    /// Milliseconds left in `table_bucket`'s retry backoff window, 0 when the
+    /// bucket is not currently backed off.
+    fn retry_backoff_remaining_ms(&self, table_bucket: &TableBucket) -> i64 {
+        self.retry_backoff_expiry_ms
+            .get(table_bucket)
+            .map(|expiry| expiry.saturating_sub(current_time_ms()))
+            .unwrap_or(0)
+            .max(0)
+    }
+
+    /// Drops every pending retry backoff so re-enqueued batches are immediately
+    /// drainable again. Tests use this to reach a re-enqueued batch without
+    /// waiting out the backoff, mirroring `update_throttle(bucket, 0.0)`.
+    #[cfg(test)]
+    pub(crate) fn clear_retry_backoff(&self) {
+        self.retry_backoff_expiry_ms.clear();
     }
 
     /// Updates the bucket throttle using `max_throttle * pressure²`.
@@ -792,6 +859,8 @@ impl RecordAccumulator {
                 }
 
                 if let Some(mut batch) = maybe_batch {
+                    // A drained batch must not accept new records when re-enqueued for retry.
+                    batch.close()?;
                     let current_batch_size = batch.estimated_size_in_bytes();
                     size += current_batch_size;
 
@@ -924,11 +993,11 @@ impl RecordAccumulator {
             return;
         }
 
-        // Find the correct position sorted by batch_sequence
+        // Keep retries ordered ahead of batches that have never been sent.
         let batch_seq = ready_write_batch.write_batch.batch_sequence();
         let mut insert_pos = dq.len();
         for (i, existing) in dq.iter().enumerate() {
-            if existing.has_batch_sequence() && existing.batch_sequence() > batch_seq {
+            if !existing.has_batch_sequence() || existing.batch_sequence() > batch_seq {
                 insert_pos = i;
                 break;
             }
@@ -1350,6 +1419,131 @@ mod tests {
 
     fn enabled_idempotence() -> Arc<IdempotenceManager> {
         Arc::new(IdempotenceManager::new(true, 5))
+    }
+
+    #[tokio::test]
+    async fn test_retry_keeps_new_records_in_a_separate_batch() -> Result<()> {
+        use futures::FutureExt;
+
+        for idempotent in [false, true] {
+            for kv in [false, true] {
+                let idempotence = Arc::new(IdempotenceManager::new(idempotent, 5));
+                idempotence.set_writer_id(42);
+                let accumulator =
+                    RecordAccumulator::new(Config::default(), Arc::clone(&idempotence));
+                let table_path = TablePath::new("db".to_string(), "tbl".to_string());
+                let physical_path = Arc::new(PhysicalTablePath::of(Arc::new(table_path.clone())));
+                let table_info = Arc::new(build_table_info(table_path.clone(), 1, 1));
+                let cluster = Arc::new(build_cluster(&table_path, 1, 1));
+                let nodes = HashSet::from([cluster.get_tablet_server(1).unwrap().clone()]);
+                let row = GenericRow {
+                    values: vec![Datum::Int32(1)],
+                };
+                let record = if kv {
+                    WriteRecord::for_upsert(
+                        table_info,
+                        physical_path,
+                        1,
+                        Bytes::from_static(b"key"),
+                        None,
+                        WriteFormat::CompactedKv,
+                        None,
+                        Some(RowBytes::Owned(Bytes::from_static(b"value"))),
+                    )
+                } else {
+                    WriteRecord::for_append(table_info, physical_path, 1, &row)
+                };
+                let first = accumulator
+                    .append(&record, 0, &cluster, false)?
+                    .result_handle
+                    .unwrap();
+                let mut batches = accumulator.drain(cluster.clone(), &nodes, 1024 * 1024)?;
+                let mut batch = batches.remove(&1).unwrap().pop().unwrap();
+                let batch_id = batch.write_batch.batch_id();
+                let original = batch.write_batch.build()?;
+                accumulator.re_enqueue(batch);
+
+                let appended = accumulator.append(&record, 0, &cluster, false)?;
+                assert!(
+                    appended.new_batch_created,
+                    "a retry must not accept additional records (kv={kv}, idempotent={idempotent})"
+                );
+                let second = appended.result_handle.unwrap();
+                let mut batches = accumulator.drain(cluster.clone(), &nodes, 1024 * 1024)?;
+                let mut retry = batches.remove(&1).unwrap().pop().unwrap();
+                assert_eq!(retry.write_batch.batch_id(), batch_id);
+                assert!(retry.write_batch.is_closed());
+                assert_eq!(retry.write_batch.record_count(), 1);
+                assert_eq!(retry.write_batch.build()?, original);
+                assert!(retry.write_batch.complete(Ok(())));
+                idempotence.handle_completed_batch(&retry.table_bucket, batch_id, 42);
+                assert!(first.wait().await?.is_ok());
+                assert!(
+                    second.wait().now_or_never().is_none(),
+                    "the old batch ACK must not complete the new record"
+                );
+
+                let mut batches = accumulator.drain(cluster, &nodes, 1024 * 1024)?;
+                let next = batches.remove(&1).unwrap().pop().unwrap();
+                assert_ne!(next.write_batch.batch_id(), batch_id);
+                assert_eq!(next.write_batch.record_count(), 1);
+                assert!(next.write_batch.complete(Ok(())));
+                assert!(second.wait().await?.is_ok());
+            }
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_retries_drain_before_fresh_batches() -> Result<()> {
+        let idempotence = Arc::new(IdempotenceManager::new(true, 2));
+        idempotence.set_writer_id(42);
+        let accumulator = RecordAccumulator::new(Config::default(), Arc::clone(&idempotence));
+        let table_path = TablePath::new("db".to_string(), "tbl".to_string());
+        let physical_path = Arc::new(PhysicalTablePath::of(Arc::new(table_path.clone())));
+        let table_info = Arc::new(build_table_info(table_path.clone(), 1, 2));
+        let cluster = Arc::new(build_cluster(&table_path, 1, 2));
+        let first = append_and_drain(&accumulator, &cluster, &table_path, 0)?;
+        let second = append_and_drain(&accumulator, &cluster, &table_path, 0)?;
+        let second_id = second.write_batch.batch_id();
+        let bucket = first.table_bucket.clone();
+        let row = GenericRow {
+            values: vec![Datum::Int32(1)],
+        };
+        let record = WriteRecord::for_append(table_info, Arc::clone(&physical_path), 1, &row);
+        let mut fresh_ids = Vec::new();
+        for _ in 0..2 {
+            accumulator.append(&record, 0, &cluster, false)?;
+            let entry = accumulator.write_batches.get(&physical_path).unwrap();
+            let mut queue = entry.batches.get(&0).unwrap().lock();
+            let batch = queue.back_mut().unwrap();
+            fresh_ids.push(batch.batch_id());
+            // Keep two distinct fresh batches queued while both slots are occupied.
+            batch.close()?;
+        }
+        accumulator.re_enqueue(second);
+        let nodes = HashSet::from([cluster.get_tablet_server(1).unwrap().clone()]);
+        assert!(
+            accumulator
+                .drain(cluster.clone(), &nodes, 1024 * 1024)?
+                .is_empty()
+        );
+        idempotence.handle_completed_batch(&bucket, first.write_batch.batch_id(), 42);
+
+        // The retry must precede both fresh batches, even with a free in-flight slot.
+        for (expected_seq, expected_id) in [second_id, fresh_ids[0], fresh_ids[1]]
+            .into_iter()
+            .enumerate()
+        {
+            let mut batches = accumulator.drain(cluster.clone(), &nodes, 1024 * 1024)?;
+            let batch = batches.remove(&1).unwrap().pop().unwrap();
+            assert_eq!(batch.write_batch.batch_id(), expected_id);
+            assert_eq!(batch.write_batch.batch_sequence(), expected_seq as i32 + 1);
+            idempotence.handle_completed_batch(&bucket, expected_id, 42);
+        }
+        assert_eq!(idempotence.in_flight_count(&bucket), 0);
+        assert!(accumulator.drain(cluster, &nodes, 1024 * 1024)?.is_empty());
+        Ok(())
     }
 
     #[tokio::test]
@@ -2164,6 +2358,51 @@ mod tests {
 
         assert!(matches!(result.unwrap_err(), Error::BufferExhausted { .. }));
         assert!(elapsed >= Duration::from_millis(80)); // allow some timing slack
+    }
+
+    #[test]
+    fn test_memory_limiter_acquire_within_bounds_wait_by_deadline() {
+        // Writer default wait is effectively unbounded; a caller deadline must win.
+        let limiter = Arc::new(MemoryLimiter::new(1024, Duration::from_secs(3600)));
+        let _permit = limiter.acquire(1024).unwrap();
+
+        let start = Instant::now();
+        let result = limiter.acquire_within(512, Some(Instant::now() + Duration::from_millis(100)));
+        let elapsed = start.elapsed();
+
+        // Returns within the caller budget, not the 1h configured wait_timeout.
+        assert!(matches!(result.unwrap_err(), Error::BufferExhausted { .. }));
+        assert!(elapsed >= Duration::from_millis(80));
+        assert!(elapsed < Duration::from_secs(2));
+    }
+
+    #[test]
+    fn test_memory_limiter_acquire_within_past_deadline_is_nonblocking() {
+        // A deadline already in the past = try semantics (zero submit budget).
+        let limiter = Arc::new(MemoryLimiter::new(1024, Duration::from_secs(3600)));
+        let _permit = limiter.acquire(1024).unwrap();
+
+        let start = Instant::now();
+        let result = limiter.acquire_within(512, Some(Instant::now() - Duration::from_millis(1)));
+        let elapsed = start.elapsed();
+
+        assert!(matches!(result.unwrap_err(), Error::BufferExhausted { .. }));
+        assert!(elapsed < Duration::from_millis(50));
+    }
+
+    #[test]
+    fn test_memory_limiter_acquire_within_succeeds_when_capacity_available() {
+        // A bounded deadline must not prevent an allocation that fits right away.
+        let limiter = Arc::new(MemoryLimiter::new(1024, Duration::from_secs(3600)));
+
+        let start = Instant::now();
+        let permit = limiter
+            .acquire_within(512, Some(Instant::now() + Duration::from_millis(100)))
+            .unwrap();
+        assert!(start.elapsed() < Duration::from_millis(50));
+        assert_eq!(*limiter.state.lock(), 512);
+        drop(permit);
+        assert_eq!(*limiter.state.lock(), 0);
     }
 
     #[test]

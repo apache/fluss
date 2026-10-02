@@ -20,6 +20,11 @@
 
 SKIP_GPG=${SKIP_GPG:-false}
 
+if [[ "${SKIP_GPG}" != "true" && "${SKIP_GPG}" != "false" ]]; then
+    echo "SKIP_GPG must be true or false." >&2
+    exit 1
+fi
+
 if [[ -z "${RELEASE_VERSION:-}" ]]; then
     echo "RELEASE_VERSION was not set." >&2
     exit 1
@@ -48,6 +53,24 @@ fi
 FLUSS_DIR="$(cd .. && pwd -P)"
 GATEWAY_DIR="${FLUSS_DIR}/fluss-gateway"
 RELEASE_DIR="${GATEWAY_RELEASE_DIR:-${FLUSS_DIR}/tools/releasing/release}"
+
+if [[ "${SKIP_GPG}" == "false" ]]; then
+    if [[ -z "${RELEASE_COMMIT:-}" ]]; then
+        echo "Set RELEASE_COMMIT to the full RC commit hash, or use SKIP_GPG=true for an unsigned development build." >&2
+        exit 1
+    fi
+    current_commit="$(git -C "${FLUSS_DIR}" rev-parse HEAD)"
+    tracked_changes="$(git -C "${FLUSS_DIR}" status --porcelain --untracked-files=no)"
+    if [[ "${current_commit}" != "${RELEASE_COMMIT}" ]]; then
+        echo "HEAD does not match RELEASE_COMMIT ${RELEASE_COMMIT}." >&2
+        exit 1
+    fi
+    if [[ -n "${tracked_changes}" ]]; then
+        echo "Commit or discard tracked changes before building release artifacts." >&2
+        exit 1
+    fi
+fi
+
 mkdir -p "${RELEASE_DIR}"
 
 gateway_version="$(
@@ -91,6 +114,18 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# Signed releases use only the recorded commit, like the source release. In
+# particular, ignored or untracked files must not enter Docker COPY inputs.
+# Keep unsigned development and CI builds on the working tree.
+build_source_dir="${FLUSS_DIR}"
+if [[ "${SKIP_GPG}" == "false" ]]; then
+    build_source_dir="${temporary_dir}/source"
+    mkdir -p "${build_source_dir}"
+    git -C "${FLUSS_DIR}" archive "${RELEASE_COMMIT}" \
+        | tar -xf - -C "${build_source_dir}"
+    GATEWAY_DIR="${build_source_dir}/fluss-gateway"
+fi
+
 if ! docker buildx version >/dev/null 2>&1; then
     echo "Docker with buildx is required to build the Gateway release binary." >&2
     exit 1
@@ -108,11 +143,11 @@ if [[ -n "${GATEWAY_BUILD_CACHE_TO:-}" ]]; then
 fi
 docker buildx build \
     --platform "linux/${GATEWAY_ARCH}" \
-    --file "${FLUSS_DIR}/docker/fluss-gateway/Dockerfile.build" \
+    --file "${build_source_dir}/docker/fluss-gateway/Dockerfile.build" \
     --target artifact \
     ${build_cache_args[@]+"${build_cache_args[@]}"} \
     --output "type=local,dest=${temporary_dir}/binary" \
-    "${FLUSS_DIR}"
+    "${build_source_dir}"
 gateway_binary="${temporary_dir}/binary/fluss-gateway"
 
 if [[ ! -x "${gateway_binary}" ]]; then
@@ -154,6 +189,12 @@ install -m 0644 "${GATEWAY_DIR}/openapi.yaml" "${package_dir}/"
 install -m 0644 "${GATEWAY_DIR}/DEPENDENCIES.rust.tsv" "${package_dir}/"
 install -m 0644 "${GATEWAY_DIR}/LICENSE-bin" "${package_dir}/LICENSE"
 install -m 0644 "${GATEWAY_DIR}/NOTICE-bin" "${package_dir}/NOTICE"
+
+# Include the RC identity in the signed archive, not in an unsigned working-tree build.
+if [[ "${SKIP_GPG}" == "false" ]]; then
+    printf '%s\n' "${RELEASE_COMMIT}" > "${package_dir}/RELEASE_COMMIT"
+    chmod 0644 "${package_dir}/RELEASE_COMMIT"
+fi
 
 (
     cd "${temporary_dir}"

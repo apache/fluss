@@ -18,6 +18,7 @@
 """Unit tests for Schema (no cluster required)."""
 
 import pyarrow as pa
+import pytest
 
 import fluss
 
@@ -148,3 +149,39 @@ def test_schema_with_nested_complex_types():
     assert types[0] == "map<string NOT NULL,row<seq: int, label: string>>"
     assert types[1] == "array<map<string NOT NULL,int>>"
     assert types[2] == "row<ids: array<int>>"
+
+def test_get_auto_increment_columns():
+    fields = pa.schema(
+        [
+            pa.field("id", pa.int32()),
+            pa.field("seq", pa.int64()),
+        ]
+    )
+
+    schema = fluss.Schema(fields, primary_keys=["id"], auto_increment_column="seq")
+    assert schema.get_auto_increment_columns() == ["seq"]
+
+    schema_without = fluss.Schema(fields, primary_keys=["id"])
+    assert schema_without.get_auto_increment_columns() == []
+
+
+def test_auto_increment_column_is_validated():
+    fields = pa.schema(
+        [
+            pa.field("id", pa.int32()),
+            pa.field("seq", pa.int64()),
+            pa.field("name", pa.string()),
+        ]
+    )
+
+    with pytest.raises(Exception, match="primary-key table"):
+        fluss.Schema(fields, auto_increment_column="seq")
+
+    with pytest.raises(Exception, match="can not be used as the primary key"):
+        fluss.Schema(fields, primary_keys=["id"], auto_increment_column="id")
+
+    with pytest.raises(Exception, match="must be INT or BIGINT"):
+        fluss.Schema(fields, primary_keys=["id"], auto_increment_column="name")
+
+    with pytest.raises(Exception, match="missing"):
+        fluss.Schema(fields, primary_keys=["id"], auto_increment_column="missing")

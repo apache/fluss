@@ -20,6 +20,7 @@ package org.apache.fluss.client.lookup;
 import org.apache.fluss.bucketing.BucketingFunction;
 import org.apache.fluss.client.metadata.MetadataUpdater;
 import org.apache.fluss.client.table.getter.PartitionGetter;
+import org.apache.fluss.exception.InvalidBucketRoutingException;
 import org.apache.fluss.exception.PartitionNotExistException;
 import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.PhysicalTablePath;
@@ -39,7 +40,6 @@ import java.util.HashSet;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 
-import static org.apache.fluss.client.utils.ClientUtils.getPartitionId;
 import static org.apache.fluss.utils.PartitionUtils.HISTORICAL_PARTITION_VALUE;
 import static org.apache.fluss.utils.PartitionUtils.isPastAutoPartition;
 import static org.apache.fluss.utils.Preconditions.checkArgument;
@@ -124,35 +124,42 @@ class PrimaryKeyLookuper extends AbstractLookuper implements Lookuper {
                 bucketKeyEncoder == primaryKeyEncoder
                         ? pkBytes
                         : bucketKeyEncoder.encodeKey(lookupKey);
-        int bucketId = bucketingFunction.bucketing(bkBytes, numBuckets);
         Long partitionId = null;
         String originalPartitionName = null;
+        int bucketCount = numBuckets;
         if (partitionGetter != null) {
             originalPartitionName = partitionGetter.getPartition(lookupKey);
             if (confirmedHistoricalPartitions.contains(originalPartitionName)) {
-                return historicalLookup(bucketId, pkBytes, originalPartitionName);
+                return historicalLookup(bkBytes, pkBytes, originalPartitionName);
             }
             try {
-                partitionId =
-                        getPartitionId(
-                                lookupKey,
-                                partitionGetter,
-                                tableInfo.getTablePath(),
-                                metadataUpdater);
+                PartitionRoutingInfo routing = resolvePartitionRouting(originalPartitionName);
+                partitionId = routing.getPartitionId();
+                bucketCount = routing.getBucketCount();
             } catch (PartitionNotExistException e) {
-                return mayFallbackToHistoricalLookup(bucketId, pkBytes, originalPartitionName);
+                return mayFallbackToHistoricalLookup(bkBytes, pkBytes, originalPartitionName);
+            } catch (InvalidBucketRoutingException e) {
+                return completedExceptionally(e);
             }
         }
 
+        int bucketId = bucketingFunction.bucketing(bkBytes, bucketCount);
         TableBucket tableBucket = new TableBucket(tableInfo.getTableId(), partitionId, bucketId);
-        return lookupBucket(tableBucket, pkBytes, insertIfNotExists, false, originalPartitionName);
+        return lookupBucket(
+                tableBucket,
+                bkBytes,
+                pkBytes,
+                insertIfNotExists,
+                false,
+                originalPartitionName,
+                bucketCount);
     }
 
     /**
      * Falls back to historical lookup when the normal partition is missing and fallback is enabled.
      */
     private CompletableFuture<LookupResult> mayFallbackToHistoricalLookup(
-            int bucketId, byte[] keyBytes, String originalPartitionName) {
+            byte[] bucketKeyBytes, byte[] keyBytes, String originalPartitionName) {
         // Clear the stale normal-partition route before deciding whether to fall back so that a
         // partition created later can be discovered by the next lookup.
         metadataUpdater.invalidPhysicalTableBucketAndPartitionMeta(
@@ -171,28 +178,33 @@ class PrimaryKeyLookuper extends AbstractLookuper implements Lookuper {
             return CompletableFuture.completedFuture(new LookupResult(Collections.emptyList()));
         }
         confirmedHistoricalPartitions.add(originalPartitionName);
-        return historicalLookup(bucketId, keyBytes, originalPartitionName);
+        return historicalLookup(bucketKeyBytes, keyBytes, originalPartitionName);
     }
 
     private CompletableFuture<LookupResult> historicalLookup(
-            int bucketId, byte[] keyBytes, String originalPartitionName) {
+            byte[] bucketKeyBytes, byte[] keyBytes, String originalPartitionName) {
         if (insertIfNotExists) {
             return completedExceptionally(
                     new UnsupportedOperationException(
                             "Lookup with insertIfNotExists is not supported for historical partition lookup."));
         }
-        PhysicalTablePath historicalPartitionPath =
-                PhysicalTablePath.of(tableInfo.getTablePath(), HISTORICAL_PARTITION_VALUE);
         try {
-            if (!metadataUpdater.checkAndUpdatePartitionMetadata(historicalPartitionPath)) {
-                throw new PartitionNotExistException(
-                        "Historical partition " + historicalPartitionPath + " does not exist.");
-            }
-            Long historicalPartitionId =
-                    metadataUpdater.getPartitionIdOrElseThrow(historicalPartitionPath);
+            PartitionRoutingInfo routing = resolvePartitionRouting(HISTORICAL_PARTITION_VALUE);
+            // Route by the historical partition's own count, which an ALTER bucket.num does not
+            // change. The bucket the lake data lives in is resolved on the server.
+            int routingBucketId =
+                    bucketingFunction.bucketing(bucketKeyBytes, routing.getBucketCount());
             TableBucket tableBucket =
-                    new TableBucket(tableInfo.getTableId(), historicalPartitionId, bucketId);
-            return lookupBucket(tableBucket, keyBytes, false, true, originalPartitionName);
+                    new TableBucket(
+                            tableInfo.getTableId(), routing.getPartitionId(), routingBucketId);
+            return lookupBucket(
+                    tableBucket,
+                    bucketKeyBytes,
+                    keyBytes,
+                    false,
+                    true,
+                    originalPartitionName,
+                    routing.getBucketCount());
         } catch (Throwable t) {
             return completedExceptionally(t);
         }
@@ -200,10 +212,12 @@ class PrimaryKeyLookuper extends AbstractLookuper implements Lookuper {
 
     private CompletableFuture<LookupResult> lookupBucket(
             TableBucket tableBucket,
+            byte[] bucketKeyBytes,
             byte[] keyBytes,
             boolean insertIfNotExists,
             boolean historicalLookup,
-            @Nullable String originalPartitionName) {
+            @Nullable String originalPartitionName,
+            int bucketCount) {
         CompletableFuture<LookupResult> lookupFuture = new CompletableFuture<>();
         lookupClient
                 .lookup(
@@ -211,7 +225,8 @@ class PrimaryKeyLookuper extends AbstractLookuper implements Lookuper {
                         tableBucket,
                         keyBytes,
                         insertIfNotExists,
-                        historicalLookup ? originalPartitionName : null)
+                        historicalLookup ? originalPartitionName : null,
+                        bucketCount)
                 .whenComplete(
                         (result, error) -> {
                             if (error != null) {
@@ -227,9 +242,7 @@ class PrimaryKeyLookuper extends AbstractLookuper implements Lookuper {
                                 }
 
                                 mayFallbackToHistoricalLookup(
-                                                tableBucket.getBucket(),
-                                                keyBytes,
-                                                originalPartitionName)
+                                                bucketKeyBytes, keyBytes, originalPartitionName)
                                         .whenComplete(
                                                 (historicalResult, historicalError) -> {
                                                     if (historicalError != null) {

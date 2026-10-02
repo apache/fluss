@@ -216,7 +216,9 @@ fn write_table_info(
         schema = schema.column(name, data_type);
     }
     if let Some(keys) = primary_key {
-        schema = schema.primary_key(keys.iter().copied());
+        schema = schema
+            .primary_key(keys.iter().copied())
+            .expect("valid fixture primary key");
     }
     let descriptor = TableDescriptor::builder()
         .schema(schema.build().expect("valid fixture schema"))

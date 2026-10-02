@@ -18,7 +18,9 @@
 package org.apache.fluss.client.lookup;
 
 import org.apache.fluss.client.metadata.MetadataUpdater;
+import org.apache.fluss.cluster.Cluster;
 import org.apache.fluss.memory.MemorySegment;
+import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.SchemaGetter;
 import org.apache.fluss.metadata.SchemaInfo;
@@ -74,6 +76,17 @@ abstract class AbstractLookuper implements Lookuper {
                 targetSchemaId,
                 new FixedSchemaDecoder(
                         tableInfo.getTableConfig().getKvFormat(), tableInfo.getSchema()));
+    }
+
+    protected PartitionRoutingInfo resolvePartitionRouting(String partitionName) {
+        PhysicalTablePath partitionPath =
+                PhysicalTablePath.of(tableInfo.getTablePath(), partitionName);
+        metadataUpdater.checkAndUpdatePartitionMetadata(partitionPath);
+
+        Cluster cluster = metadataUpdater.getCluster();
+        long partitionId = cluster.getPartitionIdOrElseThrow(partitionPath);
+        int bucketCount = cluster.getBucketCountOrFallback(tableInfo, partitionId);
+        return new PartitionRoutingInfo(partitionId, bucketCount);
     }
 
     protected void handleLookupResponse(
@@ -177,5 +190,23 @@ abstract class AbstractLookuper implements Lookuper {
             rowList.add(row);
         }
         return new LookupResult(rowList);
+    }
+
+    static final class PartitionRoutingInfo {
+        private final long partitionId;
+        private final int bucketCount;
+
+        private PartitionRoutingInfo(long partitionId, int bucketCount) {
+            this.partitionId = partitionId;
+            this.bucketCount = bucketCount;
+        }
+
+        long getPartitionId() {
+            return partitionId;
+        }
+
+        int getBucketCount() {
+            return bucketCount;
+        }
     }
 }

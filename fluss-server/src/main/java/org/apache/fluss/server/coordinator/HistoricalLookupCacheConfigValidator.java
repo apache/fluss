@@ -24,11 +24,18 @@ import org.apache.fluss.exception.ConfigException;
 
 import java.time.Duration;
 
-/** Validates dynamic historical lookup cache settings. */
+/** Validates dynamic historical lookup settings. */
 final class HistoricalLookupCacheConfigValidator implements ServerReconfigurable {
 
     @Override
     public void validate(Configuration newConfig) throws ConfigException {
+        validatePositive(
+                newConfig.get(ConfigOptions.SERVER_HISTORICAL_PARTITION_THREAD_POOL_MAX_SIZE),
+                ConfigOptions.SERVER_HISTORICAL_PARTITION_THREAD_POOL_MAX_SIZE.key());
+        validatePositive(
+                newConfig.get(ConfigOptions.NETTY_SERVER_MAX_QUEUED_HISTORICAL_REQUESTS),
+                ConfigOptions.NETTY_SERVER_MAX_QUEUED_HISTORICAL_REQUESTS.key());
+
         double newMaxRatio =
                 newConfig.get(
                         ConfigOptions.SERVER_HISTORICAL_PARTITION_LOOKUP_CACHE_MAX_DISK_RATIO);
@@ -56,4 +63,12 @@ final class HistoricalLookupCacheConfigValidator implements ServerReconfigurable
 
     @Override
     public void reconfigure(Configuration newConfig) {}
+
+    private static void validatePositive(int value, String configKey) throws ConfigException {
+        if (value <= 0) {
+            throw new ConfigException(
+                    String.format(
+                            "Invalid configuration for %s, it must be greater than 0.", configKey));
+        }
+    }
 }

@@ -17,15 +17,22 @@
 
 package org.apache.fluss.lake.paimon.lookup;
 
+import org.apache.fluss.bucketing.PaimonBucketingFunction;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.MemorySize;
 import org.apache.fluss.config.TableConfig;
 import org.apache.fluss.exception.DiskWriteLockedException;
+import org.apache.fluss.exception.KvStorageException;
+import org.apache.fluss.exception.RetriableException;
 import org.apache.fluss.lake.lakestorage.LakeTableLookuper;
+import org.apache.fluss.lake.lakestorage.LakeTableLookuperManager;
+import org.apache.fluss.lake.lakestorage.LakeTableLookuperManager.LookupCacheOptions;
 import org.apache.fluss.lake.lakestorage.TestingLakeCatalogContext;
 import org.apache.fluss.lake.paimon.PaimonLakeCatalog;
+import org.apache.fluss.lake.paimon.PaimonLakeStorage;
 import org.apache.fluss.metadata.KvFormat;
+import org.apache.fluss.metadata.LakeLookupMode;
 import org.apache.fluss.metadata.ResolvedPartitionSpec;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableChange;
@@ -37,6 +44,7 @@ import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.encode.CompactedKeyEncoder;
 import org.apache.fluss.row.encode.ValueDecoder;
 import org.apache.fluss.row.encode.paimon.PaimonKeyEncoder;
+import org.apache.fluss.rpc.protocol.ApiError;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.utils.ExecutorUtils;
 
@@ -47,11 +55,14 @@ import org.apache.paimon.catalog.CatalogFactory;
 import org.apache.paimon.data.BinaryRow;
 import org.apache.paimon.data.BinaryString;
 import org.apache.paimon.data.Timestamp;
+import org.apache.paimon.fs.FileIO;
 import org.apache.paimon.fs.Path;
 import org.apache.paimon.io.DataFileMeta;
 import org.apache.paimon.io.DataFilePathFactory;
 import org.apache.paimon.options.Options;
+import org.apache.paimon.table.CatalogEnvironment;
 import org.apache.paimon.table.FileStoreTable;
+import org.apache.paimon.table.PrimaryKeyFileStoreTable;
 import org.apache.paimon.table.sink.TableCommitImpl;
 import org.apache.paimon.table.source.DataSplit;
 import org.apache.paimon.table.source.Split;
@@ -59,18 +70,28 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 
 import java.io.File;
+import java.io.IOException;
+import java.lang.reflect.Field;
+import java.nio.file.Files;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 import static org.apache.fluss.config.ConfigOptions.KV_FORMAT_VERSION_2;
 import static org.apache.fluss.lake.paimon.utils.PaimonConversions.toPaimon;
@@ -79,8 +100,11 @@ import static org.apache.fluss.lake.paimon.utils.PaimonTestUtils.writeAndCommitD
 import static org.apache.fluss.testutils.DataTestUtils.row;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.catchThrowable;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.spy;
 
-/** Tests for {@link PaimonLakeTableLookuper}. */
+/** Tests for the Paimon {@link LakeTableLookuper} implementations. */
 class PaimonLakeTableLookuperTest {
 
     private static final String DB = "lookup_db";
@@ -96,6 +120,7 @@ class PaimonLakeTableLookuperTest {
     private Configuration paimonConfig;
     private PaimonLakeCatalog lakeCatalog;
     private Catalog paimonCatalog;
+    private LakeTableLookuperManager lookuperManager;
 
     @BeforeEach
     void setUp() {
@@ -105,10 +130,19 @@ class PaimonLakeTableLookuperTest {
         paimonCatalog =
                 CatalogFactory.createCatalog(
                         CatalogContext.create(Options.fromMap(paimonConfig.toMap())));
+        lookuperManager =
+                new PaimonLakeStorage(paimonConfig)
+                        .createLakeTableLookuperManager(
+                                tempWarehouseDir.getAbsolutePath(),
+                                new LookupCacheOptions(
+                                        LOOKUP_CACHE_MAX_DISK_BYTES, Duration.ofHours(3)));
     }
 
     @AfterEach
     void tearDown() throws Exception {
+        if (lookuperManager != null) {
+            lookuperManager.close();
+        }
         if (paimonCatalog != null) {
             paimonCatalog.close();
         }
@@ -117,8 +151,9 @@ class PaimonLakeTableLookuperTest {
         }
     }
 
-    @Test
-    void testLookupPartitionedPrimaryKeyTable() throws Exception {
+    @ParameterizedTest(name = "lookupMode={0}")
+    @EnumSource(LakeLookupMode.class)
+    void testLookupPartitionedPrimaryKeyTable(LakeLookupMode lookupMode) throws Exception {
         TablePath tablePath = TablePath.of(DB, "partitioned_pk");
         Schema schema = pkSchema();
         TableDescriptor tableDescriptor = partitionedPkDescriptor(schema);
@@ -129,13 +164,7 @@ class PaimonLakeTableLookuperTest {
                         0, Collections.singletonList(paimonRow(1, "20240101", "Alice"))));
 
         try (LakeTableLookuper lookuper =
-                new PaimonLakeTableLookuper(
-                        paimonConfig,
-                        tablePath,
-                        tempWarehouseDir.getAbsolutePath(),
-                        tableConfig(KvFormat.COMPACTED),
-                        LOOKUP_CACHE_MAX_DISK_BYTES,
-                        NO_OP_DISK_WRITE_GUARD)) {
+                createLookuper(lookupMode, tablePath, KvFormat.COMPACTED)) {
             List<Boolean> lookupFileDownloads = new ArrayList<>();
             LakeTableLookuper.LookupContext context =
                     lookupContext(
@@ -157,15 +186,238 @@ class PaimonLakeTableLookuperTest {
                                     paimonKey(schema, 1, "20240101"),
                                     lookupContext(schema, "20240101", 1, SCHEMA_ID)))
                     .isNull();
-            assertThat(lookuper.lookup(compactedKey(schema, 1, "20240101"), context)).isNull();
+            // SST creates a local lookup file on the first lookup; SCAN never creates one.
+            assertThat(lookupFileDownloads)
+                    .containsExactlyElementsOf(
+                            lookupMode == LakeLookupMode.SST
+                                    ? Arrays.asList(true, false)
+                                    : Arrays.asList(false, false));
+        }
+    }
 
-            // The first lookup creates the local lookup file, while subsequent lookups reuse it.
-            assertThat(lookupFileDownloads).containsExactly(true, false, false);
+    @ParameterizedTest(name = "lookupMode={0}")
+    @EnumSource(LakeLookupMode.class)
+    void testLookupKeysInComputedBuckets(LakeLookupMode lookupMode) throws Exception {
+        TablePath tablePath = TablePath.of(DB, "computed_buckets");
+        Schema schema = pkSchema();
+        FileStoreTable table = createPaimonTable(tablePath, partitionedPkDescriptor(schema));
+        PaimonKeyEncoder bucketKeyEncoder =
+                new PaimonKeyEncoder(schema.getRowType(), Collections.singletonList("id"));
+        byte[] firstKey = bucketKeyEncoder.encodeKey(row(1, "20240101", "Alice"));
+        byte[] secondKey = bucketKeyEncoder.encodeKey(row(3, "20240101", "Bob"));
+        PaimonBucketingFunction bucketingFunction = new PaimonBucketingFunction();
+        int firstBucket = bucketingFunction.bucketing(firstKey, 2);
+        int secondBucket = bucketingFunction.bucketing(secondKey, 2);
+        assertThat(firstBucket).isNotEqualTo(secondBucket);
+
+        writeAndCommitData(
+                table,
+                Collections.singletonMap(
+                        firstBucket, Collections.singletonList(paimonRow(1, "20240101", "Alice"))));
+        writeAndCommitData(
+                table,
+                Collections.singletonMap(
+                        secondBucket, Collections.singletonList(paimonRow(3, "20240101", "Bob"))));
+
+        try (LakeTableLookuper lookuper =
+                createLookuper(lookupMode, tablePath, KvFormat.COMPACTED)) {
+            BinaryValue firstValue =
+                    decodeValue(
+                            lookuper.lookup(
+                                    firstKey,
+                                    lookupContext(schema, "20240101", firstBucket, SCHEMA_ID)),
+                            SCHEMA_ID,
+                            schema);
+            BinaryValue secondValue =
+                    decodeValue(
+                            lookuper.lookup(
+                                    secondKey,
+                                    lookupContext(schema, "20240101", secondBucket, SCHEMA_ID)),
+                            SCHEMA_ID,
+                            schema);
+
+            assertRow(firstValue.row, 1, "20240101", "Alice");
+            assertRow(secondValue.row, 3, "20240101", "Bob");
+
+            // A missing bucket id delegates routing to the lake table's bucket layout.
+            LakeTableLookuper.LookupContext context =
+                    lookupContext(schema, "20240101", null, SCHEMA_ID);
+            assertRow(
+                    decodeValue(lookuper.lookup(firstKey, context), SCHEMA_ID, schema).row,
+                    1,
+                    "20240101",
+                    "Alice");
+            assertRow(
+                    decodeValue(lookuper.lookup(secondKey, context), SCHEMA_ID, schema).row,
+                    3,
+                    "20240101",
+                    "Bob");
+
+            writeAndCommitData(
+                    table,
+                    Collections.singletonMap(
+                            firstBucket,
+                            Collections.singletonList(paimonRow(1, "20240101", "Updated Alice"))));
+            lookuper.requestRefresh();
+            assertRow(
+                    decodeValue(lookuper.lookup(firstKey, context), SCHEMA_ID, schema).row,
+                    1,
+                    "20240101",
+                    "Updated Alice");
         }
     }
 
     @Test
-    void testDiskWriteLockBlocksOnlyLookupFileDownloads() throws Exception {
+    void testScanLookupFiltersRowsBeforeLimit() throws Exception {
+        TablePath tablePath = TablePath.of(DB, "scan_row_filter");
+        Schema schema = pkSchema();
+        FileStoreTable table =
+                createPaimonTable(
+                        tablePath,
+                        TableDescriptor.builder()
+                                .schema(schema)
+                                .partitionedBy("dt")
+                                .distributedBy(1, "id")
+                                .customProperty("paimon.read.batch-size", "1")
+                                .build());
+        writeAndCommitData(
+                table,
+                Collections.singletonMap(
+                        0,
+                        Arrays.asList(
+                                paimonRow(1, "20240101", "Alice"),
+                                paimonRow(3, "20240101", "Bob"),
+                                paimonRow(5, "20240101", "Carol"))));
+        PaimonKeyEncoder keyEncoder =
+                new PaimonKeyEncoder(schema.getRowType(), Collections.singletonList("id"));
+        LakeTableLookuper.LookupContext context = lookupContext(schema, "20240101", 0, SCHEMA_ID);
+
+        try (LakeTableLookuper lookuper =
+                createLookuper(LakeLookupMode.SCAN, tablePath, KvFormat.COMPACTED)) {
+            // Matching rows follow non-matching rows, and reading crosses batch boundaries.
+            byte[] middleValue =
+                    lookuper.lookup(keyEncoder.encodeKey(row(3, "20240101", "")), context);
+            byte[] lastValue =
+                    lookuper.lookup(keyEncoder.encodeKey(row(5, "20240101", "")), context);
+            assertRow(decodeValue(middleValue, SCHEMA_ID, schema).row, 3, "20240101", "Bob");
+            assertRow(decodeValue(lastValue, SCHEMA_ID, schema).row, 5, "20240101", "Carol");
+            // The absent key lies inside the file's min/max range.
+            assertThat(lookuper.lookup(keyEncoder.encodeKey(row(2, "20240101", "")), context))
+                    .isNull();
+        }
+    }
+
+    @Test
+    void testConcurrentFirstLookupsForDifferentPartitions() throws Exception {
+        TablePath tablePath = TablePath.of(DB, "concurrent_first_lookups");
+        Schema schema = pkSchema();
+        FileStoreTable table = createPaimonTable(tablePath, partitionedPkDescriptor(schema));
+        writeAndCommitData(
+                table,
+                Collections.singletonMap(
+                        0,
+                        Arrays.asList(
+                                paimonRow(1, "20240101", "Alice"),
+                                paimonRow(2, "20240102", "Bob"))));
+
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+        try {
+            // Recreate the local query so every attempt submits two cold-cache lookups together.
+            for (int attempt = 0; attempt < 10; attempt++) {
+                CountDownLatch downloadsStarted = new CountDownLatch(2);
+                Runnable diskWriteGuard =
+                        () -> {
+                            downloadsStarted.countDown();
+                            try {
+                                // Without Fluss-level serialization, both downloads reach this
+                                // guard and continue together, exercising Paimon's shared mutable
+                                // lookup-store comparator. With serialization, the short wait
+                                // expires and the downloads proceed one at a time.
+                                downloadsStarted.await(100, TimeUnit.MILLISECONDS);
+                            } catch (InterruptedException e) {
+                                Thread.currentThread().interrupt();
+                                throw new RuntimeException(e);
+                            }
+                        };
+
+                try (LakeTableLookuper lookuper =
+                        createLookuper(
+                                LakeLookupMode.SST,
+                                tablePath,
+                                KvFormat.COMPACTED,
+                                1,
+                                diskWriteGuard)) {
+                    Future<byte[]> firstLookup =
+                            executor.submit(
+                                    () ->
+                                            lookuper.lookup(
+                                                    paimonKey(schema, 1, "20240101"),
+                                                    lookupContext(
+                                                            schema, "20240101", 0, SCHEMA_ID)));
+                    Future<byte[]> secondLookup =
+                            executor.submit(
+                                    () ->
+                                            lookuper.lookup(
+                                                    paimonKey(schema, 2, "20240102"),
+                                                    lookupContext(
+                                                            schema, "20240102", 0, SCHEMA_ID)));
+
+                    BinaryValue firstValue = decodeValue(firstLookup.get(), SCHEMA_ID, schema);
+                    BinaryValue secondValue = decodeValue(secondLookup.get(), SCHEMA_ID, schema);
+                    assertRow(firstValue.row, 1, "20240101", "Alice");
+                    assertRow(secondValue.row, 2, "20240102", "Bob");
+                }
+            }
+        } finally {
+            ExecutorUtils.gracefulShutdown(30, TimeUnit.SECONDS, executor);
+        }
+    }
+
+    @Test
+    void testRefreshesFilesWhenLakeSnapshotChanges() throws Exception {
+        TablePath tablePath = TablePath.of(DB, "refresh_registered_files");
+        Schema schema = pkSchema();
+        FileStoreTable table = createPaimonTable(tablePath, partitionedPkDescriptor(schema));
+        writeAndCommitData(
+                table,
+                Collections.singletonMap(
+                        0,
+                        Arrays.asList(
+                                paimonRow(1, "20240101", "Alice"),
+                                paimonRow(2, "20240102", "Bob"))));
+
+        try (LakeTableLookuper lookuper =
+                createLookuper(LakeLookupMode.SST, tablePath, KvFormat.COMPACTED)) {
+            LakeTableLookuper.LookupContext firstPartition =
+                    lookupContext(schema, "20240101", 0, SCHEMA_ID);
+            LakeTableLookuper.LookupContext secondPartition =
+                    lookupContext(schema, "20240102", 0, SCHEMA_ID);
+            // Register two partition-buckets and populate their local lookup files.
+            assertThat(lookuper.lookup(paimonKey(schema, 1, "20240101"), firstPartition))
+                    .isNotNull();
+            assertThat(lookuper.lookup(paimonKey(schema, 2, "20240102"), secondPartition))
+                    .isNotNull();
+
+            writeAndCommitData(
+                    table,
+                    Collections.singletonMap(
+                            0, Collections.singletonList(paimonRow(3, "20240101", "Carol"))));
+            // The newly committed file is not registered before the explicit refresh.
+            assertThat(lookuper.lookup(paimonKey(schema, 3, "20240101"), firstPartition)).isNull();
+
+            lookuper.requestRefresh();
+
+            // Only the new data file needs a local lookup-file download after the bulk refresh.
+            assertLookupAndFileDownload(lookuper, schema, 3, "20240101", "Carol", true);
+            assertLookupAndFileDownload(lookuper, schema, 1, "20240101", "Alice", false);
+            assertLookupAndFileDownload(lookuper, schema, 2, "20240102", "Bob", false);
+        }
+    }
+
+    @ParameterizedTest(name = "lookupMode={0}")
+    @EnumSource(LakeLookupMode.class)
+    void testDiskWriteLockBlocksOnlyLookupFileDownloads(LakeLookupMode lookupMode)
+            throws Exception {
         TablePath tablePath = TablePath.of(DB, "disk_write_lock");
         Schema schema = pkSchema();
         FileStoreTable table = createPaimonTable(tablePath, partitionedPkDescriptor(schema));
@@ -185,13 +437,7 @@ class PaimonLakeTableLookuperTest {
                 };
 
         try (LakeTableLookuper lookuper =
-                new PaimonLakeTableLookuper(
-                        paimonConfig,
-                        tablePath,
-                        tempWarehouseDir.getAbsolutePath(),
-                        tableConfig(KvFormat.COMPACTED),
-                        LOOKUP_CACHE_MAX_DISK_BYTES,
-                        diskWriteGuard)) {
+                createLookuper(lookupMode, tablePath, KvFormat.COMPACTED, 1, diskWriteGuard)) {
             LakeTableLookuper.LookupContext cachedPartition =
                     lookupContext(schema, "20240101", 0, SCHEMA_ID);
             LakeTableLookuper.LookupContext uncachedPartition =
@@ -201,14 +447,21 @@ class PaimonLakeTableLookuperTest {
                     .isNotNull();
             diskWriteLocked.set(true);
 
-            // Cache hits remain available, while a lookup that needs a new local file is rejected.
+            // SST cache hits remain available, while a lookup that needs a new local file is
+            // rejected. SCAN performs no local writes and is unaffected by the guard.
             assertThat(lookuper.lookup(paimonKey(schema, 1, "20240101"), cachedPartition))
                     .isNotNull();
-            assertThatThrownBy(
-                            () ->
-                                    lookuper.lookup(
-                                            paimonKey(schema, 2, "20240102"), uncachedPartition))
-                    .isInstanceOf(DiskWriteLockedException.class);
+            if (lookupMode == LakeLookupMode.SST) {
+                assertThatThrownBy(
+                                () ->
+                                        lookuper.lookup(
+                                                paimonKey(schema, 2, "20240102"),
+                                                uncachedPartition))
+                        .isInstanceOf(DiskWriteLockedException.class);
+            } else {
+                assertThat(lookuper.lookup(paimonKey(schema, 2, "20240102"), uncachedPartition))
+                        .isNotNull();
+            }
 
             diskWriteLocked.set(false);
             assertThat(lookuper.lookup(paimonKey(schema, 2, "20240102"), uncachedPartition))
@@ -217,7 +470,87 @@ class PaimonLakeTableLookuperTest {
     }
 
     @Test
-    void testLookupPartitionsWithSameHashCode() throws Exception {
+    void testSharesIOManagerAndDeletesOnlyClosedLookuperFiles() throws Exception {
+        Schema schema = pkSchema();
+        TablePath firstTablePath = TablePath.of(DB, "shared_io_first");
+        TablePath secondTablePath = TablePath.of(DB, "shared_io_second");
+        FileStoreTable firstTable =
+                createPaimonTable(firstTablePath, partitionedPkDescriptor(schema));
+        FileStoreTable secondTable =
+                createPaimonTable(secondTablePath, partitionedPkDescriptor(schema));
+        writeAndCommitData(
+                firstTable,
+                Collections.singletonMap(
+                        0, Collections.singletonList(paimonRow(1, "20240101", "Alice"))));
+        writeAndCommitData(
+                secondTable,
+                Collections.singletonMap(
+                        0, Collections.singletonList(paimonRow(2, "20240101", "Bob"))));
+
+        File lookupDir = new File(tempWarehouseDir, "shared-lookup-cache");
+        LakeTableLookuperManager.Context firstLookuperContext =
+                new LakeTableLookuperManager.Context(
+                        paimonConfig,
+                        "first-table",
+                        tableConfig(KvFormat.COMPACTED, 1, LakeLookupMode.SST),
+                        NO_OP_DISK_WRITE_GUARD);
+        LakeTableLookuperManager.Context secondLookuperContext =
+                new LakeTableLookuperManager.Context(
+                        paimonConfig,
+                        "second-table",
+                        tableConfig(KvFormat.COMPACTED, 1, LakeLookupMode.SST),
+                        NO_OP_DISK_WRITE_GUARD);
+        LakeTableLookuperManager sharedLookuperManager =
+                new PaimonLakeStorage(paimonConfig)
+                        .createLakeTableLookuperManager(
+                                lookupDir.getAbsolutePath(),
+                                new LookupCacheOptions(
+                                        LOOKUP_CACHE_MAX_DISK_BYTES, Duration.ofHours(3)));
+        try {
+            try (LakeTableLookuper firstLookuper =
+                            sharedLookuperManager.createLakeTableLookuper(
+                                    firstTablePath, firstLookuperContext);
+                    LakeTableLookuper secondLookuper =
+                            sharedLookuperManager.createLakeTableLookuper(
+                                    secondTablePath, secondLookuperContext)) {
+                assertThat(
+                                firstLookuper.lookup(
+                                        paimonKey(schema, 1, "20240101"),
+                                        lookupContext(schema, "20240101", 0, SCHEMA_ID)))
+                        .isNotNull();
+                Set<java.nio.file.Path> firstLookupFiles = regularFiles(lookupDir);
+                assertThat(firstLookupFiles).isNotEmpty();
+
+                assertThat(
+                                secondLookuper.lookup(
+                                        paimonKey(schema, 2, "20240101"),
+                                        lookupContext(schema, "20240101", 0, SCHEMA_ID)))
+                        .isNotNull();
+                Set<java.nio.file.Path> secondLookupFiles = regularFiles(lookupDir);
+                secondLookupFiles.removeAll(firstLookupFiles);
+                assertThat(secondLookupFiles).isNotEmpty();
+                assertThat(lookupDir.listFiles(File::isDirectory)).hasSize(1);
+
+                firstLookuper.close();
+                assertThat(firstLookupFiles).allMatch(path -> !Files.exists(path));
+                assertThat(secondLookupFiles).allMatch(Files::exists);
+                assertThat(
+                                secondLookuper.lookup(
+                                        paimonKey(schema, 2, "20240101"),
+                                        lookupContext(schema, "20240101", 0, SCHEMA_ID)))
+                        .isNotNull();
+            }
+            assertThat(regularFiles(lookupDir)).isEmpty();
+            assertThat(lookupDir.listFiles(File::isDirectory)).hasSize(1);
+        } finally {
+            sharedLookuperManager.close();
+        }
+        assertThat(lookupDir.listFiles(File::isDirectory)).isEmpty();
+    }
+
+    @ParameterizedTest(name = "lookupMode={0}")
+    @EnumSource(LakeLookupMode.class)
+    void testLookupPartitionsWithSameHashCode(LakeLookupMode lookupMode) throws Exception {
         // These distinct partition values produce the same BinaryRow hash code, reproducing the
         // mutable-key collision that previously made one partition reuse another partition's files.
         String firstPartition = "b8";
@@ -242,13 +575,7 @@ class PaimonLakeTableLookuperTest {
                         0, Collections.singletonList(paimonRow(2, secondPartition, "Bob"))));
 
         try (LakeTableLookuper lookuper =
-                new PaimonLakeTableLookuper(
-                        paimonConfig,
-                        tablePath,
-                        tempWarehouseDir.getAbsolutePath(),
-                        tableConfig(KvFormat.COMPACTED),
-                        LOOKUP_CACHE_MAX_DISK_BYTES,
-                        NO_OP_DISK_WRITE_GUARD)) {
+                createLookuper(lookupMode, tablePath, KvFormat.COMPACTED)) {
             BinaryValue firstValue =
                     decodeValue(
                             lookuper.lookup(
@@ -269,8 +596,9 @@ class PaimonLakeTableLookuperTest {
         }
     }
 
-    @Test
-    void testLookupWithIndexedKvFormat() throws Exception {
+    @ParameterizedTest(name = "lookupMode={0}")
+    @EnumSource(LakeLookupMode.class)
+    void testLookupWithIndexedKvFormat(LakeLookupMode lookupMode) throws Exception {
         TablePath tablePath = TablePath.of(DB, "indexed_kv_format");
         Schema schema = pkSchema();
         TableDescriptor tableDescriptor =
@@ -283,14 +611,7 @@ class PaimonLakeTableLookuperTest {
                 Collections.singletonMap(
                         0, Collections.singletonList(paimonRow(1, "20240101", "Alice"))));
 
-        try (LakeTableLookuper lookuper =
-                new PaimonLakeTableLookuper(
-                        paimonConfig,
-                        tablePath,
-                        tempWarehouseDir.getAbsolutePath(),
-                        tableConfig(KvFormat.INDEXED),
-                        LOOKUP_CACHE_MAX_DISK_BYTES,
-                        NO_OP_DISK_WRITE_GUARD)) {
+        try (LakeTableLookuper lookuper = createLookuper(lookupMode, tablePath, KvFormat.INDEXED)) {
             LakeTableLookuper.LookupContext context =
                     lookupContext(schema, "20240101", 0, SCHEMA_ID);
 
@@ -306,8 +627,9 @@ class PaimonLakeTableLookuperTest {
         }
     }
 
-    @Test
-    void testLookupKvFormatV2WithNonDefaultBucketKey() throws Exception {
+    @ParameterizedTest(name = "lookupMode={0}")
+    @EnumSource(LakeLookupMode.class)
+    void testLookupKvFormatV2WithNonDefaultBucketKey(LakeLookupMode lookupMode) throws Exception {
         TablePath tablePath = TablePath.of(DB, "non_default_bucket_key");
         Schema schema =
                 Schema.newBuilder()
@@ -330,12 +652,11 @@ class PaimonLakeTableLookuperTest {
                         0, Collections.singletonList(paimonRow(1, "sub-1", "20240101", "Alice"))));
 
         try (LakeTableLookuper lookuper =
-                new PaimonLakeTableLookuper(
-                        paimonConfig,
+                createLookuper(
+                        lookupMode,
                         tablePath,
-                        tempWarehouseDir.getAbsolutePath(),
-                        tableConfig(KvFormat.COMPACTED, KV_FORMAT_VERSION_2),
-                        LOOKUP_CACHE_MAX_DISK_BYTES,
+                        KvFormat.COMPACTED,
+                        KV_FORMAT_VERSION_2,
                         NO_OP_DISK_WRITE_GUARD)) {
             LakeTableLookuper.LookupContext context =
                     lookupContext(schema, "20240101", 0, SCHEMA_ID);
@@ -351,8 +672,10 @@ class PaimonLakeTableLookuperTest {
         }
     }
 
-    @Test
-    void testRetriesInitializationAfterLookupKeyConverterFailure() throws Exception {
+    @ParameterizedTest(name = "lookupMode={0}")
+    @EnumSource(LakeLookupMode.class)
+    void testRetriesInitializationAfterLookupKeyConverterFailure(LakeLookupMode lookupMode)
+            throws Exception {
         TablePath tablePath = TablePath.of(DB, "retry_initialization");
         Schema schema =
                 Schema.newBuilder()
@@ -387,12 +710,11 @@ class PaimonLakeTableLookuperTest {
                         .build();
 
         try (LakeTableLookuper lookuper =
-                new PaimonLakeTableLookuper(
-                        paimonConfig,
+                createLookuper(
+                        lookupMode,
                         tablePath,
-                        tempWarehouseDir.getAbsolutePath(),
-                        tableConfig(KvFormat.COMPACTED, KV_FORMAT_VERSION_2),
-                        LOOKUP_CACHE_MAX_DISK_BYTES,
+                        KvFormat.COMPACTED,
+                        KV_FORMAT_VERSION_2,
                         NO_OP_DISK_WRITE_GUARD)) {
             // Inject a late initialization failure: the Paimon table requires sub_id in its
             // lookup key, but the first lookup's value row type deliberately omits that field.
@@ -404,8 +726,8 @@ class PaimonLakeTableLookuperTest {
                     .isInstanceOf(IllegalArgumentException.class)
                     .hasMessageContaining("sub_id");
 
-            // The failed attempt must not leave localTableQuery as a false initialization marker.
-            // A second lookup on the same object should rebuild all resources and succeed.
+            // A failed attempt must not poison lazy initialization. A second lookup on the same
+            // object should initialize with the valid schema and succeed.
             byte[] value =
                     lookuper.lookup(compactedKey, lookupContext(schema, "20240101", 0, SCHEMA_ID));
             assertThat(value).isNotNull();
@@ -415,140 +737,185 @@ class PaimonLakeTableLookuperTest {
     }
 
     @Test
-    void testRefreshFilesAfterCompactionAndSnapshotExpiration() throws Exception {
-        TablePath tablePath = TablePath.of(DB, "compacted_pk");
+    void testScanLookupRetriesOnlyIoFailures() throws Exception {
+        TablePath tablePath = TablePath.of(DB, "scan_io_failure");
         Schema schema = pkSchema();
         FileStoreTable table = createPaimonTable(tablePath, partitionedPkDescriptor(schema));
-        for (int id = 1; id <= 5; id++) {
-            writeAndCommitData(
-                    table,
-                    Collections.singletonMap(
-                            0, Collections.singletonList(paimonRow(id, "20240101", "name-" + id))));
-        }
-        writeAndCommitData(
-                table,
-                Collections.singletonMap(
-                        0, Collections.singletonList(paimonRow(6, "20240102", "name-6"))));
-
-        BinaryRow partition = BinaryRow.singleColumn(BinaryString.fromString("20240101"));
-        List<DataFileMeta> filesBeforeCompaction = dataFiles(table, partition, 0);
-        assertThat(filesBeforeCompaction).hasSize(5);
-
-        AtomicBoolean blockDownloads = new AtomicBoolean();
-        CountDownLatch downloadStarted = new CountDownLatch(1);
-        CountDownLatch continueDownload = new CountDownLatch(1);
-        Runnable diskWriteGuard =
-                () -> {
-                    if (blockDownloads.get()) {
-                        downloadStarted.countDown();
-                        try {
-                            continueDownload.await();
-                        } catch (InterruptedException e) {
-                            Thread.currentThread().interrupt();
-                            throw new RuntimeException(e);
-                        }
-                    }
-                };
+        long snapshotId =
+                writeAndCommitData(
+                        table,
+                        Collections.singletonMap(
+                                0, Collections.singletonList(paimonRow(1, "20240101", "Alice"))));
+        FileIO fileIO = spy(table.fileIO());
+        Path nextSnapshotPath = table.snapshotManager().snapshotPath(snapshotId + 1);
+        byte[] key =
+                new PaimonKeyEncoder(schema.getRowType(), Collections.singletonList("id"))
+                        .encodeKey(row(1, "20240101", "Alice"));
+        LakeTableLookuper.LookupContext context = lookupContext(schema, "20240101", 0, SCHEMA_ID);
 
         try (LakeTableLookuper lookuper =
-                new PaimonLakeTableLookuper(
-                        paimonConfig,
-                        tablePath,
-                        tempWarehouseDir.getAbsolutePath(),
-                        tableConfig(KvFormat.COMPACTED),
-                        LOOKUP_CACHE_MAX_DISK_BYTES,
-                        diskWriteGuard)) {
+                createLookuper(LakeLookupMode.SCAN, tablePath, KvFormat.COMPACTED)) {
+            // Keep Paimon's real scan and snapshot planning, injecting only the filesystem.
+            Field tableField =
+                    PaimonScanBasedTableLookuper.class.getDeclaredField("fileStoreTable");
+            tableField.setAccessible(true);
+            tableField.set(
+                    lookuper,
+                    new PrimaryKeyFileStoreTable(
+                            fileIO, table.location(), table.schema(), CatalogEnvironment.empty()));
+
+            IOException ioFailure = new IOException("Injected snapshot probe failure");
+            doThrow(ioFailure).doCallRealMethod().when(fileIO).exists(nextSnapshotPath);
+
+            Throwable failure = catchThrowable(() -> lookuper.lookup(key, context));
+            assertThat(failure).isInstanceOf(KvStorageException.class);
+            assertThat(failure.getCause())
+                    .isExactlyInstanceOf(RuntimeException.class)
+                    .hasCause(ioFailure);
+            assertThat(ApiError.fromThrowable(failure).exception())
+                    .isInstanceOf(RetriableException.class);
+            assertRow(
+                    decodeValue(lookuper.lookup(key, context), SCHEMA_ID, schema).row,
+                    1,
+                    "20240101",
+                    "Alice");
+
+            BinaryRow partition = BinaryRow.singleColumn(BinaryString.fromString("20240101"));
+            Path dataFilePath =
+                    table.store()
+                            .pathFactory()
+                            .createDataFilePathFactory(partition, 0)
+                            .toPath(dataFiles(table, partition, 0).get(0));
+            IOException readFailure = new IOException("Injected data file read failure");
+            doThrow(readFailure).doCallRealMethod().when(fileIO).newInputStream(dataFilePath);
+            assertThatThrownBy(() -> lookuper.lookup(key, context))
+                    .isInstanceOf(KvStorageException.class)
+                    .hasRootCauseMessage(readFailure.getMessage());
+            assertRow(
+                    decodeValue(lookuper.lookup(key, context), SCHEMA_ID, schema).row,
+                    1,
+                    "20240101",
+                    "Alice");
+
+            RuntimeException nonIoFailure =
+                    new RuntimeException(new IllegalStateException("Injected non-I/O failure"));
+            doThrow(nonIoFailure).doCallRealMethod().when(fileIO).exists(nextSnapshotPath);
+            assertThatThrownBy(() -> lookuper.lookup(key, context)).isSameAs(nonIoFailure);
+            assertRow(
+                    decodeValue(lookuper.lookup(key, context), SCHEMA_ID, schema).row,
+                    1,
+                    "20240101",
+                    "Alice");
+        }
+    }
+
+    @ParameterizedTest(name = "lookupMode={0}")
+    @EnumSource(LakeLookupMode.class)
+    void testLookupAfterCompactionAndSnapshotExpiration(LakeLookupMode lookupMode)
+            throws Exception {
+        TablePath tablePath = TablePath.of(DB, "compacted_lookup");
+        Schema schema = pkSchema();
+        FileStoreTable table = createCompactionTable(tablePath, schema);
+        BinaryRow partition = BinaryRow.singleColumn(BinaryString.fromString("20240101"));
+
+        try (LakeTableLookuper lookuper =
+                createLookuper(lookupMode, tablePath, KvFormat.COMPACTED)) {
             assertThat(
                             lookuper.lookup(
                                     paimonKey(schema, 5, "20240101"),
                                     lookupContext(schema, "20240101", 0, SCHEMA_ID)))
                     .isNotNull();
-            assertThat(
+
+            compactAndExpire(table, partition);
+
+            BinaryValue value =
+                    decodeValue(
                             lookuper.lookup(
-                                    paimonKey(schema, 6, "20240102"),
-                                    lookupContext(schema, "20240102", 0, SCHEMA_ID)))
-                    .isNotNull();
-
-            new CompactHelper(table, new File(tempWarehouseDir, "compact"))
-                    .compactBucket(partition, 0)
-                    .commit();
-            assertThat(dataFiles(table, partition, 0)).hasSize(1);
-
-            DataFilePathFactory pathFactory =
-                    table.store().pathFactory().createDataFilePathFactory(partition, 0);
-            List<Path> filesBeforeCompactionPaths = new ArrayList<>();
-            for (DataFileMeta file : filesBeforeCompaction) {
-                Path path = pathFactory.toPath(file);
-                assertThat(table.store().snapshotManager().fileIO().exists(path)).isTrue();
-                filesBeforeCompactionPaths.add(path);
-            }
-
-            Options expireOptions = new Options();
-            expireOptions.set(CoreOptions.SNAPSHOT_NUM_RETAINED_MIN, 1);
-            expireOptions.set(CoreOptions.SNAPSHOT_NUM_RETAINED_MAX, 1);
-            // Compaction only marks the replaced files as deleted. Snapshot expiration performs
-            // the physical cleanup that makes the stale lookuper fail to open an old data file.
-            try (TableCommitImpl commit = table.copy(expireOptions.toMap()).newCommit("")) {
-                commit.expireSnapshots();
-            }
-            for (Path path : filesBeforeCompactionPaths) {
-                assertThat(table.store().snapshotManager().fileIO().exists(path)).isFalse();
-            }
-
-            List<Boolean> refreshedLookupDownloads = new ArrayList<>();
-            List<Boolean> cachedLookupDownloads = new ArrayList<>();
-            LakeTableLookuper.LookupContext refreshedContext =
-                    lookupContext(
-                            schema,
-                            "20240101",
-                            0,
+                                    paimonKey(schema, 1, "20240101"),
+                                    lookupContext(schema, "20240101", 0, SCHEMA_ID)),
                             SCHEMA_ID,
-                            (lookupTimeNanos, lookupFileDownloaded) ->
-                                    refreshedLookupDownloads.add(lookupFileDownloaded));
-            LakeTableLookuper.LookupContext cachedContext =
-                    lookupContext(
-                            schema,
-                            "20240102",
-                            0,
-                            SCHEMA_ID,
-                            (lookupTimeNanos, lookupFileDownloaded) ->
-                                    cachedLookupDownloads.add(lookupFileDownloaded));
-            ExecutorService executor = Executors.newFixedThreadPool(2);
-            blockDownloads.set(true);
-            try {
-                Future<byte[]> refreshedLookup =
-                        executor.submit(
-                                () ->
-                                        lookuper.lookup(
-                                                paimonKey(schema, 1, "20240101"),
-                                                refreshedContext));
-                assertThat(downloadStarted.await(30, TimeUnit.SECONDS)).isTrue();
-
-                Future<byte[]> cachedLookup =
-                        executor.submit(
-                                () ->
-                                        lookuper.lookup(
-                                                paimonKey(schema, 6, "20240102"), cachedContext));
-                BinaryValue cachedValue =
-                        decodeValue(cachedLookup.get(30, TimeUnit.SECONDS), SCHEMA_ID, schema);
-                assertRow(cachedValue.row, 6, "20240102", "name-6");
-
-                continueDownload.countDown();
-                BinaryValue refreshedValue =
-                        decodeValue(refreshedLookup.get(30, TimeUnit.SECONDS), SCHEMA_ID, schema);
-                assertRow(refreshedValue.row, 1, "20240101", "name-1");
-            } finally {
-                continueDownload.countDown();
-                ExecutorUtils.gracefulShutdown(30, TimeUnit.SECONDS, executor);
-            }
-
-            assertThat(refreshedLookupDownloads).containsExactly(true);
-            assertThat(cachedLookupDownloads).containsExactly(false);
+                            schema);
+            assertRow(value.row, 1, "20240101", "name-1");
         }
     }
 
-    @Test
-    void testLookupWithNonStringPartitionKey() throws Exception {
+    @ParameterizedTest(name = "lookupMode={0}")
+    @EnumSource(LakeLookupMode.class)
+    void testLookupsRunConcurrently(LakeLookupMode lookupMode) throws Exception {
+        TablePath tablePath = TablePath.of(DB, "concurrent_lookups");
+        Schema schema = pkSchema();
+        FileStoreTable table = createPaimonTable(tablePath, partitionedPkDescriptor(schema));
+        writeAndCommitData(
+                table,
+                Collections.singletonMap(
+                        0,
+                        Arrays.asList(
+                                paimonRow(1, "20240101", "Alice"),
+                                paimonRow(2, "20240101", "Bob"))));
+
+        CountDownLatch firstLookupAtRecorder = new CountDownLatch(1);
+        CountDownLatch releaseFirstLookup = new CountDownLatch(1);
+        CountDownLatch secondLookupAtRecorder = new CountDownLatch(1);
+        LakeTableLookuper.LookupContext firstContext =
+                lookupContext(
+                        schema,
+                        "20240101",
+                        0,
+                        SCHEMA_ID,
+                        (lookupTimeNanos, lookupFileDownloaded) -> {
+                            firstLookupAtRecorder.countDown();
+                            try {
+                                releaseFirstLookup.await();
+                            } catch (InterruptedException e) {
+                                Thread.currentThread().interrupt();
+                                throw new RuntimeException(e);
+                            }
+                        });
+        LakeTableLookuper.LookupContext secondContext =
+                lookupContext(
+                        schema,
+                        "20240101",
+                        0,
+                        SCHEMA_ID,
+                        (lookupTimeNanos, lookupFileDownloaded) ->
+                                secondLookupAtRecorder.countDown());
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+        try (LakeTableLookuper lookuper =
+                createLookuper(lookupMode, tablePath, KvFormat.COMPACTED)) {
+            Future<byte[]> firstLookup;
+            Future<byte[]> secondLookup;
+            try {
+                firstLookup =
+                        executor.submit(
+                                () ->
+                                        lookuper.lookup(
+                                                paimonKey(schema, 1, "20240101"), firstContext));
+                assertThat(firstLookupAtRecorder.await(30, TimeUnit.SECONDS)).isTrue();
+
+                secondLookup =
+                        executor.submit(
+                                () ->
+                                        lookuper.lookup(
+                                                paimonKey(schema, 2, "20240101"), secondContext));
+                assertThat(secondLookupAtRecorder.await(30, TimeUnit.SECONDS)).isTrue();
+            } finally {
+                releaseFirstLookup.countDown();
+            }
+
+            BinaryValue firstValue =
+                    decodeValue(firstLookup.get(30, TimeUnit.SECONDS), SCHEMA_ID, schema);
+            BinaryValue secondValue =
+                    decodeValue(secondLookup.get(30, TimeUnit.SECONDS), SCHEMA_ID, schema);
+            assertRow(firstValue.row, 1, "20240101", "Alice");
+            assertRow(secondValue.row, 2, "20240101", "Bob");
+        } finally {
+            ExecutorUtils.gracefulShutdown(30, TimeUnit.SECONDS, executor);
+        }
+    }
+
+    @ParameterizedTest(name = "lookupMode={0}")
+    @EnumSource(LakeLookupMode.class)
+    void testLookupWithNonStringPartitionKey(LakeLookupMode lookupMode) throws Exception {
         TablePath tablePath = TablePath.of(DB, "int_partition_pk");
         Schema schema =
                 Schema.newBuilder()
@@ -569,13 +936,7 @@ class PaimonLakeTableLookuperTest {
                 Collections.singletonMap(0, Collections.singletonList(paimonRow(1, 7, "Alice"))));
 
         try (LakeTableLookuper lookuper =
-                new PaimonLakeTableLookuper(
-                        paimonConfig,
-                        tablePath,
-                        tempWarehouseDir.getAbsolutePath(),
-                        tableConfig(KvFormat.COMPACTED),
-                        LOOKUP_CACHE_MAX_DISK_BYTES,
-                        NO_OP_DISK_WRITE_GUARD)) {
+                createLookuper(lookupMode, tablePath, KvFormat.COMPACTED)) {
             LakeTableLookuper.LookupContext context =
                     new LakeTableLookuper.LookupContext(
                             ResolvedPartitionSpec.fromPartitionName(
@@ -595,8 +956,9 @@ class PaimonLakeTableLookuperTest {
         }
     }
 
-    @Test
-    void testRejectAppendOnlyTable() throws Exception {
+    @ParameterizedTest(name = "lookupMode={0}")
+    @EnumSource(LakeLookupMode.class)
+    void testRejectAppendOnlyTableAndLookupAfterClose(LakeLookupMode lookupMode) throws Exception {
         TablePath tablePath = TablePath.of(DB, "append_only");
         Schema schema =
                 Schema.newBuilder()
@@ -607,13 +969,7 @@ class PaimonLakeTableLookuperTest {
         createPaimonTable(tablePath, tableDescriptor);
 
         try (LakeTableLookuper lookuper =
-                new PaimonLakeTableLookuper(
-                        paimonConfig,
-                        tablePath,
-                        tempWarehouseDir.getAbsolutePath(),
-                        tableConfig(KvFormat.COMPACTED),
-                        LOOKUP_CACHE_MAX_DISK_BYTES,
-                        NO_OP_DISK_WRITE_GUARD)) {
+                createLookuper(lookupMode, tablePath, KvFormat.COMPACTED)) {
             LakeTableLookuper.LookupContext context =
                     new LakeTableLookuper.LookupContext(
                             new ResolvedPartitionSpec(
@@ -626,11 +982,18 @@ class PaimonLakeTableLookuperTest {
             assertThatThrownBy(() -> lookuper.lookup(new byte[0], context))
                     .isInstanceOf(UnsupportedOperationException.class)
                     .hasMessageContaining("primary-key Paimon tables");
+
+            lookuper.close();
+            assertThatThrownBy(() -> lookuper.lookup(new byte[0], context))
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("closed");
         }
     }
 
-    @Test
-    void testLookupAfterSchemaEvolutionPadsNewColumnsWithNull() throws Exception {
+    @ParameterizedTest(name = "lookupMode={0}")
+    @EnumSource(LakeLookupMode.class)
+    void testLookupAfterSchemaEvolutionPadsNewColumnsWithNull(LakeLookupMode lookupMode)
+            throws Exception {
         TablePath tablePath = TablePath.of(DB, "schema_evolution_pk");
         Schema oldSchema = pkSchema();
         TableDescriptor oldDescriptor = partitionedPkDescriptor(oldSchema);
@@ -666,13 +1029,7 @@ class PaimonLakeTableLookuperTest {
                         Collections.singletonList(paimonRow(2, "20240101", "Bob", "new-value"))));
 
         try (LakeTableLookuper lookuper =
-                new PaimonLakeTableLookuper(
-                        paimonConfig,
-                        tablePath,
-                        tempWarehouseDir.getAbsolutePath(),
-                        tableConfig(KvFormat.COMPACTED),
-                        LOOKUP_CACHE_MAX_DISK_BYTES,
-                        NO_OP_DISK_WRITE_GUARD)) {
+                createLookuper(lookupMode, tablePath, KvFormat.COMPACTED)) {
             BinaryValue oldSchemaValue =
                     decodeValue(
                             lookuper.lookup(
@@ -708,6 +1065,68 @@ class PaimonLakeTableLookuperTest {
         }
     }
 
+    private LakeTableLookuper createLookuper(
+            LakeLookupMode lookupMode, TablePath tablePath, KvFormat kvFormat) {
+        return createLookuper(lookupMode, tablePath, kvFormat, 1, NO_OP_DISK_WRITE_GUARD);
+    }
+
+    private LakeTableLookuper createLookuper(
+            LakeLookupMode lookupMode,
+            TablePath tablePath,
+            KvFormat kvFormat,
+            int kvFormatVersion,
+            Runnable diskWriteGuard) {
+        return createLookuper(
+                tablePath, tableConfig(kvFormat, kvFormatVersion, lookupMode), diskWriteGuard);
+    }
+
+    private FileStoreTable createCompactionTable(TablePath tablePath, Schema schema)
+            throws Exception {
+        FileStoreTable table = createPaimonTable(tablePath, partitionedPkDescriptor(schema));
+        for (int id = 1; id <= 5; id++) {
+            writeAndCommitData(
+                    table,
+                    Collections.singletonMap(
+                            0, Collections.singletonList(paimonRow(id, "20240101", "name-" + id))));
+        }
+        writeAndCommitData(
+                table,
+                Collections.singletonMap(
+                        0, Collections.singletonList(paimonRow(6, "20240102", "name-6"))));
+        return table;
+    }
+
+    private void compactAndExpire(FileStoreTable table, BinaryRow partition) throws Exception {
+        List<DataFileMeta> filesBeforeCompaction = dataFiles(table, partition, 0);
+        assertThat(filesBeforeCompaction).hasSize(5);
+
+        new CompactHelper(table, new File(tempWarehouseDir, "compact"))
+                .compactBucket(partition, 0)
+                .commit();
+        assertThat(dataFiles(table, partition, 0)).hasSize(1);
+
+        DataFilePathFactory pathFactory =
+                table.store().pathFactory().createDataFilePathFactory(partition, 0);
+        List<Path> filesBeforeCompactionPaths = new ArrayList<>();
+        for (DataFileMeta file : filesBeforeCompaction) {
+            Path path = pathFactory.toPath(file);
+            assertThat(table.store().snapshotManager().fileIO().exists(path)).isTrue();
+            filesBeforeCompactionPaths.add(path);
+        }
+
+        Options expireOptions = new Options();
+        expireOptions.set(CoreOptions.SNAPSHOT_NUM_RETAINED_MIN, 1);
+        expireOptions.set(CoreOptions.SNAPSHOT_NUM_RETAINED_MAX, 1);
+        // Compaction only marks the replaced files as deleted. Snapshot expiration performs the
+        // physical cleanup that makes an SST lookuper refresh its stale file set.
+        try (TableCommitImpl commit = table.copy(expireOptions.toMap()).newCommit("")) {
+            commit.expireSnapshots();
+        }
+        for (Path path : filesBeforeCompactionPaths) {
+            assertThat(table.store().snapshotManager().fileIO().exists(path)).isFalse();
+        }
+    }
+
     private FileStoreTable createPaimonTable(TablePath tablePath, TableDescriptor tableDescriptor)
             throws Exception {
         lakeCatalog.createTable(
@@ -729,15 +1148,30 @@ class PaimonLakeTableLookuperTest {
                         CatalogContext.create(Options.fromMap(paimonConfig.toMap())));
     }
 
-    private static TableConfig tableConfig(KvFormat kvFormat) {
-        return tableConfig(kvFormat, 1);
-    }
-
-    private static TableConfig tableConfig(KvFormat kvFormat, int kvFormatVersion) {
+    private static TableConfig tableConfig(
+            KvFormat kvFormat, int kvFormatVersion, LakeLookupMode lookupMode) {
         Configuration config = new Configuration();
         config.set(ConfigOptions.TABLE_KV_FORMAT, kvFormat);
         config.set(ConfigOptions.TABLE_KV_FORMAT_VERSION, kvFormatVersion);
+        config.set(ConfigOptions.TABLE_DATALAKE_HISTORICAL_PARTITION_LOOKUP_MODE, lookupMode);
         return new TableConfig(config);
+    }
+
+    private LakeTableLookuper createLookuper(
+            TablePath tablePath, TableConfig tableConfig, Runnable diskWriteGuard) {
+        return lookuperManager.createLakeTableLookuper(
+                tablePath,
+                new LakeTableLookuperManager.Context(
+                        paimonConfig, tablePath.toString(), tableConfig, diskWriteGuard));
+    }
+
+    private static Set<java.nio.file.Path> regularFiles(File directory) throws IOException {
+        if (!directory.exists()) {
+            return new HashSet<>();
+        }
+        try (Stream<java.nio.file.Path> paths = Files.walk(directory.toPath())) {
+            return paths.filter(Files::isRegularFile).collect(Collectors.toSet());
+        }
     }
 
     private static Schema pkSchema() {
@@ -758,7 +1192,7 @@ class PaimonLakeTableLookuperTest {
     }
 
     private static LakeTableLookuper.LookupContext lookupContext(
-            Schema schema, String partitionName, int bucket, short schemaId) {
+            Schema schema, String partitionName, Integer bucket, short schemaId) {
         return new LakeTableLookuper.LookupContext(
                 ResolvedPartitionSpec.fromPartitionName(
                         Collections.singletonList("dt"), partitionName),
@@ -825,11 +1259,6 @@ class PaimonLakeTableLookuperTest {
         return new PaimonKeyEncoder(schema.getRowType(), keys).encodeKey(row(fields));
     }
 
-    private static byte[] compactedKey(Schema schema, int id, String dt) {
-        return CompactedKeyEncoder.createKeyEncoder(schema.getRowType(), Arrays.asList("id", "dt"))
-                .encodeKey(row(id, dt, ""));
-    }
-
     private static BinaryValue decodeValue(byte[] value, short schemaId, Schema schema) {
         return decodeValue(value, schemaId, schema, KvFormat.COMPACTED);
     }
@@ -838,6 +1267,32 @@ class PaimonLakeTableLookuperTest {
             byte[] value, short schemaId, Schema schema, KvFormat kvFormat) {
         return new ValueDecoder(new TestingSchemaGetter(schemaId, schema), kvFormat)
                 .decodeValue(value);
+    }
+
+    private static void assertLookupAndFileDownload(
+            LakeTableLookuper lookuper,
+            Schema schema,
+            int id,
+            String partitionName,
+            String name,
+            boolean expectedFileDownload)
+            throws Exception {
+        List<Boolean> fileDownloads = new ArrayList<>();
+        BinaryValue value =
+                decodeValue(
+                        lookuper.lookup(
+                                paimonKey(schema, id, partitionName),
+                                lookupContext(
+                                        schema,
+                                        partitionName,
+                                        0,
+                                        SCHEMA_ID,
+                                        (lookupTimeNanos, lookupFileDownloaded) ->
+                                                fileDownloads.add(lookupFileDownloaded))),
+                        SCHEMA_ID,
+                        schema);
+        assertRow(value.row, id, partitionName, name);
+        assertThat(fileDownloads).containsExactly(expectedFileDownload);
     }
 
     private static void assertRow(InternalRow row, int id, String dt, String name) {

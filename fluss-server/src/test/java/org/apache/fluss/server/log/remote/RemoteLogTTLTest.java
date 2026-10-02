@@ -143,11 +143,9 @@ final class RemoteLogTTLTest extends RemoteLogTestBase {
         assertThat(remoteLog.getRemoteLogStartOffset()).isEqualTo(Long.MAX_VALUE);
         assertThat(remoteLog.getHighestCopiedEndOffset()).isEqualTo(40L);
 
-        // Fetch records from remote.
-        // mock to update remote log end offset and remote log start offset as
-        // NotifyRemoteLogOffsetsRequest do.
-        logTablet.updateRemoteLogStartOffset(40L);
-        logTablet.updateRemoteLogEndOffset(40L);
+        // Fetch records from remote. Mock the empty manifest state propagated by
+        // NotifyRemoteLogOffsetsRequest.
+        logTablet.updateRemoteLogOffsets(Long.MAX_VALUE, -1L, 40L);
         CompletableFuture<Map<TableBucket, FetchLogResultForBucket>> future =
                 new CompletableFuture<>();
         replicaManager.fetchLogRecords(

@@ -31,6 +31,7 @@ import javax.annotation.Nullable;
 import java.util.List;
 
 import static org.apache.fluss.lake.paimon.utils.PaimonConversions.toPaimonPartition;
+import static org.apache.fluss.utils.Preconditions.checkNotNull;
 import static org.apache.fluss.utils.Preconditions.checkState;
 
 /** A base interface to write {@link LogRecord} to Paimon. */
@@ -40,7 +41,9 @@ public abstract class RecordWriter<T> implements AutoCloseable {
     protected final RowType tableRowType;
     protected final int bucket;
     protected final List<String> partitionKeys;
-    protected final BinaryRow partition;
+    protected final boolean historicalPartition;
+    // Null for historical writers, which derive the original partition from each record.
+    protected final @Nullable BinaryRow fixedPartition;
     protected final FlussRecordAsPaimonRow flussRecordAsPaimonRow;
 
     public RecordWriter(
@@ -50,17 +53,21 @@ public abstract class RecordWriter<T> implements AutoCloseable {
             @Nullable String partition,
             List<String> partitionKeys,
             org.apache.fluss.types.RowType flussRowType,
-            boolean paimonIncludingSystemColumns) {
+            boolean paimonIncludingSystemColumns,
+            boolean historicalPartition) {
         this.tableWrite = tableWrite;
         this.tableRowType = tableRowType;
         this.bucket = tableBucket.getBucket();
         this.partitionKeys = partitionKeys;
-        if (partition == null || partitionKeys.isEmpty()) {
+        this.historicalPartition = historicalPartition;
+        if (historicalPartition) {
+            this.fixedPartition = null;
+        } else if (partition == null || partitionKeys.isEmpty()) {
             // non-partitioned table
-            this.partition = BinaryRow.EMPTY_ROW;
+            this.fixedPartition = BinaryRow.EMPTY_ROW;
         } else {
             // eagerly resolve BinaryRow partition from partition name string
-            this.partition = resolvePartition(partition, partitionKeys, flussRowType);
+            this.fixedPartition = resolvePartition(partition, partitionKeys, flussRowType);
         }
         this.flussRecordAsPaimonRow =
                 new FlussRecordAsPaimonRow(
@@ -69,17 +76,29 @@ public abstract class RecordWriter<T> implements AutoCloseable {
 
     public abstract void write(LogRecord record) throws Exception;
 
-    CommitMessage complete() throws Exception {
+    List<CommitMessage> complete() throws Exception {
         List<CommitMessage> commitMessages = tableWrite.prepareCommit();
-        checkState(
-                commitMessages.size() == 1,
-                "The size of CommitMessage must be 1, but got %s.",
-                commitMessages);
-        return commitMessages.get(0);
+        // A normal writer targets one fixed partition, while a historical writer may write to
+        // multiple original partitions and therefore produce multiple commit messages.
+        if (!historicalPartition) {
+            checkState(
+                    commitMessages.size() == 1,
+                    "The size of CommitMessage must be 1, but got %s.",
+                    commitMessages);
+        }
+        return commitMessages;
     }
 
     public void close() throws Exception {
         tableWrite.close();
+    }
+
+    /** Sets the current Fluss record and returns the Paimon partition it should be written to. */
+    protected BinaryRow prepareRecordAndGetPartition(LogRecord record) {
+        flussRecordAsPaimonRow.setFlussRecord(record);
+        return historicalPartition
+                ? tableWrite.getPartition(flussRecordAsPaimonRow)
+                : checkNotNull(fixedPartition);
     }
 
     /**

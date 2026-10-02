@@ -30,6 +30,7 @@ import org.apache.fluss.exception.InvalidPartitionException;
 import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.flink.FlinkConnectorOptions;
 import org.apache.fluss.metadata.DataLakeFormat;
+import org.apache.fluss.metadata.PartitionInfo;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.row.encode.KvValueLayout;
@@ -272,9 +273,21 @@ abstract class FlinkCatalogITCase {
                 .hasMessage(
                         "Currently, auto partition is only supported for partitioned table, please set table property 'table.auto-partition.enabled' to false.");
 
+        // altering bucket.num is no longer blocked at the catalog layer; it is rejected by the
+        // server. This table is non-partitioned, so it fails with the non-partitioned rescale
+        // message (partitioned-table rescale is supported; non-partitioned is not yet).
         String unSupportedDml2 =
                 "alter table test_alter_table_append_only set ('bucket.num' = '1000')";
         assertThatThrownBy(() -> tEnv.executeSql(unSupportedDml2))
+                .rootCause()
+                .isInstanceOf(InvalidAlterTableException.class)
+                .hasMessageContaining("Cannot alter 'bucket.num' on non-partitioned table")
+                .hasMessageContaining("not yet supported");
+
+        assertThatThrownBy(
+                        () ->
+                                tEnv.executeSql(
+                                        "alter table test_alter_table_append_only reset ('bucket.num')"))
                 .rootCause()
                 .isInstanceOf(CatalogException.class)
                 .hasMessage("The option 'bucket.num' is not supported to alter yet.");
@@ -299,6 +312,47 @@ abstract class FlinkCatalogITCase {
                 .rootCause()
                 .isInstanceOf(CatalogException.class)
                 .hasMessage("The option 'auto-increment.fields' is not supported to alter yet.");
+    }
+
+    @Test
+    void testAlterPartitionedTableBucketCount() throws Exception {
+        String tableName = "test_alter_partitioned_table_bucket_count";
+        ObjectPath objectPath = new ObjectPath(DEFAULT_DB, tableName);
+        TablePath tablePath = TablePath.of(DEFAULT_DB, tableName);
+        tEnv.executeSql(
+                "create table "
+                        + tableName
+                        + " (a int, pt string) partitioned by (pt) with ('bucket.num' = '2')");
+        tEnv.executeSql("alter table " + tableName + " add partition (pt = 'old')");
+
+        CatalogTable table = (CatalogTable) catalog.getTable(objectPath);
+        assertThat(table.getOptions()).containsEntry(BUCKET_NUMBER.key(), "2");
+
+        try (Connection conn =
+                ConnectionFactory.createConnection(FLUSS_CLUSTER_EXTENSION.getClientConfig())) {
+            Admin admin = conn.getAdmin();
+            assertThat(admin.listPartitionInfos(tablePath).get())
+                    .singleElement()
+                    .satisfies(partition -> assertThat(partition.getBucketCount()).isEqualTo(2));
+
+            tEnv.executeSql("alter table " + tableName + " set ('bucket.num' = '4')");
+
+            table = (CatalogTable) catalog.getTable(objectPath);
+            assertThat(table.getOptions()).containsEntry(BUCKET_NUMBER.key(), "4");
+
+            tEnv.executeSql("alter table " + tableName + " add partition (pt = 'new')");
+
+            Map<String, Integer> bucketCountByPartition =
+                    admin.listPartitionInfos(tablePath).get().stream()
+                            .collect(
+                                    Collectors.toMap(
+                                            PartitionInfo::getPartitionName,
+                                            PartitionInfo::getBucketCount));
+            assertThat(bucketCountByPartition)
+                    .hasSize(2)
+                    .containsEntry("old", 2)
+                    .containsEntry("new", 4);
+        }
     }
 
     @Test

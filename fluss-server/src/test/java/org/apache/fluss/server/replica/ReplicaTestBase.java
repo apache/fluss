@@ -457,7 +457,10 @@ public class ReplicaTestBase {
                                         isr,
                                         Collections.emptyList(),
                                         INITIAL_COORDINATOR_EPOCH,
-                                        INITIAL_BUCKET_EPOCH))));
+                                        INITIAL_BUCKET_EPOCH),
+                                // all test tables are created distributedBy(3)
+                                TEST_ROUTING_BUCKET_COUNT,
+                                0L)));
     }
 
     // TODO this is only for single tablet server unit test.
@@ -500,8 +503,14 @@ public class ReplicaTestBase {
                                         Collections.emptyList(),
                                         INITIAL_COORDINATOR_EPOCH,
                                         // use leader epoch as bucket epoch
-                                        leaderEpoch))));
+                                        leaderEpoch),
+                                // all test tables are created distributedBy(3)
+                                TEST_ROUTING_BUCKET_COUNT,
+                                0L)));
     }
+
+    /** The routing bucket count carried by test notifications; test tables are distributedBy(3). */
+    protected static final Integer TEST_ROUTING_BUCKET_COUNT = 3;
 
     protected void makeLeaderAndFollower(List<NotifyLeaderAndIsrData> notifyLeaderAndIsrDataList) {
         replicaManager.becomeLeaderOrFollower(0, notifyLeaderAndIsrDataList, result -> {});
