@@ -34,6 +34,7 @@ import org.apache.fluss.server.zk.data.TabletServerRegistration;
 import org.apache.fluss.server.zk.data.ZkData.PartitionIdsZNode;
 import org.apache.fluss.server.zk.data.ZkData.TableIdsZNode;
 import org.apache.fluss.testutils.common.AllCallbackWrapper;
+import org.apache.fluss.utils.clock.Clock;
 import org.apache.fluss.utils.clock.SystemClock;
 import org.apache.fluss.utils.concurrent.ExecutorThreadFactory;
 import org.apache.fluss.utils.concurrent.FlussScheduler;
@@ -161,6 +162,10 @@ class CoordinatorEventProcessorTestBase {
     }
 
     protected CoordinatorEventProcessor buildCoordinatorEventProcessor() {
+        return buildCoordinatorEventProcessor(SystemClock.getInstance());
+    }
+
+    protected CoordinatorEventProcessor buildCoordinatorEventProcessor(Clock clock) {
         Configuration conf = new Configuration();
         conf.set(ConfigOptions.REMOTE_DATA_DIR, remoteDataDir);
         conf.set(ConfigOptions.COORDINATOR_OFFLINE_LEADER_RETRY_DELAY, Duration.ofDays(1));
@@ -178,6 +183,6 @@ class CoordinatorEventProcessorTestBase {
                 metadataManager,
                 kvSnapshotLeaseManager,
                 scheduler,
-                SystemClock.getInstance());
+                clock);
     }
 }
