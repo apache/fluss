@@ -264,11 +264,16 @@ suitable for production.
 
 ## Security checklist
 
-The 1.0 preview implements only `trust` mode (see
-[Security](../gateway/index.md#security)). Before exposing a Gateway beyond a trusted
-network boundary:
+The default `trust` mode permits anonymous requests. Choose `password`, `token`,
+or a correctly configured `trusted-header` provider as described in
+[Security](../gateway/index.md#security) before exposing the Gateway beyond a
+trusted network boundary:
 
-- Terminate TLS at an authenticated ingress or load balancer.
+- Terminate TLS at an ingress or load balancer. For password/token authentication
+  on the container's non-loopback plaintext listener, explicitly configure
+  `gateway.security.allow-insecure-transport: true` and protect the internal hop.
+- For `trusted-header`, configure the proxy peer IP allowlist and ensure the proxy
+  overwrites the identity header. Forwarded headers do not establish trust.
 - Restrict access to the REST port (8080) and the Prometheus port (9095) with
   network policies or firewall rules.
 - With SASL/PLAIN cluster connections, grant the shared service account only

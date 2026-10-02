@@ -40,6 +40,7 @@ struct FakeTable {
 struct FakeState {
     databases: BTreeMap<String, BTreeMap<String, FakeTable>>,
     calls: Vec<FakeCall>,
+    contexts: Vec<RequestContext>,
     failures: HashMap<Operation, GatewayError>,
     writes: Vec<Option<Vec<String>>>,
     write_failures: Vec<(usize, GatewayError)>,
@@ -159,6 +160,10 @@ impl FakeFlussBackend {
         self.state().failures.insert(operation, error);
     }
 
+    pub fn contexts(&self) -> Vec<RequestContext> {
+        self.state().contexts.clone()
+    }
+
     pub fn calls(&self) -> Vec<FakeCall> {
         self.state().calls.clone()
     }
@@ -174,6 +179,7 @@ impl FakeFlussBackend {
             return Err(unknown_cluster(ctx.cluster_id().as_str()));
         }
         let mut state = self.state();
+        state.contexts.push(ctx.clone());
         if let Some(call) = mutation {
             state.calls.push(call);
         }
