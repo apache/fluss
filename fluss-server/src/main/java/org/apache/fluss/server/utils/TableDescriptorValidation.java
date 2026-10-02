@@ -253,9 +253,9 @@ public class TableDescriptorValidation {
                 tableConf
                         .getOptional(ConfigOptions.TABLE_DATALAKE_FORMAT)
                         .orElse(clusterDataLakeFormat);
-        if (dataLakeFormat != DataLakeFormat.PAIMON) {
+        if (dataLakeFormat != DataLakeFormat.PAIMON && dataLakeFormat != DataLakeFormat.ICEBERG) {
             throw new InvalidConfigException(
-                    "Custom lake table path is only supported for Paimon.");
+                    "Custom lake table path is only supported for Paimon and Iceberg.");
         }
     }
 
