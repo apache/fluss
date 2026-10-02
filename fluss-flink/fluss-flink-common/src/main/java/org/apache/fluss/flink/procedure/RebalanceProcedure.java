@@ -41,6 +41,8 @@ import java.util.List;
  * CALL sys.rebalance('REPLICA_DISTRIBUTION');
  * -- Trigger rebalance with REPLICA_DISTRIBUTION and LEADER_DISTRIBUTION goals
  * CALL sys.rebalance('REPLICA_DISTRIBUTION,LEADER_DISTRIBUTION');
+ * -- Restore leadership to the first replica in each assignment
+ * CALL sys.rebalance('PREFERRED_LEADER_ELECTION');
  * </pre>
  */
 public class RebalanceProcedure extends ProcedureBase {
