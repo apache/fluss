@@ -83,6 +83,10 @@ public class FlinkConnectorOptionsUtils {
      *   <li>FIRST_ROW/VERSIONED: merge semantics require same-key records go to same task
      * </ul>
      *
+     * <p>Additionally, the AGGREGATION merge engine enables Undo Recovery on the sink, whose
+     * one-writer-per-bucket assumption further excludes BUCKET_LOAD_BALANCE; see {@link
+     * #validateDistributionModeForUndoRecovery}.
+     *
      * @param mergeEngineType the merge engine type (can be null for non-merge-engine tables)
      * @param distributionMode the distribution mode configured for the sink
      * @throws IllegalArgumentException if distribution mode is incompatible with merge engine
@@ -91,14 +95,53 @@ public class FlinkConnectorOptionsUtils {
             @Nullable MergeEngineType mergeEngineType, DistributionMode distributionMode) {
         if (mergeEngineType != null
                 && distributionMode != DistributionMode.BUCKET
+                && distributionMode != DistributionMode.BUCKET_LOAD_BALANCE
                 && distributionMode != DistributionMode.AUTO) {
             throw new IllegalArgumentException(
                     String.format(
                             "For primary key tables with merge engine ('%s'), "
-                                    + "'sink.distribution-mode' must be 'bucket' or 'auto' (default). "
-                                    + "Disabling shuffle breaks merge semantics because records with the same key "
+                                    + "'sink.distribution-mode' must be 'bucket', 'bucket_load_balance' or 'auto' (default). "
+                                    + "Disabling keyed shuffle breaks merge semantics because records with the same key "
                                     + "must be processed by the same task. Current mode: %s",
                             mergeEngineType, distributionMode));
+        }
+        // The AGGREGATION merge engine enables Undo Recovery on the sink; the
+        // one-writer-per-bucket constraint of Undo Recovery further excludes BUCKET_LOAD_BALANCE.
+        validateDistributionModeForUndoRecovery(
+                mergeEngineType == MergeEngineType.AGGREGATION, distributionMode);
+    }
+
+    /**
+     * Validates that the distribution mode is safe for the sink's Undo Recovery.
+     *
+     * <p>Undo Recovery, which is enabled automatically for aggregation tables, assumes each bucket
+     * is written by exactly one sink subtask: the writer state tracks the last written offset per
+     * bucket and fails on conflicting offsets during recovery. BUCKET_LOAD_BALANCE and NONE may fan
+     * one bucket out to several subtasks and break that assumption.
+     *
+     * <p>This is the single guard shared by the entry-point validation ({@link
+     * #validateDistributionModeForMergeEngine}) and the sink builder's defense-in-depth check, so
+     * the two can never drift apart.
+     *
+     * @param enableUndoRecovery whether Undo Recovery is enabled for the sink
+     * @param distributionMode the distribution mode configured for the sink
+     * @throws IllegalArgumentException if the distribution mode may fan one bucket out to several
+     *     subtasks while Undo Recovery is enabled
+     */
+    public static void validateDistributionModeForUndoRecovery(
+            boolean enableUndoRecovery, DistributionMode distributionMode) {
+        if (enableUndoRecovery
+                && distributionMode != DistributionMode.AUTO
+                && distributionMode != DistributionMode.BUCKET) {
+            throw new IllegalArgumentException(
+                    String.format(
+                            "'sink.distribution-mode' = '%s' is not supported when Undo Recovery "
+                                    + "is enabled (automatic for the aggregation merge engine): "
+                                    + "Undo Recovery assumes each bucket is written by exactly one "
+                                    + "sink subtask, but this distribution mode may fan one bucket "
+                                    + "out to several subtasks. Please use 'bucket' or 'auto' "
+                                    + "(default) instead.",
+                            distributionMode));
         }
     }
 

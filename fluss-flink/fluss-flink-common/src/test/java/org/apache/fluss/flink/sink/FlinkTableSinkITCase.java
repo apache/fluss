@@ -247,6 +247,8 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
         String insertPlan = tEnv.explainSql(insertSql, ExplainDetail.JSON_EXECUTION_PLAN);
         if (distributionMode == DistributionMode.BUCKET) {
             assertThat(insertPlan).contains("\"ship_strategy\" : \"BUCKET\"");
+        } else if (distributionMode == DistributionMode.BUCKET_LOAD_BALANCE) {
+            assertThat(insertPlan).contains("\"ship_strategy\" : \"BUCKET_LOAD_BALANCE\"");
         } else {
             assertThat(insertPlan).contains("\"ship_strategy\" : \"FORWARD\"");
         }
@@ -390,10 +392,10 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
                         + "(11, 3511, 'stave'), "
                         + "(12, 3512, 'Tim')";
 
-        if (distributionMode == DistributionMode.BUCKET) {
+        if (distributionMode == DistributionMode.BUCKET
+                || distributionMode == DistributionMode.BUCKET_LOAD_BALANCE) {
             assertThatThrownBy(() -> tEnv.explainSql(insertSql, ExplainDetail.JSON_EXECUTION_PLAN))
-                    .hasMessageContaining(
-                            "BUCKET mode is only supported for log tables with bucket keys");
+                    .hasMessageContaining("mode is only supported for log tables with bucket keys");
             return;
         }
 
@@ -457,6 +459,8 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
         String insertPlan = tEnv.explainSql(insertSql, ExplainDetail.JSON_EXECUTION_PLAN);
         if (distributionMode == DistributionMode.BUCKET) {
             assertThat(insertPlan).contains("\"ship_strategy\" : \"BUCKET\"");
+        } else if (distributionMode == DistributionMode.BUCKET_LOAD_BALANCE) {
+            assertThat(insertPlan).contains("\"ship_strategy\" : \"BUCKET_LOAD_BALANCE\"");
         } else if (distributionMode == DistributionMode.AUTO
                 || distributionMode == DistributionMode.NONE) {
             assertThat(insertPlan).contains("\"ship_strategy\" : \"FORWARD\"");
@@ -489,6 +493,25 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
                         "+I[13, 503, cony]", "+I[14, 504, jemmy]",
                         "+I[15, 505, pig]", "+I[16, 506, stephen]");
         assertResultsIgnoreOrder(rowIter, expectedRows, true);
+    }
+
+    @Test
+    @MultiVersionTest
+    void testAggregationMergeEngineRejectsBucketLoadBalance() {
+        // Undo Recovery for aggregation tables assumes one writer per bucket, while
+        // bucket_load_balance may fan one bucket out to several subtasks, so the combination
+        // must be rejected when the sink is planned.
+        tEnv.executeSql(
+                "create table agg_load_balance_sink (a int not null primary key not enforced, "
+                        + "b int) "
+                        + "with('table.merge-engine' = 'aggregation', "
+                        + "'fields.b.agg' = 'sum', "
+                        + "'sink.distribution-mode' = 'bucket_load_balance')");
+
+        String insertSql = "INSERT INTO agg_load_balance_sink VALUES (1, 1)";
+        assertThatThrownBy(() -> tEnv.explainSql(insertSql, ExplainDetail.JSON_EXECUTION_PLAN))
+                .hasStackTraceContaining("is not supported when Undo Recovery is enabled")
+                .hasStackTraceContaining("Please use 'bucket' or 'auto'");
     }
 
     @Test
