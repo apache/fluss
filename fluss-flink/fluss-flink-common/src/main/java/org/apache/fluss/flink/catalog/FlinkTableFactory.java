@@ -146,11 +146,6 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
         LookupOptions.LookupCacheType lookupCacheType = tableOptions.get(LookupOptions.CACHE_TYPE);
         if (lookupCacheType.equals(LookupOptions.LookupCacheType.PARTIAL)) {
             cache = DefaultLookupCache.fromConfig(tableOptions);
-        } else if (lookupCacheType.equals(LookupOptions.LookupCacheType.FULL)) {
-            // currently, flink framework only support InputFormatProvider
-            // as ScanRuntimeProviders for Full caching lookup join, so in here, we just throw
-            // unsupported exception
-            throw new UnsupportedOperationException("Full lookup caching is not supported yet.");
         }
 
         // other option values
@@ -177,6 +172,7 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
                 tableOptions.get(FlinkConnectorOptions.LOOKUP_ASYNC),
                 tableOptions.get(FlinkConnectorOptions.LOOKUP_INSERT_IF_NOT_EXISTS),
                 cache,
+                lookupCacheType,
                 partitionDiscoveryIntervalMs,
                 splitAssignmentBatchSize,
                 tableOptions.get(toFlinkOption(ConfigOptions.TABLE_DATALAKE_ENABLED)),
