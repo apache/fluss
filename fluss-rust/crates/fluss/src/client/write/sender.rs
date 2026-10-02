@@ -247,14 +247,37 @@ impl Sender {
         if !batches.is_empty() {
             self.add_to_inflight_batches(&batches);
             for (leader_id, leader_batches) in batches {
-                futures.push(
-                    Box::pin(self.send_write_request(leader_id, self.ack, leader_batches))
-                        as SendFuture<'_>,
-                );
+                futures.extend(self.table_send_futures(leader_id, leader_batches));
             }
         }
 
         Ok((futures, None, unknown_leaders))
+    }
+
+    /// Schedule each table independently, as Java's asynchronous per-table RPCs do.
+    /// These batches have already passed the accumulator's per-bucket in-flight
+    /// checks. Splitting the drained set does not admit any additional batches.
+    /// Each future owns its response state, so a slow table cannot hold up another
+    /// table's dispatch or completion within this drain.
+    fn table_send_futures(
+        &self,
+        destination: i32,
+        batches: Vec<ReadyWriteBatch>,
+    ) -> Vec<SendFuture<'_>> {
+        let mut by_table: HashMap<TableId, Vec<ReadyWriteBatch>> = HashMap::new();
+        for batch in batches {
+            by_table
+                .entry(batch.table_bucket.table_id())
+                .or_default()
+                .push(batch);
+        }
+        by_table
+            .into_iter()
+            .map(|(table_id, batches)| {
+                Box::pin(self.send_table_write_request(destination, self.ack, table_id, batches))
+                    as SendFuture<'_>
+            })
+            .collect()
     }
 
     /// Refresh metadata for buckets with unknown leaders. Runs as a concurrent
@@ -316,10 +339,11 @@ impl Sender {
         }
     }
 
-    async fn send_write_request(
+    async fn send_table_write_request(
         &self,
         destination: i32,
         acks: i16,
+        table_id: TableId,
         batches: Vec<ReadyWriteBatch>,
     ) -> Result<()> {
         if batches.is_empty() {
@@ -334,25 +358,13 @@ impl Sender {
         // send attempt.
         self.record_request_batch_metrics(&batches);
 
-        let mut records_by_bucket = HashMap::new();
-        let mut write_batch_by_table: HashMap<TableId, Vec<TableBucket>> = HashMap::new();
-
-        for batch in batches {
-            let table_bucket = batch.table_bucket.clone();
-            write_batch_by_table
-                .entry(table_bucket.table_id())
-                .or_default()
-                .push(table_bucket.clone());
-            records_by_bucket.insert(table_bucket, batch);
-        }
-
         let cluster = self.metadata.get_cluster();
 
         let destination_node = match cluster.get_tablet_server(destination) {
             Some(node) => node,
             None => {
                 self.handle_batches_with_error(
-                    records_by_bucket.into_values().collect(),
+                    batches,
                     FlussError::LeaderNotAvailableException,
                     format!("Destination node not found in metadata cache {destination}."),
                 )
@@ -364,7 +376,7 @@ impl Sender {
             Ok(connection) => connection,
             Err(e) => {
                 self.handle_batches_with_error(
-                    records_by_bucket.into_values().collect(),
+                    batches,
                     FlussError::NetworkException,
                     format!("Failed to connect destination node {destination}: {e}"),
                 )
@@ -373,61 +385,52 @@ impl Sender {
             }
         };
 
-        for (table_id, table_buckets) in write_batch_by_table {
-            let mut request_batches: Vec<ReadyWriteBatch> = table_buckets
-                .iter()
-                .filter_map(|bucket| records_by_bucket.remove(bucket))
-                .collect();
-
-            if request_batches.is_empty() {
-                continue;
+        let mut request_batches = batches;
+        let write_request = match Self::build_write_request(
+            table_id,
+            acks,
+            self.max_request_timeout_ms,
+            &mut request_batches,
+        ) {
+            Ok(req) => req,
+            Err(e) => {
+                self.handle_batches_with_local_error(
+                    request_batches,
+                    format!("Failed to build write request: {e}"),
+                )?;
+                return Ok(());
             }
+        };
 
-            let write_request = match Self::build_write_request(
-                table_id,
-                acks,
-                self.max_request_timeout_ms,
-                &mut request_batches,
-            ) {
-                Ok(req) => req,
-                Err(e) => {
-                    self.handle_batches_with_local_error(
-                        request_batches,
-                        format!("Failed to build write request: {e}"),
-                    )?;
-                    continue;
-                }
-            };
-
-            // Snapshot after connection setup and request construction, immediately before
-            // dispatch. Refresh on every attempt, including retries, so an old out-of-order
-            // response can be distinguished from one with no subsequent ACK progress.
-            // Put batches back into records_by_bucket for response handling.
-            for mut request_batch in request_batches {
-                if self.idempotence_manager.is_enabled()
-                    && request_batch.write_batch.has_batch_sequence()
-                {
-                    let last_acked = self
-                        .idempotence_manager
-                        .last_acked_sequence(&request_batch.table_bucket);
-                    request_batch
-                        .write_batch
-                        .set_last_acked_sequence_at_send(last_acked);
-                }
-                records_by_bucket.insert(request_batch.table_bucket.clone(), request_batch);
+        let mut records_by_bucket = HashMap::new();
+        let mut table_buckets = Vec::with_capacity(request_batches.len());
+        // Snapshot after connection setup and request construction, immediately before
+        // dispatch. Refresh on every attempt, including retries, so an old out-of-order
+        // response can be distinguished from one with no subsequent ACK progress.
+        // Put batches back into records_by_bucket for response handling.
+        for mut request_batch in request_batches {
+            if self.idempotence_manager.is_enabled()
+                && request_batch.write_batch.has_batch_sequence()
+            {
+                let last_acked = self
+                    .idempotence_manager
+                    .last_acked_sequence(&request_batch.table_bucket);
+                request_batch
+                    .write_batch
+                    .set_last_acked_sequence_at_send(last_acked);
             }
-
-            self.send_and_handle_response(
-                &connection,
-                write_request,
-                table_id,
-                &table_buckets,
-                &mut records_by_bucket,
-            )
-            .await?;
+            table_buckets.push(request_batch.table_bucket.clone());
+            records_by_bucket.insert(request_batch.table_bucket.clone(), request_batch);
         }
 
-        Ok(())
+        self.send_and_handle_response(
+            &connection,
+            write_request,
+            table_id,
+            &table_buckets,
+            &mut records_by_bucket,
+        )
+        .await
     }
 
     fn build_write_request(
@@ -1259,7 +1262,12 @@ impl WriteResponse for PutKvResponse {
 }
 
 #[cfg(test)]
+#[path = "sender_concurrency_tests.rs"]
+mod concurrency_tests;
+
+#[cfg(test)]
 mod tests {
+    use super::concurrency_tests::{read_produce_request, respond_produce};
     use super::*;
     use crate::client::WriteRecord;
     use crate::cluster::{Cluster, ServerType};
@@ -1276,7 +1284,7 @@ mod tests {
     use std::collections::{HashMap, HashSet};
     use std::sync::atomic::AtomicUsize;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    use tokio::net::{TcpListener, TcpStream};
+    use tokio::net::TcpListener;
 
     fn disabled_idempotence() -> Arc<IdempotenceManager> {
         Arc::new(IdempotenceManager::new(false, 5))
@@ -1795,7 +1803,9 @@ mod tests {
 
                 let (batch, _handle) =
                     build_ready_batch(accumulator.as_ref(), cluster.clone(), table_path)?;
-                sender.send_write_request(1, 1, vec![batch]).await?;
+                sender
+                    .send_table_write_request(1, 1, 1, vec![batch])
+                    .await?;
                 let _ = server_task.await;
                 Ok(())
             })
@@ -1879,7 +1889,9 @@ mod tests {
                 // serialized or dispatched. Metrics must still be recorded so the
                 // count matches Java, which updates writer metrics over the whole
                 // drained set regardless of send outcome.
-                sender.send_write_request(999, 1, vec![batch]).await?;
+                sender
+                    .send_table_write_request(999, 1, 1, vec![batch])
+                    .await?;
                 Ok(())
             })
         })
@@ -2089,63 +2101,6 @@ mod tests {
         Ok(())
     }
 
-    /// Handle the handshake, then let the test choose when to respond to each produce request.
-    async fn read_produce_request(stream: &mut TcpStream) -> i32 {
-        loop {
-            let len = stream.read_i32().await.expect("request length");
-            let mut payload = vec![0u8; len as usize];
-            stream.read_exact(&mut payload).await.expect("request");
-            let api_key = i16::from_be_bytes(payload[..2].try_into().unwrap());
-            let request_id = i32::from_be_bytes(payload[4..8].try_into().unwrap());
-            if api_key == 1014 {
-                return request_id;
-            }
-            assert_eq!(api_key, 1000, "expected ApiVersions or ProduceLog");
-            let response = ApiVersionsResponse {
-                api_versions: vec![
-                    PbApiVersion {
-                        api_key: 1000, // ApiVersions
-                        min_version: 0,
-                        max_version: 0,
-                    },
-                    PbApiVersion {
-                        api_key: 1014, // ProduceLog
-                        min_version: 0,
-                        max_version: 0,
-                    },
-                ],
-                server_type: Some(ServerType::TabletServer.to_type_id()),
-            };
-            write_controlled_response(stream, request_id, response).await;
-        }
-    }
-
-    async fn write_controlled_response(
-        stream: &mut TcpStream,
-        request_id: i32,
-        response: impl Message,
-    ) {
-        let body = response.encode_to_vec();
-        stream
-            .write_i32((5 + body.len()) as i32)
-            .await
-            .expect("response length");
-        stream.write_u8(0).await.expect("success response type");
-        stream.write_i32(request_id).await.expect("request id");
-        stream.write_all(&body).await.expect("response body");
-    }
-
-    async fn respond_produce(stream: &mut TcpStream, request_id: i32, error: FlussError) {
-        let response = ProduceLogResponse {
-            buckets_resp: vec![PbProduceLogRespForBucket {
-                bucket_id: 0,
-                error_code: Some(error.code()),
-                ..Default::default()
-            }],
-        };
-        write_controlled_response(stream, request_id, response).await;
-    }
-
     fn send_controlled_batch(
         sender: &Arc<Sender>,
         batch: ReadyWriteBatch,
@@ -2154,7 +2109,7 @@ mod tests {
         sender.add_to_inflight_batches(&batches);
         let batches = batches.remove(&1).unwrap();
         let sender = Arc::clone(sender);
-        tokio::spawn(async move { sender.send_write_request(1, -1, batches).await })
+        tokio::spawn(async move { sender.send_table_write_request(1, -1, 1, batches).await })
     }
 
     #[derive(Clone, Copy)]
