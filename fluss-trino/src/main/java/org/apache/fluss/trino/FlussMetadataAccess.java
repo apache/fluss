@@ -62,11 +62,11 @@ import static org.apache.fluss.utils.Preconditions.checkNotNull;
  */
 final class FlussMetadataAccess {
 
-    private final Admin admin;
+    private final FlussClientManager clientManager;
 
     @Inject
     FlussMetadataAccess(FlussClientManager clientManager) {
-        this.admin = checkNotNull(clientManager, "clientManager is null").getAdmin();
+        this.clientManager = checkNotNull(clientManager, "clientManager is null");
     }
 
     List<String> listSchemaNames() {
@@ -89,7 +89,7 @@ final class FlussMetadataAccess {
                     schema,
                     buildNameMapping(
                             await(
-                                    admin.listTables(schema.getFlussName()),
+                                    getAdmin().listTables(schema.getFlussName()),
                                     FLUSS_METADATA_ERROR,
                                     "Failed to list Fluss tables in database "
                                             + schema.getFlussName())));
@@ -180,7 +180,7 @@ final class FlussMetadataAccess {
         try {
             List<BucketInfo> bucketInfos =
                     await(
-                            admin.describeBuckets(tablePath),
+                            getAdmin().describeBuckets(tablePath),
                             FLUSS_SPLIT_ERROR,
                             "Failed to describe Fluss buckets for " + table);
 
@@ -246,6 +246,17 @@ final class FlussMetadataAccess {
         }
     }
 
+    private Admin getAdmin() {
+        try {
+            return clientManager.getAdmin();
+        } catch (TrinoException e) {
+            throw e;
+        } catch (RuntimeException e) {
+            throw new TrinoException(
+                    FLUSS_METADATA_ERROR, "Failed to initialize the Fluss client", e);
+        }
+    }
+
     private Map<FlussBucketHandle, Long> listNonPartitionedOffsets(
             TablePath tablePath,
             FlussTableHandle table,
@@ -259,7 +270,7 @@ final class FlussMetadataAccess {
 
         Map<Integer, Long> rawOffsets =
                 await(
-                        admin.listOffsets(tablePath, bucketIds, offsetSpec).all(),
+                        getAdmin().listOffsets(tablePath, bucketIds, offsetSpec).all(),
                         FLUSS_SPLIT_ERROR,
                         "Failed to list Fluss offsets for " + table);
 
@@ -280,6 +291,8 @@ final class FlussMetadataAccess {
             OffsetSpec offsetSpec) {
         Map<String, List<FlussPhysicalBucket>> bucketsByPartition = groupByPartition(buckets);
         Map<String, CompletableFuture<Map<Integer, Long>>> futures = new LinkedHashMap<>();
+
+        Admin admin = getAdmin();
 
         for (Map.Entry<String, List<FlussPhysicalBucket>> entry : bucketsByPartition.entrySet()) {
             String partitionName = entry.getKey();
@@ -318,7 +331,7 @@ final class FlussMetadataAccess {
     private Map<String, List<String>> loadSchemaNameMapping() {
         return buildNameMapping(
                 await(
-                        admin.listDatabases(),
+                        getAdmin().listDatabases(),
                         FLUSS_METADATA_ERROR,
                         "Failed to list Fluss databases"));
     }
@@ -326,7 +339,7 @@ final class FlussMetadataAccess {
     private TableInfo loadTableInfo(String databaseName, String tableName) {
         TablePath tablePath = TablePath.of(databaseName, tableName);
         return await(
-                admin.getTableInfo(tablePath),
+                getAdmin().getTableInfo(tablePath),
                 FLUSS_METADATA_ERROR,
                 "Failed to get Fluss table metadata for " + tablePath);
     }

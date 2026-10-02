@@ -18,8 +18,6 @@
 
 package org.apache.fluss.trino;
 
-import com.google.inject.Inject;
-import jakarta.annotation.PreDestroy;
 import org.apache.fluss.client.Connection;
 import org.apache.fluss.client.ConnectionFactory;
 import org.apache.fluss.client.admin.Admin;
@@ -27,26 +25,42 @@ import org.apache.fluss.client.table.Table;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.metadata.TablePath;
 
+import com.google.inject.Inject;
+import io.trino.spi.TrinoException;
+import jakarta.annotation.PreDestroy;
+
+import static org.apache.fluss.trino.FlussErrorCode.AUTHENTICATION_NOT_SUPPORTED;
 import static org.apache.fluss.utils.ExceptionUtils.firstOrSuppressed;
 import static org.apache.fluss.utils.ExceptionUtils.rethrowException;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
+import static org.apache.fluss.utils.Preconditions.checkState;
 
-/** Owns the shared Fluss connection and Admin client. */
+/** Lazily initializes and owns the shared Fluss connection and Admin client. */
 public final class FlussClientManager {
+
     private static final String BOOTSTRAP_SERVERS = "bootstrap.servers";
     private static final String SECURITY_PROTOCOL = "client.security.protocol";
     private static final String SASL_MECHANISM = "client.security.sasl.mechanism";
     private static final String SASL_USERNAME = "client.security.sasl.username";
     private static final String SASL_PASSWORD = "client.security.sasl.password";
 
-    private final Connection connection;
-    private final Admin admin;
+    private static final String PLAINTEXT = "PLAINTEXT";
 
+    private final Object lock = new Object();
+    private final Configuration configuration;
+    private final boolean authenticationConfigured;
+
+    // All mutable state is guarded by lock.
+    private Connection connection;
+    private Admin admin;
+    private boolean closed;
+
+    /** Captures connector configuration without connecting to Fluss. */
     @Inject
     public FlussClientManager(FlussConfig config) {
         checkNotNull(config, "config is null");
 
-        Configuration configuration = new Configuration();
+        this.configuration = new Configuration();
         configuration.setString(BOOTSTRAP_SERVERS, config.getBootstrapServers());
 
         config.getSecurityProtocol()
@@ -55,46 +69,110 @@ public final class FlussClientManager {
                 .ifPresent(value -> configuration.setString(SASL_MECHANISM, value));
         config.getSaslUsername().ifPresent(value -> configuration.setString(SASL_USERNAME, value));
         config.getSaslPassword().ifPresent(value -> configuration.setString(SASL_PASSWORD, value));
-
-        connection = ConnectionFactory.createConnection(configuration);
-        try {
-            admin = connection.getAdmin();
-        } catch (RuntimeException | Error failure) {
-            try {
-                connection.close();
-            } catch (Throwable closeFailure) {
-                firstOrSuppressed(closeFailure, failure);
-            }
-            throw failure;
-        }
+        this.authenticationConfigured = isAuthenticationConfigured(config);
     }
 
-    Admin getAdmin() {
-        return admin;
-    }
-
-    Table openTable(TablePath tablePath) {
-        return connection.getTable(tablePath);
-    }
-
+    /** Closes initialized resources without triggering initialization. */
     @PreDestroy
     public void close() throws Exception {
-        Throwable failure = null;
+        Admin adminToClose;
+        Connection connectionToClose;
 
-        try {
-            admin.close();
-        } catch (Exception | Error e) {
-            failure = firstOrSuppressed(e, null);
+        synchronized (lock) {
+            if (closed) {
+                return;
+            }
+
+            closed = true;
+            adminToClose = admin;
+            connectionToClose = connection;
+
+            admin = null;
+            connection = null;
         }
 
-        try {
-            connection.close();
-        } catch (Exception | Error e) {
-            failure = firstOrSuppressed(e, failure);
+        Throwable failure = null;
+
+        if (adminToClose != null) {
+            try {
+                adminToClose.close();
+            } catch (Exception | Error e) {
+                failure = firstOrSuppressed(e, failure);
+            }
+        }
+
+        if (connectionToClose != null) {
+            try {
+                connectionToClose.close();
+            } catch (Exception | Error e) {
+                failure = firstOrSuppressed(e, failure);
+            }
         }
 
         if (failure != null) {
             rethrowException(failure, "Failed closing Fluss client resources");
         }
+    }
+
+    /** Returns the shared Admin client. Callers must not close it. */
+    Admin getAdmin() {
+        synchronized (lock) {
+            initializeIfNeeded();
+            return admin;
+        }
+    }
+
+    /** Opens an independently owned table that the caller must close. */
+    Table openTable(TablePath tablePath) {
+        checkNotNull(tablePath, "tablePath is null");
+
+        synchronized (lock) {
+            initializeIfNeeded();
+            return connection.getTable(tablePath);
+        }
+    }
+
+    /** Initializes both resources while holding lock. */
+    private void initializeIfNeeded() {
+        checkState(!closed, "Fluss client manager is closed");
+
+        if (connection != null) {
+            return;
+        }
+
+        if (authenticationConfigured) {
+            throw new TrinoException(
+                    AUTHENTICATION_NOT_SUPPORTED,
+                    "Authentication is not supported by the Fluss Trino connector; "
+                            + "only PLAINTEXT connections are currently supported");
+        }
+
+        Connection newConnection = null;
+
+        try {
+            newConnection = ConnectionFactory.createConnection(configuration);
+            Admin newAdmin = newConnection.getAdmin();
+
+            connection = newConnection;
+            admin = newAdmin;
+        } catch (RuntimeException | Error failure) {
+            if (newConnection != null) {
+                try {
+                    newConnection.close();
+                } catch (Exception | Error closeFailure) {
+                    firstOrSuppressed(closeFailure, failure);
+                }
+            }
+
+            throw failure;
+        }
+    }
+
+    private static boolean isAuthenticationConfigured(FlussConfig config) {
+        return (config.getSecurityProtocol().isPresent()
+                        && !PLAINTEXT.equalsIgnoreCase(config.getSecurityProtocol().get()))
+                || config.getSaslMechanism().isPresent()
+                || config.getSaslUsername().isPresent()
+                || config.getSaslPassword().isPresent();
     }
 }

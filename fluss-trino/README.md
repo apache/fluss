@@ -35,6 +35,7 @@ binary.
 | Writes, DDL, lookup and Union Read | Not supported |
 | Predicate, aggregation, limit and partition pruning pushdown | Not implemented |
 | Task retries / fault-tolerant execution | Not supported |
+| SASL authentication on JDK 25 | Not supported; configuration properties are retained |
 
 Ordinary `SELECT`, column selection and ordering, `COUNT(*)`, `WHERE`, `ORDER BY`
 and `LIMIT` use Trino's execution engine. Filters and other operations without
@@ -55,7 +56,19 @@ keys that become duplicates under Trino semantics are rejected.
 
 ## Build
 
-Build the connector with its own Maven wrapper and JDK 25:
+First install the matching Fluss dependencies from the repository root using
+JDK 17, as in the connector CI workflow:
+
+```sh
+JAVA_HOME=/path/to/jdk-17 ./mvnw -B \
+  -pl fluss-client,fluss-server,fluss-test-utils -am install -DskipTests
+```
+
+The standalone connector build does not build sibling modules automatically.
+This step installs the current checkout's Fluss artifacts and test JARs into the
+local Maven repository. It is required in a fresh environment.
+
+Then build the connector with its own Maven wrapper and JDK 25:
 
 ```sh
 cd fluss-trino
@@ -77,9 +90,27 @@ bootstrap.servers=localhost:9123
 ```
 
 Replace the bootstrap address with Fluss endpoints reachable from every Trino
-node. The connector also accepts `client.security.protocol`,
-`client.security.sasl.mechanism`, `client.security.sasl.username`, and
-`client.security.sasl.password` when required by the Fluss cluster.
+node. The current connector supports only unauthenticated `PLAINTEXT` connections.
+
+### SASL limitation on JDK 25
+
+**SASL authentication is currently unsupported.** The Fluss client's SASL callback
+uses `Subject.getSubject()`, which is unsupported on JDK 25. A separate Fluss
+client compatibility fix is planned.
+
+The properties `client.security.protocol`, `client.security.sasl.mechanism`,
+`client.security.sasl.username`, and `client.security.sasl.password` remain
+recognized configuration keys for future compatibility. Retaining them does not
+enable authentication: the connector currently rejects initialization if a
+protocol other than `PLAINTEXT`, or any SASL property, is configured. Leave SASL
+properties unset, even when explicitly selecting `PLAINTEXT`.
+
+Client initialization is lazy, so this rejection occurs on the first operation
+that needs the Fluss client, rather than during catalog creation. Upgrading the
+Fluss client alone will not enable SASL while the connector's explicit restriction
+remains in place; it must also be removed after compatibility is verified.
+
+The Arrow JVM option below does not resolve the SASL incompatibility.
 
 ### Required JVM option for Arrow reads
 

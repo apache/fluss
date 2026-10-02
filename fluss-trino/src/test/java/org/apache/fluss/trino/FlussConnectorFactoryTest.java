@@ -71,6 +71,7 @@ final class FlussConnectorFactoryTest {
                                 mock(ConnectorSession.class),
                                 connector.beginTransaction(READ_COMMITTED, true, true));
                 assertThat(metadata).isInstanceOf(ClassLoaderSafeConnectorMetadata.class);
+                factory.verifyNoInteractions();
                 assertThat(metadata.listSchemaNames(mock(ConnectorSession.class)))
                         .containsExactly("sales");
                 assertThat(connector.getTableProperties()).isNotEmpty();
@@ -83,6 +84,30 @@ final class FlussConnectorFactoryTest {
             }
             verify(admin).close();
             verify(connection).close();
+        }
+    }
+
+    @Test
+    void testBootstrapAndShutdownWithoutFlussConnection() {
+        ConnectorContext context = mock(ConnectorContext.class, RETURNS_MOCKS);
+        when(context.getSpiVersion()).thenReturn(new ConnectorContext() {}.getSpiVersion());
+
+        try (MockedStatic<ConnectionFactory> factory = mockStatic(ConnectionFactory.class)) {
+            factory.when(() -> ConnectionFactory.createConnection(any(Configuration.class)))
+                    .thenThrow(new IllegalStateException("Fluss is unavailable"));
+
+            Connector connector =
+                    new FlussConnectorFactory()
+                            .create(
+                                    "fluss",
+                                    Collections.singletonMap("bootstrap.servers", "localhost:9123"),
+                                    context);
+            try {
+                factory.verifyNoInteractions();
+            } finally {
+                connector.shutdown();
+            }
+            factory.verifyNoInteractions();
         }
     }
 

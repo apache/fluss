@@ -28,15 +28,33 @@ on:
       - release-**
     paths:
       - 'fluss-trino/**'
-      - 'tools/maven/checkstyle.xml'
-      - 'tools/maven/suppressions.xml'
+      - 'fluss-client/**'
+      - 'fluss-common/**'
+      - 'fluss-rpc/**'
+      - 'fluss-server/**'
+      - 'fluss-test-utils/**'
+      - 'fluss-metrics/**'
+      - 'fluss-protogen/**'
+      - 'pom.xml'
+      - '.mvn/**'
+      - 'mvnw'
+      - 'tools/maven/**'
       - '.github/workflows/ci-trino.yaml'
 
   pull_request:
     paths:
       - 'fluss-trino/**'
-      - 'tools/maven/checkstyle.xml'
-      - 'tools/maven/suppressions.xml'
+      - 'fluss-client/**'
+      - 'fluss-common/**'
+      - 'fluss-rpc/**'
+      - 'fluss-server/**'
+      - 'fluss-test-utils/**'
+      - 'fluss-metrics/**'
+      - 'fluss-protogen/**'
+      - 'pom.xml'
+      - '.mvn/**'
+      - 'mvnw'
+      - 'tools/maven/**'
       - '.github/workflows/ci-trino.yaml'
 
 concurrency:
@@ -45,12 +63,24 @@ concurrency:
 
 jobs:
   build:
-    name: "Java 25 / Trino"
+    name: "Trino Connector"
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Install Fluss dependencies
+        run: >-
+          ./mvnw -B --no-transfer-progress
+          -pl fluss-client,fluss-server,fluss-test-utils
+          -am install -DskipTests
 
       - name: Set up JDK 25
         uses: actions/setup-java@v5
@@ -58,6 +88,6 @@ jobs:
           distribution: 'temurin'
           java-version: '25'
 
-      - name: Build
+      - name: Build and verify Trino connector
         working-directory: fluss-trino
-        run: ./mvnw -B clean verify
+        run: ./mvnw -B --no-transfer-progress clean verify

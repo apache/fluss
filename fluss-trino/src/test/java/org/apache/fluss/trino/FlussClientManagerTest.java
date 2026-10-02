@@ -21,13 +21,18 @@ import org.apache.fluss.client.Connection;
 import org.apache.fluss.client.ConnectionFactory;
 import org.apache.fluss.client.admin.Admin;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.exception.AuthenticationException;
+import org.apache.fluss.metadata.TablePath;
 
+import io.trino.spi.TrinoException;
 import org.junit.jupiter.api.Test;
 import org.mockito.InOrder;
 import org.mockito.MockedStatic;
 
 import java.io.IOException;
+import java.util.Arrays;
 
+import static org.apache.fluss.trino.FlussErrorCode.AUTHENTICATION_NOT_SUPPORTED;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
@@ -35,16 +40,18 @@ import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockStatic;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /** Tests client ownership without creating network connections. */
 final class FlussClientManagerTest {
     @Test
-    void testConfigurationAndCloseOrder() throws Exception {
+    void testPlaintextConfigurationAndCloseOrder() throws Exception {
         Connection connection = mock(Connection.class);
         Admin admin = mock(Admin.class);
         when(connection.getAdmin()).thenReturn(admin);
+
         try (MockedStatic<ConnectionFactory> factory = mockStatic(ConnectionFactory.class)) {
             factory.when(() -> ConnectionFactory.createConnection(any(Configuration.class)))
                     .thenAnswer(
@@ -52,28 +59,143 @@ final class FlussClientManagerTest {
                                 Configuration config = invocation.getArgument(0);
                                 assertThat(config.toMap())
                                         .containsEntry("bootstrap.servers", "localhost:9123")
-                                        .containsEntry("client.security.protocol", "SASL")
-                                        .containsEntry("client.security.sasl.mechanism", "PLAIN")
-                                        .containsEntry("client.security.sasl.username", "test-user")
-                                        .containsEntry(
-                                                "client.security.sasl.password", "test-password");
+                                        .containsEntry("client.security.protocol", "PLAINTEXT")
+                                        .doesNotContainKeys(
+                                                "client.security.sasl.mechanism",
+                                                "client.security.sasl.username",
+                                                "client.security.sasl.password");
                                 return connection;
                             });
+
             FlussClientManager manager =
                     new FlussClientManager(
                             new FlussConfig()
                                     .setBootstrapServers("localhost:9123")
-                                    .setSecurityProtocol("SASL")
-                                    .setSaslMechanism("PLAIN")
-                                    .setSaslUsername("test-user")
-                                    .setSaslPassword("test-password"));
+                                    .setSecurityProtocol("PLAINTEXT"));
+
+            // Construction must not connect to Fluss.
+            factory.verifyNoInteractions();
+
             assertThat(manager.getAdmin()).isSameAs(admin);
             assertThat(manager.getAdmin()).isSameAs(admin);
+
             manager.close();
+            manager.close();
+
+            assertThatThrownBy(manager::getAdmin)
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("closed");
+
             InOrder order = inOrder(admin, connection);
             order.verify(admin).close();
             order.verify(connection).close();
+
             verify(connection).getAdmin();
+            factory.verify(() -> ConnectionFactory.createConnection(any(Configuration.class)));
+        }
+    }
+
+    @Test
+    void testInitializationFailurePreservesAuthenticationCause() {
+        RuntimeException failure =
+                new RuntimeException(
+                        "Failed to initialize Fluss client",
+                        new AuthenticationException("Failed to create SASL client"));
+
+        try (MockedStatic<ConnectionFactory> factory = mockStatic(ConnectionFactory.class)) {
+            factory.when(() -> ConnectionFactory.createConnection(any(Configuration.class)))
+                    .thenThrow(failure);
+
+            assertThatThrownBy(
+                            () ->
+                                    new FlussClientManager(
+                                                    new FlussConfig()
+                                                            .setBootstrapServers("localhost:9123"))
+                                            .getAdmin())
+                    .isSameAs(failure);
+        }
+    }
+
+    @Test
+    void testAuthenticationConfigurationIsRejectedOnFirstUse() throws Exception {
+        for (FlussConfig config :
+                Arrays.asList(
+                        new FlussConfig().setSecurityProtocol("SASL"),
+                        new FlussConfig().setSaslMechanism("PLAIN"),
+                        new FlussConfig().setSaslUsername("test-user"),
+                        new FlussConfig().setSaslPassword("test-password"))) {
+            config.setBootstrapServers("localhost:9123");
+            try (MockedStatic<ConnectionFactory> factory = mockStatic(ConnectionFactory.class)) {
+                FlussClientManager manager = new FlussClientManager(config);
+                try {
+                    factory.verifyNoInteractions();
+                    assertThatThrownBy(manager::getAdmin)
+                            .isInstanceOfSatisfying(
+                                    TrinoException.class,
+                                    failure ->
+                                            assertThat(failure.getErrorCode())
+                                                    .isEqualTo(
+                                                            AUTHENTICATION_NOT_SUPPORTED
+                                                                    .toErrorCode()));
+                    assertThatThrownBy(() -> manager.openTable(TablePath.of("sales", "users")))
+                            .isInstanceOf(TrinoException.class)
+                            .hasMessageContaining("only PLAINTEXT");
+                } finally {
+                    manager.close();
+                }
+                factory.verifyNoInteractions();
+            }
+        }
+    }
+
+    @Test
+    void testCloseBeforeInitializationPreventsLaterUse() throws Exception {
+        try (MockedStatic<ConnectionFactory> factory = mockStatic(ConnectionFactory.class)) {
+            FlussClientManager manager =
+                    new FlussClientManager(new FlussConfig().setBootstrapServers("localhost:9123"));
+
+            manager.close();
+            manager.close();
+
+            assertThatThrownBy(manager::getAdmin)
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("closed");
+            assertThatThrownBy(() -> manager.openTable(TablePath.of("sales", "users")))
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("closed");
+            factory.verifyNoInteractions();
+        }
+    }
+
+    @Test
+    void testRetryAfterAdminInitializationFailure() throws Exception {
+        Connection failedConnection = mock(Connection.class);
+        Connection connection = mock(Connection.class);
+        Admin admin = mock(Admin.class);
+        RuntimeException failure = new RuntimeException("cannot create admin");
+        when(failedConnection.getAdmin()).thenThrow(failure);
+        when(connection.getAdmin()).thenReturn(admin);
+
+        try (MockedStatic<ConnectionFactory> factory = mockStatic(ConnectionFactory.class)) {
+            factory.when(() -> ConnectionFactory.createConnection(any(Configuration.class)))
+                    .thenReturn(failedConnection, connection);
+
+            FlussClientManager manager =
+                    new FlussClientManager(new FlussConfig().setBootstrapServers("localhost:9123"));
+            try {
+                assertThatThrownBy(manager::getAdmin).isSameAs(failure);
+                verify(failedConnection).close();
+                assertThat(manager.getAdmin()).isSameAs(admin);
+                assertThat(manager.getAdmin()).isSameAs(admin);
+            } finally {
+                manager.close();
+            }
+
+            factory.verify(
+                    () -> ConnectionFactory.createConnection(any(Configuration.class)), times(2));
+            verify(failedConnection).close();
+            verify(admin).close();
+            verify(connection).close();
         }
     }
 
@@ -88,8 +210,9 @@ final class FlussClientManagerTest {
             assertThatThrownBy(
                             () ->
                                     new FlussClientManager(
-                                            new FlussConfig()
-                                                    .setBootstrapServers("localhost:9123")))
+                                                    new FlussConfig()
+                                                            .setBootstrapServers("localhost:9123"))
+                                            .getAdmin())
                     .isSameAs(failure);
             verify(connection).close();
         }
@@ -108,8 +231,9 @@ final class FlussClientManagerTest {
             assertThatThrownBy(
                             () ->
                                     new FlussClientManager(
-                                            new FlussConfig()
-                                                    .setBootstrapServers("localhost:9123")))
+                                                    new FlussConfig()
+                                                            .setBootstrapServers("localhost:9123"))
+                                            .getAdmin())
                     .isSameAs(failure);
             assertThat(failure.getSuppressed()).containsExactly(cleanupFailure);
         }
@@ -120,17 +244,25 @@ final class FlussClientManagerTest {
         Connection connection = mock(Connection.class);
         Admin admin = mock(Admin.class);
         when(connection.getAdmin()).thenReturn(admin);
+
         IOException adminFailure = new IOException("cannot close admin");
         IOException connectionFailure = new IOException("cannot close connection");
         doThrow(adminFailure).when(admin).close();
         doThrow(connectionFailure).when(connection).close();
+
         try (MockedStatic<ConnectionFactory> factory = mockStatic(ConnectionFactory.class)) {
             factory.when(() -> ConnectionFactory.createConnection(any(Configuration.class)))
                     .thenReturn(connection);
+
             FlussClientManager manager =
                     new FlussClientManager(new FlussConfig().setBootstrapServers("localhost:9123"));
+
+            assertThat(manager.getAdmin()).isSameAs(admin);
+
             assertThatThrownBy(manager::close).isSameAs(adminFailure);
             assertThat(adminFailure.getSuppressed()).containsExactly(connectionFailure);
+
+            verify(admin).close();
             verify(connection).close();
         }
     }
