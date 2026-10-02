@@ -17,6 +17,7 @@
 
 package org.apache.fluss.client.table.scanner.log;
 
+import org.apache.fluss.exception.FetchException;
 import org.apache.fluss.exception.WakeupException;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.record.LogRecordReadContext;
@@ -26,6 +27,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import java.io.IOException;
 import java.time.Duration;
 import java.util.Arrays;
 import java.util.Collections;
@@ -41,10 +43,12 @@ import java.util.concurrent.atomic.AtomicReference;
 
 import static org.apache.fluss.record.TestData.DATA1;
 import static org.apache.fluss.record.TestData.DATA1_ROW_TYPE;
+import static org.apache.fluss.record.TestData.DATA1_TABLE_PATH;
 import static org.apache.fluss.record.TestData.DEFAULT_SCHEMA_ID;
 import static org.apache.fluss.record.TestData.TEST_SCHEMA_GETTER;
 import static org.apache.fluss.testutils.DataTestUtils.genMemoryLogRecordsByObject;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Test for {@link LogFetchBuffer}. */
 public class LogFetchBufferTest {
@@ -167,6 +171,41 @@ public class LogFetchBufferTest {
     }
 
     @Test
+    void testRetainAllDiscardsRemovedPendingFetches() throws Exception {
+        AtomicBoolean discarded = new AtomicBoolean(false);
+        PendingFetch pendingFetch =
+                new PendingFetch() {
+                    @Override
+                    public TableBucket tableBucket() {
+                        return tableBucket1;
+                    }
+
+                    @Override
+                    public boolean isCompleted() {
+                        return false;
+                    }
+
+                    @Override
+                    public CompletedFetch toCompletedFetch() {
+                        throw new AssertionError("Pending fetch should be discarded.");
+                    }
+
+                    @Override
+                    public void discard() {
+                        discarded.set(true);
+                    }
+                };
+
+        try (LogFetchBuffer logFetchBuffer = new LogFetchBuffer()) {
+            logFetchBuffer.pend(pendingFetch);
+            logFetchBuffer.retainAll(Collections.emptySet());
+
+            assertThat(discarded).isTrue();
+            assertThat(logFetchBuffer.pendedBuckets()).isEmpty();
+        }
+    }
+
+    @Test
     void testWakeup() throws Exception {
         try (LogFetchBuffer logFetchBuffer = new LogFetchBuffer()) {
             AtomicReference<Exception> exception = new AtomicReference<>();
@@ -223,7 +262,7 @@ public class LogFetchBufferTest {
 
             Future<Boolean> signal =
                     service.submit(() -> await(logFetchBuffer, Duration.ofSeconds(1)));
-            logFetchBuffer.tryComplete(pending1.tableBucket());
+            logFetchBuffer.tryComplete(pending1.tableBucket(), null);
             // nothing happen, as pending1 is not completed
             assertThat(logFetchBuffer.isEmpty()).isTrue();
             // no condition signal
@@ -231,7 +270,7 @@ public class LogFetchBufferTest {
 
             signal = service.submit(() -> await(logFetchBuffer, Duration.ofMinutes(1)));
             completed1.set(true);
-            logFetchBuffer.tryComplete(pending1.tableBucket());
+            logFetchBuffer.tryComplete(pending1.tableBucket(), null);
             assertThat(signal.get()).isTrue();
             assertThat(logFetchBuffer.isEmpty()).isFalse();
             assertThat(logFetchBuffer.poll().tableBucket).isEqualTo(tableBucket1);
@@ -241,15 +280,45 @@ public class LogFetchBufferTest {
 
             signal = service.submit(() -> await(logFetchBuffer, Duration.ofMinutes(1)));
             completed2.set(true);
-            logFetchBuffer.tryComplete(pending2.tableBucket());
+            logFetchBuffer.tryComplete(pending2.tableBucket(), null);
             assertThat(signal.get()).isTrue();
             assertThat(logFetchBuffer.isEmpty()).isFalse();
-            logFetchBuffer.tryComplete(pending3.tableBucket());
-            logFetchBuffer.tryComplete(pending4.tableBucket());
+            logFetchBuffer.tryComplete(pending3.tableBucket(), null);
+            logFetchBuffer.tryComplete(pending4.tableBucket(), null);
             assertThat(logFetchBuffer.poll().tableBucket).isEqualTo(tableBucket2);
             assertThat(logFetchBuffer.poll().tableBucket).isEqualTo(tableBucket3);
             assertThat(logFetchBuffer.poll().tableBucket).isEqualTo(tableBucket3);
             assertThat(logFetchBuffer.isEmpty()).isTrue();
+        }
+    }
+
+    @Test
+    void testFetchException() throws Exception {
+        ExecutorService service = Executors.newSingleThreadExecutor();
+        try (LogFetchBuffer logFetchBuffer = new LogFetchBuffer()) {
+            AtomicBoolean completed = new AtomicBoolean(false);
+            PendingFetch pendingFetch = makePendingFetch(tableBucket1, completed);
+
+            logFetchBuffer.tryComplete(pendingFetch.tableBucket(), null);
+            assertThat(logFetchBuffer.isEmpty()).isTrue();
+            logFetchBuffer.pend(pendingFetch);
+            assertThat(logFetchBuffer.isEmpty()).isTrue();
+
+            Future<Boolean> signal =
+                    service.submit(() -> await(logFetchBuffer, Duration.ofMinutes(1)));
+            completed.set(true);
+            logFetchBuffer.tryComplete(
+                    pendingFetch.tableBucket(), new IOException("Test fetch exception"));
+            assertThat(signal.get()).isTrue();
+            assertThat(logFetchBuffer.isEmpty()).isFalse();
+            assertThatThrownBy(logFetchBuffer::poll)
+                    .isExactlyInstanceOf(FetchException.class)
+                    .hasMessageContaining("Test fetch exception");
+            assertThatThrownBy(logFetchBuffer::peek)
+                    .isExactlyInstanceOf(FetchException.class)
+                    .hasMessageContaining("Test fetch exception");
+        } finally {
+            service.shutdownNow();
         }
     }
 
@@ -260,7 +329,9 @@ public class LogFetchBufferTest {
     private DefaultCompletedFetch makeCompletedFetch(TableBucket tableBucket) throws Exception {
         return new DefaultCompletedFetch(
                 tableBucket,
-                new FetchLogResultForBucket(tableBucket, genMemoryLogRecordsByObject(DATA1), 10L),
+                DATA1_TABLE_PATH,
+                FetchLogResultForBucket.records(
+                        tableBucket, genMemoryLogRecordsByObject(DATA1), 10L, -1L, -1L),
                 readContext,
                 logScannerStatus,
                 true,

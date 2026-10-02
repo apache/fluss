@@ -66,6 +66,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.Condition;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
+import java.util.stream.Collectors;
 
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 import static org.apache.fluss.utils.concurrent.LockUtils.inLock;
@@ -241,7 +242,13 @@ final class ReplicaFetcherThread extends ShutdownableThread {
             responseData = fetchFuture.get(timeoutSeconds, TimeUnit.SECONDS);
         } catch (Throwable t) {
             if (isRunning()) {
-                LOG.warn("Error in response for fetch log request {}", fetchLogRequest, t);
+                LOG.warn(
+                        "Error in response from leader server {} for fetch log request from table ids: {}",
+                        leader.leaderServerId(),
+                        fetchLogRequest.getTablesReqsList().stream()
+                                .map(x -> x.getTableId())
+                                .collect(Collectors.toSet()),
+                        t);
                 inLock(
                         bucketStatusMapLock,
                         () -> bucketsWithError.addAll(fairBucketStatusMap.bucketSet()));
@@ -335,6 +342,14 @@ final class ReplicaFetcherThread extends ShutdownableThread {
                 if (logAppendInfo.validBytes() > 0) {
                     nextFetchOffset = logAppendInfo.lastOffset() + 1;
                 }
+            }
+
+            // Propagate the leader's KV snapshot retention boundary to the follower even when the
+            // successful response contains no records, so obsolete local log segments can be
+            // cleaned up.
+            Replica replica = replicaManager.getReplicaOrException(tableBucket);
+            if (replica.isKvTable() && replicaData.hasMinRetainOffset()) {
+                replica.getLogTablet().updateMinRetainOffset(replicaData.getMinRetainOffset());
             }
 
             if (nextFetchOffset != -1L && fairBucketStatusMap.contains(tableBucket)) {

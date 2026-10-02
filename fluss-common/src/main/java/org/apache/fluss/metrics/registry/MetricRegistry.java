@@ -20,7 +20,7 @@ package org.apache.fluss.metrics.registry;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.metrics.Metric;
 import org.apache.fluss.metrics.groups.AbstractMetricGroup;
-import org.apache.fluss.metrics.reporter.MetricReporter;
+import org.apache.fluss.metrics.reporter.ReporterAndSettings;
 import org.apache.fluss.metrics.reporter.ReporterSetup;
 import org.apache.fluss.plugin.PluginManager;
 import org.apache.fluss.utils.AutoCloseableAsync;
@@ -68,13 +68,13 @@ public interface MetricRegistry extends AutoCloseableAsync {
      */
     static MetricRegistry create(
             Configuration configuration, @Nullable PluginManager pluginManager) {
-        List<MetricReporter> metricReporters =
+        List<ReporterAndSettings> metricReporters =
                 ReporterSetup.fromConfiguration(configuration, pluginManager);
         if (metricReporters.isEmpty()) {
             LOG.info("No metrics reporter configured, no metrics will be exposed/reported.");
             return NOPMetricRegistry.INSTANCE;
         } else {
-            return new MetricRegistryImpl(metricReporters);
+            return MetricRegistryImpl.fromReporters(metricReporters);
         }
     }
 }

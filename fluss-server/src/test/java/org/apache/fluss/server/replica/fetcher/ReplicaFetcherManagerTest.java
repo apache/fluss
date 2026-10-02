@@ -24,6 +24,7 @@ import org.apache.fluss.config.Configuration;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.server.entity.NotifyLeaderAndIsrData;
+import org.apache.fluss.server.entity.NotifyLeaderAndIsrResultForBucket;
 import org.apache.fluss.server.replica.ReplicaManager;
 import org.apache.fluss.server.replica.ReplicaTestBase;
 import org.apache.fluss.server.replica.fetcher.ReplicaFetcherManager.ServerIdAndFetcherId;
@@ -36,8 +37,10 @@ import org.junit.jupiter.api.Test;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.apache.fluss.record.TestData.DATA1_TABLE_ID;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_PATH;
@@ -71,7 +74,6 @@ class ReplicaFetcherManagerTest extends ReplicaTestBase {
 
     @Test
     void testAddAndRemoveBucket() {
-        int numFetchers = 2;
         ReplicaFetcherManager fetcherManager =
                 new TestingReplicaFetcherManager(TABLET_SERVER_ID, replicaManager, fetcherThread);
 
@@ -93,7 +95,9 @@ class ReplicaFetcherManagerTest extends ReplicaTestBase {
                                         Arrays.asList(leader.id(), TABLET_SERVER_ID),
                                         Collections.emptyList(),
                                         INITIAL_COORDINATOR_EPOCH,
-                                        LeaderAndIsr.INITIAL_BUCKET_EPOCH))),
+                                        LeaderAndIsr.INITIAL_BUCKET_EPOCH),
+                                3,
+                                0L)),
                 result -> {});
 
         InitialFetchStatus initialFetchStatus =
@@ -106,20 +110,67 @@ class ReplicaFetcherManagerTest extends ReplicaTestBase {
                 fetcherManager.getFetcherThreadMap();
         assertThat(fetcherThreadMap.size()).isEqualTo(1);
         ReplicaFetcherThread thread =
-                fetcherThreadMap.get(new ServerIdAndFetcherId(1, tb.hashCode() % numFetchers));
+                fetcherThreadMap.get(new ServerIdAndFetcherId(1, fetcherManager.getFetcherId(tb)));
         assertThat(thread).isEqualTo(fetcherThread);
         assertThat(fetcherThread.fetchStatus(tb).isPresent()).isTrue();
 
         fetcherManager.removeFetcherForBuckets(Collections.singleton(tb));
         // the fetcher thread will not be moved out from the map.
         assertThat(fetcherThreadMap.size()).isEqualTo(1);
-        thread = fetcherThreadMap.get(new ServerIdAndFetcherId(1, tb.hashCode() % numFetchers));
+        thread = fetcherThreadMap.get(new ServerIdAndFetcherId(1, fetcherManager.getFetcherId(tb)));
 
         assertThat(thread).isEqualTo(fetcherThread);
         assertThat(fetcherThread.fetchStatus(tb).isPresent()).isFalse();
 
         fetcherManager.shutdownIdleFetcherThreads();
         assertThat(fetcherThreadMap.size()).isEqualTo(0);
+    }
+
+    @Test
+    void testFetcherIdWithinConfiguredRange() {
+        int numFetchers = 2;
+        conf.set(ConfigOptions.LOG_REPLICA_FETCHER_NUMBER, numFetchers);
+        ReplicaFetcherManager fetcherManager =
+                new ReplicaFetcherManager(
+                        conf, null, TABLET_SERVER_ID, replicaManager, id -> Optional.of(leader));
+
+        TableBucket positiveHashBucket = new TableBucket(0L, 0);
+        TableBucket negativeHashBucket = new TableBucket(Integer.MAX_VALUE, 1);
+        TableBucket evenHashBucket = new TableBucket(0L, 1);
+        assertThat(positiveHashBucket.hashCode()).isPositive();
+        assertThat(negativeHashBucket.hashCode()).isNegative();
+
+        assertThat(fetcherManager.getFetcherId(positiveHashBucket)).isEqualTo(1);
+        assertThat(fetcherManager.getFetcherId(negativeHashBucket)).isEqualTo(1);
+        assertThat(fetcherManager.getFetcherId(evenHashBucket)).isZero();
+    }
+
+    @Test
+    void testDoesNotAddFetcherWhenFollowerHasNoLeader() {
+        TableBucket tb = new TableBucket(DATA1_TABLE_ID, 0);
+        AtomicReference<List<NotifyLeaderAndIsrResultForBucket>> result = new AtomicReference<>();
+
+        replicaManager.becomeLeaderOrFollower(
+                INITIAL_COORDINATOR_EPOCH,
+                Collections.singletonList(
+                        new NotifyLeaderAndIsrData(
+                                PhysicalTablePath.of(DATA1_TABLE_PATH),
+                                tb,
+                                Collections.singletonList(TABLET_SERVER_ID),
+                                new LeaderAndIsr(
+                                        LeaderAndIsr.NO_LEADER,
+                                        LeaderAndIsr.INITIAL_LEADER_EPOCH,
+                                        Collections.emptyList(),
+                                        Collections.emptyList(),
+                                        INITIAL_COORDINATOR_EPOCH,
+                                        LeaderAndIsr.INITIAL_BUCKET_EPOCH),
+                                3,
+                                0L)),
+                result::set);
+
+        assertThat(result.get()).hasSize(1);
+        assertThat(result.get().get(0).succeeded()).isTrue();
+        assertThat(replicaManager.getReplicaFetcherManager().getFetcherThreadMap()).isEmpty();
     }
 
     private class TestingReplicaFetcherManager extends ReplicaFetcherManager {

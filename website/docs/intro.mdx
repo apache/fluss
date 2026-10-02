@@ -1,0 +1,67 @@
+---
+title: Introduction
+sidebar_position: 1
+slug: /
+---
+
+import { useColorMode } from '@docusaurus/theme-common';
+
+# What is Apache Fluss?
+
+Apache Fluss is an open-source, lakehouse-native streaming storage system for real-time analytics and AI. Applications can consume table changes, look up rows by primary key, and access historical data through lakehouse integrations.
+
+Fluss integrates with **Apache Flink** and **Apache Spark**, supports streaming reads and writes with sub-second latency, and uses columnar storage for projection and predicate pushdown. It offers two table types: append-only **Log Tables** and updatable **PrimaryKey Tables**.
+
+Fluss also enables **Lakestream**, the shared streaming and lakehouse table foundation of the **Streamhouse** architecture. Learn how storage and independent compute engines fit together in [Streamhouse and Lakestream](concepts/streamhouse-and-lakestream.mdx).
+
+{(() => {
+  const { colorMode } = useColorMode();
+  return (
+    <img src={colorMode === 'dark' ? '/img/fluss.png' : '/img/fluss_light_mode.png'} alt="Apache Fluss architecture and lakehouse integrations" />
+  );
+})()}
+
+**Fluss (German: river, pronounced `/flus/`)** carries streaming data continuously into lakes, like a river 🌊
+
+## Use cases
+
+Fluss supports workloads that benefit from sharing maintained tables through streaming, primary-key lookup, and lake access. The access paths available depend on the table type and integration. Specialized copies may still be useful for an application's indexing, latency, or isolation requirements.
+
+### 1. Real-time feature stores for ML serving and training
+
+A Fluss **PrimaryKey Table** can expose maintained feature rows through key-value lookups and changes through streaming reads. Lake tiering supports historical access. Reusing feature definitions and maintained results can reduce duplicate pipelines; training and serving still need explicit freshness and point-in-time semantics.
+
+### 2. Real-time risk, fraud detection, and decision audit
+
+Applications can consume table changes and look up maintained entity data for real-time decisions. Reconstructing a decision also requires the application to record its inputs, rules or model version, and outcome, with suitable data retention.
+
+### 3. Real-time entity profiles and Customer 360
+
+Compute engines can enrich source tables and publish reusable entity profiles. Supported merge engines and partial updates help maintain shared rows from multiple producers. Time windows and business transformations remain responsibilities of the producing computation.
+
+### 4. AI agent memory and context engineering for LLM systems
+
+Shared tables can supply maintained context for AI services:
+
+- **Session memory**: conversation logs
+- **Entity memory**: live key-value facts
+- **Behavioral memory**: streaming features
+- **Semantic memory**: data accessed through a supported Lance integration
+
+Retrieval services use the access paths supported by each table and integration. The AI application owns prompt construction, retrieval policy, decision logging, and any additional indexes.
+
+### 5. Real-time operational analytics
+
+Columnar storage, projection, and supported pruning reduce the data that query engines need to read. Engines may access Fluss, committed lake data, or both through a supported union-read integration. Query latency and the freshness of the data read should be evaluated separately.
+
+### 6. Streaming ETL with reusable results
+
+Flink jobs can read shared tables, perform joins or aggregations, and publish maintained result tables for other workloads. Supported patterns such as delta joins and partial updates can reduce duplicated state. Windows, timers, and intermediate execution state remain private to the computation where required.
+
+## Where to go next?
+
+- [QuickStart](quickstart/flink.md): Get started with Fluss in minutes.
+- [Fluss Architecture](concepts/architecture.mdx): Learn about Fluss's architecture.
+- [Table Design](table-design/overview.mdx): Explore Fluss's table types, partitions and buckets.
+- [Streamhouse and Lakestream](concepts/streamhouse-and-lakestream.mdx): Understand the architecture and its coordinated stream–lake table foundation.
+- [Development](/community/dev/ide-setup): Set up your development environment and contribute to the community.

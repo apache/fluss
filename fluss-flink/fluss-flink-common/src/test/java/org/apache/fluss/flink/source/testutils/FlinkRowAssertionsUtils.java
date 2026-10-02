@@ -119,6 +119,35 @@ public class FlinkRowAssertionsUtils {
         return actual;
     }
 
+    /**
+     * Collects all rows and fails if the Flink result iterator does not finish within one minute.
+     */
+    public static List<String> collectRowsUntilEndWithTimeout(CloseableIterator<Row> iterator) {
+        CompletableFuture<List<String>> future =
+                CompletableFuture.supplyAsync(
+                        () -> {
+                            try {
+                                return collectBatchRows(iterator);
+                            } catch (Exception e) {
+                                throw new RuntimeException(e);
+                            }
+                        },
+                        EXECUTOR);
+        try {
+            return future.get(1, TimeUnit.MINUTES);
+        } catch (TimeoutException e) {
+            future.cancel(true);
+            try {
+                iterator.close();
+            } catch (Exception ignored) {
+                // The timeout is the test failure we need to report.
+            }
+            throw new AssertionError("Flink job did not finish within one minute.", e);
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to collect Flink job results.", e.getCause());
+        }
+    }
+
     protected static List<String> collectRowsWithTimeout(
             CloseableIterator<Row> iterator,
             int expectedCount,

@@ -34,10 +34,11 @@ public enum RebalanceStatus {
     REBALANCING(1),
     FAILED(2),
     COMPLETED(3),
-    CANCELED(4);
+    CANCELED(4),
+    TIMEOUT(5);
 
     public static final Set<RebalanceStatus> FINAL_STATUSES =
-            new HashSet<>(Arrays.asList(COMPLETED, CANCELED, FAILED));
+            new HashSet<>(Arrays.asList(COMPLETED, CANCELED, FAILED, TIMEOUT));
 
     private final int code;
 

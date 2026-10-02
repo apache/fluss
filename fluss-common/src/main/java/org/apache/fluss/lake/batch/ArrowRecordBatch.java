@@ -18,11 +18,32 @@
 package org.apache.fluss.lake.batch;
 
 import org.apache.fluss.annotation.PublicEvolving;
+import org.apache.fluss.record.ArrowBatchData;
 
 /**
- * The Arrow implementation of the RecordBatch interface.
+ * The Arrow implementation of the {@link RecordBatch} interface.
+ *
+ * <p>Wraps an {@link ArrowBatchData} for use by lake writers that support batch writing via {@link
+ * org.apache.fluss.lake.writer.SupportsRecordBatchWrite}.
  *
  * @since 0.7
  */
 @PublicEvolving
-public class ArrowRecordBatch implements RecordBatch {}
+public class ArrowRecordBatch implements RecordBatch, AutoCloseable {
+
+    private final ArrowBatchData arrowBatchData;
+
+    public ArrowRecordBatch(ArrowBatchData arrowBatchData) {
+        this.arrowBatchData = arrowBatchData;
+    }
+
+    /** Returns the underlying {@link ArrowBatchData}. */
+    public ArrowBatchData getArrowBatchData() {
+        return arrowBatchData;
+    }
+
+    @Override
+    public void close() {
+        arrowBatchData.close();
+    }
+}

@@ -1,12 +1,12 @@
 ---
-title: Building a Streaming Lakehouse
+title: Building with Lakestream
 sidebar_position: 2
 ---
 
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-This guide will help you set up a basic Streaming Lakehouse using Fluss with Paimon or Iceberg, and help you better understand the powerful feature of Union Read.
+This guide sets up a Lakestream foundation using Fluss with Paimon or Iceberg. You will use managed tiering and Union Read to access fresh streaming data and committed lakehouse data as layers of one logical table. For the definitions of Streamhouse and Lakestream, see [Streamhouse and Lakestream](../concepts/streamhouse-and-lakestream.mdx).
 
 ## Environment Setup
 ### Prerequisites
@@ -61,16 +61,16 @@ services:
       - rustfs-data:/data
     command: /data
   rustfs-init:
-    image: minio/mc
+    image: rustfs/rc:v0.1.36
     depends_on:
       - rustfs
     entrypoint: >
       /bin/sh -c "
-      until mc alias set rustfs http://rustfs:9000 rustfsadmin rustfsadmin; do
+      until rc alias set rustfs http://rustfs:9000 rustfsadmin rustfsadmin; do
         echo 'Waiting for RustFS...';
         sleep 1;
       done;
-      mc mb --ignore-existing rustfs/fluss;
+      rc mb --ignore-existing rustfs/fluss;
       "
   #end
   coordinator-server:
@@ -182,7 +182,7 @@ The Docker Compose environment consists of the following containers:
 
 
 :::tip
-[RustFS](https://github.com/rustfs/rustfs) is used as replacement for S3 in this quickstart example, for your production setup you may want to configure this to use cloud file system. See [here](/maintenance/filesystems/overview.md) for information on how to setup cloud file systems
+[RustFS](https://github.com/rustfs/rustfs) is used as replacement for S3 in this quickstart example, for your production setup you may want to configure this to use cloud file system. See [here](/maintenance/tiered-storage/filesystems/overview.md) for information on how to setup cloud file systems
 :::
 
 4. To start all containers, run:
@@ -191,11 +191,18 @@ docker compose up -d
 ```
 This command automatically starts all the containers defined in the Docker Compose configuration in detached mode.
 
-Run
+Count the long-running containers (excluding the one-shot `rustfs-init` service and the
+interactive `sql-client` service):
+
 ```shell
-docker compose ps
+docker compose ps --status running --quiet \
+  rustfs coordinator-server tablet-server zookeeper jobmanager taskmanager | wc -l
 ```
-to check whether all containers are running properly.
+
+The expected output is `6`. The `rustfs-init` service should exit successfully, and the
+`sql-client` service may exit because no interactive terminal is attached. A lower
+number means that one or more long-running containers failed to start. Run
+`docker compose ps -a` to identify them.
 
 You can also visit http://localhost:8083/ to see if Flink is running normally.
 
@@ -250,16 +257,16 @@ services:
       - rustfs-data:/data
     command: /data
   rustfs-init:
-    image: minio/mc
+    image: rustfs/rc:v0.1.36
     depends_on:
       - rustfs
     entrypoint: >
       /bin/sh -c "
-      until mc alias set rustfs http://rustfs:9000 rustfsadmin rustfsadmin; do
+      until rc alias set rustfs http://rustfs:9000 rustfsadmin rustfsadmin; do
         echo 'Waiting for RustFS...';
         sleep 1;
       done;
-      mc mb --ignore-existing rustfs/fluss;
+      rc mb --ignore-existing rustfs/fluss;
       "
   #end
   postgres:
@@ -396,7 +403,7 @@ The Docker Compose environment consists of the following containers:
 - **RustFS**: an S3-compatible storage system used both as Fluss remote storage and Iceberg's filesystem warehouse.
 
 :::tip
-[RustFS](https://github.com/rustfs/rustfs) is used as replacement for S3 in this quickstart example, for your production setup you may want to configure this to use cloud file system. See [here](/maintenance/filesystems/overview.md) for information on how to setup cloud file systems
+[RustFS](https://github.com/rustfs/rustfs) is used as replacement for S3 in this quickstart example, for your production setup you may want to configure this to use cloud file system. See [here](/maintenance/tiered-storage/filesystems/overview.md) for information on how to setup cloud file systems
 :::
 
 4. To start all containers, run:
@@ -405,11 +412,18 @@ docker compose up -d
 ```
 This command automatically starts all the containers defined in the Docker Compose configuration in detached mode.
 
-Run
+Count the long-running containers (excluding the one-shot `rustfs-init` service and the
+interactive `sql-client` service):
+
 ```shell
-docker compose ps
+docker compose ps --status running --quiet \
+  rustfs postgres coordinator-server tablet-server zookeeper jobmanager taskmanager | wc -l
 ```
-to check whether all containers are running properly.
+
+The expected output is `7`. The `rustfs-init` service should exit successfully, and the
+`sql-client` service may exit because no interactive terminal is attached. A lower
+number means that one or more long-running containers failed to start. Run
+`docker compose ps -a` to identify them.
 
 You can also visit http://localhost:8083/ to see if Flink is running normally.
 

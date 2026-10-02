@@ -52,6 +52,8 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.FutureTask;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -148,10 +150,6 @@ public class RequestChannelTest {
             channel.putRequest(createTestRequest(i));
         }
 
-        // Wait for backpressure to be applied (channel operations are async via eventLoop)
-        // The backpressure should be triggered when we add the threshold-th request
-        testChannel.waitForAutoReadChange(false, 2, TimeUnit.SECONDS);
-
         // Verify backpressure is active: autoRead should be false
         assertThat(testChannel.isAutoRead()).isFalse();
         assertThat(channel.requestsCount()).isGreaterThanOrEqualTo(backpressureThreshold);
@@ -165,15 +163,135 @@ public class RequestChannelTest {
             assertThat(request).isNotNull();
         }
 
-        // Wait for backpressure to be released
-        testChannel.waitForAutoReadChange(true, 2, TimeUnit.SECONDS);
-
         // Verify backpressure is released: autoRead should be true again
         assertThat(testChannel.isAutoRead()).isTrue();
         assertThat(channel.requestsCount()).isLessThanOrEqualTo(resumeThreshold);
 
         // Clean up
         channel.unregisterChannel(testChannel);
+    }
+
+    @Test
+    void testBackpressureStaysReleasedWhenQueueDrainsBeforePause() throws Exception {
+        RequestChannel channel = new RequestChannel(2);
+        TestChannel testChannel = new TestChannel();
+        channel.registerChannel(testChannel);
+        channel.putRequest(createTestRequest(0));
+        channel.putRequest(createTestRequest(1));
+        assertThat(testChannel.isAutoRead()).isFalse();
+
+        testChannel.eventLoop.blockNextTask();
+        FutureTask<Void> resumeTask =
+                new FutureTask<>(
+                        () -> {
+                            channel.pollRequest(0);
+                            return null;
+                        });
+        Thread resumeThread = new Thread(resumeTask);
+        FutureTask<Void> pauseTask =
+                new FutureTask<>(
+                        () -> {
+                            channel.putRequest(createTestRequest(2));
+                            return null;
+                        });
+        Thread pauseThread = new Thread(pauseTask);
+
+        try {
+            resumeThread.start();
+            testChannel.eventLoop.waitUntilTaskBlocked();
+            pauseThread.start();
+            waitForRequestCount(channel, 2);
+            waitUntilBlocked(pauseThread);
+            assertThat(channel.pollRequest(0)).isNotNull();
+            assertThat(channel.pollRequest(0)).isNotNull();
+        } finally {
+            testChannel.eventLoop.releaseBlockedTask();
+        }
+
+        resumeTask.get(2, TimeUnit.SECONDS);
+        pauseTask.get(2, TimeUnit.SECONDS);
+        assertThat(channel.requestsCount()).isZero();
+        assertThat(testChannel.isAutoRead()).isTrue();
+    }
+
+    @Test
+    void testBackpressureStaysActiveWhenQueueRefillsBeforeResume() throws Exception {
+        RequestChannel channel = new RequestChannel(2);
+        TestChannel testChannel = new TestChannel();
+        channel.registerChannel(testChannel);
+        channel.putRequest(createTestRequest(0));
+
+        testChannel.eventLoop.blockNextTask();
+        FutureTask<Void> pauseTask =
+                new FutureTask<>(
+                        () -> {
+                            channel.putRequest(createTestRequest(1));
+                            return null;
+                        });
+        Thread pauseThread = new Thread(pauseTask);
+        FutureTask<Void> resumeTask =
+                new FutureTask<>(
+                        () -> {
+                            channel.pollRequest(0);
+                            return null;
+                        });
+        Thread resumeThread = new Thread(resumeTask);
+
+        try {
+            pauseThread.start();
+            testChannel.eventLoop.waitUntilTaskBlocked();
+            resumeThread.start();
+            waitForRequestCount(channel, 1);
+            waitUntilBlocked(resumeThread);
+            channel.putRequest(createTestRequest(2));
+        } finally {
+            testChannel.eventLoop.releaseBlockedTask();
+        }
+
+        pauseTask.get(2, TimeUnit.SECONDS);
+        resumeTask.get(2, TimeUnit.SECONDS);
+        assertThat(channel.requestsCount()).isEqualTo(2);
+        assertThat(testChannel.isAutoRead()).isFalse();
+    }
+
+    @Test
+    void testZeroBackpressureThresholdDoesNotSpin() throws Exception {
+        RequestChannel channel = new RequestChannel(0);
+        channel.putRequest(createTestRequest(0));
+        FutureTask<RpcRequest> pollTask = new FutureTask<>(() -> channel.pollRequest(0));
+        Thread pollThread = new Thread(pollTask);
+        pollThread.setDaemon(true);
+
+        try {
+            pollThread.start();
+            pollThread.join(TimeUnit.SECONDS.toMillis(2));
+            assertThat(pollTask.isDone()).isTrue();
+        } finally {
+            if (!pollTask.isDone()) {
+                channel.putRequest(createTestRequest(1));
+                pollThread.join(TimeUnit.SECONDS.toMillis(2));
+            }
+        }
+
+        assertThat(pollTask.get(2, TimeUnit.SECONDS)).isNotNull();
+    }
+
+    private static void waitForRequestCount(RequestChannel channel, int expectedCount) {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2);
+        while (channel.requestsCount() != expectedCount && System.nanoTime() < deadline) {
+            Thread.yield();
+        }
+        assertThat(channel.requestsCount()).isEqualTo(expectedCount);
+    }
+
+    private static void waitUntilBlocked(Thread thread) {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2);
+        while (thread.getState() != Thread.State.WAITING
+                && thread.getState() != Thread.State.BLOCKED
+                && System.nanoTime() < deadline) {
+            Thread.yield();
+        }
+        assertThat(thread.getState()).isIn(Thread.State.WAITING, Thread.State.BLOCKED);
     }
 
     /** Helper method to create a test RpcRequest with a unique identifier. */
@@ -229,17 +347,6 @@ public class RequestChannelTest {
 
         boolean isAutoRead() {
             return autoRead.get();
-        }
-
-        void waitForAutoReadChange(boolean expectedValue, long timeout, TimeUnit unit)
-                throws InterruptedException {
-            long deadline = System.nanoTime() + unit.toNanos(timeout);
-            while (autoRead.get() != expectedValue && System.nanoTime() < deadline) {
-                Thread.sleep(10);
-            }
-            assertThat(autoRead.get())
-                    .as("AutoRead should be " + expectedValue + " within timeout")
-                    .isEqualTo(expectedValue);
         }
 
         // Minimal implementation of other required methods
@@ -578,8 +685,24 @@ public class RequestChannelTest {
 
         /** Test EventLoop that executes tasks immediately in the current thread for testing. */
         private static class TestEventLoop extends SingleThreadEventExecutor implements EventLoop {
+            private final AtomicBoolean blockNextExecution = new AtomicBoolean();
+            private final CountDownLatch taskBlocked = new CountDownLatch(1);
+            private final CountDownLatch blockedTaskRelease = new CountDownLatch(1);
+
             TestEventLoop() {
                 super(null, new DefaultThreadFactory("test"), false);
+            }
+
+            void blockNextTask() {
+                blockNextExecution.set(true);
+            }
+
+            void waitUntilTaskBlocked() throws InterruptedException {
+                assertThat(taskBlocked.await(2, TimeUnit.SECONDS)).isTrue();
+            }
+
+            void releaseBlockedTask() {
+                blockedTaskRelease.countDown();
             }
 
             @Override
@@ -589,7 +712,17 @@ public class RequestChannelTest {
 
             @Override
             public void execute(Runnable task) {
-                // Execute immediately in current thread for testing
+                if (blockNextExecution.compareAndSet(true, false)) {
+                    taskBlocked.countDown();
+                    try {
+                        if (!blockedTaskRelease.await(2, TimeUnit.SECONDS)) {
+                            throw new IllegalStateException("Timed out waiting to release task");
+                        }
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        throw new IllegalStateException(e);
+                    }
+                }
                 task.run();
             }
 

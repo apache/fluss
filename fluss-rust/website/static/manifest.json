@@ -1,0 +1,17 @@
+{
+  "short_name": "Fluss Clients",
+  "name": "Apache Fluss Clients: Rust, Python, and C++",
+  "description": "Rust, Python, and C++ clients for Apache Fluss",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#000000",
+  "theme_color": "#0071e3",
+  "icons": [
+    {
+      "src": "img/logo/svg/colored_logo.svg",
+      "sizes": "any",
+      "type": "image/svg+xml"
+    }
+  ]
+}

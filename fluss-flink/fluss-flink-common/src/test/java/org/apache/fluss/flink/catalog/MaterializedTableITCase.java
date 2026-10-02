@@ -20,6 +20,7 @@ package org.apache.fluss.flink.catalog;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
+import org.apache.fluss.testutils.common.MultiVersionTest;
 
 import org.apache.flink.api.common.JobID;
 import org.apache.flink.client.program.rest.RestClusterClient;
@@ -164,6 +165,7 @@ public abstract class MaterializedTableITCase {
     }
 
     @Test
+    @MultiVersionTest
     void testCreateMaterializedTableInContinuousMode() throws Exception {
         String materializedTableDDL =
                 "CREATE MATERIALIZED TABLE shop_detail\n"

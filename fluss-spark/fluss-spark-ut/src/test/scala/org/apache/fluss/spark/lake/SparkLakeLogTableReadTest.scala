@@ -20,8 +20,10 @@ package org.apache.fluss.spark.lake
 import org.apache.fluss.config.{ConfigOptions, Configuration}
 import org.apache.fluss.metadata.DataLakeFormat
 import org.apache.fluss.spark.SparkConnectorOptions.BUCKET_NUMBER
+import org.apache.fluss.spark.read.FlussMetrics
 
 import org.apache.spark.sql.Row
+import org.apache.spark.sql.execution.datasources.v2.BatchScanExec
 
 import java.nio.file.Files
 
@@ -115,6 +117,10 @@ abstract class SparkLakeLogTableReadTest extends SparkLakeTableReadTestBase {
         sql(s"SELECT name FROM $DEFAULT_DATABASE.t_lake_only ORDER BY name"),
         Row("alpha") :: Row("beta") :: Row("gamma") :: Nil
       )
+
+      // COUNT(*) / COUNT(1) over a lake-only read: empty projection must fall back.
+      checkAnswer(sql(s"SELECT COUNT(*) FROM $DEFAULT_DATABASE.t_lake_only"), Row(3L) :: Nil)
+      checkAnswer(sql(s"SELECT COUNT(1) FROM $DEFAULT_DATABASE.t_lake_only"), Row(3L) :: Nil)
     }
 
     // Test partitioned table
@@ -149,6 +155,19 @@ abstract class SparkLakeLogTableReadTest extends SparkLakeTableReadTestBase {
         Row("alpha", "2026-01-01") ::
           Row("beta", "2026-01-01") ::
           Row("gamma", "2026-01-02") :: Nil
+      )
+
+      // COUNT(*) over a partitioned lake-only read.
+      checkAnswer(
+        sql(s"SELECT COUNT(*) FROM $DEFAULT_DATABASE.t_lake_only_partitioned"),
+        Row(3L) :: Nil
+      )
+
+      // COUNT(*) with a partition filter.
+      checkAnswer(
+        sql(
+          s"SELECT COUNT(*) FROM $DEFAULT_DATABASE.t_lake_only_partitioned WHERE dt = '2026-01-01'"),
+        Row(2L) :: Nil
       )
     }
   }
@@ -473,6 +492,99 @@ abstract class SparkLakeLogTableReadTest extends SparkLakeTableReadTestBase {
     }
   }
 
+  test("Spark Lake Read: log table partition filter pushdown prunes partitions") {
+    withTable("t_pd_part_lake") {
+      sql(s"""
+             |CREATE TABLE $DEFAULT_DATABASE.t_pd_part_lake
+             |  (id INT, name STRING, dt STRING)
+             | PARTITIONED BY (dt)
+             | TBLPROPERTIES (
+             |  '${ConfigOptions.TABLE_DATALAKE_ENABLED.key()}' = true,
+             |  '${ConfigOptions.TABLE_DATALAKE_FRESHNESS.key()}' = '1s',
+             |  '${BUCKET_NUMBER.key()}' = 1)
+             |""".stripMargin)
+
+      // Lake-only partitions: tier all data, then filter by partition key.
+      sql(s"""
+             |INSERT INTO $DEFAULT_DATABASE.t_pd_part_lake VALUES
+             |(1, 'alpha', '2026-01-01'),
+             |(2, 'beta', '2026-01-01'),
+             |(3, 'gamma', '2026-01-02'),
+             |(4, 'delta', '2026-01-03')
+             |""".stripMargin)
+      tierToLake("t_pd_part_lake")
+
+      val lakeOnlyDf = sql(s"""
+                              |SELECT * FROM $DEFAULT_DATABASE.t_pd_part_lake
+                              |WHERE dt = '2026-01-02' ORDER BY id""".stripMargin)
+      checkAnswer(lakeOnlyDf, Row(3, "gamma", "2026-01-02") :: Nil)
+      assert(
+        lakeInputPartitions(lakeOnlyDf).length == 1,
+        s"Expected 1 input partition after partition pruning"
+      )
+
+      // Append more data after tiering so the planner mixes lake splits and Fluss log tail.
+      sql(s"""
+             |INSERT INTO $DEFAULT_DATABASE.t_pd_part_lake VALUES
+             |(5, 'epsilon', '2026-01-01'),
+             |(6, 'zeta', '2026-01-04')
+             |""".stripMargin)
+
+      val unionDf = sql(s"""
+                           |SELECT * FROM $DEFAULT_DATABASE.t_pd_part_lake
+                           |WHERE dt = '2026-01-01' ORDER BY id""".stripMargin)
+      checkAnswer(
+        unionDf,
+        Row(1, "alpha", "2026-01-01") ::
+          Row(2, "beta", "2026-01-01") ::
+          Row(5, "epsilon", "2026-01-01") :: Nil
+      )
+      // Only one partition should be planned: lake split + log tail for dt='2026-01-01'.
+      val unionParts = lakeInputPartitions(unionDf)
+      assert(
+        unionParts.length == 2,
+        s"Expected 2 input partitions (one lake split + one log tail) after pruning, " +
+          s"got ${unionParts.length}")
+
+      // Check the description carries the partition filter for visibility in EXPLAIN output.
+      assert(
+        unionDf.queryExecution.executedPlan.toString.contains("PartitionFilter"),
+        s"Plan should contain PartitionFilter:\n${unionDf.queryExecution.executedPlan}"
+      )
+    }
+  }
+
+  test("Spark Lake Read: log table partition filter pushdown in fallback (no lake snapshot)") {
+    withTable("t_pd_part_fb") {
+      sql(s"""
+             |CREATE TABLE $DEFAULT_DATABASE.t_pd_part_fb
+             |  (id INT, name STRING, dt STRING)
+             | PARTITIONED BY (dt)
+             | TBLPROPERTIES (
+             |  '${ConfigOptions.TABLE_DATALAKE_ENABLED.key()}' = true,
+             |  '${ConfigOptions.TABLE_DATALAKE_FRESHNESS.key()}' = '1s',
+             |  '${BUCKET_NUMBER.key()}' = 1)
+             |""".stripMargin)
+
+      sql(s"""
+             |INSERT INTO $DEFAULT_DATABASE.t_pd_part_fb VALUES
+             |(1, 'alpha', '2026-01-01'),
+             |(2, 'beta', '2026-01-02'),
+             |(3, 'gamma', '2026-01-03')
+             |""".stripMargin)
+
+      // No tiering performed -> falls back to reading directly from Fluss.
+      val df = sql(s"""
+                      |SELECT * FROM $DEFAULT_DATABASE.t_pd_part_fb
+                      |WHERE dt = '2026-01-02' ORDER BY id""".stripMargin)
+      checkAnswer(df, Row(2, "beta", "2026-01-02") :: Nil)
+      assert(
+        lakeInputPartitions(df).length == 1,
+        s"Expected fallback to plan 1 input partition after pruning"
+      )
+    }
+  }
+
   test("Spark Lake Read: filter pushdown — partitioned lake table") {
     withTable("t_pd_partitioned") {
       sql(s"""
@@ -523,6 +635,41 @@ abstract class SparkLakeLogTableReadTest extends SparkLakeTableReadTestBase {
     }
   }
 
+  test("Spark Lake Read: log table union read with limit pushdown") {
+    withTable("t_union_limit") {
+      sql(s"""
+             |CREATE TABLE $DEFAULT_DATABASE.t_union_limit (id INT, name STRING)
+             | TBLPROPERTIES (
+             |  '${ConfigOptions.TABLE_DATALAKE_ENABLED.key()}' = true,
+             |  '${ConfigOptions.TABLE_DATALAKE_FRESHNESS.key()}' = '1s',
+             |  '${BUCKET_NUMBER.key()}' = 1)
+             |""".stripMargin)
+
+      sql(s"""
+             |INSERT INTO $DEFAULT_DATABASE.t_union_limit VALUES
+             |(1, "alpha"), (2, "beta"), (3, "gamma")
+             |""".stripMargin)
+
+      tierToLake("t_union_limit")
+
+      sql(s"""
+             |INSERT INTO $DEFAULT_DATABASE.t_union_limit VALUES
+             |(4, "delta"), (5, "epsilon")
+             |""".stripMargin)
+
+      val df = sql(s"SELECT * FROM $DEFAULT_DATABASE.t_union_limit LIMIT 2")
+      assert(flussScan(df).flatMap(_.limit).distinct == Seq(2))
+
+      // Verify limit pushdown actually reduces rows read via metrics
+      df.collect()
+      val batchScanExec = df.queryExecution.executedPlan.collectFirst {
+        case b: BatchScanExec => b
+      }.get
+      val numRowsRead = batchScanExec.metrics(FlussMetrics.NUM_ROWS_READ).value
+      assert(numRowsRead == 2L, s"Expected 2 rows read with limit pushdown, got $numRowsRead")
+    }
+  }
+
   test("Spark Lake Read: non-FULL startup mode skips lake path") {
     withTable("t_earliest") {
       sql(s"""
@@ -555,8 +702,63 @@ abstract class SparkLakeLogTableReadTest extends SparkLakeTableReadTestBase {
 
 }
 
+@SparkLakeTest
 class SparkLakePaimonLogTableReadTest extends SparkLakeLogTableReadTest {
   override protected def dataLakeFormat: DataLakeFormat = DataLakeFormat.PAIMON
+
+  test("Spark Lake Read: custom lake path falls back when no lake snapshot") {
+    withTable("t_custom_lake_path_fallback") {
+      sql(s"""
+             |CREATE TABLE $DEFAULT_DATABASE.t_custom_lake_path_fallback (id INT, name STRING)
+             | TBLPROPERTIES (
+             |  '${ConfigOptions.TABLE_DATALAKE_ENABLED.key()}' = true,
+             |  '${ConfigOptions.TABLE_DATALAKE_DATABASE_NAME.key()}' = 'custom_lake_db',
+             |  '${ConfigOptions.TABLE_DATALAKE_TABLE_NAME.key()}' = 'custom_lake_table_fallback',
+             |  '${ConfigOptions.TABLE_DATALAKE_FRESHNESS.key()}' = '1s',
+             |  '${BUCKET_NUMBER.key()}' = 1)
+             |""".stripMargin)
+
+      sql(s"""
+             |INSERT INTO $DEFAULT_DATABASE.t_custom_lake_path_fallback VALUES
+             |(1, "hello"), (2, "fluss")
+             |""".stripMargin)
+
+      checkAnswer(
+        sql(s"""
+               |SELECT * FROM $DEFAULT_DATABASE.t_custom_lake_path_fallback
+               |WHERE id >= 1
+               |ORDER BY id
+               |""".stripMargin),
+        Row(1, "hello") :: Row(2, "fluss") :: Nil
+      )
+    }
+  }
+
+  test("Spark Lake Read: custom lake path rejects an actual lake read") {
+    withTable("t_custom_lake_path_snapshot") {
+      sql(s"""
+             |CREATE TABLE $DEFAULT_DATABASE.t_custom_lake_path_snapshot (id INT, name STRING)
+             | TBLPROPERTIES (
+             |  '${ConfigOptions.TABLE_DATALAKE_ENABLED.key()}' = true,
+             |  '${ConfigOptions.TABLE_DATALAKE_DATABASE_NAME.key()}' = 'custom_lake_db',
+             |  '${ConfigOptions.TABLE_DATALAKE_TABLE_NAME.key()}' = 'custom_lake_table_snapshot',
+             |  '${ConfigOptions.TABLE_DATALAKE_FRESHNESS.key()}' = '1s',
+             |  '${BUCKET_NUMBER.key()}' = 1)
+             |""".stripMargin)
+
+      sql(s"""
+             |INSERT INTO $DEFAULT_DATABASE.t_custom_lake_path_snapshot VALUES
+             |(1, "hello"), (2, "fluss")
+             |""".stripMargin)
+      tierToLake("t_custom_lake_path_snapshot")
+
+      val error = intercept[UnsupportedOperationException] {
+        sql(s"SELECT * FROM $DEFAULT_DATABASE.t_custom_lake_path_snapshot").collect()
+      }
+      assert(
+        error.getMessage == "Custom lake table path is not supported for Spark lake reads yet.")
+    }
+  }
 
   override protected def flussConf: Configuration = {
     val conf = super.flussConf
@@ -577,6 +779,7 @@ class SparkLakePaimonLogTableReadTest extends SparkLakeLogTableReadTest {
   }
 }
 
+@SparkLakeTest
 class SparkLakeIcebergLogTableReadTest extends SparkLakeLogTableReadTest {
   override protected def dataLakeFormat: DataLakeFormat = DataLakeFormat.ICEBERG
 

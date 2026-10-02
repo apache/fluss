@@ -23,27 +23,57 @@ import org.apache.fluss.rpc.messages.ProduceLogRequest;
 import org.apache.fluss.rpc.protocol.ApiError;
 import org.apache.fluss.rpc.protocol.Errors;
 
+import javax.annotation.Nullable;
+
+import java.util.Objects;
+
 /** Result of {@link ProduceLogRequest} for each table bucket. */
 @Internal
 public class ProduceLogResultForBucket extends WriteResultForBucket {
     private final long baseOffset;
+    // Identifies the original partition for a historical write; null for a normal write.
+    private final @Nullable String originalPartitionName;
 
     public ProduceLogResultForBucket(TableBucket tableBucket, long baseOffset, long endOffset) {
-        this(tableBucket, baseOffset, endOffset, ApiError.NONE);
+        this(tableBucket, baseOffset, endOffset, ApiError.NONE, null);
     }
 
     public ProduceLogResultForBucket(TableBucket tableBucket, ApiError error) {
-        this(tableBucket, -1L, -1L, error);
+        this(tableBucket, -1L, -1L, error, null);
+    }
+
+    public static ProduceLogResultForBucket historicalSuccess(
+            TableBucket tableBucket,
+            long baseOffset,
+            long endOffset,
+            String originalPartitionName) {
+        return new ProduceLogResultForBucket(
+                tableBucket, baseOffset, endOffset, ApiError.NONE, originalPartitionName);
+    }
+
+    public static ProduceLogResultForBucket historicalFailure(
+            TableBucket tableBucket, ApiError error, String originalPartitionName) {
+        return new ProduceLogResultForBucket(tableBucket, -1L, -1L, error, originalPartitionName);
     }
 
     private ProduceLogResultForBucket(
-            TableBucket tableBucket, long baseOffset, long endOffset, ApiError error) {
+            TableBucket tableBucket,
+            long baseOffset,
+            long endOffset,
+            ApiError error,
+            @Nullable String originalPartitionName) {
         super(tableBucket, endOffset, error);
         this.baseOffset = baseOffset;
+        this.originalPartitionName = originalPartitionName;
     }
 
     public long getBaseOffset() {
         return baseOffset;
+    }
+
+    /** Returns the original partition name for a historical write, or null for a normal write. */
+    public @Nullable String getOriginalPartitionName() {
+        return originalPartitionName;
     }
 
     @Override
@@ -51,7 +81,11 @@ public class ProduceLogResultForBucket extends WriteResultForBucket {
         //noinspection unchecked
         return (T)
                 new ProduceLogResultForBucket(
-                        tableBucket, baseOffset, getWriteLogEndOffset(), newError.toApiError());
+                        tableBucket,
+                        baseOffset,
+                        getWriteLogEndOffset(),
+                        newError.toApiError(),
+                        originalPartitionName);
     }
 
     @Override
@@ -66,6 +100,12 @@ public class ProduceLogResultForBucket extends WriteResultForBucket {
             return false;
         }
         ProduceLogResultForBucket that = (ProduceLogResultForBucket) o;
-        return baseOffset == that.baseOffset;
+        return baseOffset == that.baseOffset
+                && Objects.equals(originalPartitionName, that.originalPartitionName);
+    }
+
+    @Override
+    public int hashCode() {
+        return Objects.hash(super.hashCode(), baseOffset, originalPartitionName);
     }
 }

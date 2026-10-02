@@ -23,6 +23,7 @@ import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.exception.PartitionNotExistException;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.ResolvedPartitionSpec;
+import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.utils.AutoPartitionStrategy;
 import org.apache.fluss.utils.ExceptionUtils;
@@ -65,10 +66,9 @@ public class DynamicPartitionCreator {
         this.fatalErrorHandler = fatalErrorHandler;
     }
 
+    /** Ensures the partition exists, creating it asynchronously when enabled. */
     public void checkAndCreatePartitionAsync(
-            PhysicalTablePath physicalTablePath,
-            List<String> partitionKeys,
-            AutoPartitionStrategy autoPartitionStrategy) {
+            PhysicalTablePath physicalTablePath, TableInfo tableInfo) {
         String partitionName = physicalTablePath.getPartitionName();
         if (partitionName == null) {
             // no need to check and create partition
@@ -87,7 +87,11 @@ public class DynamicPartitionCreator {
                 // if the partition exists, we should skip creating it.
                 LOG.debug("Partition {} already exists, skipping.", physicalTablePath);
             } else {
-                // Validate early, before touching any state.
+                // Validate early, before touching any state. The strategy is only resolved here,
+                // on the partition-creation path, not on the common "already exists" path.
+                List<String> partitionKeys = tableInfo.getPartitionKeys();
+                AutoPartitionStrategy autoPartitionStrategy =
+                        tableInfo.getTableConfig().getAutoPartitionStrategy();
                 ResolvedPartitionSpec resolvedPartitionSpec =
                         ResolvedPartitionSpec.fromPartitionName(partitionKeys, partitionName);
                 validateAutoPartitionTime(

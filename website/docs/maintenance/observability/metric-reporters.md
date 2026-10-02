@@ -23,6 +23,27 @@ Push-based reporters usually implement the `Scheduled` interface and periodicall
 
 Pull-based reporters are queried from an external system instead.
 
+## Filtering metrics
+
+Each reporter supports two filters:
+
+- `metrics.reporter.<name>.filter.includes`: metrics to export (default: `*:*:*`).
+- `metrics.reporter.<name>.filter.excludes`: metrics to omit (default: empty). Excludes take precedence.
+
+Rules use `<scope>[:<name>[:<type>]]`, with `;` between rules and `,` between names/types.
+Use logical scopes with `.` separators (without `fluss_` or label values) and original metric names.
+Patterns support `*` wildcards and regular expressions. Types are `counter`, `gauge`, `meter`, or
+`histogram`; omitted names/types match all.
+
+For example, exclude bucket metrics (including subgroups) and histograms from PushGateway:
+
+```yaml
+metrics.reporter.prometheus-push.filter.includes: *:*:*
+metrics.reporter.prometheus-push.filter.excludes: *.bucket;*.bucket.*;*:*:histogram
+```
+
+Restart the Fluss process to apply changes.
+
 ## Reporters
 
 The following sections list the supported reporters currently.
@@ -93,6 +114,8 @@ Parameters:
 - `metrics.reporter.prometheus-push.random-job-name-suffix` - (Optional) Specifies whether a random suffix should be appended to the job name, defaults to true. This is useful when multiple instances of the reporter are running on the same host. 
 - `metrics.reporter.prometheus-push.delete-on-shutdown` - (Optional) Specifies whether to delete metrics from the PushGateway on shutdown, defaults to true. Fluss will try its best to delete the metrics but this is not guaranteed.
 - `metrics.reporter.prometheus-push.grouping-key` - Specifies the grouping key which is the group and global labels of all metrics. The label name and value are separated by `=`, and labels are separated by `;`, e.g., `k1=v1;k2=v2`.
+- `metrics.reporter.prometheus-push.username` - (Optional) The username for Basic Auth of the Prometheus PushGateway. Leave it unset to disable authentication.
+- `metrics.reporter.prometheus-push.password` - (Optional) The password for Basic Auth of the Prometheus PushGateway. Only takes effect when `username` is configured.
 
 Example configuration:
 
@@ -104,6 +127,8 @@ metrics.reporter.prometheus-push.push-interval: 10 SECONDS
 metrics.reporter.prometheus-push.random-job-name-suffix: true
 metrics.reporter.prometheus-push.delete-on-shutdown: true
 metrics.reporter.prometheus-push.grouping-key: instance=instance01;cluster=clusterA
+metrics.reporter.prometheus-push.username: myuser
+metrics.reporter.prometheus-push.password: mypassword
 ```
 
 ### InfluxDB

@@ -21,6 +21,7 @@ import org.apache.fluss.exception.RemoteStorageException;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.remote.RemoteLogManifest;
 import org.apache.fluss.remote.RemoteLogSegment;
 import org.apache.fluss.server.log.LogTablet;
 import org.apache.fluss.server.log.remote.RemoteLogStorage.IndexType;
@@ -35,7 +36,6 @@ import org.junit.jupiter.params.provider.ValueSource;
 import java.io.File;
 import java.io.InputStream;
 import java.nio.file.StandardCopyOption;
-import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -140,7 +140,11 @@ class DefaultRemoteLogStorageTest extends RemoteLogTestBase {
         // do snapshot.
         RemoteLogTablet remoteLogTablet = buildRemoteLogTablet(logTablet);
         List<RemoteLogSegment> remoteLogSegmentList = createRemoteLogSegmentList(logTablet);
-        remoteLogTablet.addAndDeleteLogSegments(remoteLogSegmentList, Collections.emptyList());
+        remoteLogTablet.loadRemoteLogManifest(
+                new RemoteLogManifest(
+                        logTablet.getPhysicalTablePath(),
+                        logTablet.getTableBucket(),
+                        remoteLogSegmentList));
         assertThat(remoteLogTablet.getIdToRemoteLogSegmentMap())
                 .hasSize(remoteLogSegmentList.size());
         RemoteLogManifest manifestSnapshot = remoteLogTablet.currentManifest();

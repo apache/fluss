@@ -35,6 +35,7 @@ import org.apache.paimon.table.source.Split;
 import org.apache.paimon.types.DataTypes;
 import org.junit.jupiter.api.Test;
 
+import java.time.LocalDate;
 import java.util.Collections;
 import java.util.List;
 
@@ -76,5 +77,34 @@ class PaimonSplitTest extends PaimonSourceTestBase {
         Split actualSplit = actualSplits.get(0);
         assertThat(actualSplit).isEqualTo(paimonSplit.dataSplit());
         assertThat(((DataSplit) actualSplit).bucket()).isEqualTo(paimonSplit.bucket());
+    }
+
+    @Test
+    void testPaimonSplitWithDatePartition() throws Exception {
+        int bucketNum = 1;
+        TablePath tablePath = TablePath.of(DEFAULT_DB, "non_string_partition_table");
+        Schema.Builder builder =
+                Schema.newBuilder()
+                        .column("c1", DataTypes.INT())
+                        .column("c2", DataTypes.STRING())
+                        .column("dt", DataTypes.DATE());
+        builder.partitionKeys("dt");
+        builder.primaryKey("c1", "dt");
+        builder.option(CoreOptions.BUCKET.key(), String.valueOf(bucketNum));
+        createTable(tablePath, builder.build());
+        Table table = getTable(tablePath);
+
+        int epochDay = (int) LocalDate.of(2024, 3, 1).toEpochDay();
+        GenericRow record1 = GenericRow.of(12, BinaryString.fromString("a"), epochDay);
+        writeRecord(tablePath, Collections.singletonList(record1));
+        Snapshot snapshot = table.latestSnapshot().get();
+
+        LakeSource<PaimonSplit> lakeSource = lakeStorage.createLakeSource(tablePath);
+        List<PaimonSplit> paimonSplits = lakeSource.createPlanner(snapshot::id).plan();
+
+        // The DATE partition must be rendered in Fluss partition-name format ("2024-03-01"),
+        // not read blindly via BinaryRow.getString which yields garbage for non-String columns.
+        PaimonSplit paimonSplit = paimonSplits.get(0);
+        assertThat(paimonSplit.partition()).isEqualTo(Collections.singletonList("2024-03-01"));
     }
 }

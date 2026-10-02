@@ -32,4 +32,8 @@ public class KvSnapshotNotExistException extends ApiException {
     public KvSnapshotNotExistException(String message) {
         super(message);
     }
+
+    public KvSnapshotNotExistException(String message, Throwable cause) {
+        super(message, cause);
+    }
 }

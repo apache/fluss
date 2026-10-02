@@ -44,15 +44,26 @@ public class ServerInfo {
 
     private final Map<String, Endpoint> endpointMap;
     private final ServerType serverType;
+    private final TabletServerResource resource;
 
     public ServerInfo(
             Integer id, @Nullable String rack, List<Endpoint> endpoints, ServerType serverType) {
+        this(id, rack, endpoints, serverType, TabletServerResource.unknown());
+    }
+
+    public ServerInfo(
+            Integer id,
+            @Nullable String rack,
+            List<Endpoint> endpoints,
+            ServerType serverType,
+            TabletServerResource resource) {
         this.id = id;
         this.rack = rack;
         this.endpointMap =
                 endpoints.stream()
                         .collect(Collectors.toMap(Endpoint::getListenerName, endpoint -> endpoint));
         this.serverType = serverType;
+        this.resource = resource;
     }
 
     public Integer id() {
@@ -97,6 +108,10 @@ public class ServerInfo {
         return new ArrayList<>(endpointMap.values());
     }
 
+    public TabletServerResource resource() {
+        return resource;
+    }
+
     @Override
     public boolean equals(Object o) {
         if (o == null || getClass() != o.getClass()) {
@@ -105,12 +120,13 @@ public class ServerInfo {
         ServerInfo that = (ServerInfo) o;
         return Objects.equals(id, that.id)
                 && Objects.equals(rack, that.rack)
-                && Objects.equals(endpointMap, that.endpointMap);
+                && Objects.equals(endpointMap, that.endpointMap)
+                && Objects.equals(resource, that.resource);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(id, rack, endpointMap);
+        return Objects.hash(id, rack, endpointMap, resource);
     }
 
     @Override
@@ -124,6 +140,8 @@ public class ServerInfo {
                 + endpointMap.values()
                 + ", type="
                 + serverType
+                + ", resource="
+                + resource
                 + '}';
     }
 }

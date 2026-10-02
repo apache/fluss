@@ -57,6 +57,7 @@ import static org.apache.fluss.record.TestData.DATA1_TABLE_PATH;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_PATH_PK;
 import static org.apache.fluss.record.TestData.DATA_1_WITH_KEY_AND_VALUE;
 import static org.apache.fluss.record.TestData.EXPECTED_LOG_RESULTS_FOR_DATA_1_WITH_PK;
+import static org.apache.fluss.record.TestData.TEST_SCHEMA_GETTER;
 import static org.apache.fluss.server.testutils.KvTestUtils.assertLookupResponse;
 import static org.apache.fluss.server.testutils.RpcMessageTestUtils.assertFetchLogResponse;
 import static org.apache.fluss.server.testutils.RpcMessageTestUtils.assertFetchLogResponseWithRowKind;
@@ -165,7 +166,7 @@ public class ReplicaFetcherITCase {
             assertThat(resultForBucket.getTableBucket()).isEqualTo(tb);
             LogRecords records = resultForBucket.records();
             assertThat(records).isNotNull();
-            assertLogRecordsEquals(DATA1_ROW_TYPE, records, DATA1);
+            assertLogRecordsEquals(DATA1_ROW_TYPE, records, DATA1, TEST_SCHEMA_GETTER);
         }
     }
 

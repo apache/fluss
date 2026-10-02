@@ -18,6 +18,7 @@
 package org.apache.fluss.server.log;
 
 import org.apache.fluss.annotation.VisibleForTesting;
+import org.apache.fluss.rpc.protocol.FetchLogReadPreference;
 
 import javax.annotation.Nullable;
 
@@ -34,6 +35,7 @@ public final class FetchParamsBuilder {
     @Nullable private Map<Long, FilterInfo> tableFilterInfoMap;
     private int minFetchBytes;
     private long maxWaitMs;
+    private FetchLogReadPreference readPreference = FetchLogReadPreference.LOCAL_FIRST;
 
     public FetchParamsBuilder(int replicaId, int maxFetchBytes) {
         this.replicaId = replicaId;
@@ -63,6 +65,11 @@ public final class FetchParamsBuilder {
         return this;
     }
 
+    public FetchParamsBuilder withReadPreference(FetchLogReadPreference readPreference) {
+        this.readPreference = readPreference;
+        return this;
+    }
+
     public FetchParams build() {
         return new FetchParams(
                 replicaId,
@@ -70,6 +77,7 @@ public final class FetchParamsBuilder {
                 maxFetchBytes,
                 minFetchBytes,
                 maxWaitMs,
-                tableFilterInfoMap);
+                tableFilterInfoMap,
+                readPreference);
     }
 }

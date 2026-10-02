@@ -18,33 +18,38 @@
 package org.apache.fluss.flink.source;
 
 import org.apache.fluss.client.initializer.OffsetsInitializer;
+import org.apache.fluss.client.table.getter.PartitionGetter;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
-import org.apache.fluss.config.StatisticsColumnsConfig;
 import org.apache.fluss.config.TableConfig;
 import org.apache.fluss.flink.FlinkConnectorOptions;
+import org.apache.fluss.flink.adapter.SupportsLookupCustomShuffleAdapter;
+import org.apache.fluss.flink.adapter.SupportsLookupCustomShuffleAdapter.InputDataPartitionerAdapter;
+import org.apache.fluss.flink.row.FlinkAsFlussRow;
 import org.apache.fluss.flink.source.deserializer.RowDataDeserializationSchema;
 import org.apache.fluss.flink.source.lookup.FlinkAsyncLookupFunction;
 import org.apache.fluss.flink.source.lookup.FlinkLookupFunction;
+import org.apache.fluss.flink.source.lookup.FlussLookupInputPartitioner;
 import org.apache.fluss.flink.source.lookup.LookupNormalizer;
 import org.apache.fluss.flink.source.reader.LeaseContext;
 import org.apache.fluss.flink.utils.FlinkConnectorOptionsUtils;
 import org.apache.fluss.flink.utils.FlinkConversions;
+import org.apache.fluss.flink.utils.FlinkUtils;
 import org.apache.fluss.flink.utils.PredicateConverter;
 import org.apache.fluss.flink.utils.PushdownUtils;
 import org.apache.fluss.flink.utils.PushdownUtils.FieldEqual;
 import org.apache.fluss.lake.source.LakeSource;
 import org.apache.fluss.lake.source.LakeSplit;
 import org.apache.fluss.metadata.ChangelogImage;
+import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.DeleteBehavior;
 import org.apache.fluss.metadata.MergeEngineType;
+import org.apache.fluss.metadata.PartitionSpec;
 import org.apache.fluss.metadata.TablePath;
-import org.apache.fluss.predicate.CompoundPredicate;
 import org.apache.fluss.predicate.PartitionPredicateVisitor;
 import org.apache.fluss.predicate.Predicate;
 import org.apache.fluss.predicate.PredicateBuilder;
 import org.apache.fluss.predicate.PredicateVisitor;
-import org.apache.fluss.types.DataTypeChecks;
 import org.apache.fluss.types.RowType;
 
 import org.apache.flink.annotation.VisibleForTesting;
@@ -78,7 +83,6 @@ import org.apache.flink.table.data.RowData;
 import org.apache.flink.table.expressions.AggregateExpression;
 import org.apache.flink.table.expressions.ResolvedExpression;
 import org.apache.flink.table.functions.AsyncLookupFunction;
-import org.apache.flink.table.functions.FunctionDefinition;
 import org.apache.flink.table.functions.LookupFunction;
 import org.apache.flink.table.types.DataType;
 import org.apache.flink.table.types.logical.LogicalType;
@@ -104,7 +108,6 @@ import static org.apache.fluss.flink.utils.LakeSourceUtils.createLakeSource;
 import static org.apache.fluss.flink.utils.PredicateConverter.convertToFlussPredicate;
 import static org.apache.fluss.flink.utils.PushdownUtils.ValueConversion.FLINK_INTERNAL_VALUE;
 import static org.apache.fluss.flink.utils.PushdownUtils.extractFieldEquals;
-import static org.apache.fluss.flink.utils.StringifyPredicateVisitor.stringifyPartitionPredicate;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
 /** Flink table source to scan Fluss data. */
@@ -116,7 +119,8 @@ public class FlinkTableSource
                 SupportsRowLevelModificationScan,
                 SupportsLimitPushDown,
                 SupportsAggregatePushDown,
-                SupportsWatermarkPushDown {
+                SupportsWatermarkPushDown,
+                SupportsLookupCustomShuffleAdapter {
 
     public static final Logger LOG = LoggerFactory.getLogger(FlinkTableSource.class);
 
@@ -132,6 +136,7 @@ public class FlinkTableSource
     private final int[] partitionKeyIndexes;
     private final boolean streaming;
     private final FlinkConnectorOptionsUtils.StartupOptions startupOptions;
+    private final FlinkConnectorOptionsUtils.BoundedOptions boundedOptions;
 
     // options for lookup source
     private final boolean lookupAsync;
@@ -159,9 +164,6 @@ public class FlinkTableSource
 
     @Nullable private GenericRowData singleRowFilter;
 
-    // whether the scan is for row-level modification
-    @Nullable private RowLevelModificationType modificationScanType;
-
     // count(*) push down
     private boolean selectRowCount = false;
 
@@ -176,6 +178,9 @@ public class FlinkTableSource
 
     /** Watermark strategy that is pushed down by the Flink optimizer. */
     @Nullable private WatermarkStrategy<RowData> watermarkStrategy;
+
+    /** Custom partitioner prepared for the current lookup runtime provider. */
+    @Nullable private InputDataPartitionerAdapter lookupInputPartitioner;
 
     public FlinkTableSource(
             TablePath tablePath,
@@ -205,6 +210,7 @@ public class FlinkTableSource
                 partitionKeyIndexes,
                 streaming,
                 startupOptions,
+                FlinkConnectorOptionsUtils.BoundedOptions.unbounded(),
                 lookupAsync,
                 insertIfNotExists,
                 cache,
@@ -216,6 +222,12 @@ public class FlinkTableSource
                 leaseContext);
     }
 
+    /**
+     * Creates a table source with the legacy default bounded options.
+     *
+     * @deprecated Use the constructor that explicitly accepts bounded options.
+     */
+    @Deprecated
     public FlinkTableSource(
             TablePath tablePath,
             Configuration flussConfig,
@@ -235,6 +247,48 @@ public class FlinkTableSource
             @Nullable MergeEngineType mergeEngineType,
             Map<String, String> tableOptions,
             LeaseContext leaseContext) {
+        this(
+                tablePath,
+                flussConfig,
+                tableConfig,
+                tableOutputType,
+                primaryKeyIndexes,
+                bucketKeyIndexes,
+                partitionKeyIndexes,
+                streaming,
+                startupOptions,
+                FlinkConnectorOptionsUtils.BoundedOptions.unbounded(),
+                lookupAsync,
+                insertIfNotExists,
+                cache,
+                scanPartitionDiscoveryIntervalMs,
+                splitPerAssignmentBatchSize,
+                isDataLakeEnabled,
+                mergeEngineType,
+                tableOptions,
+                leaseContext);
+    }
+
+    public FlinkTableSource(
+            TablePath tablePath,
+            Configuration flussConfig,
+            TableConfig tableConfig,
+            org.apache.flink.table.types.logical.RowType tableOutputType,
+            int[] primaryKeyIndexes,
+            int[] bucketKeyIndexes,
+            int[] partitionKeyIndexes,
+            boolean streaming,
+            FlinkConnectorOptionsUtils.StartupOptions startupOptions,
+            FlinkConnectorOptionsUtils.BoundedOptions boundedOptions,
+            boolean lookupAsync,
+            boolean insertIfNotExists,
+            @Nullable LookupCache cache,
+            long scanPartitionDiscoveryIntervalMs,
+            int splitPerAssignmentBatchSize,
+            boolean isDataLakeEnabled,
+            @Nullable MergeEngineType mergeEngineType,
+            Map<String, String> tableOptions,
+            LeaseContext leaseContext) {
         this.tablePath = tablePath;
         this.flussConfig = flussConfig;
         this.tableOutputType = tableOutputType;
@@ -244,6 +298,7 @@ public class FlinkTableSource
         this.partitionKeyIndexes = partitionKeyIndexes;
         this.streaming = streaming;
         this.startupOptions = checkNotNull(startupOptions, "startupOptions must not be null");
+        this.boundedOptions = checkNotNull(boundedOptions, "boundedOptions must not be null");
 
         this.lookupAsync = lookupAsync;
         this.insertIfNotExists = insertIfNotExists;
@@ -265,7 +320,42 @@ public class FlinkTableSource
 
         // Pre-compute available statistics columns to avoid repeated calculation
         RowType flussRowType = FlinkConversions.toFlussRowType(tableOutputType);
-        this.availableStatsColumns = computeAvailableStatsColumns(flussRowType);
+        this.availableStatsColumns =
+                PushdownUtils.computeAvailableStatsColumns(flussRowType, tableConfig);
+    }
+
+    private FlinkTableSource(FlinkTableSource source) {
+        this.tablePath = source.tablePath;
+        this.flussConfig = new Configuration(source.flussConfig);
+        this.tableOutputType = source.tableOutputType;
+        this.primaryKeyIndexes = source.primaryKeyIndexes.clone();
+        this.bucketKeyIndexes = source.bucketKeyIndexes.clone();
+        this.partitionKeyIndexes = source.partitionKeyIndexes.clone();
+        this.streaming = source.streaming;
+        this.startupOptions = copyStartupOptions(source.startupOptions);
+        this.boundedOptions = source.boundedOptions;
+        this.lookupAsync = source.lookupAsync;
+        this.insertIfNotExists = source.insertIfNotExists;
+        this.cache = source.cache;
+        this.scanPartitionDiscoveryIntervalMs = source.scanPartitionDiscoveryIntervalMs;
+        this.splitPerAssignmentBatchSize = source.splitPerAssignmentBatchSize;
+        this.isDataLakeEnabled = source.isDataLakeEnabled;
+        this.leaseContext = source.leaseContext;
+        this.mergeEngineType = source.mergeEngineType;
+        this.tableConfig = source.tableConfig;
+        // Note: availableStatsColumns is already computed in the constructor
+        this.availableStatsColumns = new HashSet<>(source.availableStatsColumns);
+        this.producedDataType = source.producedDataType;
+        this.projectedFields =
+                source.projectedFields == null ? null : source.projectedFields.clone();
+        this.singleRowFilter = copyGenericRowData(source.singleRowFilter);
+        this.selectRowCount = source.selectRowCount;
+        this.limit = source.limit;
+        this.partitionFilters = source.partitionFilters;
+        this.tableOptions = new HashMap<>(source.tableOptions);
+        this.lakeSource = source.lakeSource == null ? null : source.lakeSource.copy();
+        this.logRecordBatchFilter = source.logRecordBatchFilter;
+        this.watermarkStrategy = source.watermarkStrategy;
     }
 
     @Override
@@ -401,6 +491,8 @@ public class FlinkTableSource
                         "Unsupported startup mode: " + startupOptions.startupMode);
         }
 
+        OffsetsInitializer stoppingOffsetsInitializer = createStoppingOffsetsInitializer();
+
         FlinkSource<RowData> source =
                 new FlinkSource<>(
                         flussConfig,
@@ -411,9 +503,13 @@ public class FlinkTableSource
                         projectedFields,
                         logRecordBatchFilter,
                         offsetsInitializer,
+                        stoppingOffsetsInitializer,
+                        FlinkConnectorOptionsUtils.toBoundedness(streaming, boundedOptions),
                         scanPartitionDiscoveryIntervalMs,
                         splitPerAssignmentBatchSize,
                         new RowDataDeserializationSchema(),
+                        FlinkConversions.toFlussRowType(
+                                (org.apache.flink.table.types.logical.RowType) producedDataType),
                         streaming,
                         partitionFilters,
                         enableLakeSource ? lakeSource : null,
@@ -430,15 +526,12 @@ public class FlinkTableSource
 
                 @Override
                 public Source<RowData, ?, ?> createSource() {
-                    if (modificationScanType != null) {
+                    if (hasPrimaryKey()
+                            && startupOptions.startupMode
+                                    != FlinkConnectorOptions.ScanStartupMode.FULL) {
                         throw new UnsupportedOperationException(
-                                "Currently, Fluss table only supports "
-                                        + modificationScanType
-                                        + " statement with conditions on primary key.");
-                    }
-                    if (!isDataLakeEnabled) {
-                        throw new UnsupportedOperationException(
-                                "Currently, Fluss only support queries on table with datalake enabled or point queries on primary key when it's in batch execution mode.");
+                                "Currently, Fluss batch scan on primary-key tables only supports "
+                                        + "full startup mode.");
                     }
                     return source;
                 }
@@ -463,6 +556,46 @@ public class FlinkTableSource
         }
     }
 
+    /** Creates the stopping offsets initializer from the configured bounded options. */
+    private OffsetsInitializer createStoppingOffsetsInitializer() {
+        if (boundedOptions.getBoundedMode() != FlinkConnectorOptions.ScanBoundedMode.UNBOUNDED) {
+            validateBoundedModeSupported();
+        }
+        return FlinkConnectorOptionsUtils.toStoppingOffsetsInitializer(streaming, boundedOptions);
+    }
+
+    private void validateBoundedModeSupported() {
+        if (hasPrimaryKey()) {
+            if (!streaming) {
+                throw new UnsupportedOperationException(
+                        String.format(
+                                "'%s' is not supported for primary key tables in batch execution mode.",
+                                FlinkConnectorOptions.SCAN_BOUNDED_MODE.key()));
+            }
+            if (startupOptions.startupMode == FlinkConnectorOptions.ScanStartupMode.FULL) {
+                throw new UnsupportedOperationException(
+                        String.format(
+                                "'%s' is not supported for primary key tables in '%s' startup mode, "
+                                        + "because the snapshot reading phase has no bounded end. "
+                                        + "Use 'earliest', 'latest' or 'timestamp' startup mode to "
+                                        + "read the changelog of a primary key table with a bounded end.",
+                                FlinkConnectorOptions.SCAN_BOUNDED_MODE.key(),
+                                FlinkConnectorOptions.ScanStartupMode.FULL));
+            }
+        }
+        if (isDataLakeEnabled
+                && startupOptions.startupMode == FlinkConnectorOptions.ScanStartupMode.FULL) {
+            throw new UnsupportedOperationException(
+                    String.format(
+                            "'%s' is not supported for the datalake union read, i.e. '%s' startup "
+                                    + "mode on a datalake-enabled table. Use 'earliest', 'latest' "
+                                    + "or 'timestamp' startup mode to read only the Fluss log with "
+                                    + "a bounded end.",
+                            FlinkConnectorOptions.SCAN_BOUNDED_MODE.key(),
+                            FlinkConnectorOptions.ScanStartupMode.FULL));
+        }
+    }
+
     @Override
     public LookupRuntimeProvider getLookupRuntimeProvider(LookupContext context) {
         LookupNormalizer lookupNormalizer =
@@ -473,6 +606,7 @@ public class FlinkTableSource
                         partitionKeyIndexes,
                         tableOutputType,
                         projectedFields);
+        this.lookupInputPartitioner = createLookupInputPartitioner(lookupNormalizer);
         if (lookupAsync) {
             AsyncLookupFunction asyncLookupFunction =
                     new FlinkAsyncLookupFunction(
@@ -504,38 +638,40 @@ public class FlinkTableSource
         }
     }
 
+    @Nullable
+    private InputDataPartitionerAdapter createLookupInputPartitioner(
+            LookupNormalizer lookupNormalizer) {
+        if (bucketKeyIndexes.length == 0) {
+            return null;
+        }
+
+        // Fluss Catalog exposes the resolved bucket count through FlinkConversions.toFlinkTable.
+        int numBuckets =
+                checkNotNull(
+                        org.apache.flink.configuration.Configuration.fromMap(tableOptions)
+                                .get(FlinkConnectorOptions.BUCKET_NUMBER),
+                        "The resolved table option '%s' must be present for bucket shuffle.",
+                        FlinkConnectorOptions.BUCKET_NUMBER.key());
+        org.apache.flink.table.types.logical.RowType lookupKeyType =
+                FlinkUtils.projectRowType(tableOutputType, lookupNormalizer.getLookupKeyIndexes());
+        List<String> fieldNames = tableOutputType.getFieldNames();
+        List<String> bucketKeyNames = new ArrayList<>(bucketKeyIndexes.length);
+        for (int bucketKeyIndex : bucketKeyIndexes) {
+            bucketKeyNames.add(fieldNames.get(bucketKeyIndex));
+        }
+        DataLakeFormat lakeFormat = tableConfig.getDataLakeFormat().orElse(null);
+        return new FlussLookupInputPartitioner(
+                lookupNormalizer, lookupKeyType, bucketKeyNames, lakeFormat, numBuckets);
+    }
+
     @Override
     public DynamicTableSource copy() {
-        FlinkTableSource source =
-                new FlinkTableSource(
-                        tablePath,
-                        flussConfig,
-                        tableConfig,
-                        tableOutputType,
-                        primaryKeyIndexes,
-                        bucketKeyIndexes,
-                        partitionKeyIndexes,
-                        streaming,
-                        startupOptions,
-                        lookupAsync,
-                        insertIfNotExists,
-                        cache,
-                        scanPartitionDiscoveryIntervalMs,
-                        splitPerAssignmentBatchSize,
-                        isDataLakeEnabled,
-                        mergeEngineType,
-                        tableOptions,
-                        leaseContext);
-        source.producedDataType = producedDataType;
-        source.projectedFields = projectedFields;
-        source.singleRowFilter = singleRowFilter;
-        source.modificationScanType = modificationScanType;
-        source.partitionFilters = partitionFilters;
-        source.lakeSource = lakeSource;
-        source.logRecordBatchFilter = logRecordBatchFilter;
-        source.watermarkStrategy = watermarkStrategy;
-        // Note: availableStatsColumns is already computed in the constructor
-        return source;
+        return new FlinkTableSource(this);
+    }
+
+    @Override
+    public Optional<InputDataPartitionerAdapter> getPartitionerAdapter() {
+        return Optional.ofNullable(lookupInputPartitioner);
     }
 
     @Override
@@ -596,7 +732,8 @@ public class FlinkTableSource
 
             // if not all primary key fields are in condition, fall through to
             // try partition filter pushdown for partitioned PK tables
-            if (visitedPkFields.equals(primaryKeyTypes.keySet())) {
+            if (visitedPkFields.equals(primaryKeyTypes.keySet())
+                    && lookupCoversAllData(lookupRow)) {
                 singleRowFilter = lookupRow;
                 // FLINK-38635: return all filters as remaining for scan vs lookup safety net
                 return Result.of(acceptedFilters, filters);
@@ -627,8 +764,7 @@ public class FlinkTableSource
                     } else {
                         acceptedFilters.add(filter);
                     }
-                    // Convert literals in the predicate to partition string
-                    converted.add(stringifyPartitionPredicate(p));
+                    converted.add(p);
                 } else {
                     remainingFilters.add(filter);
                 }
@@ -677,7 +813,8 @@ public class FlinkTableSource
                 Predicate predicate = predicateOpt.get();
                 LOG.trace("Converted filter to predicate: {}", predicate);
                 // Check if predicate can benefit from statistics
-                if (canPredicateUseStatistics(predicate, flussRowType, availableStatsColumns)) {
+                if (PushdownUtils.canPredicateUseStatistics(
+                        predicate, flussRowType, availableStatsColumns)) {
                     pushdownPredicates.add(predicate);
                     acceptedFilters.add(filter);
                 }
@@ -714,6 +851,7 @@ public class FlinkTableSource
         }
 
         if (lakePredicates.isEmpty()) {
+            checkNotNull(lakeSource).withFilters(Collections.emptyList());
             return;
         }
 
@@ -730,94 +868,10 @@ public class FlinkTableSource
         }
     }
 
-    /**
-     * Checks if a predicate can benefit from statistics based on the available statistics columns.
-     *
-     * @param predicate the predicate to check
-     * @param rowType the row type
-     * @param availableStatsColumns the columns that have statistics available
-     * @return true if the predicate can use statistics
-     */
-    private boolean canPredicateUseStatistics(
-            Predicate predicate, RowType rowType, Set<String> availableStatsColumns) {
-
-        class StatisticsUsageVisitor implements PredicateVisitor<Boolean> {
-            @Override
-            public Boolean visit(org.apache.fluss.predicate.LeafPredicate leaf) {
-                // Check if the field referenced by this predicate has statistics available
-                String fieldName = rowType.getFieldNames().get(leaf.index());
-                // Check if statistics are available for this column
-                return availableStatsColumns.contains(fieldName);
-            }
-
-            @Override
-            public Boolean visit(CompoundPredicate compound) {
-                // For compound predicates, all children must be able to use statistics
-                for (Predicate child : compound.children()) {
-                    if (!child.visit(this)) {
-                        return false;
-                    }
-                }
-                return true;
-            }
-        }
-
-        return predicate.visit(new StatisticsUsageVisitor());
-    }
-
-    /**
-     * Computes the available statistics columns based on table configuration. This method is called
-     * once during construction to pre-compute the result.
-     *
-     * @param flussRowType the row type
-     * @return set of column names that have statistics available
-     */
-    private Set<String> computeAvailableStatsColumns(RowType flussRowType) {
-        StatisticsColumnsConfig statsConfig = tableConfig.getStatisticsColumns();
-
-        if (!statsConfig.isEnabled()) {
-            LOG.debug("Statistics collection is disabled for the table");
-            return Collections.emptySet();
-        }
-
-        Set<String> columns = new HashSet<>();
-        if (statsConfig.getMode() == StatisticsColumnsConfig.Mode.ALL) {
-            // Collect all columns with supported statistics types
-            for (int i = 0; i < flussRowType.getFieldCount(); i++) {
-                org.apache.fluss.types.DataType fieldType = flussRowType.getTypeAt(i);
-                if (DataTypeChecks.isSupportedStatisticsType(fieldType)) {
-                    columns.add(flussRowType.getFieldNames().get(i));
-                }
-            }
-        } else {
-            // Use user-specified columns (validate they exist and have supported types)
-            for (String columnName : statsConfig.getColumns()) {
-                int columnIndex = flussRowType.getFieldNames().indexOf(columnName);
-                if (columnIndex >= 0) {
-                    org.apache.fluss.types.DataType fieldType = flussRowType.getTypeAt(columnIndex);
-                    if (DataTypeChecks.isSupportedStatisticsType(fieldType)) {
-                        columns.add(columnName);
-                    } else {
-                        LOG.trace(
-                                "Configured statistics column '{}' has unsupported type and will be ignored",
-                                columnName);
-                    }
-                } else {
-                    LOG.trace(
-                            "Configured statistics column '{}' does not exist in table schema",
-                            columnName);
-                }
-            }
-        }
-
-        return columns;
-    }
-
     @Override
     public RowLevelModificationScanContext applyRowLevelModificationScan(
             RowLevelModificationType rowLevelModificationType,
             @Nullable RowLevelModificationScanContext rowLevelModificationScanContext) {
-        modificationScanType = rowLevelModificationType;
         return null;
     }
 
@@ -831,7 +885,7 @@ public class FlinkTableSource
             List<int[]> groupingSets,
             List<AggregateExpression> aggregateExpressions,
             DataType dataType) {
-        // Only supports 'select count(*)/count(1) from source' for log table now.
+        // Only supports global count when an exact row count is available.
         if (streaming
                 || aggregateExpressions.size() != 1
                 || groupingSets.size() > 1
@@ -839,23 +893,38 @@ public class FlinkTableSource
                 // The count pushdown feature is not supported when the data lake is enabled.
                 // Otherwise, it'll cause miss count data in lake. But In the future, we can push
                 // down count into lake.
-                || isDataLakeEnabled) {
+                || isDataLakeEnabled
+                || (hasPrimaryKey() && tableConfig.getKvTTL().isPresent())) {
             return false;
         }
 
-        FunctionDefinition functionDefinition = aggregateExpressions.get(0).getFunctionDefinition();
-        if (!(functionDefinition
-                        .getClass()
-                        .getCanonicalName()
-                        .equals(
-                                "org.apache.flink.table.planner.functions.aggfunctions.CountAggFunction")
-                || functionDefinition
-                        .getClass()
-                        .getCanonicalName()
-                        .equals(
-                                "org.apache.flink.table.planner.functions.aggfunctions.Count1AggFunction"))) {
+        AggregateExpression aggExpr = aggregateExpressions.get(0);
+        String functionName = aggExpr.getFunctionDefinition().getClass().getCanonicalName();
+
+        // Verify that the aggregate function is COUNT(*) or COUNT(1)
+        // CountAggFunction: COUNT(*) or COUNT(column)
+        // Count1AggFunction: COUNT(1) with constant argument
+        boolean isCountAgg =
+                "org.apache.flink.table.planner.functions.aggfunctions.CountAggFunction"
+                        .equals(functionName);
+        boolean isCount1Agg =
+                "org.apache.flink.table.planner.functions.aggfunctions.Count1AggFunction"
+                        .equals(functionName);
+        if (!isCountAgg && !isCount1Agg) {
             return false;
         }
+
+        // For COUNT(column), reject if column is nullable (cannot handle NULL filtering)
+        if (isCountAgg) {
+            List<org.apache.flink.table.expressions.Expression> args = aggExpr.getChildren();
+            if (!args.isEmpty() && args.get(0) instanceof ResolvedExpression) {
+                ResolvedExpression arg = (ResolvedExpression) args.get(0);
+                if (arg.getOutputDataType().getLogicalType().isNullable()) {
+                    return false;
+                }
+            }
+        }
+
         selectRowCount = true;
         this.producedDataType = dataType.getLogicalType();
         return true;
@@ -869,6 +938,29 @@ public class FlinkTableSource
         return pkTypes;
     }
 
+    private static FlinkConnectorOptionsUtils.StartupOptions copyStartupOptions(
+            FlinkConnectorOptionsUtils.StartupOptions startupOptions) {
+        FlinkConnectorOptionsUtils.StartupOptions copy =
+                new FlinkConnectorOptionsUtils.StartupOptions();
+        copy.startupMode = startupOptions.startupMode;
+        copy.startupTimestampMs = startupOptions.startupTimestampMs;
+        return copy;
+    }
+
+    @Nullable
+    private static GenericRowData copyGenericRowData(@Nullable GenericRowData rowData) {
+        if (rowData == null) {
+            return null;
+        }
+
+        GenericRowData copy = new GenericRowData(rowData.getRowKind(), rowData.getArity());
+        for (int i = 0; i < rowData.getArity(); i++) {
+            Object field = rowData.getField(i);
+            copy.setField(i, field instanceof byte[] ? ((byte[]) field).clone() : field);
+        }
+        return copy;
+    }
+
     // projection from pk_field_index to index_in_pk
     private int[] getKeyRowProjection() {
         int[] projection = new int[tableOutputType.getFieldCount()];
@@ -876,6 +968,25 @@ public class FlinkTableSource
             projection[primaryKeyIndexes[i]] = i;
         }
         return projection;
+    }
+
+    private boolean lookupCoversAllData(GenericRowData lookupRow) {
+        if (!isDataLakeEnabled || !isPartitioned()) {
+            return true;
+        }
+        // TODO: drop this gate once FIP-28 lets the lookup path read expired partitions from the
+        // lake; then always push the single-row lookup down instead of falling back to a scan.
+        // Partition keys are a subset of the primary key, so the partition resolves from lookupRow.
+        RowType flussRowType = FlinkConversions.toFlussRowType(tableOutputType);
+        PartitionGetter partitionGetter =
+                new PartitionGetter(
+                        flussRowType.project(primaryKeyIndexes),
+                        flussRowType.project(partitionKeyIndexes).getFieldNames());
+        PartitionSpec partitionSpec =
+                partitionGetter
+                        .getResolvedPartitionSpec(new FlinkAsFlussRow(lookupRow))
+                        .toPartitionSpec();
+        return PushdownUtils.partitionExists(tablePath, flussConfig, partitionSpec);
     }
 
     @VisibleForTesting

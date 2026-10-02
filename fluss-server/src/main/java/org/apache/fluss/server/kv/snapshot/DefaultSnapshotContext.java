@@ -57,6 +57,10 @@ public class DefaultSnapshotContext implements SnapshotContext, ServerReconfigur
 
     private final int maxFetchLogSizeInRecoverKv;
 
+    private final int remoteLogPrefetchNumInRecoverKv;
+
+    private final int remoteLogDownloadThreadsInRecoverKv;
+
     private final FsPath remoteKvDir;
 
     private DefaultSnapshotContext(
@@ -70,7 +74,9 @@ public class DefaultSnapshotContext implements SnapshotContext, ServerReconfigur
             int writeBufferSizeInBytes,
             FsPath remoteKvDir,
             CompletedSnapshotHandleStore completedSnapshotHandleStore,
-            int maxFetchLogSizeInRecoverKv) {
+            int maxFetchLogSizeInRecoverKv,
+            int remoteLogPrefetchNumInRecoverKv,
+            int remoteLogDownloadThreadsInRecoverKv) {
         this.zooKeeperClient = zooKeeperClient;
         this.completedKvSnapshotCommitter = completedKvSnapshotCommitter;
         this.snapshotScheduler = snapshotScheduler;
@@ -83,6 +89,8 @@ public class DefaultSnapshotContext implements SnapshotContext, ServerReconfigur
 
         this.completedSnapshotHandleStore = completedSnapshotHandleStore;
         this.maxFetchLogSizeInRecoverKv = maxFetchLogSizeInRecoverKv;
+        this.remoteLogPrefetchNumInRecoverKv = remoteLogPrefetchNumInRecoverKv;
+        this.remoteLogDownloadThreadsInRecoverKv = remoteLogDownloadThreadsInRecoverKv;
     }
 
     public static DefaultSnapshotContext create(
@@ -101,7 +109,9 @@ public class DefaultSnapshotContext implements SnapshotContext, ServerReconfigur
                 (int) conf.get(ConfigOptions.REMOTE_FS_WRITE_BUFFER_SIZE).getBytes(),
                 FlussPaths.remoteKvDir(conf),
                 new ZooKeeperCompletedSnapshotHandleStore(zkClient),
-                (int) conf.get(ConfigOptions.KV_RECOVER_LOG_RECORD_BATCH_MAX_SIZE).getBytes());
+                (int) conf.get(ConfigOptions.KV_RECOVER_LOG_RECORD_BATCH_MAX_SIZE).getBytes(),
+                conf.get(ConfigOptions.KV_RECOVERY_REMOTE_LOG_PREFETCH_NUM),
+                conf.get(ConfigOptions.KV_RECOVERY_REMOTE_LOG_DOWNLOAD_THREADS));
     }
 
     public ZooKeeperClient getZooKeeperClient() {
@@ -161,6 +171,16 @@ public class DefaultSnapshotContext implements SnapshotContext, ServerReconfigur
     @Override
     public int maxFetchLogSizeInRecoverKv() {
         return maxFetchLogSizeInRecoverKv;
+    }
+
+    @Override
+    public int remoteLogPrefetchNumInRecoverKv() {
+        return remoteLogPrefetchNumInRecoverKv;
+    }
+
+    @Override
+    public int remoteLogDownloadThreadsInRecoverKv() {
+        return remoteLogDownloadThreadsInRecoverKv;
     }
 
     @Override

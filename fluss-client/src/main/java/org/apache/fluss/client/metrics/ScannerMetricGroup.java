@@ -24,6 +24,7 @@ import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.metrics.CharacterFilter;
 import org.apache.fluss.metrics.Counter;
 import org.apache.fluss.metrics.DescriptiveStatisticsHistogram;
+import org.apache.fluss.metrics.Gauge;
 import org.apache.fluss.metrics.Histogram;
 import org.apache.fluss.metrics.MeterView;
 import org.apache.fluss.metrics.MetricNames;
@@ -101,6 +102,14 @@ public class ScannerMetricGroup extends AbstractMetricGroup {
 
     public Counter remoteFetchErrorCount() {
         return remoteFetchErrorCount;
+    }
+
+    /**
+     * Registers the gauge for the number of log records that have not been fetched. It must be
+     * called at most once, otherwise the duplicated registration will be ignored with a warning.
+     */
+    public void registerRecordsLagGauge(Gauge<Long> recordsLagGauge) {
+        gauge(MetricNames.SCANNER_RECORDS_LAG, recordsLagGauge);
     }
 
     public void recordPollStart(long pollStartMs) {

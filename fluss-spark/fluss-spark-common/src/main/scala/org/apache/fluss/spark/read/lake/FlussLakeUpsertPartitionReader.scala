@@ -39,9 +39,10 @@ class FlussLakeUpsertPartitionReader(
     tablePath: TablePath,
     lakeSource: LakeSource[LakeSplit],
     projection: Array[Int],
+    limit: Option[Int],
     flussPartition: FlussLakeUpsertInputPartition,
     flussConfig: Configuration)
-  extends FlussPartitionReader(tablePath, flussConfig)
+  extends FlussPartitionReader(tablePath, flussConfig, limit)
   with Logging {
 
   private val lakeSplits = flussPartition.lakeSplits

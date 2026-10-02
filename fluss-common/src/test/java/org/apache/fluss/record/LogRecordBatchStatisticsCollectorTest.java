@@ -170,6 +170,34 @@ public class LogRecordBatchStatisticsCollectorTest {
     }
 
     @Test
+    void testCharStatisticsSerializationRoundTrip() throws IOException {
+        RowType charRowType = DataTypes.ROW(new DataField("char_val", DataTypes.CHAR(3)));
+        LogRecordBatchStatisticsCollector charCollector =
+                new LogRecordBatchStatisticsCollector(charRowType, new int[] {0});
+
+        List<Object[]> charData =
+                Arrays.asList(
+                        new Object[] {"cat"},
+                        new Object[] {"a"},
+                        new Object[] {null},
+                        new Object[] {"dog"});
+        for (Object[] data : charData) {
+            charCollector.processRow(DataTestUtils.row(data));
+        }
+
+        MemorySegment segment = MemorySegment.allocateHeapMemory(1024);
+        charCollector.writeStatistics(new MemorySegmentOutputView(segment));
+
+        DefaultLogRecordBatchStatistics statistics =
+                LogRecordBatchStatisticsParser.parseStatistics(segment, 0, charRowType, 1);
+
+        assertThat(statistics.getMinValues().getChar(0, 3)).isEqualTo(BinaryString.fromString("a"));
+        assertThat(statistics.getMaxValues().getChar(0, 3))
+                .isEqualTo(BinaryString.fromString("dog"));
+        assertThat(statistics.getNullCounts()[0]).isEqualTo(1);
+    }
+
+    @Test
     void testPartialStatsIndexMapping() throws IOException {
         RowType fullRowType =
                 DataTypes.ROW(

@@ -21,6 +21,7 @@ import org.apache.fluss.memory.MemorySegment;
 import org.apache.fluss.memory.MemorySegmentOutputView;
 import org.apache.fluss.row.BinaryRow;
 import org.apache.fluss.utils.CloseableIterator;
+import org.apache.fluss.utils.MurmurHashUtils;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
@@ -130,6 +131,11 @@ public class DefaultValueRecordBatch implements ValueRecordBatch {
         int sizeInBytes = sizeInBytes();
         return sizeInBytes == that.sizeInBytes()
                 && segment.equalTo(that.segment, position, that.position, sizeInBytes);
+    }
+
+    @Override
+    public int hashCode() {
+        return MurmurHashUtils.hashBytes(segment, position, sizeInBytes());
     }
 
     // ------------------------------------------------------------------------------------------
@@ -262,13 +268,22 @@ public class DefaultValueRecordBatch implements ValueRecordBatch {
          * @param valueBytes consisted of schema id and the row encoded in the value bytes
          */
         public void append(byte[] valueBytes) throws IOException {
+            append(valueBytes, 0, valueBytes.length);
+        }
+
+        /**
+         * @param valueBytes consisted of schema id and the row encoded in the value bytes
+         * @param offset the offset of the value bytes to append
+         * @param length the number of value bytes to append
+         */
+        public void append(byte[] valueBytes, int offset, int length) throws IOException {
             if (isClosed) {
                 throw new IllegalStateException(
                         "Tried to add a record, but ValueRecordBatchBuilder is closed for record adds.");
             }
-            outputView.writeInt(valueBytes.length);
-            outputView.write(valueBytes);
-            sizeInBytes += valueBytes.length + LENGTH_LENGTH;
+            outputView.writeInt(length);
+            outputView.write(valueBytes, offset, length);
+            sizeInBytes += length + LENGTH_LENGTH;
             currentRecordNumber++;
         }
 

@@ -20,6 +20,7 @@ package org.apache.fluss.record;
 import org.apache.fluss.memory.MemorySegment;
 import org.apache.fluss.memory.MemorySegmentOutputView;
 import org.apache.fluss.metadata.LogFormat;
+import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.aligned.AlignedRow;
 import org.apache.fluss.testutils.DataTestUtils;
@@ -74,7 +75,11 @@ public class LogRecordBatchStatisticsTest extends LogTestBase {
                 LogRecordReadContext.createArrowReadContext(
                         TestData.STATISTICS_WITH_BOOLEAN_ROW_TYPE,
                         DEFAULT_SCHEMA_ID,
-                        TEST_SCHEMA_GETTER)) {
+                        new TestingSchemaGetter(
+                                DEFAULT_SCHEMA_ID,
+                                Schema.newBuilder()
+                                        .fromRowType(TestData.STATISTICS_WITH_BOOLEAN_ROW_TYPE)
+                                        .build()))) {
             Optional<LogRecordBatchStatistics> statisticsOpt = batch.getStatistics(readContext);
             assertThat(statisticsOpt).isPresent();
 
@@ -108,7 +113,11 @@ public class LogRecordBatchStatisticsTest extends LogTestBase {
                 LogRecordReadContext.createArrowReadContext(
                         TestData.STATISTICS_WITH_NULLS_ROW_TYPE,
                         DEFAULT_SCHEMA_ID,
-                        TEST_SCHEMA_GETTER)) {
+                        new TestingSchemaGetter(
+                                DEFAULT_SCHEMA_ID,
+                                Schema.newBuilder()
+                                        .fromRowType(TestData.STATISTICS_WITH_NULLS_ROW_TYPE)
+                                        .build()))) {
             LogRecordBatchStatistics statistics = batch.getStatistics(readContext).get();
             assertThat(statistics.getNullCounts()[0]).isEqualTo(1);
             assertThat(statistics.getNullCounts()[1]).isEqualTo(1);
@@ -178,7 +187,11 @@ public class LogRecordBatchStatisticsTest extends LogTestBase {
                 LogRecordReadContext.createArrowReadContext(
                         TestData.STATISTICS_WITH_BOOLEAN_ROW_TYPE,
                         DEFAULT_SCHEMA_ID,
-                        TEST_SCHEMA_GETTER)) {
+                        new TestingSchemaGetter(
+                                DEFAULT_SCHEMA_ID,
+                                Schema.newBuilder()
+                                        .fromRowType(TestData.STATISTICS_WITH_BOOLEAN_ROW_TYPE)
+                                        .build()))) {
             Optional<LogRecordBatchStatistics> stats1 = batch.getStatistics(readContext);
             Optional<LogRecordBatchStatistics> stats2 = batch.getStatistics(readContext);
             assertThat(stats2.get()).isSameAs(stats1.get());
@@ -209,7 +222,11 @@ public class LogRecordBatchStatisticsTest extends LogTestBase {
                     LogRecordReadContext.createArrowReadContext(
                             TestData.STATISTICS_WITH_BOOLEAN_ROW_TYPE,
                             DEFAULT_SCHEMA_ID,
-                            TEST_SCHEMA_GETTER)) {
+                            new TestingSchemaGetter(
+                                    DEFAULT_SCHEMA_ID,
+                                    Schema.newBuilder()
+                                            .fromRowType(TestData.STATISTICS_WITH_BOOLEAN_ROW_TYPE)
+                                            .build()))) {
                 LogRecordBatchStatistics statistics = batch.getStatistics(readContext).get();
                 assertThat(statistics.getMinValues().getInt(0)).isEqualTo(1);
                 assertThat(statistics.getMaxValues().getInt(0)).isEqualTo(5);
@@ -232,7 +249,11 @@ public class LogRecordBatchStatisticsTest extends LogTestBase {
                 LogRecordReadContext.createArrowReadContext(
                         TestData.STATISTICS_WITH_BOOLEAN_ROW_TYPE,
                         DEFAULT_SCHEMA_ID,
-                        TEST_SCHEMA_GETTER)) {
+                        new TestingSchemaGetter(
+                                DEFAULT_SCHEMA_ID,
+                                Schema.newBuilder()
+                                        .fromRowType(TestData.STATISTICS_WITH_BOOLEAN_ROW_TYPE)
+                                        .build()))) {
             LogRecordBatchStatistics defaultStats = defaultBatch.getStatistics(readContext).get();
 
             try (FileLogRecords fileLogRecords =

@@ -23,11 +23,11 @@
     <parent>
         <groupId>org.apache.fluss</groupId>
         <artifactId>fluss</artifactId>
-        <version>1.0-SNAPSHOT</version>
+        <version>1.1-SNAPSHOT</version>
     </parent>
 
     <artifactId>fluss-common</artifactId>
-    <name>Fluss : Common</name>
+    <name>Apache Fluss : Common</name>
     <packaging>jar</packaging>
 
     <dependencies>
@@ -60,6 +60,24 @@
         <dependency>
             <groupId>org.apache.fluss</groupId>
             <artifactId>fluss-shaded-arrow</artifactId>
+        </dependency>
+
+        <!-- Unshaded Arrow dependencies used by UnshadedArrowReadUtils to load Arrow batches
+             with original Arrow classes (for ArrowBatchData / log scanner arrow batch scan).
+             Marked as provided because the actual Arrow classes are supplied at runtime by
+             downstream modules (e.g. fluss-client); fluss-common only needs them for compilation. -->
+        <dependency>
+            <groupId>org.apache.arrow</groupId>
+            <artifactId>arrow-vector</artifactId>
+            <version>${arrow.version}</version>
+            <scope>provided</scope>
+        </dependency>
+
+        <dependency>
+            <groupId>org.apache.arrow</groupId>
+            <artifactId>arrow-memory-netty</artifactId>
+            <version>${arrow.version}</version>
+            <scope>provided</scope>
         </dependency>
 
         <!-- TODO: these two dependencies need to be shaded. -->
@@ -108,6 +126,42 @@
             <artifactId>iceberg-api</artifactId>
             <version>${iceberg.version}</version>
             <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.hudi</groupId>
+            <artifactId>hudi-flink1.20-bundle</artifactId>
+            <version>${hudi.version}</version>
+            <scope>test</scope>
+            <exclusions>
+                <exclusion>
+                    <groupId>log4j</groupId>
+                    <artifactId>log4j</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>org.slf4j</groupId>
+                    <artifactId>slf4j-api</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>org.apache.commons</groupId>
+                    <artifactId>commons-lang3</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>org.apache.curator</groupId>
+                    <artifactId>curator-client</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>org.apache.curator</groupId>
+                    <artifactId>curator-framework</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>org.apache.curator</groupId>
+                    <artifactId>curator-recipes</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>org.apache.zookeeper</groupId>
+                    <artifactId>zookeeper</artifactId>
+                </exclusion>
+            </exclusions>
         </dependency>
     </dependencies>
 

@@ -1,0 +1,32 @@
+---
+title: "Lakestream Overview"
+sidebar_position: 1
+description: "How Apache Fluss coordinates streaming and lakehouse tables through shared metadata, managed tiering, and supported reads."
+---
+
+# Lakestream Overview
+
+Fluss provides the streaming table layer and lakehouse integration for a Lakestream foundation. A Flink tiering job maintains the lake representation, and supported readers use the recorded tiering progress to access data across both layers. For the definitions and diagrams, see [Streamhouse and Lakestream](../concepts/streamhouse-and-lakestream.mdx).
+
+## Metadata, Tiering, and Reads
+
+Three mechanisms keep the layers coordinated:
+
+1. **Shared metadata** identifies the table, defines its schema, and maps its physical representations and progress. Streaming buckets and lake partitions need a defined relationship; their layouts need not be identical.
+2. **Managed tiering** maintains the lake representation from streaming data. In Fluss, the [Tiering Service](tiering-service.md) runs as an Apache Flink job. It writes and commits lake data, then records the associated streaming progress. This is storage maintenance; application transformations run separately in compute engines.
+3. **Supported union reads** use a committed lake representation and its associated streaming progress to read the additional data needed from Fluss. Append-only reads must avoid gaps and duplicate records caused by overlap. Mutable-table reads must also respect versions, updates, and deletes.
+
+A lake-only query observes committed lake data. A [Union Read](union-read.md) accesses the relevant data across both layers through an integration that understands their coordination. A lake-compatible engine alone does not automatically provide union reads. Read behavior depends on the table type, lake format, engine, and execution mode; the architecture does not imply a simultaneous snapshot across all tables and engines.
+
+## Supported Integrations
+
+Application writes enter through supported Fluss table interfaces, while tiering maintains the lake representation. Schema changes must follow the supported Fluss workflow so both representations remain coordinated.
+
+Fluss integrates with [Paimon](datalake-formats/paimon.md), [Iceberg](datalake-formats/iceberg.md), [Hudi](datalake-formats/hudi.md), and [Lance](datalake-formats/lance.md). Check the documentation for your deployed release and the selected format and engine for supported table types, reads, writes, and schema evolution.
+
+## Getting Started
+
+1. **Try Lakestream**: Follow the [Lakestream Quickstart](../quickstart/lakehouse.md) using Docker.
+2. **Understand Maintenance**: Learn how the [Tiering Service](tiering-service.md) maintains the lake representation.
+3. **Choose an Access Path**: Explore [Union Read](union-read.md) and lake-only reads.
+4. **Deploy**: Follow [Deploying Lakestream](../install-deploy/deploying-streaming-lakehouse.md).

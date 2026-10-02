@@ -30,9 +30,12 @@ import org.apache.fluss.exception.InvalidPartitionException;
 import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.flink.FlinkConnectorOptions;
 import org.apache.fluss.metadata.DataLakeFormat;
+import org.apache.fluss.metadata.PartitionInfo;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.row.encode.KvValueLayout;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
+import org.apache.fluss.testutils.common.MultiVersionTest;
 
 import org.apache.flink.table.api.DataTypes;
 import org.apache.flink.table.api.EnvironmentSettings;
@@ -43,6 +46,7 @@ import org.apache.flink.table.api.config.TableConfigOptions;
 import org.apache.flink.table.catalog.Catalog;
 import org.apache.flink.table.catalog.CatalogBaseTable;
 import org.apache.flink.table.catalog.CatalogDatabase;
+import org.apache.flink.table.catalog.CatalogPartitionSpec;
 import org.apache.flink.table.catalog.CatalogTable;
 import org.apache.flink.table.catalog.ObjectPath;
 import org.apache.flink.table.catalog.exceptions.CatalogException;
@@ -158,6 +162,7 @@ abstract class FlinkCatalogITCase {
     }
 
     @Test
+    @MultiVersionTest
     void testCreateTable() throws Exception {
         // create a table will all supported data types
         tEnv.executeSql(
@@ -251,18 +256,38 @@ abstract class FlinkCatalogITCase {
 
         // alter table set an unsupported modification option should throw exception
         String unSupportedDml1 =
-                "alter table test_alter_table_append_only set ('table.auto-partition.enabled' = 'true', 'table.kv.format' = 'indexed')";
+                "alter table test_alter_table_append_only set ('table.kv.format' = 'indexed')";
 
         assertThatThrownBy(() -> tEnv.executeSql(unSupportedDml1))
                 .rootCause()
                 .isInstanceOf(InvalidAlterTableException.class)
                 .hasMessageContaining("The following options are not supported to alter yet:")
-                .hasMessageContaining("table.kv.format")
-                .hasMessageContaining("table.auto-partition.enabled");
+                .hasMessageContaining("table.kv.format");
 
+        // alter table to enable auto partition for a non-partitioned table should fail validation
+        String invalidAutoPartitionDml =
+                "alter table test_alter_table_append_only set ('table.auto-partition.enabled' = 'true')";
+        assertThatThrownBy(() -> tEnv.executeSql(invalidAutoPartitionDml))
+                .rootCause()
+                .isInstanceOf(InvalidConfigException.class)
+                .hasMessage(
+                        "Currently, auto partition is only supported for partitioned table, please set table property 'table.auto-partition.enabled' to false.");
+
+        // altering bucket.num is no longer blocked at the catalog layer; it is rejected by the
+        // server. This table is non-partitioned, so it fails with the non-partitioned rescale
+        // message (partitioned-table rescale is supported; non-partitioned is not yet).
         String unSupportedDml2 =
                 "alter table test_alter_table_append_only set ('bucket.num' = '1000')";
         assertThatThrownBy(() -> tEnv.executeSql(unSupportedDml2))
+                .rootCause()
+                .isInstanceOf(InvalidAlterTableException.class)
+                .hasMessageContaining("Cannot alter 'bucket.num' on non-partitioned table")
+                .hasMessageContaining("not yet supported");
+
+        assertThatThrownBy(
+                        () ->
+                                tEnv.executeSql(
+                                        "alter table test_alter_table_append_only reset ('bucket.num')"))
                 .rootCause()
                 .isInstanceOf(CatalogException.class)
                 .hasMessage("The option 'bucket.num' is not supported to alter yet.");
@@ -287,6 +312,47 @@ abstract class FlinkCatalogITCase {
                 .rootCause()
                 .isInstanceOf(CatalogException.class)
                 .hasMessage("The option 'auto-increment.fields' is not supported to alter yet.");
+    }
+
+    @Test
+    void testAlterPartitionedTableBucketCount() throws Exception {
+        String tableName = "test_alter_partitioned_table_bucket_count";
+        ObjectPath objectPath = new ObjectPath(DEFAULT_DB, tableName);
+        TablePath tablePath = TablePath.of(DEFAULT_DB, tableName);
+        tEnv.executeSql(
+                "create table "
+                        + tableName
+                        + " (a int, pt string) partitioned by (pt) with ('bucket.num' = '2')");
+        tEnv.executeSql("alter table " + tableName + " add partition (pt = 'old')");
+
+        CatalogTable table = (CatalogTable) catalog.getTable(objectPath);
+        assertThat(table.getOptions()).containsEntry(BUCKET_NUMBER.key(), "2");
+
+        try (Connection conn =
+                ConnectionFactory.createConnection(FLUSS_CLUSTER_EXTENSION.getClientConfig())) {
+            Admin admin = conn.getAdmin();
+            assertThat(admin.listPartitionInfos(tablePath).get())
+                    .singleElement()
+                    .satisfies(partition -> assertThat(partition.getBucketCount()).isEqualTo(2));
+
+            tEnv.executeSql("alter table " + tableName + " set ('bucket.num' = '4')");
+
+            table = (CatalogTable) catalog.getTable(objectPath);
+            assertThat(table.getOptions()).containsEntry(BUCKET_NUMBER.key(), "4");
+
+            tEnv.executeSql("alter table " + tableName + " add partition (pt = 'new')");
+
+            Map<String, Integer> bucketCountByPartition =
+                    admin.listPartitionInfos(tablePath).get().stream()
+                            .collect(
+                                    Collectors.toMap(
+                                            PartitionInfo::getPartitionName,
+                                            PartitionInfo::getBucketCount));
+            assertThat(bucketCountByPartition)
+                    .hasSize(2)
+                    .containsEntry("old", 2)
+                    .containsEntry("new", 4);
+        }
     }
 
     @Test
@@ -636,6 +702,67 @@ abstract class FlinkCatalogITCase {
     }
 
     @Test
+    void testAlterAutoPartitionNumPrecreate() throws Exception {
+        String tblName = "test_alter_auto_partition_num_precreate";
+        ObjectPath objectPath = new ObjectPath(DEFAULT_DB, tblName);
+        TablePath tablePath = new TablePath(DEFAULT_DB, tblName);
+
+        tEnv.executeSql(
+                "create table "
+                        + tblName
+                        + " (a int, dt string) partitioned by (dt) "
+                        + "with ('table.auto-partition.enabled' = 'true',"
+                        + " 'table.auto-partition.key' = 'dt',"
+                        + " 'table.auto-partition.time-unit' = 'hour',"
+                        + " 'table.auto-partition.num-retention' = '-1',"
+                        + " 'table.auto-partition.num-precreate' = '1')");
+        FLUSS_CLUSTER_EXTENSION.waitUntilPartitionAllReady(tablePath, 1);
+
+        tEnv.executeSql(
+                "alter table " + tblName + " set ('table.auto-partition.num-precreate' = '3')");
+        FLUSS_CLUSTER_EXTENSION.waitUntilPartitionAllReady(tablePath, 3);
+
+        CatalogTable table = (CatalogTable) catalog.getTable(objectPath);
+        assertThat(table.getOptions().get(ConfigOptions.TABLE_AUTO_PARTITION_NUM_PRECREATE.key()))
+                .isEqualTo("3");
+
+        tEnv.executeSql("alter table " + tblName + " reset ('table.auto-partition.num-precreate')");
+        table = (CatalogTable) catalog.getTable(objectPath);
+        assertThat(table.getOptions())
+                .doesNotContainKey(ConfigOptions.TABLE_AUTO_PARTITION_NUM_PRECREATE.key());
+    }
+
+    @Test
+    void testAlterAutoPartitionEnabled() throws Exception {
+        String tblName = "test_alter_auto_partition_enabled";
+        ObjectPath objectPath = new ObjectPath(DEFAULT_DB, tblName);
+        TablePath tablePath = new TablePath(DEFAULT_DB, tblName);
+
+        tEnv.executeSql(
+                "create table "
+                        + tblName
+                        + " (a int, dt string) partitioned by (dt) "
+                        + "with ('table.auto-partition.enabled' = 'false',"
+                        + " 'table.auto-partition.key' = 'dt',"
+                        + " 'table.auto-partition.time-unit' = 'hour',"
+                        + " 'table.auto-partition.num-precreate' = '2')");
+
+        tEnv.executeSql(
+                "alter table " + tblName + " set ('table.auto-partition.enabled' = 'true')");
+        FLUSS_CLUSTER_EXTENSION.waitUntilPartitionAllReady(tablePath, 2);
+
+        CatalogTable table = (CatalogTable) catalog.getTable(objectPath);
+        assertThat(table.getOptions().get(ConfigOptions.TABLE_AUTO_PARTITION_ENABLED.key()))
+                .isEqualTo("true");
+
+        tEnv.executeSql(
+                "alter table " + tblName + " set ('table.auto-partition.enabled' = 'false')");
+        table = (CatalogTable) catalog.getTable(objectPath);
+        assertThat(table.getOptions().get(ConfigOptions.TABLE_AUTO_PARTITION_ENABLED.key()))
+                .isEqualTo("false");
+    }
+
+    @Test
     void testTableWithExpression() throws Exception {
         // create a table with watermark and computed column
         tEnv.executeSql(
@@ -686,6 +813,9 @@ abstract class FlinkCatalogITCase {
             expectedTableProperties.put("table.replication.factor", "1");
             expectedTableProperties.put(
                     "table.kv.format-version", String.valueOf(CURRENT_KV_FORMAT_VERSION));
+            expectedTableProperties.put(
+                    ConfigOptions.TABLE_KV_VALUE_LAYOUT_VERSION.key(),
+                    String.valueOf(KvValueLayout.PLAIN.version()));
             assertThat(tableInfo.getProperties().toMap()).isEqualTo(expectedTableProperties);
 
             Map<String, String> expectedCustomProperties = new HashMap<>();
@@ -701,6 +831,75 @@ abstract class FlinkCatalogITCase {
             assertThat(tableInfo.getCustomProperties().toMap()).isEqualTo(expectedCustomProperties);
             assertThat(tableInfo.getNumBuckets()).isEqualTo(2);
         }
+    }
+
+    @Test
+    void testAlterTableWatermark() throws Exception {
+        String tableName = "test_watermark_table";
+        ObjectPath tablePath = new ObjectPath(DEFAULT_DB, tableName);
+
+        // 1. create table without watermark
+        tEnv.executeSql(
+                String.format(
+                        "CREATE TABLE %s ("
+                                + "  id BIGINT,"
+                                + "  ts TIMESTAMP(3),"
+                                + "  PRIMARY KEY (id) NOT ENFORCED"
+                                + ")",
+                        tableName));
+
+        CatalogTable table = (CatalogTable) catalog.getTable(tablePath);
+        assertThat(table.getUnresolvedSchema().getWatermarkSpecs()).isEmpty();
+
+        // 2. add watermark
+        tEnv.executeSql(
+                String.format(
+                        "ALTER TABLE %s ADD WATERMARK FOR ts AS ts - INTERVAL '10' SECOND",
+                        tableName));
+
+        table = (CatalogTable) catalog.getTable(tablePath);
+        List<Schema.UnresolvedWatermarkSpec> watermarks =
+                table.getUnresolvedSchema().getWatermarkSpecs();
+        assertThat(watermarks).hasSize(1);
+        assertThat(watermarks.get(0).getColumnName()).isEqualTo("ts");
+        assertThat(watermarks.get(0).getWatermarkExpression().asSummaryString())
+                .contains("INTERVAL '10' SECOND");
+
+        // 3. modify watermark
+        tEnv.executeSql(
+                String.format(
+                        "ALTER TABLE %s MODIFY WATERMARK FOR ts AS ts - INTERVAL '5' SECOND",
+                        tableName));
+
+        table = (CatalogTable) catalog.getTable(tablePath);
+        watermarks = table.getUnresolvedSchema().getWatermarkSpecs();
+        assertThat(watermarks).hasSize(1);
+        assertThat(watermarks.get(0).getColumnName()).isEqualTo("ts");
+        String modifySummary = watermarks.get(0).getWatermarkExpression().asSummaryString();
+        assertThat(modifySummary)
+                .contains("INTERVAL '5' SECOND")
+                .doesNotContain("INTERVAL '10' SECOND");
+
+        // 4. drop watermark
+        tEnv.executeSql(String.format("ALTER TABLE %s DROP WATERMARK", tableName));
+
+        table = (CatalogTable) catalog.getTable(tablePath);
+        assertThat(table.getUnresolvedSchema().getWatermarkSpecs()).isEmpty();
+
+        // 5. add watermark again and verify persistence
+        tEnv.executeSql(
+                String.format(
+                        "ALTER TABLE %s ADD WATERMARK FOR ts AS ts - INTERVAL '15' SECOND",
+                        tableName));
+
+        CatalogTable reloadedTable = (CatalogTable) catalog.getTable(tablePath);
+        List<Schema.UnresolvedWatermarkSpec> reloadedWatermarks =
+                reloadedTable.getUnresolvedSchema().getWatermarkSpecs();
+
+        assertThat(reloadedWatermarks).hasSize(1);
+        assertThat(reloadedWatermarks.get(0).getColumnName()).isEqualTo("ts");
+        assertThat(reloadedWatermarks.get(0).getWatermarkExpression().asSummaryString())
+                .contains("INTERVAL '15' SECOND");
     }
 
     @Test
@@ -934,6 +1133,17 @@ abstract class FlinkCatalogITCase {
     }
 
     @Test
+    void testBitmapFunctionFailsForFullyQualifiedNonexistentDatabase() {
+        assertThatThrownBy(
+                        () ->
+                                tEnv.executeSql(
+                                        "SELECT "
+                                                + CATALOG_NAME
+                                                + ".nonexistent_db.rb_build(ARRAY[1,2])"))
+                .hasMessageContaining("No match found for function signature");
+    }
+
+    @Test
     void testCreateCatalogWithLakeProperties() throws Exception {
         Map<String, String> properties = new HashMap<>();
         properties.put("paimon.jdbc.password", "pass");
@@ -1016,6 +1226,31 @@ abstract class FlinkCatalogITCase {
     }
 
     @Test
+    void testListPartitionsOnChangelogVirtualTableForPlannerStats() throws Exception {
+        // Flink's planner asks Catalog#listPartitions(ObjectPath) when recomputing statistics for
+        // partitioned tables. For a $changelog virtual table, the catalog should transparently list
+        // the base table's partitions instead of looking up a physical table named
+        // '<base>$changelog'.
+        tEnv.executeSql(
+                "CREATE TABLE partitioned_changelog_for_stats ("
+                        + "  id INT NOT NULL,"
+                        + "  name STRING,"
+                        + "  region STRING NOT NULL,"
+                        + "  PRIMARY KEY (id, region) NOT ENFORCED"
+                        + ") PARTITIONED BY (region) "
+                        + "WITH ('bucket.num' = '1')");
+
+        ObjectPath basePath = new ObjectPath(DEFAULT_DB, "partitioned_changelog_for_stats");
+        CatalogPartitionSpec partitionSpec =
+                new CatalogPartitionSpec(Collections.singletonMap("region", "us"));
+        catalog.createPartition(basePath, partitionSpec, null, false);
+
+        ObjectPath changelogPath =
+                new ObjectPath(DEFAULT_DB, "partitioned_changelog_for_stats$changelog");
+        assertThat(catalog.listPartitions(changelogPath)).containsExactly(partitionSpec);
+    }
+
+    @Test
     void testGetBinlogVirtualTable() throws Exception {
         // Create a primary key table with partition
         tEnv.executeSql(
@@ -1076,6 +1311,7 @@ abstract class FlinkCatalogITCase {
         actualOptions.remove(ConfigOptions.BOOTSTRAP_SERVERS.key());
         actualOptions.remove(ConfigOptions.TABLE_REPLICATION_FACTOR.key());
         actualOptions.remove(ConfigOptions.TABLE_KV_FORMAT_VERSION.key());
+        actualOptions.remove(ConfigOptions.TABLE_KV_VALUE_LAYOUT_VERSION.key());
         assertThat(actualOptions).isEqualTo(expectedOptions);
     }
 }

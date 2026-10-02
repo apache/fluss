@@ -88,12 +88,12 @@ class UpsertWriterImpl extends AbstractTableWriter implements UpsertWriter {
                         tableInfo.getTableConfig(),
                         tableInfo.isDefaultBucketKey());
         this.bucketKeyEncoder =
-                tableInfo.isDefaultBucketKey()
-                        ? primaryKeyEncoder
-                        : KeyEncoder.ofBucketKeyEncoder(
-                                tableInfo.getRowType(),
-                                tableInfo.getBucketKeys(),
-                                tableInfo.getTableConfig().getDataLakeFormat().orElse(null));
+                KeyEncoder.ofBucketKeyEncoder(
+                        tableInfo.getRowType(),
+                        tableInfo.getBucketKeys(),
+                        tableInfo.getTableConfig(),
+                        tableInfo.isDefaultBucketKey(),
+                        primaryKeyEncoder);
 
         this.kvFormat = tableInfo.getTableConfig().getKvFormat();
         this.writeFormat = WriteFormat.fromKvFormat(this.kvFormat);

@@ -23,6 +23,7 @@ import org.apache.fluss.metadata.ChangelogImage;
 import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.DeleteBehavior;
 import org.apache.fluss.metadata.KvFormat;
+import org.apache.fluss.metadata.LakeLookupMode;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.MergeEngineType;
 import org.apache.fluss.utils.AutoPartitionStrategy;
@@ -77,9 +78,39 @@ public class TableConfig {
         return config.getOptional(ConfigOptions.TABLE_KV_FORMAT_VERSION);
     }
 
+    /**
+     * Gets the physical KV value layout version persisted with the table.
+     *
+     * <p>The KV format version controls the key encoding strategy, while the value layout version
+     * controls the fixed header surrounding the BinaryRow payload in RocksDB. An empty value
+     * identifies tables created before value layouts were versioned; those tables use the plain
+     * layout.
+     */
+    public Optional<Integer> getKvValueLayoutVersion() {
+        return config.getOptional(ConfigOptions.TABLE_KV_VALUE_LAYOUT_VERSION);
+    }
+
+    /**
+     * Whether standby replicas are enabled for this primary key table. Returns false for legacy
+     * tables that were created before this option was introduced.
+     */
+    public boolean isStandbyReplicaEnabled() {
+        return config.getOptional(ConfigOptions.TABLE_KV_STANDBY_REPLICA_ENABLED).orElse(false);
+    }
+
     /** Gets the log TTL of the table. */
     public long getLogTTLMs() {
         return config.get(ConfigOptions.TABLE_LOG_TTL).toMillis();
+    }
+
+    /** Gets the row-level TTL of the table. */
+    public Optional<Duration> getKvTTL() {
+        return config.getOptional(ConfigOptions.TABLE_KV_TTL);
+    }
+
+    /** Gets the optional row-level TTL time column of the table. */
+    public Optional<String> getKvTTLTimeColumn() {
+        return config.getOptional(ConfigOptions.TABLE_KV_TTL_TIME_COLUMN);
     }
 
     /** Gets the local segments to retain for tiered log of the table. */
@@ -87,9 +118,26 @@ public class TableConfig {
         return config.get(ConfigOptions.TABLE_TIERED_LOG_LOCAL_SEGMENTS);
     }
 
+    /** Gets the TTL of local segments for tiered log. */
+    public long getLocalLogTTLMs() {
+        return config.getOptional(ConfigOptions.TABLE_LOG_LOCAL_TTL)
+                .orElseGet(() -> config.get(ConfigOptions.TABLE_LOG_TTL))
+                .toMillis();
+    }
+
     /** Whether the data lake is enabled. */
     public boolean isDataLakeEnabled() {
         return config.get(ConfigOptions.TABLE_DATALAKE_ENABLED);
+    }
+
+    /** Whether historical partition access is enabled. */
+    public boolean isHistoricalPartitionEnabled() {
+        return config.get(ConfigOptions.TABLE_DATALAKE_HISTORICAL_PARTITION_ENABLED);
+    }
+
+    /** Gets the lookup mode for historical partitions of the table. */
+    public LakeLookupMode getHistoricalLookupMode() {
+        return config.get(ConfigOptions.TABLE_DATALAKE_HISTORICAL_PARTITION_LOOKUP_MODE);
     }
 
     /**

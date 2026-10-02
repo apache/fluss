@@ -24,13 +24,13 @@
     <parent>
         <groupId>org.apache.fluss</groupId>
         <artifactId>fluss-flink</artifactId>
-        <version>1.0-SNAPSHOT</version>
+        <version>1.1-SNAPSHOT</version>
     </parent>
 
     <packaging>jar</packaging>
 
     <artifactId>fluss-flink-tiering</artifactId>
-    <name>Fluss : Flink : Tiering</name>
+    <name>Apache Fluss : Flink : Tiering</name>
 
     <properties>
         <flink.minor.version>1.20.3</flink.minor.version>
@@ -56,6 +56,77 @@
             <artifactId>flink-streaming-java</artifactId>
             <version>${flink.minor.version}</version>
             <scope>provided</scope>
+        </dependency>
+
+        <!-- test dependencies -->
+        <dependency>
+            <groupId>org.apache.fluss</groupId>
+            <artifactId>fluss-flink-common</artifactId>
+            <version>${project.version}</version>
+            <scope>test</scope>
+            <type>test-jar</type>
+        </dependency>
+
+        <dependency>
+            <groupId>org.apache.fluss</groupId>
+            <artifactId>fluss-server</artifactId>
+            <version>${project.version}</version>
+            <scope>test</scope>
+        </dependency>
+
+        <dependency>
+            <groupId>org.apache.fluss</groupId>
+            <artifactId>fluss-server</artifactId>
+            <version>${project.version}</version>
+            <scope>test</scope>
+            <type>test-jar</type>
+        </dependency>
+
+        <dependency>
+            <groupId>org.apache.fluss</groupId>
+            <artifactId>fluss-common</artifactId>
+            <version>${project.version}</version>
+            <scope>test</scope>
+            <type>test-jar</type>
+        </dependency>
+
+        <dependency>
+            <groupId>org.apache.fluss</groupId>
+            <artifactId>fluss-test-utils</artifactId>
+        </dependency>
+
+        <!-- for curator TestingServer -->
+        <dependency>
+            <groupId>org.apache.curator</groupId>
+            <artifactId>curator-test</artifactId>
+            <version>${curator.version}</version>
+            <scope>test</scope>
+        </dependency>
+
+        <dependency>
+            <groupId>org.apache.flink</groupId>
+            <artifactId>flink-clients</artifactId>
+            <version>${flink.minor.version}</version>
+            <scope>test</scope>
+        </dependency>
+
+        <dependency>
+            <groupId>org.apache.flink</groupId>
+            <artifactId>flink-connector-base</artifactId>
+            <version>${flink.minor.version}</version>
+            <scope>test</scope>
+        </dependency>
+
+        <!--
+         Required at test runtime because TieringSource loads FlinkConnectorOptionsUtils, which
+         references ValidationException from flink-table-common. fluss-flink-common declares this
+         dependency as provided, so it is not transitively available to this module's tests.
+        -->
+        <dependency>
+            <groupId>org.apache.flink</groupId>
+            <artifactId>flink-table-common</artifactId>
+            <version>${flink.minor.version}</version>
+            <scope>test</scope>
         </dependency>
     </dependencies>
 

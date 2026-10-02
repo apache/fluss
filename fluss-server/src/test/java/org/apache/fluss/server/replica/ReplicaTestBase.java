@@ -19,6 +19,7 @@ package org.apache.fluss.server.replica;
 
 import org.apache.fluss.cluster.Endpoint;
 import org.apache.fluss.cluster.ServerType;
+import org.apache.fluss.config.ConfigOption;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.MemorySize;
@@ -27,6 +28,7 @@ import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableDescriptor;
+import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.record.MemoryLogRecords;
 import org.apache.fluss.rpc.RpcClient;
@@ -36,10 +38,12 @@ import org.apache.fluss.server.coordinator.LakeCatalogDynamicLoader;
 import org.apache.fluss.server.coordinator.MetadataManager;
 import org.apache.fluss.server.coordinator.TestCoordinatorGateway;
 import org.apache.fluss.server.entity.NotifyLeaderAndIsrData;
+import org.apache.fluss.server.kv.KvFlushScheduler;
 import org.apache.fluss.server.kv.KvManager;
 import org.apache.fluss.server.kv.scan.ScannerManager;
 import org.apache.fluss.server.kv.snapshot.CompletedKvSnapshotCommitter;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshot;
+import org.apache.fluss.server.kv.snapshot.CompletedSnapshotJsonSerde;
 import org.apache.fluss.server.kv.snapshot.KvSnapshotDataDownloader;
 import org.apache.fluss.server.kv.snapshot.KvSnapshotDataUploader;
 import org.apache.fluss.server.kv.snapshot.SnapshotContext;
@@ -83,6 +87,7 @@ import java.io.IOException;
 import java.time.Duration;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -166,6 +171,16 @@ public class ReplicaTestBase {
         return conf;
     }
 
+    /**
+     * Returns the KV flush scheduler to install into the {@link KvManager}, or {@code null} to let
+     * the manager create its own. Subclasses override this to gain deterministic control over when
+     * the asynchronous KV flush runs.
+     */
+    @Nullable
+    protected KvFlushScheduler createTestKvFlushScheduler(Configuration conf) {
+        return null;
+    }
+
     @BeforeAll
     static void baseBeforeAll() {
         zkClient =
@@ -178,6 +193,8 @@ public class ReplicaTestBase {
     public void setup(TestInfo testInfo) throws Exception {
         conf = getServerConf();
         conf.set(ConfigOptions.TABLET_SERVER_ID, TABLET_SERVER_ID);
+        // Keep unrelated tests independent of the host machine's actual disk usage.
+        conf.set(ConfigOptions.SERVER_DATA_DISK_WRITE_LIMIT_RATIO, 1.0);
         if (testInfo != null && testInfo.getTags().contains(ServerTestTags.JBOD_MULTI_DIR_TAG)) {
             conf.set(
                     ConfigOptions.DATA_DIRS,
@@ -221,7 +238,9 @@ public class ReplicaTestBase {
                         zkClient,
                         logManager,
                         TestingMetricGroups.TABLET_SERVER_METRICS,
-                        localDiskManager);
+                        localDiskManager,
+                        createTestKvFlushScheduler(conf),
+                        manualClock);
         kvManager.startup();
 
         serverMetadataCache =
@@ -355,7 +374,8 @@ public class ReplicaTestBase {
                 scannerManager,
                 manualClock,
                 ioExecutor,
-                localDiskManager);
+                localDiskManager,
+                null);
     }
 
     @AfterEach
@@ -437,7 +457,10 @@ public class ReplicaTestBase {
                                         isr,
                                         Collections.emptyList(),
                                         INITIAL_COORDINATOR_EPOCH,
-                                        INITIAL_BUCKET_EPOCH))));
+                                        INITIAL_BUCKET_EPOCH),
+                                // all test tables are created distributedBy(3)
+                                TEST_ROUTING_BUCKET_COUNT,
+                                0L)));
     }
 
     // TODO this is only for single tablet server unit test.
@@ -480,11 +503,38 @@ public class ReplicaTestBase {
                                         Collections.emptyList(),
                                         INITIAL_COORDINATOR_EPOCH,
                                         // use leader epoch as bucket epoch
-                                        leaderEpoch))));
+                                        leaderEpoch),
+                                // all test tables are created distributedBy(3)
+                                TEST_ROUTING_BUCKET_COUNT,
+                                0L)));
     }
+
+    /** The routing bucket count carried by test notifications; test tables are distributedBy(3). */
+    protected static final Integer TEST_ROUTING_BUCKET_COUNT = 3;
 
     protected void makeLeaderAndFollower(List<NotifyLeaderAndIsrData> notifyLeaderAndIsrDataList) {
         replicaManager.becomeLeaderOrFollower(0, notifyLeaderAndIsrDataList, result -> {});
+    }
+
+    protected void updateTableConfig(
+            Replica replica, ConfigOption<?> configOption, String newConfigValue) {
+        updateTableConfig(replica, Collections.singletonMap(configOption.key(), newConfigValue));
+    }
+
+    protected void updateTableConfig(Replica replica, Map<String, String> configUpdates) {
+        TableInfo currentTableInfo = replica.getTableInfo();
+        Map<String, String> properties =
+                new HashMap<>(currentTableInfo.toTableDescriptor().getProperties());
+        properties.putAll(configUpdates);
+        replica.updateTableInfo(
+                TableInfo.of(
+                        currentTableInfo.getTablePath(),
+                        currentTableInfo.getTableId(),
+                        currentTableInfo.getSchemaId(),
+                        currentTableInfo.toTableDescriptor().withProperties(properties),
+                        currentTableInfo.getRemoteDataDir(),
+                        currentTableInfo.getCreatedTime(),
+                        currentTableInfo.getModifiedTime()));
     }
 
     protected Replica makeLogReplica(PhysicalTablePath physicalTablePath, TableBucket tableBucket)
@@ -626,7 +676,7 @@ public class ReplicaTestBase {
         private final FsPath remoteKvTabletDir;
         protected ManuallyTriggeredScheduledExecutorService scheduledExecutorService;
         protected final TestingCompletedKvSnapshotCommitter testKvSnapshotStore;
-        private final ExecutorService executorService;
+        protected final ExecutorService executorService;
 
         public TestSnapshotContext(
                 String remoteKvTabletDir, TestingCompletedKvSnapshotCommitter testKvSnapshotStore)
@@ -715,7 +765,14 @@ public class ReplicaTestBase {
         @Override
         public FunctionWithException<TableBucket, CompletedSnapshot, Exception>
                 getLatestCompletedSnapshotProvider() {
-            return testKvSnapshotStore::getLatestCompletedSnapshot;
+            return tableBucket -> {
+                CompletedSnapshot snapshot =
+                        testKvSnapshotStore.getLatestCompletedSnapshot(tableBucket);
+                return snapshot == null
+                        ? null
+                        : CompletedSnapshotJsonSerde.fromJson(
+                                CompletedSnapshotJsonSerde.toJson(snapshot));
+            };
         }
 
         @Override

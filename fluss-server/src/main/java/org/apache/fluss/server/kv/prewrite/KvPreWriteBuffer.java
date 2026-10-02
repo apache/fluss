@@ -21,22 +21,24 @@ import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.memory.MemorySegment;
 import org.apache.fluss.metrics.Counter;
 import org.apache.fluss.record.ChangeType;
-import org.apache.fluss.server.kv.KvBatchWriter;
 import org.apache.fluss.server.metrics.group.TabletServerMetricGroup;
 import org.apache.fluss.utils.MurmurHashUtils;
 
 import javax.annotation.Nullable;
 import javax.annotation.concurrent.NotThreadSafe;
 
-import java.io.IOException;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Base64;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.LinkedList;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 
+import static org.apache.fluss.utils.Preconditions.checkArgument;
 import static org.apache.fluss.utils.UnsafeUtils.BYTE_ARRAY_BASE_OFFSET;
 
 /**
@@ -85,8 +87,7 @@ import static org.apache.fluss.utils.UnsafeUtils.BYTE_ARRAY_BASE_OFFSET;
  * head to tail, it will stop flush.
  */
 @NotThreadSafe
-public class KvPreWriteBuffer implements AutoCloseable {
-    private final KvBatchWriter kvBatchWriter;
+public class KvPreWriteBuffer {
 
     // a mapping from the key to the kv-entry
     private final Map<Key, KvEntry> kvEntryMap = new HashMap<>();
@@ -101,12 +102,29 @@ public class KvPreWriteBuffer implements AutoCloseable {
     // the max LSN in the buffer
     private long maxLogSequenceNumber = -1;
 
-    public KvPreWriteBuffer(
-            KvBatchWriter kvBatchWriter, TabletServerMetricGroup serverMetricGroup) {
-        this.kvBatchWriter = kvBatchWriter;
+    // Accumulated byte size of entries not yet completed by a flush.
+    private long pendingFlushBytes = 0;
 
+    public KvPreWriteBuffer(TabletServerMetricGroup serverMetricGroup) {
         truncateAsDuplicatedCount = serverMetricGroup.kvTruncateAsDuplicatedCount();
         truncateAsErrorCount = serverMetricGroup.kvTruncateAsErrorCount();
+    }
+
+    /**
+     * Marks the last KV mutation when it ends a successfully appended or recovered WAL batch.
+     *
+     * <p>Call after applying each batch and before staging any mutation from the next batch. Empty
+     * batches do not mark an entry; their offsets are covered by the flush target or a later batch.
+     *
+     * @param batchEndOffset the exclusive end offset of the completed WAL batch
+     */
+    public void markWalBatchEnd(long batchEndOffset) {
+        KvEntry last = allKvEntries.peekLast();
+        // Empty batches have no mutation to mark. Their offsets are covered by the flush target
+        // or a later batch; never infer a boundary from a gap between KV mutations.
+        if (last != null && last.logSequenceNumber + 1 == batchEndOffset) {
+            last.endOfWalBatch = true;
+        }
     }
 
     /**
@@ -154,10 +172,17 @@ public class KvPreWriteBuffer implements AutoCloseable {
                                 v == null
                                         ? KvEntry.of(changeType, key, value, lsn)
                                         : KvEntry.of(changeType, key, value, lsn, v));
+        // link the previous version forward to the new entry, so each version knows its
+        // successor and completeFlush can detach it in constant time
+        if (kvEntry.previousEntry != null) {
+            kvEntry.previousEntry.nextEntry = kvEntry;
+        }
         // append the entry to the tail of the list for all kv entries
         allKvEntries.addLast(kvEntry);
         // update the max lsn
         maxLogSequenceNumber = lsn;
+        // track accumulated bytes for flush budget gating
+        pendingFlushBytes += entryBytes(key, value);
     }
 
     /**
@@ -194,10 +219,26 @@ public class KvPreWriteBuffer implements AutoCloseable {
                 break;
             }
             descIter.remove();
+            if (entry.state == EntryState.PREPARED) {
+                throw new IllegalStateException(
+                        "Cannot truncate prepared pre-write entry. logSequenceNumber="
+                                + entry.getLogSequenceNumber()
+                                + ", targetLogSequenceNumber="
+                                + targetLogSequenceNumber);
+            }
+            pendingFlushBytes -= entryBytes(entry.getKey(), entry.getValue());
             boolean removed = kvEntryMap.remove(entry.getKey(), entry);
+            // the removed entry is no longer the successor of its previous version; clear the
+            // forward link so the truncated entry does not stay reachable through it
+            if (entry.previousEntry != null) {
+                entry.previousEntry.nextEntry = null;
+            }
             // if the latest entry is removed, we need to rollback the previous entry to the map
-            if (removed && entry.previousEntry != null) {
-                kvEntryMap.put(entry.getKey(), entry.previousEntry);
+            if (removed) {
+                KvEntry previousEntry = previousEntryInBuffer(entry.previousEntry);
+                if (previousEntry != null) {
+                    kvEntryMap.put(entry.getKey(), previousEntry);
+                }
             }
         }
         if (!descIter.hasNext()) {
@@ -205,55 +246,106 @@ public class KvPreWriteBuffer implements AutoCloseable {
         }
     }
 
+    /** Returns the accumulated byte size of all entries waiting to be flushed. */
+    public long pendingFlushBytes() {
+        return pendingFlushBytes;
+    }
+
     /**
-     * To flush the key-value pairs whose sequence number is less than the given sequence number.
+     * Prepares a prefix of entries for asynchronous flush without removing them from the buffer.
      *
-     * @param exclusiveUpToLogSequenceNumber the exclusive upper bound of the log sequence number to
-     *     be flushed
-     * @return the row count difference of the kv entries in the buffer after flushing.
+     * <p>The prepared entries remain visible through {@link #get(Key)}, so foreground writes can
+     * still derive correct CDC records while the background flush writes RocksDB.
      */
-    public int flush(long exclusiveUpToLogSequenceNumber) throws IOException {
+    public PreparedFlush prepareFlush(long exclusiveUpToLogSequenceNumber) {
+        ArrayList<KvEntry> entries = new ArrayList<>();
         int rowCountDiff = 0;
-        int flushedCount = 0;
-        for (Iterator<KvEntry> it = allKvEntries.iterator(); it.hasNext(); ) {
-            KvEntry entry = it.next();
-            // if find one entry whose sequence number is greater than the given sequence number,
-            // break the loop
+        for (KvEntry entry : allKvEntries) {
             if (entry.getLogSequenceNumber() >= exclusiveUpToLogSequenceNumber) {
                 break;
             }
-
-            // first remove the entry from the list
-            it.remove();
-
-            // then write data using write batch writer
-            Value value = entry.getValue();
-            if (value.value != null) {
-                flushedCount += 1;
-                kvBatchWriter.put(entry.getKey().key, value.value);
-            } else {
-                flushedCount += 1;
-                kvBatchWriter.delete(entry.getKey().key);
+            if (entry.state == EntryState.PREPARED) {
+                throw new IllegalStateException(
+                        "Found an already prepared entry while preparing async flush.");
             }
+            entry.state = EntryState.PREPARED;
+            entries.add(entry);
+            rowCountDiff += rowCountDelta(entry);
+        }
+        return new PreparedFlush(exclusiveUpToLogSequenceNumber, entries, rowCountDiff);
+    }
 
-            // for update_after, we don't change the row count
-            if (entry.getChangeType() == ChangeType.INSERT) {
-                rowCountDiff += 1;
-            } else if (entry.getChangeType() == ChangeType.DELETE) {
-                rowCountDiff -= 1;
+    /** Completes a prepared async flush and removes flushed entries from the buffer. */
+    public int completeFlush(PreparedFlush preparedFlush) {
+        for (KvEntry entry : preparedFlush.entries) {
+            KvEntry first = allKvEntries.removeFirst();
+            if (first != entry) {
+                throw new IllegalStateException("Prepared flush entries are no longer a prefix.");
             }
-
-            // if the kv entry to be flushed is equal to the one in the kvEntryMap, we
-            // can remove it from the map. Although it's not a must to remove from the map,
-            // we remove it to reduce the memory usage
+            if (entry.state != EntryState.PREPARED) {
+                throw new IllegalStateException("Prepared flush entry is not in PREPARED state.");
+            }
+            entry.state = EntryState.FLUSHED;
+            pendingFlushBytes -= entryBytes(entry.getKey(), entry.getValue());
             kvEntryMap.remove(entry.getKey(), entry);
+            // the immediate successor is the only live referencer of a flushed entry; clearing
+            // its reference makes the flushed entry (and, transitively, its older versions)
+            // unreachable instead of being retained while no longer counted by pendingFlushBytes
+            if (entry.nextEntry != null) {
+                entry.nextEntry.previousEntry = null;
+            }
         }
-        // flush to underlying kv tablet
-        if (flushedCount > 0) {
-            kvBatchWriter.flush();
+        if (allKvEntries.isEmpty()) {
+            maxLogSequenceNumber = -1;
         }
+        return preparedFlush.rowCountDiff;
+    }
 
-        return rowCountDiff;
+    /** Aborts a prepared async flush and makes its entries active again. */
+    public void abortFlush(PreparedFlush preparedFlush) {
+        for (KvEntry entry : preparedFlush.entries) {
+            if (entry.state == EntryState.PREPARED) {
+                entry.state = EntryState.ACTIVE;
+            }
+        }
+    }
+
+    /**
+     * Resets all PREPARED entries back to ACTIVE. Used when orphaned PREPARED entries are detected
+     * from a previous incomplete flush cycle so the next prepareFlush starts clean.
+     */
+    public void abortAllPrepared() {
+        for (KvEntry entry : allKvEntries) {
+            if (entry.state == EntryState.PREPARED) {
+                entry.state = EntryState.ACTIVE;
+            }
+        }
+    }
+
+    private static long entryBytes(Key key, Value value) {
+        return (long) key.key.length + (value.value != null ? value.value.length : 0L);
+    }
+
+    /** Contribution of one entry to the table row count: +1 for INSERT, -1 for DELETE. */
+    private static int rowCountDelta(KvEntry entry) {
+        if (entry.getChangeType() == ChangeType.INSERT) {
+            return 1;
+        } else if (entry.getChangeType() == ChangeType.DELETE) {
+            return -1;
+        }
+        return 0;
+    }
+
+    /**
+     * Returns the given entry if it is still in the buffer, or null if it has been flushed.
+     *
+     * <p>No walk along the {@code previousEntry} chain is needed: entries are flushed strictly in
+     * list-prefix order ({@link #completeFlush}), and a previous entry of the same key always
+     * precedes this entry in the list, so once an entry is FLUSHED its whole previous chain is
+     * FLUSHED as well.
+     */
+    private static @Nullable KvEntry previousEntryInBuffer(@Nullable KvEntry entry) {
+        return entry != null && entry.state != EntryState.FLUSHED ? entry : null;
     }
 
     @VisibleForTesting
@@ -269,21 +361,6 @@ public class KvPreWriteBuffer implements AutoCloseable {
     @VisibleForTesting
     public long getMaxLSN() {
         return maxLogSequenceNumber;
-    }
-
-    @Override
-    public void close() throws Exception {
-        if (kvBatchWriter != null) {
-            kvBatchWriter.close();
-        }
-    }
-
-    public Counter getTruncateAsDuplicatedCount() {
-        return truncateAsDuplicatedCount;
-    }
-
-    public Counter getTruncateAsErrorCount() {
-        return truncateAsErrorCount;
     }
 
     // -------------------------------------------------------------------------------------------
@@ -303,9 +380,17 @@ public class KvPreWriteBuffer implements AutoCloseable {
         private final Key key;
         private final Value value;
         private final long logSequenceNumber;
+        private boolean endOfWalBatch;
 
-        // the previous mapped value in the buffer before this key-value put
-        @Nullable private final KvEntry previousEntry;
+        // the previous mapped value in the buffer before this key-value put; null once the
+        // referenced entry has been flushed (see completeFlush)
+        @Nullable private KvEntry previousEntry;
+
+        // the newer version of the same key that references this entry as its previous version;
+        // null once that version has been truncated (see truncateTo)
+        @Nullable private KvEntry nextEntry;
+
+        private EntryState state = EntryState.ACTIVE;
 
         public static KvEntry of(ChangeType changeType, Key key, Value value, long sequenceNumber) {
             return new KvEntry(changeType, key, value, sequenceNumber, null);
@@ -345,8 +430,21 @@ public class KvPreWriteBuffer implements AutoCloseable {
             return value;
         }
 
-        long getLogSequenceNumber() {
+        /** Returns the WAL offset that produced this mutation. */
+        public long getLogSequenceNumber() {
             return logSequenceNumber;
+        }
+
+        @VisibleForTesting
+        @Nullable
+        KvEntry getPreviousEntry() {
+            return previousEntry;
+        }
+
+        @VisibleForTesting
+        @Nullable
+        KvEntry getNextEntry() {
+            return nextEntry;
         }
 
         @Override
@@ -385,6 +483,89 @@ public class KvPreWriteBuffer implements AutoCloseable {
                     + previousEntry
                     + '}';
         }
+    }
+
+    /** Prepared entries for an asynchronous flush. */
+    public static final class PreparedFlush {
+        private final long exclusiveUpToLogSequenceNumber;
+        private final List<KvEntry> entries;
+        private final int rowCountDiff;
+
+        private PreparedFlush(
+                long exclusiveUpToLogSequenceNumber, List<KvEntry> entries, int rowCountDiff) {
+            this.exclusiveUpToLogSequenceNumber = exclusiveUpToLogSequenceNumber;
+            this.entries = entries;
+            this.rowCountDiff = rowCountDiff;
+        }
+
+        public long exclusiveUpToLogSequenceNumber() {
+            return exclusiveUpToLogSequenceNumber;
+        }
+
+        public List<KvEntry> entries() {
+            return entries;
+        }
+
+        public int rowCountDiff() {
+            return rowCountDiff;
+        }
+
+        public boolean isEmpty() {
+            return entries.isEmpty();
+        }
+
+        /**
+         * Splits the prepared prefix only between complete WAL batches. Each segment is one atomic
+         * native write and can therefore publish its end independently after success. Budgets are
+         * checked after adding each complete WAL batch.
+         *
+         * @param targetBytesPerSegment key/value payload budget, or non-positive for unlimited
+         * @param targetEntriesPerSegment KV entry budget; the final batch may exceed either budget
+         */
+        public List<PreparedFlush> split(long targetBytesPerSegment, int targetEntriesPerSegment) {
+            checkArgument(targetEntriesPerSegment > 0, "targetEntriesPerSegment must be positive.");
+            List<PreparedFlush> segments = null;
+            int segmentStart = 0;
+            long segmentBytes = 0;
+            int segmentRowCountDiff = 0;
+            for (int i = 0; i < entries.size(); i++) {
+                KvEntry entry = entries.get(i);
+                segmentBytes += entryBytes(entry.getKey(), entry.getValue());
+                segmentRowCountDiff += rowCountDelta(entry);
+                if (entry.endOfWalBatch
+                        && i + 1 < entries.size()
+                        && (i + 1 - segmentStart >= targetEntriesPerSegment
+                                || (targetBytesPerSegment > 0
+                                        && segmentBytes >= targetBytesPerSegment))) {
+                    if (segments == null) {
+                        segments = new ArrayList<>();
+                    }
+                    segments.add(
+                            new PreparedFlush(
+                                    entry.logSequenceNumber + 1,
+                                    entries.subList(segmentStart, i + 1),
+                                    segmentRowCountDiff));
+                    segmentStart = i + 1;
+                    segmentBytes = 0;
+                    segmentRowCountDiff = 0;
+                }
+            }
+            if (segments == null) {
+                return Collections.singletonList(this);
+            }
+            segments.add(
+                    new PreparedFlush(
+                            exclusiveUpToLogSequenceNumber,
+                            entries.subList(segmentStart, entries.size()),
+                            segmentRowCountDiff));
+            return segments;
+        }
+    }
+
+    private enum EntryState {
+        ACTIVE,
+        PREPARED,
+        FLUSHED
     }
 
     /** A key wrapper to wrap a byte array with overriding the hashCode and equals method. */

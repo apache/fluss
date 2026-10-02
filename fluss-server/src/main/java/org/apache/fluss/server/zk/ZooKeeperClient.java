@@ -21,6 +21,7 @@ import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.config.ConfigurationUtils;
 import org.apache.fluss.config.FlussConfigUtils;
 import org.apache.fluss.exception.CoordinatorEpochFencedException;
 import org.apache.fluss.metadata.DatabaseSummary;
@@ -216,6 +217,18 @@ public class ZooKeeperClient implements AutoCloseable {
     public Optional<byte[]> getOrEmpty(String path) throws Exception {
         try {
             return Optional.of(zkClient.getData().forPath(path));
+        } catch (KeeperException.NoNodeException e) {
+            return Optional.empty();
+        }
+    }
+
+    /**
+     * Reads the znode data and captures its {@link Stat} (hence the ZK version) atomically. Used by
+     * compare-and-set callers that must write back with the exact version they read.
+     */
+    private Optional<byte[]> getDataWithStat(String path, Stat stat) throws Exception {
+        try {
+            return Optional.of(zkClient.getData().storingStatIn(stat).forPath(path));
         } catch (KeeperException.NoNodeException e) {
             return Optional.empty();
         }
@@ -433,11 +446,10 @@ public class ZooKeeperClient implements AutoCloseable {
                 tableIds.stream().collect(toMap(TableIdZNode::path, id -> id));
 
         List<ZkGetDataResponse> responses = getDataInBackground(path2TableIdMap.keySet());
-        return processGetDataResponses(
+        return processGetDataResponsesOrThrow(
                 responses,
                 response -> path2TableIdMap.get(response.getPath()),
-                TableIdZNode::decode,
-                "table assignment");
+                data -> data == null || data.length == 0 ? null : TableIdZNode.decode(data));
     }
 
     /** Get the partition assignment in ZK. */
@@ -453,11 +465,10 @@ public class ZooKeeperClient implements AutoCloseable {
                 partitionIds.stream().collect(toMap(PartitionIdZNode::path, id -> id));
 
         List<ZkGetDataResponse> responses = getDataInBackground(path2PartitionIdMap.keySet());
-        return processGetDataResponses(
+        return processGetDataResponsesOrThrow(
                 responses,
                 response -> path2PartitionIdMap.get(response.getPath()),
-                PartitionIdZNode::decode,
-                "partition assignment");
+                PartitionIdZNode::decode);
     }
 
     public void updateTableAssignment(
@@ -584,11 +595,10 @@ public class ZooKeeperClient implements AutoCloseable {
                 tableBuckets.stream().collect(toMap(LeaderAndIsrZNode::path, bucket -> bucket));
 
         List<ZkGetDataResponse> responses = getDataInBackground(path2TableBucketMap.keySet());
-        return processGetDataResponses(
+        return processGetDataResponsesOrThrow(
                 responses,
                 response -> path2TableBucketMap.get(response.getPath()),
-                LeaderAndIsrZNode::decode,
-                "leader and isr");
+                LeaderAndIsrZNode::decode);
     }
 
     public void updateLeaderAndIsr(
@@ -611,12 +621,14 @@ public class ZooKeeperClient implements AutoCloseable {
             return;
         }
 
+        long startTimeMs = System.currentTimeMillis();
+        int transactionCount = 0;
         List<CuratorOp> ops = new ArrayList<>(leaderAndIsrList.size());
         for (Map.Entry<TableBucket, LeaderAndIsr> entry : leaderAndIsrList.entrySet()) {
             TableBucket tableBucket = entry.getKey();
             LeaderAndIsr leaderAndIsr = entry.getValue();
 
-            LOG.info("Batch Update {} for bucket {} in Zookeeper.", leaderAndIsr, tableBucket);
+            LOG.debug("Batch update {} for bucket {} in ZooKeeper.", leaderAndIsr, tableBucket);
             String path = LeaderAndIsrZNode.path(tableBucket);
             byte[] data = LeaderAndIsrZNode.encode(leaderAndIsr);
             CuratorOp updateOp = zkClient.transactionOp().setData().forPath(path, data);
@@ -624,13 +636,20 @@ public class ZooKeeperClient implements AutoCloseable {
             if (ops.size() == MAX_BATCH_SIZE) {
                 List<CuratorOp> wrapOps = wrapRequestsWithEpochCheck(ops, expectedZkVersion);
                 zkClient.transaction().forOperations(wrapOps);
+                transactionCount++;
                 ops.clear();
             }
         }
         if (!ops.isEmpty()) {
             List<CuratorOp> wrapOps = wrapRequestsWithEpochCheck(ops, expectedZkVersion);
             zkClient.transaction().forOperations(wrapOps);
+            transactionCount++;
         }
+        LOG.info(
+                "Batch updated LeaderAndIsr for {} buckets in {} ZooKeeper transactions in {} ms.",
+                leaderAndIsrList.size(),
+                transactionCount,
+                System.currentTimeMillis() - startTimeMs);
     }
 
     protected void deleteLeaderAndIsr(TableBucket tableBucket) throws Exception {
@@ -791,6 +810,19 @@ public class ZooKeeperClient implements AutoCloseable {
                 t -> t.remoteDataDir == null ? t.newRemoteDataDir(defaultRemoteDataDir) : t);
     }
 
+    /**
+     * Get the table registration together with the ZK version of its znode, so callers can perform
+     * a compare-and-set write (see {@link #updateTableWithPartitionBucketCountBackfill}).
+     */
+    public Optional<VersionedData<TableRegistration>> getTableWithVersion(TablePath tablePath)
+            throws Exception {
+        Stat stat = new Stat();
+        Optional<byte[]> bytes = getDataWithStat(TableZNode.path(tablePath), stat);
+        return bytes.map(TableZNode::decode)
+                .map(t -> t.remoteDataDir == null ? t.newRemoteDataDir(defaultRemoteDataDir) : t)
+                .map(t -> new VersionedData<>(t, stat.getVersion()));
+    }
+
     /** Get the tables in ZK. */
     public Map<TablePath, TableRegistration> getTables(Collection<TablePath> tablePaths)
             throws Exception {
@@ -906,12 +938,7 @@ public class ZooKeeperClient implements AutoCloseable {
     /** Get the partition registrations of a table in ZK. */
     public Map<String, PartitionRegistration> getPartitionRegistrations(TablePath tablePath)
             throws Exception {
-        Map<String, PartitionRegistration> partitions = new HashMap<>();
-        for (String partitionName : getPartitions(tablePath)) {
-            Optional<PartitionRegistration> optPartition = getPartition(tablePath, partitionName);
-            optPartition.ifPresent(partition -> partitions.put(partitionName, partition));
-        }
-        return partitions;
+        return getPartitionRegistrations(tablePath, getPartitions(tablePath));
     }
 
     /** Get the partition and the id for the partitions of tables in ZK. */
@@ -959,20 +986,31 @@ public class ZooKeeperClient implements AutoCloseable {
             List<String> partitionKeys,
             ResolvedPartitionSpec partialPartitionSpec)
             throws Exception {
-        Map<String, PartitionRegistration> partitions = new HashMap<>();
+        List<String> matchedPartitionNames =
+                getPartitions(tablePath).stream()
+                        .filter(
+                                partitionName ->
+                                        fromPartitionName(partitionKeys, partitionName)
+                                                .contains(partialPartitionSpec))
+                        .collect(Collectors.toList());
+        return getPartitionRegistrations(tablePath, matchedPartitionNames);
+    }
 
-        for (String partitionName : getPartitions(tablePath)) {
-            ResolvedPartitionSpec resolvedPartitionSpec =
-                    fromPartitionName(partitionKeys, partitionName);
-            boolean contains = resolvedPartitionSpec.contains(partialPartitionSpec);
-            if (contains) {
-                Optional<PartitionRegistration> optPartition =
-                        getPartition(tablePath, partitionName);
-                optPartition.ifPresent(partition -> partitions.put(partitionName, partition));
-            }
-        }
-
-        return partitions;
+    private Map<String, PartitionRegistration> getPartitionRegistrations(
+            TablePath tablePath, Collection<String> partitionNames) throws Exception {
+        Map<String, String> path2PartitionName =
+                partitionNames.stream()
+                        .collect(
+                                toMap(
+                                        partitionName ->
+                                                PartitionZNode.path(tablePath, partitionName),
+                                        partitionName -> partitionName));
+        return getPartitionZNodeData(
+                path2PartitionName,
+                partitionRegistration ->
+                        partitionRegistration.getRemoteDataDir() == null
+                                ? partitionRegistration.newRemoteDataDir(defaultRemoteDataDir)
+                                : partitionRegistration);
     }
 
     /** Get the id and name for the partitions of a table in ZK. */
@@ -1023,6 +1061,136 @@ public class ZooKeeperClient implements AutoCloseable {
                 p -> p.getRemoteDataDir() == null ? p.newRemoteDataDir(defaultRemoteDataDir) : p);
     }
 
+    /**
+     * Get a partition registration together with the ZK version of its znode, so callers can
+     * perform a compare-and-set backfill (see {@link
+     * #updateTableWithPartitionBucketCountBackfill}).
+     */
+    public Optional<VersionedData<PartitionRegistration>> getPartitionWithVersion(
+            TablePath tablePath, String partitionName) throws Exception {
+        String path = PartitionZNode.path(tablePath, partitionName);
+        Stat stat = new Stat();
+        return getDataWithStat(path, stat)
+                .map(PartitionZNode::decode)
+                .map(
+                        p ->
+                                p.getRemoteDataDir() == null
+                                        ? p.newRemoteDataDir(defaultRemoteDataDir)
+                                        : p)
+                .map(p -> new VersionedData<>(p, stat.getVersion()));
+    }
+
+    /**
+     * Gets all partition registrations of a table together with their ZK versions. The partition
+     * znodes are fetched concurrently to avoid one synchronous ZooKeeper round trip per partition.
+     * A partition dropped after the children listing is omitted from the result.
+     */
+    public Map<String, VersionedData<PartitionRegistration>> getPartitionRegistrationsWithVersion(
+            TablePath tablePath) throws Exception {
+        Set<String> partitionNames = getPartitions(tablePath);
+        if (partitionNames.isEmpty()) {
+            return Collections.emptyMap();
+        }
+
+        Map<String, String> pathToPartitionName =
+                partitionNames.stream()
+                        .collect(toMap(name -> PartitionZNode.path(tablePath, name), name -> name));
+        List<ZkGetDataResponse> responses = getDataInBackground(pathToPartitionName.keySet());
+        Map<String, VersionedData<PartitionRegistration>> registrations = new HashMap<>();
+        for (ZkGetDataResponse response : responses) {
+            if (response.getResultCode() == KeeperException.Code.NONODE) {
+                continue;
+            }
+            response.maybeThrow();
+            byte[] data =
+                    checkNotNull(
+                            response.getData(),
+                            "Partition registration data must not be null for %s",
+                            response.getPath());
+            Stat stat =
+                    checkNotNull(
+                            response.getStat(),
+                            "Partition registration stat must not be null for %s",
+                            response.getPath());
+            PartitionRegistration registration = PartitionZNode.decode(data);
+            if (registration.getRemoteDataDir() == null) {
+                registration = registration.newRemoteDataDir(defaultRemoteDataDir);
+            }
+            registrations.put(
+                    pathToPartitionName.get(response.getPath()),
+                    new VersionedData<>(registration, stat.getVersion()));
+        }
+        return registrations;
+    }
+
+    /**
+     * Overwrites a partition's registration znode without a version check. NOT used in production
+     * (the ALTER bucket.num backfill goes through {@link
+     * #updateTableWithPartitionBucketCountBackfill}); this is a test-only backdoor for constructing
+     * legacy partition znodes, e.g. one with a null per-partition bucket count (v1 data) or a stale
+     * znode version.
+     */
+    @VisibleForTesting
+    public void updatePartitionRegistration(
+            TablePath tablePath, String partitionName, PartitionRegistration registration)
+            throws Exception {
+        String path = PartitionZNode.path(tablePath, partitionName);
+        byte[] data = PartitionZNode.encode(registration);
+        zkClient.setData().forPath(path, data);
+    }
+
+    /**
+     * Updates the table registration and the given partition registrations in one atomic ZooKeeper
+     * transaction. Every {@code setData} is CAS-guarded by its expected ZK version and the whole
+     * transaction is fenced on the coordinator epoch znode ({@link ZkVersion#MATCH_ANY_VERSION}
+     * skips the fence), so a stale snapshot or a deposed coordinator fails with {@link
+     * KeeperException.BadVersionException} instead of committing.
+     *
+     * @param tablePath the table to update
+     * @param tableRegistration the new table-level registration
+     * @param expectedTableZkVersion the expected ZK version of the table znode
+     * @param partitionBackfills partition name -&gt; (updated registration + expected ZK version)
+     * @param expectedCoordinatorEpochZkVersion the coordinator epoch znode version to fence on
+     */
+    public void updateTableWithPartitionBucketCountBackfill(
+            TablePath tablePath,
+            TableRegistration tableRegistration,
+            int expectedTableZkVersion,
+            Map<String, VersionedData<PartitionRegistration>> partitionBackfills,
+            int expectedCoordinatorEpochZkVersion)
+            throws Exception {
+        List<CuratorOp> ops = new ArrayList<>(partitionBackfills.size() + 1);
+        for (Map.Entry<String, VersionedData<PartitionRegistration>> entry :
+                partitionBackfills.entrySet()) {
+            String partitionPath = PartitionZNode.path(tablePath, entry.getKey());
+            byte[] partitionData = PartitionZNode.encode(entry.getValue().data());
+            ops.add(
+                    zkClient.transactionOp()
+                            .setData()
+                            .withVersion(entry.getValue().zkVersion())
+                            .forPath(partitionPath, partitionData));
+        }
+        String tablePathStr = TableZNode.path(tablePath);
+        byte[] tableData = TableZNode.encode(tableRegistration);
+        ops.add(
+                zkClient.transactionOp()
+                        .setData()
+                        .withVersion(expectedTableZkVersion)
+                        .forPath(tablePathStr, tableData));
+
+        List<CuratorOp> fencedOps =
+                wrapRequestsWithEpochCheck(ops, expectedCoordinatorEpochZkVersion);
+        zkClient.transaction().forOperations(fencedOps);
+        if (!partitionBackfills.isEmpty()) {
+            LOG.info(
+                    "Atomically backfilled bucket count for {} partition(s) and updated table {} in "
+                            + "one transaction (CAS + epoch fence {}).",
+                    partitionBackfills.size(),
+                    tablePath,
+                    expectedCoordinatorEpochZkVersion);
+        }
+    }
+
     /** Get partition id and table id for each partition in a batch async way. */
     public Map<PhysicalTablePath, TablePartition> getPartitionIds(
             Collection<PhysicalTablePath> partitionPaths) throws Exception {
@@ -1036,12 +1204,18 @@ public class ZooKeeperClient implements AutoCloseable {
                                                         checkNotNull(p.getPartitionName())),
                                         path -> path));
 
-        List<ZkGetDataResponse> responses = getDataInBackground(path2PartitionPathMap.keySet());
-        return processGetDataResponses(
+        return getPartitionZNodeData(
+                path2PartitionPathMap, PartitionRegistration::toTablePartition);
+    }
+
+    private <K, V> Map<K, V> getPartitionZNodeData(
+            Map<String, K> path2Key, Function<PartitionRegistration, V> partitionRegistrationMapper)
+            throws Exception {
+        List<ZkGetDataResponse> responses = getDataInBackground(path2Key.keySet());
+        return processGetDataResponsesOrThrow(
                 responses,
-                response -> path2PartitionPathMap.get(response.getPath()),
-                (byte[] data) -> PartitionZNode.decode(data).toTablePartition(),
-                "partition");
+                response -> path2Key.get(response.getPath()),
+                data -> partitionRegistrationMapper.apply(PartitionZNode.decode(data)));
     }
 
     /** Get partition num of a table in ZK. */
@@ -1067,7 +1241,8 @@ public class ZooKeeperClient implements AutoCloseable {
             PartitionAssignment partitionAssignment,
             String remoteDataDir,
             TablePath tablePath,
-            long tableId)
+            long tableId,
+            int bucketCount)
             throws Exception {
         // Merge "registerPartitionAssignment()" and "registerPartition()"
         // into one transaction. This is to avoid the case that the partition assignment is
@@ -1113,7 +1288,7 @@ public class ZooKeeperClient implements AutoCloseable {
                                 metadataPath,
                                 PartitionZNode.encode(
                                         new PartitionRegistration(
-                                                tableId, partitionId, remoteDataDir)));
+                                                tableId, partitionId, remoteDataDir, bucketCount)));
 
         ops.add(tabletServerPartitionNode);
         ops.add(metadataPartitionNode);
@@ -1251,24 +1426,45 @@ public class ZooKeeperClient implements AutoCloseable {
                 partitionId == null
                         ? BucketIdsZNode.pathOfTable(tableId)
                         : BucketIdsZNode.pathOfPartition(partitionId);
-        // iterate all buckets
+        Map<String, TableBucket> snapshotPathToTableBucket = new HashMap<>();
         for (String bucketIdStr : getChildren(bucketIdsPath)) {
-            // get the bucket id
             int bucketId = Integer.parseInt(bucketIdStr);
+            snapshots.put(bucketId, Optional.empty());
             TableBucket tableBucket = new TableBucket(tableId, partitionId, bucketId);
-            // get the snapshot node for the bucket
-            String bucketSnapshotPath = BucketSnapshotsZNode.path(tableBucket);
-            // get all the snapshots for the bucket
-            List<String> bucketSnapshots = getChildren(bucketSnapshotPath);
+            snapshotPathToTableBucket.put(BucketSnapshotsZNode.path(tableBucket), tableBucket);
+        }
 
-            Optional<Long> optLatestSnapshotId =
-                    bucketSnapshots.stream().map(Long::parseLong).reduce(Math::max);
-            Optional<BucketSnapshot> optTableBucketSnapshot = Optional.empty();
-            if (optLatestSnapshotId.isPresent()) {
-                optTableBucketSnapshot =
-                        getTableBucketSnapshot(tableBucket, optLatestSnapshotId.get());
+        List<ZkGetChildrenResponse> childrenResponses =
+                getChildrenInBackground(snapshotPathToTableBucket.keySet());
+        Map<String, Integer> snapshotDataPathToBucketId = new HashMap<>();
+        for (ZkGetChildrenResponse response : childrenResponses) {
+            if (response.getResultCode() == KeeperException.Code.NONODE) {
+                continue;
             }
-            snapshots.put(bucketId, optTableBucketSnapshot);
+            response.maybeThrow();
+
+            OptionalLong latestSnapshotId =
+                    response.getChildren().stream().mapToLong(Long::parseLong).max();
+            if (latestSnapshotId.isPresent()) {
+                TableBucket tableBucket =
+                        checkNotNull(snapshotPathToTableBucket.get(response.getPath()));
+                snapshotDataPathToBucketId.put(
+                        BucketSnapshotIdZNode.path(tableBucket, latestSnapshotId.getAsLong()),
+                        tableBucket.getBucket());
+            }
+        }
+
+        List<ZkGetDataResponse> dataResponses =
+                getDataInBackground(snapshotDataPathToBucketId.keySet());
+        for (ZkGetDataResponse response : dataResponses) {
+            if (response.getResultCode() == KeeperException.Code.NONODE) {
+                // The snapshot may be deleted between listing the children and reading its data.
+                continue;
+            }
+            response.maybeThrow();
+
+            int bucketId = checkNotNull(snapshotDataPathToBucketId.get(response.getPath()));
+            snapshots.put(bucketId, Optional.of(BucketSnapshotIdZNode.decode(response.getData())));
         }
         return snapshots;
     }
@@ -1339,6 +1535,93 @@ public class ZooKeeperClient implements AutoCloseable {
             throws Exception {
         String path = BucketRemoteLogsZNode.path(tableBucket);
         return getOrEmpty(path).map(BucketRemoteLogsZNode::decode);
+    }
+
+    /**
+     * Lists all remote log manifest handles for buckets of the given table (or partition when
+     * {@code partitionId != null}). Reads the {@code BucketRemoteLogsZNode} subtree under either
+     * {@code /tabletservers/tables/{tableId}/buckets/} or {@code
+     * /tabletservers/partitions/{partitionId}/buckets/} as a single ZK getChildren call followed by
+     * per-bucket getData. Returns each bucket's currently-published manifest path from coordinator
+     * metadata; callers must read the manifest file separately.
+     */
+    public List<TableBucketAndManifest> listRemoteLogManifestHandles(
+            long tableId, @Nullable Long partitionId) throws Exception {
+        String bucketsPath =
+                partitionId == null
+                        ? TableIdZNode.path(tableId) + "/buckets"
+                        : PartitionIdZNode.path(partitionId) + "/buckets";
+        List<String> bucketIdStrs = getChildren(bucketsPath);
+        List<TableBucketAndManifest> result = new ArrayList<>(bucketIdStrs.size());
+        for (String bucketIdStr : bucketIdStrs) {
+            int bucketId = Integer.parseInt(bucketIdStr);
+            TableBucket tb =
+                    partitionId == null
+                            ? new TableBucket(tableId, bucketId)
+                            : new TableBucket(tableId, partitionId, bucketId);
+            Optional<RemoteLogManifestHandle> handle = getRemoteLogManifestHandle(tb);
+            handle.ifPresent(h -> result.add(new TableBucketAndManifest(tb, h)));
+        }
+        return result;
+    }
+
+    /**
+     * A decoded znode value together with the ZK version of its znode. Used to carry the version
+     * captured at read time so a later write can compare-and-set against it.
+     */
+    public static final class VersionedData<T> {
+        private final T data;
+        private final int zkVersion;
+
+        public VersionedData(T data, int zkVersion) {
+            this.data = data;
+            this.zkVersion = zkVersion;
+        }
+
+        public T data() {
+            return data;
+        }
+
+        public int zkVersion() {
+            return zkVersion;
+        }
+    }
+
+    /** Tuple of a table bucket and its current remote log manifest handle. */
+    public static final class TableBucketAndManifest {
+        private final TableBucket tableBucket;
+        private final RemoteLogManifestHandle manifestHandle;
+
+        public TableBucketAndManifest(
+                TableBucket tableBucket, RemoteLogManifestHandle manifestHandle) {
+            this.tableBucket = tableBucket;
+            this.manifestHandle = manifestHandle;
+        }
+
+        public TableBucket getTableBucket() {
+            return tableBucket;
+        }
+
+        public RemoteLogManifestHandle getManifestHandle() {
+            return manifestHandle;
+        }
+    }
+
+    /**
+     * Lists the snapshot ids of all completed bucket snapshots for the given {@link TableBucket}.
+     * Reads only the {@code BucketSnapshotsZNode} children — the per-snapshot payload is not
+     * fetched, since callers (e.g. orphan-files cleanup) only need the id set to identify which
+     * snapshot directories must be retained. Returned ids are ordered ascending.
+     */
+    public List<Long> listBucketSnapshotIds(TableBucket tableBucket) throws Exception {
+        String path = BucketSnapshotsZNode.path(tableBucket);
+        List<String> snapshotIdStrs = getChildren(path);
+        List<Long> ids = new ArrayList<>(snapshotIdStrs.size());
+        for (String snapshotIdStr : snapshotIdStrs) {
+            ids.add(Long.parseLong(snapshotIdStr));
+        }
+        Collections.sort(ids);
+        return ids;
     }
 
     /** Upsert the {@link LakeTable} to Zk Node. */
@@ -1518,7 +1801,7 @@ public class ZooKeeperClient implements AutoCloseable {
                     .forPath(path, ConfigEntityZNode.encode(configs));
         }
 
-        LOG.info("upsert entity configs {}", configs);
+        LOG.info("upsert entity configs {}", ConfigurationUtils.hideSensitiveValues(configs));
         insertConfigChangeNotification();
     }
 
@@ -1621,6 +1904,15 @@ public class ZooKeeperClient implements AutoCloseable {
         return zkClient;
     }
 
+    /**
+     * Returns the Curator wrapper owned by this client for tests that need a decorating client over
+     * the same ZooKeeper connection. The returned wrapper must not be closed by the caller.
+     */
+    @VisibleForTesting
+    public CuratorFrameworkWithUnhandledErrorListener getCuratorFrameworkWrapper() {
+        return curatorFrameworkWrapper;
+    }
+
     // --------------------------------------------------------------------------------------------
     // Table and Partition Metadata
     // --------------------------------------------------------------------------------------------
@@ -1705,8 +1997,13 @@ public class ZooKeeperClient implements AutoCloseable {
         LeaderAndIsr leaderAndIsr = leaderAndIsrs.get(bucket);
         Integer leader = leaderAndIsr != null ? leaderAndIsr.leader() : null;
         Integer leaderEpoch = leaderAndIsr != null ? leaderAndIsr.leaderEpoch() : null;
+        List<Integer> isr = leaderAndIsr != null ? leaderAndIsr.isr() : Collections.emptyList();
+        int bucketEpoch =
+                leaderAndIsr != null
+                        ? leaderAndIsr.bucketEpoch()
+                        : BucketMetadata.NO_LEADER_ISR_STATE_EPOCH;
         List<Integer> replicas = assignment.getBucketAssignments().get(bucketId).getReplicas();
-        return new BucketMetadata(bucketId, leader, leaderEpoch, replicas);
+        return new BucketMetadata(bucketId, leader, leaderEpoch, replicas, isr, bucketEpoch);
     }
 
     /** Close the underlying ZooKeeperClient. */
@@ -1818,7 +2115,8 @@ public class ZooKeeperClient implements AutoCloseable {
      * @return list of async responses for each path
      * @throws Exception if there is an error during the operation
      */
-    private List<ZkGetDataResponse> getDataInBackground(Collection<String> paths) throws Exception {
+    @VisibleForTesting
+    List<ZkGetDataResponse> getDataInBackground(Collection<String> paths) throws Exception {
         List<ZkGetDataRequest> requests =
                 paths.stream().map(ZkGetDataRequest::new).collect(Collectors.toList());
         return handleRequestInBackground(requests, ZkGetDataResponse::create);
@@ -1900,6 +2198,27 @@ public class ZooKeeperClient implements AutoCloseable {
                         operationName,
                         response.getPath(),
                         response.getResultCode());
+            }
+        }
+        return result;
+    }
+
+    @VisibleForTesting
+    static <K, V> Map<K, V> processGetDataResponsesOrThrow(
+            List<ZkGetDataResponse> responses,
+            Function<ZkGetDataResponse, K> keyExtractor,
+            Function<byte[], V> decoder)
+            throws KeeperException {
+        Map<K, V> result = new HashMap<>();
+        for (ZkGetDataResponse response : responses) {
+            if (response.getResultCode() == KeeperException.Code.NONODE) {
+                continue;
+            }
+            response.maybeThrow();
+
+            V value = decoder.apply(response.getData());
+            if (value != null) {
+                result.put(keyExtractor.apply(response), value);
             }
         }
         return result;

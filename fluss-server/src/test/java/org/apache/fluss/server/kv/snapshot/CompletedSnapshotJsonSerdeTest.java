@@ -56,7 +56,7 @@ class CompletedSnapshotJsonSerdeTest extends JsonSerdeTestBase<CompletedSnapshot
                         new TableBucket(1, 1),
                         1,
                         new FsPath("oss://bucket/snapshot"),
-                        new KvSnapshotHandle(sharedFileHandles, privateFileHandles, 5),
+                        KvSnapshotHandle.create(sharedFileHandles, privateFileHandles, 5),
                         10,
                         null,
                         null);
@@ -65,7 +65,7 @@ class CompletedSnapshotJsonSerdeTest extends JsonSerdeTestBase<CompletedSnapshot
                         new TableBucket(1, 10L, 1),
                         1,
                         new FsPath("oss://bucket/snapshot"),
-                        new KvSnapshotHandle(sharedFileHandles, privateFileHandles, 5),
+                        KvSnapshotHandle.create(sharedFileHandles, privateFileHandles, 5),
                         10,
                         1234L,
                         Collections.singletonList(new AutoIncIDRange(2, 10000, 20000)));

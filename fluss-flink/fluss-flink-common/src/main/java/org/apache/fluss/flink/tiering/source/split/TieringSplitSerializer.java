@@ -86,6 +86,9 @@ public class TieringSplitSerializer implements SimpleVersionedSerializer<Tiering
         out.writeInt(split.getNumberOfSplits());
         // write skipCurrentRound
         out.writeBoolean(split.shouldSkipCurrentRound());
+        // write split metadata for this tiering round
+        out.writeInt(split.getSplitIndex());
+        out.writeLong(split.getTieringRoundTimestamp());
         if (split.isTieringSnapshotSplit()) {
             // Snapshot split
             TieringSnapshotSplit tieringSnapshotSplit = split.asTieringSnapshotSplit();
@@ -139,6 +142,8 @@ public class TieringSplitSerializer implements SimpleVersionedSerializer<Tiering
         // deserialize number of splits
         int numberOfSplits = in.readInt();
         boolean skipCurrentRound = in.readBoolean();
+        int splitIndex = in.readInt();
+        long tieringRoundTimestamp = in.readLong();
 
         if (splitKind == TIERING_SNAPSHOT_SPLIT_FLAG) {
             // deserialize snapshot id
@@ -152,7 +157,9 @@ public class TieringSplitSerializer implements SimpleVersionedSerializer<Tiering
                     snapshotId,
                     logOffsetOfSnapshot,
                     numberOfSplits,
-                    skipCurrentRound);
+                    skipCurrentRound,
+                    splitIndex,
+                    tieringRoundTimestamp);
         } else {
             // deserialize starting offset
             long startingOffset = in.readLong();
@@ -165,7 +172,9 @@ public class TieringSplitSerializer implements SimpleVersionedSerializer<Tiering
                     startingOffset,
                     stoppingOffset,
                     numberOfSplits,
-                    skipCurrentRound);
+                    skipCurrentRound,
+                    splitIndex,
+                    tieringRoundTimestamp);
         }
     }
 }

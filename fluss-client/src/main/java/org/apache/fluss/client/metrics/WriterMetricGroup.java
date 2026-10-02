@@ -29,13 +29,29 @@ import org.apache.fluss.metrics.ThreadSafeSimpleCounter;
 import org.apache.fluss.metrics.groups.AbstractMetricGroup;
 import org.apache.fluss.rpc.metrics.ClientMetricGroup;
 
+import javax.annotation.Nullable;
+
+import java.util.Map;
+
 import static org.apache.fluss.metrics.utils.MetricGroupUtils.makeScope;
 
-/** Metrics for {@link WriterClient}. */
+/**
+ * Metrics for {@link WriterClient}.
+ *
+ * <p>The connection-level shared writer client uses the {@code client.writer} scope without any
+ * extra variables. Writer clients that may have multiple instances under the same {@link
+ * ClientMetricGroup} should use a subclass with a dedicated scope and a disambiguating {@code
+ * writer_instance_id} variable, see {@link MultiTableWriterMetricGroup}.
+ */
 @Internal
 public class WriterMetricGroup extends AbstractMetricGroup {
     private static final String name = "writer";
     private static final int WINDOW_SIZE = 1024;
+
+    private final String groupName;
+
+    /** Only set for subclasses whose instances may coexist under the same parent. */
+    @Nullable private final String writerInstanceId;
 
     private final Counter recordsRetryTotal;
     private final Counter recordsSendTotal;
@@ -47,7 +63,16 @@ public class WriterMetricGroup extends AbstractMetricGroup {
     private volatile long batchQueueTimeMs = -1;
 
     public WriterMetricGroup(ClientMetricGroup parent) {
-        super(parent.getMetricRegistry(), makeScope(parent, name), parent);
+        this(parent, name, null);
+    }
+
+    protected WriterMetricGroup(
+            ClientMetricGroup parent, String groupName, @Nullable String writerInstanceId) {
+        super(parent.getMetricRegistry(), makeScope(parent, groupName), parent);
+        this.groupName = groupName;
+        // must be assigned before the first metric registration below, as reporters resolve
+        // getAllVariables() (which reads writerInstanceId) when a metric is added
+        this.writerInstanceId = writerInstanceId;
 
         gauge(MetricNames.WRITER_BATCH_QUEUE_TIME_MS, () -> batchQueueTimeMs);
 
@@ -99,6 +124,13 @@ public class WriterMetricGroup extends AbstractMetricGroup {
 
     @Override
     protected String getGroupName(CharacterFilter filter) {
-        return name;
+        return groupName;
+    }
+
+    @Override
+    protected final void putVariables(Map<String, String> variables) {
+        if (writerInstanceId != null) {
+            variables.put("writer_instance_id", writerInstanceId);
+        }
     }
 }

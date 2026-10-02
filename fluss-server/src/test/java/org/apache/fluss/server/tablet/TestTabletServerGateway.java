@@ -26,10 +26,14 @@ import org.apache.fluss.rpc.messages.ApiVersionsRequest;
 import org.apache.fluss.rpc.messages.ApiVersionsResponse;
 import org.apache.fluss.rpc.messages.DatabaseExistsRequest;
 import org.apache.fluss.rpc.messages.DatabaseExistsResponse;
+import org.apache.fluss.rpc.messages.DescribeBucketsRequest;
+import org.apache.fluss.rpc.messages.DescribeBucketsResponse;
 import org.apache.fluss.rpc.messages.DescribeClusterConfigsRequest;
 import org.apache.fluss.rpc.messages.DescribeClusterConfigsResponse;
 import org.apache.fluss.rpc.messages.FetchLogRequest;
 import org.apache.fluss.rpc.messages.FetchLogResponse;
+import org.apache.fluss.rpc.messages.GetClusterHealthRequest;
+import org.apache.fluss.rpc.messages.GetClusterHealthResponse;
 import org.apache.fluss.rpc.messages.GetDatabaseInfoRequest;
 import org.apache.fluss.rpc.messages.GetDatabaseInfoResponse;
 import org.apache.fluss.rpc.messages.GetFileSystemSecurityTokenRequest;
@@ -180,7 +184,8 @@ public class TestTabletServerGateway implements TabletServerGateway {
         fetchLogData.forEach(
                 (tableBucket, fetchData) -> {
                     FetchLogResultForBucket fetchLogResultForBucket =
-                            new FetchLogResultForBucket(tableBucket, MemoryLogRecords.EMPTY, 0L);
+                            FetchLogResultForBucket.records(
+                                    tableBucket, MemoryLogRecords.EMPTY, 0L, -1L, -1L);
                     resultForBucketMap.put(tableBucket, fetchLogResultForBucket);
                 });
         return CompletableFuture.completedFuture(makeFetchLogResponse(resultForBucketMap));
@@ -235,6 +240,12 @@ public class TestTabletServerGateway implements TabletServerGateway {
     }
 
     @Override
+    public CompletableFuture<GetClusterHealthResponse> getClusterHealth(
+            GetClusterHealthRequest request) {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
     public CompletableFuture<DatabaseExistsResponse> databaseExists(DatabaseExistsRequest request) {
         throw new UnsupportedOperationException();
     }
@@ -246,6 +257,12 @@ public class TestTabletServerGateway implements TabletServerGateway {
 
     @Override
     public CompletableFuture<GetTableInfoResponse> getTableInfo(GetTableInfoRequest request) {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public CompletableFuture<DescribeBucketsResponse> describeBuckets(
+            DescribeBucketsRequest request) {
         throw new UnsupportedOperationException();
     }
 
@@ -396,35 +413,37 @@ public class TestTabletServerGateway implements TabletServerGateway {
     }
 
     public void response(int index, ApiMessage response) {
+        removeRequestFuture(index).complete(response);
+    }
+
+    /** Completes the request at the given index exceptionally. */
+    public void failRequest(int index, Throwable throwable) {
+        removeRequestFuture(index).completeExceptionally(throwable);
+    }
+
+    @SuppressWarnings("unchecked")
+    private CompletableFuture<ApiMessage> removeRequestFuture(int index) {
         if (requests.isEmpty()) {
             throw new IllegalStateException("No requests pending for inbound response.");
         }
 
-        // Index out of bounds check.
         if (index >= requests.size()) {
             throw new IllegalArgumentException(
                     "Index " + index + " is out of bounds for requests queue.");
         }
 
-        CompletableFuture<ApiMessage> result = null;
         int currentIndex = 0;
         for (Iterator<Tuple2<ApiMessage, CompletableFuture<?>>> it = requests.iterator();
                 it.hasNext(); ) {
             Tuple2<ApiMessage, CompletableFuture<?>> tuple = it.next();
             if (currentIndex == index) {
-                result = (CompletableFuture<ApiMessage>) tuple.f1;
                 it.remove();
-                break;
+                return (CompletableFuture<ApiMessage>) tuple.f1;
             }
             currentIndex++;
         }
 
-        if (result != null) {
-            result.complete(response);
-        } else {
-            throw new IllegalStateException(
-                    "The future to complete was not found at index " + index);
-        }
+        throw new IllegalStateException("The future to complete was not found at index " + index);
     }
 
     private StopReplicaResponse mockStopReplicaResponse(

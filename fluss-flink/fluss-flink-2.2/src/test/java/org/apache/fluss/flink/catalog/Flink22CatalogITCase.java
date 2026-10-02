@@ -17,6 +17,8 @@
 
 package org.apache.fluss.flink.catalog;
 
+import org.apache.fluss.testutils.common.MultiVersionTest;
+
 import org.apache.flink.table.api.DataTypes;
 import org.apache.flink.table.api.Schema;
 import org.apache.flink.table.catalog.CatalogTable;
@@ -29,6 +31,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 public class Flink22CatalogITCase extends FlinkCatalogITCase {
 
     @Test
+    @MultiVersionTest
     void testGetTableWithIndex() throws Exception {
         String tableName = "table_with_pk_only";
         tEnv.executeSql(

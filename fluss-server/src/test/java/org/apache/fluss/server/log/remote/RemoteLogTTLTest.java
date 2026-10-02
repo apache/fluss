@@ -17,12 +17,16 @@
 
 package org.apache.fluss.server.log.remote;
 
+import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.remote.RemoteLogSegment;
 import org.apache.fluss.rpc.entity.FetchLogResultForBucket;
 import org.apache.fluss.rpc.protocol.Errors;
 import org.apache.fluss.server.entity.FetchReqInfo;
 import org.apache.fluss.server.log.FetchParams;
 import org.apache.fluss.server.log.LogTablet;
+import org.apache.fluss.server.log.remote.RemoteLogIndexCache.Entry;
+import org.apache.fluss.server.replica.Replica;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -55,9 +59,10 @@ final class RemoteLogTTLTest extends RemoteLogTestBase {
         }
         // Need to make leader by ReplicaManager.
         makeLogTableAsLeader(tb, partitionTable);
-        LogTablet logTablet = replicaManager.getReplicaOrException(tb).getLogTablet();
+        Replica replica = replicaManager.getReplicaOrException(tb);
+        LogTablet logTablet = replica.getLogTablet();
         // enable data lake
-        logTablet.updateIsDataLakeEnabled(true);
+        updateTableConfig(replica, ConfigOptions.TABLE_DATALAKE_ENABLED, "true");
         // add 5 segments, so 4 segments will be uploaded to remote (exclude active segment)
         // segment offsets: [0,10), [10,20), [20,30), [30,40), [40,50) active
         addMultiSegmentsToLogTablet(logTablet, 5);
@@ -68,6 +73,31 @@ final class RemoteLogTTLTest extends RemoteLogTestBase {
         assertThat(remoteLog.allRemoteLogSegments().size()).isEqualTo(4);
         assertThat(remoteLog.getRemoteLogStartOffset()).isEqualTo(0L);
         assertThat(remoteLog.getRemoteLogEndOffset()).hasValue(40L);
+
+        // Materialize the index cache entries for all remote log segments.
+        RemoteLogIndexCache indexCache =
+                remoteLogManager.getRemoteLogIndexCache(logTablet.getDataDir());
+        for (RemoteLogSegment remoteLogSegment : remoteLog.allRemoteLogSegments()) {
+            remoteLogManager.lookupPositionForOffset(
+                    remoteLogSegment, remoteLogSegment.remoteLogStartOffset());
+        }
+        assertThat(indexCache.getInternalCache().asMap()).hasSize(4);
+        RemoteLogSegment expiredSegment =
+                remoteLog.allRemoteLogSegments().stream()
+                        .filter(segment -> segment.remoteLogStartOffset() < 20L)
+                        .findFirst()
+                        .get();
+        RemoteLogSegment retainedSegment =
+                remoteLog.allRemoteLogSegments().stream()
+                        .filter(segment -> segment.remoteLogStartOffset() >= 20L)
+                        .findFirst()
+                        .get();
+        Entry expiredIndexEntry =
+                indexCache.getInternalCache().getIfPresent(expiredSegment.remoteLogSegmentId());
+        Entry retainedIndexEntry =
+                indexCache.getInternalCache().getIfPresent(retainedSegment.remoteLogSegmentId());
+        assertThat(expiredIndexEntry).isNotNull();
+        assertThat(retainedIndexEntry).isNotNull();
 
         // advance time past TTL (7 days)
         manualClock.advanceTime(Duration.ofDays(7).plusHours(1));
@@ -96,6 +126,14 @@ final class RemoteLogTTLTest extends RemoteLogTestBase {
                         segment ->
                                 assertThat(segment.remoteLogStartOffset())
                                         .isGreaterThanOrEqualTo(20L));
+        assertThat(indexCache.getInternalCache().asMap())
+                .hasSize(2)
+                .doesNotContainKeys(expiredSegment.remoteLogSegmentId())
+                .containsKey(retainedSegment.remoteLogSegmentId());
+        assertThat(expiredIndexEntry.offsetIndex().file()).doesNotExist();
+        assertThat(expiredIndexEntry.timeIndex().file()).doesNotExist();
+        assertThat(retainedIndexEntry.offsetIndex().file()).exists();
+        assertThat(retainedIndexEntry.timeIndex().file()).exists();
 
         // now advance lake log end offset to include all remaining segments
         logTablet.updateLakeLogEndOffset(40L);
@@ -103,12 +141,11 @@ final class RemoteLogTTLTest extends RemoteLogTestBase {
         remoteLogTaskScheduler.triggerPeriodicScheduledTasks();
         assertThat(remoteLog.allRemoteLogSegments()).isEmpty();
         assertThat(remoteLog.getRemoteLogStartOffset()).isEqualTo(Long.MAX_VALUE);
+        assertThat(remoteLog.getHighestCopiedEndOffset()).isEqualTo(40L);
 
-        // Fetch records from remote.
-        // mock to update remote log end offset and remote log start offset as
-        // NotifyRemoteLogOffsetsRequest do.
-        logTablet.updateRemoteLogStartOffset(40L);
-        logTablet.updateRemoteLogEndOffset(40L);
+        // Fetch records from remote. Mock the empty manifest state propagated by
+        // NotifyRemoteLogOffsetsRequest.
+        logTablet.updateRemoteLogOffsets(Long.MAX_VALUE, -1L, 40L);
         CompletableFuture<Map<TableBucket, FetchLogResultForBucket>> future =
                 new CompletableFuture<>();
         replicaManager.fetchLogRecords(

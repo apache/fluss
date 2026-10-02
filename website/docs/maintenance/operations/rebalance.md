@@ -110,6 +110,7 @@ Rebalance statuses:
 - **COMPLETED**: The rebalance has successfully completed
 - **FAILED**: The rebalance has failed
 - **CANCELED**: The rebalance has been canceled
+- **TIMEOUT**: The rebalance task timed out (e.g., ISR could not converge within the timeout period)
 
 ### 4. Cancel Rebalance (If Needed)
 

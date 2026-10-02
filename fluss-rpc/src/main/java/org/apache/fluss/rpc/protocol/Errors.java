@@ -27,11 +27,15 @@ import org.apache.fluss.exception.DatabaseAlreadyExistException;
 import org.apache.fluss.exception.DatabaseNotEmptyException;
 import org.apache.fluss.exception.DatabaseNotExistException;
 import org.apache.fluss.exception.DeletionDisabledException;
+import org.apache.fluss.exception.DiskWriteLockedException;
 import org.apache.fluss.exception.DuplicateSequenceException;
 import org.apache.fluss.exception.FencedLeaderEpochException;
 import org.apache.fluss.exception.FencedTieringEpochException;
+import org.apache.fluss.exception.HistoricalPartitionThrottledException;
 import org.apache.fluss.exception.IneligibleReplicaException;
+import org.apache.fluss.exception.InsufficientKvLeaderReplicaCapacityException;
 import org.apache.fluss.exception.InvalidAlterTableException;
+import org.apache.fluss.exception.InvalidBucketRoutingException;
 import org.apache.fluss.exception.InvalidColumnProjectionException;
 import org.apache.fluss.exception.InvalidConfigException;
 import org.apache.fluss.exception.InvalidCoordinatorException;
@@ -75,6 +79,7 @@ import org.apache.fluss.exception.SecurityTokenException;
 import org.apache.fluss.exception.ServerNotExistException;
 import org.apache.fluss.exception.ServerTagAlreadyExistException;
 import org.apache.fluss.exception.ServerTagNotExistException;
+import org.apache.fluss.exception.StorageBackpressureException;
 import org.apache.fluss.exception.StorageException;
 import org.apache.fluss.exception.TableAlreadyExistException;
 import org.apache.fluss.exception.TableNotExistException;
@@ -265,7 +270,28 @@ public enum Errors {
     TOO_MANY_SCANNERS(
             69,
             "The per-bucket or per-server scanner session limit has been reached.",
-            TooManyScannersException::new);
+            TooManyScannersException::new),
+    DISK_WRITE_LOCKED(
+            70,
+            "The tablet server has rejected writes because its data disk usage reached the configured write-limit ratio.",
+            DiskWriteLockedException::new),
+    INSUFFICIENT_KV_LEADER_REPLICA_CAPACITY(
+            71,
+            "The cluster does not have enough KV leader replica capacity.",
+            InsufficientKvLeaderReplicaCapacityException::new),
+    STORAGE_BACKPRESSURE_EXCEPTION(
+            72,
+            "The tablet server has rejected the write because the KV storage engine has reached its write-pressure threshold.",
+            StorageBackpressureException::new),
+    HISTORICAL_PARTITION_THROTTLED(
+            73,
+            "Historical partition request is throttled because too many historical requests are in flight.",
+            HistoricalPartitionThrottledException::new),
+    INVALID_BUCKET_ROUTING(
+            74,
+            "The request's bucket routing information is missing or invalid. The client should "
+                    + "refresh partition metadata and rebuild the request.",
+            InvalidBucketRoutingException::new);
 
     private static final Logger LOG = LoggerFactory.getLogger(Errors.class);
 

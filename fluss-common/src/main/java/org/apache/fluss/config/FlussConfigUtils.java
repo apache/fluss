@@ -23,6 +23,7 @@ import org.apache.fluss.exception.IllegalConfigurationException;
 import org.apache.fluss.fs.FsPath;
 
 import java.lang.reflect.Field;
+import java.time.Duration;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
@@ -47,10 +48,20 @@ public class FlussConfigUtils {
         ALTERABLE_TABLE_OPTIONS =
                 Arrays.asList(
                         ConfigOptions.TABLE_DATALAKE_ENABLED.key(),
+                        ConfigOptions.TABLE_DATALAKE_HISTORICAL_PARTITION_ENABLED.key(),
+                        ConfigOptions.TABLE_DATALAKE_HISTORICAL_PARTITION_LOOKUP_MODE.key(),
+                        ConfigOptions.TABLE_DATALAKE_DATABASE_NAME.key(),
+                        ConfigOptions.TABLE_DATALAKE_TABLE_NAME.key(),
                         ConfigOptions.TABLE_DATALAKE_FRESHNESS.key(),
+                        ConfigOptions.TABLE_DATALAKE_AUTO_COMPACTION.key(),
+                        ConfigOptions.TABLE_LOG_TTL.key(),
                         ConfigOptions.TABLE_TIERED_LOG_LOCAL_SEGMENTS.key(),
+                        ConfigOptions.TABLE_LOG_LOCAL_TTL.key(),
+                        ConfigOptions.TABLE_AUTO_PARTITION_ENABLED.key(),
                         ConfigOptions.TABLE_AUTO_PARTITION_NUM_RETENTION.key(),
-                        ConfigOptions.TABLE_STATISTICS_COLUMNS.key());
+                        ConfigOptions.TABLE_AUTO_PARTITION_NUM_PRECREATE.key(),
+                        ConfigOptions.TABLE_STATISTICS_COLUMNS.key(),
+                        ConfigOptions.TABLE_KV_STANDBY_REPLICA_ENABLED.key());
     }
 
     public static boolean isTableStorageConfig(String key) {
@@ -114,6 +125,8 @@ public class FlussConfigUtils {
 
     public static void validateCoordinatorConfigs(Configuration conf) {
         validateServerConfigs(conf);
+        validMinDuration(conf, ConfigOptions.COORDINATOR_CONTROL_REQUEST_RETRY_BACKOFF, 1);
+        validMinDuration(conf, ConfigOptions.COORDINATOR_CONTROL_REQUEST_TIMEOUT, 1);
     }
 
     public static void validateTabletConfigs(Configuration conf) {
@@ -128,34 +141,9 @@ public class FlussConfigUtils {
         validMinValue(ConfigOptions.TABLET_SERVER_ID, serverId.get(), 0);
     }
 
-    /** Validate common server configs. */
-    protected static void validateServerConfigs(Configuration conf) {
-        // Validate remote.data.dir and remote.data.dirs
-        String remoteDataDir = conf.get(ConfigOptions.REMOTE_DATA_DIR);
-        List<String> remoteDataDirs = conf.get(ConfigOptions.REMOTE_DATA_DIRS);
-        if (conf.get(ConfigOptions.REMOTE_DATA_DIR) == null
-                && conf.get(ConfigOptions.REMOTE_DATA_DIRS).isEmpty()) {
-            throw new IllegalConfigurationException(
-                    String.format(
-                            "Either %s or %s must be configured.",
-                            ConfigOptions.REMOTE_DATA_DIR.key(),
-                            ConfigOptions.REMOTE_DATA_DIRS.key()));
-        }
-
-        if (remoteDataDir != null) {
-            // Must validate that remote.data.dir is a valid FsPath
-            try {
-                new FsPath(conf.get(ConfigOptions.REMOTE_DATA_DIR));
-            } catch (Exception e) {
-                throw new IllegalConfigurationException(
-                        String.format(
-                                "Invalid configuration for %s.",
-                                ConfigOptions.REMOTE_DATA_DIR.key()),
-                        e);
-            }
-        }
-
+    public static void validateRemoteDataDirs(Configuration conf) {
         // Validate remote.data.dirs
+        List<String> remoteDataDirs = conf.get(ConfigOptions.REMOTE_DATA_DIRS);
         for (int i = 0; i < remoteDataDirs.size(); i++) {
             String dir = remoteDataDirs.get(i);
             try {
@@ -185,30 +173,83 @@ public class FlussConfigUtils {
                                     weights.size()));
                 }
 
-                // Validate all weights are no less than 0
+                // Verify that each weight is non-negative and that the total weight is greater than
+                // 0.
+                int totalWeight = 0;
                 for (int i = 0; i < weights.size(); i++) {
-                    if (weights.get(i) < 0) {
+                    int weight = weights.get(i);
+                    if (weight < 0) {
                         throw new IllegalConfigurationException(
                                 String.format(
                                         "All weights in '%s' must be no less than 0, but found %d at index %d.",
-                                        ConfigOptions.REMOTE_DATA_DIRS_WEIGHTS.key(),
-                                        weights.get(i),
-                                        i));
+                                        ConfigOptions.REMOTE_DATA_DIRS_WEIGHTS.key(), weight, i));
                     }
+                    totalWeight += weight;
+                }
+                if (totalWeight <= 0) {
+                    throw new IllegalConfigurationException(
+                            String.format(
+                                    "The sum of all weights in '%s' must be greater than 0, but the current sum is %d.",
+                                    ConfigOptions.REMOTE_DATA_DIRS_WEIGHTS.key(), totalWeight));
                 }
             }
         }
+    }
+
+    /** Validate common server configs. */
+    protected static void validateServerConfigs(Configuration conf) {
+        // Validate remote.data.dir and remote.data.dirs
+        String remoteDataDir = conf.get(ConfigOptions.REMOTE_DATA_DIR);
+        List<String> remoteDataDirs = conf.get(ConfigOptions.REMOTE_DATA_DIRS);
+        if (remoteDataDir == null && remoteDataDirs.isEmpty()) {
+            throw new IllegalConfigurationException(
+                    String.format(
+                            "Either %s or %s must be configured.",
+                            ConfigOptions.REMOTE_DATA_DIR.key(),
+                            ConfigOptions.REMOTE_DATA_DIRS.key()));
+        }
+
+        if (remoteDataDir != null) {
+            // Must validate that remote.data.dir is a valid FsPath
+            try {
+                new FsPath(conf.get(ConfigOptions.REMOTE_DATA_DIR));
+            } catch (Exception e) {
+                throw new IllegalConfigurationException(
+                        String.format(
+                                "Invalid configuration for %s.",
+                                ConfigOptions.REMOTE_DATA_DIR.key()),
+                        e);
+            }
+        }
+
+        validateRemoteDataDirs(conf);
 
         validMinValue(conf, ConfigOptions.DEFAULT_REPLICATION_FACTOR, 1);
         validMinValue(conf, ConfigOptions.KV_MAX_RETAINED_SNAPSHOTS, 1);
         validMinValue(conf, ConfigOptions.SERVER_IO_POOL_SIZE, 1);
         validMinValue(conf, ConfigOptions.BACKGROUND_THREADS, 1);
+        validMinDuration(conf, ConfigOptions.LOG_RETENTION_CHECK_INTERVAL, 1);
+        validMinDuration(
+                conf,
+                ConfigOptions.SERVER_HISTORICAL_PARTITION_LOOKUPER_CACHE_EXPIRE_AFTER_ACCESS,
+                1);
+        validateHistoricalLookupCacheRatio(conf);
 
         if (conf.get(ConfigOptions.LOG_SEGMENT_FILE_SIZE).getBytes() > Integer.MAX_VALUE) {
             throw new IllegalConfigurationException(
                     String.format(
                             "Invalid configuration for %s, it must be less than or equal %d bytes.",
                             ConfigOptions.LOG_SEGMENT_FILE_SIZE.key(), Integer.MAX_VALUE));
+        }
+    }
+
+    private static void validateHistoricalLookupCacheRatio(Configuration conf) {
+        double historicalLookupCacheMaxRatio =
+                conf.get(ConfigOptions.SERVER_HISTORICAL_PARTITION_LOOKUP_CACHE_MAX_DISK_RATIO);
+        if (!(historicalLookupCacheMaxRatio > 0.0 && historicalLookupCacheMaxRatio <= 1.0)) {
+            throw new IllegalConfigurationException(
+                    "Invalid configuration for %s, it must be within (0.0, 1.0].",
+                    ConfigOptions.SERVER_HISTORICAL_PARTITION_LOOKUP_CACHE_MAX_DISK_RATIO.key());
         }
     }
 
@@ -223,6 +264,22 @@ public class FlussConfigUtils {
                     String.format(
                             "Invalid configuration for %s, it must be greater than or equal %d.",
                             option.key(), minValue));
+        }
+    }
+
+    public static void validateClientConfigs(Configuration conf) {
+        validMinValue(conf, ConfigOptions.CLIENT_SCANNER_LOG_MAX_POLL_RECORDS, 1);
+        validMinDuration(conf, ConfigOptions.CLIENT_CONNECT_TIMEOUT, 1);
+    }
+
+    private static void validMinDuration(
+            Configuration conf, ConfigOption<Duration> option, long minMillis) {
+        long millis = conf.get(option).toMillis();
+        if (millis < minMillis) {
+            throw new IllegalConfigurationException(
+                    String.format(
+                            "Invalid configuration for %s, it must be greater than or equal %d ms.",
+                            option.key(), minMillis));
         }
     }
 }

@@ -25,6 +25,7 @@ import org.apache.fluss.exception.RemoteStorageException;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.remote.RemoteLogManifest;
 import org.apache.fluss.remote.RemoteLogSegment;
 import org.apache.fluss.rpc.gateway.CoordinatorGateway;
 import org.apache.fluss.server.log.LogManager;
@@ -123,7 +124,7 @@ public class RemoteLogManager implements Closeable {
         this.coordinatorGateway = coordinatorGateway;
         this.logManager = logManager;
         this.remoteLogIndexCachesByDir = new ConcurrentHashMap<>();
-        int cacheSize = (int) conf.get(ConfigOptions.REMOTE_LOG_INDEX_FILE_CACHE_SIZE).getBytes();
+        long cacheSize = conf.get(ConfigOptions.REMOTE_LOG_INDEX_FILE_CACHE_SIZE).getBytes();
         for (File dataDir : localDiskManager.dataDirs()) {
             remoteLogIndexCachesByDir.put(
                     dataDir, new RemoteLogIndexCache(cacheSize, remoteLogStorage, dataDir));
@@ -151,8 +152,7 @@ public class RemoteLogManager implements Closeable {
         TableBucket tableBucket = replica.getTableBucket();
         PhysicalTablePath physicalTablePath = replica.getPhysicalTablePath();
         LogTablet log = replica.getLogTablet();
-        RemoteLogTablet remoteLog =
-                new RemoteLogTablet(physicalTablePath, tableBucket, replica.getLogTTLMs());
+        RemoteLogTablet remoteLog = new RemoteLogTablet(physicalTablePath, tableBucket);
         Optional<RemoteLogManifestHandle> remoteLogManifestHandleOpt =
                 zkClient.getRemoteLogManifestHandle(tableBucket);
         if (remoteLogManifestHandleOpt.isPresent()) {
@@ -163,8 +163,11 @@ public class RemoteLogManager implements Closeable {
                             remoteLogManifestHandleOpt.get().getRemoteLogManifestPath());
             remoteLog.loadRemoteLogManifest(manifest);
         }
-        remoteLog.getRemoteLogEndOffset().ifPresent(log::updateRemoteLogEndOffset);
-        log.updateRemoteLogStartOffset(remoteLog.getRemoteLogStartOffset());
+
+        log.updateRemoteLogOffsets(
+                remoteLog.getRemoteLogStartOffset(),
+                remoteLog.getRemoteLogEndOffset().orElse(-1L),
+                remoteLog.getHighestCopiedEndOffset());
         log.updateRemoteLogSize(remoteLog.getRemoteSizeInBytes());
         // leader needs to register the remote log metrics
         remoteLog.registerMetrics(replica.bucketMetrics());
@@ -257,13 +260,20 @@ public class RemoteLogManager implements Closeable {
             return -1L;
         }
 
-        RemoteLogSegment segment = remoteLogTablet.findSegmentByTimestamp(timestamp);
-        if (segment == null) {
-            return -1L;
-        } else {
-            return remoteLogIndexCacheForBucket(tableBucket)
-                    .lookupOffsetForTimestamp(segment, timestamp);
+        RemoteLogIndexCache indexCache = remoteLogIndexCacheForBucket(tableBucket);
+        for (RemoteLogSegment segment : remoteLogTablet.findSegmentsByTimestamp(timestamp)) {
+            long offset = indexCache.lookupOffsetForTimestamp(segment, timestamp);
+            // The timestamp index covers the complete physical segment, while overlap handling may
+            // expose only a clipped logical range. Clamp a result in the hidden prefix to the
+            // logical start, and skip a result in the hidden suffix in favor of the next candidate.
+            if (offset < segment.logicalStartOffset()) {
+                return segment.logicalStartOffset();
+            }
+            if (offset < segment.logicalEndOffset()) {
+                return offset;
+            }
         }
+        return -1L;
     }
 
     /**
@@ -273,6 +283,12 @@ public class RemoteLogManager implements Closeable {
      */
     public List<RemoteLogSegment> relevantRemoteLogSegments(TableBucket tableBucket, long offset) {
         return remoteLogTablet(tableBucket).relevantRemoteLogSegments(offset);
+    }
+
+    /** Returns the maximal physically contiguous remote segment prefix for FetchLog v0. */
+    public List<RemoteLogSegment> relevantRemoteLogSegmentsForFetchV0(
+            TableBucket tableBucket, long offset) {
+        return remoteLogTablet(tableBucket).relevantRemoteLogSegmentsForFetchV0(offset);
     }
 
     private boolean remoteDisabled() {
@@ -314,6 +330,7 @@ public class RemoteLogManager implements Closeable {
                                     replica,
                                     remoteLog,
                                     remoteLogStorage,
+                                    remoteLogIndexCache(replica.getLogTablet().getDataDir()),
                                     coordinatorGateway,
                                     clock,
                                     maxUploadSegmentsPerTask);

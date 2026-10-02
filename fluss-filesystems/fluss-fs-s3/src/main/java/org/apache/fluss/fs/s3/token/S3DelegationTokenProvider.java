@@ -17,24 +17,33 @@
 
 package org.apache.fluss.fs.s3.token;
 
+import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.fs.token.CredentialsJsonSerde;
 import org.apache.fluss.fs.token.ObtainedSecurityToken;
+import org.apache.fluss.utils.StringUtils;
 
-import com.amazonaws.auth.AWSStaticCredentialsProvider;
-import com.amazonaws.auth.BasicAWSCredentials;
-import com.amazonaws.client.builder.AwsClientBuilder;
-import com.amazonaws.services.securitytoken.AWSSecurityTokenService;
-import com.amazonaws.services.securitytoken.AWSSecurityTokenServiceClientBuilder;
-import com.amazonaws.services.securitytoken.model.AssumeRoleRequest;
-import com.amazonaws.services.securitytoken.model.AssumeRoleResult;
-import com.amazonaws.services.securitytoken.model.Credentials;
-import com.amazonaws.services.securitytoken.model.GetSessionTokenResult;
 import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.fs.s3a.AWSCredentialProviderList;
+import org.apache.hadoop.fs.s3a.auth.CredentialProviderListFactory;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import software.amazon.awssdk.auth.credentials.AwsBasicCredentials;
+import software.amazon.awssdk.auth.credentials.AwsCredentials;
+import software.amazon.awssdk.auth.credentials.AwsCredentialsProvider;
+import software.amazon.awssdk.auth.credentials.AwsSessionCredentials;
+import software.amazon.awssdk.auth.credentials.StaticCredentialsProvider;
+import software.amazon.awssdk.regions.Region;
+import software.amazon.awssdk.services.sts.StsClient;
+import software.amazon.awssdk.services.sts.StsClientBuilder;
+import software.amazon.awssdk.services.sts.model.AssumeRoleRequest;
+import software.amazon.awssdk.services.sts.model.AssumeRoleResponse;
+import software.amazon.awssdk.services.sts.model.Credentials;
+import software.amazon.awssdk.services.sts.model.GetSessionTokenResponse;
 
 import javax.annotation.Nullable;
 
+import java.io.IOException;
+import java.net.URI;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Map;
@@ -49,6 +58,9 @@ public class S3DelegationTokenProvider {
 
     private static final String ACCESS_KEY_ID = "fs.s3a.access.key";
     private static final String ACCESS_KEY_SECRET = "fs.s3a.secret.key";
+    private static final String AWS_CREDENTIALS_PROVIDER = "fs.s3a.aws.credentials.provider";
+    public static final String CREDENTIAL_PROVIDER_EXPLICITLY_CONFIGURED =
+            "fluss.fs.s3.aws.credentials.provider.explicitly.configured";
 
     private static final String REGION_KEY = "fs.s3a.region";
     private static final String ENDPOINT_KEY = "fs.s3a.endpoint";
@@ -63,9 +75,10 @@ public class S3DelegationTokenProvider {
     @Nullable private final String secretKey;
     @Nullable private final String roleArn;
     @Nullable private final String stsEndpoint;
+    @Nullable private final AWSCredentialProviderList credentialProviderList;
     private final Map<String, String> additionInfos;
 
-    public S3DelegationTokenProvider(String scheme, Configuration conf) {
+    public S3DelegationTokenProvider(String scheme, Configuration conf) throws IOException {
         this.scheme = scheme;
         this.region = conf.get(REGION_KEY);
         checkArgument(region != null, "Region is not set.");
@@ -73,11 +86,26 @@ public class S3DelegationTokenProvider {
         this.secretKey = conf.get(ACCESS_KEY_SECRET);
         this.roleArn = conf.get(ROLE_ARN_KEY);
         this.stsEndpoint = conf.get(STS_ENDPOINT_KEY);
+        boolean hasCredentialProvider =
+                conf.getBoolean(CREDENTIAL_PROVIDER_EXPLICITLY_CONFIGURED, false)
+                        && !StringUtils.isNullOrWhitespaceOnly(
+                                conf.getTrimmed(AWS_CREDENTIALS_PROVIDER));
 
         checkArgument(
                 (accessKey == null) == (secretKey == null),
                 "S3 access key and secret key must both be set or both be unset.");
-        if (accessKey == null) {
+        if (hasCredentialProvider) {
+            checkArgument(
+                    !Arrays.asList(conf.getTrimmedStrings(AWS_CREDENTIALS_PROVIDER))
+                            .contains(DynamicTemporaryAWSCredentialsProvider.NAME),
+                    "%s cannot be configured as a server-side AWS credentials provider.",
+                    DynamicTemporaryAWSCredentialsProvider.NAME);
+        }
+        this.credentialProviderList =
+                hasCredentialProvider
+                        ? CredentialProviderListFactory.createAWSCredentialProviderList(null, conf)
+                        : null;
+        if (accessKey == null && credentialProviderList == null) {
             checkArgument(
                     roleArn != null,
                     "Role ARN must be set when static credentials are not provided.");
@@ -92,67 +120,100 @@ public class S3DelegationTokenProvider {
     }
 
     public ObtainedSecurityToken obtainSecurityToken() {
-        AWSSecurityTokenService stsClient = buildStsClient();
-        try {
+        try (StsClient stsClient = buildStsClient()) {
             Credentials credentials;
 
             if (roleArn != null) {
                 LOG.info("Obtaining session credentials via AssumeRole, role: {}", roleArn);
                 AssumeRoleRequest request =
-                        new AssumeRoleRequest()
-                                .withRoleArn(roleArn)
-                                .withRoleSessionName("fluss-" + UUID.randomUUID());
-                AssumeRoleResult result = stsClient.assumeRole(request);
-                credentials = result.getCredentials();
+                        AssumeRoleRequest.builder()
+                                .roleArn(roleArn)
+                                .roleSessionName("fluss-" + UUID.randomUUID())
+                                .build();
+                AssumeRoleResponse response = stsClient.assumeRole(request);
+                credentials = response.credentials();
             } else {
                 LOG.info(
-                        "Obtaining session credentials via GetSessionToken with access key: {}",
-                        accessKey);
-                GetSessionTokenResult result = stsClient.getSessionToken();
-                credentials = result.getCredentials();
+                        "Obtaining session credentials via GetSessionToken{}.",
+                        credentialProviderList != null
+                                ? " with configured AWS credentials provider"
+                                : " with access key: " + S3TokenLogUtils.maskAccessKey(accessKey));
+                GetSessionTokenResponse response = stsClient.getSessionToken();
+                credentials = response.credentials();
             }
 
             LOG.info(
                     "Session credentials obtained successfully with access key: {} expiration: {}",
-                    credentials.getAccessKeyId(),
-                    credentials.getExpiration());
+                    S3TokenLogUtils.maskAccessKey(credentials.accessKeyId()),
+                    credentials.expiration());
 
             return new ObtainedSecurityToken(
                     scheme,
                     toJson(credentials),
-                    credentials.getExpiration().getTime(),
+                    credentials.expiration().toEpochMilli(),
                     additionInfos);
-        } finally {
-            stsClient.shutdown();
         }
     }
 
-    private AWSSecurityTokenService buildStsClient() {
-        AWSSecurityTokenServiceClientBuilder builder =
-                AWSSecurityTokenServiceClientBuilder.standard();
+    @VisibleForTesting
+    static URI parseStsEndpoint(String stsEndpoint) {
+        return URI.create(stsEndpoint.contains("://") ? stsEndpoint : "https://" + stsEndpoint);
+    }
 
-        if (accessKey != null && secretKey != null) {
-            builder.withCredentials(
-                    new AWSStaticCredentialsProvider(
-                            new BasicAWSCredentials(accessKey, secretKey)));
+    private StsClient buildStsClient() {
+        StsClientBuilder builder = StsClient.builder().region(Region.of(region));
+
+        AwsCredentialsProvider stsCredentialsProvider = createStsCredentialsProvider();
+        if (stsCredentialsProvider != null) {
+            builder.credentialsProvider(stsCredentialsProvider);
         }
 
         if (stsEndpoint != null) {
-            builder.withEndpointConfiguration(
-                    new AwsClientBuilder.EndpointConfiguration(stsEndpoint, region));
-        } else {
-            builder.withRegion(region);
+            builder.endpointOverride(parseStsEndpoint(stsEndpoint));
         }
 
         return builder.build();
     }
 
+    @Nullable
+    AwsCredentialsProvider createStsCredentialsProvider() {
+        if (credentialProviderList != null) {
+            if (roleArn != null) {
+                // Not the list itself: StsClient.close() would close it, breaking
+                // every later token refresh.
+                LOG.info("Using configured AWS credentials provider as the AssumeRole caller.");
+                return () -> credentialProviderList.resolveCredentials();
+            }
+            AwsCredentials credentials = credentialProviderList.resolveCredentials();
+            checkArgument(
+                    !(credentials instanceof AwsSessionCredentials),
+                    "Session credentials from the configured AWS credentials provider are not supported "
+                            + "for Fluss S3 client-token generation.");
+            checkArgument(
+                    credentials.accessKeyId() != null && credentials.secretAccessKey() != null,
+                    "The configured AWS credentials provider must return an access key and secret key.");
+            LOG.info(
+                    "Using configured AWS credentials provider for STS GetSessionToken with access key: {}",
+                    S3TokenLogUtils.maskAccessKey(credentials.accessKeyId()));
+            return StaticCredentialsProvider.create(
+                    AwsBasicCredentials.create(
+                            credentials.accessKeyId(), credentials.secretAccessKey()));
+        }
+
+        if (accessKey != null && secretKey != null) {
+            return StaticCredentialsProvider.create(
+                    AwsBasicCredentials.create(accessKey, secretKey));
+        }
+
+        return null;
+    }
+
     private byte[] toJson(Credentials credentials) {
         org.apache.fluss.fs.token.Credentials flussCredentials =
                 new org.apache.fluss.fs.token.Credentials(
-                        credentials.getAccessKeyId(),
-                        credentials.getSecretAccessKey(),
-                        credentials.getSessionToken());
+                        credentials.accessKeyId(),
+                        credentials.secretAccessKey(),
+                        credentials.sessionToken());
         return CredentialsJsonSerde.toJson(flussCredentials);
     }
 }

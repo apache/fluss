@@ -5,7 +5,7 @@ sidebar_position: 4
 
 # How to become a committer
 
-There is no strict protocol for becoming a committer. Candidates for new committers are typically people that are active contributors and community members. Candidates are suggested by current committers or PPMC members, and voted upon by the PPMC.
+There is no strict protocol for becoming a committer. Candidates for new committers are typically people that are active contributors and community members. Candidates are suggested by current committers or PMC members, and voted upon by the PMC.
 
 If you would like to become a committer, you should engage with the community and start contributing to Apache Fluss in any of the ways described in the [How to Contribute](how-to-contribute/contribute-code.md) guides. You might also want to talk to other committers and ask for their advice and guidance.
 
@@ -23,15 +23,15 @@ While the prior points give ways to identify promising candidates, the following
 
 - **Respectful and constructive**: They have shown themselves to be respectful towards other community members and constructive in discussions.
 
-## Path to PPMC Membership
+## Path to PMC Membership
 
-Outstanding committers may be invited to join the Project Management Committee (PPMC). As described in [Fluss Team](fluss-team.md), the PPMC is the vehicle through which decision-making power and responsibility for oversight devolves to developers. While committers have the ability to update the code, only the PPMC as a body has the authority to:
+The Project Management Committee (PMC) is the official controlling body of the project. PMC members “must” be able to perform the official responsibilities of the PMC (verify releases and growth of committers/PMC). We “want” them to be people that have a vision for Fluss, technology and community wise.
 
-- Vote on formal releases of the project's software
-- Vote in new committers and PPMC members
-- Manage the incubator project
+For the avoidance of doubt, not every PMC member needs to know all details of how exactly Fluss’s release process works (it is okay to understand the gist and how to find the details). Likewise, not every PMC member needs to be a visionary. We strive to build a PMC that covers all parts well, understanding that each member brings different strengths.
 
-For more details on PPMC roles and responsibilities, see [Fluss Team](fluss-team.md).
+Ideally, we find candidates among active community members that have shown initiative to shape the direction of Fluss (technology and community) and have shown willingness to learn the official processes, such as how to create or verify for releases.
+
+For more details on PMC roles and responsibilities, see [Fluss Team](fluss-team.md).
 
 ## Committer Rights
 

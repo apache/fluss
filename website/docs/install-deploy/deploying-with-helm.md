@@ -86,7 +86,7 @@ helm install zk bitnami/zookeeper
 #### Install from Helm repo
 
 ```bash
-helm repo add fluss https://downloads.apache.org/incubator/fluss/helm-chart
+helm repo add fluss https://downloads.apache.org/fluss/helm-chart
 helm repo update
 helm install helm-repo/fluss
 ```
@@ -383,6 +383,59 @@ The same pattern works with Sealed Secrets, HashiCorp Vault Agent Injector (prod
 | `configurationOverrides.data.dir` | Local data directory | `/tmp/fluss/data` |
 | `configurationOverrides.internal.listener.name` | Internal listener name | `INTERNAL` |
 
+### Secrets in Configuration Overrides
+
+| Parameter | Description | Default |
+|-----------|-------------|---------|
+| `secrets.basePath` | Base directory for secret mounts | `/etc/fluss/secrets` |
+| `secrets.mounts` | Secrets mounted as files under `<basePath>/<name>`, entries of `{name, secretName}` | `[]` |
+| `secrets.env` | Secret values injected as env vars via `secretKeyRef`, entries of `{name, secretName, key}` | `[]` |
+
+Any `configurationOverrides` value can reference a secret through a
+[config provider marker](../security/secrets.md) instead of a literal, so the rendered
+`server.yaml` ConfigMap never contains secret material. The chart generates the matching
+`config.providers` settings, restricted to the declared mounts and env names.
+
+```bash
+kubectl create secret generic fluss-paimon-creds \
+  --from-literal=access-key=... --from-literal=secret-key=...
+```
+
+```yaml
+secrets:
+  mounts:
+    - name: paimon-creds
+      secretName: fluss-paimon-creds
+
+configurationOverrides:
+  datalake.paimon.s3.access-key: ${directory:/etc/fluss/secrets/paimon-creds:access-key}
+  datalake.paimon.s3.secret-key: ${directory:/etc/fluss/secrets/paimon-creds:secret-key}
+```
+
+Alternatively, a value can be injected as an environment variable:
+
+```yaml
+secrets:
+  env:
+    - name: PAIMON_S3_ACCESS_KEY
+      secretName: fluss-paimon-creds
+      key: access-key
+
+configurationOverrides:
+  datalake.paimon.s3.access-key: ${env:PAIMON_S3_ACCESS_KEY}
+```
+
+To rotate a secret, update the Kubernetes Secret and restart the pods
+(`kubectl rollout restart statefulset -l app.kubernetes.io/name=fluss`); markers are resolved at
+server startup.
+
+This works with any Secret producer — for example, an
+[External Secrets Operator](https://external-secrets.io/) `ExternalSecret` syncing from AWS
+Secrets Manager or Vault into the referenced Secret. To restart pods automatically when the
+Secret changes, a controller such as [Reloader](https://github.com/stakater/Reloader) can watch
+it (annotate the StatefulSets with `secret.reloader.stakater.com/reload: "<secret-name>"`),
+making rotation fully hands-off.
+
 ### Tablet Server Parameters
 
 | Parameter | Description | Default |
@@ -430,6 +483,8 @@ The same pattern works with Sealed Secrets, HashiCorp Vault Agent Injector (prod
 
 | Parameter | Description | Default |
 |-----------|-------------|---------|
+| `coordinator.annotations` | Annotations to add to the CoordinatorServer StatefulSet | `{}` |
+| `coordinator.service.annotations` | Annotations to add to the CoordinatorServer headless Service | `{}` |
 | `coordinator.extraVolumes` | Extra volumes to add to the CoordinatorServer pod spec | `[]` |
 | `coordinator.extraVolumeMounts` | Extra volume mounts to add to the coordinator container | `[]` |
 | `coordinator.initContainers` | Init containers to run before the coordinator container starts | `[]` |
@@ -440,6 +495,8 @@ The same pattern works with Sealed Secrets, HashiCorp Vault Agent Injector (prod
 | `coordinator.podDisruptionBudget.enabled` | Enable PodDisruptionBudget for CoordinatorServer | `false` |
 | `coordinator.podDisruptionBudget.minAvailable` | Minimum available coordinator pods during disruption | Not set |
 | `coordinator.podDisruptionBudget.maxUnavailable` | Maximum unavailable coordinator pods during disruption | Not set |
+| `tablet.annotations` | Annotations to add to the TabletServer StatefulSet | `{}` |
+| `tablet.service.annotations` | Annotations to add to the TabletServer headless Service | `{}` |
 | `tablet.extraVolumes` | Extra volumes to add to TabletServer pod specs | `[]` |
 | `tablet.extraVolumeMounts` | Extra volume mounts to add to the tablet container | `[]` |
 | `tablet.initContainers` | Init containers to run before the tablet container starts | `[]` |
@@ -450,6 +507,19 @@ The same pattern works with Sealed Secrets, HashiCorp Vault Agent Injector (prod
 | `tablet.podDisruptionBudget.enabled` | Enable PodDisruptionBudget for TabletServer | `false` |
 | `tablet.podDisruptionBudget.minAvailable` | Minimum available tablet server pods during disruption | Not set |
 | `tablet.podDisruptionBudget.maxUnavailable` | Maximum unavailable tablet server pods during disruption | Not set |
+
+Workload and service annotations are where controllers such as
+[Reloader](https://github.com/stakater/Reloader) (restart on Secret change) or Argo CD
+(sync-waves) hook in:
+
+```yaml
+coordinator:
+  annotations:
+    secret.reloader.stakater.com/reload: fluss-internal-sasl
+tablet:
+  annotations:
+    secret.reloader.stakater.com/reload: fluss-internal-sasl
+```
 
 ## Advanced Configuration
 
@@ -742,8 +812,8 @@ _fsAzurePlugin: &fsAzurePlugin
         - sh
         - -c
         - |
-          wget -O /plugins/azure/fluss-fs-azure-0.9.jar \
-            https://repo1.maven.org/maven2/org/apache/fluss/fluss-fs-azure/0.9.0-incubating/fluss-fs-azure-0.9.0-incubating.jar
+          wget -O /plugins/azure/fluss-fs-azure-$FLUSS_VERSION$.jar \
+            $FLUSS_MAVEN_REPO_URL$/org/apache/fluss/fluss-fs-azure/$FLUSS_VERSION$/fluss-fs-azure-$FLUSS_VERSION$.jar
       volumeMounts:
         - name: azure-plugin
           mountPath: /plugins
@@ -770,6 +840,43 @@ helm upgrade fluss ./helm -f values-new.yaml
 ### Rolling Updates
 
 The StatefulSets support rolling updates. When you update the configuration, pods will be restarted one by one to maintain availability.
+
+#### Cluster Health Readiness Probe
+
+The TabletServer readiness probe performs a two-step check to ensure safe rolling upgrades:
+
+1. **Local TCP port check** — confirms the TabletServer process is up and listening.
+2. **Cluster health check** — calls the Coordinator's Cluster Health API to confirm cluster status is GREEN (all replicas
+   in-sync, all leaders active) across the cluster.
+
+Only when both steps pass is the pod marked as Ready, allowing the StatefulSet controller to proceed to the next pod.
+If the Coordinator does not support the Cluster Health API (e.g., during a mixed-version upgrade from an older version),
+the probe immediately falls back to TCP-only port readiness.
+
+You can tune the probe parameters in your values:
+
+```yaml
+tablet:
+  readinessProbe:
+    # Timeout in ms for the RPC call to Coordinator (default: 5000)
+    rpcTimeoutMs: 5000
+    # Standard Kubernetes probe parameters (tuned for recovery checks)
+    failureThreshold: 200
+    timeoutSeconds: 10
+    initialDelaySeconds: 15
+    periodSeconds: 5
+```
+
+| Parameter          | Default | Description                                                                                                                                    |
+|--------------------|---------|------------------------------------------------------------------------------------------------------------------------------------------------|
+| `rpcTimeoutMs`     | `5000`  | Timeout in milliseconds for the RPC call to the Coordinator.                                                                                   |
+| `failureThreshold` | `200`   | Max consecutive probe failures before marking the pod as unready. With `periodSeconds=5`, this allows up to ~16 minutes for recovery.          |
+| `periodSeconds`    | `5`     | How often the probe runs.                                                                                                                      |
+
+:::note
+The CoordinatorServer does not need the Cluster Health API probe — it does not host data replicas, so a simple TCP check is sufficient.
+The Coordinator should be upgraded **after** all TabletServers are fully upgraded and recovered.
+:::
 
 ## Custom Container Images
 
@@ -805,7 +912,7 @@ image:
 
 ### Health Checks
 
-The chart includes liveness and readiness probes:
+The chart includes liveness and readiness probes. By default, both use TCP socket checks:
 
 ```yaml
 livenessProbe:
@@ -822,6 +929,9 @@ readinessProbe:
   periodSeconds: 3
   failureThreshold: 100
 ```
+
+For TabletServers, you can enable the Cluster Health readiness probe for safe rolling upgrades.
+See [Cluster Health Readiness Probe](#cluster-health-readiness-probe) for details.
 
 ### Logs
 

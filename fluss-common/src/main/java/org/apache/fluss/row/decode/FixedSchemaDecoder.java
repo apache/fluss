@@ -23,10 +23,9 @@ import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.record.ValueRecord;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.ProjectedRow;
+import org.apache.fluss.row.encode.KvValueLayout;
 import org.apache.fluss.types.DataType;
 import org.apache.fluss.utils.SchemaUtil;
-
-import static org.apache.fluss.row.encode.ValueEncoder.SCHEMA_ID_LENGTH;
 
 /**
  * A decoder that deserializes raw byte arrays of {@link ValueRecord} with dynamic or
@@ -90,6 +89,10 @@ public class FixedSchemaDecoder {
      * adheres to the fixed {@code targetSchema}.
      */
     public InternalRow decode(MemorySegment valueSegment) {
-        return decode(valueSegment, SCHEMA_ID_LENGTH, valueSegment.size() - SCHEMA_ID_LENGTH);
+        KvValueLayout layout = KvValueLayout.PLAIN;
+        return decode(
+                valueSegment,
+                layout.rowPayloadOffset(),
+                layout.rowPayloadLength(valueSegment.size()));
     }
 }

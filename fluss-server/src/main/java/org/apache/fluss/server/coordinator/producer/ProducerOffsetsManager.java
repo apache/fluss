@@ -88,6 +88,8 @@ public class ProducerOffsetsManager implements AutoCloseable {
         this.offsetsStore = offsetsStore;
         this.defaultTtlMs = defaultTtlMs;
         this.cleanupIntervalMs = cleanupIntervalMs;
+        // TODO: Reuse the CoordinatorServer shared scheduler for this lightweight coordinator
+        // cleanup task instead of creating a component-owned scheduler.
         this.cleanupScheduler =
                 Executors.newSingleThreadScheduledExecutor(
                         new ExecutorThreadFactory("producer-snapshot-cleanup"));

@@ -1,0 +1,38 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# Verify that the pushed tag version matches the workspace package version in fluss-rust/Cargo.toml.
+# Tag v1.0.0 or v1.0.0-rc1; Cargo 1.0.0. Compare base version (strip -rc*): both pass when Cargo is 1.0.0.
+# Requires: checkout before this step. Reads the Rust workspace version from fluss-rust/Cargo.toml and compares it with the pushed tag.
+
+name: 'Verify tag matches crate version'
+description: 'Exits with an error if the pushed tag base version does not match [workspace.package] version in fluss-rust/Cargo.toml.'
+
+runs:
+  using: 'composite'
+  steps:
+    - run: |
+        TAG_VERSION="${GITHUB_REF#refs/tags/v}"
+        CARGO_TOML="${GITHUB_WORKSPACE}/fluss-rust/Cargo.toml"
+        CRATE_VERSION=$(sed -n '/^\[workspace.package\]/,/^\[/p' "${CARGO_TOML}" | grep '^\s*version\s*=' | head -1 | sed -E 's/.*"([^"]+)".*/\1/')
+        base() { echo "$1" | sed -E 's/-rc(\.[0-9]+|[0-9]+)$//'; }
+        if [ "$(base "$TAG_VERSION")" != "$(base "$CRATE_VERSION")" ]; then
+          echo "::error::Tag version ($TAG_VERSION) does not match fluss-rust/Cargo.toml version ($CRATE_VERSION). Run fluss-rust/scripts/bump-version.sh before tagging, or tag the version configured in Cargo.toml."
+          exit 1
+        fi
+        echo "Tag and crate version match: $TAG_VERSION"
+      shell: bash

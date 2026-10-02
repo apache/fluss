@@ -35,7 +35,6 @@ import org.slf4j.LoggerFactory;
 import javax.annotation.Nullable;
 
 import java.util.Collections;
-import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
 
@@ -201,17 +200,16 @@ public class RocksDBStatistics implements AutoCloseable {
     }
 
     /**
-     * Get total memory usage across all RocksDB components including block cache, memtables,
-     * indexes, filters, etc.
+     * Get total memory usage across non-overlapping RocksDB memory components.
      *
-     * <p>This uses RocksDB MemoryUtil to get approximate memory usage by type and sums all types.
-     * This includes:
+     * <p>This uses RocksDB MemoryUtil to get approximate memory usage by type. The unflushed
+     * memtable value is not added separately because it is a subset of total memtable usage. This
+     * includes:
      *
      * <ul>
      *   <li>Block cache usage (if explicit cache is provided)
      *   <li>All memtables (active and immutable)
      *   <li>Table readers (indexes and bloom filters)
-     *   <li>Pinned blocks
      * </ul>
      *
      * <p>Note: To get accurate block cache memory usage, an explicit Cache object must be provided
@@ -226,16 +224,14 @@ public class RocksDBStatistics implements AutoCloseable {
                 return 0L;
             }
 
-            Set<Cache> caches = null;
-            if (blockCache != null) {
-                caches = new HashSet<>();
-                caches.add(blockCache);
-            }
+            Set<Cache> caches = blockCache == null ? null : Collections.singleton(blockCache);
 
             Map<MemoryUsageType, Long> memoryUsage =
                     MemoryUtil.getApproximateMemoryUsageByType(
                             Collections.singletonList(db), caches);
-            return memoryUsage.values().stream().mapToLong(Long::longValue).sum();
+            return memoryUsage.getOrDefault(MemoryUsageType.kMemTableTotal, 0L)
+                    + memoryUsage.getOrDefault(MemoryUsageType.kTableReadersTotal, 0L)
+                    + memoryUsage.getOrDefault(MemoryUsageType.kCacheTotal, 0L);
         } catch (Exception e) {
             LOG.debug("Failed to get total memory usage from RocksDB", e);
             return 0L;
@@ -274,7 +270,10 @@ public class RocksDBStatistics implements AutoCloseable {
     /**
      * Get memory usage for block cache via MemoryUtil API.
      *
-     * @return block cache memory usage in bytes, or 0 if not available
+     * <p>When the cache is shared across tablets, it is not attributable at table scope and this
+     * instance is constructed without a cache. The shared cache usage is reported at server scope.
+     *
+     * @return block cache memory usage in bytes, or 0 if not available or using shared cache
      */
     public long getBlockCacheMemoryUsage() {
         return getMemoryUsageByType(MemoryUsageType.kCacheTotal);
@@ -283,7 +282,10 @@ public class RocksDBStatistics implements AutoCloseable {
     /**
      * Get pinned memory usage in block cache.
      *
-     * @return pinned memory usage in bytes, or 0 if not available
+     * <p>When the cache is shared across tablets, it is not attributable at table scope and this
+     * instance is constructed without a cache.
+     *
+     * @return pinned memory usage in bytes, or 0 if not available or using shared cache
      */
     public long getBlockCachePinnedUsage() {
         try (ResourceGuard.Lease lease = resourceGuard.acquireResource()) {
@@ -302,11 +304,7 @@ public class RocksDBStatistics implements AutoCloseable {
                 return 0L;
             }
 
-            Set<Cache> caches = null;
-            if (blockCache != null) {
-                caches = new HashSet<>();
-                caches.add(blockCache);
-            }
+            Set<Cache> caches = blockCache == null ? null : Collections.singleton(blockCache);
 
             Map<MemoryUsageType, Long> memoryUsage =
                     MemoryUtil.getApproximateMemoryUsageByType(

@@ -24,9 +24,11 @@ import org.apache.fluss.cluster.rebalance.RebalanceStatus;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.FencedLeaderEpochException;
+import org.apache.fluss.exception.InvalidAlterTableException;
 import org.apache.fluss.exception.InvalidCoordinatorException;
 import org.apache.fluss.fs.FsPath;
-import org.apache.fluss.metadata.DatabaseDescriptor;
+import org.apache.fluss.metadata.PartitionSpec;
+import org.apache.fluss.metadata.ResolvedPartitionSpec;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableBucketReplica;
@@ -35,6 +37,9 @@ import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePartition;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.metrics.Gauge;
+import org.apache.fluss.metrics.MetricNames;
+import org.apache.fluss.metrics.groups.AbstractMetricGroup;
 import org.apache.fluss.rpc.gateway.TabletServerGateway;
 import org.apache.fluss.rpc.messages.AdjustIsrResponse;
 import org.apache.fluss.rpc.messages.ApiMessage;
@@ -45,18 +50,24 @@ import org.apache.fluss.rpc.messages.NotifyLeaderAndIsrRequest;
 import org.apache.fluss.rpc.messages.NotifyLeaderAndIsrResponse;
 import org.apache.fluss.rpc.messages.NotifyRemoteLogOffsetsRequest;
 import org.apache.fluss.rpc.messages.UpdateMetadataRequest;
+import org.apache.fluss.rpc.messages.UpdateMetadataResponse;
+import org.apache.fluss.rpc.protocol.ApiError;
 import org.apache.fluss.rpc.protocol.ApiKeys;
+import org.apache.fluss.rpc.protocol.Errors;
 import org.apache.fluss.server.coordinator.event.AccessContextEvent;
 import org.apache.fluss.server.coordinator.event.AdjustIsrReceivedEvent;
 import org.apache.fluss.server.coordinator.event.CommitKvSnapshotEvent;
 import org.apache.fluss.server.coordinator.event.CommitRemoteLogManifestEvent;
 import org.apache.fluss.server.coordinator.event.CoordinatorEventManager;
-import org.apache.fluss.server.coordinator.lease.KvSnapshotLeaseManager;
+import org.apache.fluss.server.coordinator.event.NotifyLeaderAndIsrResponseReceivedEvent;
+import org.apache.fluss.server.coordinator.event.RetryOfflineLeaderEvent;
+import org.apache.fluss.server.coordinator.remote.RemoteDirDynamicLoader;
 import org.apache.fluss.server.coordinator.statemachine.BucketState;
 import org.apache.fluss.server.coordinator.statemachine.ReplicaState;
 import org.apache.fluss.server.entity.AdjustIsrResultForBucket;
 import org.apache.fluss.server.entity.CommitKvSnapshotData;
 import org.apache.fluss.server.entity.CommitRemoteLogManifestData;
+import org.apache.fluss.server.entity.NotifyLeaderAndIsrResultForBucket;
 import org.apache.fluss.server.entity.TablePropertyChanges;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshot;
 import org.apache.fluss.server.kv.snapshot.ZooKeeperCompletedSnapshotHandleStore;
@@ -68,35 +79,26 @@ import org.apache.fluss.server.metadata.TableMetadata;
 import org.apache.fluss.server.metrics.group.TestingMetricGroups;
 import org.apache.fluss.server.tablet.TestTabletServerGateway;
 import org.apache.fluss.server.zk.NOPErrorHandler;
-import org.apache.fluss.server.zk.ZkEpoch;
 import org.apache.fluss.server.zk.ZooKeeperClient;
-import org.apache.fluss.server.zk.ZooKeeperExtension;
 import org.apache.fluss.server.zk.data.BucketAssignment;
-import org.apache.fluss.server.zk.data.CoordinatorAddress;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
 import org.apache.fluss.server.zk.data.PartitionAssignment;
 import org.apache.fluss.server.zk.data.TableAssignment;
 import org.apache.fluss.server.zk.data.TabletServerRegistration;
 import org.apache.fluss.server.zk.data.ZkData;
-import org.apache.fluss.server.zk.data.ZkData.PartitionIdsZNode;
-import org.apache.fluss.server.zk.data.ZkData.TableIdsZNode;
-import org.apache.fluss.testutils.common.AllCallbackWrapper;
+import org.apache.fluss.server.zk.data.ZkVersion;
+import org.apache.fluss.testutils.common.ManuallyTriggeredScheduledExecutorService;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.utils.ExceptionUtils;
 import org.apache.fluss.utils.clock.SystemClock;
-import org.apache.fluss.utils.concurrent.ExecutorThreadFactory;
 import org.apache.fluss.utils.types.Tuple2;
 
-import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.BeforeAll;
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.extension.RegisterExtension;
 import org.junit.jupiter.api.io.TempDir;
 
-import java.io.IOException;
 import java.nio.file.Path;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
@@ -106,8 +108,10 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentLinkedDeque;
-import java.util.concurrent.Executors;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.stream.Collectors;
@@ -128,10 +132,11 @@ import static org.apache.fluss.server.utils.TableAssignmentUtils.generateAssignm
 import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.apache.fluss.testutils.common.CommonTestUtils.waitValue;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Test for {@link CoordinatorEventProcessor}. */
-class CoordinatorEventProcessorTest {
+class CoordinatorEventProcessorTest extends CoordinatorEventProcessorTestBase {
 
     private static final int N_BUCKETS = 3;
     private static final int REPLICATION_FACTOR = 3;
@@ -144,92 +149,142 @@ class CoordinatorEventProcessorTest {
                                     .primaryKey("a")
                                     .build())
                     .distributedBy(3, "a")
+                    .property(ConfigOptions.TABLE_KV_STANDBY_REPLICA_ENABLED.key(), "true")
                     .build()
                     .withReplicationFactor(REPLICATION_FACTOR);
 
-    @RegisterExtension
-    public static final AllCallbackWrapper<ZooKeeperExtension> ZOO_KEEPER_EXTENSION_WRAPPER =
-            new AllCallbackWrapper<>(new ZooKeeperExtension());
+    @Test
+    void testLoadedAssignmentsTrackKnownKvAndUnknownTablesConservatively() throws Exception {
+        long kvTableId = 10001L;
+        long logTableId = 10002L;
+        long orphanTableId = 10003L;
+        TableDescriptor logTable =
+                TableDescriptor.builder()
+                        .schema(Schema.newBuilder().column("a", DataTypes.INT()).build())
+                        .distributedBy(1)
+                        .build();
+        TableBucket kvBucket = new TableBucket(kvTableId, 0);
+        TableBucket logBucket = new TableBucket(logTableId, 0);
+        TableBucket orphanBucket = new TableBucket(orphanTableId, 0);
 
-    private static ZooKeeperClient zookeeperClient;
-    private static MetadataManager metadataManager;
-    private static ZkEpoch zkEpoch;
+        fromCtx(
+                ctx -> {
+                    long now = System.currentTimeMillis();
+                    ctx.putTableInfo(
+                            TableInfo.of(
+                                    TablePath.of(defaultDatabase, "known_kv"),
+                                    kvTableId,
+                                    0,
+                                    TEST_TABLE,
+                                    remoteDataDir,
+                                    now,
+                                    now));
+                    ctx.putTableInfo(
+                            TableInfo.of(
+                                    TablePath.of(defaultDatabase, "known_log"),
+                                    logTableId,
+                                    0,
+                                    logTable,
+                                    remoteDataDir,
+                                    now,
+                                    now));
 
-    private CoordinatorEventProcessor eventProcessor;
-    private final String defaultDatabase = "db";
-    private TestCoordinatorChannelManager testCoordinatorChannelManager;
-    private AutoPartitionManager autoPartitionManager;
-    private LakeTableTieringManager lakeTableTieringManager;
-    private CompletedSnapshotStoreManager completedSnapshotStoreManager;
-    private CoordinatorMetadataCache serverMetadataCache;
-    private KvSnapshotLeaseManager kvSnapshotLeaseManager;
-    private String remoteDataDir;
+                    eventProcessor.trackKvBucketsForLoadedAssignment(
+                            kvTableId, Collections.singleton(kvBucket));
+                    eventProcessor.trackKvBucketsForLoadedAssignment(
+                            logTableId, Collections.singleton(logBucket));
+                    eventProcessor.trackKvBucketsForLoadedAssignment(
+                            orphanTableId, Collections.singleton(orphanBucket));
+                    return null;
+                });
 
-    @BeforeAll
-    static void baseBeforeAll() throws Exception {
-        zookeeperClient =
-                ZOO_KEEPER_EXTENSION_WRAPPER
-                        .getCustomExtension()
-                        .getZooKeeperClient(NOPErrorHandler.INSTANCE);
-        metadataManager =
-                new MetadataManager(
-                        zookeeperClient,
-                        new Configuration(),
-                        new LakeCatalogDynamicLoader(new Configuration(), null, true));
-
-        // register coordinator server
-        zookeeperClient.registerCoordinatorLeader(
-                new CoordinatorAddress(
-                        "2", Endpoint.fromListenersString("CLIENT://localhost:10012")));
-
-        zkEpoch = zookeeperClient.fenceBecomeCoordinatorLeader("2");
-        // register 3 tablet servers
-        for (int i = 0; i < 3; i++) {
-            zookeeperClient.registerTabletServer(
-                    i,
-                    new TabletServerRegistration(
-                            "rack" + i,
-                            Collections.singletonList(
-                                    new Endpoint("host" + i, 1000, DEFAULT_LISTENER_NAME)),
-                            System.currentTimeMillis()));
-        }
+        assertThat(fromCtx(CoordinatorContext::getKvBucketCount)).isEqualTo(2);
+        fromCtx(
+                ctx -> {
+                    ctx.removeKvBuckets(Arrays.asList(kvBucket, logBucket, orphanBucket));
+                    return null;
+                });
+        assertThat(fromCtx(CoordinatorContext::getKvBucketCount)).isZero();
     }
 
-    @BeforeEach
-    void beforeEach() throws IOException {
-        serverMetadataCache = new CoordinatorMetadataCache();
-        // set a test channel manager for the context
-        testCoordinatorChannelManager = new TestCoordinatorChannelManager();
-        autoPartitionManager =
-                new AutoPartitionManager(serverMetadataCache, metadataManager, new Configuration());
-        lakeTableTieringManager =
-                new LakeTableTieringManager(TestingMetricGroups.LAKE_TIERING_METRICS);
-        Configuration conf = new Configuration();
-        remoteDataDir = zookeeperClient.getDefaultRemoteDataDir();
-        conf.setString(ConfigOptions.REMOTE_DATA_DIR, remoteDataDir);
-        kvSnapshotLeaseManager =
-                new KvSnapshotLeaseManager(
-                        Duration.ofMinutes(10).toMillis(),
-                        zookeeperClient,
-                        remoteDataDir,
-                        SystemClock.getInstance(),
-                        TestingMetricGroups.COORDINATOR_METRICS);
-        kvSnapshotLeaseManager.start();
+    @Test
+    void testStartupAndShutdownPublishObservedKvLeaderReplicaCount() throws Exception {
+        initCoordinatorChannel();
+        TablePath tablePath = TablePath.of(defaultDatabase, "startup_observed_count");
+        TableAssignment tableAssignment =
+                generateAssignment(
+                        N_BUCKETS,
+                        REPLICATION_FACTOR,
+                        new TabletServerInfo[] {
+                            new TabletServerInfo(0, "rack0"),
+                            new TabletServerInfo(1, "rack1"),
+                            new TabletServerInfo(2, "rack2")
+                        });
+        long tableId =
+                metadataManager.createTable(
+                        tablePath, remoteDataDir, TEST_TABLE, tableAssignment, false);
+        verifyTableCreated(tableId, tableAssignment, N_BUCKETS, REPLICATION_FACTOR);
+        assertThat(replicaCapacityController.getKvLeaderReplicaCount()).isEqualTo(N_BUCKETS);
 
-        eventProcessor = buildCoordinatorEventProcessor();
-        eventProcessor.startup();
-        metadataManager.createDatabase(
-                defaultDatabase, DatabaseDescriptor.builder().build(), false);
-        completedSnapshotStoreManager = eventProcessor.completedSnapshotStoreManager();
-    }
-
-    @AfterEach
-    void afterEach() {
         eventProcessor.shutdown();
-        metadataManager.dropDatabase(defaultDatabase, false, true);
-        // clear the assignment info for all tables;
-        ZOO_KEEPER_EXTENSION_WRAPPER.getCustomExtension().cleanupPath(TableIdsZNode.path());
-        ZOO_KEEPER_EXTENSION_WRAPPER.getCustomExtension().cleanupPath(PartitionIdsZNode.path());
+        assertThat(replicaCapacityController.getKvLeaderReplicaCount()).isZero();
+
+        // Simulate a stale value left by a previous CoordinatorContext. Startup must replace it
+        // with the count reconstructed from the loaded assignments.
+        replicaCapacityController.updateObservedKvLeaderReplicaCount(100);
+        eventProcessor = buildCoordinatorEventProcessor();
+        initCoordinatorChannel();
+        eventProcessor.startup();
+
+        assertThat(replicaCapacityController.getKvLeaderReplicaCount()).isEqualTo(N_BUCKETS);
+    }
+
+    @Test
+    void testAutoPartitionInitializationAfterCapacityInputsRestored() throws Exception {
+        initCoordinatorChannel();
+        TablePath kvTablePath = TablePath.of(defaultDatabase, "startup_capacity_kv");
+        TableAssignment tableAssignment =
+                generateAssignment(
+                        N_BUCKETS,
+                        REPLICATION_FACTOR,
+                        new TabletServerInfo[] {
+                            new TabletServerInfo(0, "rack0"),
+                            new TabletServerInfo(1, "rack1"),
+                            new TabletServerInfo(2, "rack2")
+                        });
+        long kvTableId =
+                metadataManager.createTable(
+                        kvTablePath, remoteDataDir, TEST_TABLE, tableAssignment, false);
+        verifyTableCreated(kvTableId, tableAssignment, N_BUCKETS, REPLICATION_FACTOR);
+
+        TablePath autoPartitionTablePath =
+                TablePath.of(defaultDatabase, "startup_capacity_auto_partition");
+        long autoPartitionTableId =
+                metadataManager.createTable(
+                        autoPartitionTablePath, remoteDataDir, getPartitionedTable(), null, false);
+
+        eventProcessor.shutdown();
+        autoPartitionManager.close();
+
+        serverMetadataCache = new CoordinatorMetadataCache();
+        replicaCapacityController =
+                new ReplicaCapacityController(new Configuration(), serverMetadataCache);
+        RecordingAutoPartitionManager recordingAutoPartitionManager =
+                new RecordingAutoPartitionManager(
+                        serverMetadataCache,
+                        metadataManager,
+                        remoteDataDir,
+                        replicaCapacityController);
+        autoPartitionManager = recordingAutoPartitionManager;
+        eventProcessor = buildCoordinatorEventProcessor();
+        initCoordinatorChannel();
+        eventProcessor.startup();
+
+        assertThat(recordingAutoPartitionManager.getInitializedTableIds())
+                .contains(autoPartitionTableId);
+        assertThat(recordingAutoPartitionManager.getObservedKvLeaderReplicaCountAtInit())
+                .isEqualTo(N_BUCKETS);
+        assertThat(recordingAutoPartitionManager.getLiveTabletServerCountAtInit()).isEqualTo(3);
     }
 
     @Test
@@ -250,12 +305,18 @@ class CoordinatorEventProcessorTest {
                             new TabletServerInfo(1, "rack1"),
                             new TabletServerInfo(2, "rack2")
                         });
-        long t1Id = metadataManager.createTable(t1, tableDescriptor, tableAssignment, false);
+        long t1Id =
+                metadataManager.createTable(
+                        t1, remoteDataDir, tableDescriptor, tableAssignment, false);
 
         TablePath t2 = TablePath.of(defaultDatabase, "create_drop_t2");
-        long t2Id = metadataManager.createTable(t2, tableDescriptor, tableAssignment, false);
+        long t2Id =
+                metadataManager.createTable(
+                        t2, remoteDataDir, tableDescriptor, tableAssignment, false);
 
         verifyTableCreated(t2Id, tableAssignment, nBuckets, replicationFactor);
+        retryVerifyContext(ctx -> assertThat(ctx.getKvBucketCount()).isEqualTo(6));
+        assertThat(replicaCapacityController.getKvLeaderReplicaCount()).isEqualTo(6);
 
         // mock CompletedSnapshotStore
         for (TableBucket tableBucket : allTableBuckets(t1Id, nBuckets)) {
@@ -268,6 +329,8 @@ class CoordinatorEventProcessorTest {
         metadataManager.dropTable(t1, false);
 
         verifyTableDropped(t1Id);
+        retryVerifyContext(ctx -> assertThat(ctx.getKvBucketCount()).isEqualTo(3));
+        assertThat(replicaCapacityController.getKvLeaderReplicaCount()).isEqualTo(3);
 
         // verify CompleteSnapshotStore has been removed when the table is dropped
         assertThat(completedSnapshotStoreManager.getBucketCompletedSnapshotStores()).isEmpty();
@@ -299,6 +362,8 @@ class CoordinatorEventProcessorTest {
         Set<TableBucketReplica> tableBucketReplicas =
                 fromCtx(ctx -> ctx.getAllReplicasForTable(t2Id));
         assertThat(tableBucketReplicas).isEmpty();
+        assertThat(fromCtx(CoordinatorContext::getKvBucketCount)).isZero();
+        assertThat(replicaCapacityController.getKvLeaderReplicaCount()).isZero();
     }
 
     @Test
@@ -383,13 +448,15 @@ class CoordinatorEventProcessorTest {
 
         TablePath table1Path = TablePath.of(defaultDatabase, "t1");
         long table1Id =
-                metadataManager.createTable(table1Path, TEST_TABLE, table1Assignment, false);
+                metadataManager.createTable(
+                        table1Path, remoteDataDir, TEST_TABLE, table1Assignment, false);
 
         TableAssignment table2Assignment =
                 TableAssignment.builder().add(0, BucketAssignment.of(3)).build();
         TablePath table2Path = TablePath.of(defaultDatabase, "t2");
         long table2Id =
-                metadataManager.createTable(table2Path, TEST_TABLE, table2Assignment, false);
+                metadataManager.createTable(
+                        table2Path, remoteDataDir, TEST_TABLE, table2Assignment, false);
 
         // retry until the table2 been created
         retryVerifyContext(
@@ -494,7 +561,9 @@ class CoordinatorEventProcessorTest {
                         .add(1, BucketAssignment.of(1, 2, 0))
                         .build();
         TablePath tablePath = TablePath.of(defaultDatabase, "t_restart");
-        long table1Id = metadataManager.createTable(tablePath, TEST_TABLE, tableAssignment, false);
+        long table1Id =
+                metadataManager.createTable(
+                        tablePath, remoteDataDir, TEST_TABLE, tableAssignment, false);
 
         // let's restart
         initCoordinatorChannel();
@@ -611,6 +680,142 @@ class CoordinatorEventProcessorTest {
     }
 
     @Test
+    void testMetricsRemainCollectableAfterDropTableFailure() throws Exception {
+        eventProcessor.shutdown();
+
+        FailingUpdateMetadataChannelManager failingChannelManager =
+                new FailingUpdateMetadataChannelManager();
+        testCoordinatorChannelManager = failingChannelManager;
+        eventProcessor = buildCoordinatorEventProcessor();
+        eventProcessor.startup();
+        completedSnapshotStoreManager = eventProcessor.completedSnapshotStoreManager();
+
+        TablePath tablePath = TablePath.of(defaultDatabase, "test_metrics_during_drop_table");
+        initCoordinatorChannel();
+        TableAssignment tableAssignment =
+                generateAssignment(
+                        N_BUCKETS,
+                        REPLICATION_FACTOR,
+                        new TabletServerInfo[] {
+                            new TabletServerInfo(0, "rack0"),
+                            new TabletServerInfo(1, "rack1"),
+                            new TabletServerInfo(2, "rack2")
+                        });
+        long tableId =
+                metadataManager.createTable(
+                        tablePath, remoteDataDir, TEST_TABLE, tableAssignment, false);
+        verifyTableCreated(tableId, tableAssignment, N_BUCKETS, REPLICATION_FACTOR);
+
+        List<TableBucket> tableBuckets = allTableBuckets(tableId, N_BUCKETS);
+        List<AbstractMetricGroup> bucketMetricGroups = new ArrayList<>();
+        List<Gauge<?>> inFlightGauges = new ArrayList<>();
+        for (TableBucket tableBucket : tableBuckets) {
+            completedSnapshotStoreManager.getOrCreateCompletedSnapshotStore(tablePath, tableBucket);
+            AbstractMetricGroup bucketMetricGroup =
+                    (AbstractMetricGroup)
+                            TestingMetricGroups.COORDINATOR_METRICS.getTableBucketMetricGroup(
+                                    tablePath, tableBucket);
+            assertThat(bucketMetricGroup).isNotNull();
+            bucketMetricGroups.add(bucketMetricGroup);
+            inFlightGauges.add(
+                    (Gauge<?>) bucketMetricGroup.getMetrics().get(MetricNames.KV_NUM_SNAPSHOTS));
+            inFlightGauges.add(
+                    (Gauge<?>)
+                            bucketMetricGroup.getMetrics().get(MetricNames.KV_ALL_SNAPSHOT_SIZE));
+        }
+        assertThat(inFlightGauges).doesNotContainNull();
+
+        failingChannelManager.failNextUpdateMetadata();
+        metadataManager.dropTable(tablePath, false);
+        failingChannelManager.awaitFailure();
+        fromCtx(context -> null);
+
+        assertThat(completedSnapshotStoreManager.getBucketCompletedSnapshotStores()).isEmpty();
+        assertThat(bucketMetricGroups).allMatch(AbstractMetricGroup::isClosed);
+        assertThat(tableBuckets)
+                .allSatisfy(
+                        tableBucket ->
+                                assertThat(
+                                                TestingMetricGroups.COORDINATOR_METRICS
+                                                        .getTableBucketMetricGroup(
+                                                                tablePath, tableBucket))
+                                        .isNull());
+        assertThatCode(() -> inFlightGauges.forEach(Gauge::getValue)).doesNotThrowAnyException();
+    }
+
+    @Test
+    void testMetricsRemainCollectableAfterDropPartitionFailure() throws Exception {
+        eventProcessor.shutdown();
+
+        FailingUpdateMetadataChannelManager failingChannelManager =
+                new FailingUpdateMetadataChannelManager();
+        testCoordinatorChannelManager = failingChannelManager;
+        eventProcessor = buildCoordinatorEventProcessor();
+        eventProcessor.startup();
+        completedSnapshotStoreManager = eventProcessor.completedSnapshotStoreManager();
+
+        TablePath tablePath = TablePath.of(defaultDatabase, "test_metrics_during_drop_partition");
+        initCoordinatorChannel();
+        long tableId =
+                metadataManager.createTable(
+                        tablePath, remoteDataDir, getPartitionedTable(), null, false);
+        Map<Integer, BucketAssignment> assignments =
+                generateAssignment(
+                                N_BUCKETS,
+                                REPLICATION_FACTOR,
+                                new TabletServerInfo[] {
+                                    new TabletServerInfo(0, "rack0"),
+                                    new TabletServerInfo(1, "rack1"),
+                                    new TabletServerInfo(2, "rack2")
+                                })
+                        .getBucketAssignments();
+        PartitionAssignment partitionAssignment = new PartitionAssignment(tableId, assignments);
+        PartitionIdName partition =
+                preparePartitionAssignment(tablePath, tableId, partitionAssignment).f0;
+        verifyPartitionCreated(
+                new TablePartition(tableId, partition.partitionId),
+                partitionAssignment,
+                N_BUCKETS,
+                REPLICATION_FACTOR);
+
+        List<TableBucket> tableBuckets = allTableBuckets(tableId, partition.partitionId, N_BUCKETS);
+        List<AbstractMetricGroup> bucketMetricGroups = new ArrayList<>();
+        List<Gauge<?>> inFlightGauges = new ArrayList<>();
+        for (TableBucket tableBucket : tableBuckets) {
+            completedSnapshotStoreManager.getOrCreateCompletedSnapshotStore(tablePath, tableBucket);
+            AbstractMetricGroup bucketMetricGroup =
+                    (AbstractMetricGroup)
+                            TestingMetricGroups.COORDINATOR_METRICS.getTableBucketMetricGroup(
+                                    tablePath, tableBucket);
+            assertThat(bucketMetricGroup).isNotNull();
+            bucketMetricGroups.add(bucketMetricGroup);
+            inFlightGauges.add(
+                    (Gauge<?>) bucketMetricGroup.getMetrics().get(MetricNames.KV_NUM_SNAPSHOTS));
+            inFlightGauges.add(
+                    (Gauge<?>)
+                            bucketMetricGroup.getMetrics().get(MetricNames.KV_ALL_SNAPSHOT_SIZE));
+        }
+        assertThat(inFlightGauges).doesNotContainNull();
+
+        failingChannelManager.failNextUpdateMetadata();
+        zookeeperClient.deletePartition(tablePath, partition.partitionName);
+        failingChannelManager.awaitFailure();
+        fromCtx(context -> null);
+
+        assertThat(completedSnapshotStoreManager.getBucketCompletedSnapshotStores()).isEmpty();
+        assertThat(bucketMetricGroups).allMatch(AbstractMetricGroup::isClosed);
+        assertThat(tableBuckets)
+                .allSatisfy(
+                        tableBucket ->
+                                assertThat(
+                                                TestingMetricGroups.COORDINATOR_METRICS
+                                                        .getTableBucketMetricGroup(
+                                                                tablePath, tableBucket))
+                                        .isNull());
+        assertThatCode(() -> inFlightGauges.forEach(Gauge::getValue)).doesNotThrowAnyException();
+    }
+
+    @Test
     void testCreateAndDropPartition() throws Exception {
         TablePath tablePath = TablePath.of(defaultDatabase, "test_create_drop_partition");
         // make sure all request to gateway should be successful
@@ -618,7 +823,8 @@ class CoordinatorEventProcessorTest {
         // create a partitioned table
         TableDescriptor tablePartitionTableDescriptor = getPartitionedTable();
         long tableId =
-                metadataManager.createTable(tablePath, tablePartitionTableDescriptor, null, false);
+                metadataManager.createTable(
+                        tablePath, remoteDataDir, tablePartitionTableDescriptor, null, false);
 
         int nBuckets = 3;
         int replicationFactor = 3;
@@ -690,7 +896,8 @@ class CoordinatorEventProcessorTest {
         // create a partitioned table
         TableDescriptor tablePartitionTableDescriptor = getPartitionedTable();
         long tableId =
-                metadataManager.createTable(tablePath, tablePartitionTableDescriptor, null, false);
+                metadataManager.createTable(
+                        tablePath, remoteDataDir, tablePartitionTableDescriptor, null, false);
 
         int nBuckets = 3;
         int replicationFactor = 3;
@@ -741,6 +948,229 @@ class CoordinatorEventProcessorTest {
                 partitionAssignment,
                 nBuckets,
                 replicationFactor);
+    }
+
+    @Test
+    void testDropPartitionRoutedThroughCleanupManager() throws Exception {
+        TablePath tablePath = TablePath.of(defaultDatabase, "test_drop_partition_via_cleanup");
+        initCoordinatorChannel();
+        TableDescriptor partitionedTableDescriptor = getPartitionedTable();
+        long tableId =
+                metadataManager.createTable(
+                        tablePath, remoteDataDir, partitionedTableDescriptor, null, false);
+
+        int nBuckets = 3;
+        int replicationFactor = 3;
+        Map<Integer, BucketAssignment> assignments =
+                generateAssignment(
+                                nBuckets,
+                                replicationFactor,
+                                new TabletServerInfo[] {
+                                    new TabletServerInfo(0, "rack0"),
+                                    new TabletServerInfo(1, "rack1"),
+                                    new TabletServerInfo(2, "rack2")
+                                })
+                        .getBucketAssignments();
+        PartitionAssignment partitionAssignment = new PartitionAssignment(tableId, assignments);
+        Tuple2<PartitionIdName, PartitionIdName> partitionIdAndNameTuple2 =
+                preparePartitionAssignment(tablePath, tableId, partitionAssignment);
+
+        long partition1Id = partitionIdAndNameTuple2.f0.partitionId;
+        String partition1Name = partitionIdAndNameTuple2.f0.partitionName;
+        long partition2Id = partitionIdAndNameTuple2.f1.partitionId;
+
+        verifyPartitionCreated(
+                new TablePartition(tableId, partition1Id),
+                partitionAssignment,
+                nBuckets,
+                replicationFactor);
+        verifyPartitionCreated(
+                new TablePartition(tableId, partition2Id),
+                partitionAssignment,
+                nBuckets,
+                replicationFactor);
+
+        // Drop partition1 via ZK (simulates the watcher path).
+        zookeeperClient.deletePartition(tablePath, partition1Name);
+
+        // Verify the drop entered the lifecycle throttler and partition is fully deleted.
+        TableLifecycleThrottler throttler = eventProcessor.getLifecycleThrottler();
+        verifyPartitionDropped(tableId, partition1Id);
+
+        // After completion, the lifecycle throttler should have released tracking.
+        assertThat(throttler.getInflightCount()).isZero();
+        assertThat(throttler.getPendingDropCount()).isZero();
+
+        // Partition2 should remain online.
+        verifyPartitionCreated(
+                new TablePartition(tableId, partition2Id),
+                partitionAssignment,
+                nBuckets,
+                replicationFactor);
+    }
+
+    @Test
+    void testDropPartitionedTableRoutedThroughCleanupManager() throws Exception {
+        TablePath tablePath = TablePath.of(defaultDatabase, "test_drop_table_via_cleanup");
+        initCoordinatorChannel();
+        TableDescriptor partitionedTableDescriptor = getPartitionedTable();
+        long tableId =
+                metadataManager.createTable(
+                        tablePath, remoteDataDir, partitionedTableDescriptor, null, false);
+
+        int nBuckets = 3;
+        int replicationFactor = 3;
+        Map<Integer, BucketAssignment> assignments =
+                generateAssignment(
+                                nBuckets,
+                                replicationFactor,
+                                new TabletServerInfo[] {
+                                    new TabletServerInfo(0, "rack0"),
+                                    new TabletServerInfo(1, "rack1"),
+                                    new TabletServerInfo(2, "rack2")
+                                })
+                        .getBucketAssignments();
+        PartitionAssignment partitionAssignment = new PartitionAssignment(tableId, assignments);
+        Tuple2<PartitionIdName, PartitionIdName> partitionIdAndNameTuple2 =
+                preparePartitionAssignment(tablePath, tableId, partitionAssignment);
+
+        long partition1Id = partitionIdAndNameTuple2.f0.partitionId;
+        long partition2Id = partitionIdAndNameTuple2.f1.partitionId;
+
+        verifyPartitionCreated(
+                new TablePartition(tableId, partition1Id),
+                partitionAssignment,
+                nBuckets,
+                replicationFactor);
+        verifyPartitionCreated(
+                new TablePartition(tableId, partition2Id),
+                partitionAssignment,
+                nBuckets,
+                replicationFactor);
+
+        // Drop the entire table (triggers NODE_DELETED for partitions + table via watcher).
+        metadataManager.dropTable(tablePath, false);
+
+        // Verify the drops entered the lifecycle throttler.
+        TableLifecycleThrottler cleanupManager = eventProcessor.getLifecycleThrottler();
+        retry(
+                Duration.ofMinutes(1),
+                () ->
+                        assertThat(
+                                        cleanupManager.getInflightCount() > 0
+                                                || (!zookeeperClient
+                                                                .getPartitionAssignment(
+                                                                        partition1Id)
+                                                                .isPresent()
+                                                        && !zookeeperClient
+                                                                .getPartitionAssignment(
+                                                                        partition2Id)
+                                                                .isPresent()))
+                                .isTrue());
+
+        // Verify both partitions and the table are fully deleted.
+        verifyPartitionDropped(tableId, partition1Id);
+        verifyPartitionDropped(tableId, partition2Id);
+        verifyTableDropped(tableId);
+
+        // Lifecycle throttler returns to idle state after all completions propagate.
+        retry(
+                Duration.ofMinutes(1),
+                () -> {
+                    assertThat(cleanupManager.getInflightCount()).isZero();
+                    assertThat(cleanupManager.getPendingDropCount()).isZero();
+                });
+    }
+
+    @Test
+    void testDropPartitionedTableWithNoPartitionsClearsTableState() throws Exception {
+        TablePath tablePath =
+                TablePath.of(defaultDatabase, "test_drop_partitioned_table_no_partitions");
+        initCoordinatorChannel();
+
+        long tableId =
+                metadataManager.createTable(
+                        tablePath, remoteDataDir, getPartitionedTable(), null, false);
+        retryVerifyContext(ctx -> assertThat(ctx.getTablePathById(tableId)).isNotNull());
+
+        metadataManager.dropTable(tablePath, false);
+
+        // The fix at the tail of processDropTable explicitly calls resumeDeletions(), which
+        // sees vacuous-true (getAllReplicasForTable returns empty) and runs
+        // completeDeleteTable -> removeTable, evicting the table from both tablesToBeDeleted
+        // and tablePathById.
+        retryVerifyContext(
+                ctx -> {
+                    assertThat(ctx.getTablePathById(tableId)).isNull();
+                    assertThat(ctx.getTablesToBeDeleted()).doesNotContain(tableId);
+                    assertThat(ctx.allTables()).doesNotContainKey(tableId);
+                });
+    }
+
+    @Test
+    void testStartupResumesDropPartitionThroughCleanupManager() throws Exception {
+        TablePath tablePath = TablePath.of(defaultDatabase, "test_startup_resume_via_cleanup");
+        initCoordinatorChannel();
+        TableDescriptor partitionedTableDescriptor = getPartitionedTable();
+        long tableId =
+                metadataManager.createTable(
+                        tablePath, remoteDataDir, partitionedTableDescriptor, null, false);
+
+        int nBuckets = 3;
+        int replicationFactor = 3;
+        Map<Integer, BucketAssignment> assignments =
+                generateAssignment(
+                                nBuckets,
+                                replicationFactor,
+                                new TabletServerInfo[] {
+                                    new TabletServerInfo(0, "rack0"),
+                                    new TabletServerInfo(1, "rack1"),
+                                    new TabletServerInfo(2, "rack2")
+                                })
+                        .getBucketAssignments();
+        PartitionAssignment partitionAssignment = new PartitionAssignment(tableId, assignments);
+        Tuple2<PartitionIdName, PartitionIdName> partitionIdAndNameTuple2 =
+                preparePartitionAssignment(tablePath, tableId, partitionAssignment);
+
+        long partition1Id = partitionIdAndNameTuple2.f0.partitionId;
+        String partition2Name = partitionIdAndNameTuple2.f1.partitionName;
+        long partition2Id = partitionIdAndNameTuple2.f1.partitionId;
+
+        verifyPartitionCreated(
+                new TablePartition(tableId, partition1Id),
+                partitionAssignment,
+                nBuckets,
+                replicationFactor);
+        verifyPartitionCreated(
+                new TablePartition(tableId, partition2Id),
+                partitionAssignment,
+                nBuckets,
+                replicationFactor);
+
+        // Shutdown the event processor, then delete partition2 in ZK while it's down.
+        eventProcessor.shutdown();
+        zookeeperClient.deletePartition(tablePath, partition2Name);
+
+        // Restart the event processor. During startup, the stale partition2 should be
+        // detected and routed through the cleanup manager.
+        eventProcessor = buildCoordinatorEventProcessor();
+        initCoordinatorChannel();
+        eventProcessor.startup();
+
+        // Verify partition2 is fully deleted (routed through lifecycle throttler on startup).
+        TableLifecycleThrottler cleanupManager = eventProcessor.getLifecycleThrottler();
+        verifyPartitionDropped(tableId, partition2Id);
+
+        // Partition1 should remain online.
+        verifyPartitionCreated(
+                new TablePartition(tableId, partition1Id),
+                partitionAssignment,
+                nBuckets,
+                replicationFactor);
+
+        // Lifecycle throttler returns to idle.
+        assertThat(cleanupManager.getInflightCount()).isZero();
+        assertThat(cleanupManager.getPendingDropCount()).isZero();
     }
 
     @Test
@@ -837,7 +1267,8 @@ class CoordinatorEventProcessorTest {
                             new TabletServerInfo(1, "rack1"),
                             new TabletServerInfo(2, "rack2")
                         });
-        long t1Id = metadataManager.createTable(t1, TEST_TABLE, tableAssignment, false);
+        long t1Id =
+                metadataManager.createTable(t1, remoteDataDir, TEST_TABLE, tableAssignment, false);
         verifyTableCreated(t1Id, tableAssignment, nBuckets, replicationFactor);
 
         // get the origin bucket leaderAndIsr
@@ -873,6 +1304,298 @@ class CoordinatorEventProcessorTest {
     }
 
     @Test
+    void testProcessAdjustIsrRejectsRequestFromNonLeader() throws Exception {
+        Map.Entry<TableBucket, LeaderAndIsr> entry =
+                createTableAndGetLeaderAndIsr("adjust_isr_from_non_leader");
+        TableBucket tableBucket = entry.getKey();
+        LeaderAndIsr currentLeaderAndIsr = entry.getValue();
+        int nonLeader =
+                currentLeaderAndIsr.isr().stream()
+                        .filter(replica -> replica != currentLeaderAndIsr.leader())
+                        .findFirst()
+                        .get();
+        LeaderAndIsr invalidLeaderAndIsr =
+                new LeaderAndIsr(
+                        nonLeader,
+                        currentLeaderAndIsr.leaderEpoch(),
+                        currentLeaderAndIsr.isr(),
+                        currentLeaderAndIsr.standbyReplicas(),
+                        currentLeaderAndIsr.coordinatorEpoch(),
+                        currentLeaderAndIsr.bucketEpoch());
+
+        AdjustIsrResultForBucket invalidResult = submitAdjustIsr(tableBucket, invalidLeaderAndIsr);
+
+        assertThat(invalidResult.getError().error())
+                .isEqualTo(Errors.FENCED_LEADER_EPOCH_EXCEPTION);
+        assertThat(invalidResult.getErrorMessage())
+                .contains(
+                        String.format(
+                                "request leader %s does not match current leader %s",
+                                nonLeader, currentLeaderAndIsr.leader()));
+        Optional<LeaderAndIsr> storedLeaderAndIsr =
+                fromCtx(ctx -> ctx.getBucketLeaderAndIsr(tableBucket));
+        assertThat(storedLeaderAndIsr).contains(currentLeaderAndIsr);
+    }
+
+    @Test
+    void testProcessAdjustIsrRejectsIsrWithoutCurrentLeader() throws Exception {
+        Map.Entry<TableBucket, LeaderAndIsr> entry =
+                createTableAndGetLeaderAndIsr("adjust_isr_without_current_leader");
+        TableBucket tableBucket = entry.getKey();
+        LeaderAndIsr currentLeaderAndIsr = entry.getValue();
+        List<Integer> isrWithoutLeader =
+                currentLeaderAndIsr.isr().stream()
+                        .filter(replica -> replica != currentLeaderAndIsr.leader())
+                        .collect(Collectors.toList());
+        LeaderAndIsr invalidLeaderAndIsr =
+                new LeaderAndIsr(
+                        currentLeaderAndIsr.leader(),
+                        currentLeaderAndIsr.leaderEpoch(),
+                        isrWithoutLeader,
+                        currentLeaderAndIsr.standbyReplicas(),
+                        currentLeaderAndIsr.coordinatorEpoch(),
+                        currentLeaderAndIsr.bucketEpoch());
+
+        AdjustIsrResultForBucket invalidResult = submitAdjustIsr(tableBucket, invalidLeaderAndIsr);
+        assertThat(invalidResult.getError().error()).isEqualTo(Errors.INELIGIBLE_REPLICA_EXCEPTION);
+        assertThat(invalidResult.getErrorMessage())
+                .contains(
+                        String.format(
+                                "leader %s is not in the new ISR", currentLeaderAndIsr.leader()));
+        Optional<LeaderAndIsr> storedLeaderAndIsr =
+                fromCtx(ctx -> ctx.getBucketLeaderAndIsr(tableBucket));
+        assertThat(storedLeaderAndIsr).contains(currentLeaderAndIsr);
+    }
+
+    @Test
+    void testDiskWriteLockedNotifyLeaderResponseMarksReplicaOffline() throws Exception {
+        initCoordinatorChannel();
+        TablePath tablePath =
+                TablePath.of(defaultDatabase, "disk_write_locked_notify_leader_response");
+        int nBuckets = 3;
+        int replicationFactor = 3;
+        TableAssignment tableAssignment =
+                generateAssignment(
+                        nBuckets,
+                        replicationFactor,
+                        new TabletServerInfo[] {
+                            new TabletServerInfo(0, "rack0"),
+                            new TabletServerInfo(1, "rack1"),
+                            new TabletServerInfo(2, "rack2")
+                        });
+        long tableId =
+                metadataManager.createTable(
+                        tablePath, remoteDataDir, TEST_TABLE, tableAssignment, false);
+        verifyTableCreated(tableId, tableAssignment, nBuckets, replicationFactor);
+
+        TableBucket tableBucket = new TableBucket(tableId, 0);
+        int leader =
+                tableAssignment.getBucketAssignment(tableBucket.getBucket()).getReplicas().get(0);
+        TableBucketReplica tableBucketReplica = new TableBucketReplica(tableBucket, leader);
+
+        eventProcessor
+                .getCoordinatorEventManager()
+                .put(
+                        new NotifyLeaderAndIsrResponseReceivedEvent(
+                                Collections.singletonList(
+                                        new NotifyLeaderAndIsrResultForBucket(
+                                                tableBucket,
+                                                new ApiError(
+                                                        Errors.DISK_WRITE_LOCKED,
+                                                        "disk write locked"))),
+                                leader));
+
+        fromCtx(
+                ctx -> {
+                    assertThat(ctx.getReplicaState(tableBucketReplica)).isEqualTo(OfflineReplica);
+                    assertThat(ctx.isReplicaOnline(leader, tableBucket)).isFalse();
+                    return null;
+                });
+    }
+
+    @Test
+    void testRetryOfflineLeaderEventRetriesOfflineReplicaOnLiveServer() throws Exception {
+        assertThat(eventProcessor.hasOfflineLeaderRetryTaskScheduled()).isFalse();
+        initCoordinatorChannel();
+        TablePath tablePath = TablePath.of(defaultDatabase, "retry_offline_leader_on_live_server");
+        int nBuckets = 3;
+        int replicationFactor = 1;
+        TableAssignment tableAssignment =
+                generateAssignment(
+                        nBuckets,
+                        replicationFactor,
+                        new TabletServerInfo[] {new TabletServerInfo(0, "rack0")});
+        long tableId =
+                metadataManager.createTable(
+                        tablePath,
+                        remoteDataDir,
+                        TEST_TABLE.withReplicationFactor(replicationFactor),
+                        tableAssignment,
+                        false);
+        verifyTableCreated(tableId, tableAssignment, nBuckets, replicationFactor);
+
+        TableBucket tableBucket = new TableBucket(tableId, 0);
+        int leader =
+                tableAssignment.getBucketAssignment(tableBucket.getBucket()).getReplicas().get(0);
+        TableBucketReplica tableBucketReplica = new TableBucketReplica(tableBucket, leader);
+
+        eventProcessor
+                .getCoordinatorEventManager()
+                .put(
+                        new NotifyLeaderAndIsrResponseReceivedEvent(
+                                Collections.singletonList(
+                                        new NotifyLeaderAndIsrResultForBucket(
+                                                tableBucket,
+                                                new ApiError(
+                                                        Errors.DISK_WRITE_LOCKED,
+                                                        "disk write locked"))),
+                                leader));
+
+        retryVerifyContext(
+                ctx -> {
+                    assertThat(ctx.getReplicaState(tableBucketReplica)).isEqualTo(OfflineReplica);
+                    assertThat(ctx.getBucketState(tableBucket)).isEqualTo(OfflineBucket);
+                    assertThat(ctx.isReplicaOnline(leader, tableBucket)).isFalse();
+                });
+        assertThat(eventProcessor.hasOfflineLeaderRetryTaskScheduled()).isTrue();
+
+        eventProcessor.getCoordinatorEventManager().put(new RetryOfflineLeaderEvent());
+
+        retryVerifyContext(
+                ctx -> {
+                    assertThat(ctx.isReplicaOnline(leader, tableBucket)).isTrue();
+                    assertThat(ctx.getReplicaState(tableBucketReplica)).isEqualTo(OnlineReplica);
+                    assertThat(ctx.getBucketState(tableBucket)).isEqualTo(OnlineBucket);
+                    assertThat(ctx.getBucketLeaderAndIsr(tableBucket).get().leader())
+                            .isEqualTo(leader);
+                });
+        assertThat(eventProcessor.hasOfflineLeaderRetryTaskScheduled()).isFalse();
+    }
+
+    @Test
+    void testRetryOfflineLeaderEventKeepsReplicaOfflineWhenRetryStillFails() throws Exception {
+        initCoordinatorChannel();
+        TablePath tablePath = TablePath.of(defaultDatabase, "retry_offline_leader_still_fails");
+        int nBuckets = 3;
+        int replicationFactor = 1;
+        TableAssignment tableAssignment =
+                generateAssignment(
+                        nBuckets,
+                        replicationFactor,
+                        new TabletServerInfo[] {new TabletServerInfo(0, "rack0")});
+        long tableId =
+                metadataManager.createTable(
+                        tablePath,
+                        remoteDataDir,
+                        TEST_TABLE.withReplicationFactor(replicationFactor),
+                        tableAssignment,
+                        false);
+        verifyTableCreated(tableId, tableAssignment, nBuckets, replicationFactor);
+
+        TableBucket tableBucket = new TableBucket(tableId, 0);
+        int leader =
+                tableAssignment.getBucketAssignment(tableBucket.getBucket()).getReplicas().get(0);
+        TableBucketReplica tableBucketReplica = new TableBucketReplica(tableBucket, leader);
+
+        eventProcessor
+                .getCoordinatorEventManager()
+                .put(
+                        new NotifyLeaderAndIsrResponseReceivedEvent(
+                                Collections.singletonList(
+                                        new NotifyLeaderAndIsrResultForBucket(
+                                                tableBucket,
+                                                new ApiError(
+                                                        Errors.DISK_WRITE_LOCKED,
+                                                        "disk write locked"))),
+                                leader));
+
+        retryVerifyContext(
+                ctx -> {
+                    assertThat(ctx.getReplicaState(tableBucketReplica)).isEqualTo(OfflineReplica);
+                    assertThat(ctx.isReplicaOnline(leader, tableBucket)).isFalse();
+                });
+        assertThat(eventProcessor.hasOfflineLeaderRetryTaskScheduled()).isTrue();
+
+        CountingFailingNotifyGateway failingGateway = new CountingFailingNotifyGateway();
+        testCoordinatorChannelManager.setGateways(Collections.singletonMap(leader, failingGateway));
+
+        eventProcessor.getCoordinatorEventManager().put(new RetryOfflineLeaderEvent());
+
+        retry(
+                Duration.ofMinutes(1),
+                () -> assertThat(failingGateway.getNotifyLeaderAndIsrCount()).isGreaterThan(0));
+        retryVerifyContext(
+                ctx -> {
+                    assertThat(ctx.getReplicaState(tableBucketReplica)).isEqualTo(OfflineReplica);
+                    assertThat(ctx.getBucketState(tableBucket)).isEqualTo(OfflineBucket);
+                    assertThat(ctx.isReplicaOnline(leader, tableBucket)).isFalse();
+                });
+        assertThat(eventProcessor.hasOfflineLeaderRetryTaskScheduled()).isTrue();
+    }
+
+    @Test
+    void testRetryOfflineLeaderEventSkipsDeletedBucket() throws Exception {
+        initCoordinatorChannel();
+        TablePath tablePath = TablePath.of(defaultDatabase, "retry_offline_leader_deleted_bucket");
+        int nBuckets = 3;
+        int replicationFactor = 1;
+        TableAssignment tableAssignment =
+                generateAssignment(
+                        nBuckets,
+                        replicationFactor,
+                        new TabletServerInfo[] {new TabletServerInfo(0, "rack0")});
+        long tableId =
+                metadataManager.createTable(
+                        tablePath,
+                        remoteDataDir,
+                        TEST_TABLE.withReplicationFactor(replicationFactor),
+                        tableAssignment,
+                        false);
+        verifyTableCreated(tableId, tableAssignment, nBuckets, replicationFactor);
+
+        TableBucket tableBucket = new TableBucket(tableId, 0);
+        int leader =
+                tableAssignment.getBucketAssignment(tableBucket.getBucket()).getReplicas().get(0);
+        TableBucketReplica tableBucketReplica = new TableBucketReplica(tableBucket, leader);
+
+        eventProcessor
+                .getCoordinatorEventManager()
+                .put(
+                        new NotifyLeaderAndIsrResponseReceivedEvent(
+                                Collections.singletonList(
+                                        new NotifyLeaderAndIsrResultForBucket(
+                                                tableBucket,
+                                                new ApiError(
+                                                        Errors.DISK_WRITE_LOCKED,
+                                                        "disk write locked"))),
+                                leader));
+
+        retryVerifyContext(
+                ctx -> {
+                    assertThat(ctx.getReplicaState(tableBucketReplica)).isEqualTo(OfflineReplica);
+                    assertThat(ctx.isReplicaOnline(leader, tableBucket)).isFalse();
+                });
+
+        fromCtx(
+                ctx -> {
+                    ctx.queueTableDeletion(Collections.singleton(tableId));
+                    return null;
+                });
+
+        eventProcessor.getCoordinatorEventManager().put(new RetryOfflineLeaderEvent());
+
+        fromCtx(
+                ctx -> {
+                    assertThat(ctx.getReplicaState(tableBucketReplica)).isEqualTo(OfflineReplica);
+                    assertThat(ctx.isReplicaOnline(leader, tableBucket)).isFalse();
+                    assertThat(ctx.offlineReplicasOnLiveTabletServers())
+                            .contains(tableBucketReplica);
+                    return null;
+                });
+        assertThat(eventProcessor.hasOfflineLeaderRetryTaskScheduled()).isFalse();
+    }
+
+    @Test
     void testSchemaChange() throws Exception {
         // make sure all request to gateway should be successful
         initCoordinatorChannel();
@@ -891,7 +1614,7 @@ class CoordinatorEventProcessorTest {
                         });
         // create table
         List<Integer> replicas = tableAssignment.getBucketAssignment(0).getReplicas();
-        metadataManager.createTable(t1, TEST_TABLE, tableAssignment, false);
+        metadataManager.createTable(t1, remoteDataDir, TEST_TABLE, tableAssignment, false);
         TableInfo tableInfo = metadataManager.getTable(t1);
 
         retry(
@@ -903,7 +1626,12 @@ class CoordinatorEventProcessorTest {
                                         tableInfo,
                                         Collections.singletonList(
                                                 new BucketMetadata(
-                                                        0, replicas.get(0), 0, replicas)))));
+                                                        0,
+                                                        replicas.get(0),
+                                                        0,
+                                                        replicas,
+                                                        replicas,
+                                                        0)))));
 
         // alter table column.
         alterTable(
@@ -931,6 +1659,96 @@ class CoordinatorEventProcessorTest {
     }
 
     @Test
+    void testSchemaChangeKeepsBucketCountEpochAfterRescale() throws Exception {
+        initCoordinatorChannel();
+        TablePath t1 = TablePath.of(defaultDatabase, "schema_change_keeps_epoch");
+        int originalBucketCount = 3;
+        TableAssignment tableAssignment =
+                generateAssignment(
+                        originalBucketCount,
+                        REPLICATION_FACTOR,
+                        new TabletServerInfo[] {
+                            new TabletServerInfo(0, "rack0"),
+                            new TabletServerInfo(1, "rack1"),
+                            new TabletServerInfo(2, "rack2")
+                        });
+        TableDescriptor partitionedTable =
+                TableDescriptor.builder()
+                        .schema(
+                                Schema.newBuilder()
+                                        .column("a", DataTypes.INT())
+                                        .column("b", DataTypes.STRING())
+                                        .primaryKey("a", "b")
+                                        .build())
+                        .distributedBy(originalBucketCount)
+                        .partitionedBy("b")
+                        .build()
+                        .withReplicationFactor(REPLICATION_FACTOR);
+        long tableId =
+                metadataManager.createTable(
+                        t1, remoteDataDir, partitionedTable, tableAssignment, false);
+        // create one partition so the ALTER bucket.num rescale can commit
+        metadataManager.createPartition(
+                t1,
+                tableId,
+                remoteDataDir,
+                new PartitionAssignment(
+                        tableId,
+                        generateAssignment(
+                                        originalBucketCount,
+                                        REPLICATION_FACTOR,
+                                        new TabletServerInfo[] {
+                                            new TabletServerInfo(0, "rack0"),
+                                            new TabletServerInfo(1, "rack1"),
+                                            new TabletServerInfo(2, "rack2")
+                                        })
+                                .getBucketAssignments()),
+                ResolvedPartitionSpec.fromPartitionSpec(
+                        Collections.singletonList("b"),
+                        new PartitionSpec(Collections.singletonMap("b", "2024-01-01"))),
+                false,
+                originalBucketCount);
+
+        // ALTER bucket.num advances the bucket count epoch (persisted in ZK TableRegistration)
+        metadataManager.alterBucketCount(
+                t1, 8, false, null, ZkVersion.MATCH_ANY_VERSION.getVersion());
+
+        long epochAfterAlter = metadataManager.getTable(t1).getBucketCountEpoch();
+        assertThat(epochAfterAlter).isGreaterThan(0L);
+
+        // A later schema change rebuilds the context TableInfo; the epoch must survive it
+        alterTable(
+                t1,
+                Collections.singletonList(
+                        TableChange.addColumn(
+                                "add_column",
+                                DataTypes.INT(),
+                                null,
+                                TableChange.ColumnPosition.last())));
+
+        retryVerifyContext(
+                ctx -> {
+                    TableInfo tableInfoInCtx = ctx.getTableInfoById(tableId);
+                    assertThat(tableInfoInCtx).isNotNull();
+                    // the schema change took effect
+                    assertThat(tableInfoInCtx.getSchema().getColumnNames()).contains("add_column");
+                    // and the bucket count epoch did NOT roll back to 0
+                    assertThat(tableInfoInCtx.getBucketCountEpoch()).isEqualTo(epochAfterAlter);
+                });
+
+        // the UpdateMetadata pushed for the schema change carries the same epoch
+        TableInfo tableInfoAfterSchemaChange = metadataManager.getTable(t1);
+        assertThat(tableInfoAfterSchemaChange.getBucketCountEpoch()).isEqualTo(epochAfterAlter);
+        retry(
+                Duration.ofMinutes(1),
+                () ->
+                        verifyMetadataUpdateRequest(
+                                3,
+                                new TableMetadata(
+                                        tableInfoAfterSchemaChange, Collections.emptyList())));
+    }
+
+    @Test
     void testTableRegistrationChange() throws Exception {
         // make sure all request to gateway should be successful
         initCoordinatorChannel();
@@ -950,7 +1768,7 @@ class CoordinatorEventProcessorTest {
                         });
         // create table
         List<Integer> replicas = tableAssignment.getBucketAssignment(0).getReplicas();
-        metadataManager.createTable(t1, TEST_TABLE, tableAssignment, false);
+        metadataManager.createTable(t1, remoteDataDir, TEST_TABLE, tableAssignment, false);
         TableInfo tableInfo = metadataManager.getTable(t1);
 
         retry(
@@ -962,14 +1780,26 @@ class CoordinatorEventProcessorTest {
                                         tableInfo,
                                         Collections.singletonList(
                                                 new BucketMetadata(
-                                                        0, replicas.get(0), 0, replicas)))));
+                                                        0,
+                                                        replicas.get(0),
+                                                        0,
+                                                        replicas,
+                                                        replicas,
+                                                        0)))));
 
         // alter table properties (custom property)
         TablePropertyChanges.Builder builder = TablePropertyChanges.builder();
         builder.setCustomProperty("custom.key", "custom.value");
         TablePropertyChanges tablePropertyChanges = builder.build();
         metadataManager.alterTableProperties(
-                t1, Collections.emptyList(), tablePropertyChanges, false, null);
+                t1,
+                Collections.emptyList(),
+                tablePropertyChanges,
+                false,
+                null,
+                (currentTable, updatedTable) -> {},
+                (currentTable, updatedTable) -> {},
+                ZkVersion.MATCH_ANY_VERSION.getVersion());
 
         // get updated table info and verify metadata update request is sent
         TableInfo updatedTableInfo = metadataManager.getTable(t1);
@@ -995,6 +1825,211 @@ class CoordinatorEventProcessorTest {
     }
 
     @Test
+    void testAlterStandbyReplicaEnabled() throws Exception {
+        // make sure all request to gateway should be successful
+        initCoordinatorChannel();
+
+        // create a PK table with standby replica enabled (TEST_TABLE has it enabled)
+        TablePath t1 = TablePath.of(defaultDatabase, "test_alter_standby_replica");
+        int nBuckets = 1;
+        int replicationFactor = 3;
+        TableAssignment tableAssignment =
+                generateAssignment(
+                        nBuckets,
+                        replicationFactor,
+                        new TabletServerInfo[] {
+                            new TabletServerInfo(0, "rack0"),
+                            new TabletServerInfo(1, "rack1"),
+                            new TabletServerInfo(2, "rack2")
+                        });
+        long tableId =
+                metadataManager.createTable(t1, remoteDataDir, TEST_TABLE, tableAssignment, false);
+        TableBucket tableBucket = new TableBucket(tableId, 0);
+
+        // wait for the bucket to become online with standby replica assigned
+        retryVerifyContext(
+                ctx -> {
+                    assertThat(ctx.getBucketState(tableBucket)).isEqualTo(OnlineBucket);
+                    LeaderAndIsr leaderAndIsr = ctx.getBucketLeaderAndIsr(tableBucket).get();
+                    // Standby should be assigned since the table is PK with standby enabled
+                    assertThat(leaderAndIsr.standbyReplicas()).hasSize(1);
+                });
+
+        // ALTER: disable standby replica
+        TablePropertyChanges.Builder disableBuilder = TablePropertyChanges.builder();
+        disableBuilder.setTableProperty(
+                ConfigOptions.TABLE_KV_STANDBY_REPLICA_ENABLED.key(), "false");
+        metadataManager.alterTableProperties(
+                t1,
+                Collections.emptyList(),
+                disableBuilder.build(),
+                false,
+                null,
+                (currentTable, updatedTable) -> {},
+                (currentTable, updatedTable) -> {},
+                ZkVersion.MATCH_ANY_VERSION.getVersion());
+
+        // verify standby replicas are removed after re-election
+        retryVerifyContext(
+                ctx -> {
+                    TableInfo tableInfoInCtx = ctx.getTableInfoById(tableId);
+                    assertThat(tableInfoInCtx.getTableConfig().isStandbyReplicaEnabled()).isFalse();
+                    LeaderAndIsr leaderAndIsr = ctx.getBucketLeaderAndIsr(tableBucket).get();
+                    assertThat(leaderAndIsr.standbyReplicas()).isEmpty();
+                });
+
+        // Also verify from ZooKeeper that standby replicas are cleared
+        LeaderAndIsr zkLeaderAndIsr = zookeeperClient.getLeaderAndIsr(tableBucket).get();
+        assertThat(zkLeaderAndIsr.standbyReplicas()).isEmpty();
+    }
+
+    @Test
+    void testAlterEnableStandbyReplicaForExistingTable() throws Exception {
+        // Simulate a legacy PK table created without standby replica config.
+        // After ALTER to enable standby replica, re-election should be triggered
+        // and standby replicas should be assigned.
+        initCoordinatorChannel();
+
+        // Create PK table WITHOUT standby replica enabled (simulating legacy table)
+        TablePath t1 = TablePath.of(defaultDatabase, "test_enable_standby_existing");
+        TableDescriptor pkTableNoStandby =
+                TableDescriptor.builder()
+                        .schema(
+                                Schema.newBuilder()
+                                        .column("a", DataTypes.INT())
+                                        .primaryKey("a")
+                                        .build())
+                        .distributedBy(1, "a")
+                        .build()
+                        .withReplicationFactor(3);
+
+        int nBuckets = 1;
+        int replicationFactor = 3;
+        TableAssignment tableAssignment =
+                generateAssignment(
+                        nBuckets,
+                        replicationFactor,
+                        new TabletServerInfo[] {
+                            new TabletServerInfo(0, "rack0"),
+                            new TabletServerInfo(1, "rack1"),
+                            new TabletServerInfo(2, "rack2")
+                        });
+        long tableId =
+                metadataManager.createTable(
+                        t1, remoteDataDir, pkTableNoStandby, tableAssignment, false);
+        TableBucket tableBucket = new TableBucket(tableId, 0);
+
+        // Wait for the bucket to become online with NO standby (legacy behavior)
+        retryVerifyContext(
+                ctx -> {
+                    assertThat(ctx.getBucketState(tableBucket)).isEqualTo(OnlineBucket);
+                    LeaderAndIsr leaderAndIsr = ctx.getBucketLeaderAndIsr(tableBucket).get();
+                    assertThat(leaderAndIsr.standbyReplicas()).isEmpty();
+                });
+
+        // Record the leader epoch before ALTER
+        int leaderEpochBefore = zookeeperClient.getLeaderAndIsr(tableBucket).get().leaderEpoch();
+
+        // ALTER: enable standby replica
+        TablePropertyChanges.Builder enableBuilder = TablePropertyChanges.builder();
+        enableBuilder.setTableProperty(
+                ConfigOptions.TABLE_KV_STANDBY_REPLICA_ENABLED.key(), "true");
+        metadataManager.alterTableProperties(
+                t1,
+                Collections.emptyList(),
+                enableBuilder.build(),
+                false,
+                null,
+                (currentTable, updatedTable) -> {},
+                (currentTable, updatedTable) -> {},
+                ZkVersion.MATCH_ANY_VERSION.getVersion());
+
+        // Verify re-election happened: standby assigned and leaderEpoch incremented
+        retryVerifyContext(
+                ctx -> {
+                    TableInfo tableInfoInCtx = ctx.getTableInfoById(tableId);
+                    assertThat(tableInfoInCtx.getTableConfig().isStandbyReplicaEnabled()).isTrue();
+                    LeaderAndIsr leaderAndIsr = ctx.getBucketLeaderAndIsr(tableBucket).get();
+                    // Standby should now be assigned
+                    assertThat(leaderAndIsr.standbyReplicas()).hasSize(1);
+                    // Leader epoch should have incremented (proves re-election)
+                    assertThat(leaderAndIsr.leaderEpoch()).isGreaterThan(leaderEpochBefore);
+                });
+
+        // Also verify from ZooKeeper
+        LeaderAndIsr zkLeaderAndIsr = zookeeperClient.getLeaderAndIsr(tableBucket).get();
+        assertThat(zkLeaderAndIsr.standbyReplicas()).hasSize(1);
+        assertThat(zkLeaderAndIsr.leaderEpoch()).isGreaterThan(leaderEpochBefore);
+    }
+
+    @Test
+    void testAlterStandbyReplicaEnabledForLogTable() throws Exception {
+        // Altering standby replica config on a log table (no PK) should throw an error
+        initCoordinatorChannel();
+
+        TablePath t1 = TablePath.of(defaultDatabase, "test_alter_standby_log_table");
+        TableDescriptor logTable =
+                TableDescriptor.builder()
+                        .schema(
+                                Schema.newBuilder()
+                                        .column("a", DataTypes.INT())
+                                        .column("b", DataTypes.STRING())
+                                        .build())
+                        .distributedBy(1)
+                        .build()
+                        .withReplicationFactor(3);
+
+        int nBuckets = 1;
+        int replicationFactor = 3;
+        TableAssignment tableAssignment =
+                generateAssignment(
+                        nBuckets,
+                        replicationFactor,
+                        new TabletServerInfo[] {
+                            new TabletServerInfo(0, "rack0"),
+                            new TabletServerInfo(1, "rack1"),
+                            new TabletServerInfo(2, "rack2")
+                        });
+        metadataManager.createTable(t1, remoteDataDir, logTable, tableAssignment, false);
+
+        // ALTER: try to enable standby replica on a log table should fail
+        TablePropertyChanges.Builder enableBuilder = TablePropertyChanges.builder();
+        enableBuilder.setTableProperty(
+                ConfigOptions.TABLE_KV_STANDBY_REPLICA_ENABLED.key(), "true");
+        assertThatThrownBy(
+                        () ->
+                                metadataManager.alterTableProperties(
+                                        t1,
+                                        Collections.emptyList(),
+                                        enableBuilder.build(),
+                                        false,
+                                        null,
+                                        (currentTable, updatedTable) -> {},
+                                        (currentTable, updatedTable) -> {},
+                                        ZkVersion.MATCH_ANY_VERSION.getVersion()))
+                .isInstanceOf(InvalidAlterTableException.class)
+                .hasMessageContaining("can only be altered on primary key tables");
+
+        // ALTER: try to set to false on a log table should also fail
+        TablePropertyChanges.Builder disableBuilder = TablePropertyChanges.builder();
+        disableBuilder.setTableProperty(
+                ConfigOptions.TABLE_KV_STANDBY_REPLICA_ENABLED.key(), "false");
+        assertThatThrownBy(
+                        () ->
+                                metadataManager.alterTableProperties(
+                                        t1,
+                                        Collections.emptyList(),
+                                        disableBuilder.build(),
+                                        false,
+                                        null,
+                                        (currentTable, updatedTable) -> {},
+                                        (currentTable, updatedTable) -> {},
+                                        ZkVersion.MATCH_ANY_VERSION.getVersion()))
+                .isInstanceOf(InvalidAlterTableException.class)
+                .hasMessageContaining("can only be altered on primary key tables");
+    }
+
+    @Test
     void testDoBucketReassignment() throws Exception {
         zookeeperClient.registerTabletServer(
                 3,
@@ -1012,7 +2047,11 @@ class CoordinatorEventProcessorTest {
         TableAssignment tableAssignment = new TableAssignment(bucketAssignments);
         long t1Id =
                 metadataManager.createTable(
-                        t1, CoordinatorEventProcessorTest.TEST_TABLE, tableAssignment, false);
+                        t1,
+                        remoteDataDir,
+                        CoordinatorEventProcessorTest.TEST_TABLE,
+                        tableAssignment,
+                        false);
         TableBucket tb0 = new TableBucket(t1Id, 0);
         verifyIsr(tb0, 0, Arrays.asList(0, 1, 3));
 
@@ -1054,13 +2093,13 @@ class CoordinatorEventProcessorTest {
         // Set up controlled gateways that capture NotifyLeaderAndIsr calls.
         // Gateways start in pass-through mode for table creation, then switch
         // to controlled mode to verify sequential leader migration.
-        ConcurrentLinkedDeque<CompletableFuture<Void>> pendingTriggers =
+        ConcurrentLinkedDeque<ControlledNotifyTrigger> pendingTriggers =
                 new ConcurrentLinkedDeque<>();
         int[] servers = zookeeperClient.getSortedTabletServerList();
         Map<Integer, TabletServerGateway> gateways = new HashMap<>();
         ControlledNotifyGateway[] controlledGateways = new ControlledNotifyGateway[servers.length];
         for (int i = 0; i < servers.length; i++) {
-            ControlledNotifyGateway gw = new ControlledNotifyGateway(pendingTriggers);
+            ControlledNotifyGateway gw = new ControlledNotifyGateway(servers[i], pendingTriggers);
             gateways.put(servers[i], gw);
             controlledGateways[i] = gw;
         }
@@ -1073,7 +2112,8 @@ class CoordinatorEventProcessorTest {
         bucketAssignments.put(1, BucketAssignment.of(0, 1, 2));
         bucketAssignments.put(2, BucketAssignment.of(0, 1, 2));
         TableAssignment tableAssignment = new TableAssignment(bucketAssignments);
-        long t1Id = metadataManager.createTable(t1, TEST_TABLE, tableAssignment, false);
+        long t1Id =
+                metadataManager.createTable(t1, remoteDataDir, TEST_TABLE, tableAssignment, false);
 
         TableBucket tb0 = new TableBucket(t1Id, 0);
         TableBucket tb1 = new TableBucket(t1Id, 1);
@@ -1155,6 +2195,101 @@ class CoordinatorEventProcessorTest {
         verifyIsr(tb2, 1, Arrays.asList(0, 1, 2));
     }
 
+    @Test
+    void testLeaderOnlyRebalanceCompletionCheckRequiresSuccessfulResponseFromNewLeader() {
+        TableBucket tableBucket = new TableBucket(1L, 0);
+        RebalancePlanForBucket planForBucket =
+                new RebalancePlanForBucket(
+                        tableBucket, 0, 1, Arrays.asList(0, 1, 2), Arrays.asList(1, 0, 2));
+        NotifyLeaderAndIsrResultForBucket successResult =
+                new NotifyLeaderAndIsrResultForBucket(tableBucket);
+        NotifyLeaderAndIsrResultForBucket failedResult =
+                new NotifyLeaderAndIsrResultForBucket(
+                        tableBucket, new ApiError(Errors.UNKNOWN_SERVER_ERROR, "failed"));
+
+        assertThat(
+                        CoordinatorEventProcessor
+                                .isSuccessfulLeaderOnlyRebalanceResponseFromNewLeader(
+                                        successResult, 1, planForBucket))
+                .isTrue();
+        assertThat(
+                        CoordinatorEventProcessor
+                                .isSuccessfulLeaderOnlyRebalanceResponseFromNewLeader(
+                                        successResult, 0, planForBucket))
+                .isFalse();
+        assertThat(
+                        CoordinatorEventProcessor
+                                .isSuccessfulLeaderOnlyRebalanceResponseFromNewLeader(
+                                        failedResult, 1, planForBucket))
+                .isFalse();
+    }
+
+    @Test
+    void testLeaderOnlyRebalanceIgnoresSuccessResponseFromOldLeader() throws Exception {
+        ConcurrentLinkedDeque<ControlledNotifyTrigger> pendingTriggers =
+                new ConcurrentLinkedDeque<>();
+        int[] servers = zookeeperClient.getSortedTabletServerList();
+        Map<Integer, TabletServerGateway> gateways = new HashMap<>();
+        ControlledNotifyGateway[] controlledGateways = new ControlledNotifyGateway[servers.length];
+        for (int i = 0; i < servers.length; i++) {
+            ControlledNotifyGateway gw = new ControlledNotifyGateway(servers[i], pendingTriggers);
+            gateways.put(servers[i], gw);
+            controlledGateways[i] = gw;
+        }
+        testCoordinatorChannelManager.setGateways(gateways);
+
+        TablePath t1 = TablePath.of(defaultDatabase, "test_leader_rebalance_wait_new_leader");
+        Map<Integer, BucketAssignment> bucketAssignments = new HashMap<>();
+        bucketAssignments.put(0, BucketAssignment.of(0, 1, 2));
+        TableAssignment tableAssignment = new TableAssignment(bucketAssignments);
+        long t1Id =
+                metadataManager.createTable(t1, remoteDataDir, TEST_TABLE, tableAssignment, false);
+
+        TableBucket tb0 = new TableBucket(t1Id, 0);
+
+        verifyIsr(tb0, 0, Arrays.asList(0, 1, 2));
+
+        for (ControlledNotifyGateway gw : controlledGateways) {
+            gw.enableControlMode();
+        }
+        pendingTriggers.clear();
+
+        Map<TableBucket, RebalancePlanForBucket> rebalancePlan = new HashMap<>();
+        rebalancePlan.put(
+                tb0,
+                new RebalancePlanForBucket(
+                        tb0, 0, 1, Arrays.asList(0, 1, 2), Arrays.asList(1, 0, 2)));
+
+        eventProcessor
+                .getRebalanceManager()
+                .registerRebalance(
+                        "rebalance-wait-new-leader-response",
+                        rebalancePlan,
+                        RebalanceStatus.NOT_STARTED);
+
+        retry(
+                Duration.ofMinutes(1),
+                () -> assertThat(hasPendingNotifyTrigger(pendingTriggers, 0)).isTrue());
+        retry(
+                Duration.ofMinutes(1),
+                () -> assertThat(hasPendingNotifyTrigger(pendingTriggers, 1)).isTrue());
+        assertThat(countInProgressRebalanceTasks(tb0)).isEqualTo(1);
+
+        completePendingNotifyTrigger(pendingTriggers, 0);
+        fromCtx(ctx -> null);
+
+        assertThat(countInProgressRebalanceTasks(tb0)).isEqualTo(1);
+        assertThat(eventProcessor.getRebalanceManager().hasInProgressRebalance()).isTrue();
+
+        completePendingNotifyTrigger(pendingTriggers, 1);
+        retry(
+                Duration.ofMinutes(1),
+                () ->
+                        assertThat(eventProcessor.getRebalanceManager().hasInProgressRebalance())
+                                .isFalse());
+        verifyIsr(tb0, 1, Arrays.asList(0, 1, 2));
+    }
+
     private void verifyIsr(TableBucket tb, int expectedLeader, List<Integer> expectedIsr)
             throws Exception {
         LeaderAndIsr leaderAndIsr =
@@ -1171,19 +2306,82 @@ class CoordinatorEventProcessorTest {
                 .hasSameElementsAs(expectedIsr);
     }
 
-    private CoordinatorEventProcessor buildCoordinatorEventProcessor() {
-        return new CoordinatorEventProcessor(
-                zookeeperClient,
-                serverMetadataCache,
-                testCoordinatorChannelManager,
-                new CoordinatorContext(zkEpoch),
-                autoPartitionManager,
-                lakeTableTieringManager,
-                TestingMetricGroups.COORDINATOR_METRICS,
-                new Configuration(),
-                Executors.newFixedThreadPool(1, new ExecutorThreadFactory("test-coordinator-io")),
-                metadataManager,
-                kvSnapshotLeaseManager);
+    private static class FailingUpdateMetadataChannelManager extends TestCoordinatorChannelManager {
+
+        private final CountDownLatch failureObserved = new CountDownLatch(1);
+        private volatile boolean failUpdateMetadata;
+
+        private void failNextUpdateMetadata() {
+            failUpdateMetadata = true;
+        }
+
+        @Override
+        public void sendUpdateMetadataRequest(
+                int serverId,
+                UpdateMetadataRequest request,
+                BiConsumer<UpdateMetadataResponse, ? super Throwable> responseConsumer) {
+            if (failUpdateMetadata) {
+                failUpdateMetadata = false;
+                failureObserved.countDown();
+                throw new RuntimeException("Injected update metadata failure");
+            }
+            super.sendUpdateMetadataRequest(serverId, request, responseConsumer);
+        }
+
+        private void awaitFailure() throws InterruptedException {
+            assertThat(failureObserved.await(30, TimeUnit.SECONDS)).isTrue();
+        }
+    }
+
+    private static class RecordingAutoPartitionManager extends AutoPartitionManager {
+
+        private final CoordinatorMetadataCache metadataCache;
+        private final ReplicaCapacityController replicaCapacityController;
+
+        private Set<Long> initializedTableIds = Collections.emptySet();
+        private long observedKvLeaderReplicaCountAtInit = -1;
+        private int liveTabletServerCountAtInit = -1;
+
+        private RecordingAutoPartitionManager(
+                CoordinatorMetadataCache metadataCache,
+                MetadataManager metadataManager,
+                String remoteDataDir,
+                ReplicaCapacityController replicaCapacityController) {
+            super(
+                    metadataCache,
+                    metadataManager,
+                    new RemoteDirDynamicLoader(
+                            Configuration.fromMap(
+                                    Collections.singletonMap(
+                                            ConfigOptions.REMOTE_DATA_DIR.key(), remoteDataDir))),
+                    new Configuration(),
+                    replicaCapacityController,
+                    SystemClock.getInstance(),
+                    new ManuallyTriggeredScheduledExecutorService());
+            this.metadataCache = metadataCache;
+            this.replicaCapacityController = replicaCapacityController;
+        }
+
+        @Override
+        public void initAutoPartitionTables(List<TableInfo> tableInfos) {
+            initializedTableIds =
+                    tableInfos.stream().map(TableInfo::getTableId).collect(Collectors.toSet());
+            observedKvLeaderReplicaCountAtInit =
+                    replicaCapacityController.getKvLeaderReplicaCount();
+            liveTabletServerCountAtInit = metadataCache.getLiveTabletServerInfos().size();
+        }
+
+        private Set<Long> getInitializedTableIds() {
+            return initializedTableIds;
+        }
+
+        private long getObservedKvLeaderReplicaCountAtInit() {
+            return observedKvLeaderReplicaCountAtInit;
+        }
+
+        private int getLiveTabletServerCountAtInit() {
+            return liveTabletServerCountAtInit;
+        }
     }
 
     private void initCoordinatorChannel() throws Exception {
@@ -1230,14 +2428,16 @@ class CoordinatorEventProcessorTest {
                 partitionAssignment,
                 remoteDataDir,
                 tablePath,
-                tableId);
+                tableId,
+                partitionAssignment.getBucketAssignments().size());
         zookeeperClient.registerPartitionAssignmentAndMetadata(
                 partition2Id,
                 partition2Name,
                 partitionAssignment,
                 remoteDataDir,
                 tablePath,
-                tableId);
+                tableId,
+                partitionAssignment.getBucketAssignments().size());
 
         return Tuple2.of(
                 new PartitionIdName(partition1Id, partition1Name),
@@ -1504,11 +2704,56 @@ class CoordinatorEventProcessorTest {
         return event.getResultFuture().get(30, TimeUnit.SECONDS);
     }
 
+    private Map.Entry<TableBucket, LeaderAndIsr> createTableAndGetLeaderAndIsr(String tableName)
+            throws Exception {
+        initCoordinatorChannel();
+        TableAssignment tableAssignment =
+                generateAssignment(
+                        N_BUCKETS,
+                        REPLICATION_FACTOR,
+                        new TabletServerInfo[] {
+                            new TabletServerInfo(0, "rack0"),
+                            new TabletServerInfo(1, "rack1"),
+                            new TabletServerInfo(2, "rack2")
+                        });
+        long tableId =
+                metadataManager.createTable(
+                        TablePath.of(defaultDatabase, tableName),
+                        remoteDataDir,
+                        TEST_TABLE,
+                        tableAssignment,
+                        false);
+        verifyTableCreated(tableId, tableAssignment, N_BUCKETS, REPLICATION_FACTOR);
+
+        Map<TableBucket, LeaderAndIsr> bucketLeaderAndIsrMap =
+                new HashMap<>(
+                        waitValue(
+                                () -> fromCtx(ctx -> Optional.of(ctx.bucketLeaderAndIsr())),
+                                Duration.ofMinutes(1),
+                                "leader not elected"));
+        return bucketLeaderAndIsrMap.entrySet().iterator().next();
+    }
+
+    private AdjustIsrResultForBucket submitAdjustIsr(
+            TableBucket tableBucket, LeaderAndIsr newLeaderAndIsr) throws Exception {
+        CompletableFuture<AdjustIsrResponse> response = new CompletableFuture<>();
+        eventProcessor
+                .getCoordinatorEventManager()
+                .put(
+                        new AdjustIsrReceivedEvent(
+                                Collections.singletonMap(tableBucket, newLeaderAndIsr), response));
+        return getAdjustIsrResponseData(response.get()).get(tableBucket);
+    }
+
     private long createTable(TablePath tablePath, TabletServerInfo[] servers) {
         TableAssignment tableAssignment =
                 generateAssignment(N_BUCKETS, REPLICATION_FACTOR, servers);
         return metadataManager.createTable(
-                tablePath, CoordinatorEventProcessorTest.TEST_TABLE, tableAssignment, false);
+                tablePath,
+                remoteDataDir,
+                CoordinatorEventProcessorTest.TEST_TABLE,
+                tableAssignment,
+                false);
     }
 
     private void alterTable(TablePath tablePath, List<TableChange> schemaChanges) {
@@ -1547,11 +2792,34 @@ class CoordinatorEventProcessorTest {
     }
 
     private static void drainPendingNotifyTriggers(
-            ConcurrentLinkedDeque<CompletableFuture<Void>> pendingTriggers) {
-        CompletableFuture<Void> trigger;
+            ConcurrentLinkedDeque<ControlledNotifyTrigger> pendingTriggers) {
+        ControlledNotifyTrigger trigger;
         while ((trigger = pendingTriggers.poll()) != null) {
             trigger.complete(null);
         }
+    }
+
+    private static boolean hasPendingNotifyTrigger(
+            ConcurrentLinkedDeque<ControlledNotifyTrigger> pendingTriggers, int responseServerId) {
+        for (ControlledNotifyTrigger trigger : pendingTriggers) {
+            if (trigger.getResponseServerId() == responseServerId) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static void completePendingNotifyTrigger(
+            ConcurrentLinkedDeque<ControlledNotifyTrigger> pendingTriggers, int responseServerId) {
+        for (ControlledNotifyTrigger trigger : pendingTriggers) {
+            if (trigger.getResponseServerId() == responseServerId) {
+                assertThat(pendingTriggers.remove(trigger)).isTrue();
+                trigger.complete(null);
+                return;
+            }
+        }
+        throw new AssertionError(
+                "No pending NotifyLeaderAndIsr response for server " + responseServerId);
     }
 
     private int countInProgressRebalanceTasks(TableBucket... buckets) {
@@ -1564,6 +2832,25 @@ class CoordinatorEventProcessorTest {
         return count;
     }
 
+    private static class CountingFailingNotifyGateway extends TestTabletServerGateway {
+        private final AtomicInteger notifyLeaderAndIsrCount = new AtomicInteger();
+
+        CountingFailingNotifyGateway() {
+            super(true, Collections.emptySet());
+        }
+
+        int getNotifyLeaderAndIsrCount() {
+            return notifyLeaderAndIsrCount.get();
+        }
+
+        @Override
+        public CompletableFuture<NotifyLeaderAndIsrResponse> notifyLeaderAndIsr(
+                NotifyLeaderAndIsrRequest request) {
+            notifyLeaderAndIsrCount.incrementAndGet();
+            return super.notifyLeaderAndIsr(request);
+        }
+    }
+
     /**
      * A gateway that intercepts NotifyLeaderAndIsr calls for verifying sequential execution of
      * leader migrations. In pass-through mode, it delegates to the parent. In controlled mode, it
@@ -1572,10 +2859,14 @@ class CoordinatorEventProcessorTest {
      */
     private static class ControlledNotifyGateway extends TestTabletServerGateway {
         private volatile boolean controlMode = false;
-        private final ConcurrentLinkedDeque<CompletableFuture<Void>> pendingTriggers;
+        private final int responseServerId;
+        private final ConcurrentLinkedDeque<ControlledNotifyTrigger> pendingTriggers;
 
-        ControlledNotifyGateway(ConcurrentLinkedDeque<CompletableFuture<Void>> pendingTriggers) {
+        ControlledNotifyGateway(
+                int responseServerId,
+                ConcurrentLinkedDeque<ControlledNotifyTrigger> pendingTriggers) {
             super(false, Collections.emptySet());
+            this.responseServerId = responseServerId;
             this.pendingTriggers = pendingTriggers;
         }
 
@@ -1592,9 +2883,30 @@ class CoordinatorEventProcessorTest {
             // Build the proper success response using parent's logic.
             NotifyLeaderAndIsrResponse response = super.notifyLeaderAndIsr(request).join();
             // Return a future that completes only when the test releases the trigger.
-            CompletableFuture<Void> trigger = new CompletableFuture<>();
+            ControlledNotifyTrigger trigger = new ControlledNotifyTrigger(responseServerId);
             pendingTriggers.add(trigger);
-            return trigger.thenApply(v -> response);
+            return trigger.getFuture().thenApply(v -> response);
+        }
+    }
+
+    private static class ControlledNotifyTrigger {
+        private final int responseServerId;
+        private final CompletableFuture<Void> future = new CompletableFuture<>();
+
+        ControlledNotifyTrigger(int responseServerId) {
+            this.responseServerId = responseServerId;
+        }
+
+        int getResponseServerId() {
+            return responseServerId;
+        }
+
+        CompletableFuture<Void> getFuture() {
+            return future;
+        }
+
+        void complete(Void value) {
+            future.complete(value);
         }
     }
 

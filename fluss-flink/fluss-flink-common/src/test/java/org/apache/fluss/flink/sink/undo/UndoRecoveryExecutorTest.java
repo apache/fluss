@@ -278,18 +278,53 @@ class UndoRecoveryExecutorTest {
         assertThat(mockWriter.isFlushCalled()).isTrue();
     }
 
-    /**
-     * Test scanner position-based completion for empty-batch-only recovery ranges.
-     *
-     * <p>Simulates a scenario where the recovery range (checkpointOffset=0, logEndOffset=3)
-     * contains only empty LogRecordBatches. Empty batches consume WAL offsets but produce zero
-     * ScanRecords. The scanner position advances past the recovery range without emitting any
-     * records for the target bucket.
-     *
-     * <p>Uses a two-bucket setup: bucket0 has no records (empty batches), bucket1 has real records
-     * that cause the mock scanner to advance bucket0's position on each poll. Completion is
-     * detected via {@code scanner.position(bucket) >= logEndOffset}.
-     */
-    // TODO: Empty LogRecordBatch scenario is not testable with current offset-based completion
-    //  detection. Once LogScanner supports bounded subscription mode, add a test here.
+    @Test
+    void testEmptyBatchOnlyRangeCompletesFromPollProgress() throws Exception {
+        TableBucket bucket = new TableBucket(TABLE_ID, 0);
+        BucketRecoveryContext ctx = new BucketRecoveryContext(bucket, 0L, 3L);
+        mockScanner.setConsumedUpToOffset(bucket, 3L);
+
+        executor.execute(Collections.singletonList(ctx));
+
+        assertThat(ctx.isComplete()).isTrue();
+        assertThat(ctx.getTotalRecordsProcessed()).isEqualTo(0);
+        assertThat(mockWriter.getDeleteCount()).isEqualTo(0);
+        assertThat(mockWriter.getUpsertCount()).isEqualTo(0);
+    }
+
+    @Test
+    void testTrailingEmptyBatchRangeCompletesFromPollProgress() throws Exception {
+        TableBucket bucket = new TableBucket(TABLE_ID, 0);
+        BucketRecoveryContext ctx = new BucketRecoveryContext(bucket, 0L, 3L);
+        mockScanner.setRecordsForBucket(
+                bucket,
+                Collections.singletonList(
+                        new ScanRecord(0L, 0L, ChangeType.INSERT, row(1, "a", 100))));
+        mockScanner.setConsumedUpToOffset(bucket, 3L);
+
+        executor.execute(Collections.singletonList(ctx));
+
+        assertThat(ctx.isComplete()).isTrue();
+        assertThat(ctx.getTotalRecordsProcessed()).isEqualTo(1);
+        assertThat(mockWriter.getDeleteCount()).isEqualTo(1);
+        assertThat(mockWriter.getUpsertCount()).isEqualTo(0);
+    }
+
+    @Test
+    void testDoesNotProcessRecordAtOrBeyondTargetLeo() throws Exception {
+        TableBucket bucket = new TableBucket(TABLE_ID, 0);
+        BucketRecoveryContext ctx = new BucketRecoveryContext(bucket, 0L, 2L);
+        mockScanner.setRecordsForBucket(
+                bucket,
+                Arrays.asList(
+                        new ScanRecord(0L, 0L, ChangeType.INSERT, row(1, "before-target", 100)),
+                        new ScanRecord(2L, 0L, ChangeType.INSERT, row(2, "at-target", 200))));
+        mockScanner.setConsumedUpToOffset(bucket, 3L);
+
+        executor.execute(Collections.singletonList(ctx));
+
+        assertThat(ctx.getTotalRecordsProcessed()).isEqualTo(1);
+        assertThat(mockWriter.getDeleteCount()).isEqualTo(1);
+        assertThat(mockWriter.getUpsertCount()).isEqualTo(0);
+    }
 }

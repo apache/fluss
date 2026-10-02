@@ -25,22 +25,26 @@ import org.apache.fluss.flink.source.reader.LeaseContext;
 import org.apache.fluss.flink.utils.FlinkConnectorOptionsUtils;
 import org.apache.fluss.flink.utils.FlinkConversions;
 import org.apache.fluss.metadata.TablePath;
-import org.apache.fluss.predicate.Predicate;
 import org.apache.fluss.types.RowType;
 
+import org.apache.flink.annotation.VisibleForTesting;
 import org.apache.flink.table.connector.ChangelogMode;
 import org.apache.flink.table.connector.source.DynamicTableSource;
 import org.apache.flink.table.connector.source.ScanTableSource;
 import org.apache.flink.table.connector.source.SourceProvider;
+import org.apache.flink.table.connector.source.abilities.SupportsFilterPushDown;
+import org.apache.flink.table.connector.source.abilities.SupportsProjectionPushDown;
 import org.apache.flink.table.data.RowData;
-import org.apache.flink.table.types.logical.LogicalType;
+import org.apache.flink.table.expressions.ResolvedExpression;
+import org.apache.flink.table.types.DataType;
 
-import javax.annotation.Nullable;
-
+import java.util.Collections;
+import java.util.List;
 import java.util.Map;
 
 /** A Flink table source for the $binlog virtual table. */
-public class BinlogFlinkTableSource implements ScanTableSource {
+public class BinlogFlinkTableSource
+        implements ScanTableSource, SupportsProjectionPushDown, SupportsFilterPushDown {
 
     private final TablePath tablePath;
     private final Configuration flussConfig;
@@ -51,15 +55,13 @@ public class BinlogFlinkTableSource implements ScanTableSource {
     private final boolean isPartitioned;
     private final boolean streaming;
     private final FlinkConnectorOptionsUtils.StartupOptions startupOptions;
+    private final FlinkConnectorOptionsUtils.BoundedOptions boundedOptions;
     private final long scanPartitionDiscoveryIntervalMs;
     private final int splitPerAssignmentBatchSize;
     private final Map<String, String> tableOptions;
 
-    // Projection pushdown
-    @Nullable private int[] projectedFields;
-    private LogicalType producedDataType;
-
-    @Nullable private Predicate partitionFilters;
+    // Projection pushdown.
+    private org.apache.flink.table.types.logical.RowType producedDataType;
 
     public BinlogFlinkTableSource(
             TablePath tablePath,
@@ -92,12 +94,37 @@ public class BinlogFlinkTableSource implements ScanTableSource {
             long scanPartitionDiscoveryIntervalMs,
             int splitPerAssignmentBatchSize,
             Map<String, String> tableOptions) {
+        this(
+                tablePath,
+                flussConfig,
+                binlogOutputType,
+                isPartitioned,
+                streaming,
+                startupOptions,
+                FlinkConnectorOptionsUtils.BoundedOptions.unbounded(),
+                scanPartitionDiscoveryIntervalMs,
+                splitPerAssignmentBatchSize,
+                tableOptions);
+    }
+
+    public BinlogFlinkTableSource(
+            TablePath tablePath,
+            Configuration flussConfig,
+            org.apache.flink.table.types.logical.RowType binlogOutputType,
+            boolean isPartitioned,
+            boolean streaming,
+            FlinkConnectorOptionsUtils.StartupOptions startupOptions,
+            FlinkConnectorOptionsUtils.BoundedOptions boundedOptions,
+            long scanPartitionDiscoveryIntervalMs,
+            int splitPerAssignmentBatchSize,
+            Map<String, String> tableOptions) {
         this.tablePath = tablePath;
         this.flussConfig = flussConfig;
         this.binlogOutputType = binlogOutputType;
         this.isPartitioned = isPartitioned;
         this.streaming = streaming;
         this.startupOptions = startupOptions;
+        this.boundedOptions = boundedOptions;
         this.scanPartitionDiscoveryIntervalMs = scanPartitionDiscoveryIntervalMs;
         this.splitPerAssignmentBatchSize = splitPerAssignmentBatchSize;
         this.tableOptions = tableOptions;
@@ -116,11 +143,9 @@ public class BinlogFlinkTableSource implements ScanTableSource {
 
     @Override
     public ScanRuntimeProvider getScanRuntimeProvider(ScanContext scanContext) {
-        // Create the Fluss row type for the data columns (the original table columns)
+        // Create the Fluss row type for the data columns (the original table columns). The data
+        // scan always stays full because the projected before/after columns are whole nested ROWs.
         RowType flussRowType = FlinkConversions.toFlussRowType(dataColumnsType);
-        if (projectedFields != null) {
-            flussRowType = flussRowType.project(projectedFields);
-        }
 
         // Determine the offsets initializer based on startup mode
         OffsetsInitializer offsetsInitializer;
@@ -143,6 +168,8 @@ public class BinlogFlinkTableSource implements ScanTableSource {
         }
 
         // Create the source with the binlog deserialization schema
+        OffsetsInitializer stoppingOffsetsInitializer =
+                FlinkConnectorOptionsUtils.toStoppingOffsetsInitializer(streaming, boundedOptions);
         FlinkSource<RowData> source =
                 new FlinkSource<>(
                         flussConfig,
@@ -150,14 +177,20 @@ public class BinlogFlinkTableSource implements ScanTableSource {
                         false,
                         isPartitioned,
                         flussRowType,
-                        projectedFields,
+                        null,
                         null,
                         offsetsInitializer,
+                        stoppingOffsetsInitializer,
+                        FlinkConnectorOptionsUtils.toBoundedness(streaming, boundedOptions),
                         scanPartitionDiscoveryIntervalMs,
                         splitPerAssignmentBatchSize,
                         new BinlogDeserializationSchema(),
+                        FlinkConversions.toFlussRowType(producedDataType),
                         streaming,
-                        partitionFilters,
+                        // $binlog data/partition columns are nested inside before/after ROWs, so no
+                        // top-level partition filter is pushable; always scan without one.
+                        null,
+                        null,
                         LeaseContext.DEFAULT);
 
         return SourceProvider.of(source);
@@ -173,12 +206,11 @@ public class BinlogFlinkTableSource implements ScanTableSource {
                         isPartitioned,
                         streaming,
                         startupOptions,
+                        boundedOptions,
                         scanPartitionDiscoveryIntervalMs,
                         splitPerAssignmentBatchSize,
                         tableOptions);
         copy.producedDataType = producedDataType;
-        copy.projectedFields = projectedFields;
-        copy.partitionFilters = partitionFilters;
         return copy;
     }
 
@@ -187,6 +219,29 @@ public class BinlogFlinkTableSource implements ScanTableSource {
         return "FlussBinlogTableSource";
     }
 
-    // TODO: Implement projection pushdown handling for nested before/after columns
-    // TODO: Implement filter pushdown
+    @Override
+    public boolean supportsNestedProjection() {
+        return false;
+    }
+
+    @Override
+    public void applyProjection(int[][] projectedFields, DataType producedDataType) {
+        this.producedDataType =
+                (org.apache.flink.table.types.logical.RowType) producedDataType.getLogicalType();
+    }
+
+    @Override
+    public Result applyFilters(List<ResolvedExpression> filters) {
+        // The $binlog data and partition columns are nested inside the before/after ROW columns,
+        // and the leading columns are non-pushable metadata (_change_type, _log_offset,
+        // _commit_timestamp). No top-level filter is convertible to a Fluss predicate, so nothing
+        // is pushed down; all filters are returned to Flink. Implemented for interface parity with
+        // the normal table.
+        return Result.of(Collections.emptyList(), filters);
+    }
+
+    @VisibleForTesting
+    org.apache.flink.table.types.logical.RowType getProducedDataType() {
+        return producedDataType;
+    }
 }

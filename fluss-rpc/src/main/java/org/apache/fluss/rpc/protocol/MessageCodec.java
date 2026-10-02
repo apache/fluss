@@ -117,13 +117,24 @@ public final class MessageCodec {
         int frameLength = REQUEST_HEADER_LENGTH + requestSize;
         int bufferSize = frameLength + 4;
         ByteBuf buffer = allocator.ioBuffer(bufferSize, bufferSize);
-        // header
-        buffer.writeInt(frameLength);
-        buffer.writeShort(apiKey);
-        buffer.writeShort(apiVersion);
-        buffer.writeInt(requestId);
-        // payload
-        request.writeTo(buffer);
-        return buffer;
+        try {
+            // header
+            buffer.writeInt(frameLength);
+            buffer.writeShort(apiKey);
+            buffer.writeShort(apiVersion);
+            buffer.writeInt(requestId);
+            // payload
+            request.writeTo(buffer);
+            return buffer;
+        } catch (Throwable t) {
+            try {
+                buffer.release();
+            } catch (Throwable releaseFailure) {
+                if (releaseFailure != t) {
+                    t.addSuppressed(releaseFailure);
+                }
+            }
+            throw t;
+        }
     }
 }

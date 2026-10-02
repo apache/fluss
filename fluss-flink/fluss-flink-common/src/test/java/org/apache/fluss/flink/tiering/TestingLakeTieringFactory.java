@@ -26,7 +26,9 @@ import org.apache.fluss.lake.committer.LakeCommitter;
 import org.apache.fluss.lake.serializer.SimpleVersionedSerializer;
 import org.apache.fluss.lake.writer.LakeTieringFactory;
 import org.apache.fluss.lake.writer.LakeWriter;
+import org.apache.fluss.lake.writer.TieringTableValidator;
 import org.apache.fluss.lake.writer.WriterInitContext;
+import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.record.LogRecord;
 
 import javax.annotation.Nullable;
@@ -38,12 +40,25 @@ import java.util.Map;
 
 /** An implementation of {@link LakeTieringFactory} for testing purpose. */
 public class TestingLakeTieringFactory
-        implements LakeTieringFactory<TestingWriteResult, TestingCommittable> {
+        implements LakeTieringFactory<TestingWriteResult, TestingCommittable>,
+                TieringTableValidator {
 
     @Nullable private TestingLakeCommitter testingLakeCommitter;
 
+    // the exception to be thrown when complete() is called on created lake writers
+    @Nullable private final IOException writerCompleteException;
+
+    private final List<TestingLakeWriter> createdLakeWriters = new ArrayList<>();
+
     public TestingLakeTieringFactory(@Nullable TestingLakeCommitter testingLakeCommitter) {
+        this(testingLakeCommitter, null);
+    }
+
+    public TestingLakeTieringFactory(
+            @Nullable TestingLakeCommitter testingLakeCommitter,
+            @Nullable IOException writerCompleteException) {
         this.testingLakeCommitter = testingLakeCommitter;
+        this.writerCompleteException = writerCompleteException;
     }
 
     public TestingLakeTieringFactory() {
@@ -51,9 +66,18 @@ public class TestingLakeTieringFactory
     }
 
     @Override
+    public void validateTable(TableInfo tableInfo) throws IOException {}
+
+    @Override
     public LakeWriter<TestingWriteResult> createLakeWriter(WriterInitContext writerInitContext)
             throws IOException {
-        return new TestingLakeWriter();
+        TestingLakeWriter lakeWriter = new TestingLakeWriter(writerCompleteException);
+        createdLakeWriters.add(lakeWriter);
+        return lakeWriter;
+    }
+
+    public List<TestingLakeWriter> getCreatedLakeWriters() {
+        return createdLakeWriters;
     }
 
     @Override
@@ -76,9 +100,22 @@ public class TestingLakeTieringFactory
                 "method getCommittableSerializer is not supported.");
     }
 
-    private static final class TestingLakeWriter implements LakeWriter<TestingWriteResult> {
+    /** A lake writer for testing purpose which tracks the closed state. */
+    public static final class TestingLakeWriter implements LakeWriter<TestingWriteResult> {
 
         private int writtenRecords;
+
+        @Nullable private final IOException completeException;
+
+        private boolean closed;
+
+        public TestingLakeWriter() {
+            this(null);
+        }
+
+        public TestingLakeWriter(@Nullable IOException completeException) {
+            this.completeException = completeException;
+        }
 
         @Override
         public void write(LogRecord record) throws IOException {
@@ -87,11 +124,20 @@ public class TestingLakeTieringFactory
 
         @Override
         public TestingWriteResult complete() throws IOException {
+            if (completeException != null) {
+                throw completeException;
+            }
             return new TestingWriteResult(writtenRecords);
         }
 
         @Override
-        public void close() throws IOException {}
+        public void close() throws IOException {
+            closed = true;
+        }
+
+        public boolean isClosed() {
+            return closed;
+        }
     }
 
     /** A lake committer for testing purpose. */

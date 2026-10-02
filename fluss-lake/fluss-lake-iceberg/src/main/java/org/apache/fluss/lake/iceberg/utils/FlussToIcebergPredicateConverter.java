@@ -107,7 +107,7 @@ public class FlussToIcebergPredicateConverter implements PredicateVisitor<Expres
         public Expression visitStartsWith(FieldRef fieldRef, Object literal) {
             String fieldName = getField(fieldRef.index()).name();
             return Expressions.startsWith(
-                    fieldName, convertToIcebergLiteral(fieldRef.index(), literal).toString());
+                    fieldName, convertToIcebergLiteral(fieldRef, literal).toString());
         }
 
         @Override
@@ -125,41 +125,39 @@ public class FlussToIcebergPredicateConverter implements PredicateVisitor<Expres
         @Override
         public Expression visitLessThan(FieldRef fieldRef, Object literal) {
             String fieldName = getField(fieldRef.index()).name();
-            return Expressions.lessThan(
-                    fieldName, convertToIcebergLiteral(fieldRef.index(), literal));
+            return Expressions.lessThan(fieldName, convertToIcebergLiteral(fieldRef, literal));
         }
 
         @Override
         public Expression visitGreaterOrEqual(FieldRef fieldRef, Object literal) {
             String fieldName = getField(fieldRef.index()).name();
             return Expressions.greaterThanOrEqual(
-                    fieldName, convertToIcebergLiteral(fieldRef.index(), literal));
+                    fieldName, convertToIcebergLiteral(fieldRef, literal));
         }
 
         @Override
         public Expression visitNotEqual(FieldRef fieldRef, Object literal) {
             String fieldName = getField(fieldRef.index()).name();
-            return Expressions.notEqual(
-                    fieldName, convertToIcebergLiteral(fieldRef.index(), literal));
+            return Expressions.notEqual(fieldName, convertToIcebergLiteral(fieldRef, literal));
         }
 
         @Override
         public Expression visitLessOrEqual(FieldRef fieldRef, Object literal) {
             String fieldName = getField(fieldRef.index()).name();
             return Expressions.lessThanOrEqual(
-                    fieldName, convertToIcebergLiteral(fieldRef.index(), literal));
+                    fieldName, convertToIcebergLiteral(fieldRef, literal));
         }
 
         @Override
         public Expression visitEqual(FieldRef fieldRef, Object literal) {
             String fieldName = getField(fieldRef.index()).name();
-            return Expressions.equal(fieldName, convertToIcebergLiteral(fieldRef.index(), literal));
+            return Expressions.equal(fieldName, convertToIcebergLiteral(fieldRef, literal));
         }
 
         @Override
         public Expression visitGreaterThan(FieldRef fieldRef, Object literal) {
             String fieldName = getField(fieldRef.index()).name();
-            Object icebergLiteral = convertToIcebergLiteral(fieldRef.index(), literal);
+            Object icebergLiteral = convertToIcebergLiteral(fieldRef, literal);
             return Expressions.greaterThan(fieldName, icebergLiteral);
         }
 
@@ -168,7 +166,7 @@ public class FlussToIcebergPredicateConverter implements PredicateVisitor<Expres
             String fieldName = getField(fieldRef.index()).name();
             List<Object> icebergLiterals =
                     literals.stream()
-                            .map(literal -> convertToIcebergLiteral(fieldRef.index(), literal))
+                            .map(literal -> convertToIcebergLiteral(fieldRef, literal))
                             .collect(Collectors.toList());
             return Expressions.in(fieldName, icebergLiterals);
         }
@@ -178,7 +176,7 @@ public class FlussToIcebergPredicateConverter implements PredicateVisitor<Expres
             String fieldName = getField(fieldRef.index()).name();
             List<Object> icebergLiterals =
                     literals.stream()
-                            .map(literal -> convertToIcebergLiteral(fieldRef.index(), literal))
+                            .map(literal -> convertToIcebergLiteral(fieldRef, literal))
                             .collect(Collectors.toList());
             return Expressions.notIn(fieldName, icebergLiterals);
         }
@@ -199,8 +197,11 @@ public class FlussToIcebergPredicateConverter implements PredicateVisitor<Expres
             return icebergSchema.columns().get(fieldIndex);
         }
 
-        private Object convertToIcebergLiteral(int fieldIndex, Object flussLiteral) {
-            return toIcebergLiteral(getField(fieldIndex), flussLiteral);
+        private Object convertToIcebergLiteral(FieldRef fieldRef, Object flussLiteral) {
+            // Pass the original Fluss field type through so IcebergConversions can reuse
+            // FlussRowAsIcebergRecord's per-Fluss-type converter directly, avoiding the lossy
+            // reverse mapping from Iceberg types back to Fluss types.
+            return toIcebergLiteral(getField(fieldRef.index()), fieldRef.type(), flussLiteral);
         }
     }
 }

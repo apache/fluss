@@ -45,4 +45,9 @@ class CompletedPendingFetch implements PendingFetch {
     public CompletedFetch toCompletedFetch() {
         return completedFetch;
     }
+
+    @Override
+    public void discard() {
+        completedFetch.drain();
+    }
 }

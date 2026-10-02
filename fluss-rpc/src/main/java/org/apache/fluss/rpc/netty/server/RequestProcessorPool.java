@@ -38,6 +38,8 @@ import java.util.concurrent.Executors;
 final class RequestProcessorPool {
     private static final Logger LOG = LoggerFactory.getLogger(RequestProcessorPool.class);
 
+    private static final String PROCESSOR_INDEX = "processor_index";
+
     private final RequestChannel[] requestChannels;
     private final RequestProcessor[] processors;
 
@@ -54,10 +56,16 @@ final class RequestProcessorPool {
 
         RequestHandler<?>[] requestHandlers = initializeRequestHandlers(protocols, service);
         for (int i = 0; i < numProcessors; i++) {
-            requestChannels[i] = new RequestChannel(totalQueueCapacity / numProcessors);
+            RequestChannel requestChannel = new RequestChannel(totalQueueCapacity / numProcessors);
+            requestChannels[i] = requestChannel;
             // bind processor to a single channel to make requests from the
             // same channel processed serializable
-            processors[i] = new RequestProcessor(i, requestChannels[i], service, requestHandlers);
+            processors[i] = new RequestProcessor(i, requestChannel, service, requestHandlers);
+            requestsMetrics.gauge(
+                    PROCESSOR_INDEX,
+                    String.valueOf(i),
+                    MetricNames.REQUEST_QUEUE_SIZE,
+                    requestChannel::requestsCount);
         }
         // register requestQueueSize metrics
         requestsMetrics.gauge(MetricNames.REQUEST_QUEUE_SIZE, this::getRequestQueueSize);

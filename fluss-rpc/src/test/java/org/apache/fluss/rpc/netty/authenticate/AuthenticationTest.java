@@ -79,6 +79,25 @@ public class AuthenticationTest {
     }
 
     @Test
+    void testJaasConfigRejectsNonPlainLoginModule() throws Exception {
+        Configuration clientConfig = new Configuration();
+        clientConfig.set(ConfigOptions.CLIENT_SECURITY_PROTOCOL, "sasl");
+        clientConfig.set(ConfigOptions.CLIENT_SASL_MECHANISM, "plain");
+        clientConfig.setString(
+                "client.security.sasl.jaas.config",
+                "com.sun.security.auth.module.JndiLoginModule required username=\"root\" password=\"password\";");
+        try (NettyClient nettyClient =
+                new NettyClient(clientConfig, TestingClientMetricGroup.newInstance())) {
+            assertThatThrownBy(
+                            () -> verifyGetTableNamesList(nettyClient, usernamePasswordServerNode))
+                    .isInstanceOf(AuthenticationException.class)
+                    .hasMessageContaining(
+                            "Only 'org.apache.fluss.security.auth.sasl.plain.PlainLoginModule' is supported")
+                    .hasMessageContaining("Got: 'com.sun.security.auth.module.JndiLoginModule'");
+        }
+    }
+
+    @Test
     void testMutualAuthenticate() throws Exception {
         Configuration clientConfig = new Configuration();
         clientConfig.set(ConfigOptions.CLIENT_SECURITY_PROTOCOL, "mutual");
@@ -223,11 +242,7 @@ public class AuthenticationTest {
         configuration.setString(
                 ConfigOptions.SERVER_SECURITY_PROTOCOL_MAP.key(), "CLIENT1:mutual,CLIENT2:sasl");
         configuration.setString("security.sasl.enabled.mechanisms", "plain");
-        configuration.setString(
-                "security.sasl.plain.jaas.config",
-                "org.apache.fluss.security.auth.sasl.plain.PlainLoginModule required "
-                        + "    user_root=\"password\" "
-                        + "    user_guest=\"password2\";");
+        configuration.setString("security.sasl.plain.credentials", "root:password,guest:password2");
         configuration.set(ConfigOptions.SUPER_USERS, "User:root");
         configuration.set(ConfigOptions.AUTHORIZER_ENABLED, true);
         // 3 worker threads is enough for this test

@@ -23,11 +23,11 @@
     <parent>
         <groupId>org.apache.fluss</groupId>
         <artifactId>fluss-metrics</artifactId>
-        <version>1.0-SNAPSHOT</version>
+        <version>1.1-SNAPSHOT</version>
     </parent>
 
     <artifactId>fluss-metrics-influxdb</artifactId>
-    <name>Fluss : Metrics : InfluxDB</name>
+    <name>Apache Fluss : Metrics : InfluxDB</name>
 
     <properties>
         <influxdb3.version>1.8.0</influxdb3.version>

@@ -22,11 +22,15 @@ import org.apache.fluss.config.Configuration;
 import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableDescriptor;
+import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.rpc.gateway.CoordinatorGateway;
 import org.apache.fluss.rpc.gateway.TabletServerGateway;
 import org.apache.fluss.rpc.messages.CommitLakeTableSnapshotRequest;
+import org.apache.fluss.rpc.messages.CommitLakeTableSnapshotResponse;
+import org.apache.fluss.rpc.messages.PbCommitLakeTableSnapshotRespForTable;
 import org.apache.fluss.rpc.messages.PbLakeTableOffsetForBucket;
 import org.apache.fluss.rpc.messages.PbLakeTableSnapshotInfo;
+import org.apache.fluss.rpc.messages.PbLakeTableSnapshotMetadata;
 import org.apache.fluss.server.log.LogTablet;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
 import org.apache.fluss.server.testutils.RpcMessageTestUtils;
@@ -38,6 +42,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 
 import java.time.Duration;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -165,5 +170,46 @@ class CommitLakeTableSnapshotITCase {
                         .build();
         return RpcMessageTestUtils.createTable(
                 FLUSS_CLUSTER_EXTENSION, DATA1_TABLE_PATH, tableDescriptor);
+    }
+
+    @Test
+    void testCommitLakeTableSnapshotV2RejectedAfterDropTable() throws Exception {
+        long tableId = createLogTable();
+        TablePath tablePath = DATA1_TABLE_PATH;
+
+        CoordinatorGateway coordinatorGateway = FLUSS_CLUSTER_EXTENSION.newCoordinatorClient();
+        coordinatorGateway
+                .dropTable(
+                        RpcMessageTestUtils.newDropTableRequest(
+                                tablePath.getDatabaseName(), tablePath.getTableName(), false))
+                .get();
+
+        // Wait for the table to be fully deleted from ZK
+        retry(
+                Duration.ofMinutes(2),
+                () -> {
+                    assertThat(zkClient.tableExist(tablePath)).isFalse();
+                    assertThat(zkClient.getTableAssignment(tableId)).isEmpty();
+                });
+
+        // Try to commit a V2 lake table snapshot for the dropped tableId
+        PbLakeTableSnapshotMetadata metadata =
+                new PbLakeTableSnapshotMetadata()
+                        .setTableId(tableId)
+                        .setSnapshotId(1L)
+                        .setTieredBucketOffsetsFilePath("/tmp/fake/path.offsets");
+
+        CommitLakeTableSnapshotRequest commitRequest = new CommitLakeTableSnapshotRequest();
+        commitRequest.addAllLakeTableSnapshotMetadatas(Collections.singletonList(metadata));
+
+        CommitLakeTableSnapshotResponse response =
+                coordinatorGateway.commitLakeTableSnapshot(commitRequest).get();
+
+        // Verify the response contains an error for the dropped table
+        assertThat(response.getTableRespsCount()).isEqualTo(1);
+        PbCommitLakeTableSnapshotRespForTable tableResp = response.getTableRespAt(0);
+        assertThat(tableResp.getTableId()).isEqualTo(tableId);
+        assertThat(tableResp.getErrorCode()).isNotZero();
+        assertThat(tableResp.getErrorMessage()).contains("not found");
     }
 }

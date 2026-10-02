@@ -111,7 +111,6 @@ public class ZooKeeperUtils {
         if (configPath.isPresent()) {
             try {
                 zkClientConfig = new ZKClientConfig(configPath.get());
-                curatorFrameworkBuilder.zkClientConfig(zkClientConfig);
             } catch (QuorumPeerConfig.ConfigException e) {
                 LOG.warn("Fail to load zookeeper client config from path {}", configPath.get(), e);
                 throw new RuntimeException(
@@ -127,6 +126,7 @@ public class ZooKeeperUtils {
         zkClientConfig.setProperty(
                 JUTE_MAXBUFFER,
                 String.valueOf(configuration.getInt(ConfigOptions.ZOOKEEPER_MAX_BUFFER_SIZE)));
+        curatorFrameworkBuilder.zkClientConfig(zkClientConfig);
 
         return new ZooKeeperClient(
                 startZookeeperClient(curatorFrameworkBuilder, fatalErrorHandler), configuration);

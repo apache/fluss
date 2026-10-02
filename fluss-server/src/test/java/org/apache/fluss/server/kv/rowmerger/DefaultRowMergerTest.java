@@ -94,9 +94,10 @@ class DefaultRowMergerTest {
     void testPartialUpdateRowMergerDeleteBehavior(DeleteBehavior deleteBehavior) {
         DefaultRowMerger merger = new DefaultRowMerger(KvFormat.COMPACTED, deleteBehavior);
 
-        // Configure for partial update (only name column)
+        // Explicit full schema ({id, name}) matches plain merger behavior (same as null targets).
         RowMerger partialMerger =
                 merger.configureTargetColumns(new int[] {0, 1}, (byte) 1, SCHEMA); // id + name
+        assertThat(partialMerger).isSameAs(merger);
 
         BinaryValue oldValue = createBinaryValue(1, "old");
 
@@ -106,7 +107,7 @@ class DefaultRowMergerTest {
 
         assertThat(partialMerger.merge(null, oldValue)).isEqualTo(oldValue);
 
-        // schema change then partial update (except name column).
+        // schema change then partial update (only id + age; omit name).
         partialMerger = merger.configureTargetColumns(new int[] {0, 2}, (byte) 2, SCHEMA_2);
         BinaryValue newValue = createBinaryValue(1, null, "20");
         BinaryValue mergeValue = createBinaryValue(1, "old", "20");

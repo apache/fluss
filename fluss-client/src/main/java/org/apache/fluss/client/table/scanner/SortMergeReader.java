@@ -26,30 +26,32 @@ import org.apache.fluss.utils.CloseableIterator;
 
 import javax.annotation.Nullable;
 
-import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.Iterator;
 import java.util.List;
 import java.util.NoSuchElementException;
 import java.util.PriorityQueue;
-import java.util.function.Function;
 
 /**
- * A sort merge reader to merge snapshot record and change log. Both of them should have the same
- * primary key encoding when comparing the keys.
+ * A sort merge reader that merges snapshot records and change log records into a single stream
+ * sorted by primary key. Both inputs must share the same primary key encoding.
+ *
+ * <p>The merge is driven by a single {@link MergeIterator} (a two-way merge). For the same key the
+ * change log wins over the snapshot: an update overrides the value, a delete removes the row. Using
+ * one iterator keeps the result identical regardless of how many times {@link #readBatch()} is
+ * called, so trailing change log records (keys greater than the max snapshot key) are never
+ * dropped.
  */
 public class SortMergeReader {
 
     private final ProjectedRow snapshotProjectedPkRow;
     private final CloseableIterator<LogRecord> snapshotRecordIterator;
     private final Comparator<InternalRow> userKeyComparator;
-    private CloseableIterator<KeyValueRow> changeLogIterator;
-
-    private final SnapshotMergedRowIteratorWrapper snapshotMergedRowIteratorWrapper;
-
-    private final ChangeLogIteratorWrapper changeLogIteratorWrapper;
+    private final CloseableIterator<KeyValueRow> changeLogIterator;
     private @Nullable final ProjectedRow projectedRow;
+
+    private @Nullable MergeIterator mergeIterator;
 
     public SortMergeReader(
             @Nullable int[] projectedFields,
@@ -78,23 +80,129 @@ public class SortMergeReader {
         this.snapshotRecordIterator =
                 ConcatRecordIterator.wrap(snapshotRecordIterators, userKeyComparator, pkIndexes);
         this.changeLogIterator = changeLogIterator;
-        this.changeLogIteratorWrapper = new ChangeLogIteratorWrapper();
-        this.snapshotMergedRowIteratorWrapper = new SnapshotMergedRowIteratorWrapper();
-        // to project to fields provided by user
         this.projectedRow = projectedFields == null ? null : ProjectedRow.from(projectedFields);
     }
 
+    /**
+     * Returns the merged-row iterator, or {@code null} when nothing is left. The same instance is
+     * returned on every call, so repeated invocations keep draining the snapshot and change log.
+     */
     @Nullable
     public CloseableIterator<InternalRow> readBatch() {
-        if (!snapshotRecordIterator.hasNext()) {
-            return changeLogIterator.hasNext()
-                    ? changeLogIteratorWrapper.replace(changeLogIterator)
-                    : null;
-        } else {
-            CloseableIterator<SortMergeRows> mergedRecordIterator =
-                    transform(snapshotRecordIterator, this::sortMergeWithChangeLog);
+        if (mergeIterator == null) {
+            mergeIterator = new MergeIterator();
+        }
+        return mergeIterator.hasNext() ? mergeIterator : null;
+    }
 
-            return snapshotMergedRowIteratorWrapper.replace(mergedRecordIterator);
+    /** Two-way merge iterator over the snapshot and change log streams. */
+    private class MergeIterator implements CloseableIterator<InternalRow> {
+
+        // peeked head of each stream; null means not peeked yet or drained
+        private @Nullable LogRecord pendingSnapshot;
+        private @Nullable KeyValueRow pendingLog;
+
+        // next row to return (before projection) and whether it has been computed
+        private @Nullable InternalRow nextRow;
+        private boolean nextComputed;
+
+        private @Nullable LogRecord peekSnapshot() {
+            if (pendingSnapshot == null && snapshotRecordIterator.hasNext()) {
+                pendingSnapshot = snapshotRecordIterator.next();
+            }
+            return pendingSnapshot;
+        }
+
+        private @Nullable KeyValueRow peekLog() {
+            if (pendingLog == null && changeLogIterator.hasNext()) {
+                pendingLog = changeLogIterator.next();
+            }
+            return pendingLog;
+        }
+
+        @Override
+        public boolean hasNext() {
+            if (!nextComputed) {
+                nextRow = advance();
+                nextComputed = true;
+            }
+            return nextRow != null;
+        }
+
+        @Override
+        public InternalRow next() {
+            if (!hasNext()) {
+                throw new NoSuchElementException();
+            }
+            InternalRow row = nextRow;
+            nextRow = null;
+            nextComputed = false;
+            return projectedRow == null ? row : projectedRow.replaceRow(row);
+        }
+
+        /** Advances to the next merged row, or {@code null} when both streams are drained. */
+        private @Nullable InternalRow advance() {
+            while (true) {
+                LogRecord snapshot = peekSnapshot();
+                KeyValueRow log = peekLog();
+
+                if (snapshot == null && log == null) {
+                    return null;
+                }
+
+                // only the change log remains
+                if (snapshot == null) {
+                    InternalRow row = takeLog(log);
+                    if (row != null) {
+                        return row;
+                    }
+                    continue;
+                }
+
+                InternalRow snapshotRow = snapshot.getRow();
+
+                // only the snapshot remains
+                if (log == null) {
+                    pendingSnapshot = null;
+                    return snapshotRow;
+                }
+
+                int compareResult =
+                        userKeyComparator.compare(
+                                snapshotProjectedPkRow.replaceRow(snapshotRow), log.keyRow());
+                if (compareResult < 0) {
+                    pendingSnapshot = null;
+                    return snapshotRow;
+                } else if (compareResult > 0) {
+                    InternalRow row = takeLog(log);
+                    if (row != null) {
+                        return row;
+                    }
+                    continue;
+                } else {
+                    // same key: change log overrides snapshot, delete drops both
+                    pendingSnapshot = null;
+                    InternalRow row = takeLog(log);
+                    if (row != null) {
+                        return row;
+                    }
+                    continue;
+                }
+            }
+        }
+
+        /**
+         * Consumes the change log head; returns its value row, or {@code null} if it is a delete.
+         */
+        private @Nullable InternalRow takeLog(KeyValueRow log) {
+            pendingLog = null;
+            return log.isDelete() ? null : log.valueRow();
+        }
+
+        @Override
+        public void close() {
+            snapshotRecordIterator.close();
+            changeLogIterator.close();
         }
     }
 
@@ -167,243 +275,5 @@ public class SortMergeReader {
             }
             return priorityQueue.peek().next();
         }
-    }
-
-    private SortMergeRows sortMergeWithChangeLog(InternalRow lakeSnapshotRow) {
-        // no log record, we return the snapshot record
-        if (!changeLogIterator.hasNext()) {
-            return new SortMergeRows(lakeSnapshotRow);
-        }
-        KeyValueRow logKeyValueRow = changeLogIterator.next();
-        // now, let's compare with the snapshot row with log row
-        int compareResult =
-                userKeyComparator.compare(
-                        snapshotProjectedPkRow.replaceRow(lakeSnapshotRow),
-                        logKeyValueRow.keyRow());
-        if (compareResult == 0) {
-            // record of snapshot is equal to log, but the log record is delete,
-            // we shouldn't emit record
-            if (logKeyValueRow.isDelete()) {
-                return SortMergeRows.EMPTY;
-            } else {
-                // return the log record
-                return new SortMergeRows(logKeyValueRow.valueRow());
-            }
-        }
-
-        // the snapshot record is less than the log record, emit the
-        // snapshot record
-        if (compareResult < 0) {
-            // need to put back the log record to log iterator to make the log record
-            // can be advanced again
-            changeLogIterator =
-                    SingleElementHeadIterator.addElementToHead(logKeyValueRow, changeLogIterator);
-            return new SortMergeRows(lakeSnapshotRow);
-        } else {
-            // snapshot record > log record
-            // we should emit the log record firsts; and still need to iterator changelog to find
-            // the first change log greater than the snapshot record
-            List<InternalRow> emitRows = new ArrayList<>();
-            // only emit the log record if it's not a delete operation
-            if (!logKeyValueRow.isDelete()) {
-                emitRows.add(logKeyValueRow.valueRow());
-            }
-            boolean shouldEmitSnapshotRecord = true;
-            while (changeLogIterator.hasNext()) {
-                // get the next log record
-                logKeyValueRow = changeLogIterator.next();
-                // compare with the snapshot row,
-                compareResult =
-                        userKeyComparator.compare(
-                                snapshotProjectedPkRow.replaceRow(lakeSnapshotRow),
-                                logKeyValueRow.keyRow());
-                // if snapshot record < the log record
-                if (compareResult < 0) {
-                    // we can break the loop
-                    changeLogIterator =
-                            SingleElementHeadIterator.addElementToHead(
-                                    logKeyValueRow, changeLogIterator);
-                    break;
-                } else if (compareResult > 0) {
-                    // snapshot record > the log record
-                    // the log record should be emitted
-                    if (!logKeyValueRow.isDelete()) {
-                        emitRows.add(logKeyValueRow.valueRow());
-                    }
-                } else {
-                    // log record == snapshot record
-                    // the log record should be emitted if is not delete, but the snapshot record
-                    // shouldn't be emitted
-                    if (!logKeyValueRow.isDelete()) {
-                        emitRows.add(logKeyValueRow.valueRow());
-                    }
-                    shouldEmitSnapshotRecord = false;
-                }
-            }
-
-            if (shouldEmitSnapshotRecord) {
-                emitRows.add(lakeSnapshotRow);
-            }
-            return new SortMergeRows(emitRows);
-        }
-    }
-
-    private static class ChangeLogIteratorWrapper implements CloseableIterator<InternalRow> {
-        private CloseableIterator<KeyValueRow> changeLogRecordIterator;
-        private KeyValueRow nextReturnRow;
-
-        public ChangeLogIteratorWrapper() {}
-
-        public ChangeLogIteratorWrapper replace(
-                CloseableIterator<KeyValueRow> changeLogRecordIterator) {
-            this.changeLogRecordIterator = changeLogRecordIterator;
-            this.nextReturnRow = null;
-            return this;
-        }
-
-        @Override
-        public void close() {
-            if (changeLogRecordIterator != null) {
-                changeLogRecordIterator.close();
-            }
-        }
-
-        @Override
-        public boolean hasNext() {
-            if (nextReturnRow != null) {
-                return true;
-            }
-            while (changeLogRecordIterator != null && changeLogRecordIterator.hasNext()) {
-                KeyValueRow row = changeLogRecordIterator.next();
-                if (!row.isDelete()) {
-                    nextReturnRow = row;
-                    return true;
-                }
-            }
-            return false;
-        }
-
-        @Override
-        public InternalRow next() {
-            if (nextReturnRow == null) {
-                throw new NoSuchElementException();
-            }
-            KeyValueRow row = nextReturnRow;
-            nextReturnRow = null; // Clear cache after consuming
-            return row.valueRow();
-        }
-    }
-
-    private class SnapshotMergedRowIteratorWrapper implements CloseableIterator<InternalRow> {
-        private CloseableIterator<SortMergeRows> currentLakeSnapshotRecords;
-
-        private @Nullable Iterator<InternalRow> currentMergedRows;
-
-        // the row to be returned
-        private @Nullable InternalRow returnedRow;
-
-        public SnapshotMergedRowIteratorWrapper replace(
-                CloseableIterator<SortMergeRows> currentLakeSnapshotRecords) {
-            this.currentLakeSnapshotRecords = currentLakeSnapshotRecords;
-            this.returnedRow = null;
-            this.currentMergedRows = null;
-            return this;
-        }
-
-        @Override
-        public void close() {
-            currentLakeSnapshotRecords.close();
-        }
-
-        @Override
-        public boolean hasNext() {
-            if (returnedRow != null) {
-                return true;
-            }
-            try {
-                // Loop to skip empty merge results (e.g., when a snapshot record is
-                // deleted by changelog) and advance to the next non-empty result.
-                while (returnedRow == null) {
-                    if (currentMergedRows == null) {
-                        if (!currentLakeSnapshotRecords.hasNext()) {
-                            return false;
-                        }
-
-                        SortMergeRows sortMergeRows = currentLakeSnapshotRecords.next();
-                        if (!sortMergeRows.mergedRows.isEmpty()) {
-                            currentMergedRows = sortMergeRows.mergedRows.iterator();
-                        } else {
-                            // If mergedRows is empty (e.g., record was deleted), continue
-                            // the loop to try the next snapshot record.
-                            continue;
-                        }
-                    }
-
-                    if (currentMergedRows.hasNext()) {
-                        returnedRow = currentMergedRows.next();
-                    } else {
-                        currentMergedRows = null;
-                    }
-                }
-                return true;
-            } catch (Exception e) {
-                throw new RuntimeException(e);
-            }
-        }
-
-        @Override
-        public InternalRow next() {
-            InternalRow returnedRow =
-                    projectedRow == null
-                            ? this.returnedRow
-                            : projectedRow.replaceRow(this.returnedRow);
-            // now, we can set the internalRow to null,
-            // if no any row remain in current merged row, set the currentMergedRows to null
-            // to enable fetch next merged rows
-            this.returnedRow = null;
-            if (currentMergedRows != null && !currentMergedRows.hasNext()) {
-                currentMergedRows = null;
-            }
-            return returnedRow;
-        }
-    }
-
-    private static class SortMergeRows {
-        private static final SortMergeRows EMPTY = new SortMergeRows(Collections.emptyList());
-
-        // the rows merge with change log, one snapshot row may advance multiple change log
-        private final List<InternalRow> mergedRows;
-
-        public SortMergeRows(List<InternalRow> mergedRows) {
-            this.mergedRows = mergedRows;
-        }
-
-        public SortMergeRows(InternalRow internalRow) {
-            this.mergedRows = Collections.singletonList(internalRow);
-        }
-    }
-
-    private <R> CloseableIterator<R> transform(
-            CloseableIterator<LogRecord> originElementIterator,
-            final Function<InternalRow, R> function) {
-        return new CloseableIterator<R>() {
-            private final CloseableIterator<LogRecord> inner = originElementIterator;
-
-            @Override
-            public void close() {
-                inner.close();
-            }
-
-            @Override
-            public boolean hasNext() {
-                return inner.hasNext();
-            }
-
-            @Override
-            public R next() {
-                LogRecord element = inner.next();
-                return function.apply(element.getRow());
-            }
-        };
     }
 }

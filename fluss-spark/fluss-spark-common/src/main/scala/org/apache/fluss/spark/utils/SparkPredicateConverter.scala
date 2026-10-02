@@ -27,7 +27,6 @@ import org.apache.spark.sql.types.{Decimal => SparkDecimal}
 import org.apache.spark.unsafe.types.UTF8String
 
 import java.lang.{Boolean => JBoolean, Byte => JByte, Double => JDouble, Float => JFloat, Long => JLong, Short => JShort}
-import java.time.LocalDate
 
 import scala.jdk.CollectionConverters._
 
@@ -277,9 +276,8 @@ object SparkPredicateConverter {
           }
 
         case DataTypeRoot.DATE =>
-          // RPC serialization (PredicateMessageUtils) expects LocalDate.
           value match {
-            case d: Integer => LocalDate.ofEpochDay(d.longValue())
+            case d: Integer => d
             case _ => throw new UnsupportedExpression
           }
 

@@ -24,8 +24,9 @@ This project bundles the following dependencies under the Apache Software Licens
 - org.apache.parquet:parquet-variant:1.16.0
 - org.apache.orc:orc-core:nohive:1.9.7
 - org.apache.orc:orc-shims:1.9.7
+- commons-codec:commons-codec:1.15
 - org.apache.commons:commons-lang3:3.18.0
-- org.apache.commons:commons-compress:1.24.0
+- org.apache.commons:commons-compress:1.26.1
 - org.apache.httpcomponents.client5:httpclient5:5.5
 - org.apache.httpcomponents.core5:httpcore5:5.3.4
 - org.apache.httpcomponents.core5:httpcore5-h2:5.3.4

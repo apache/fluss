@@ -22,6 +22,7 @@ import org.apache.iceberg.PartitionKey;
 import org.apache.iceberg.Schema;
 import org.apache.iceberg.StructLike;
 import org.apache.iceberg.Table;
+import org.apache.iceberg.data.InternalRecordWrapper;
 import org.apache.iceberg.data.Record;
 import org.apache.iceberg.io.BaseTaskWriter;
 import org.apache.iceberg.io.FileAppenderFactory;
@@ -71,19 +72,24 @@ class GenericRecordDeltaWriter extends BaseTaskWriter<Record> {
     }
 
     private class GenericEqualityDeltaWriter extends BaseEqualityDeltaWriter {
+        private final InternalRecordWrapper wrapper;
+        private final InternalRecordWrapper keyWrapper;
+
         private GenericEqualityDeltaWriter(
                 PartitionKey partition, Schema schema, Schema eqDeleteSchema) {
             super(partition, schema, eqDeleteSchema);
+            this.wrapper = new InternalRecordWrapper(schema.asStruct());
+            this.keyWrapper = new InternalRecordWrapper(eqDeleteSchema.asStruct());
         }
 
         @Override
         protected StructLike asStructLike(Record record) {
-            return record;
+            return wrapper.wrap(record);
         }
 
         @Override
         protected StructLike asStructLikeKey(Record record) {
-            return record;
+            return keyWrapper.wrap(record);
         }
     }
 }

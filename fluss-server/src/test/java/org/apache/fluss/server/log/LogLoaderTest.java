@@ -53,6 +53,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.Collectors;
 
 import static org.apache.fluss.record.TestData.DATA1_ROW_TYPE;
@@ -316,6 +317,37 @@ final class LogLoaderTest extends LogTestBase {
         assertThat(log.writerStateManager().activeWriters().size()).isEqualTo(1);
         assertThat(log.writerStateManager().activeWriters().get(wid1).lastBatchSequence())
                 .isEqualTo(13);
+    }
+
+    @Test
+    void testWriterStateRecoveryAcceptsBatchSequenceGap() throws Exception {
+        LogTablet log = createLogTablet(true);
+        long writerId = 1L;
+
+        log.appendAsFollower(
+                genMemoryLogRecordsWithWriterId(
+                        Collections.singletonList(new Object[] {1, "a"}), writerId, 10, 0L));
+        log.appendAsFollower(
+                genMemoryLogRecordsWithWriterId(
+                        Collections.singletonList(new Object[] {2, "b"}), writerId, 11, 1L));
+        log.roll(Optional.empty());
+
+        MemoryLogRecords recordsWithSequenceGap =
+                genMemoryLogRecordsWithWriterId(
+                        Collections.singletonList(new Object[] {3, "c"}), writerId, 100, 2L);
+        log.activeLogSegment().append(2L, clock.milliseconds(), 2L, recordsWithSequenceGap);
+        log.close();
+
+        log = createLogTablet(false);
+        assertThat(log.localLogEndOffset()).isEqualTo(3L);
+        assertThat(log.writerStateManager().activeWriters().get(writerId).lastBatchSequence())
+                .isEqualTo(100);
+
+        // The recovered state should be persisted in the new snapshot and survive another restart.
+        log.close();
+        log = createLogTablet(false);
+        assertThat(log.writerStateManager().activeWriters().get(writerId).lastBatchSequence())
+                .isEqualTo(100);
     }
 
     @Test
@@ -650,6 +682,8 @@ final class LogLoaderTest extends LogTestBase {
                 PhysicalTablePath.of(DATA1_TABLE_PATH),
                 logDir,
                 conf,
+                new AtomicBoolean(
+                        conf.get(ConfigOptions.LOG_RETENTION_ROLL_ACTIVE_SEGMENT_ENABLED)),
                 TestingMetricGroups.TABLET_SERVER_METRICS,
                 recoveryPoint,
                 scheduler,

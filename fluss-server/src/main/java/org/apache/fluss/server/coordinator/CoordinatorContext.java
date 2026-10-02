@@ -94,6 +94,7 @@ public class CoordinatorContext {
     private final Map<Long, TableInfo> tableInfoById = new HashMap<>();
 
     private final Map<TableBucket, LeaderAndIsr> bucketLeaderAndIsr = new HashMap<>();
+    private final Set<TableBucket> kvBuckets = new HashSet<>();
     private final Set<Long> tablesToBeDeleted = new HashSet<>();
 
     private final Set<TablePartition> partitionsToBeDeleted = new HashSet<>();
@@ -105,6 +106,13 @@ public class CoordinatorContext {
      * tablet_server_id after the tablet server become alive or dead.
      */
     private final Map<Integer, Set<TableBucket>> replicasOnOffline = new HashMap<>();
+
+    /**
+     * Tracks buckets where a leader change has been dispatched (via NotifyLeaderAndIsr) but not yet
+     * confirmed by the target server. A bucket enters this set when we send the notification and
+     * leaves it when the target server successfully responds confirming it is the leader.
+     */
+    private final Set<TableBucket> pendingLeaderActivationBuckets = new HashSet<>();
 
     /** A mapping from tabletServers to server tag. */
     private final Map<Integer, ServerTag> serverTags = new HashMap<>();
@@ -218,6 +226,82 @@ public class CoordinatorContext {
         replicasOnOffline.remove(serverId);
     }
 
+    /** Removes the offline marker for one table bucket on the given tablet server. */
+    public void removeOfflineBucketInServer(TableBucket tableBucket, int serverId) {
+        Set<TableBucket> tableBuckets = replicasOnOffline.get(serverId);
+        if (tableBuckets == null) {
+            return;
+        }
+        tableBuckets.remove(tableBucket);
+        if (tableBuckets.isEmpty()) {
+            replicasOnOffline.remove(serverId);
+        }
+    }
+
+    /**
+     * Returns offline replicas that are on live tablet servers.
+     *
+     * <p>The {@code replicasOnOffline} map is part of {@link #isReplicaOnline(int, TableBucket)},
+     * so replicas in it are filtered out from leader election even when their tablet server is
+     * still live.
+     */
+    public Set<TableBucketReplica> offlineReplicasOnLiveTabletServers() {
+        Set<Integer> liveTabletServers = liveTabletServerSet();
+        Set<TableBucketReplica> offlineReplicas = new HashSet<>();
+        for (Map.Entry<Integer, Set<TableBucket>> entry : replicasOnOffline.entrySet()) {
+            int serverId = entry.getKey();
+            if (!liveTabletServers.contains(serverId)) {
+                continue;
+            }
+            for (TableBucket tableBucket : entry.getValue()) {
+                offlineReplicas.add(new TableBucketReplica(tableBucket, serverId));
+            }
+        }
+        return offlineReplicas;
+    }
+
+    // ---- Pending leader activation tracking (for Cluster Health API) ----
+
+    public void addPendingLeaderActivation(TableBucket bucket) {
+        pendingLeaderActivationBuckets.add(bucket);
+    }
+
+    public void addPendingLeaderActivations(Collection<TableBucket> buckets) {
+        pendingLeaderActivationBuckets.addAll(buckets);
+    }
+
+    public void clearPendingLeaderActivation(TableBucket bucket) {
+        pendingLeaderActivationBuckets.remove(bucket);
+    }
+
+    /**
+     * Returns whether the given bucket has an active leader. A leader is considered active when:
+     *
+     * <ul>
+     *   <li>A LeaderAndIsr record exists for the bucket
+     *   <li>The leader is not {@link LeaderAndIsr#NO_LEADER}
+     *   <li>The leader's tablet server is alive
+     *   <li>The bucket is not pending leader activation confirmation
+     * </ul>
+     */
+    public boolean isLeaderActive(TableBucket bucket) {
+        return getBucketLeaderAndIsr(bucket)
+                .map(
+                        lai ->
+                                lai.leader() != LeaderAndIsr.NO_LEADER
+                                        && liveTabletServers.containsKey(lai.leader())
+                                        && !pendingLeaderActivationBuckets.contains(bucket))
+                .orElse(false);
+    }
+
+    public Set<TableBucket> getPendingLeaderActivationBuckets() {
+        return Collections.unmodifiableSet(pendingLeaderActivationBuckets);
+    }
+
+    public void removeFromPendingLeaderActivations(Set<TableBucket> buckets) {
+        pendingLeaderActivationBuckets.removeAll(buckets);
+    }
+
     public Map<Long, TablePath> allTables() {
         return tablePathById;
     }
@@ -262,6 +346,21 @@ public class CoordinatorContext {
                                                     bucket)));
         }
         return allBuckets;
+    }
+
+    /** Idempotently adds buckets observed as KV buckets. */
+    public void addKvBuckets(Collection<TableBucket> tableBuckets) {
+        kvBuckets.addAll(tableBuckets);
+    }
+
+    /** Idempotently removes buckets that are no longer observed as KV buckets. */
+    public void removeKvBuckets(Collection<TableBucket> tableBuckets) {
+        kvBuckets.removeAll(tableBuckets);
+    }
+
+    /** Returns the number of KV buckets currently observed by the Coordinator. */
+    public long getKvBucketCount() {
+        return kvBuckets.size();
     }
 
     public Set<TableBucketReplica> replicasOnTabletServer(int server) {
@@ -656,10 +755,16 @@ public class CoordinatorContext {
         tablesToBeDeleted.remove(tableId);
         Map<Integer, List<Integer>> assignment = tableAssignments.remove(tableId);
         if (assignment != null) {
-            // remove leadership info for each bucket from the context
+            Set<TableBucket> removedBuckets = new HashSet<>();
             assignment
                     .keySet()
-                    .forEach(bucket -> bucketLeaderAndIsr.remove(new TableBucket(tableId, bucket)));
+                    .forEach(
+                            bucket -> {
+                                TableBucket tb = new TableBucket(tableId, bucket);
+                                bucketLeaderAndIsr.remove(tb);
+                                removedBuckets.add(tb);
+                            });
+            removeFromPendingLeaderActivations(removedBuckets);
         }
 
         TablePath tablePath = tablePathById.remove(tableId);
@@ -673,16 +778,20 @@ public class CoordinatorContext {
         partitionsToBeDeleted.remove(tablePartition);
         Map<Integer, List<Integer>> assignment = partitionAssignments.remove(tablePartition);
         if (assignment != null) {
-            // remove leadership info for each bucket from the context
+            Set<TableBucket> removedBuckets = new HashSet<>();
             assignment
                     .keySet()
                     .forEach(
-                            bucket ->
-                                    bucketLeaderAndIsr.remove(
-                                            new TableBucket(
-                                                    tablePartition.getTableId(),
-                                                    tablePartition.getPartitionId(),
-                                                    bucket)));
+                            bucket -> {
+                                TableBucket tb =
+                                        new TableBucket(
+                                                tablePartition.getTableId(),
+                                                tablePartition.getPartitionId(),
+                                                bucket);
+                                bucketLeaderAndIsr.remove(tb);
+                                removedBuckets.add(tb);
+                            });
+            removeFromPendingLeaderActivations(removedBuckets);
         }
 
         PhysicalTablePath physicalTablePath =
@@ -717,6 +826,7 @@ public class CoordinatorContext {
         partitionAssignments.clear();
         bucketLeaderAndIsr.clear();
         replicasOnOffline.clear();
+        pendingLeaderActivationBuckets.clear();
         bucketStates.clear();
         replicaStates.clear();
         tablePathById.clear();
@@ -724,6 +834,7 @@ public class CoordinatorContext {
         tableInfoById.clear();
         pathByPartitionId.clear();
         partitionIdByPath.clear();
+        kvBuckets.clear();
     }
 
     public void resetContext() {

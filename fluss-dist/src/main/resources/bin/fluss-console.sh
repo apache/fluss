@@ -81,7 +81,7 @@ log="${FLUSS_LOG_PREFIX}.log"
 out="${FLUSS_LOG_PREFIX}.out"
 err="${FLUSS_LOG_PREFIX}.err"
 
-log_setting=("-Dlog.file=${log}" "-Dlog4j.configuration=file:${FLUSS_CONF_DIR}/log4j-console.properties" "-Dlog4j.configurationFile=file:${FLUSS_CONF_DIR}/log4j-console.properties" "-Dlogback.configurationFile=file:${FLUSS_CONF_DIR}/logback-console.xml")
+log_setting=("-Dlog.file=${log}" "-Dlog4j.shutdownHookEnabled=false" "-Dlog4j.configuration=file:${FLUSS_CONF_DIR}/log4j-console.properties" "-Dlog4j.configurationFile=file:${FLUSS_CONF_DIR}/log4j-console.properties" "-Dlogback.configurationFile=file:${FLUSS_CONF_DIR}/logback-console.xml")
 
 echo "Starting $SERVICE as a console application on host $HOSTNAME."
 

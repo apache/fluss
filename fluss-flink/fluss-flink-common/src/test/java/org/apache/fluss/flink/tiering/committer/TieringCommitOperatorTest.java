@@ -29,6 +29,7 @@ import org.apache.fluss.flink.utils.FlinkTestBase;
 import org.apache.fluss.lake.committer.CommittedLakeSnapshot;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.testutils.common.MultiVersionTest;
 
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.runtime.jobgraph.OperatorID;
@@ -62,14 +63,17 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** UT for {@link TieringCommitOperator}. */
+@MultiVersionTest
 class TieringCommitOperatorTest extends FlinkTestBase {
 
     private TieringCommitOperator<TestingWriteResult, TestingCommittable> committerOperator;
     private MockOperatorEventGateway mockOperatorEventGateway;
     private StreamOperatorParameters<CommittableMessage<TestingCommittable>> parameters;
+    private List<CommittableMessage<TestingCommittable>> output;
 
     @BeforeEach
     public void beforeEach() throws Exception {
+        output = new ArrayList<>();
         mockOperatorEventGateway = new MockOperatorEventGateway();
         MockOperatorEventDispatcher mockOperatorEventDispatcher =
                 new MockOperatorEventDispatcher(mockOperatorEventGateway);
@@ -77,7 +81,7 @@ class TieringCommitOperatorTest extends FlinkTestBase {
                 StreamOperatorParametersAdapter.create(
                         new SourceOperatorStreamTask<String>(new DummyEnvironment()),
                         new MockStreamConfig(new Configuration(), 1),
-                        new MockOutput<>(new ArrayList<>()),
+                        new MockOutput<>(output),
                         null,
                         mockOperatorEventDispatcher,
                         null);
@@ -94,6 +98,52 @@ class TieringCommitOperatorTest extends FlinkTestBase {
     @AfterEach
     void afterEach() throws Exception {
         committerOperator.close();
+    }
+
+    @Test
+    void testDuplicateBucketWriteResult() throws Exception {
+        TablePath tablePath = TablePath.of("fluss", "duplicate_bucket");
+        long tableId = createTable(tablePath, DEFAULT_PK_TABLE_DESCRIPTOR);
+        TableBucket tableBucket = new TableBucket(tableId, 0);
+        committerOperator.processElement(
+                createTableBucketWriteResultStreamRecord(tablePath, tableBucket, 1, 1, 1, 2));
+
+        // The duplicate would reach the expected count, but must fail instead of committing.
+        assertThatThrownBy(
+                        () ->
+                                committerOperator.processElement(
+                                        createTableBucketWriteResultStreamRecord(
+                                                tablePath, tableBucket, 2, 2, 2, 2)))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage(
+                        "Found duplicate write results for bucket %s of table %s.",
+                        tableBucket, tableId);
+        verifyNoLakeSnapshot(tablePath);
+    }
+
+    @Test
+    void testInconsistentWriteResultCounts() throws Exception {
+        TablePath tablePath = TablePath.of("fluss", "inconsistent_result_counts");
+        long tableId = createTable(tablePath, DEFAULT_PK_TABLE_DESCRIPTOR);
+        committerOperator.processElement(
+                createTableBucketWriteResultStreamRecord(
+                        tablePath, new TableBucket(tableId, 0), 1, 1, 1, 2));
+
+        assertThatThrownBy(
+                        () ->
+                                committerOperator.processElement(
+                                        createTableBucketWriteResultStreamRecord(
+                                                tablePath,
+                                                new TableBucket(tableId, 1),
+                                                2,
+                                                2,
+                                                2,
+                                                3)))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage(
+                        "numberOfWriteResults is not same across TableBucketWriteResults for table %s, got %s and %s.",
+                        tableId, 2, 3);
+        verifyNoLakeSnapshot(tablePath);
     }
 
     @Test
@@ -213,7 +263,7 @@ class TieringCommitOperatorTest extends FlinkTestBase {
         long tableId = createTable(tablePath1, DATA1_PARTITIONED_TABLE_DESCRIPTOR);
         int numberOfWriteResults = 3;
 
-        // verify when all are empty
+        // all buckets empty but offsets advanced: an empty lake snapshot is committed
         for (int bucket = 0; bucket < 3; bucket++) {
             TableBucket tableBucket = new TableBucket(tableId, bucket);
             committerOperator.processElement(
@@ -221,9 +271,13 @@ class TieringCommitOperatorTest extends FlinkTestBase {
                             tablePath1, tableBucket, null, 3, 6L, numberOfWriteResults));
         }
 
-        verifyNoLakeSnapshot(tablePath1);
+        Map<TableBucket, Long> expectedLogEndOffsets = new HashMap<>();
+        expectedLogEndOffsets.put(new TableBucket(tableId, 0), 3L);
+        expectedLogEndOffsets.put(new TableBucket(tableId, 1), 3L);
+        expectedLogEndOffsets.put(new TableBucket(tableId, 2), 3L);
+        verifyLakeSnapshot(tablePath1, tableId, 1, expectedLogEndOffsets);
 
-        // verify when one bucket result is empty
+        // one bucket empty with a valid offset: committed together with non-empty buckets
         for (int bucket = 1; bucket < 3; bucket++) {
             TableBucket tableBucket = new TableBucket(tableId, bucket);
             committerOperator.processElement(
@@ -241,21 +295,59 @@ class TieringCommitOperatorTest extends FlinkTestBase {
                         tablePath1,
                         new TableBucket(tableId, 0),
                         null,
-                        3,
+                        4,
                         6L,
                         numberOfWriteResults));
 
-        Map<TableBucket, Long> expectedLogEndOffsets = new HashMap<>();
+        expectedLogEndOffsets = new HashMap<>();
+        expectedLogEndOffsets.put(new TableBucket(tableId, 0), 4L);
         expectedLogEndOffsets.put(new TableBucket(tableId, 1), 1L);
         expectedLogEndOffsets.put(new TableBucket(tableId, 2), 2L);
-        verifyLakeSnapshot(tablePath1, tableId, 1, expectedLogEndOffsets);
+        verifyLakeSnapshot(tablePath1, tableId, 2, expectedLogEndOffsets);
+
+        // one bucket skipped (unknown offset): its previously committed offset is retained
+        for (int bucket = 1; bucket < 3; bucket++) {
+            TableBucket tableBucket = new TableBucket(tableId, bucket);
+            committerOperator.processElement(
+                    createTableBucketWriteResultStreamRecord(
+                            tablePath1,
+                            tableBucket,
+                            bucket,
+                            bucket * 10L,
+                            bucket * 10L,
+                            numberOfWriteResults));
+        }
+        committerOperator.processElement(
+                createTableBucketWriteResultStreamRecord(
+                        tablePath1,
+                        new TableBucket(tableId, 0),
+                        null,
+                        // unknown bucket offset and timestamp
+                        -1,
+                        -1L,
+                        numberOfWriteResults));
+
+        expectedLogEndOffsets = new HashMap<>();
+        expectedLogEndOffsets.put(new TableBucket(tableId, 0), 4L);
+        expectedLogEndOffsets.put(new TableBucket(tableId, 1), 10L);
+        expectedLogEndOffsets.put(new TableBucket(tableId, 2), 20L);
+        verifyLakeSnapshot(tablePath1, tableId, 3, expectedLogEndOffsets);
+
+        // all buckets skipped (unknown offsets): nothing is committed
+        for (int bucket = 0; bucket < 3; bucket++) {
+            TableBucket tableBucket = new TableBucket(tableId, bucket);
+            committerOperator.processElement(
+                    createTableBucketWriteResultStreamRecord(
+                            tablePath1, tableBucket, null, -1, -1L, numberOfWriteResults));
+        }
+        verifyLakeSnapshot(tablePath1, tableId, 3, expectedLogEndOffsets);
     }
 
     @Test
     void testTableCommitWhenFlussMissingLakeSnapshot() throws Exception {
         TablePath tablePath = TablePath.of("fluss", "test_commit_when_fluss_missing_lake_snapshot");
         long tableId = createTable(tablePath, DEFAULT_PK_TABLE_DESCRIPTOR);
-        int numberOfWriteResults = 3;
+        int numberOfWriteResults = 2;
 
         Map<TableBucket, Long> expectedLogEndOffsets = new HashMap<>();
         for (int bucket = 0; bucket < 3; bucket++) {
@@ -276,7 +368,7 @@ class TieringCommitOperatorTest extends FlinkTestBase {
                         new TestingLakeTieringFactory(testingLakeCommitter));
         committerOperator.open();
 
-        for (int bucket = 0; bucket < 3; bucket++) {
+        for (int bucket = 0; bucket < numberOfWriteResults; bucket++) {
             TableBucket tableBucket = new TableBucket(tableId, bucket);
             committerOperator.processElement(
                     createTableBucketWriteResultStreamRecord(
@@ -296,19 +388,33 @@ class TieringCommitOperatorTest extends FlinkTestBase {
                         tablePath,
                         tableId,
                         mockMissingCommittedLakeSnapshot));
+        assertThat(output).isEmpty();
 
+        // Retry with a different count and arrival order to verify the failed round was cleared.
+        numberOfWriteResults = 3;
         expectedLogEndOffsets = new HashMap<>();
-        for (int bucket = 0; bucket < 3; bucket++) {
+        for (int bucket : new int[] {2, 0, 1}) {
             TableBucket tableBucket = new TableBucket(tableId, bucket);
             long offset = bucket * bucket;
             long timestamp = bucket * bucket;
             committerOperator.processElement(
                     createTableBucketWriteResultStreamRecord(
-                            tablePath, tableBucket, 3, offset, timestamp, numberOfWriteResults));
+                            tablePath,
+                            tableBucket,
+                            bucket,
+                            offset,
+                            timestamp,
+                            numberOfWriteResults));
             expectedLogEndOffsets.put(tableBucket, offset);
         }
 
         verifyLakeSnapshot(tablePath, tableId, 1, expectedLogEndOffsets);
+        assertThat(output)
+                .singleElement()
+                .satisfies(
+                        message ->
+                                assertThat(message.committable().writeResults())
+                                        .containsExactly(2, 0, 1));
     }
 
     @Test

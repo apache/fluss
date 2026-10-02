@@ -175,7 +175,7 @@ public class LeafPredicate implements Predicate {
                 return internalRow.getTimestampNtz(pos, timestampType.getPrecision());
             case TIMESTAMP_WITH_LOCAL_TIME_ZONE:
                 LocalZonedTimestampType lzTs = (LocalZonedTimestampType) fieldType;
-                return internalRow.getTimestampNtz(pos, lzTs.getPrecision());
+                return internalRow.getTimestampLtz(pos, lzTs.getPrecision());
             case FLOAT:
                 return internalRow.getFloat(pos);
             case DOUBLE:
@@ -188,6 +188,7 @@ public class LeafPredicate implements Predicate {
                 return internalRow.getDecimal(
                         pos, decimalType.getPrecision(), decimalType.getScale());
             case BINARY:
+            case BYTES:
                 return internalRow.getBytes(pos);
             default:
                 throw new UnsupportedOperationException("Unsupported type: " + fieldType);

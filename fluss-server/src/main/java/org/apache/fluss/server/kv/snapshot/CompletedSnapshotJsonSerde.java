@@ -193,7 +193,7 @@ public class CompletedSnapshotJsonSerde
 
         // construct CompletedSnapshot
         KvSnapshotHandle kvSnapshotHandle =
-                new KvSnapshotHandle(sharedFileHandles, privateFileHandles, incrementalSize);
+                KvSnapshotHandle.restore(sharedFileHandles, privateFileHandles, incrementalSize);
 
         Long rowCount = null;
         if (node.has(ROW_COUNT)) {

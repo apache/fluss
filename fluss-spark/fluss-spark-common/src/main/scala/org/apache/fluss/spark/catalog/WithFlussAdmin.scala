@@ -22,7 +22,6 @@ import org.apache.fluss.client.admin.Admin
 import org.apache.fluss.config.{Configuration => FlussConfiguration}
 import org.apache.fluss.utils.{IOUtils, Preconditions}
 
-import org.apache.spark.sql.connector.catalog.CatalogPlugin
 import org.apache.spark.sql.util.CaseInsensitiveStringMap
 
 import java.util
@@ -34,9 +33,6 @@ trait WithFlussAdmin extends AutoCloseable {
   private var _connection: Connection = _
   private var _admin: Admin = _
   private var _flussConfig: FlussConfiguration = _
-
-  // TODO: init lake spark catalog
-  protected var lakeCatalog: CatalogPlugin = _
 
   protected def initFlussClient(options: CaseInsensitiveStringMap): Unit = {
     val flussConfigs = new util.HashMap[String, String]()

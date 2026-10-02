@@ -17,14 +17,21 @@
 
 package org.apache.fluss.server.coordinator;
 
+import org.apache.fluss.cluster.Endpoint;
+import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.cluster.TabletServerInfo;
 import org.apache.fluss.config.AutoPartitionTimeUnit;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.config.MemorySize;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.server.coordinator.remote.RemoteDirDynamicLoader;
+import org.apache.fluss.server.metadata.CoordinatorMetadataCache;
+import org.apache.fluss.server.metadata.ServerInfo;
+import org.apache.fluss.server.metadata.TabletServerResource;
 import org.apache.fluss.server.testutils.TestingServerMetadataCache;
 import org.apache.fluss.server.zk.NOPErrorHandler;
 import org.apache.fluss.server.zk.ZooKeeperClient;
@@ -50,8 +57,11 @@ import java.time.Duration;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.time.ZonedDateTime;
+import java.util.Arrays;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
@@ -61,6 +71,7 @@ import java.util.stream.Stream;
 
 import static org.apache.fluss.metadata.ResolvedPartitionSpec.fromPartitionName;
 import static org.apache.fluss.server.utils.TableAssignmentUtils.generateAssignment;
+import static org.apache.fluss.utils.PartitionUtils.HISTORICAL_PARTITION_VALUE;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** Test for {@link AutoPartitionManager}. */
@@ -73,6 +84,8 @@ class AutoPartitionManagerTest {
     protected static ZooKeeperClient zookeeperClient;
     private static MetadataManager metadataManager;
     private static String remoteDataDir;
+    private static List<String> remoteDataDirs;
+    private static RemoteDirDynamicLoader remoteDirDynamicLoader;
 
     @BeforeAll
     static void beforeAll() {
@@ -85,7 +98,17 @@ class AutoPartitionManagerTest {
                         zookeeperClient,
                         new Configuration(),
                         new LakeCatalogDynamicLoader(new Configuration(), null, true));
-        remoteDataDir = zookeeperClient.getDefaultRemoteDataDir();
+
+        remoteDataDir = "/dir";
+        remoteDataDirs = Arrays.asList("/dir1", "/dir2", "/dir3", "/dir4");
+        Configuration conf = new Configuration();
+        conf.set(ConfigOptions.REMOTE_DATA_DIR, remoteDataDir);
+        conf.set(ConfigOptions.REMOTE_DATA_DIRS, remoteDataDirs);
+        conf.set(ConfigOptions.REMOTE_DATA_DIRS_WEIGHTS, Arrays.asList(1, 1, 1, 1));
+        conf.set(
+                ConfigOptions.REMOTE_DATA_DIRS_STRATEGY,
+                ConfigOptions.RemoteDataDirStrategy.WEIGHTED_ROUND_ROBIN);
+        remoteDirDynamicLoader = new RemoteDirDynamicLoader(conf);
     }
 
     @AfterEach
@@ -304,7 +327,9 @@ class AutoPartitionManagerTest {
                                 zookeeperClient,
                                 new Configuration(),
                                 new LakeCatalogDynamicLoader(new Configuration(), null, true)),
+                        remoteDirDynamicLoader,
                         new Configuration(),
+                        disabledCapacityController(),
                         clock,
                         periodicExecutor);
         autoPartitionManager.start();
@@ -320,6 +345,7 @@ class AutoPartitionManagerTest {
                 zookeeperClient.getPartitionRegistrations(tablePath);
         // pre-create 4 partitions including current partition
         assertThat(partitions.keySet()).containsExactlyInAnyOrder(params.expectedPartitions);
+        verifyPartitionsRemoteDataDir(tablePath, partitions.keySet());
 
         int replicaFactor = table.getTableConfig().getReplicationFactor();
         Map<Integer, BucketAssignment> bucketAssignments =
@@ -341,9 +367,11 @@ class AutoPartitionManagerTest {
             metadataManager.createPartition(
                     tablePath,
                     tableId,
+                    remoteDataDir,
                     partitionAssignment,
                     fromPartitionName(table.getPartitionKeys(), partitionName),
-                    false);
+                    false,
+                    table.getNumBuckets());
             // mock the partition is created in zk.
             autoPartitionManager.addPartition(tableId, partitionName);
         }
@@ -376,6 +404,91 @@ class AutoPartitionManagerTest {
     }
 
     @Test
+    void testDayFormatWithDashes() throws Exception {
+        ZonedDateTime startTime =
+                LocalDateTime.parse("2024-09-10T00:00:00").atZone(ZoneId.systemDefault());
+        ManualClock clock = new ManualClock(startTime.toInstant().toEpochMilli());
+        ManuallyTriggeredScheduledExecutorService periodicExecutor =
+                new ManuallyTriggeredScheduledExecutorService();
+
+        AutoPartitionManager autoPartitionManager =
+                new AutoPartitionManager(
+                        new TestingServerMetadataCache(3),
+                        new MetadataManager(
+                                zookeeperClient,
+                                new Configuration(),
+                                new LakeCatalogDynamicLoader(new Configuration(), null, true)),
+                        remoteDirDynamicLoader,
+                        new Configuration(),
+                        disabledCapacityController(),
+                        clock,
+                        periodicExecutor);
+        autoPartitionManager.start();
+
+        TableInfo table =
+                createPartitionedTable(2, 4, AutoPartitionTimeUnit.DAY, false, "yyyy-MM-dd");
+        TablePath tablePath = table.getTablePath();
+        autoPartitionManager.addAutoPartitionTable(table, true);
+        periodicExecutor.triggerNonPeriodicScheduledTask();
+
+        Map<String, PartitionRegistration> partitions =
+                zookeeperClient.getPartitionRegistrations(tablePath);
+        assertThat(partitions.keySet())
+                .containsExactlyInAnyOrder("2024-09-10", "2024-09-11", "2024-09-12", "2024-09-13");
+
+        int replicaFactor = table.getTableConfig().getReplicationFactor();
+        Map<Integer, BucketAssignment> bucketAssignments =
+                generateAssignment(
+                                table.getNumBuckets(),
+                                replicaFactor,
+                                new TabletServerInfo[] {
+                                    new TabletServerInfo(0, "rack0"),
+                                    new TabletServerInfo(1, "rack1"),
+                                    new TabletServerInfo(2, "rack2")
+                                })
+                        .getBucketAssignments();
+        PartitionAssignment partitionAssignment =
+                new PartitionAssignment(table.getTableId(), bucketAssignments);
+        metadataManager.createPartition(
+                tablePath,
+                table.getTableId(),
+                remoteDataDir,
+                partitionAssignment,
+                fromPartitionName(table.getPartitionKeys(), "2024-09-15"),
+                false,
+                table.getNumBuckets());
+        autoPartitionManager.addPartition(table.getTableId(), "2024-09-15");
+
+        metadataManager.dropPartition(
+                tablePath, fromPartitionName(table.getPartitionKeys(), "2024-09-10"), false);
+        autoPartitionManager.removePartition(table.getTableId(), "2024-09-10");
+
+        clock.advanceTime(Duration.ofDays(3).plus(Duration.ofHours(23)));
+        periodicExecutor.triggerPeriodicScheduledTasks();
+        partitions = zookeeperClient.getPartitionRegistrations(tablePath);
+        assertThat(partitions.keySet())
+                .containsExactlyInAnyOrder(
+                        "2024-09-11",
+                        "2024-09-12",
+                        "2024-09-13",
+                        "2024-09-14",
+                        "2024-09-15",
+                        "2024-09-16");
+
+        clock.advanceTime(Duration.ofDays(2));
+        periodicExecutor.triggerPeriodicScheduledTasks();
+        partitions = zookeeperClient.getPartitionRegistrations(tablePath);
+        assertThat(partitions.keySet())
+                .containsExactlyInAnyOrder(
+                        "2024-09-13",
+                        "2024-09-14",
+                        "2024-09-15",
+                        "2024-09-16",
+                        "2024-09-17",
+                        "2024-09-18");
+    }
+
+    @Test
     void testMaxPartitions() throws Exception {
         int expectPartitionNumber = 10;
         Configuration config = new Configuration();
@@ -397,7 +510,9 @@ class AutoPartitionManagerTest {
                 new AutoPartitionManager(
                         new TestingServerMetadataCache(3),
                         metadataManager,
+                        remoteDirDynamicLoader,
                         new Configuration(),
+                        disabledCapacityController(),
                         clock,
                         periodicExecutor);
         autoPartitionManager.start();
@@ -435,9 +550,11 @@ class AutoPartitionManagerTest {
             metadataManager.createPartition(
                     tablePath,
                     tableId,
+                    remoteDataDir,
                     partitionAssignment,
                     fromPartitionName(table.getPartitionKeys(), i + ""),
-                    false);
+                    false,
+                    table.getNumBuckets());
             // mock the partition is created in zk.
             autoPartitionManager.addPartition(tableId, i + "");
         }
@@ -474,7 +591,9 @@ class AutoPartitionManagerTest {
                 new AutoPartitionManager(
                         new TestingServerMetadataCache(3),
                         metadataManager,
+                        remoteDirDynamicLoader,
                         new Configuration(),
+                        disabledCapacityController(),
                         clock,
                         periodicExecutor);
         autoPartitionManager.start();
@@ -510,15 +629,101 @@ class AutoPartitionManagerTest {
                         "20250419", "20250420", "20250421", "20250422", "20250423");
     }
 
+    @Test
+    void testDayPartitionDropShouldNotBeDelayedByJitter() throws Exception {
+        ZonedDateTime startTime =
+                LocalDateTime.parse("2025-04-19T00:00:00").atZone(ZoneId.systemDefault());
+        long startMs = startTime.toInstant().toEpochMilli();
+        ManualClock clock = new ManualClock(startMs);
+        ManuallyTriggeredScheduledExecutorService periodicExecutor =
+                new ManuallyTriggeredScheduledExecutorService();
+        AutoPartitionManager autoPartitionManager =
+                new AutoPartitionManager(
+                        new TestingServerMetadataCache(3),
+                        metadataManager,
+                        remoteDirDynamicLoader,
+                        new Configuration(),
+                        disabledCapacityController(),
+                        clock,
+                        periodicExecutor);
+        autoPartitionManager.start();
+
+        // Create a DAY-partitioned table: numRetention=2, numPreCreate=4
+        TableInfo table = createPartitionedTable(2, 4, AutoPartitionTimeUnit.DAY);
+        TablePath tablePath = table.getTablePath();
+        autoPartitionManager.addAutoPartitionTable(table, true);
+        periodicExecutor.triggerNonPeriodicScheduledTasks();
+
+        Map<String, PartitionRegistration> partitions =
+                zookeeperClient.getPartitionRegistrations(tablePath);
+        // Initial: 20250419, 20250420, 20250421, 20250422
+        assertThat(partitions.keySet())
+                .containsExactlyInAnyOrder("20250419", "20250420", "20250421", "20250422");
+
+        Integer delayMinutes =
+                autoPartitionManager.getAutoCreateDayDelayMinutes(table.getTableId());
+        assertThat(delayMinutes).isNotNull();
+
+        // Advance exactly 3 days to 2025-04-22T00:00:00.
+        // From 'now' perspective: current day is 20250422, retain 2 => keep 20250420, 20250421.
+        // So 20250419 should be dropped.
+        //
+        // With the bug (drop used delayed time): if delay > 0, delayed time would still
+        // be on 20250421, retain 2 => keep 20250419, 20250420 => 20250419 NOT dropped.
+        clock.advanceTime(Duration.ofDays(3));
+        periodicExecutor.triggerPeriodicScheduledTasks();
+
+        partitions = zookeeperClient.getPartitionRegistrations(tablePath);
+        // 20250419 must be dropped regardless of jitter delay
+        assertThat(partitions.keySet()).doesNotContain("20250419");
+        // Retained partitions should still exist
+        assertThat(partitions.keySet()).contains("20250420", "20250421", "20250422");
+    }
+
+    @Test
+    void testRemovePartitionFromMultiplePartitionKeysTable() throws Exception {
+        ManuallyTriggeredScheduledExecutorService periodicExecutor =
+                new ManuallyTriggeredScheduledExecutorService();
+        AutoPartitionManager autoPartitionManager =
+                new AutoPartitionManager(
+                        new TestingServerMetadataCache(3),
+                        metadataManager,
+                        remoteDirDynamicLoader,
+                        new Configuration(),
+                        disabledCapacityController(),
+                        new ManualClock(0L),
+                        periodicExecutor);
+
+        TableInfo table = createPartitionedTable(2, 0, AutoPartitionTimeUnit.DAY, true);
+        long tableId = table.getTableId();
+        autoPartitionManager.addAutoPartitionTable(table, false);
+        autoPartitionManager.addPartition(tableId, "20250419$A");
+        autoPartitionManager.addPartition(tableId, "20250419$B");
+
+        assertThat(autoPartitionManager.getPartitionsByTable(tableId))
+                .containsEntry(
+                        "20250419", new HashSet<>(Arrays.asList("20250419$A", "20250419$B")));
+
+        autoPartitionManager.removePartition(tableId, "20250419$A");
+
+        assertThat(autoPartitionManager.getPartitionsByTable(tableId))
+                .containsEntry("20250419", new HashSet<>(Arrays.asList("20250419$B")));
+
+        autoPartitionManager.removePartition(tableId, "20250419$B");
+
+        assertThat(autoPartitionManager.getPartitionsByTable(tableId))
+                .doesNotContainKey("20250419");
+    }
+
     /**
-     * Test if AutoPartionManager.createPartition adheres to maxBucketLimit while adding new
-     * parition automatically, skip if it breaches limit.
+     * Test if AutoPartitionManager.createPartition applies maxBucketLimit per partition while
+     * adding new partition automatically.
      */
     @Test
-    void testMaxBucketNum() throws Exception {
+    void testMaxBucketNumPerPartition() throws Exception {
 
         int bucketCountPerPartition = 10;
-        int maxBucketNum = 30; // Allow only 3 partitions with 10 buckets each
+        int maxBucketNum = 30;
 
         Configuration config = new Configuration();
         config.set(ConfigOptions.MAX_BUCKET_NUM, maxBucketNum);
@@ -539,7 +744,9 @@ class AutoPartitionManagerTest {
                 new AutoPartitionManager(
                         new TestingServerMetadataCache(3),
                         metadataManager,
+                        remoteDirDynamicLoader,
                         config,
+                        disabledCapacityController(),
                         clock,
                         periodicExecutor);
         autoPartitionManager.start();
@@ -554,16 +761,163 @@ class AutoPartitionManagerTest {
         periodicExecutor.triggerNonPeriodicScheduledTask();
 
         int partitionsNum = zookeeperClient.getPartitionNumber(tablePath);
-        // Only 3 partitions should be created (3 * 10 = 30 buckets) out of the 4 requested
-        assertThat(partitionsNum).isEqualTo(3);
+        // All 4 requested partitions should be created because each partition is below the limit.
+        assertThat(partitionsNum).isEqualTo(4);
 
         // Advance time to trigger another auto-partition cycle
         clock.advanceTime(Duration.ofDays(1).plusHours(23));
         periodicExecutor.triggerPeriodicScheduledTasks();
 
-        // Check partitions again - should still have only 3 due to bucket limit
         partitionsNum = zookeeperClient.getPartitionNumber(tablePath);
-        assertThat(partitionsNum).isEqualTo(3);
+        assertThat(partitionsNum).isEqualTo(5);
+    }
+
+    /**
+     * Verifies that the cached {@link TableInfo} update is the eventual-consistency boundary for
+     * auto-created partition bucket counts: partitions created before the refresh keep the old
+     * count, while later partitions use the new count.
+     */
+    @Test
+    void testAutoCreatedPartitionUsesCachedBucketCount() throws Exception {
+        ZonedDateTime startTime =
+                LocalDateTime.parse("2024-09-10T00:00:00").atZone(ZoneId.systemDefault());
+        long startMs = startTime.toInstant().toEpochMilli();
+        ManualClock clock = new ManualClock(startMs);
+        ManuallyTriggeredScheduledExecutorService periodicExecutor =
+                new ManuallyTriggeredScheduledExecutorService();
+
+        AutoPartitionManager autoPartitionManager =
+                new AutoPartitionManager(
+                        new TestingServerMetadataCache(3),
+                        metadataManager,
+                        remoteDirDynamicLoader,
+                        new Configuration(),
+                        disabledCapacityController(),
+                        clock,
+                        periodicExecutor);
+        autoPartitionManager.start();
+
+        // DAY-partitioned table with 4 buckets per partition, never auto-drop, pre-create 4
+        TableInfo table = createPartitionedTableWithBuckets(-1, 4, AutoPartitionTimeUnit.DAY, 4);
+        TablePath tablePath = table.getTablePath();
+        autoPartitionManager.addAutoPartitionTable(table, true);
+        periodicExecutor.triggerNonPeriodicScheduledTask();
+
+        Map<String, PartitionRegistration> partitions =
+                zookeeperClient.getPartitionRegistrations(tablePath);
+        assertThat(partitions.keySet())
+                .containsExactlyInAnyOrder("20240910", "20240911", "20240912", "20240913");
+        // all pre-created partitions carry the original bucket count 4
+        for (PartitionRegistration reg : partitions.values()) {
+            assertThat(reg.getBucketCount()).isEqualTo(4);
+        }
+
+        // Simulate the first half of ALTER bucket.num 4 -> 8: ZK is updated, but the coordinator
+        // event has not refreshed AutoPartitionManager's cached TableInfo yet.
+        TableRegistration reg = zookeeperClient.getTable(tablePath).get();
+        zookeeperClient.updateTable(tablePath, reg.newBucketCount(8));
+        clock.advanceTime(Duration.ofDays(1).plusHours(23));
+        periodicExecutor.triggerPeriodicScheduledTasks();
+
+        partitions = zookeeperClient.getPartitionRegistrations(tablePath);
+        assertThat(partitions.get("20240914").getBucketCount()).isEqualTo(4);
+
+        // Complete event propagation and create the next partition from the refreshed cache.
+        TableInfo updatedTable = createUpdatedBucketCountTableInfo(table, 8);
+        autoPartitionManager.updateAutoPartitionTables(updatedTable);
+        periodicExecutor.triggerNonPeriodicScheduledTask();
+        clock.advanceTime(Duration.ofDays(1));
+        periodicExecutor.triggerPeriodicScheduledTasks();
+
+        partitions = zookeeperClient.getPartitionRegistrations(tablePath);
+        assertThat(partitions.get("20240910").getBucketCount()).isEqualTo(4);
+        assertThat(partitions.get("20240914").getBucketCount()).isEqualTo(4);
+        assertThat(partitions.get("20240915").getBucketCount()).isEqualTo(8);
+    }
+
+    @Test
+    void testAutoCreatePartitionChecksCapacityWithoutReservation() throws Exception {
+        ZonedDateTime startTime =
+                LocalDateTime.parse("2025-04-26T00:00:00").atZone(ZoneId.systemDefault());
+        ManualClock clock = new ManualClock(startTime.toInstant().toEpochMilli());
+        ManuallyTriggeredScheduledExecutorService periodicExecutor =
+                new ManuallyTriggeredScheduledExecutorService();
+        ReplicaCapacityController capacityController = capacityControllerWithCapacity(16);
+        AutoPartitionManager autoPartitionManager =
+                new AutoPartitionManager(
+                        new TestingServerMetadataCache(3),
+                        metadataManager,
+                        remoteDirDynamicLoader,
+                        new Configuration(),
+                        capacityController,
+                        clock,
+                        periodicExecutor);
+        autoPartitionManager.start();
+
+        TableInfo table = createPartitionedTable(-1, 2, AutoPartitionTimeUnit.HOUR);
+        TablePath tablePath = table.getTablePath();
+        autoPartitionManager.addAutoPartitionTable(table, true);
+        periodicExecutor.triggerNonPeriodicScheduledTask();
+
+        Map<String, PartitionRegistration> partitions =
+                zookeeperClient.getPartitionRegistrations(tablePath);
+        // This unit test has no coordinator event thread to publish the created partition buckets
+        // back as observed state, so both best-effort checks pass without reserving capacity.
+        assertThat(partitions.keySet()).containsExactlyInAnyOrder("2025042600", "2025042601");
+        assertThat(capacityController.getKvLeaderReplicaCount()).isZero();
+    }
+
+    @Test
+    void testAutoDropPartitionDoesNotMutateObservedKvLeaderReplicaCount() throws Exception {
+        ZonedDateTime startTime =
+                LocalDateTime.parse("2025-04-26T00:00:00").atZone(ZoneId.systemDefault());
+        ManualClock clock = new ManualClock(startTime.toInstant().toEpochMilli());
+        ManuallyTriggeredScheduledExecutorService periodicExecutor =
+                new ManuallyTriggeredScheduledExecutorService();
+        ReplicaCapacityController capacityController = capacityControllerWithCapacity(64);
+        AutoPartitionManager autoPartitionManager =
+                new AutoPartitionManager(
+                        new TestingServerMetadataCache(3),
+                        metadataManager,
+                        remoteDirDynamicLoader,
+                        new Configuration(),
+                        capacityController,
+                        clock,
+                        periodicExecutor);
+        autoPartitionManager.start();
+
+        TableInfo table = createPartitionedTable(1, 0, AutoPartitionTimeUnit.HOUR);
+        TablePath tablePath = table.getTablePath();
+        autoPartitionManager.addAutoPartitionTable(table, false);
+        PartitionAssignment partitionAssignment = partitionAssignment(table);
+        metadataManager.createPartition(
+                tablePath,
+                table.getTableId(),
+                remoteDataDir,
+                partitionAssignment,
+                fromPartitionName(table.getPartitionKeys(), "2025042600"),
+                false,
+                table.getNumBuckets());
+        metadataManager.createPartition(
+                tablePath,
+                table.getTableId(),
+                remoteDataDir,
+                partitionAssignment,
+                fromPartitionName(table.getPartitionKeys(), "2025042601"),
+                false,
+                table.getNumBuckets());
+        autoPartitionManager.addPartition(table.getTableId(), "2025042600");
+        autoPartitionManager.addPartition(table.getTableId(), "2025042601");
+        capacityController.updateObservedKvLeaderReplicaCount((long) table.getNumBuckets() * 2);
+
+        clock.advanceTime(Duration.ofHours(2));
+        periodicExecutor.triggerPeriodicScheduledTasks();
+
+        Map<String, PartitionRegistration> partitions =
+                zookeeperClient.getPartitionRegistrations(tablePath);
+        assertThat(partitions.keySet()).containsExactly("2025042601");
+        assertThat(capacityController.getKvLeaderReplicaCount())
+                .isEqualTo((long) table.getNumBuckets() * 2);
     }
 
     @Test
@@ -580,7 +934,9 @@ class AutoPartitionManagerTest {
                 new AutoPartitionManager(
                         new TestingServerMetadataCache(3),
                         metadataManager,
+                        remoteDirDynamicLoader,
                         new Configuration(),
+                        disabledCapacityController(),
                         clock,
                         periodicExecutor);
         autoPartitionManager.start();
@@ -612,6 +968,180 @@ class AutoPartitionManagerTest {
                 .containsExactlyInAnyOrder(
                         "2024091003", "2024091004", "2024091005", "2024091006", "2024091007");
     }
+
+    @Test
+    void testUpdateAutoPartitionNumPrecreate() throws Exception {
+        ZonedDateTime startTime =
+                LocalDateTime.parse("2024-09-10T00:00:00").atZone(ZoneId.systemDefault());
+        long startMs = startTime.toInstant().toEpochMilli();
+        ManualClock clock = new ManualClock(startMs);
+        ManuallyTriggeredScheduledExecutorService periodicExecutor =
+                new ManuallyTriggeredScheduledExecutorService();
+
+        AutoPartitionManager autoPartitionManager =
+                new AutoPartitionManager(
+                        new TestingServerMetadataCache(3),
+                        metadataManager,
+                        remoteDirDynamicLoader,
+                        new Configuration(),
+                        disabledCapacityController(),
+                        clock,
+                        periodicExecutor);
+        autoPartitionManager.start();
+
+        TableInfo table = createPartitionedTable(-1, 1, AutoPartitionTimeUnit.HOUR);
+        TablePath tablePath = table.getTablePath();
+        autoPartitionManager.addAutoPartitionTable(table, true);
+        periodicExecutor.triggerNonPeriodicScheduledTask();
+
+        Map<String, PartitionRegistration> partitions =
+                zookeeperClient.getPartitionRegistrations(tablePath);
+        assertThat(partitions.keySet()).containsExactlyInAnyOrder("2024091000");
+
+        TableInfo increasedPrecreateTable =
+                createUpdatedTableInfo(table, /* numRetention= */ -1, /* numPreCreate= */ 3);
+        autoPartitionManager.updateAutoPartitionTables(increasedPrecreateTable);
+        periodicExecutor.triggerNonPeriodicScheduledTask();
+
+        partitions = zookeeperClient.getPartitionRegistrations(tablePath);
+        assertThat(partitions.keySet())
+                .containsExactlyInAnyOrder("2024091000", "2024091001", "2024091002");
+
+        TableInfo decreasedPrecreateTable =
+                createUpdatedTableInfo(
+                        increasedPrecreateTable, /* numRetention= */ -1, /* numPreCreate= */ 1);
+        autoPartitionManager.updateAutoPartitionTables(decreasedPrecreateTable);
+        periodicExecutor.triggerNonPeriodicScheduledTask();
+
+        partitions = zookeeperClient.getPartitionRegistrations(tablePath);
+        assertThat(partitions.keySet())
+                .containsExactlyInAnyOrder("2024091000", "2024091001", "2024091002");
+
+        clock.advanceTime(Duration.ofHours(1));
+        periodicExecutor.triggerPeriodicScheduledTasks();
+        partitions = zookeeperClient.getPartitionRegistrations(tablePath);
+        assertThat(partitions.keySet())
+                .containsExactlyInAnyOrder("2024091000", "2024091001", "2024091002");
+
+        clock.advanceTime(Duration.ofHours(2));
+        periodicExecutor.triggerPeriodicScheduledTasks();
+        partitions = zookeeperClient.getPartitionRegistrations(tablePath);
+        assertThat(partitions.keySet())
+                .containsExactlyInAnyOrder("2024091000", "2024091001", "2024091002", "2024091003");
+    }
+
+    @Test
+    void testUpdateAutoPartitionEnabled() throws Exception {
+        ZonedDateTime startTime =
+                LocalDateTime.parse("2024-09-10T00:00:00").atZone(ZoneId.systemDefault());
+        long startMs = startTime.toInstant().toEpochMilli();
+        ManualClock clock = new ManualClock(startMs);
+        ManuallyTriggeredScheduledExecutorService periodicExecutor =
+                new ManuallyTriggeredScheduledExecutorService();
+
+        AutoPartitionManager autoPartitionManager =
+                new AutoPartitionManager(
+                        new TestingServerMetadataCache(3),
+                        metadataManager,
+                        remoteDirDynamicLoader,
+                        new Configuration(),
+                        disabledCapacityController(),
+                        clock,
+                        periodicExecutor);
+        autoPartitionManager.start();
+
+        TableInfo table = createPartitionedTable(-1, 4, AutoPartitionTimeUnit.HOUR);
+        TablePath tablePath = table.getTablePath();
+        autoPartitionManager.addAutoPartitionTable(table, true);
+        periodicExecutor.triggerNonPeriodicScheduledTask();
+
+        Map<String, PartitionRegistration> partitions =
+                zookeeperClient.getPartitionRegistrations(tablePath);
+        assertThat(partitions.keySet())
+                .containsExactlyInAnyOrder("2024091000", "2024091001", "2024091002", "2024091003");
+
+        TableInfo disabledTable = createUpdatedAutoPartitionEnabledTableInfo(table, false);
+        autoPartitionManager.handleAutoPartitionStrategyChange(
+                disabledTable,
+                table.getTableConfig().getAutoPartitionStrategy(),
+                disabledTable.getTableConfig().getAutoPartitionStrategy());
+
+        clock.advanceTime(Duration.ofHours(4));
+        periodicExecutor.triggerPeriodicScheduledTasks();
+        partitions = zookeeperClient.getPartitionRegistrations(tablePath);
+        assertThat(partitions.keySet())
+                .containsExactlyInAnyOrder("2024091000", "2024091001", "2024091002", "2024091003");
+
+        TableInfo reEnabledTable = createUpdatedAutoPartitionEnabledTableInfo(disabledTable, true);
+        autoPartitionManager.handleAutoPartitionStrategyChange(
+                reEnabledTable,
+                disabledTable.getTableConfig().getAutoPartitionStrategy(),
+                reEnabledTable.getTableConfig().getAutoPartitionStrategy());
+        periodicExecutor.triggerNonPeriodicScheduledTask();
+
+        partitions = zookeeperClient.getPartitionRegistrations(tablePath);
+        assertThat(partitions.keySet())
+                .containsExactlyInAnyOrder(
+                        "2024091000",
+                        "2024091001",
+                        "2024091002",
+                        "2024091003",
+                        "2024091004",
+                        "2024091005",
+                        "2024091006",
+                        "2024091007");
+    }
+
+    @Test
+    void testHistoricalPartitionLifecycle() throws Exception {
+        ZonedDateTime startTime =
+                LocalDateTime.parse("2024-09-10T00:00:00").atZone(ZoneId.systemDefault());
+        ManualClock clock = new ManualClock(startTime.toInstant().toEpochMilli());
+        ManuallyTriggeredScheduledExecutorService periodicExecutor =
+                new ManuallyTriggeredScheduledExecutorService();
+        AutoPartitionManager autoPartitionManager =
+                new AutoPartitionManager(
+                        new TestingServerMetadataCache(3),
+                        metadataManager,
+                        remoteDirDynamicLoader,
+                        new Configuration(),
+                        disabledCapacityController(),
+                        clock,
+                        periodicExecutor);
+        autoPartitionManager.start();
+
+        TableInfo table = createPartitionedTable(2, 0, AutoPartitionTimeUnit.HOUR);
+        TableInfo enabledTable = createUpdatedHistoricalPartitionEnabledTableInfo(table, true);
+        TablePath tablePath = table.getTablePath();
+        autoPartitionManager.addAutoPartitionTable(enabledTable, true);
+        autoPartitionManager.createHistoricalPartition(enabledTable);
+
+        Map<String, PartitionRegistration> partitions =
+                zookeeperClient.getPartitionRegistrations(tablePath);
+        assertThat(partitions.keySet()).contains(HISTORICAL_PARTITION_VALUE);
+
+        createPartition(enabledTable, "2024090900", autoPartitionManager);
+
+        periodicExecutor.triggerNonPeriodicScheduledTasks();
+
+        partitions = zookeeperClient.getPartitionRegistrations(tablePath);
+        assertThat(partitions.keySet()).contains(HISTORICAL_PARTITION_VALUE);
+        assertThat(partitions.keySet()).doesNotContain("2024090900");
+
+        // Disabling the table option removes the system partition immediately without waiting for
+        // an auto-partition task.
+        TableInfo disabledTable = createUpdatedHistoricalPartitionEnabledTableInfo(table, false);
+        autoPartitionManager.dropHistoricalPartition(disabledTable);
+
+        partitions = zookeeperClient.getPartitionRegistrations(tablePath);
+        assertThat(partitions.keySet()).doesNotContain(HISTORICAL_PARTITION_VALUE);
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // Batch / inflight tests previously housed here have moved to TableLifecycleThrottlerTest.
+    // The AutoPartitionManager now drops expired partitions synchronously and the asynchronous
+    // replica cleanup throttling is handled by TableLifecycleThrottler.
+    // ---------------------------------------------------------------------------------------
 
     private static class TestParams {
         final AutoPartitionTimeUnit timeUnit;
@@ -759,7 +1289,7 @@ class AutoPartitionManagerTest {
 
     private void verifyPartitionsRemoteDataDir(
             TablePath tablePath, Collection<String> partitionNames) throws Exception {
-        Set<String> allRemoteDataDirs = new HashSet<>();
+        Set<String> allRemoteDataDirs = new HashSet<>(remoteDataDirs);
         allRemoteDataDirs.add(remoteDataDir);
         for (String partitionName : partitionNames) {
             Optional<PartitionRegistration> partition =
@@ -770,11 +1300,37 @@ class AutoPartitionManagerTest {
         }
     }
 
+    private void createPartition(
+            TableInfo tableInfo, String partitionName, AutoPartitionManager autoPartitionManager)
+            throws Exception {
+        Map<Integer, BucketAssignment> bucketAssignments =
+                generateAssignment(
+                                tableInfo.getNumBuckets(),
+                                tableInfo.getTableConfig().getReplicationFactor(),
+                                new TabletServerInfo[] {
+                                    new TabletServerInfo(0, "rack0"),
+                                    new TabletServerInfo(1, "rack1"),
+                                    new TabletServerInfo(2, "rack2")
+                                })
+                        .getBucketAssignments();
+        PartitionAssignment partitionAssignment =
+                new PartitionAssignment(tableInfo.getTableId(), bucketAssignments);
+        metadataManager.createPartition(
+                tableInfo.getTablePath(),
+                tableInfo.getTableId(),
+                remoteDataDir,
+                partitionAssignment,
+                fromPartitionName(tableInfo.getPartitionKeys(), partitionName),
+                false,
+                bucketAssignments.size());
+        autoPartitionManager.addPartition(tableInfo.getTableId(), partitionName);
+    }
+
     private TableInfo createPartitionedTable(
             int partitionRetentionNum, int partitionPreCreateNum, AutoPartitionTimeUnit timeUnit)
             throws Exception {
         return createPartitionedTable(
-                partitionRetentionNum, partitionPreCreateNum, timeUnit, false);
+                partitionRetentionNum, partitionPreCreateNum, timeUnit, false, null, 1);
     }
 
     private TableInfo createPartitionedTable(
@@ -783,7 +1339,55 @@ class AutoPartitionManagerTest {
             AutoPartitionTimeUnit timeUnit,
             boolean multiplePartitionKeys)
             throws Exception {
-        long tableId = 1;
+        return createPartitionedTable(
+                partitionRetentionNum,
+                partitionPreCreateNum,
+                timeUnit,
+                multiplePartitionKeys,
+                null,
+                1);
+    }
+
+    private TableInfo createPartitionedTable(
+            int partitionRetentionNum,
+            int partitionPreCreateNum,
+            AutoPartitionTimeUnit timeUnit,
+            boolean multiplePartitionKeys,
+            String timeFormat)
+            throws Exception {
+        return createPartitionedTable(
+                partitionRetentionNum,
+                partitionPreCreateNum,
+                timeUnit,
+                multiplePartitionKeys,
+                timeFormat,
+                1);
+    }
+
+    private TableInfo createPartitionedTable(
+            int partitionRetentionNum,
+            int partitionPreCreateNum,
+            AutoPartitionTimeUnit timeUnit,
+            boolean multiplePartitionKeys,
+            long tableId)
+            throws Exception {
+        return createPartitionedTable(
+                partitionRetentionNum,
+                partitionPreCreateNum,
+                timeUnit,
+                multiplePartitionKeys,
+                null,
+                tableId);
+    }
+
+    private TableInfo createPartitionedTable(
+            int partitionRetentionNum,
+            int partitionPreCreateNum,
+            AutoPartitionTimeUnit timeUnit,
+            boolean multiplePartitionKeys,
+            String timeFormat,
+            long tableId)
+            throws Exception {
         TablePath tablePath =
                 multiplePartitionKeys
                         ? TablePath.of("db", "test_multiple_partition_keys_" + UUID.randomUUID())
@@ -818,6 +1422,13 @@ class AutoPartitionManagerTest {
                         .property(
                                 ConfigOptions.TABLE_AUTO_PARTITION_NUM_RETENTION,
                                 partitionRetentionNum)
+                        .properties(
+                                timeFormat == null
+                                        ? Collections.emptyMap()
+                                        : Collections.singletonMap(
+                                                ConfigOptions.TABLE_AUTO_PARTITION_TIME_FORMAT
+                                                        .key(),
+                                                timeFormat))
                         .property(
                                 ConfigOptions.TABLE_AUTO_PARTITION_NUM_PRECREATE,
                                 multiplePartitionKeys ? 0 : partitionPreCreateNum)
@@ -894,6 +1505,44 @@ class AutoPartitionManagerTest {
         Configuration newProperties = new Configuration(original.getProperties());
         newProperties.set(ConfigOptions.TABLE_AUTO_PARTITION_NUM_RETENTION, newNumRetention);
         newProperties.set(ConfigOptions.TABLE_AUTO_PARTITION_NUM_PRECREATE, newNumPreCreate);
+        return createUpdatedTableInfo(original, newProperties);
+    }
+
+    private TableInfo createUpdatedAutoPartitionEnabledTableInfo(
+            TableInfo original, boolean autoPartitionEnabled) {
+        Configuration newProperties = new Configuration(original.getProperties());
+        newProperties.set(ConfigOptions.TABLE_AUTO_PARTITION_ENABLED, autoPartitionEnabled);
+        return createUpdatedTableInfo(original, newProperties);
+    }
+
+    private TableInfo createUpdatedHistoricalPartitionEnabledTableInfo(
+            TableInfo original, boolean historicalPartitionEnabled) {
+        Configuration newProperties = new Configuration(original.getProperties());
+        newProperties.set(
+                ConfigOptions.TABLE_DATALAKE_HISTORICAL_PARTITION_ENABLED,
+                historicalPartitionEnabled);
+        return createUpdatedTableInfo(original, newProperties);
+    }
+
+    /** Creates a new TableInfo with an updated table-level bucket count, reusing the original. */
+    private TableInfo createUpdatedBucketCountTableInfo(TableInfo original, int newNumBuckets) {
+        return new TableInfo(
+                original.getTablePath(),
+                original.getTableId(),
+                original.getSchemaId(),
+                original.getSchema(),
+                original.getBucketKeys(),
+                original.getPartitionKeys(),
+                newNumBuckets,
+                original.getProperties(),
+                original.getCustomProperties(),
+                original.getRemoteDataDir(),
+                original.getComment().orElse(null),
+                original.getCreatedTime(),
+                System.currentTimeMillis());
+    }
+
+    private TableInfo createUpdatedTableInfo(TableInfo original, Configuration newProperties) {
         return new TableInfo(
                 original.getTablePath(),
                 original.getTableId(),
@@ -908,5 +1557,43 @@ class AutoPartitionManagerTest {
                 original.getComment().orElse(null),
                 original.getCreatedTime(),
                 System.currentTimeMillis());
+    }
+
+    private static ReplicaCapacityController capacityControllerWithCapacity(long capacity) {
+        CoordinatorMetadataCache metadataCache = new CoordinatorMetadataCache();
+        metadataCache.updateMetadata(
+                null,
+                Collections.singleton(
+                        new ServerInfo(
+                                0,
+                                null,
+                                Endpoint.fromListenersString("INTERNAL://localhost:10000"),
+                                ServerType.TABLET_SERVER,
+                                new TabletServerResource(null, capacity))),
+                Collections.emptyMap());
+        Configuration conf = new Configuration();
+        conf.set(ConfigOptions.KV_LEADER_REPLICA_MEMORY_RESERVED, new MemorySize(1));
+        return new ReplicaCapacityController(conf, metadataCache);
+    }
+
+    private static ReplicaCapacityController disabledCapacityController() {
+        Configuration conf = new Configuration();
+        conf.set(ConfigOptions.KV_LEADER_REPLICA_MEMORY_RESERVED, MemorySize.ZERO);
+        return new ReplicaCapacityController(conf, new CoordinatorMetadataCache());
+    }
+
+    private static PartitionAssignment partitionAssignment(TableInfo table) {
+        int replicaFactor = table.getTableConfig().getReplicationFactor();
+        Map<Integer, BucketAssignment> bucketAssignments =
+                generateAssignment(
+                                table.getNumBuckets(),
+                                replicaFactor,
+                                new TabletServerInfo[] {
+                                    new TabletServerInfo(0, "rack0"),
+                                    new TabletServerInfo(1, "rack1"),
+                                    new TabletServerInfo(2, "rack2")
+                                })
+                        .getBucketAssignments();
+        return new PartitionAssignment(table.getTableId(), bucketAssignments);
     }
 }

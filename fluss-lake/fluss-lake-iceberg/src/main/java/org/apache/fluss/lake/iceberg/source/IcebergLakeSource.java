@@ -27,6 +27,7 @@ import org.apache.fluss.lake.source.Planner;
 import org.apache.fluss.lake.source.RecordReader;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.predicate.Predicate;
+import org.apache.fluss.utils.ArrayUtils;
 
 import org.apache.iceberg.Schema;
 import org.apache.iceberg.Table;
@@ -38,6 +39,7 @@ import javax.annotation.Nullable;
 
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
 
@@ -56,9 +58,21 @@ public class IcebergLakeSource implements LakeSource<IcebergSplit> {
         this.tablePath = tablePath;
     }
 
+    private IcebergLakeSource(IcebergLakeSource source) {
+        this.icebergConfig = new Configuration(source.icebergConfig);
+        this.tablePath = source.tablePath;
+        this.project = ArrayUtils.deepCopy(source.project);
+        this.filter = source.filter;
+    }
+
+    @Override
+    public IcebergLakeSource copy() {
+        return new IcebergLakeSource(this);
+    }
+
     @Override
     public void withProject(int[][] project) {
-        this.project = project;
+        this.project = ArrayUtils.deepCopy(project);
     }
 
     @Override
@@ -68,6 +82,11 @@ public class IcebergLakeSource implements LakeSource<IcebergSplit> {
 
     @Override
     public FilterPushDownResult withFilters(List<Predicate> predicates) {
+        if (predicates.isEmpty()) {
+            filter = null;
+            return FilterPushDownResult.of(Collections.emptyList(), Collections.emptyList());
+        }
+
         List<Predicate> unConsumedPredicates = new ArrayList<>();
         List<Predicate> consumedPredicates = new ArrayList<>();
         List<Expression> converted = new ArrayList<>();
@@ -82,9 +101,7 @@ public class IcebergLakeSource implements LakeSource<IcebergSplit> {
                 unConsumedPredicates.add(predicate);
             }
         }
-        if (!converted.isEmpty()) {
-            filter = converted.stream().reduce(Expressions::and).orElse(null);
-        }
+        filter = converted.stream().reduce(Expressions::and).orElse(null);
         return FilterPushDownResult.of(consumedPredicates, unConsumedPredicates);
     }
 

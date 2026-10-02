@@ -6,9 +6,11 @@ sidebar_position: 2
 # Remote Storage
 
 Remote storage usually means a cost-efficient and fault-tolerant storage comparing to local disk, such as S3, HDFS, OSS.
-See more detail about how to configure remote storage in documentation of [filesystems](maintenance/filesystems/overview.md).
+See more detail about how to configure remote storage in documentation of [filesystems](filesystems/overview.md).
 
 For log table, Fluss will use remote storage to store the tiered log segments of data. For primary key table, Fluss will use remote storage to store the snapshot as well as the tiered log segments for change log.
+
+The [`remove_orphan_files`](/engine-flink/actions.md#remove_orphan_files) Flink action can remove eligible orphan files from remote storage. See the action documentation for cleanup scope and usage.
 
 ## Remote Log
 
@@ -33,9 +35,25 @@ Below is the list for all configurations to control the log segments tiered beha
 
 ### Table configurations about remote log
 
-When local log segments are copied to remote storage, the local log segments will be deleted to reduce local disk cost.
-But sometimes, we want to keep the several latest log segments retain in local, although they have been coped to remote storage for better read performance.
-You can control how many log segments to retain in local by setting the configuration `table.log.tiered.local-segments`(default is 2) per table.
+After a rolled local log segment is copied to remote storage, it can be removed to reduce local disk
+usage. Uncopied segments are never eligible for local TTL cleanup.
+
+Use the following table options to control local retention:
+
+- `table.log.local-ttl` controls TTL-based cleanup. It inherits `table.log.ttl` when it is not
+  configured. Setting it to `0ms` disables TTL-based local cleanup. When both TTLs are positive,
+  the local TTL must be less than or equal to `table.log.ttl`.
+- `table.log.tiered.local-segments` keeps the configured number of recent local segments from
+  count-based cleanup (default: 2). Copied segments beyond that count can be removed even before
+  their local TTL expires.
+
+The two cleanup policies are independent: a copied local segment can be removed when it exceeds the
+configured segment count or when its local TTL expires.
+
+`table.log.ttl` independently controls the retention of table log data, including its remote copy.
+See [TTL](../../table-design/data-distribution/ttl.md) for the complete lifecycle from an active
+local segment through rolling, upload, local cleanup, and remote expiration. The server-side
+remote-log settings are listed in [server configuration](../configuration.md#log-tiered-storage).
 
 ## Remote snapshot of primary key table
 

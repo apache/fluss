@@ -33,6 +33,8 @@ public class ScanRecord implements LogRecord {
     /** Indicates that the size in bytes is unknown for this record. */
     public static final int UNKNOWN_SIZE_IN_BYTES = -1;
 
+    private final long tableId;
+    private final int schemaId;
     private final long offset;
     private final long timestamp;
     private final ChangeType changeType;
@@ -53,6 +55,19 @@ public class ScanRecord implements LogRecord {
 
     public ScanRecord(
             long offset, long timestamp, ChangeType changeType, InternalRow row, int sizeInBytes) {
+        this(INVALID, -1, offset, timestamp, changeType, row, sizeInBytes);
+    }
+
+    public ScanRecord(
+            long tableId,
+            int schemaId,
+            long offset,
+            long timestamp,
+            ChangeType changeType,
+            InternalRow row,
+            int sizeInBytes) {
+        this.tableId = tableId;
+        this.schemaId = schemaId;
         this.offset = offset;
         this.timestamp = timestamp;
         this.changeType = changeType;
@@ -83,6 +98,16 @@ public class ScanRecord implements LogRecord {
 
     public int getSizeInBytes() {
         return sizeInBytes;
+    }
+
+    /** The table id this record belongs to. */
+    public long getTableId() {
+        return tableId;
+    }
+
+    /** The schema id of the batch this record was produced with. */
+    public int getSchemaId() {
+        return schemaId;
     }
 
     @Override

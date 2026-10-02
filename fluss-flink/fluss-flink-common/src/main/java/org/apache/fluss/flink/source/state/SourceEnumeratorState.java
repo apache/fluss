@@ -22,6 +22,8 @@ import org.apache.fluss.metadata.TableBucket;
 
 import javax.annotation.Nullable;
 
+import java.util.Collection;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -44,15 +46,54 @@ public class SourceEnumeratorState {
     // lease context for restore.
     private final String leaseId;
 
+    /** Whether the initial partition discovery has been completed. */
+    private final boolean initialDiscoveryFinished;
+
+    /** Splits that have been initialized (offsets resolved) but not yet assigned to readers. */
+    private final Collection<SourceSplitBase> unassignedSplits;
+
     public SourceEnumeratorState(
             Set<TableBucket> assignedBuckets,
             Map<Long, String> assignedPartitions,
             @Nullable List<SourceSplitBase> remainingHybridLakeFlussSplits,
             String leaseId) {
+        this(
+                assignedBuckets,
+                assignedPartitions,
+                remainingHybridLakeFlussSplits,
+                leaseId,
+                true,
+                Collections.emptyList());
+    }
+
+    public SourceEnumeratorState(
+            Set<TableBucket> assignedBuckets,
+            Map<Long, String> assignedPartitions,
+            @Nullable List<SourceSplitBase> remainingHybridLakeFlussSplits,
+            String leaseId,
+            boolean initialDiscoveryFinished) {
+        this(
+                assignedBuckets,
+                assignedPartitions,
+                remainingHybridLakeFlussSplits,
+                leaseId,
+                initialDiscoveryFinished,
+                Collections.emptyList());
+    }
+
+    public SourceEnumeratorState(
+            Set<TableBucket> assignedBuckets,
+            Map<Long, String> assignedPartitions,
+            @Nullable List<SourceSplitBase> remainingHybridLakeFlussSplits,
+            String leaseId,
+            boolean initialDiscoveryFinished,
+            Collection<SourceSplitBase> unassignedSplits) {
         this.assignedBuckets = assignedBuckets;
         this.assignedPartitions = assignedPartitions;
         this.remainingHybridLakeFlussSplits = remainingHybridLakeFlussSplits;
         this.leaseId = leaseId;
+        this.initialDiscoveryFinished = initialDiscoveryFinished;
+        this.unassignedSplits = unassignedSplits;
     }
 
     public Set<TableBucket> getAssignedBuckets() {
@@ -72,6 +113,14 @@ public class SourceEnumeratorState {
         return leaseId;
     }
 
+    public boolean isInitialDiscoveryFinished() {
+        return initialDiscoveryFinished;
+    }
+
+    public Collection<SourceSplitBase> getUnassignedSplits() {
+        return unassignedSplits;
+    }
+
     @Override
     public boolean equals(Object o) {
         if (this == o) {
@@ -85,12 +134,19 @@ public class SourceEnumeratorState {
                 && Objects.equals(assignedPartitions, that.assignedPartitions)
                 && Objects.equals(
                         remainingHybridLakeFlussSplits, that.remainingHybridLakeFlussSplits)
-                && Objects.equals(leaseId, that.leaseId);
+                && Objects.equals(leaseId, that.leaseId)
+                && initialDiscoveryFinished == that.initialDiscoveryFinished
+                && Objects.equals(unassignedSplits, that.unassignedSplits);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(assignedBuckets, assignedPartitions, remainingHybridLakeFlussSplits);
+        return Objects.hash(
+                assignedBuckets,
+                assignedPartitions,
+                remainingHybridLakeFlussSplits,
+                initialDiscoveryFinished,
+                unassignedSplits);
     }
 
     @Override
@@ -104,6 +160,10 @@ public class SourceEnumeratorState {
                 + remainingHybridLakeFlussSplits
                 + ", leaseId="
                 + leaseId
+                + ", initialDiscoveryFinished="
+                + initialDiscoveryFinished
+                + ", unassignedSplits="
+                + unassignedSplits
                 + '}';
     }
 }

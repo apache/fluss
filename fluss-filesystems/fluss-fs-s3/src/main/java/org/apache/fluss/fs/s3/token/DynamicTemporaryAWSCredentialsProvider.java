@@ -19,12 +19,12 @@ package org.apache.fluss.fs.s3.token;
 
 import org.apache.fluss.fs.token.Credentials;
 
-import com.amazonaws.auth.AWSCredentials;
-import com.amazonaws.auth.AWSCredentialsProvider;
-import com.amazonaws.auth.BasicSessionCredentials;
 import org.apache.hadoop.fs.s3a.auth.NoAwsCredentialsException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import software.amazon.awssdk.auth.credentials.AwsCredentials;
+import software.amazon.awssdk.auth.credentials.AwsCredentialsProvider;
+import software.amazon.awssdk.auth.credentials.AwsSessionCredentials;
 
 /**
  * Support dynamic session credentials for authenticating with AWS. Please note that users may
@@ -32,7 +32,7 @@ import org.slf4j.LoggerFactory;
  * changing the class name would be a backward-incompatible change. This credential provider must
  * not fail in creation because that will break a chain of credential providers.
  */
-public class DynamicTemporaryAWSCredentialsProvider implements AWSCredentialsProvider {
+public class DynamicTemporaryAWSCredentialsProvider implements AwsCredentialsProvider {
 
     public static final String NAME = DynamicTemporaryAWSCredentialsProvider.class.getName();
 
@@ -42,21 +42,16 @@ public class DynamicTemporaryAWSCredentialsProvider implements AWSCredentialsPro
             LoggerFactory.getLogger(DynamicTemporaryAWSCredentialsProvider.class);
 
     @Override
-    public AWSCredentials getCredentials() {
+    public AwsCredentials resolveCredentials() {
         Credentials credentials = S3DelegationTokenReceiver.getCredentials();
 
         if (credentials == null) {
             throw new NoAwsCredentialsException(COMPONENT);
         }
         LOG.debug("Providing session credentials");
-        return new BasicSessionCredentials(
+        return AwsSessionCredentials.create(
                 credentials.getAccessKeyId(),
                 credentials.getSecretAccessKey(),
                 credentials.getSecurityToken());
-    }
-
-    @Override
-    public void refresh() {
-        // Intentionally blank. Credentials are updated by S3DelegationTokenReceiver
     }
 }

@@ -51,6 +51,12 @@ public interface LakeCatalog extends AutoCloseable {
     /**
      * Alter a table in lake.
      *
+     * <p>A {@link TableChange.ModifyBucketCount} is Fluss's coordinator-orchestrated bucket count
+     * rescale: implementations supporting rescale must apply it to their bucket layout option,
+     * others should throw {@link UnsupportedOperationException}. User-facing changes to the
+     * lake-native bucket option (e.g. Paimon {@code bucket}) keep being rejected to prevent the two
+     * systems from diverging.
+     *
      * @param tablePath path of the table to be altered
      * @param tableChanges The changes to be applied to the table
      * @param context contextual information needed for alter table
@@ -95,6 +101,16 @@ public interface LakeCatalog extends AutoCloseable {
          */
         @Nullable
         TableDescriptor getCurrentTable();
+
+        /**
+         * Get the lake table path currently associated with the Fluss table.
+         *
+         * @return the current lake table path, or null when there is no current Fluss table
+         */
+        @Nullable
+        default TablePath getCurrentLakeTablePath() {
+            return null;
+        }
 
         /** Get the expected table info of fluss. */
         TableDescriptor getExpectedTable();

@@ -20,6 +20,8 @@ package org.apache.fluss.record;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.utils.CloseableIterator;
 
+import org.apache.arrow.vector.IntVector;
+import org.apache.arrow.vector.VarCharVector;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -27,11 +29,13 @@ import org.junit.jupiter.params.provider.ValueSource;
 
 import java.io.File;
 import java.util.Collections;
+import java.util.List;
 import java.util.Optional;
 
 import static org.apache.fluss.record.LogRecordBatchFormat.LOG_MAGIC_VALUE_V0;
 import static org.apache.fluss.record.LogRecordBatchFormat.LOG_MAGIC_VALUE_V1;
 import static org.apache.fluss.record.LogRecordBatchFormat.LOG_MAGIC_VALUE_V2;
+import static org.apache.fluss.record.TestData.DATA1;
 import static org.apache.fluss.record.TestData.DATA1_ROW_TYPE;
 import static org.apache.fluss.record.TestData.DATA1_SCHEMA;
 import static org.apache.fluss.record.TestData.DEFAULT_SCHEMA_ID;
@@ -255,6 +259,52 @@ public class FileLogInputStreamTest extends LogTestBase {
             assertThat(memoryStats.getMaxValues().getInt(0)).isEqualTo(10);
             assertThat(memoryStats.getMinValues().getString(1).toString()).isEqualTo("a");
             assertThat(memoryStats.getMaxValues().getString(1).toString()).isEqualTo("j");
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(bytes = {LOG_MAGIC_VALUE_V0, LOG_MAGIC_VALUE_V1})
+    void testLoadArrowBatch(byte recordBatchMagic) throws Exception {
+        List<Object[]> data = DATA1;
+        try (FileLogRecords fileLogRecords =
+                FileLogRecords.open(new File(tempDir, "test_arrow_batch.tmp"))) {
+            fileLogRecords.append(
+                    createRecordsWithoutBaseLogOffset(
+                            DATA1_ROW_TYPE,
+                            DEFAULT_SCHEMA_ID,
+                            0L,
+                            -1L,
+                            recordBatchMagic,
+                            data,
+                            LogFormat.ARROW,
+                            true));
+            fileLogRecords.flush();
+
+            FileLogInputStream logInputStream =
+                    new FileLogInputStream(fileLogRecords, 0, fileLogRecords.sizeInBytes());
+            FileLogInputStream.FileChannelLogRecordBatch batch = logInputStream.nextBatch();
+            assertThat(batch).isNotNull();
+
+            TestingSchemaGetter schemaGetter =
+                    new TestingSchemaGetter(DEFAULT_SCHEMA_ID, DATA1_SCHEMA);
+            try (LogRecordReadContext readContext =
+                    LogRecordReadContext.createArrowReadContext(
+                            DATA1_ROW_TYPE, DEFAULT_SCHEMA_ID, schemaGetter)) {
+                try (ArrowBatchData arrowBatchData = batch.loadArrowBatch(readContext)) {
+                    assertThat(arrowBatchData.getRecordCount()).isEqualTo(data.size());
+                    assertThat(arrowBatchData.getBaseLogOffset()).isEqualTo(0L);
+                    assertThat(arrowBatchData.getSchemaId()).isEqualTo(DEFAULT_SCHEMA_ID);
+
+                    org.apache.arrow.vector.VectorSchemaRoot root =
+                            arrowBatchData.getVectorSchemaRoot();
+                    IntVector intVector = (IntVector) root.getVector(0);
+                    VarCharVector stringVector = (VarCharVector) root.getVector(1);
+                    for (int i = 0; i < data.size(); i++) {
+                        assertThat(intVector.get(i)).isEqualTo(data.get(i)[0]);
+                        assertThat(stringVector.getObject(i).toString()).isEqualTo(data.get(i)[1]);
+                    }
+                }
+            }
         }
     }
 }

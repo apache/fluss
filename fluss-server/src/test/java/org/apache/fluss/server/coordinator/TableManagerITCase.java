@@ -23,21 +23,26 @@ import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.config.AutoPartitionTimeUnit;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.config.MemorySize;
 import org.apache.fluss.exception.DatabaseAlreadyExistException;
 import org.apache.fluss.exception.DatabaseNotEmptyException;
 import org.apache.fluss.exception.DatabaseNotExistException;
+import org.apache.fluss.exception.InsufficientKvLeaderReplicaCapacityException;
 import org.apache.fluss.exception.InvalidDatabaseException;
 import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.exception.PartitionNotExistException;
 import org.apache.fluss.exception.SchemaNotExistException;
 import org.apache.fluss.exception.TableAlreadyExistException;
 import org.apache.fluss.exception.TableNotExistException;
+import org.apache.fluss.metadata.DataLakeFormat;
+import org.apache.fluss.metadata.PartitionSpec;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.metrics.registry.MetricRegistry;
+import org.apache.fluss.row.encode.KvValueLayout;
 import org.apache.fluss.rpc.GatewayClientProxy;
 import org.apache.fluss.rpc.RpcClient;
 import org.apache.fluss.rpc.gateway.AdminGateway;
@@ -63,6 +68,8 @@ import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.BucketAssignment;
 import org.apache.fluss.server.zk.data.PartitionRegistration;
 import org.apache.fluss.server.zk.data.TableAssignment;
+import org.apache.fluss.server.zk.data.ZkData.PartitionsZNode;
+import org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.ZooDefs;
 import org.apache.fluss.types.DataTypeChecks;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.types.RowType;
@@ -95,11 +102,13 @@ import java.util.stream.Collectors;
 
 import static org.apache.fluss.config.ConfigOptions.CURRENT_KV_FORMAT_VERSION;
 import static org.apache.fluss.config.ConfigOptions.DEFAULT_LISTENER_NAME;
+import static org.apache.fluss.server.testutils.RpcMessageTestUtils.createPartition;
 import static org.apache.fluss.server.testutils.RpcMessageTestUtils.newAlterTableRequest;
 import static org.apache.fluss.server.testutils.RpcMessageTestUtils.newCreateDatabaseRequest;
 import static org.apache.fluss.server.testutils.RpcMessageTestUtils.newCreateTableRequest;
 import static org.apache.fluss.server.testutils.RpcMessageTestUtils.newDatabaseExistsRequest;
 import static org.apache.fluss.server.testutils.RpcMessageTestUtils.newDropDatabaseRequest;
+import static org.apache.fluss.server.testutils.RpcMessageTestUtils.newDropPartitionRequest;
 import static org.apache.fluss.server.testutils.RpcMessageTestUtils.newDropTableRequest;
 import static org.apache.fluss.server.testutils.RpcMessageTestUtils.newGetTableInfoRequest;
 import static org.apache.fluss.server.testutils.RpcMessageTestUtils.newListTablesRequest;
@@ -110,6 +119,7 @@ import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toServerNode;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toTablePath;
 import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.apache.fluss.testutils.common.CommonTestUtils.waitValue;
+import static org.apache.fluss.utils.PartitionUtils.HISTORICAL_PARTITION_VALUE;
 import static org.apache.fluss.utils.PartitionUtils.generateAutoPartition;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -296,6 +306,9 @@ class TableManagerITCase {
         properties.put(
                 ConfigOptions.TABLE_KV_FORMAT_VERSION.key(),
                 String.valueOf(CURRENT_KV_FORMAT_VERSION));
+        properties.put(
+                ConfigOptions.TABLE_KV_VALUE_LAYOUT_VERSION.key(),
+                String.valueOf(KvValueLayout.PLAIN.version()));
         assertThat(gottenTable)
                 .isEqualTo(tableDescriptor.withProperties(properties).withReplicationFactor(1));
 
@@ -494,6 +507,9 @@ class TableManagerITCase {
         properties.put(
                 ConfigOptions.TABLE_KV_FORMAT_VERSION.key(),
                 String.valueOf(CURRENT_KV_FORMAT_VERSION));
+        properties.put(
+                ConfigOptions.TABLE_KV_VALUE_LAYOUT_VERSION.key(),
+                String.valueOf(KvValueLayout.PLAIN.version()));
         tableDescriptor = tableDescriptor.withProperties(properties);
 
         assertThat(TableDescriptor.fromJsonBytes(tableMetadata.getTableJson()))
@@ -577,7 +593,7 @@ class TableManagerITCase {
     void testMetadataWithPartition(boolean isCoordinatorServer) throws Exception {
         AdminReadOnlyGateway gateway = getAdminOnlyGateway(isCoordinatorServer);
         AdminGateway adminGateway = getAdminGateway();
-        String db1 = "db1";
+        String db1 = "db1_" + (isCoordinatorServer ? "coordinator" : "tablet");
         String tb1 = "tb1";
         // create a partitioned table, and request a not exist partition, should throw partition not
         // exist exception
@@ -635,7 +651,9 @@ class TableManagerITCase {
                 .cause()
                 .isInstanceOf(PartitionNotExistException.class)
                 .hasMessage(
-                        "Table partition 'db1.partitioned_tb(p=not_exist_partition)' does not exist.");
+                        String.format(
+                                "Table partition '%s.partitioned_tb(p=not_exist_partition)' does not exist.",
+                                db1));
     }
 
     @ParameterizedTest
@@ -676,6 +694,114 @@ class TableManagerITCase {
         assertThat(tsNodes)
                 .containsExactlyInAnyOrderElementsOf(
                         FLUSS_CLUSTER_EXTENSION.getTabletServerNodes());
+    }
+
+    @Test
+    void testCreatePersistsServerOwnedKvValueLayouts() throws Exception {
+        AdminReadOnlyGateway gateway = getAdminOnlyGateway(true);
+        AdminGateway adminGateway = getAdminGateway();
+
+        String databaseName = "db_value_layout";
+        TablePath plainTablePath = TablePath.of(databaseName, "plain_pk");
+        TablePath ttlTablePath = TablePath.of(databaseName, "ttl_pk");
+        TablePath logTablePath = TablePath.of(databaseName, "log_table");
+        adminGateway.createDatabase(newCreateDatabaseRequest(databaseName, false)).get();
+
+        adminGateway.createTable(newCreateTableRequest(plainTablePath, newPkTable(), false)).get();
+        TableDescriptor ttlDescriptor =
+                newPkTable()
+                        .withProperties(
+                                Collections.singletonMap(ConfigOptions.TABLE_KV_TTL.key(), "1 h"));
+        adminGateway.createTable(newCreateTableRequest(ttlTablePath, ttlDescriptor, false)).get();
+        adminGateway.createTable(newCreateTableRequest(logTablePath, newLogTable(), false)).get();
+
+        TableDescriptor plainTable =
+                TableDescriptor.fromJsonBytes(
+                        gateway.getTableInfo(newGetTableInfoRequest(plainTablePath))
+                                .get()
+                                .getTableJson());
+        TableDescriptor ttlTable =
+                TableDescriptor.fromJsonBytes(
+                        gateway.getTableInfo(newGetTableInfoRequest(ttlTablePath))
+                                .get()
+                                .getTableJson());
+        TableDescriptor logTable =
+                TableDescriptor.fromJsonBytes(
+                        gateway.getTableInfo(newGetTableInfoRequest(logTablePath))
+                                .get()
+                                .getTableJson());
+
+        assertThat(plainTable.getProperties())
+                .containsEntry(
+                        ConfigOptions.TABLE_KV_VALUE_LAYOUT_VERSION.key(),
+                        String.valueOf(KvValueLayout.PLAIN.version()));
+        assertThat(ttlTable.getProperties())
+                .containsEntry(
+                        ConfigOptions.TABLE_KV_VALUE_LAYOUT_VERSION.key(),
+                        String.valueOf(KvValueLayout.TAGGED.version()));
+        assertThat(logTable.getProperties())
+                .doesNotContainKey(ConfigOptions.TABLE_KV_VALUE_LAYOUT_VERSION.key());
+    }
+
+    @Test
+    void testCreateOverridesClientSuppliedValueLayoutVersion() throws Exception {
+        AdminReadOnlyGateway gateway = getAdminOnlyGateway(true);
+        AdminGateway adminGateway = getAdminGateway();
+
+        String db1 = "db_event_time_row_ttl";
+        String tb1 = "tb_event_time_row_ttl";
+        TablePath tablePath = TablePath.of(db1, tb1);
+        adminGateway.createDatabase(newCreateDatabaseRequest(db1, false)).get();
+
+        Schema schema =
+                Schema.newBuilder()
+                        .column("id", DataTypes.INT())
+                        .column("event_time", DataTypes.BIGINT())
+                        .column("name", DataTypes.STRING())
+                        .primaryKey("id")
+                        .build();
+        Map<String, String> properties = new HashMap<>();
+        properties.put(ConfigOptions.TABLE_KV_TTL.key(), "1 h");
+        properties.put(ConfigOptions.TABLE_KV_TTL_TIME_COLUMN.key(), "event_time");
+        properties.put(ConfigOptions.TABLE_KV_VALUE_LAYOUT_VERSION.key(), "1");
+        TableDescriptor tableDescriptor =
+                TableDescriptor.builder()
+                        .schema(schema)
+                        .distributedBy(3, "id")
+                        .properties(properties)
+                        .build();
+        adminGateway.createTable(newCreateTableRequest(tablePath, tableDescriptor, false)).get();
+
+        GetTableInfoResponse response =
+                gateway.getTableInfo(newGetTableInfoRequest(tablePath)).get();
+        TableDescriptor gottenTable = TableDescriptor.fromJsonBytes(response.getTableJson());
+
+        assertThat(gottenTable.getProperties())
+                .containsEntry(
+                        ConfigOptions.TABLE_KV_VALUE_LAYOUT_VERSION.key(),
+                        String.valueOf(KvValueLayout.TAGGED.version()));
+
+        String layoutVersion =
+                gottenTable.getProperties().get(ConfigOptions.TABLE_KV_VALUE_LAYOUT_VERSION.key());
+        adminGateway
+                .alterTable(
+                        newAlterTableRequest(
+                                tablePath,
+                                Collections.singletonMap(
+                                        ConfigOptions.TABLE_KV_STANDBY_REPLICA_ENABLED.key(),
+                                        "false"),
+                                Collections.emptyList(),
+                                Collections.emptyList(),
+                                false))
+                .get();
+
+        TableDescriptor alteredTable =
+                TableDescriptor.fromJsonBytes(
+                        gateway.getTableInfo(newGetTableInfoRequest(tablePath))
+                                .get()
+                                .getTableJson());
+        assertThat(alteredTable.getProperties())
+                .containsEntry(ConfigOptions.TABLE_KV_VALUE_LAYOUT_VERSION.key(), layoutVersion);
     }
 
     @Test
@@ -806,6 +932,59 @@ class TableManagerITCase {
         return newPartitionedTableBuilder(null).build();
     }
 
+    private static FlussClusterExtension historicalPartitionCluster(int maxPartitionNum) {
+        Configuration conf = initConf();
+        conf.set(ConfigOptions.DATALAKE_FORMAT, DataLakeFormat.PAIMON);
+        conf.set(ConfigOptions.MAX_PARTITION_NUM, maxPartitionNum);
+        return FlussClusterExtension.builder()
+                .setNumOfTabletServers(1)
+                .setClusterConf(conf)
+                .build();
+    }
+
+    private static TableDescriptor historicalPartitionTable(boolean historicalPartitionEnabled) {
+        return newPartitionedTableBuilder(null)
+                .property(ConfigOptions.TABLE_AUTO_PARTITION_KEY, "dt")
+                .property(ConfigOptions.TABLE_DATALAKE_ENABLED, true)
+                .property(
+                        ConfigOptions.TABLE_DATALAKE_HISTORICAL_PARTITION_ENABLED,
+                        historicalPartitionEnabled)
+                .build();
+    }
+
+    private static void createHistoricalPartitionTable(
+            AdminGateway gateway, TablePath tablePath, boolean enabled) throws Exception {
+        gateway.createTable(
+                        newCreateTableRequest(tablePath, historicalPartitionTable(enabled), false))
+                .get();
+    }
+
+    private static void setHistoricalPartitionEnabled(
+            AdminGateway gateway, TablePath tablePath, boolean enabled) throws Exception {
+        gateway.alterTable(
+                        newAlterTableRequest(
+                                tablePath,
+                                Collections.singletonMap(
+                                        ConfigOptions.TABLE_DATALAKE_HISTORICAL_PARTITION_ENABLED
+                                                .key(),
+                                        Boolean.toString(enabled)),
+                                Collections.emptyList(),
+                                Collections.emptyList(),
+                                false))
+                .get();
+    }
+
+    private static boolean isHistoricalPartitionEnabled(AdminGateway gateway, TablePath tablePath)
+            throws Exception {
+        TableDescriptor tableDescriptor =
+                TableDescriptor.fromJsonBytes(
+                        gateway.getTableInfo(newGetTableInfoRequest(tablePath))
+                                .get()
+                                .getTableJson());
+        return Configuration.fromMap(tableDescriptor.getProperties())
+                .get(ConfigOptions.TABLE_DATALAKE_HISTORICAL_PARTITION_ENABLED);
+    }
+
     private static TableDescriptor.Builder newPartitionedTableBuilder(
             @Nullable Schema.Column extraColumn) {
         Schema.Builder builder =
@@ -839,6 +1018,10 @@ class TableManagerITCase {
                 .comment("first table")
                 .distributedBy(3, "a")
                 .build();
+    }
+
+    private static PartitionSpec partitionSpec(String dt) {
+        return new PartitionSpec(Collections.singletonMap("dt", dt));
     }
 
     private static List<PbAddColumn> alterTableAddColumns() {
@@ -913,6 +1096,228 @@ class TableManagerITCase {
     }
 
     // Test methods for table creation restrictions
+
+    @Test
+    void testKvLeaderReplicaCapacityRestriction() throws Exception {
+        Configuration conf = initConf();
+        conf.set(ConfigOptions.KV_LEADER_REPLICA_MEMORY_RESERVED, new MemorySize(1));
+        conf.set(ConfigOptions.TABLET_SERVER_ADVERTISED_RESOURCE_MEMORY_SIZE, new MemorySize(3));
+        FlussClusterExtension limitedCluster =
+                FlussClusterExtension.builder()
+                        .setNumOfTabletServers(1)
+                        .setClusterConf(conf)
+                        .build();
+
+        try {
+            limitedCluster.start();
+
+            AdminGateway gateway = limitedCluster.newCoordinatorClient();
+            TablePath firstTablePath = TablePath.of("fluss", "kv_capacity_first");
+            TablePath secondTablePath = TablePath.of("fluss", "kv_capacity_second");
+            gateway.createTable(newCreateTableRequest(firstTablePath, newPkTable(), false)).get();
+            waitForKvLeaderReplicaCount(limitedCluster, 3);
+
+            assertThatThrownBy(
+                            () ->
+                                    gateway.createTable(
+                                                    newCreateTableRequest(
+                                                            secondTablePath,
+                                                            newPkTable().withBucketCount(1),
+                                                            false))
+                                            .get())
+                    .cause()
+                    .isInstanceOf(InsufficientKvLeaderReplicaCapacityException.class)
+                    .hasMessageContaining("observedKvLeaderReplicaCount=3")
+                    .hasMessageContaining("requestedKvLeaderReplicaCount=1")
+                    .hasMessageContaining("kvLeaderReplicaCapacity=3");
+
+            gateway.dropTable(newDropTableRequest("fluss", "kv_capacity_first", false)).get();
+            waitForKvLeaderReplicaCount(limitedCluster, 0);
+            gateway.createTable(
+                            newCreateTableRequest(
+                                    secondTablePath, newPkTable().withBucketCount(1), false))
+                    .get();
+
+            assertThat(gateway.tableExists(newTableExistsRequest(secondTablePath)).get().isExists())
+                    .isTrue();
+        } finally {
+            limitedCluster.close();
+        }
+    }
+
+    @Test
+    void testKvLeaderReplicaCapacityRestrictionForPartitionedTable() throws Exception {
+        Configuration conf = initConf();
+        conf.set(ConfigOptions.KV_LEADER_REPLICA_MEMORY_RESERVED, new MemorySize(1));
+        conf.set(ConfigOptions.TABLET_SERVER_ADVERTISED_RESOURCE_MEMORY_SIZE, new MemorySize(3));
+        FlussClusterExtension limitedCluster =
+                FlussClusterExtension.builder()
+                        .setNumOfTabletServers(1)
+                        .setClusterConf(conf)
+                        .build();
+
+        try {
+            limitedCluster.start();
+
+            AdminGateway gateway = limitedCluster.newCoordinatorClient();
+            TablePath tablePath = TablePath.of("fluss", "partitioned_kv_capacity");
+            TableDescriptor tableDescriptor =
+                    newPartitionedTableBuilder(null)
+                            .property(ConfigOptions.TABLE_AUTO_PARTITION_ENABLED.key(), "false")
+                            .build();
+            gateway.createTable(newCreateTableRequest(tablePath, tableDescriptor, false)).get();
+
+            PartitionSpec firstPartition = partitionSpec("20260707");
+            PartitionSpec secondPartition = partitionSpec("20260708");
+            createPartition(limitedCluster, tablePath, firstPartition, false);
+            waitForKvLeaderReplicaCount(limitedCluster, 3);
+
+            assertThatThrownBy(
+                            () ->
+                                    createPartition(
+                                            limitedCluster, tablePath, secondPartition, false))
+                    .cause()
+                    .isInstanceOf(InsufficientKvLeaderReplicaCapacityException.class)
+                    .hasMessageContaining("observedKvLeaderReplicaCount=3")
+                    .hasMessageContaining("requestedKvLeaderReplicaCount=3")
+                    .hasMessageContaining("kvLeaderReplicaCapacity=3");
+
+            gateway.dropPartition(newDropPartitionRequest(tablePath, firstPartition, false)).get();
+            waitForKvLeaderReplicaCount(limitedCluster, 0);
+            createPartition(limitedCluster, tablePath, secondPartition, false);
+
+            assertThat(limitedCluster.getZooKeeperClient().getPartition(tablePath, "20260708"))
+                    .isPresent();
+        } finally {
+            limitedCluster.close();
+        }
+    }
+
+    @Test
+    void testHistoricalPartitionLifecycleFailures() throws Exception {
+        FlussClusterExtension creationFailureCluster = historicalPartitionCluster(0);
+
+        try {
+            creationFailureCluster.start();
+            AdminGateway gateway = creationFailureCluster.newCoordinatorClient();
+
+            // Case 1: CREATE reports that table metadata remains after partition creation fails.
+            TablePath createTablePath = TablePath.of("fluss", "historical_partition_partial_state");
+            assertThatThrownBy(() -> createHistoricalPartitionTable(gateway, createTablePath, true))
+                    .cause()
+                    .hasMessageContaining(
+                            "failed after the table metadata was persisted: the required "
+                                    + "historical system partition '__historical__' could not be "
+                                    + "created");
+            assertThat(gateway.tableExists(newTableExistsRequest(createTablePath)).get().isExists())
+                    .isTrue();
+
+            // Case 2: ALTER enable keeps the option disabled when partition creation fails.
+            TablePath alterTablePath = TablePath.of("fluss", "historical_partition_enable_retry");
+            createHistoricalPartitionTable(gateway, alterTablePath, false);
+            assertThatThrownBy(() -> setHistoricalPartitionEnabled(gateway, alterTablePath, true))
+                    .cause()
+                    .hasMessageContaining(
+                            "option was not changed and "
+                                    + "'table.datalake.historical-partition.enabled' remains "
+                                    + "'false'");
+            assertThat(isHistoricalPartitionEnabled(gateway, alterTablePath)).isFalse();
+        } finally {
+            creationFailureCluster.close();
+        }
+
+        FlussClusterExtension deletionFailureCluster =
+                historicalPartitionCluster(ConfigOptions.MAX_PARTITION_NUM.defaultValue());
+
+        try {
+            deletionFailureCluster.start();
+            AdminGateway gateway = deletionFailureCluster.newCoordinatorClient();
+            TablePath tablePath = TablePath.of("fluss", "historical_partition_drop_failure");
+            createHistoricalPartitionTable(gateway, tablePath, true);
+
+            ZooKeeperClient zooKeeperClient = deletionFailureCluster.getZooKeeperClient();
+            // Case 3: ALTER disable reports the orphan after partition deletion fails.
+            zooKeeperClient
+                    .getCuratorClient()
+                    .setACL()
+                    .withACL(ZooDefs.Ids.READ_ACL_UNSAFE)
+                    .forPath(PartitionsZNode.path(tablePath));
+            assertThatThrownBy(() -> setHistoricalPartitionEnabled(gateway, tablePath, false))
+                    .cause()
+                    .hasMessageContaining(
+                            "failed to delete the system partition '__historical__'. "
+                                    + "The orphan partition still consumes KV capacity");
+            assertThat(isHistoricalPartitionEnabled(gateway, tablePath)).isFalse();
+            assertThat(zooKeeperClient.getPartition(tablePath, HISTORICAL_PARTITION_VALUE))
+                    .isPresent();
+        } finally {
+            deletionFailureCluster.close();
+        }
+    }
+
+    @Test
+    void testKvLeaderReplicaCapacityRecomputedOnTabletServerReRegistration() throws Exception {
+        Configuration conf = initConf();
+        conf.set(ConfigOptions.KV_LEADER_REPLICA_MEMORY_RESERVED, new MemorySize(1));
+        conf.set(ConfigOptions.TABLET_SERVER_ADVERTISED_RESOURCE_MEMORY_SIZE, new MemorySize(3));
+        FlussClusterExtension cluster =
+                FlussClusterExtension.builder()
+                        .setNumOfTabletServers(3)
+                        .setClusterConf(conf)
+                        .build();
+
+        try {
+            cluster.start();
+
+            AdminGateway gateway = cluster.newCoordinatorClient();
+            // 3 live tablet servers, each advertising 3 bytes with 1 byte reserved -> capacity 9.
+            waitForKvLeaderReplicaCapacity(cluster, 9);
+
+            TablePath tablePath = TablePath.of("fluss", "kv_capacity_reregister");
+            gateway.createTable(newCreateTableRequest(tablePath, newPkTable(), false)).get();
+            // newPkTable() has 3 buckets -> 3 observed KV leader replicas.
+            waitForKvLeaderReplicaCount(cluster, 3);
+
+            // Bring one tablet server down: capacity shrinks to reflect the live servers, while the
+            // observed KV leader count is unaffected by tablet server churn (leaders may migrate,
+            // but the number of KV buckets tracked by the coordinator stays the same).
+            cluster.stopTabletServer(1);
+            waitForKvLeaderReplicaCapacity(cluster, 6);
+            waitForKvLeaderReplicaCount(cluster, 3);
+
+            // Re-register the tablet server: capacity is recomputed from the live servers again and
+            // the observed KV leader count remains stable.
+            cluster.startTabletServer(1);
+            waitForKvLeaderReplicaCapacity(cluster, 9);
+            waitForKvLeaderReplicaCount(cluster, 3);
+        } finally {
+            cluster.close();
+        }
+    }
+
+    private static void waitForKvLeaderReplicaCount(
+            FlussClusterExtension cluster, long expectedCount) {
+        retry(
+                Duration.ofSeconds(30),
+                () ->
+                        assertThat(
+                                        cluster.getCoordinatorServer()
+                                                .getReplicaCapacityController()
+                                                .getKvLeaderReplicaCount())
+                                .isEqualTo(expectedCount));
+    }
+
+    private static void waitForKvLeaderReplicaCapacity(
+            FlussClusterExtension cluster, long expectedCapacity) {
+        retry(
+                Duration.ofSeconds(30),
+                () ->
+                        assertThat(
+                                        cluster.getCoordinatorServer()
+                                                .getReplicaCapacityController()
+                                                .getKvLeaderReplicaCapacity())
+                                .isEqualTo(expectedCapacity));
+    }
 
     @Test
     void testLogTableCreationRestriction() throws Exception {

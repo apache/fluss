@@ -22,6 +22,8 @@ import org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.KeeperException;
 import org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.KeeperException.Code;
 import org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.data.Stat;
 
+import javax.annotation.Nullable;
+
 import java.util.List;
 import java.util.Optional;
 
@@ -77,19 +79,28 @@ public abstract class ZkAsyncResponse {
     public static class ZkGetDataResponse extends ZkAsyncResponse {
 
         private final byte[] data;
+        private final @Nullable Stat stat;
 
-        public ZkGetDataResponse(String path, Code resultCode, byte[] data) {
+        public ZkGetDataResponse(String path, Code resultCode, byte[] data, @Nullable Stat stat) {
             super(path, resultCode);
             this.data = data;
+            this.stat = stat;
         }
 
         public byte[] getData() {
             return data;
         }
 
+        public @Nullable Stat getStat() {
+            return stat;
+        }
+
         public static ZkGetDataResponse create(CuratorEvent event) {
             return new ZkGetDataResponse(
-                    event.getPath(), Code.get(event.getResultCode()), event.getData());
+                    event.getPath(),
+                    Code.get(event.getResultCode()),
+                    event.getData(),
+                    event.getStat());
         }
     }
 

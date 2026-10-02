@@ -20,11 +20,15 @@ package org.apache.fluss.metrics.reporter;
 import org.apache.fluss.config.ConfigBuilder;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.metrics.SimpleCounter;
+import org.apache.fluss.metrics.filter.MetricFilter;
 import org.apache.fluss.metrics.util.TestReporter;
 import org.apache.fluss.testutils.common.ContextClassLoaderExtension;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.util.Arrays;
 import java.util.Collections;
@@ -73,11 +77,12 @@ class ReporterSetupTest {
 
         configureReporter1(config);
 
-        final List<MetricReporter> metricReporters = ReporterSetup.fromConfiguration(config, null);
+        final List<ReporterAndSettings> metricReporters =
+                ReporterSetup.fromConfiguration(config, null);
 
         assertThat(metricReporters).hasSize(1);
 
-        final MetricReporter metricReporter = metricReporters.get(0);
+        final MetricReporter metricReporter = metricReporters.get(0).getReporter();
         assertReporter1Configured(metricReporter);
     }
 
@@ -94,11 +99,12 @@ class ReporterSetupTest {
 
         config.set(ConfigOptions.METRICS_REPORTERS, Collections.singletonList("reporter2"));
 
-        final List<MetricReporter> metricReporters = ReporterSetup.fromConfiguration(config, null);
+        final List<ReporterAndSettings> metricReporters =
+                ReporterSetup.fromConfiguration(config, null);
 
         assertThat(metricReporters).hasSize(1);
 
-        final MetricReporter reporter = metricReporters.get(0);
+        final MetricReporter reporter = metricReporters.get(0).getReporter();
         assertReporter2Configured(reporter);
     }
 
@@ -108,11 +114,12 @@ class ReporterSetupTest {
 
         config.set(ConfigOptions.METRICS_REPORTERS, Collections.singletonList("reporter1"));
 
-        final List<MetricReporter> metricReporters = ReporterSetup.fromConfiguration(config, null);
+        final List<ReporterAndSettings> metricReporters =
+                ReporterSetup.fromConfiguration(config, null);
 
         assertThat(metricReporters).hasSize(1);
 
-        final MetricReporter reporter = metricReporters.get(0);
+        final MetricReporter reporter = metricReporters.get(0).getReporter();
         assertThat(reporter).isInstanceOf(TestReporter1.class);
     }
 
@@ -125,7 +132,8 @@ class ReporterSetupTest {
                 ConfigOptions.METRICS_REPORTERS,
                 Arrays.asList("reporter11", "reporter12", "reporter13"));
 
-        final List<MetricReporter> metricReporters = ReporterSetup.fromConfiguration(config, null);
+        final List<ReporterAndSettings> metricReporters =
+                ReporterSetup.fromConfiguration(config, null);
 
         assertThat(metricReporters).hasSize(3);
 
@@ -140,9 +148,64 @@ class ReporterSetupTest {
         final Configuration config = new Configuration();
         config.set(ConfigOptions.METRICS_REPORTERS, Arrays.asList("reporter11", "failingReporter"));
 
-        final List<MetricReporter> metricReporters = ReporterSetup.fromConfiguration(config, null);
+        final List<ReporterAndSettings> metricReporters =
+                ReporterSetup.fromConfiguration(config, null);
 
         assertThat(metricReporters).hasSize(1);
+        assertThat(metricReporters.get(0).getSettings().getReporterIndex()).isZero();
+    }
+
+    @ParameterizedTest
+    @ValueSource(
+            strings = {
+                "tabletserver.*:bytes*,records*:counter,meter",
+                "\"tabletserver.*:bytes*,records*:counter,meter\"",
+                "'tabletserver.*:bytes*,records*:counter,meter'"
+            })
+    void testReporterFilterConfiguration(String includes) {
+        Configuration config = new Configuration();
+        config.set(ConfigOptions.METRICS_REPORTERS, Collections.singletonList("reporter1"));
+        config.setString("metrics.reporter.reporter1.filter.includes", includes);
+        config.setString("metrics.reporter.reporter1.filter.excludes", "*:records*");
+
+        List<ReporterAndSettings> reporters = ReporterSetup.fromConfiguration(config, null);
+
+        assertThat(reporters).hasSize(1);
+        MetricFilter filter = reporters.get(0).getSettings().getFilter();
+        assertThat(filter.filter(new SimpleCounter(), "bytesIn", "tabletserver.table")).isTrue();
+        assertThat(filter.filter(new SimpleCounter(), "recordsIn", "tabletserver.table")).isFalse();
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"", "''", "\"\""})
+    void testEmptyIncludesReportNothing(String includes) {
+        Configuration config = new Configuration();
+        config.set(ConfigOptions.METRICS_REPORTERS, Collections.singletonList("reporter1"));
+        config.setString("metrics.reporter.reporter1.filter.includes", includes);
+
+        List<ReporterAndSettings> reporters = ReporterSetup.fromConfiguration(config, null);
+
+        assertThat(reporters).hasSize(1);
+        assertThat(
+                        reporters
+                                .get(0)
+                                .getSettings()
+                                .getFilter()
+                                .filter(new SimpleCounter(), "bytesIn", "tabletserver"))
+                .isFalse();
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"*:*:unknown", "*:*:counter,unknown", "*:["})
+    void testInvalidFilterDoesNotDisableOtherReporters(String filter) {
+        Configuration config = new Configuration();
+        config.set(ConfigOptions.METRICS_REPORTERS, Arrays.asList("reporter1", "reporter2"));
+        config.setString("metrics.reporter.reporter1.filter.includes", filter);
+
+        List<ReporterAndSettings> reporters = ReporterSetup.fromConfiguration(config, null);
+
+        assertThat(reporters).hasSize(1);
+        assertThat(reporters.get(0).getReporter()).isInstanceOf(TestReporter2.class);
     }
 
     /** Reporter that exposes whether open() was called. */

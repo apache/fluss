@@ -1,0 +1,1127 @@
+// Licensed to the Apache Software Foundation (ASF) under one
+// or more contributor license agreements.  See the NOTICE file
+// distributed with this work for additional information
+// regarding copyright ownership.  The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
+// "License"); you may not use this file except in compliance
+// with the License.  You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing,
+// software distributed under the License is distributed on an
+// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+// KIND, either express or implied.  See the License for the
+// specific language governing permissions and limitations
+// under the License.
+
+use crate::ffi;
+use anyhow::{Result, anyhow};
+use arrow::array::Array;
+use arrow::ffi::{FFI_ArrowArray, FFI_ArrowSchema};
+use fcore::metadata::{
+    ArrayType, Column, DataField, DataType, DataTypes, DecimalType, MapType, RowType,
+};
+use fcore::row::Datum;
+use fluss as fcore;
+use std::borrow::Cow;
+use std::str::FromStr;
+
+pub const DATA_TYPE_BOOLEAN: i32 = 1;
+pub const DATA_TYPE_TINYINT: i32 = 2;
+pub const DATA_TYPE_SMALLINT: i32 = 3;
+pub const DATA_TYPE_INT: i32 = 4;
+pub const DATA_TYPE_BIGINT: i32 = 5;
+pub const DATA_TYPE_FLOAT: i32 = 6;
+pub const DATA_TYPE_DOUBLE: i32 = 7;
+pub const DATA_TYPE_STRING: i32 = 8;
+pub const DATA_TYPE_BYTES: i32 = 9;
+pub const DATA_TYPE_DATE: i32 = 10;
+pub const DATA_TYPE_TIME: i32 = 11;
+pub const DATA_TYPE_TIMESTAMP: i32 = 12;
+pub const DATA_TYPE_TIMESTAMP_LTZ: i32 = 13;
+pub const DATA_TYPE_DECIMAL: i32 = 14;
+pub const DATA_TYPE_CHAR: i32 = 15;
+pub const DATA_TYPE_BINARY: i32 = 16;
+pub const DATA_TYPE_ARRAY: i32 = 17;
+pub const DATA_TYPE_MAP: i32 = 18;
+pub const DATA_TYPE_ROW: i32 = 19;
+
+fn ffi_column_to_core_data_type(col: &ffi::FfiColumn) -> Result<DataType> {
+    let mut cursor = 0usize;
+    let dt = nodes_to_data_type(&col.type_nodes, &mut cursor)?;
+    if cursor != col.type_nodes.len() {
+        return Err(anyhow!(
+            "Column '{}': type tree has {} trailing nodes",
+            col.name,
+            col.type_nodes.len() - cursor
+        ));
+    }
+    Ok(dt)
+}
+
+/// Reconstruct one type from a preorder node arena, advancing `cursor` past
+/// the consumed nodes. Mirrors the C++ `data_type_to_nodes` encoder.
+fn nodes_to_data_type(nodes: &[ffi::FfiTypeNode], cursor: &mut usize) -> Result<DataType> {
+    let node = nodes
+        .get(*cursor)
+        .ok_or_else(|| anyhow!("type tree ended before all nodes were read"))?;
+    *cursor += 1;
+
+    if node.precision < 0 || node.scale < 0 {
+        return Err(anyhow!(
+            "type node precision and scale must be non-negative"
+        ));
+    }
+    let precision = node.precision as u32;
+    let scale = node.scale as u32;
+
+    let dt = match node.type_id {
+        DATA_TYPE_ARRAY => {
+            let element = nodes_to_data_type(nodes, cursor)?;
+            DataType::Array(ArrayType::with_nullable(node.nullable, element))
+        }
+        DATA_TYPE_MAP => {
+            let key = nodes_to_data_type(nodes, cursor)?;
+            let value = nodes_to_data_type(nodes, cursor)?;
+            DataType::Map(MapType::with_nullable(node.nullable, key, value))
+        }
+        DATA_TYPE_ROW => {
+            let mut fields = Vec::with_capacity(node.child_count as usize);
+            for _ in 0..node.child_count {
+                let field_name = nodes
+                    .get(*cursor)
+                    .ok_or_else(|| anyhow!("ROW field missing from type tree"))?
+                    .field_name
+                    .clone();
+                let field_type = nodes_to_data_type(nodes, cursor)?;
+                // C++ ROW columns carry no per-field description.
+                fields.push(DataField::new(field_name, field_type, None));
+            }
+            DataType::Row(RowType::with_nullable(node.nullable, fields))
+        }
+        scalar => return scalar_to_core(scalar, precision, scale, node.nullable),
+    };
+    Ok(dt)
+}
+
+fn type_precision_scale(dt: &DataType) -> (i32, i32) {
+    match dt {
+        DataType::Decimal(d) => (d.precision() as i32, d.scale() as i32),
+        DataType::Time(t) => (t.precision() as i32, 0),
+        DataType::Timestamp(ts) => (ts.precision() as i32, 0),
+        DataType::TimestampLTz(ts) => (ts.precision() as i32, 0),
+        DataType::Char(ch) => (ch.length() as i32, 0),
+        DataType::Binary(bin) => (bin.length() as i32, 0),
+        _ => (0, 0),
+    }
+}
+
+fn scalar_to_core(data_type: i32, precision: u32, scale: u32, nullable: bool) -> Result<DataType> {
+    let dt = match data_type {
+        DATA_TYPE_BOOLEAN => DataTypes::boolean(),
+        DATA_TYPE_TINYINT => DataTypes::tinyint(),
+        DATA_TYPE_SMALLINT => DataTypes::smallint(),
+        DATA_TYPE_INT => DataTypes::int(),
+        DATA_TYPE_BIGINT => DataTypes::bigint(),
+        DATA_TYPE_FLOAT => DataTypes::float(),
+        DATA_TYPE_DOUBLE => DataTypes::double(),
+        DATA_TYPE_STRING => DataTypes::string(),
+        DATA_TYPE_BYTES => DataTypes::bytes(),
+        DATA_TYPE_DATE => DataTypes::date(),
+        DATA_TYPE_TIME => DataTypes::time_with_precision(precision),
+        DATA_TYPE_TIMESTAMP => DataTypes::timestamp_with_precision(precision),
+        DATA_TYPE_TIMESTAMP_LTZ => DataTypes::timestamp_ltz_with_precision(precision),
+        DATA_TYPE_DECIMAL => DataType::Decimal(DecimalType::new(precision, scale)?),
+        DATA_TYPE_CHAR => DataTypes::char(precision),
+        DATA_TYPE_BINARY => DataTypes::binary(precision as usize),
+        _ => return Err(anyhow!("Unknown data type: {}", data_type)),
+    };
+    if nullable {
+        Ok(dt)
+    } else {
+        Ok(dt.as_non_nullable())
+    }
+}
+
+/// Serialize a type tree to a preorder node arena. Mirrors the C++
+/// `nodes_to_data_type` decoder; `field_name` is set only for ROW fields.
+fn core_data_type_to_nodes(dt: &DataType, field_name: &str, out: &mut Vec<ffi::FfiTypeNode>) {
+    let (precision, scale) = type_precision_scale(dt);
+    let child_count = match dt {
+        DataType::Array(_) => 1,
+        DataType::Map(_) => 2,
+        DataType::Row(rt) => rt.fields().len() as u32,
+        _ => 0,
+    };
+    out.push(ffi::FfiTypeNode {
+        type_id: core_data_type_to_ffi(dt),
+        nullable: dt.is_nullable(),
+        precision,
+        scale,
+        field_name: field_name.to_string(),
+        child_count,
+    });
+    match dt {
+        DataType::Array(at) => core_data_type_to_nodes(at.get_element_type(), "", out),
+        DataType::Map(mt) => {
+            core_data_type_to_nodes(mt.key_type(), "", out);
+            core_data_type_to_nodes(mt.value_type(), "", out);
+        }
+        DataType::Row(rt) => {
+            for field in rt.fields() {
+                core_data_type_to_nodes(field.data_type(), field.name(), out);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Build a nested `ARRAY<…<scalar>>` from a flat leaf description. Used by the
+/// data-writer path (`element_type_from_ffi`), which carries array-of-scalar
+/// element types without a full node arena.
+fn build_array_type_from_leaf(
+    element_data_type: i32,
+    element_precision: u32,
+    element_scale: u32,
+    array_nesting: u32,
+) -> Result<DataType> {
+    if array_nesting == 0 {
+        return Err(anyhow!("ARRAY nesting must be >= 1"));
+    }
+    let mut dt = scalar_to_core(element_data_type, element_precision, element_scale, true)?;
+    for _ in 0..array_nesting {
+        dt = DataType::Array(ArrayType::new(dt));
+    }
+    Ok(dt)
+}
+
+pub fn core_data_type_to_ffi(dt: &DataType) -> i32 {
+    match dt {
+        DataType::Boolean(_) => DATA_TYPE_BOOLEAN,
+        DataType::TinyInt(_) => DATA_TYPE_TINYINT,
+        DataType::SmallInt(_) => DATA_TYPE_SMALLINT,
+        DataType::Int(_) => DATA_TYPE_INT,
+        DataType::BigInt(_) => DATA_TYPE_BIGINT,
+        DataType::Float(_) => DATA_TYPE_FLOAT,
+        DataType::Double(_) => DATA_TYPE_DOUBLE,
+        DataType::String(_) => DATA_TYPE_STRING,
+        DataType::Bytes(_) => DATA_TYPE_BYTES,
+        DataType::Date(_) => DATA_TYPE_DATE,
+        DataType::Time(_) => DATA_TYPE_TIME,
+        DataType::Timestamp(_) => DATA_TYPE_TIMESTAMP,
+        DataType::TimestampLTz(_) => DATA_TYPE_TIMESTAMP_LTZ,
+        DataType::Decimal(_) => DATA_TYPE_DECIMAL,
+        DataType::Char(_) => DATA_TYPE_CHAR,
+        DataType::Binary(_) => DATA_TYPE_BINARY,
+        DataType::Array(_) => DATA_TYPE_ARRAY,
+        DataType::Map(_) => DATA_TYPE_MAP,
+        DataType::Row(_) => DATA_TYPE_ROW,
+    }
+}
+
+fn core_column_to_ffi(col: &Column) -> ffi::FfiColumn {
+    let mut type_nodes = Vec::new();
+    core_data_type_to_nodes(col.data_type(), "", &mut type_nodes);
+    ffi::FfiColumn {
+        name: col.name().to_string(),
+        comment: col.comment().unwrap_or("").to_string(),
+        type_nodes,
+    }
+}
+
+pub fn ffi_descriptor_to_core(
+    descriptor: &ffi::FfiTableDescriptor,
+) -> Result<fcore::metadata::TableDescriptor> {
+    let mut schema_builder = fcore::metadata::Schema::builder();
+
+    for col in &descriptor.schema.columns {
+        let dt = ffi_column_to_core_data_type(col)?;
+        schema_builder = schema_builder.column(&col.name, dt);
+        if !col.comment.is_empty() {
+            schema_builder = schema_builder.with_comment(&col.comment);
+        }
+    }
+
+    if !descriptor.schema.primary_keys.is_empty() {
+        schema_builder = schema_builder.primary_key(descriptor.schema.primary_keys.clone())?;
+    }
+
+    for auto_increment_column in &descriptor.schema.auto_increment_columns {
+        schema_builder = schema_builder.enable_auto_increment(auto_increment_column)?;
+    }
+
+    build_descriptor(schema_builder.build()?, descriptor)
+}
+
+/// Assemble a core `TableDescriptor` from a pre-built `Schema` plus the
+/// descriptor's table-level metadata (partition/bucket keys, properties,
+/// comment).
+fn build_descriptor(
+    schema: fcore::metadata::Schema,
+    descriptor: &ffi::FfiTableDescriptor,
+) -> Result<fcore::metadata::TableDescriptor> {
+    let mut builder = fcore::metadata::TableDescriptor::builder()
+        .schema(schema)
+        .partitioned_by(descriptor.partition_keys.clone());
+
+    if descriptor.bucket_count > 0 {
+        builder = builder.distributed_by(
+            Some(descriptor.bucket_count),
+            descriptor.bucket_keys.clone(),
+        );
+    } else {
+        builder = builder.distributed_by(None, descriptor.bucket_keys.clone());
+    }
+
+    for prop in &descriptor.properties {
+        builder = builder.property(&prop.key, &prop.value);
+    }
+
+    if !descriptor.custom_properties.is_empty() {
+        let custom: std::collections::HashMap<String, String> = descriptor
+            .custom_properties
+            .iter()
+            .map(|kv| (kv.key.clone(), kv.value.clone()))
+            .collect();
+        builder = builder.custom_properties(custom);
+    }
+
+    if !descriptor.comment.is_empty() {
+        builder = builder.comment(&descriptor.comment);
+    }
+
+    Ok(builder.build()?)
+}
+
+/// Import a heap `FFI_ArrowSchema` (exported by C++) and return its fields as
+/// Fluss DataTypes. Lets ArrayWriter/MapWriter carry ROW/MAP element and
+/// key/value types that the flat FFI encoding cannot express.
+///
+/// # Safety
+/// `schema_ptr` must be a valid `FFI_ArrowSchema` heap pointer exported by C++
+/// (e.g. via `arrow::ExportSchema`); ownership is taken and released here.
+pub unsafe fn arrow_ffi_to_data_types(schema_ptr: usize) -> Result<Vec<fcore::metadata::DataType>> {
+    let ffi_schema = unsafe { Box::from_raw(schema_ptr as *mut arrow::ffi::FFI_ArrowSchema) };
+    let arrow_schema = arrow::datatypes::Schema::try_from(ffi_schema.as_ref())
+        .map_err(|e| anyhow!("Failed to import Arrow schema: {e}"))?;
+    let mut out = Vec::with_capacity(arrow_schema.fields().len());
+    for field in arrow_schema.fields() {
+        out.push(fcore::record::from_arrow_field(field.as_ref())?);
+    }
+    Ok(out)
+}
+
+pub fn core_table_info_to_ffi(info: &fcore::metadata::TableInfo) -> ffi::FfiTableInfo {
+    let schema = info.get_schema();
+    let columns: Vec<ffi::FfiColumn> = schema.columns().iter().map(core_column_to_ffi).collect();
+
+    let primary_keys: Vec<String> = schema
+        .primary_key()
+        .map(|pk| pk.column_names().to_vec())
+        .unwrap_or_default();
+
+    let properties: Vec<ffi::HashMapValue> = info
+        .get_properties()
+        .iter()
+        .map(|(k, v)| ffi::HashMapValue {
+            key: k.clone(),
+            value: v.clone(),
+        })
+        .collect();
+
+    let custom_properties: Vec<ffi::HashMapValue> = info
+        .get_custom_properties()
+        .iter()
+        .map(|(k, v)| ffi::HashMapValue {
+            key: k.clone(),
+            value: v.clone(),
+        })
+        .collect();
+
+    ffi::FfiTableInfo {
+        table_id: info.get_table_id(),
+        schema_id: info.get_schema_id(),
+        table_path: ffi::FfiTablePath {
+            database_name: info.get_table_path().database().to_string(),
+            table_name: info.get_table_path().table().to_string(),
+        },
+        created_time: info.get_created_time(),
+        modified_time: info.get_modified_time(),
+        primary_keys: info.get_primary_keys().clone(),
+        bucket_keys: info.get_bucket_keys().to_vec(),
+        partition_keys: info.get_partition_keys().to_vec(),
+        num_buckets: info.get_num_buckets(),
+        has_primary_key: info.has_primary_key(),
+        is_partitioned: info.is_partitioned(),
+        properties,
+        custom_properties,
+        comment: info.get_comment().unwrap_or("").to_string(),
+        schema: ffi::FfiSchema {
+            columns,
+            primary_keys,
+            auto_increment_columns: info.get_schema().auto_increment_col_names().clone(),
+        },
+    }
+}
+
+pub fn empty_table_info() -> ffi::FfiTableInfo {
+    ffi::FfiTableInfo {
+        table_id: 0,
+        schema_id: 0,
+        table_path: ffi::FfiTablePath {
+            database_name: String::new(),
+            table_name: String::new(),
+        },
+        created_time: 0,
+        modified_time: 0,
+        primary_keys: vec![],
+        bucket_keys: vec![],
+        partition_keys: vec![],
+        num_buckets: 0,
+        has_primary_key: false,
+        is_partitioned: false,
+        properties: vec![],
+        custom_properties: vec![],
+        comment: String::new(),
+        schema: ffi::FfiSchema {
+            columns: vec![],
+            primary_keys: vec![],
+            auto_increment_columns: vec![],
+        },
+    }
+}
+
+/// Convert element type tag + precision/scale to core DataType.
+/// Used by ArrayWriterInner construction from C++.
+///
+/// Nullability is hardcoded to `true` (the default) because `ArrayWriter`
+/// only needs the type for encoding — the binary array format does not
+/// vary based on nullability. Nullability is a schema-level constraint
+/// enforced elsewhere (column definition, primary key normalization).
+pub fn element_type_from_ffi(
+    leaf_dt: i32,
+    precision: u32,
+    scale: u32,
+    array_nesting: u32,
+) -> Result<fcore::metadata::DataType> {
+    if array_nesting == 0 {
+        scalar_to_core(leaf_dt, precision, scale, true)
+    } else {
+        build_array_type_from_leaf(leaf_dt, precision, scale, array_nesting)
+    }
+}
+
+/// Convert FFI database descriptor to core. Returns None if descriptor is effectively empty
+/// (no comment and no properties), so create_database can pass Option::None to core.
+pub fn ffi_database_descriptor_to_core(
+    d: &ffi::FfiDatabaseDescriptor,
+) -> Option<fcore::metadata::DatabaseDescriptor> {
+    if d.comment.is_empty() && d.properties.is_empty() {
+        return None;
+    }
+    let mut builder = fcore::metadata::DatabaseDescriptor::builder();
+    if !d.comment.is_empty() {
+        builder = builder.comment(&d.comment);
+    }
+    if !d.properties.is_empty() {
+        let props: std::collections::HashMap<String, String> = d
+            .properties
+            .iter()
+            .map(|kv| (kv.key.clone(), kv.value.clone()))
+            .collect();
+        builder = builder.custom_properties(props);
+    }
+    Some(builder.build())
+}
+
+/// Convert core DatabaseInfo to FFI.
+pub fn core_database_info_to_ffi(info: &fcore::metadata::DatabaseInfo) -> ffi::FfiDatabaseInfo {
+    let desc = info.database_descriptor();
+    let properties: Vec<ffi::HashMapValue> = desc
+        .custom_properties()
+        .iter()
+        .map(|(k, v)| ffi::HashMapValue {
+            key: k.clone(),
+            value: v.clone(),
+        })
+        .collect();
+    ffi::FfiDatabaseInfo {
+        database_name: info.database_name().to_string(),
+        comment: desc.comment().unwrap_or("").to_string(),
+        properties,
+        created_time: info.created_time(),
+        modified_time: info.modified_time(),
+    }
+}
+
+/// Resolve types in a GenericRow using schema metadata.
+/// Narrows Int32 → Int8/Int16, parses decimal strings, etc., and pads rows
+/// shorter than `min_width` with trailing Nulls (the upsert/delete writers
+/// require full schema width; pass 0 to keep the row's own width).
+///
+/// When no column needs converting and the row is already `min_width` wide,
+/// the input row is returned as-is (borrowed) and no second row is built.
+/// Otherwise a new row is built, in which unchanged STRING and BYTES values
+/// borrow the input row's storage.
+/// Used by append, upsert, delete, lookup, and prefix lookup.
+pub fn resolve_row_types<'a>(
+    row: &'a fcore::row::GenericRow<'a>,
+    schema: Option<&fcore::metadata::Schema>,
+    min_width: usize,
+) -> Result<Cow<'a, fcore::row::GenericRow<'a>>> {
+    if row.values.len() >= min_width && !row_needs_resolution(row, schema) {
+        return Ok(Cow::Borrowed(row));
+    }
+
+    let mut out = fcore::row::GenericRow::new(row.values.len().max(min_width));
+
+    for (idx, datum) in row.values.iter().enumerate() {
+        let target = schema
+            .and_then(|s| s.columns().get(idx))
+            .map(|c| c.data_type());
+        out.set_field(idx, resolve_datum(datum, target, idx)?);
+    }
+
+    Ok(Cow::Owned(out))
+}
+
+/// Resolve the columns at `indices` (schema positions) of a possibly sparse
+/// input row into a dense row in the given order, resolving each value
+/// against its column type; positions beyond the input row's width become
+/// Null. Used by lookup (primary-key positions) and prefix lookup to compact
+/// values set at their full schema positions into the dense row the core key
+/// encoders expect.
+///
+/// When the indices are exactly [0, 1, …] and the row is already that wide,
+/// this is plain [`resolve_row_types`] and may return the input row borrowed.
+pub fn resolve_dense_row_types<'a>(
+    row: &'a fcore::row::GenericRow<'a>,
+    schema: Option<&fcore::metadata::Schema>,
+    indices: &[usize],
+) -> Result<Cow<'a, fcore::row::GenericRow<'a>>> {
+    // The row is already dense: plain resolution (possibly borrowed) suffices.
+    if row.values.len() == indices.len()
+        && indices
+            .iter()
+            .enumerate()
+            .all(|(dense_idx, &schema_idx)| schema_idx == dense_idx)
+    {
+        return resolve_row_types(row, schema, 0);
+    }
+
+    let mut dense = fcore::row::GenericRow::new(indices.len());
+    for (dense_idx, &schema_idx) in indices.iter().enumerate() {
+        let target = schema
+            .and_then(|s| s.columns().get(schema_idx))
+            .map(|c| c.data_type());
+        let resolved = match row.values.get(schema_idx) {
+            Some(datum) => resolve_datum(datum, target, schema_idx)?,
+            None => Datum::Null,
+        };
+        dense.set_field(dense_idx, resolved);
+    }
+    Ok(Cow::Owned(dense))
+}
+
+/// Whether any field of the row would be changed by `resolve_row_types`:
+/// an Int32 targeted at a narrower integer type, or a String targeted at a
+/// Decimal column (recursively through nested rows).
+fn row_needs_resolution(
+    row: &fcore::row::GenericRow<'_>,
+    schema: Option<&fcore::metadata::Schema>,
+) -> bool {
+    row.values.iter().enumerate().any(|(idx, datum)| {
+        let target = schema
+            .and_then(|s| s.columns().get(idx))
+            .map(|c| c.data_type());
+        datum_needs_resolution(datum, target)
+    })
+}
+
+/// Whether `resolve_datum` would change this datum. Mirrors the conversion
+/// branches of `resolve_datum`; every other datum/target combination is
+/// passed through unchanged, so resolution can be skipped for them.
+fn datum_needs_resolution(
+    datum: &fcore::row::Datum<'_>,
+    target: Option<&fcore::metadata::DataType>,
+) -> bool {
+    match datum {
+        Datum::Int32(_) => matches!(
+            target,
+            Some(fcore::metadata::DataType::TinyInt(_))
+                | Some(fcore::metadata::DataType::SmallInt(_))
+        ),
+        Datum::String(_) => matches!(target, Some(fcore::metadata::DataType::Decimal(_))),
+        Datum::Row(nested) => {
+            let field_types = match target {
+                Some(fcore::metadata::DataType::Row(rt)) => Some(rt.fields()),
+                _ => None,
+            };
+            nested.values.iter().enumerate().any(|(i, d)| {
+                let field_type = field_types.and_then(|f| f.get(i)).map(|f| f.data_type());
+                datum_needs_resolution(d, field_type)
+            })
+        }
+        _ => false,
+    }
+}
+
+/// Resolve a single datum against its (optional) target column type, recursing
+/// into nested ROW values. Narrows Int32 → Int8/Int16, parses decimal strings,
+/// and leaves already-typed ARRAY/MAP binaries (built by the writers) untouched.
+fn resolve_datum<'a>(
+    datum: &'a fcore::row::Datum<'_>,
+    target: Option<&fcore::metadata::DataType>,
+    idx: usize,
+) -> Result<fcore::row::Datum<'a>> {
+    Ok(match datum {
+        Datum::Null => Datum::Null,
+        Datum::Bool(v) => Datum::Bool(*v),
+        Datum::Int32(v) => match target {
+            Some(fcore::metadata::DataType::TinyInt(_)) => Datum::Int8(
+                i8::try_from(*v).map_err(|_| anyhow!("Column {idx}: {v} overflows TinyInt"))?,
+            ),
+            Some(fcore::metadata::DataType::SmallInt(_)) => Datum::Int16(
+                i16::try_from(*v).map_err(|_| anyhow!("Column {idx}: {v} overflows SmallInt"))?,
+            ),
+            _ => Datum::Int32(*v),
+        },
+        Datum::Int64(v) => Datum::Int64(*v),
+        Datum::Float32(v) => Datum::Float32(*v),
+        Datum::Float64(v) => Datum::Float64(*v),
+        Datum::Int8(v) => Datum::Int8(*v),
+        Datum::Int16(v) => Datum::Int16(*v),
+        Datum::String(cow) => match target {
+            // String standing in for a Decimal column — parse it.
+            Some(fcore::metadata::DataType::Decimal(dt)) => {
+                let (precision, scale) = (dt.precision(), dt.scale());
+                let bd = bigdecimal::BigDecimal::from_str(cow.as_ref())
+                    .map_err(|e| anyhow!("Column {idx}: invalid decimal string '{cow}': {e}"))?;
+                let decimal = fcore::row::Decimal::from_big_decimal(bd, precision, scale)
+                    .map_err(|e| anyhow!("Column {idx}: {e}"))?;
+                Datum::Decimal(decimal)
+            }
+            _ => Datum::String(Cow::Borrowed(cow.as_ref())),
+        },
+        Datum::Blob(cow) => Datum::Blob(Cow::Borrowed(cow.as_ref())),
+        Datum::Decimal(d) => Datum::Decimal(d.clone()),
+        Datum::Date(d) => Datum::Date(*d),
+        Datum::Time(t) => Datum::Time(*t),
+        Datum::TimestampNtz(ts) => Datum::TimestampNtz(*ts),
+        Datum::TimestampLtz(ts) => Datum::TimestampLtz(*ts),
+        Datum::Array(a) => Datum::Array(a.clone()),
+        Datum::Map(m) => Datum::Map(m.clone()),
+        Datum::Row(nested) => {
+            // A nested row carries untyped datums; resolve each field against
+            // the ROW's own field types so decimals/narrowing work recursively.
+            let field_types = match target {
+                Some(fcore::metadata::DataType::Row(rt)) => Some(rt.fields()),
+                _ => None,
+            };
+            let mut out = fcore::row::GenericRow::new(nested.values.len());
+            for (i, d) in nested.values.iter().enumerate() {
+                let ft = field_types.and_then(|f| f.get(i)).map(|f| f.data_type());
+                out.set_field(i, resolve_datum(d, ft, i)?);
+            }
+            Datum::Row(Box::new(out))
+        }
+    })
+}
+
+/// Convert a CompactedRow (lookup result) to an owned GenericRow<'static>.
+/// One copy for strings/bytes (Cow::Owned), but no second copy into FfiDatum.
+pub fn compacted_row_to_owned(
+    row: &dyn fcore::row::InternalRow,
+    table_info: &fcore::metadata::TableInfo,
+) -> Result<fcore::row::GenericRow<'static>> {
+    internal_row_to_owned_generic(row, table_info.get_schema().columns())
+}
+
+/// Read a single field of an InternalRow into an owned `'static` Datum, using
+/// the column's declared type. This is the per-field core of
+/// `internal_row_to_owned_generic`; the scan read path uses it to materialize
+/// one complex cell without unpacking the whole row.
+pub fn field_to_owned_datum(
+    row: &dyn fcore::row::InternalRow,
+    columns: &[fcore::metadata::Column],
+    field: usize,
+) -> Result<fcore::row::Datum<'static>> {
+    let col = columns.get(field).ok_or_else(|| {
+        anyhow!(
+            "field index {field} out of range ({} columns)",
+            columns.len()
+        )
+    })?;
+    if row.is_null_at(field)? {
+        return Ok(Datum::Null);
+    }
+
+    Ok(match col.data_type() {
+        fcore::metadata::DataType::Boolean(_) => Datum::Bool(row.get_boolean(field)?),
+        fcore::metadata::DataType::TinyInt(_) => Datum::Int8(row.get_byte(field)?),
+        fcore::metadata::DataType::SmallInt(_) => Datum::Int16(row.get_short(field)?),
+        fcore::metadata::DataType::Int(_) => Datum::Int32(row.get_int(field)?),
+        fcore::metadata::DataType::BigInt(_) => Datum::Int64(row.get_long(field)?),
+        fcore::metadata::DataType::Float(_) => Datum::Float32(row.get_float(field)?.into()),
+        fcore::metadata::DataType::Double(_) => Datum::Float64(row.get_double(field)?.into()),
+        fcore::metadata::DataType::String(_) => {
+            Datum::String(Cow::Owned(row.get_string(field)?.to_string()))
+        }
+        fcore::metadata::DataType::Bytes(_) => {
+            Datum::Blob(Cow::Owned(row.get_bytes(field)?.to_vec()))
+        }
+        fcore::metadata::DataType::Date(_) => Datum::Date(row.get_date(field)?),
+        fcore::metadata::DataType::Time(_) => Datum::Time(row.get_time(field)?),
+        fcore::metadata::DataType::Timestamp(dt) => {
+            Datum::TimestampNtz(row.get_timestamp_ntz(field, dt.precision())?)
+        }
+        fcore::metadata::DataType::TimestampLTz(dt) => {
+            Datum::TimestampLtz(row.get_timestamp_ltz(field, dt.precision())?)
+        }
+        fcore::metadata::DataType::Decimal(dt) => {
+            Datum::Decimal(row.get_decimal(field, dt.precision() as usize, dt.scale() as usize)?)
+        }
+        fcore::metadata::DataType::Char(dt) => Datum::String(Cow::Owned(
+            row.get_char(field, dt.length() as usize)?.to_string(),
+        )),
+        fcore::metadata::DataType::Binary(dt) => {
+            Datum::Blob(Cow::Owned(row.get_binary(field, dt.length())?.to_vec()))
+        }
+        fcore::metadata::DataType::Array(_) => {
+            Datum::Array(row.get_array(field)?.try_into_binary()?)
+        }
+        fcore::metadata::DataType::Map(_) => Datum::Map(row.get_map(field)?.try_into_binary()?),
+        fcore::metadata::DataType::Row(rt) => {
+            Datum::Row(Box::new(row.get_row(field)?.try_into_generic(rt)?))
+        }
+    })
+}
+
+/// Walk an InternalRow field-by-field into an owned GenericRow<'static>, using
+/// the given column types. Recurses through nested ROW/MAP/ARRAY values, so it
+/// also materializes a ROW element read out of an array or map.
+pub fn internal_row_to_owned_generic(
+    row: &dyn fcore::row::InternalRow,
+    columns: &[fcore::metadata::Column],
+) -> Result<fcore::row::GenericRow<'static>> {
+    let mut out = fcore::row::GenericRow::new(columns.len());
+    for i in 0..columns.len() {
+        out.set_field(i, field_to_owned_datum(row, columns, i)?);
+    }
+    Ok(out)
+}
+
+pub fn core_lake_snapshot_to_ffi(snapshot: &fcore::metadata::LakeSnapshot) -> ffi::FfiLakeSnapshot {
+    let bucket_offsets: Vec<ffi::FfiBucketOffset> = snapshot
+        .table_buckets_offset
+        .iter()
+        .map(|(bucket, offset)| ffi::FfiBucketOffset {
+            table_id: bucket.table_id(),
+            partition_id: bucket.partition_id().unwrap_or(-1),
+            bucket_id: bucket.bucket_id(),
+            offset: *offset,
+        })
+        .collect();
+
+    ffi::FfiLakeSnapshot {
+        snapshot_id: snapshot.snapshot_id,
+        bucket_offsets,
+    }
+}
+
+pub fn core_scan_batches_to_ffi(
+    batches: &[fcore::record::ScanBatch],
+) -> Result<ffi::FfiArrowRecordBatches, String> {
+    let mut ffi_batches = Vec::new();
+    for batch in batches {
+        let record_batch = batch.batch();
+        // Convert RecordBatch to StructArray first, then get the data
+        let struct_array = arrow::array::StructArray::from(record_batch.clone());
+        let ffi_array = Box::new(FFI_ArrowArray::new(&struct_array.into_data()));
+        let ffi_schema = Box::new(
+            FFI_ArrowSchema::try_from(record_batch.schema().as_ref()).map_err(|e| e.to_string())?,
+        );
+        // Export as raw pointers
+        ffi_batches.push(ffi::FfiArrowRecordBatch {
+            array_ptr: Box::into_raw(ffi_array) as usize,
+            schema_ptr: Box::into_raw(ffi_schema) as usize,
+            table_id: batch.bucket().table_id(),
+            partition_id: batch.bucket().partition_id().unwrap_or(-1),
+            bucket_id: batch.bucket().bucket_id(),
+            base_offset: batch.base_offset(),
+        });
+    }
+
+    Ok(ffi::FfiArrowRecordBatches {
+        batches: ffi_batches,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{resolve_dense_row_types, resolve_row_types};
+    use fluss::metadata::{DataField, DataType, DataTypes, DecimalType, RowType, Schema};
+    use fluss::row::{Datum, Decimal, GenericRow};
+    use std::borrow::Cow;
+
+    /// Asserts that STRING/BYTES values were resolved without copying: either
+    /// the input row was returned as-is (fast path) or the resolved values
+    /// borrow the input row's storage.
+    fn assert_no_copy_values(input: &[Datum<'_>], resolved: &[Datum<'_>]) {
+        assert_eq!(resolved, input);
+        for (input, resolved) in input.iter().zip(resolved) {
+            match (input, resolved) {
+                (Datum::String(input), Datum::String(resolved)) => {
+                    assert_eq!(input.as_ptr(), resolved.as_ptr());
+                }
+                (Datum::Blob(input), Datum::Blob(resolved)) => {
+                    assert_eq!(input.as_ptr(), resolved.as_ptr());
+                }
+                _ => panic!("expected STRING or BYTES values, got {resolved:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn test_resolve_row_types_returns_input_row_when_no_conversion() {
+        // No datum needs converting, whatever the target types are.
+        let row = GenericRow {
+            values: vec![
+                Datum::Int32(7), // Int column: pass-through
+                Datum::Int8(1),  // already narrow
+                Datum::Null,
+                Datum::String(Cow::Owned(String::from("s"))),
+            ],
+        };
+        let schema = Schema::builder()
+            .column("i", DataTypes::int())
+            .column("t", DataTypes::tinyint())
+            .column("n", DataTypes::string())
+            .column("s", DataTypes::string())
+            .build()
+            .unwrap();
+
+        for schema in [Some(&schema), None] {
+            let resolved = resolve_row_types(&row, schema, 0).unwrap();
+            assert!(matches!(resolved, Cow::Borrowed(_)));
+            assert!(std::ptr::eq(resolved.as_ref(), &row));
+        }
+
+        // A row that needs conversion is rebuilt instead.
+        let schema = Schema::builder()
+            .column("t", DataTypes::tinyint())
+            .build()
+            .unwrap();
+        let resolved = resolve_row_types(&row, Some(&schema), 0).unwrap();
+        assert!(matches!(resolved, Cow::Owned(_)));
+        assert_eq!(resolved.values[0], Datum::Int8(7));
+    }
+
+    #[test]
+    fn test_resolve_row_types_borrows_strings_and_bytes() {
+        // Include both setter-owned values and values already borrowing external storage.
+        let string = String::from("borrowed string");
+        let bytes = vec![0, 1, 255];
+        let row = GenericRow {
+            values: vec![
+                Datum::String(Cow::Owned(String::from("owned string"))),
+                Datum::Blob(Cow::Owned(vec![2, 3, 255])),
+                Datum::String(Cow::Borrowed(&string)),
+                Datum::Blob(Cow::Borrowed(&bytes)),
+                Datum::String(Cow::Owned(String::new())),
+                Datum::Blob(Cow::Owned(Vec::new())),
+            ],
+        };
+        let schema = Schema::builder()
+            .column("owned_string", DataTypes::string())
+            .column("owned_bytes", DataTypes::bytes())
+            .column("borrowed_string", DataTypes::string())
+            .column("borrowed_bytes", DataTypes::bytes())
+            .column("empty_string", DataTypes::string())
+            .column("empty_bytes", DataTypes::bytes())
+            .build()
+            .unwrap();
+
+        for schema in [Some(&schema), None] {
+            let resolved = resolve_row_types(&row, schema, 0).unwrap();
+            assert_no_copy_values(&row.values, &resolved.values);
+        }
+    }
+
+    #[test]
+    fn test_resolve_row_types_preserves_conversions() {
+        let schema = Schema::builder()
+            .column("tiny", DataTypes::tinyint())
+            .column("small", DataTypes::smallint())
+            .column(
+                "decimal",
+                DataType::Decimal(DecimalType::new(5, 2).unwrap()),
+            )
+            .column("string", DataTypes::string())
+            .column("bytes", DataTypes::bytes())
+            .column("nullable", DataTypes::string())
+            .build()
+            .unwrap();
+        let row = GenericRow {
+            values: vec![
+                Datum::Int32(127),
+                Datum::Int32(-32768),
+                Datum::String(Cow::Owned(String::from("123.45"))),
+                Datum::String(Cow::Owned(String::from("unchanged"))),
+                Datum::Blob(Cow::Owned(vec![1, 2, 3])),
+                Datum::Null,
+            ],
+        };
+        let resolved = resolve_row_types(&row, Some(&schema), 0).unwrap();
+        assert!(matches!(resolved, Cow::Owned(_)));
+        assert_eq!(resolved.values[0], Datum::Int8(127));
+        assert_eq!(resolved.values[1], Datum::Int16(-32768));
+        assert_eq!(
+            resolved.values[2],
+            Datum::Decimal(Decimal::from_unscaled_long(12345, 5, 2).unwrap())
+        );
+        assert_no_copy_values(&row.values[3..5], &resolved.values[3..5]);
+        assert_eq!(resolved.values[5], Datum::Null);
+    }
+
+    #[test]
+    fn test_resolve_row_types_pads_short_rows_to_min_width() {
+        let row = GenericRow {
+            values: vec![
+                Datum::String(Cow::Owned(String::from("a"))),
+                Datum::Int32(1),
+            ],
+        };
+        let schema = Schema::builder()
+            .column("a", DataTypes::string())
+            .column("b", DataTypes::int())
+            .column("c", DataTypes::string())
+            .column("d", DataTypes::string())
+            .build()
+            .unwrap();
+
+        // Wide enough: the input row is returned as-is.
+        let resolved = resolve_row_types(&row, Some(&schema), 2).unwrap();
+        assert!(matches!(resolved, Cow::Borrowed(_)));
+
+        // Short row: rebuilt at min_width with trailing Nulls, values borrowed.
+        let resolved = resolve_row_types(&row, Some(&schema), 4).unwrap();
+        assert!(matches!(resolved, Cow::Owned(_)));
+        assert_eq!(resolved.values.len(), 4);
+        assert_no_copy_values(&row.values[..1], &resolved.values[..1]);
+        assert_eq!(resolved.values[1], Datum::Int32(1));
+        assert_eq!(resolved.values[2], Datum::Null);
+        assert_eq!(resolved.values[3], Datum::Null);
+    }
+
+    #[test]
+    fn test_resolve_row_types_borrows_nested_values() {
+        let schema = Schema::builder()
+            .column("tiny", DataTypes::tinyint())
+            .column(
+                "nested",
+                DataType::Row(RowType::new(vec![
+                    DataField::new("string", DataTypes::string(), None),
+                    DataField::new("bytes", DataTypes::bytes(), None),
+                ])),
+            )
+            .build()
+            .unwrap();
+        // The outer row needs a conversion, so the nested row is rebuilt too.
+        let row = GenericRow {
+            values: vec![
+                Datum::Int32(1),
+                Datum::Row(Box::new(GenericRow {
+                    values: vec![
+                        Datum::String(Cow::Owned(String::from("nested string"))),
+                        Datum::Blob(Cow::Owned(vec![1, 2, 3])),
+                    ],
+                })),
+            ],
+        };
+        let resolved = resolve_row_types(&row, Some(&schema), 0).unwrap();
+        assert_eq!(resolved.values[0], Datum::Int8(1));
+        let (Datum::Row(input), Datum::Row(nested)) = (&row.values[1], &resolved.values[1]) else {
+            panic!("expected nested rows");
+        };
+        assert_no_copy_values(&input.values, &nested.values);
+    }
+
+    #[test]
+    fn test_resolve_row_types_nested_conversion_forces_rebuild() {
+        // Only the nested field needs converting; the fast path must not
+        // skip it.
+        let schema = Schema::builder()
+            .column(
+                "nested",
+                DataType::Row(RowType::new(vec![
+                    DataField::new(
+                        "decimal",
+                        DataType::Decimal(DecimalType::new(5, 2).unwrap()),
+                        None,
+                    ),
+                    DataField::new("string", DataTypes::string(), None),
+                ])),
+            )
+            .build()
+            .unwrap();
+        let row = GenericRow {
+            values: vec![Datum::Row(Box::new(GenericRow {
+                values: vec![
+                    Datum::String(Cow::Owned(String::from("12.34"))),
+                    Datum::String(Cow::Owned(String::from("kept"))),
+                ],
+            }))],
+        };
+        let resolved = resolve_row_types(&row, Some(&schema), 0).unwrap();
+        assert!(matches!(resolved, Cow::Owned(_)));
+        let Datum::Row(nested) = &resolved.values[0] else {
+            panic!("expected nested row");
+        };
+        assert_eq!(
+            nested.values[0],
+            Datum::Decimal(Decimal::from_unscaled_long(1234, 5, 2).unwrap())
+        );
+        assert_eq!(nested.values[1], Datum::String(Cow::Borrowed("kept")));
+    }
+
+    #[test]
+    fn test_resolve_row_types_preserves_validation() {
+        let cases = [
+            (DataTypes::tinyint(), Datum::Int32(128), "overflows TinyInt"),
+            (
+                DataTypes::smallint(),
+                Datum::Int32(32768),
+                "overflows SmallInt",
+            ),
+            (
+                DataType::Decimal(DecimalType::new(5, 2).unwrap()),
+                Datum::String(Cow::Borrowed("invalid")),
+                "invalid decimal string",
+            ),
+            (
+                DataType::Decimal(DecimalType::new(5, 2).unwrap()),
+                Datum::String(Cow::Borrowed("1234.56")),
+                "Decimal precision overflow",
+            ),
+        ];
+        for (data_type, datum, expected_error) in cases {
+            let schema = Schema::builder()
+                .column("value", data_type)
+                .build()
+                .unwrap();
+            let row = GenericRow {
+                values: vec![datum],
+            };
+            let error = resolve_row_types(&row, Some(&schema), 0).unwrap_err();
+            assert!(error.to_string().contains(expected_error), "{error}");
+        }
+    }
+
+    #[test]
+    fn test_resolve_dense_row_types_identity_returns_input_row() {
+        // PK columns at schema positions [0, 1] and a 2-wide row: already dense.
+        let row = GenericRow {
+            values: vec![
+                Datum::Int32(1),
+                Datum::String(Cow::Owned(String::from("pk"))),
+            ],
+        };
+        let schema = Schema::builder()
+            .column("a", DataTypes::int())
+            .column("b", DataTypes::string())
+            .build()
+            .unwrap();
+
+        let resolved = resolve_dense_row_types(&row, Some(&schema), &[0, 1]).unwrap();
+        assert!(matches!(resolved, Cow::Borrowed(_)));
+        assert!(std::ptr::eq(resolved.as_ref(), &row));
+    }
+
+    #[test]
+    fn test_resolve_dense_row_types_compacts_and_converts() {
+        // PK columns sit at schema positions [0, 2]; values are set at their
+        // full schema positions in a wider row.
+        let schema = Schema::builder()
+            .column("a", DataTypes::tinyint())
+            .column("filler", DataTypes::string())
+            .column("dec", DataType::Decimal(DecimalType::new(5, 2).unwrap()))
+            .build()
+            .unwrap();
+        let row = GenericRow {
+            values: vec![
+                Datum::Int32(7),                                     // a: TinyInt, narrow
+                Datum::String(Cow::Owned(String::from("not a pk"))), // skipped
+                Datum::String(Cow::Owned(String::from("12.34"))),    // dec: parse
+            ],
+        };
+
+        let resolved = resolve_dense_row_types(&row, Some(&schema), &[0, 2]).unwrap();
+        assert!(matches!(resolved, Cow::Owned(_)));
+        assert_eq!(resolved.values.len(), 2);
+        assert_eq!(resolved.values[0], Datum::Int8(7));
+        assert_eq!(
+            resolved.values[1],
+            Datum::Decimal(Decimal::from_unscaled_long(1234, 5, 2).unwrap())
+        );
+    }
+
+    #[test]
+    fn test_resolve_dense_row_types_borrows_unchanged_values() {
+        let string = String::from("borrowed");
+        let bytes = vec![9, 9];
+        let schema = Schema::builder()
+            .column("a", DataTypes::string())
+            .column("b", DataTypes::bytes())
+            .column("c", DataTypes::string())
+            .build()
+            .unwrap();
+        let row = GenericRow {
+            values: vec![
+                Datum::String(Cow::Borrowed(&string)),
+                Datum::Blob(Cow::Borrowed(&bytes)),
+                Datum::Null, // not part of the dense projection
+            ],
+        };
+
+        let resolved = resolve_dense_row_types(&row, Some(&schema), &[0, 1]).unwrap();
+        assert_eq!(resolved.values.len(), 2);
+        assert_no_copy_values(&row.values[..2], &resolved.values);
+    }
+
+    #[test]
+    fn test_resolve_dense_row_types_out_of_range_is_null() {
+        let schema = Schema::builder()
+            .column("a", DataTypes::string())
+            .column("b", DataTypes::string())
+            .build()
+            .unwrap();
+        // Only the first PK value is set; position 1 is beyond the row width.
+        let row = GenericRow {
+            values: vec![Datum::String(Cow::Owned(String::from("only")))],
+        };
+
+        let resolved = resolve_dense_row_types(&row, Some(&schema), &[0, 1]).unwrap();
+        assert!(matches!(resolved, Cow::Owned(_)));
+        assert_eq!(resolved.values.len(), 2);
+        assert_eq!(resolved.values[0], Datum::String(Cow::Borrowed("only")));
+        assert_eq!(resolved.values[1], Datum::Null);
+    }
+
+    #[test]
+    fn test_resolve_dense_row_types_preserves_validation() {
+        let schema = Schema::builder()
+            .column("a", DataTypes::string())
+            .column("dec", DataType::Decimal(DecimalType::new(5, 2).unwrap()))
+            .build()
+            .unwrap();
+        let row = GenericRow {
+            values: vec![Datum::Null, Datum::String(Cow::Owned(String::from("oops")))],
+        };
+
+        // Errors report the schema position, as full-row resolution does.
+        let error = resolve_dense_row_types(&row, Some(&schema), &[1]).unwrap_err();
+        assert!(error.to_string().contains("Column 1"), "{error}");
+    }
+}

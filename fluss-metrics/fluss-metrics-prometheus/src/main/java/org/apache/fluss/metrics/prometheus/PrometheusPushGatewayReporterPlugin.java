@@ -19,6 +19,7 @@ package org.apache.fluss.metrics.prometheus;
 
 import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.config.Password;
 import org.apache.fluss.metrics.reporter.MetricReporter;
 import org.apache.fluss.metrics.reporter.MetricReporterPlugin;
 import org.apache.fluss.utils.StringUtils;
@@ -37,8 +38,10 @@ import static org.apache.fluss.config.ConfigOptions.METRICS_REPORTER_PROMETHEUS_
 import static org.apache.fluss.config.ConfigOptions.METRICS_REPORTER_PROMETHEUS_PUSHGATEWAY_GROUPING_KEY;
 import static org.apache.fluss.config.ConfigOptions.METRICS_REPORTER_PROMETHEUS_PUSHGATEWAY_HOST_URL;
 import static org.apache.fluss.config.ConfigOptions.METRICS_REPORTER_PROMETHEUS_PUSHGATEWAY_JOB_NAME;
+import static org.apache.fluss.config.ConfigOptions.METRICS_REPORTER_PROMETHEUS_PUSHGATEWAY_PASSWORD;
 import static org.apache.fluss.config.ConfigOptions.METRICS_REPORTER_PROMETHEUS_PUSHGATEWAY_PUSH_INTERVAL;
 import static org.apache.fluss.config.ConfigOptions.METRICS_REPORTER_PROMETHEUS_PUSHGATEWAY_RANDOM_JOB_NAME_SUFFIX;
+import static org.apache.fluss.config.ConfigOptions.METRICS_REPORTER_PROMETHEUS_PUSHGATEWAY_USERNAME;
 
 /** {@link MetricReporterPlugin} for {@link PrometheusPushGatewayReporter}. */
 public class PrometheusPushGatewayReporterPlugin implements MetricReporterPlugin {
@@ -56,23 +59,34 @@ public class PrometheusPushGatewayReporterPlugin implements MetricReporterPlugin
         boolean randomSuffix =
                 config.get(METRICS_REPORTER_PROMETHEUS_PUSHGATEWAY_RANDOM_JOB_NAME_SUFFIX);
         Duration pushInterval = config.get(METRICS_REPORTER_PROMETHEUS_PUSHGATEWAY_PUSH_INTERVAL);
+        String username = config.get(METRICS_REPORTER_PROMETHEUS_PUSHGATEWAY_USERNAME);
+        Password passwordOption = config.get(METRICS_REPORTER_PROMETHEUS_PUSHGATEWAY_PASSWORD);
+        String password = passwordOption == null ? null : passwordOption.value();
         String jobName = configuredJobName;
         if (randomSuffix) {
             jobName = configuredJobName + new Random().nextLong();
         }
         Map<String, String> groupingKey =
                 parseGroupingKey(config.get(METRICS_REPORTER_PROMETHEUS_PUSHGATEWAY_GROUPING_KEY));
+        boolean basicAuthEnabled = !StringUtils.isNullOrWhitespaceOnly(username);
         LOG.info(
-                "Configured PrometheusPushGatewayReporter with {hostUrl:{}, jobName:{}, randomJobNameSuffix:{}, deleteOnShutdown:{}, groupingKey:{}, pushInterval:{}}",
+                "Configured PrometheusPushGatewayReporter with {hostUrl:{}, jobName:{}, randomJobNameSuffix:{}, deleteOnShutdown:{}, groupingKey:{}, pushInterval:{}, basicAuthEnabled:{}}",
                 hostUrl,
                 jobName,
                 randomSuffix,
                 deleteOnShutdown,
                 groupingKey,
-                pushInterval);
+                pushInterval,
+                basicAuthEnabled);
         try {
             return new PrometheusPushGatewayReporter(
-                    new URL(hostUrl), jobName, groupingKey, deleteOnShutdown, pushInterval);
+                    new URL(hostUrl),
+                    jobName,
+                    groupingKey,
+                    deleteOnShutdown,
+                    pushInterval,
+                    basicAuthEnabled ? username : null,
+                    basicAuthEnabled ? password : null);
         } catch (Exception e) {
             throw new RuntimeException(e);
         }

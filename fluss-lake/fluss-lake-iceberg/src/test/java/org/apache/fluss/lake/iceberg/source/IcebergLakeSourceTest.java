@@ -18,6 +18,7 @@
 
 package org.apache.fluss.lake.iceberg.source;
 
+import org.apache.fluss.config.Configuration;
 import org.apache.fluss.lake.source.LakeSource;
 import org.apache.fluss.lake.source.RecordReader;
 import org.apache.fluss.metadata.TablePath;
@@ -66,11 +67,26 @@ class IcebergLakeSourceTest extends IcebergSourceTestBase {
             PartitionSpec.builderFor(SCHEMA).bucket("id", DEFAULT_BUCKET_NUM).build();
 
     private static final PredicateBuilder FLUSS_BUILDER =
-            new PredicateBuilder(RowType.of(DataTypes.BIGINT(), DataTypes.STRING()));
+            new PredicateBuilder(RowType.of(DataTypes.INT(), DataTypes.STRING()));
+
+    private static final PredicateBuilder FLUSS_BUILDER_TINYINT =
+            new PredicateBuilder(RowType.of(DataTypes.TINYINT(), DataTypes.STRING()));
 
     @BeforeAll
     protected static void beforeAll() {
         IcebergSourceTestBase.beforeAll();
+    }
+
+    @Test
+    void testEmptyFiltersDoNotAccessCatalog() {
+        IcebergLakeSource lakeSource =
+                new IcebergLakeSource(
+                        new Configuration(), TablePath.of("missing_db", "missing_table"));
+
+        LakeSource.FilterPushDownResult result = lakeSource.withFilters(Collections.emptyList());
+
+        assertThat(result.acceptedPredicates()).isEmpty();
+        assertThat(result.remainingPredicates()).isEmpty();
     }
 
     @Test
@@ -119,6 +135,7 @@ class IcebergLakeSourceTest extends IcebergSourceTestBase {
         LakeSource.FilterPushDownResult filterPushDownResult = lakeSource.withFilters(allFilters);
         assertThat(filterPushDownResult.acceptedPredicates()).isEqualTo(allFilters);
         assertThat(filterPushDownResult.remainingPredicates()).isEmpty();
+        LakeSource<IcebergSplit> copiedLakeSource = lakeSource.copy();
 
         // read data to verify the filters work
         List<IcebergSplit> icebergSplits =
@@ -156,5 +173,62 @@ class IcebergLakeSourceTest extends IcebergSourceTestBase {
         assertThat(filterPushDownResult.acceptedPredicates()).isEmpty();
         assertThat(filterPushDownResult.remainingPredicates().toString())
                 .isEqualTo(allFilters.toString());
+
+        assertThat(lakeSource.createPlanner(() -> table.currentSnapshot().snapshotId()).plan())
+                .hasSize(2);
+        assertThat(
+                        copiedLakeSource
+                                .createPlanner(() -> table.currentSnapshot().snapshotId())
+                                .plan())
+                .hasSize(1);
+    }
+
+    @Test
+    void testWithTinyIntFilter() throws Exception {
+        TablePath tablePath = TablePath.of("fluss", "test_filters_tinyint");
+        createTable(tablePath, SCHEMA, PARTITION_SPEC);
+
+        Table table = getTable(tablePath);
+        List<Record> rows = new ArrayList<>();
+        for (int i = 1; i <= 4; i++) {
+            rows.add(
+                    createIcebergRecord(
+                            SCHEMA,
+                            i,
+                            "name" + i,
+                            0,
+                            (long) i,
+                            OffsetDateTime.now(ZoneOffset.UTC)));
+        }
+        writeRecord(table, rows, null, 0);
+        table.refresh();
+
+        // pass Byte literal (not Integer) to exercise the Fluss TINYINT -> Iceberg int path
+        Predicate filter1 = FLUSS_BUILDER_TINYINT.greaterOrEqual(0, (byte) 2);
+        Predicate filter2 = FLUSS_BUILDER_TINYINT.lessOrEqual(0, (byte) 3);
+        List<Predicate> allFilters = Arrays.asList(filter1, filter2);
+
+        LakeSource<IcebergSplit> lakeSource = lakeStorage.createLakeSource(tablePath);
+        LakeSource.FilterPushDownResult filterPushDownResult = lakeSource.withFilters(allFilters);
+        assertThat(filterPushDownResult.acceptedPredicates()).isEqualTo(allFilters);
+        assertThat(filterPushDownResult.remainingPredicates()).isEmpty();
+
+        List<IcebergSplit> icebergSplits =
+                lakeSource.createPlanner(() -> table.currentSnapshot().snapshotId()).plan();
+        assertThat(icebergSplits).hasSize(1);
+        IcebergSplit icebergSplit = icebergSplits.get(0);
+
+        List<Row> actual = new ArrayList<>();
+        org.apache.fluss.row.InternalRow.FieldGetter[] fieldGetters =
+                org.apache.fluss.row.InternalRow.createFieldGetters(
+                        RowType.of(new IntType(), new StringType()));
+        RecordReader recordReader = lakeSource.createRecordReader(() -> icebergSplit);
+        try (CloseableIterator<LogRecord> iterator = recordReader.read()) {
+            actual.addAll(
+                    convertToFlinkRow(
+                            fieldGetters,
+                            TransformingCloseableIterator.transform(iterator, LogRecord::getRow)));
+        }
+        assertThat(actual.toString()).isEqualTo("[+I[2, name2], +I[3, name3]]");
     }
 }

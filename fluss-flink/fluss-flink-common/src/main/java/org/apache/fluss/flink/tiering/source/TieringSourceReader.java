@@ -60,8 +60,15 @@ public final class TieringSourceReader<WriteResult>
                     elementsQueue,
             SourceReaderContext context,
             Connection connection,
-            LakeTieringFactory<WriteResult, ?> lakeTieringFactory) {
-        this(elementsQueue, context, connection, lakeTieringFactory, DEFAULT_POLL_TIMEOUT);
+            LakeTieringFactory<WriteResult, ?> lakeTieringFactory,
+            String[] ioTmpDirs) {
+        this(
+                elementsQueue,
+                context,
+                connection,
+                lakeTieringFactory,
+                DEFAULT_POLL_TIMEOUT,
+                ioTmpDirs);
     }
 
     @VisibleForTesting
@@ -72,10 +79,27 @@ public final class TieringSourceReader<WriteResult>
             Connection connection,
             LakeTieringFactory<WriteResult, ?> lakeTieringFactory,
             Duration pollTimeout) {
+        this(elementsQueue, context, connection, lakeTieringFactory, pollTimeout, new String[0]);
+    }
+
+    @VisibleForTesting
+    TieringSourceReader(
+            FutureCompletingBlockingQueue<RecordsWithSplitIds<TableBucketWriteResult<WriteResult>>>
+                    elementsQueue,
+            SourceReaderContext context,
+            Connection connection,
+            LakeTieringFactory<WriteResult, ?> lakeTieringFactory,
+            Duration pollTimeout,
+            String[] ioTmpDirs) {
         super(
                 elementsQueue,
                 createFetcherManager(
-                        elementsQueue, context, connection, lakeTieringFactory, pollTimeout),
+                        elementsQueue,
+                        context,
+                        connection,
+                        lakeTieringFactory,
+                        pollTimeout,
+                        ioTmpDirs),
                 new TableBucketWriteResultEmitter<>(),
                 context.getConfiguration(),
                 context);
@@ -88,13 +112,20 @@ public final class TieringSourceReader<WriteResult>
             SourceReaderContext context,
             Connection connection,
             LakeTieringFactory<WriteResult, ?> lakeTieringFactory,
-            Duration pollTimeout) {
+            Duration pollTimeout,
+            String[] ioTmpDirs) {
         TieringMetrics tieringMetrics = new TieringMetrics(context.metricGroup());
+        ClassLoader userClassLoader = context.getUserCodeClassLoader().asClassLoader();
         return new TieringSourceFetcherManager<>(
                 elementsQueue,
                 () ->
                         new TieringSplitReader<>(
-                                connection, lakeTieringFactory, pollTimeout, tieringMetrics),
+                                connection,
+                                lakeTieringFactory,
+                                userClassLoader,
+                                pollTimeout,
+                                tieringMetrics,
+                                ioTmpDirs),
                 context.getConfiguration(),
                 (ignore) -> {});
     }

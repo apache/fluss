@@ -32,6 +32,7 @@ import java.lang.reflect.Array;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 /** Adapter class for converting Fluss InternalArray to Pojo Array. */
 public class FlussArrayToPojoArray {
@@ -115,9 +116,17 @@ public class FlussArrayToPojoArray {
             case STRING:
                 // Default to String when the POJO element type is unspecified (Object[])
                 final Class<?> textTarget = (pojoType == Object.class) ? String.class : pojoType;
+                final Map<String, Object> enumConstantsMap =
+                        textTarget.isEnum()
+                                ? FlussTypeToPojoTypeConverter.buildEnumConstantsMap(textTarget)
+                                : null;
                 return (arr, i) ->
                         FlussTypeToPojoTypeConverter.convertTextValue(
-                                elementType, fieldName, textTarget, arr.getString(i));
+                                elementType,
+                                fieldName,
+                                textTarget,
+                                arr.getString(i),
+                                enumConstantsMap);
             case BINARY:
             case BYTES:
                 return InternalArray::getBytes;

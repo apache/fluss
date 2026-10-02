@@ -65,7 +65,7 @@ Good for: experienced contributors and committers who want to help others land t
 Contributions are easier when you are connected with other contributors. Join the conversation on:
 
 - [GitHub Discussions](https://github.com/apache/fluss/discussions) — design questions, usage help, and general discussion.
-- [Slack](https://join.slack.com/t/apache-fluss/shared_invite/zt-33wlna581-QAooAiCmnYboJS8D_JUcYw) — real-time chat with contributors and users.
+- [Slack](https://join.slack.com/t/apache-fluss/shared_invite/zt-473vgmvjr-cmIma~_iAA4cN02o5u2pDQ) — real-time chat with contributors and users.
 - [Mailing Lists](../welcome.mdx) — `dev@fluss.apache.org` for development, `user@fluss.apache.org` for user questions.
 
 Thank you for helping make Apache Fluss better.

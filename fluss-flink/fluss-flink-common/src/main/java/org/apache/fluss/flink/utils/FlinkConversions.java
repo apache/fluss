@@ -21,7 +21,9 @@ import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.config.ConfigOption;
 import org.apache.fluss.config.MemorySize;
 import org.apache.fluss.config.Password;
+import org.apache.fluss.flink.adapter.CatalogMaterializedTableAdapter;
 import org.apache.fluss.flink.adapter.CatalogTableAdapter;
+import org.apache.fluss.flink.adapter.IntervalFreshnessAdapter;
 import org.apache.fluss.flink.catalog.FlinkCatalogFactory;
 import org.apache.fluss.metadata.AggFunction;
 import org.apache.fluss.metadata.DatabaseDescriptor;
@@ -48,6 +50,7 @@ import org.apache.flink.table.catalog.ResolvedCatalogTable;
 import org.apache.flink.table.catalog.ResolvedSchema;
 import org.apache.flink.table.catalog.TableChange.ModifyRefreshHandler;
 import org.apache.flink.table.catalog.TableChange.ModifyRefreshStatus;
+import org.apache.flink.table.catalog.WatermarkSpec;
 import org.apache.flink.table.catalog.exceptions.CatalogException;
 import org.apache.flink.types.RowKind;
 
@@ -76,9 +79,11 @@ import static org.apache.fluss.flink.FlinkConnectorOptions.AUTO_INCREMENT_FIELDS
 import static org.apache.fluss.flink.FlinkConnectorOptions.BUCKET_KEY;
 import static org.apache.fluss.flink.FlinkConnectorOptions.BUCKET_NUMBER;
 import static org.apache.fluss.flink.FlinkConnectorOptions.MATERIALIZED_TABLE_DEFINITION_QUERY;
+import static org.apache.fluss.flink.FlinkConnectorOptions.MATERIALIZED_TABLE_EXPANDED_QUERY;
 import static org.apache.fluss.flink.FlinkConnectorOptions.MATERIALIZED_TABLE_INTERVAL_FRESHNESS;
 import static org.apache.fluss.flink.FlinkConnectorOptions.MATERIALIZED_TABLE_INTERVAL_FRESHNESS_TIME_UNIT;
 import static org.apache.fluss.flink.FlinkConnectorOptions.MATERIALIZED_TABLE_LOGICAL_REFRESH_MODE;
+import static org.apache.fluss.flink.FlinkConnectorOptions.MATERIALIZED_TABLE_ORIGINAL_QUERY;
 import static org.apache.fluss.flink.FlinkConnectorOptions.MATERIALIZED_TABLE_PREFIX;
 import static org.apache.fluss.flink.FlinkConnectorOptions.MATERIALIZED_TABLE_REFRESH_HANDLER_BYTES;
 import static org.apache.fluss.flink.FlinkConnectorOptions.MATERIALIZED_TABLE_REFRESH_HANDLER_DESCRIPTION;
@@ -123,7 +128,6 @@ public class FlinkConversions {
 
         // put fluss table properties into flink options, to make the properties visible to users
         convertFlussTablePropertiesToFlinkOptions(tableInfo.getProperties().toMap(), newOptions);
-
         org.apache.flink.table.api.Schema.Builder schemaBuilder =
                 org.apache.flink.table.api.Schema.newBuilder();
         if (tableInfo.hasPrimaryKey()) {
@@ -351,10 +355,12 @@ public class FlinkConversions {
         } else if (clazz.equals(Duration.class)) {
             // use string type in Flink option instead to make convert back easier
             option =
-                    builder.stringType()
-                            .defaultValue(
-                                    TimeUtils.formatWithHighestUnit(
-                                            (Duration) flussOption.defaultValue()));
+                    flussOption.hasDefaultValue()
+                            ? builder.stringType()
+                                    .defaultValue(
+                                            TimeUtils.formatWithHighestUnit(
+                                                    (Duration) flussOption.defaultValue()))
+                            : builder.stringType().noDefaultValue();
         } else if (clazz.equals(Password.class)) {
             String defaultValue = ((Password) flussOption.defaultValue()).value();
             option = builder.stringType().defaultValue(defaultValue);
@@ -461,6 +467,16 @@ public class FlinkConversions {
             return Collections.singletonList(
                     convertResetOption(
                             (org.apache.flink.table.catalog.TableChange.ResetOption) tableChange));
+        } else if (tableChange instanceof org.apache.flink.table.catalog.TableChange.AddWatermark) {
+            return convertAddWatermark(
+                    (org.apache.flink.table.catalog.TableChange.AddWatermark) tableChange);
+        } else if (tableChange
+                instanceof org.apache.flink.table.catalog.TableChange.ModifyWatermark) {
+            return convertModifyWatermark(
+                    (org.apache.flink.table.catalog.TableChange.ModifyWatermark) tableChange);
+        } else if (tableChange
+                instanceof org.apache.flink.table.catalog.TableChange.DropWatermark) {
+            return convertDropWatermark();
         } else if (tableChange instanceof ModifyRefreshStatus
                 || tableChange instanceof ModifyRefreshHandler) {
             // MaterializedTableChange may produce multiple fluss TableChange.
@@ -486,14 +502,44 @@ public class FlinkConversions {
         }
     }
 
-    private static TableChange.SetOption convertSetOption(
+    private static TableChange convertSetOption(
             org.apache.flink.table.catalog.TableChange.SetOption flinkSetOption) {
+        if (BUCKET_NUMBER.key().equals(flinkSetOption.getKey())) {
+            return TableChange.modifyBucketCount(Integer.parseInt(flinkSetOption.getValue()));
+        }
         return TableChange.set(flinkSetOption.getKey(), flinkSetOption.getValue());
     }
 
     private static TableChange.ResetOption convertResetOption(
             org.apache.flink.table.catalog.TableChange.ResetOption flinkResetOption) {
         return TableChange.reset(flinkResetOption.getKey());
+    }
+
+    private static List<TableChange> convertAddWatermark(
+            org.apache.flink.table.catalog.TableChange.AddWatermark addWatermark) {
+        return convertWatermark(addWatermark.getWatermark());
+    }
+
+    private static List<TableChange> convertModifyWatermark(
+            org.apache.flink.table.catalog.TableChange.ModifyWatermark modifyWatermark) {
+        return convertWatermark(modifyWatermark.getNewWatermark());
+    }
+
+    private static List<TableChange> convertWatermark(WatermarkSpec watermarkSpec) {
+        Map<String, String> watermarkProperties = new HashMap<>();
+        CatalogPropertiesUtils.serializeWatermarkSpecs(
+                watermarkProperties, Collections.singletonList(watermarkSpec));
+
+        return watermarkProperties.entrySet().stream()
+                .map(entry -> TableChange.set(entry.getKey(), entry.getValue()))
+                .collect(Collectors.toList());
+    }
+
+    private static List<TableChange> convertDropWatermark() {
+        return Arrays.asList(
+                TableChange.reset(CatalogPropertiesUtils.getWatermarkRowtimeKey(0)),
+                TableChange.reset(CatalogPropertiesUtils.getWatermarkExprKey(0)),
+                TableChange.reset(CatalogPropertiesUtils.getWatermarkDataTypeKey(0)));
     }
 
     /** Converts a {@code MaterializedTableChange} to a list of Fluss TableChanges. */
@@ -557,12 +603,23 @@ public class FlinkConversions {
             CatalogMaterializedTable mt, Map<String, String> customProperties) {
         // Serialize core materialized table properties
         customProperties.put(MATERIALIZED_TABLE_DEFINITION_QUERY.key(), mt.getDefinitionQuery());
+        // Only persist original/expanded queries when the active Flink version actually exposes
+        // them (Flink 2.3+). Older versions' adapter returns null; persisting a null would
+        // break downstream readers that route customProperties through Configuration.setString.
+        String originalQuery = CatalogMaterializedTableAdapter.getOriginalQuery(mt);
+        if (originalQuery != null) {
+            customProperties.put(MATERIALIZED_TABLE_ORIGINAL_QUERY.key(), originalQuery);
+        }
+        String expandedQuery = CatalogMaterializedTableAdapter.getExpandedQuery(mt);
+        if (expandedQuery != null) {
+            customProperties.put(MATERIALIZED_TABLE_EXPANDED_QUERY.key(), expandedQuery);
+        }
         // Serialize freshness configuration
         IntervalFreshness freshness = mt.getDefinitionFreshness();
         customProperties.put(MATERIALIZED_TABLE_INTERVAL_FRESHNESS.key(), freshness.getInterval());
         customProperties.put(
                 MATERIALIZED_TABLE_INTERVAL_FRESHNESS_TIME_UNIT.key(),
-                freshness.getTimeUnit().name());
+                IntervalFreshnessAdapter.getTimeUnitName(freshness));
         // Serialize refresh configuration
         customProperties.put(
                 MATERIALIZED_TABLE_LOGICAL_REFRESH_MODE.key(), mt.getLogicalRefreshMode().name());
@@ -603,6 +660,8 @@ public class FlinkConversions {
             Map<String, String> options) {
         // Validate required materialized table options first
         String definitionQuery = options.get(MATERIALIZED_TABLE_DEFINITION_QUERY.key());
+        String originalQuery = options.get(MATERIALIZED_TABLE_ORIGINAL_QUERY.key());
+        String expandedQuery = options.get(MATERIALIZED_TABLE_EXPANDED_QUERY.key());
         String intervalFreshness = options.get(MATERIALIZED_TABLE_INTERVAL_FRESHNESS.key());
         String timeUnitStr = options.get(MATERIALIZED_TABLE_INTERVAL_FRESHNESS_TIME_UNIT.key());
         String logicalRefreshModeStr = options.get(MATERIALIZED_TABLE_LOGICAL_REFRESH_MODE.key());
@@ -623,9 +682,21 @@ public class FlinkConversions {
         checkNotNull(refreshModeStr, "Materialized table refresh mode is required but missing");
         checkNotNull(refreshStatusStr, "Materialized table refresh status is required but missing");
 
+        // Compatibility: materialized tables persisted before Flink 2.3 only stored the
+        // definition-query. Flink 2.3's DefaultCatalogMaterializedTable rejects null
+        // original/expanded queries, so fall back to definition-query when those keys are
+        // absent — the closest approximation we can recover from a legacy payload.
+        if (originalQuery == null) {
+            originalQuery = definitionQuery;
+        }
+        if (expandedQuery == null) {
+            expandedQuery = definitionQuery;
+        }
+
         // Parse validated values
-        IntervalFreshness.TimeUnit timeUnit = IntervalFreshness.TimeUnit.valueOf(timeUnitStr);
-        IntervalFreshness freshness = IntervalFreshness.of(intervalFreshness, timeUnit);
+        IntervalFreshnessAdapter.TimeUnitAdapter timeUnit =
+                IntervalFreshnessAdapter.timeUnit(timeUnitStr);
+        IntervalFreshness freshness = IntervalFreshnessAdapter.of(intervalFreshness, timeUnit);
         CatalogMaterializedTable.LogicalRefreshMode logicalRefreshMode =
                 CatalogMaterializedTable.LogicalRefreshMode.valueOf(logicalRefreshModeStr);
         CatalogMaterializedTable.RefreshMode refreshMode =
@@ -645,12 +716,14 @@ public class FlinkConversions {
                         ? null
                         : decodeBase64ToBytes(refreshHandlerStringBytes);
 
-        CatalogMaterializedTable.Builder builder = CatalogMaterializedTable.newBuilder();
+        CatalogMaterializedTableAdapter builder = CatalogMaterializedTableAdapter.newAdapter();
         builder.schema(schema)
                 .comment(comment)
                 .partitionKeys(partitionKeys)
                 .options(excludeByPrefix(options, MATERIALIZED_TABLE_PREFIX))
                 .definitionQuery(definitionQuery)
+                .originalQuery(originalQuery)
+                .expandedQuery(expandedQuery)
                 .freshness(freshness)
                 .logicalRefreshMode(logicalRefreshMode)
                 .refreshMode(refreshMode)

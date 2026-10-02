@@ -59,3 +59,9 @@ data:
     {{- if (include "fluss.security.zookeeper.sasl.enabled" .) }}
     zookeeper.client.config-path: /etc/fluss/conf/zookeeper-client.properties
     {{- end }}
+
+    {{- if include "fluss.secrets.enabled" . }}
+    ### Secrets
+
+    {{- include "fluss.secrets.configLines" . | nindent 4 }}
+    {{- end }}

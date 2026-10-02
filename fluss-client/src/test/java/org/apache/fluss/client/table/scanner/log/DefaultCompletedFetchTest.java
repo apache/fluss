@@ -36,6 +36,7 @@ import org.apache.fluss.row.GenericMap;
 import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.rpc.entity.FetchLogResultForBucket;
+import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.ChunkedAllocationManager;
 import org.apache.fluss.testutils.InternalRowAssert;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.types.RowType;
@@ -104,8 +105,12 @@ public class DefaultCompletedFetchTest {
         int bucketId = 0; // records for 0-10.
         TableBucket tb = new TableBucket(DATA2_TABLE_ID, bucketId);
         FetchLogResultForBucket resultForBucket0 =
-                new FetchLogResultForBucket(
-                        tb, createMemoryLogRecords(DATA2, LogFormat.ARROW, recordBatchMagic), 10L);
+                FetchLogResultForBucket.records(
+                        tb,
+                        createMemoryLogRecords(DATA2, LogFormat.ARROW, recordBatchMagic),
+                        10L,
+                        -1L,
+                        -1L);
         DefaultCompletedFetch defaultCompletedFetch =
                 makeCompletedFetch(tb, resultForBucket0, fetchOffset);
         List<ScanRecord> scanRecords = defaultCompletedFetch.fetchRecords(8);
@@ -127,8 +132,12 @@ public class DefaultCompletedFetchTest {
         int bucketId = 0; // records for 0-10.
         TableBucket tb = new TableBucket(DATA2_TABLE_ID, bucketId);
         FetchLogResultForBucket resultForBucket0 =
-                new FetchLogResultForBucket(
-                        tb, createMemoryLogRecords(DATA2, LogFormat.ARROW, recordBatchMagic), 10L);
+                FetchLogResultForBucket.records(
+                        tb,
+                        createMemoryLogRecords(DATA2, LogFormat.ARROW, recordBatchMagic),
+                        10L,
+                        -1L,
+                        -1L);
         DefaultCompletedFetch defaultCompletedFetch =
                 makeCompletedFetch(tb, resultForBucket0, fetchOffset);
         List<ScanRecord> scanRecords = defaultCompletedFetch.fetchRecords(-10);
@@ -141,7 +150,7 @@ public class DefaultCompletedFetchTest {
         int bucketId = 0; // records for 0-10.
         TableBucket tb = new TableBucket(DATA2_TABLE_ID, bucketId);
         FetchLogResultForBucket resultForBucket0 =
-                new FetchLogResultForBucket(tb, MemoryLogRecords.EMPTY, 0L);
+                FetchLogResultForBucket.records(tb, MemoryLogRecords.EMPTY, 0L, -1L, -1L);
         DefaultCompletedFetch defaultCompletedFetch =
                 makeCompletedFetch(tb, resultForBucket0, fetchOffset);
         List<ScanRecord> scanRecords = defaultCompletedFetch.fetchRecords(10);
@@ -184,7 +193,7 @@ public class DefaultCompletedFetchTest {
             memoryLogRecords = createMemoryLogRecords(DATA2, LogFormat.INDEXED, magic);
         }
         FetchLogResultForBucket resultForBucket0 =
-                new FetchLogResultForBucket(tb, memoryLogRecords, 10L);
+                FetchLogResultForBucket.records(tb, memoryLogRecords, 10L, -1L, -1L);
         DefaultCompletedFetch defaultCompletedFetch =
                 makeCompletedFetch(tb, resultForBucket0, fetchOffset, projection);
         List<ScanRecord> scanRecords = defaultCompletedFetch.fetchRecords(8);
@@ -322,7 +331,7 @@ public class DefaultCompletedFetchTest {
         int bucketId = 0;
         TableBucket tb = new TableBucket(DATA2_TABLE_ID, bucketId);
         FetchLogResultForBucket resultForBucket =
-                new FetchLogResultForBucket(
+                FetchLogResultForBucket.records(
                         tb,
                         createRecordsWithoutBaseLogOffset(
                                 schema.getRowType(),
@@ -332,17 +341,22 @@ public class DefaultCompletedFetchTest {
                                 LOG_MAGIC_VALUE_V0,
                                 complexData,
                                 LogFormat.ARROW),
-                        3L);
+                        3L,
+                        -1L,
+                        -1L);
         DefaultCompletedFetch defaultCompletedFetch =
                 new DefaultCompletedFetch(
                         tb,
+                        DATA2_TABLE_PATH,
                         resultForBucket,
                         LogRecordReadContext.createReadContext(
                                 tableInfo,
                                 false,
+                                LogRecordReadContext.SchemaResolution.DYNAMIC,
                                 null,
                                 new TestingSchemaGetter(
-                                        tableInfo.getSchemaId(), tableInfo.getSchema())),
+                                        tableInfo.getSchemaId(), tableInfo.getSchema()),
+                                new ChunkedAllocationManager.ChunkedFactory()),
                         logScannerStatus,
                         true,
                         fetchOffset,
@@ -391,12 +405,15 @@ public class DefaultCompletedFetchTest {
             Projection projection) {
         return new DefaultCompletedFetch(
                 tableBucket,
+                DATA2_TABLE_PATH,
                 resultForBucket,
                 LogRecordReadContext.createReadContext(
                         tableInfo,
                         false,
+                        LogRecordReadContext.SchemaResolution.DYNAMIC,
                         projection,
-                        new TestingSchemaGetter(tableInfo.getSchemaId(), tableInfo.getSchema())),
+                        new TestingSchemaGetter(tableInfo.getSchemaId(), tableInfo.getSchema()),
+                        new ChunkedAllocationManager.ChunkedFactory()),
                 logScannerStatus,
                 true,
                 offset,

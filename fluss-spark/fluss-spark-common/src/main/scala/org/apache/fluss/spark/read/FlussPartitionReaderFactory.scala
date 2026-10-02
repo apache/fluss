@@ -30,6 +30,7 @@ class FlussAppendPartitionReaderFactory(
     tablePath: TablePath,
     projection: Array[Int],
     pushedPredicate: Option[Predicate],
+    limit: Option[Int],
     options: CaseInsensitiveStringMap,
     flussConfig: Configuration)
   extends PartitionReaderFactory {
@@ -40,6 +41,7 @@ class FlussAppendPartitionReaderFactory(
       tablePath,
       projection,
       pushedPredicate,
+      limit,
       flussPartition,
       flussConfig
     )
@@ -50,6 +52,7 @@ class FlussAppendPartitionReaderFactory(
 class FlussUpsertPartitionReaderFactory(
     tablePath: TablePath,
     projection: Array[Int],
+    limit: Option[Int],
     options: CaseInsensitiveStringMap,
     flussConfig: Configuration)
   extends PartitionReaderFactory {
@@ -59,6 +62,7 @@ class FlussUpsertPartitionReaderFactory(
     new FlussUpsertPartitionReader(
       tablePath,
       projection,
+      limit,
       upsertPartition,
       flussConfig
     )

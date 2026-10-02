@@ -24,11 +24,11 @@
     <parent>
         <groupId>org.apache.fluss</groupId>
         <artifactId>fluss</artifactId>
-        <version>1.0-SNAPSHOT</version>
+        <version>1.1-SNAPSHOT</version>
     </parent>
 
     <artifactId>fluss-metrics</artifactId>
-    <name>Fluss : Metrics :</name>
+    <name>Apache Fluss : Metrics :</name>
     <packaging>pom</packaging>
 
     <modules>

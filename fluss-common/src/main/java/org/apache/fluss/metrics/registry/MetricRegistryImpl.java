@@ -27,6 +27,7 @@ import org.apache.fluss.metrics.groups.FrontMetricGroup;
 import org.apache.fluss.metrics.groups.MetricGroup;
 import org.apache.fluss.metrics.groups.ReporterScopedSettings;
 import org.apache.fluss.metrics.reporter.MetricReporter;
+import org.apache.fluss.metrics.reporter.ReporterAndSettings;
 import org.apache.fluss.metrics.reporter.ScheduledMetricReporter;
 import org.apache.fluss.utils.ExceptionUtils;
 import org.apache.fluss.utils.ExecutorUtils;
@@ -50,7 +51,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 
-import static org.apache.fluss.utils.Preconditions.checkNotNull;
+import static org.apache.fluss.metrics.CharacterFilter.NO_OP_FILTER;
 
 /* This file is based on source code of Apache Flink Project (https://flink.apache.org/), licensed by the Apache
  * Software Foundation (ASF) under the Apache License, Version 2.0. See the NOTICE file distributed with this work for
@@ -78,15 +79,18 @@ public class MetricRegistryImpl implements MetricRegistry {
     private boolean isShutdown;
 
     public MetricRegistryImpl(List<MetricReporter> reporters) {
-        this(
-                reporters,
-                Executors.newSingleThreadScheduledExecutor(
-                        new ExecutorThreadFactory("fluss-metric-reporter")));
+        this(reporters, createReporterExecutor());
     }
 
     @VisibleForTesting
     protected MetricRegistryImpl(
             List<MetricReporter> reporters, ScheduledExecutorService reporterScheduledExecutor) {
+        this(reporterScheduledExecutor, withDefaultSettings(reporters));
+    }
+
+    private MetricRegistryImpl(
+            ScheduledExecutorService reporterScheduledExecutor,
+            List<ReporterAndSettings> reporters) {
         this.terminationFuture = new CompletableFuture<>();
         this.isShutdown = false;
         this.reporters = new ArrayList<>(4);
@@ -97,13 +101,33 @@ public class MetricRegistryImpl implements MetricRegistry {
         initMetricReporters(reporters);
     }
 
-    private void initMetricReporters(Collection<MetricReporter> reporterInstances) {
+    /** Creates a registry using the initialized reporters and their settings. */
+    public static MetricRegistryImpl fromReporters(List<ReporterAndSettings> reporters) {
+        return new MetricRegistryImpl(createReporterExecutor(), reporters);
+    }
+
+    private static ScheduledExecutorService createReporterExecutor() {
+        return Executors.newSingleThreadScheduledExecutor(
+                new ExecutorThreadFactory("fluss-metric-reporter"));
+    }
+
+    private static List<ReporterAndSettings> withDefaultSettings(List<MetricReporter> reporters) {
+        List<ReporterAndSettings> result = new ArrayList<>(reporters.size());
+        for (MetricReporter reporter : reporters) {
+            result.add(
+                    new ReporterAndSettings(reporter, new ReporterScopedSettings(result.size())));
+        }
+        return result;
+    }
+
+    private void initMetricReporters(Collection<ReporterAndSettings> reporterInstances) {
         if (reporterInstances.isEmpty()) {
             // no reporters defined by default, don't report anything
             LOG.info("No metrics reporter configured, no metrics will be exposed/reported.");
             return;
         }
-        for (MetricReporter reporter : reporterInstances) {
+        for (ReporterAndSettings reporterAndSettings : reporterInstances) {
+            MetricReporter reporter = reporterAndSettings.getReporter();
             final String className = reporter.getClass().getName();
             if (reporter instanceof ScheduledMetricReporter) {
                 ScheduledMetricReporter scheduledMetricReporter =
@@ -120,9 +144,7 @@ public class MetricRegistryImpl implements MetricRegistry {
             } else {
                 LOG.info("Reporting metrics for reporter of type {}.", className);
             }
-            reporters.add(
-                    new ReporterAndSettings(
-                            reporter, new ReporterScopedSettings(reporterInstances.size())));
+            reporters.add(reporterAndSettings);
         }
     }
 
@@ -161,7 +183,7 @@ public class MetricRegistryImpl implements MetricRegistry {
                 Throwable throwable = null;
                 for (ReporterAndSettings reporterAndSettings : reporters) {
                     try {
-                        reporterAndSettings.reporter.close();
+                        reporterAndSettings.getReporter().close();
                     } catch (Throwable t) {
                         throwable = ExceptionUtils.firstOrSuppressed(t, throwable);
                     }
@@ -261,12 +283,17 @@ public class MetricRegistryImpl implements MetricRegistry {
             Metric metric,
             String metricName,
             AbstractMetricGroup group) {
+        final String logicalScope = group.getLogicalScope(NO_OP_FILTER, '.');
         for (ReporterAndSettings reporterAndSettings : reporters) {
             try {
-                if (reporterAndSettings != null) {
+                if (reporterAndSettings != null
+                        && reporterAndSettings
+                                .getSettings()
+                                .getFilter()
+                                .filter(metric, metricName, logicalScope)) {
                     FrontMetricGroup<?> front =
                             new FrontMetricGroup<>(reporterAndSettings.getSettings(), group);
-                    operation.accept(reporterAndSettings.reporter, metric, metricName, front);
+                    operation.accept(reporterAndSettings.getReporter(), metric, metricName, front);
                 }
             } catch (Exception e) {
                 LOG.warn("Error while handling metric: {}.", metricName, e);
@@ -301,21 +328,6 @@ public class MetricRegistryImpl implements MetricRegistry {
             } catch (Throwable t) {
                 LOG.warn("Error while reporting metrics", t);
             }
-        }
-    }
-
-    private static class ReporterAndSettings {
-
-        private final MetricReporter reporter;
-        private final ReporterScopedSettings settings;
-
-        private ReporterAndSettings(MetricReporter reporter, ReporterScopedSettings settings) {
-            this.reporter = checkNotNull(reporter);
-            this.settings = checkNotNull(settings);
-        }
-
-        public ReporterScopedSettings getSettings() {
-            return settings;
         }
     }
 }

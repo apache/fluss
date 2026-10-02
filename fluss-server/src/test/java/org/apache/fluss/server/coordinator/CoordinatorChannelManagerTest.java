@@ -20,8 +20,11 @@ package org.apache.fluss.server.coordinator;
 import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.rpc.RpcClient;
+import org.apache.fluss.rpc.messages.ApiVersionsResponse;
 import org.apache.fluss.rpc.messages.UpdateMetadataRequest;
 import org.apache.fluss.rpc.metrics.TestingClientMetricGroup;
+import org.apache.fluss.rpc.protocol.ApiKeys;
+import org.apache.fluss.server.metrics.group.TestingMetricGroups;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
 import org.apache.fluss.server.zk.ZooKeeperExtension;
 import org.apache.fluss.testutils.common.AllCallbackWrapper;
@@ -32,6 +35,7 @@ import org.junit.jupiter.api.extension.RegisterExtension;
 import java.time.Duration;
 import java.util.Collections;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeUpdateMetadataRequest;
@@ -54,7 +58,10 @@ class CoordinatorChannelManagerTest {
         Configuration configuration = new Configuration();
         CoordinatorChannelManager coordinatorChannelManager =
                 new CoordinatorChannelManager(
-                        RpcClient.create(configuration, TestingClientMetricGroup.newInstance()));
+                        RpcClient.create(configuration, TestingClientMetricGroup.newInstance()),
+                        () -> 0,
+                        configuration,
+                        TestingMetricGroups.COORDINATOR_METRICS);
         List<ServerNode> tabletServersNode = FLUSS_CLUSTER_EXTENSION.getTabletServerNodes();
 
         // test start up using server 0
@@ -62,11 +69,13 @@ class CoordinatorChannelManagerTest {
         coordinatorChannelManager.startup(Collections.singletonList(server0));
         // try to send message, should send
         checkSendRequest(coordinatorChannelManager, server0.id(), true);
+        checkEnqueueRequest(coordinatorChannelManager, server0.id(), true);
 
         // test remove tablet server
         coordinatorChannelManager.removeTabletServer(server0.id());
         // now, shouldn't send as we already remove the tablet server
         checkSendRequest(coordinatorChannelManager, server0.id(), false);
+        checkEnqueueRequest(coordinatorChannelManager, server0.id(), false);
 
         // test add tablet server
         // before add, shouldn't send
@@ -78,8 +87,30 @@ class CoordinatorChannelManagerTest {
         // after add the tablet server, should send
         // try to send message
         checkSendRequest(coordinatorChannelManager, server1.id(), true);
+        checkEnqueueRequest(coordinatorChannelManager, server1.id(), true);
 
         coordinatorChannelManager.close();
+    }
+
+    private void checkEnqueueRequest(
+            CoordinatorChannelManager coordinatorChannelManager,
+            int targetServerId,
+            boolean expectCanEnqueue) {
+        AtomicInteger sendFlag = new AtomicInteger(0);
+        boolean enqueued =
+                coordinatorChannelManager.enqueueRequest(
+                        targetServerId,
+                        ApiKeys.API_VERSIONS,
+                        0,
+                        ignored -> {
+                            sendFlag.set(1);
+                            return CompletableFuture.completedFuture(new ApiVersionsResponse());
+                        },
+                        (response, throwable) -> sendFlag.set(2));
+
+        assertThat(enqueued).isEqualTo(expectCanEnqueue);
+        int expectedFlag = expectCanEnqueue ? 2 : 0;
+        retry(Duration.ofMinutes(1), () -> assertThat(sendFlag.get()).isEqualTo(expectedFlag));
     }
 
     private void checkSendRequest(

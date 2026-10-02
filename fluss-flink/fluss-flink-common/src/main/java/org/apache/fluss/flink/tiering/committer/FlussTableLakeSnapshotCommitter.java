@@ -94,10 +94,29 @@ public class FlussTableLakeSnapshotCommitter implements AutoCloseable {
     public String prepareLakeSnapshot(
             long tableId, TablePath tablePath, Map<TableBucket, Long> logEndOffsets)
             throws IOException {
+        return prepareLakeSnapshot(tableId, tablePath, logEndOffsets, false);
+    }
+
+    /**
+     * Prepares a complete offset map for the readable snapshot without inheriting newer offsets.
+     */
+    private String prepareReadableSnapshotOffsets(
+            long tableId, TablePath tablePath, Map<TableBucket, Long> snapshotOffsets)
+            throws IOException {
+        return prepareLakeSnapshot(tableId, tablePath, snapshotOffsets, true);
+    }
+
+    private String prepareLakeSnapshot(
+            long tableId,
+            TablePath tablePath,
+            Map<TableBucket, Long> logEndOffsets,
+            boolean ignorePreviousOffsets)
+            throws IOException {
         PbPrepareLakeTableRespForTable prepareResp;
         try {
             PrepareLakeTableSnapshotRequest prepareLakeTableSnapshotRequest =
                     toPrepareLakeTableSnapshotRequest(tableId, tablePath, logEndOffsets);
+            prepareLakeTableSnapshotRequest.setIgnorePreviousTableOffsets(ignorePreviousOffsets);
             PrepareLakeTableSnapshotResponse prepareLakeTableSnapshotResponse =
                     coordinatorGateway
                             .prepareLakeTableSnapshot(prepareLakeTableSnapshotRequest)
@@ -159,9 +178,10 @@ public class FlussTableLakeSnapshotCommitter implements AutoCloseable {
             } else {
                 // readable snapshot is known, we will first commit a snapshot with readable bucket
                 // offset
-                // prepare a readable bucket offset file for the readable snapshot
+                // These offsets describe the readable snapshot. Do not inherit offsets from a
+                // newer tiered snapshot, including buckets absent from the readable snapshot.
                 String readableSnapshotReadableOffsetsPath =
-                        prepareLakeSnapshot(
+                        prepareReadableSnapshotOffsets(
                                 tableId, tablePath, readableSnapshot.getReadableLogEndOffsets());
 
                 // reuse tiered path when readable snapshot is the committed snapshot
@@ -169,7 +189,7 @@ public class FlussTableLakeSnapshotCommitter implements AutoCloseable {
                         readableSnapshot.getReadableSnapshotId()
                                         == lakeCommitResult.getCommittedSnapshotId()
                                 ? lakeBucketTieredOffsetsPath
-                                : prepareLakeSnapshot(
+                                : prepareReadableSnapshotOffsets(
                                         tableId,
                                         tablePath,
                                         readableSnapshot.getTieredLogEndOffsets());

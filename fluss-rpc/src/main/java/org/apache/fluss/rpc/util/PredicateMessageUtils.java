@@ -51,8 +51,6 @@ import org.apache.fluss.types.DataTypeRoot;
 import org.apache.fluss.types.DecimalType;
 import org.apache.fluss.types.RowType;
 
-import java.time.LocalDate;
-import java.time.LocalTime;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -145,9 +143,9 @@ public class PredicateMessageUtils {
                             decimalType.getScale());
                 }
             case DATE:
-                return LocalDate.ofEpochDay(pbLiteral.getBigintValue());
+                return (int) pbLiteral.getBigintValue();
             case TIME_WITHOUT_TIME_ZONE:
-                return LocalTime.ofNanoOfDay(pbLiteral.getIntValue() * 1_000_000L);
+                return pbLiteral.getIntValue();
             case TIMESTAMP_WITHOUT_TIME_ZONE:
                 return TimestampNtz.fromMillis(
                         pbLiteral.getTimestampMillisValue(),
@@ -282,10 +280,10 @@ public class PredicateMessageUtils {
                 pbLiteral.setIntValue((Integer) literal);
                 break;
             case DATE:
-                pbLiteral.setBigintValue(((LocalDate) literal).toEpochDay());
+                pbLiteral.setBigintValue(((Integer) literal).longValue());
                 break;
             case TIME_WITHOUT_TIME_ZONE:
-                pbLiteral.setIntValue((int) (((LocalTime) literal).toNanoOfDay() / 1_000_000L));
+                pbLiteral.setIntValue((Integer) literal);
                 break;
             case TIMESTAMP_WITHOUT_TIME_ZONE:
                 pbLiteral.setTimestampMillisValue(((TimestampNtz) literal).getMillisecond());

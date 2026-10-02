@@ -43,7 +43,7 @@ public class ProtobufRepeatedStringField extends ProtobufAbstractRepeated<Field.
         w.format(
                 "ProtoCodecUtils.StringHolder _%sSh = _%sStringHolder();\n",
                 ccName, ProtoGenUtil.camelCase("new", singularName));
-        w.format("_%sSh.len = ProtoCodecUtils.readVarInt(_buffer);\n", ccName);
+        w.format("_%sSh.len = ProtoCodecUtils.readBytesLen(_buffer);\n", ccName);
         w.format(
                 "_%sSh.s = ProtoCodecUtils.readString(_buffer, _buffer.readerIndex(), _%sSh.len);\n",
                 ccName, ccName);

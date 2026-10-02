@@ -21,9 +21,7 @@ import org.apache.fluss.lake.iceberg.source.FlussRowAsIcebergRecord;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.row.InternalRow;
-import org.apache.fluss.types.DataField;
 import org.apache.fluss.types.DataType;
-import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.types.RowType;
 
 import org.apache.iceberg.PartitionField;
@@ -34,12 +32,10 @@ import org.apache.iceberg.Table;
 import org.apache.iceberg.catalog.TableIdentifier;
 import org.apache.iceberg.expressions.Expression;
 import org.apache.iceberg.expressions.Expressions;
-import org.apache.iceberg.types.Type;
 import org.apache.iceberg.types.Types;
 
 import javax.annotation.Nullable;
 
-import java.util.ArrayList;
 import java.util.List;
 
 import static org.apache.fluss.metadata.ResolvedPartitionSpec.PARTITION_SPEC_SEPARATOR;
@@ -53,10 +49,18 @@ public class IcebergConversions {
         return TableIdentifier.of(tablePath.getDatabaseName(), tablePath.getTableName());
     }
 
+    @Nullable
     public static PartitionKey toPartition(
             Table table, @Nullable String partitionName, int bucket) {
         PartitionSpec partitionSpec = table.spec();
         Schema schema = table.schema();
+        // FIP-27: an unpartitioned spec (clean bucket-unaware table) has no partition fields.
+        // Returning null lets the writer take Iceberg's canonical unpartitioned path
+        // (data/file.parquet); a non-null empty PartitionKey would route through the partitioned
+        // path and can produce a malformed data//file.parquet location.
+        if (partitionSpec.isUnpartitioned()) {
+            return null;
+        }
         PartitionKey partitionKey = new PartitionKey(partitionSpec, schema);
         int pos = 0;
         if (partitionName != null) {
@@ -65,7 +69,14 @@ public class IcebergConversions {
                 partitionKey.set(pos++, partition);
             }
         }
-        partitionKey.set(pos, bucket);
+        // Set the bucket value only when the trailing partition field is the Fluss bucket field
+        // (legacy identity(__bucket) or a bucket(bucketKey) transform). Bucket-unaware partitioned
+        // tables (a trailing identity partition column) have no such field.
+        List<PartitionField> fields = partitionSpec.fields();
+        PartitionField lastField = fields.get(fields.size() - 1);
+        if (IcebergPartitionSpecUtils.isFlussBucketField(schema, lastField)) {
+            partitionKey.set(pos, bucket);
+        }
         return partitionKey;
     }
 
@@ -89,59 +100,20 @@ public class IcebergConversions {
                                         partition));
             }
         }
-        expression = Expressions.and(expression, Expressions.equal(BUCKET_COLUMN_NAME, bucket));
+        // FIP-27: legacy tables carry the __bucket column and are filtered per bucket. Clean
+        // tables have no __bucket column, so no bucket-level filter is applied.
+        if (table.schema().findField(BUCKET_COLUMN_NAME) != null) {
+            expression = Expressions.and(expression, Expressions.equal(BUCKET_COLUMN_NAME, bucket));
+        }
         return expression;
     }
 
-    public static Object toIcebergLiteral(Types.NestedField field, Object flussLiteral) {
+    public static Object toIcebergLiteral(
+            Types.NestedField icebergField, DataType flussFieldType, Object flussLiteral) {
         InternalRow flussRow = GenericRow.of(flussLiteral);
         FlussRowAsIcebergRecord flussRowAsIcebergRecord =
                 new FlussRowAsIcebergRecord(
-                        Types.StructType.of(field),
-                        RowType.of(convertIcebergTypeToFlussType(field.type())),
-                        flussRow);
-        return flussRowAsIcebergRecord.get(0, field.type().typeId().javaClass());
-    }
-
-    /** Converts Iceberg data types to Fluss data types. */
-    private static DataType convertIcebergTypeToFlussType(Type icebergType) {
-        if (icebergType instanceof Types.BooleanType) {
-            return DataTypes.BOOLEAN();
-        } else if (icebergType instanceof Types.IntegerType) {
-            return DataTypes.INT();
-        } else if (icebergType instanceof Types.LongType) {
-            return DataTypes.BIGINT();
-        } else if (icebergType instanceof Types.DoubleType) {
-            return DataTypes.DOUBLE();
-        } else if (icebergType instanceof Types.TimeType) {
-            return DataTypes.TIME();
-        } else if (icebergType instanceof Types.TimestampType) {
-            Types.TimestampType timestampType = (Types.TimestampType) icebergType;
-            if (timestampType.shouldAdjustToUTC()) {
-                return DataTypes.TIMESTAMP_LTZ();
-            } else {
-                return DataTypes.TIMESTAMP();
-            }
-        } else if (icebergType instanceof Types.StringType) {
-            return DataTypes.STRING();
-        } else if (icebergType instanceof Types.DecimalType) {
-            Types.DecimalType decimalType = (Types.DecimalType) icebergType;
-            return DataTypes.DECIMAL(decimalType.precision(), decimalType.scale());
-        } else if (icebergType instanceof Types.ListType) {
-            Types.ListType listType = (Types.ListType) icebergType;
-            return DataTypes.ARRAY(convertIcebergTypeToFlussType(listType.elementType()));
-        } else if (icebergType.isStructType()) {
-            Types.StructType structType = icebergType.asStructType();
-            List<DataField> fields = new ArrayList<>();
-            for (Types.NestedField nestedField : structType.fields()) {
-                DataType fieldType = convertIcebergTypeToFlussType(nestedField.type());
-                fields.add(new DataField(nestedField.name(), fieldType));
-            }
-            return DataTypes.ROW(fields.toArray(new DataField[0]));
-        }
-
-        throw new UnsupportedOperationException(
-                "Unsupported data type conversion for Iceberg type: "
-                        + icebergType.getClass().getName());
+                        Types.StructType.of(icebergField), RowType.of(flussFieldType), flussRow);
+        return flussRowAsIcebergRecord.get(0, icebergField.type().typeId().javaClass());
     }
 }
