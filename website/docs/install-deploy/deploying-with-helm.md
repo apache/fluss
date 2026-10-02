@@ -121,8 +121,10 @@ helm uninstall fluss
 # Uninstall ZooKeeper
 helm uninstall zk
 
-# Delete PVCs
-kubectl delete pvc -l app.kubernetes.io/name=fluss
+# Delete PVCs belonging to this release. Scope by instance: the
+# app.kubernetes.io/name label is shared by every Fluss release in the
+# namespace, and carries nameOverride when one is set.
+kubectl delete pvc -l app.kubernetes.io/instance=fluss
 
 # Stop Minikube
 minikube stop
@@ -165,6 +167,7 @@ The following table lists the configurable parameters of the Fluss chart, and th
 |-----------|-------------|---------|
 | `nameOverride` | Override the name of the chart | `""` |
 | `fullnameOverride` | Override the full name of the resources | `""` |
+| `uniqueResourceNames` | Give every resource a name unique to the release, and scope the ZooKeeper root path to the release too, so that several Fluss clusters can share a namespace. See [Running several Fluss clusters in one namespace](#running-several-fluss-clusters-in-one-namespace). | `false` |
 
 ### Image Parameters
 
@@ -377,7 +380,7 @@ The same pattern works with Sealed Secrets, HashiCorp Vault Agent Injector (prod
 |-----------|-------------|---------|
 | `configurationOverrides.default.bucket.number` | Default number of buckets for tables | `3` |
 | `configurationOverrides.default.replication.factor` | Default replication factor | `3` |
-| `configurationOverrides.zookeeper.path.root` | ZooKeeper root path for Fluss | `/fluss` |
+| `configurationOverrides.zookeeper.path.root` | ZooKeeper root path for Fluss. Becomes `/fluss-<release>` when `uniqueResourceNames` is enabled | `/fluss` |
 | `configurationOverrides.zookeeper.address` | ZooKeeper ensemble address | `zk-zookeeper.{{ .Release.Namespace }}.svc.cluster.local:2181` |
 | `configurationOverrides.remote.data.dir` | Remote data directory for snapshots | `/tmp/fluss/remote-data` |
 | `configurationOverrides.data.dir` | Local data directory | `/tmp/fluss/data` |
@@ -561,6 +564,48 @@ configurationOverrides:
   zookeeper.address: "zk1.example.com:2181,zk2.example.com:2181,zk3.example.com:2181"
   zookeeper.path.root: "/my-fluss-cluster"
 ```
+
+### Running several Fluss clusters in one namespace
+
+By default the chart gives each resource a fixed name (`coordinator-server`,
+`tablet-server`, `fluss-conf-file`, and the matching headless Services — the
+metrics Services already carry the release name) and puts every cluster on the
+ZooKeeper root path `/fluss`. Two releases in the
+same namespace would therefore collide on both.
+
+Set `uniqueResourceNames` to give every resource a name unique to the release
+and move the ZooKeeper root path to `/fluss-<release>`:
+
+```bash
+helm install orders ./helm --set uniqueResourceNames=true
+helm install payments ./helm --set uniqueResourceNames=true
+```
+
+This gives you `orders-fluss-coordinator-server` alongside
+`payments-fluss-coordinator-server`, on ZooKeeper roots `/fluss-orders` and
+`/fluss-payments`. It is useful when namespace creation is restricted and one
+team needs more than one cluster.
+
+Two things still need attention:
+
+- `configurationOverrides.remote.data.dir` holds kv snapshots and tiered log
+  segments. Whenever it points at a real remote filesystem, such as
+  `s3://bucket/fluss` or an HDFS path, both releases write to the same place,
+  so give each one its own path. The chart default,
+  `/tmp/fluss/remote-data`, is a path inside each pod's own container
+  filesystem and is not shared.
+- The release name becomes part of every generated name through
+  `fluss.fullname`, which is the release name plus `-fluss`, or the release
+  name on its own when it already contains `fluss`. That prefix has to stay
+  within 40 characters, so a release name without `fluss` in it is limited to
+  34. Set `fullnameOverride` for anything longer. The chart fails the render
+  with an explicit message when the prefix is too long. That check covers the
+  resources named after `fluss.fullname`; the metrics Services are named from
+  the release name alone and are not covered by it.
+
+To enable the option on a cluster that already exists, read
+[Enabling unique resource names on an existing release](#enabling-unique-resource-names-on-an-existing-release)
+first.
 
 ### Network Configuration
 
@@ -836,6 +881,183 @@ helm upgrade fluss ./helm
 # Upgrade with new configuration
 helm upgrade fluss ./helm -f values-new.yaml
 ```
+
+### Enabling unique resource names on an existing release
+
+Turning on `uniqueResourceNames` renames the StatefulSets, and a StatefulSet
+cannot be renamed in place. Helm creates the new one and deletes the old one,
+so the pods are replaced rather than rolled and the cluster restarts.
+
+Pin the old ZooKeeper root path in the same upgrade so the new pods inherit the
+existing cluster metadata:
+
+```yaml
+uniqueResourceNames: true
+configurationOverrides:
+  zookeeper.path.root: /fluss
+```
+
+Without the pin they start against an empty `/fluss-<release>` and the old
+cluster's metadata is left behind.
+
+The pin is permanent: this release keeps `/fluss` for good. That is safe to
+leave alongside others, because the scoped root is a sibling rather than a
+child — Fluss uses the root as a ZooKeeper namespace, so a release nested under
+this one would sit among its data.
+
+The claims created from `volumeClaimTemplates` are named
+`data-<statefulset>-<ordinal>`, so renaming the StatefulSets renames every
+claim. Left alone, the new pods start on fresh empty volumes and the old claims
+are orphaned.
+
+Read the new StatefulSet names off a render rather than assuming a prefix:
+`fluss.fullname` collapses to the release name on its own when that already
+contains `fluss`, and `fullnameOverride` replaces it outright.
+
+```bash
+helm template <release> ./helm --set uniqueResourceNames=true -f <your-values> \
+  | awk '/^kind: StatefulSet/{f=1} f&&/^  name:/{print $2; f=0}'
+```
+
+A release called `prod` prints `prod-fluss-coordinator-server` and
+`prod-fluss-tablet-server`, so its claims are `data-prod-fluss-tablet-server-0`
+and so on. A release called `fluss` prints `fluss-tablet-server`, and its claim
+is `data-fluss-tablet-server-0` — not `data-fluss-fluss-tablet-server-0`.
+
+The volumes can be carried over. A StatefulSet creates a claim only when one of
+that name is missing, so **the job is to make sure each new claim binds to the
+volume its predecessor used.** You do that from the volume: a PersistentVolume
+whose `claimRef` names a claim is
+[reserved](https://kubernetes.io/docs/concepts/storage/persistent-volumes/#reserving-a-persistentvolume)
+for it, even before that claim exists. Reserve each volume for the claim the new
+StatefulSet is going to create, and the rest happens on its own.
+
+:::warning
+The cluster is down for the whole procedure, not just for the upgrade at the
+end. Any `helm upgrade` that enables this option replaces the pods rather than
+rolling them, but here the outage also covers the manual steps in between, so
+plan a maintenance window. If a GitOps controller syncs this release, suspend
+it first, or it will recreate the StatefulSets you delete in step 2.
+:::
+
+Rehearse this on a non-production cluster first. Binding behaviour varies by
+storage class: reserving a volume under `WaitForFirstConsumer` — the default on
+EKS and GKE — takes a different path through the scheduler than immediate
+binding does.
+
+Do not change `storage.size` in this upgrade. Each new claim has to fit the
+volume you reserve for it, and one that asks for more will not bind at all: the
+pod never starts and the data is never picked up.
+
+Back up or snapshot the volumes before you start. Then:
+
+1. Write down which volume backs which claim. You need this mapping in step 4,
+   and it is gone once the claims are deleted.
+
+   ```bash
+   kubectl get pvc -l app.kubernetes.io/instance=<release> \
+     -o custom-columns=CLAIM:.metadata.name,VOLUME:.spec.volumeName
+   ```
+
+   Select on `instance`, not on `app.kubernetes.io/name`: the `name` label
+   changes with `nameOverride`, and every release in the namespace shares it.
+
+   ```
+   CLAIM                      VOLUME
+   data-coordinator-server-0  pvc-8f3a1c02-...
+   data-tablet-server-0       pvc-b71e4d55-...
+   data-tablet-server-1       pvc-2c9f0ab8-...
+   data-tablet-server-2       pvc-5d84e719-...
+   ```
+
+   Then make each volume survive its claim being deleted:
+
+   ```bash
+   kubectl patch pv <volume> -p '{"spec":{"persistentVolumeReclaimPolicy":"Retain"}}'
+   ```
+
+2. Delete the old StatefulSets, then wait for their pods to go. Nothing
+   recreates them: a StatefulSet is a top-level object, and Helm only acts on
+   the release when you run a command against it. The release is simply
+   without them until step 5.
+
+   ```bash
+   kubectl delete statefulset coordinator-server tablet-server
+   kubectl wait --for=delete pod -l app.kubernetes.io/instance=<release> --timeout=5m
+   ```
+
+   Do not skip the wait: a claim cannot be deleted while a pod still refers to
+   it, and one left stuck in `Terminating` fails the upgrade at step 5.
+
+3. Delete the old claims. Each volume becomes `Released`.
+
+   ```bash
+   kubectl delete pvc data-coordinator-server-0 \
+     data-tablet-server-0 data-tablet-server-1 data-tablet-server-2
+   ```
+
+4. Point each volume at the claim the new StatefulSet will create, using the
+   names from the render above and keeping the ordinal the same. The volume
+   that backed `data-tablet-server-1` is reserved for the new tablet claim
+   ending `-1`, and so on for every claim including the coordinator's. Ordinals
+   matter because a tablet server takes its id from its pod ordinal: cross two
+   of them over and a server boots on another server's data, with nothing to
+   warn you.
+
+   The claim need not exist yet. What matters is that the reference carries no
+   `uid` — a stale one leaves the volume `Released` rather than reserved. So
+   replace the whole `claimRef`, or null the `uid` explicitly; setting only
+   `name` keeps it.
+
+   ```bash
+   kubectl patch pv <volume> --type json -p '[{
+     "op": "replace",
+     "path": "/spec/claimRef",
+     "value": {
+       "namespace": "<namespace>",
+       "name": "data-<new-statefulset>-0"
+     }
+   }]'
+   ```
+
+   Check the result before going on. Every volume should read `Available`
+   with its new claim name against it:
+
+   ```bash
+   kubectl get pv -o custom-columns=NAME:.metadata.name,PHASE:.status.phase,CLAIM:.spec.claimRef.name
+   ```
+
+5. Run the upgrade, repeating every `-f` and `--set` the release already had
+   alongside the two new settings. Do not reach for `--reuse-values`: it drops
+   values set on the command line, including the root path pin. The new
+   StatefulSets create their claims, each binds to the volume reserved for it,
+   and the pods come up on the original disks.
+
+If it goes wrong, the way back is the way in. The volumes are on `Retain`, so
+patch each `claimRef` to the old claim name instead and upgrade again without
+`uniqueResourceNames`.
+
+Restore each volume's original reclaim policy afterwards if it was not
+`Retain`.
+
+This needs no upkeep afterwards. The claims are created and labelled by the
+StatefulSet controller, exactly as they would have been on a fresh install, so
+you are not left owning extra objects. Later upgrades do not revisit them:
+`volumeClaimTemplates` is immutable once a StatefulSet exists, the controller
+only creates claims that are missing, and nothing deletes them — the claims are
+not part of the Helm release, and the StatefulSet's claim retention policy
+defaults to keeping them on both deletion and scale-down. Each `claimRef`
+becomes an ordinary binding once its claim appears and stays that way.
+
+With `storage.enabled: false`, the default, the pods use `emptyDir` and there
+is nothing to preserve: run the upgrade and let the pods come back empty.
+
+Delete the old StatefulSets first even then, and wait for their pods. Helm
+creates the new resources before deleting the old ones, so the two generations
+overlap and collide on their ZooKeeper identities. The server that arrives
+second retries for 60 seconds and then crash-loops until a later attempt wins.
+An ungraceful exit holds the old identity until its session expires, which
+`zookeeper.client.session-timeout` also defaults to 60 seconds.
 
 ### Rolling Updates
 
