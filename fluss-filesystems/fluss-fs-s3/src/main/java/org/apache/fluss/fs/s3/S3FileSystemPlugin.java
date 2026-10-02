@@ -177,10 +177,6 @@ public class S3FileSystemPlugin implements FileSystemPlugin {
         boolean hasRoleArn = hadoopConfig.get(ROLE_ARN_KEY) != null;
 
         if (hasCredentialProvider) {
-            if (hasRoleArn) {
-                throw new IllegalArgumentException(
-                        "AssumeRole and a custom AWS credentials provider cannot be configured together.");
-            }
             LOG.info(
                     "Using configured AWS credential provider(s) for server-side S3 access: {}",
                     hadoopConfig.get(PROVIDER_CONFIG_NAME));

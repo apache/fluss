@@ -63,7 +63,7 @@ class MessageCodecTest {
     private ChannelHandlerContext ctx;
 
     @BeforeEach
-    void beforeEach() {
+    void beforeEach() throws Exception {
         this.responseReceiver = new ResponseReceiver();
         this.clientHandler = new NettyClientHandler(responseReceiver);
         this.requestChannel = new RequestChannel(100);
@@ -77,6 +77,7 @@ class MessageCodecTest {
                         RequestsMetrics.createCoordinatorServerRequestMetrics(metricGroup),
                         new PlainTextAuthenticationPlugin.PlainTextServerAuthenticator());
         this.ctx = mockChannelHandlerContext();
+        serverHandler.channelActive(ctx);
     }
 
     @Test

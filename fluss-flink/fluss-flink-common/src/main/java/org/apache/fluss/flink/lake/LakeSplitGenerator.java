@@ -35,7 +35,6 @@ import org.apache.fluss.utils.ExceptionUtils;
 import javax.annotation.Nullable;
 
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -209,8 +208,9 @@ public class LakeSplitGenerator {
                             partitionName,
                             partitionBucketCount,
                             isLogTable,
-                            // pass empty map since we won't read lake splits
-                            Collections.emptyMap(),
+                            // Lake splits may be pruned while the partition still has tiered
+                            // offsets.
+                            tableBucketSnapshotLogOffset,
                             bucketEndOffset));
         }
         return splits;

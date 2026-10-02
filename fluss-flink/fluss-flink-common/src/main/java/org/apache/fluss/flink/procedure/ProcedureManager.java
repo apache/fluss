@@ -84,6 +84,7 @@ public class ProcedureManager {
         REBALANCE("sys.rebalance", RebalanceProcedure.class),
         CANCEL_REBALANCE("sys.cancel_rebalance", CancelRebalanceProcedure.class),
         LIST_REBALANCE_PROGRESS("sys.list_rebalance", ListRebalanceProcessProcedure.class),
+        LIST_PARTITION_INFOS("sys.list_partition_infos", ListPartitionInfosProcedure.class),
         DROP_KV_SNAPSHOT_LEASE("sys.drop_kv_snapshot_lease", DropKvSnapshotLeaseProcedure.class);
 
         private final String path;

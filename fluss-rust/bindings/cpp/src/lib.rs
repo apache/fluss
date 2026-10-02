@@ -16,6 +16,8 @@
 // under the License.
 
 mod types;
+mod write_callback;
+use write_callback::ensure_callback_executor;
 
 use std::collections::HashMap;
 use std::str::FromStr;
@@ -42,6 +44,15 @@ static RUNTIME: LazyLock<tokio::runtime::Runtime> = LazyLock::new(|| {
 
 #[cxx::bridge(namespace = "fluss::ffi")]
 mod ffi {
+    unsafe extern "C++" {
+        include!("write_callback.hpp");
+
+        type WriteCallback;
+
+        #[cxx_name = "Complete"]
+        fn complete(self: Pin<&mut WriteCallback>, error_code: i32, error_message: &str);
+    }
+
     struct HashMapValue {
         key: String,
         value: String,
@@ -70,6 +81,8 @@ mod ffi {
         writer_buffer_memory_size: usize,
         writer_buffer_wait_timeout_ms: u64,
         writer_kv_backpressure_max_throttle_ms: u64,
+        writer_retry_backoff_ms: u64,
+        writer_retry_max_backoff_ms: u64,
         connect_timeout_ms: u64,
         security_protocol: String,
         security_sasl_mechanism: String,
@@ -519,6 +532,8 @@ mod ffi {
         unsafe fn get_arrow_schema(self: &Table, out_ptr: usize) -> FfiResult;
         fn get_table_path(self: &Table) -> FfiTablePath;
         fn has_primary_key(self: &Table) -> bool;
+        fn writer_buffer_wait_timeout_ms(self: &Table) -> u64;
+        fn ensure_callback_executor() -> FfiResult;
         fn create_upsert_writer(self: &Table, column_indices: Vec<usize>) -> FfiPtrResult;
         fn new_lookuper(self: &Table) -> FfiPtrResult;
         fn new_prefix_lookuper(self: &Table, lookup_column_names: Vec<String>) -> FfiPtrResult;
@@ -655,24 +670,33 @@ mod ffi {
 
         // AppendWriter
         unsafe fn delete_append_writer(writer: *mut AppendWriter);
-        fn append(self: &mut AppendWriter, row: &GenericRowInner) -> FfiPtrResult;
+        // budget_ms bounds the buffer-memory wait: negative uses the writer's
+        // configured buffer wait timeout, >= 0 caps the wait at that many ms
+        // (0 = non-blocking), letting callers keep a submit within a fixed budget.
+        fn append(self: &mut AppendWriter, row: &GenericRowInner, budget_ms: i64) -> FfiPtrResult;
         // Partition (if partitioned) comes from the first row, so all rows must
         // share one partition; rows are distributed across buckets by key.
         fn append_arrow_batch(
             self: &mut AppendWriter,
             array_ptr: usize,
             schema_ptr: usize,
+            budget_ms: i64,
         ) -> FfiPtrResult;
         fn flush(self: &mut AppendWriter) -> FfiResult;
 
         // WriteResult
         unsafe fn delete_write_result(wr: *mut WriteResult);
         fn wait(self: &mut WriteResult) -> FfiResult;
+        fn notify(self: &mut WriteResult, callback: UniquePtr<WriteCallback>) -> FfiResult;
 
         // UpsertWriter
         unsafe fn delete_upsert_writer(writer: *mut UpsertWriter);
-        fn upsert(self: &mut UpsertWriter, row: &GenericRowInner) -> FfiPtrResult;
-        fn delete_row(self: &mut UpsertWriter, row: &GenericRowInner) -> FfiPtrResult;
+        fn upsert(self: &mut UpsertWriter, row: &GenericRowInner, budget_ms: i64) -> FfiPtrResult;
+        fn delete_row(
+            self: &mut UpsertWriter,
+            row: &GenericRowInner,
+            budget_ms: i64,
+        ) -> FfiPtrResult;
         fn upsert_flush(self: &mut UpsertWriter) -> FfiResult;
 
         // Lookuper
@@ -1148,6 +1172,8 @@ fn new_connection(config: &ffi::FfiConfig) -> ffi::FfiPtrResult {
         writer_buffer_memory_size: config.writer_buffer_memory_size,
         writer_buffer_wait_timeout_ms: config.writer_buffer_wait_timeout_ms,
         writer_kv_backpressure_max_throttle_ms: config.writer_kv_backpressure_max_throttle_ms,
+        writer_retry_backoff_ms: config.writer_retry_backoff_ms,
+        writer_retry_max_backoff_ms: config.writer_retry_max_backoff_ms,
         connect_timeout_ms: config.connect_timeout_ms,
         security_protocol: config.security_protocol.to_string(),
         security_sasl_mechanism: config.security_sasl_mechanism.to_string(),
@@ -2061,6 +2087,12 @@ impl Table {
         self.has_pk
     }
 
+    /// The connection's configured write-buffer wait timeout (client.writer.buffer.wait-timeout),
+    /// shared by callback admission and buffer waits. UINT64_MAX means unbounded.
+    fn writer_buffer_wait_timeout_ms(&self) -> u64 {
+        self.connection.config().writer_buffer_wait_timeout_ms
+    }
+
     fn create_upsert_writer(&self, column_indices: Vec<usize>) -> ffi::FfiPtrResult {
         let _enter = RUNTIME.enter();
 
@@ -2152,15 +2184,29 @@ unsafe fn delete_append_writer(writer: *mut AppendWriter) {
     }
 }
 
+/// Convert a C++ submit budget (milliseconds) into an optional buffer-wait deadline.
+/// Negative means "no caller budget": fall back to the writer's configured buffer
+/// wait timeout. `>= 0` caps the wait (0 makes it non-blocking / fail fast).
+fn budget_deadline(budget_ms: i64) -> Option<std::time::Instant> {
+    if budget_ms < 0 {
+        None
+    } else {
+        Some(std::time::Instant::now() + std::time::Duration::from_millis(budget_ms as u64))
+    }
+}
+
 impl AppendWriter {
-    fn append(&mut self, row: &GenericRowInner) -> ffi::FfiPtrResult {
+    fn append(&mut self, row: &GenericRowInner, budget_ms: i64) -> ffi::FfiPtrResult {
         let schema = self.table_info.get_schema();
-        let generic_row = match types::resolve_row_types(&row.row, Some(schema)) {
+        let generic_row = match types::resolve_row_types(&row.row, Some(schema), 0) {
             Ok(r) => r,
             Err(e) => return client_err_ptr(e.to_string()),
         };
 
-        let result_future = match self.inner.append(&generic_row) {
+        let result_future = match self
+            .inner
+            .append_with_deadline(generic_row.as_ref(), budget_deadline(budget_ms))
+        {
             Ok(f) => f,
             Err(e) => return err_ptr_from_core(&e),
         };
@@ -2171,7 +2217,12 @@ impl AppendWriter {
         ok_ptr(ptr as usize)
     }
 
-    fn append_arrow_batch(&mut self, array_ptr: usize, schema_ptr: usize) -> ffi::FfiPtrResult {
+    fn append_arrow_batch(
+        &mut self,
+        array_ptr: usize,
+        schema_ptr: usize,
+        budget_ms: i64,
+    ) -> ffi::FfiPtrResult {
         // Safety: C++ allocates these via `new ArrowArray/ArrowSchema` after a
         // successful `ExportRecordBatch`, so both pointers are valid heap
         // allocations that we take ownership of here.
@@ -2190,7 +2241,10 @@ impl AppendWriter {
         let struct_array = arrow::array::StructArray::from(array_data);
         let batch = arrow::record_batch::RecordBatch::from(struct_array);
 
-        let result_future = match self.inner.append_arrow_batch(batch) {
+        let result_future = match self
+            .inner
+            .append_arrow_batch_with_deadline(batch, budget_deadline(budget_ms))
+        {
             Ok(f) => f,
             Err(e) => return err_ptr_from_core(&e),
         };
@@ -2243,25 +2297,20 @@ unsafe fn delete_upsert_writer(writer: *mut UpsertWriter) {
 }
 
 impl UpsertWriter {
-    /// Pad row with Null to full schema width.
-    /// This allows callers to only set the fields they care about.
-    fn pad_row<'a>(&self, mut row: fcore::row::GenericRow<'a>) -> fcore::row::GenericRow<'a> {
-        let num_columns = self.table_info.get_schema().columns().len();
-        if row.values.len() < num_columns {
-            row.values.resize(num_columns, fcore::row::Datum::Null);
-        }
-        row
-    }
-
-    fn upsert(&mut self, row: &GenericRowInner) -> ffi::FfiPtrResult {
+    fn upsert(&mut self, row: &GenericRowInner, budget_ms: i64) -> ffi::FfiPtrResult {
         let schema = self.table_info.get_schema();
-        let generic_row = match types::resolve_row_types(&row.row, Some(schema)) {
-            Ok(r) => r,
-            Err(e) => return client_err_ptr(e.to_string()),
-        };
-        let generic_row = self.pad_row(generic_row);
+        // Resolve types and pad to full schema width, so callers may set only
+        // the fields they care about.
+        let generic_row =
+            match types::resolve_row_types(&row.row, Some(schema), schema.columns().len()) {
+                Ok(r) => r,
+                Err(e) => return client_err_ptr(e.to_string()),
+            };
 
-        let result_future = match self.inner.upsert(&generic_row) {
+        let result_future = match self
+            .inner
+            .upsert_with_deadline(generic_row.as_ref(), budget_deadline(budget_ms))
+        {
             Ok(f) => f,
             Err(e) => return err_ptr_from_core(&e),
         };
@@ -2272,15 +2321,20 @@ impl UpsertWriter {
         ok_ptr(ptr as usize)
     }
 
-    fn delete_row(&mut self, row: &GenericRowInner) -> ffi::FfiPtrResult {
+    fn delete_row(&mut self, row: &GenericRowInner, budget_ms: i64) -> ffi::FfiPtrResult {
         let schema = self.table_info.get_schema();
-        let generic_row = match types::resolve_row_types(&row.row, Some(schema)) {
-            Ok(r) => r,
-            Err(e) => return client_err_ptr(e.to_string()),
-        };
-        let generic_row = self.pad_row(generic_row);
+        // Resolve types and pad to full schema width, so callers may set only
+        // the fields they care about.
+        let generic_row =
+            match types::resolve_row_types(&row.row, Some(schema), schema.columns().len()) {
+                Ok(r) => r,
+                Err(e) => return client_err_ptr(e.to_string()),
+            };
 
-        let result_future = match self.inner.delete(&generic_row) {
+        let result_future = match self
+            .inner
+            .delete_with_deadline(generic_row.as_ref(), budget_deadline(budget_ms))
+        {
             Ok(f) => f,
             Err(e) => return err_ptr_from_core(&e),
         };
@@ -2311,35 +2365,24 @@ unsafe fn delete_lookuper(lookuper: *mut Lookuper) {
 }
 
 impl Lookuper {
-    /// Build a dense PK-only row from a (possibly sparse) input row.
-    /// The user may set PK values at their full schema positions (e.g. [0, 2])
-    /// via name-based Set(). We compact them into [0, 1, …] to match
-    /// the lookup_row_type the core KeyEncoder expects.
-    fn dense_pk_row<'a>(&self, mut row: fcore::row::GenericRow<'a>) -> fcore::row::GenericRow<'a> {
-        let pk_indices = self.table_info.get_schema().primary_key_indexes();
-        let mut dense = fcore::row::GenericRow::new(pk_indices.len());
-        for (dense_idx, &schema_idx) in pk_indices.iter().enumerate() {
-            if schema_idx < row.values.len() {
-                dense.values[dense_idx] =
-                    std::mem::replace(&mut row.values[schema_idx], fcore::row::Datum::Null);
-            }
-        }
-        dense
-    }
-
     fn lookup(&mut self, pk_row: &GenericRowInner) -> Box<LookupResultInner> {
         let schema = self.table_info.get_schema();
-        let generic_row = match types::resolve_row_types(&pk_row.row, Some(schema)) {
-            Ok(r) => self.dense_pk_row(r),
-            Err(e) => {
-                return Box::new(LookupResultInner::from_error(
-                    CLIENT_ERROR_CODE,
-                    e.to_string(),
-                ));
-            }
-        };
+        // Compact PK values (set at their full schema positions, e.g. [0, 2])
+        // into the dense PK-only row the core KeyEncoder expects. Skips the
+        // rebuild when the row is already dense and needs no conversion.
+        let pk_indices = schema.primary_key_indexes();
+        let generic_row =
+            match types::resolve_dense_row_types(&pk_row.row, Some(schema), &pk_indices) {
+                Ok(r) => r,
+                Err(e) => {
+                    return Box::new(LookupResultInner::from_error(
+                        CLIENT_ERROR_CODE,
+                        e.to_string(),
+                    ));
+                }
+            };
 
-        let lookup_result = match RUNTIME.block_on(self.inner.lookup(&generic_row)) {
+        let lookup_result = match RUNTIME.block_on(self.inner.lookup(generic_row.as_ref())) {
             Ok(r) => r,
             Err(e) => {
                 let ffi_err = err_from_core_error(&e);
@@ -2391,23 +2434,18 @@ unsafe fn delete_prefix_lookuper(lookuper: *mut PrefixLookuper) {
 }
 
 impl PrefixLookuper {
-    /// Compact a sparse input row (prefix columns set at their schema positions)
-    /// into the dense, lookup-column-ordered row the core prefix encoder expects.
-    fn dense_prefix_row<'a>(&self, mut row: GenericRow<'a>) -> GenericRow<'a> {
-        let mut dense = GenericRow::new(self.lookup_column_indices.len());
-        for (dense_idx, &schema_idx) in self.lookup_column_indices.iter().enumerate() {
-            if schema_idx < row.values.len() {
-                dense.values[dense_idx] =
-                    std::mem::replace(&mut row.values[schema_idx], Datum::Null);
-            }
-        }
-        dense
-    }
-
     fn prefix_lookup(&mut self, prefix_row: &GenericRowInner) -> Box<PrefixLookupResultInner> {
         let schema = self.table_info.get_schema();
-        let generic_row = match types::resolve_row_types(&prefix_row.row, Some(schema)) {
-            Ok(r) => self.dense_prefix_row(r),
+        // Compact prefix values (set at their full schema positions) into the
+        // dense, lookup-column-ordered row the core prefix encoder expects.
+        // Skips the rebuild when the row is already dense and needs no
+        // conversion.
+        let generic_row = match types::resolve_dense_row_types(
+            &prefix_row.row,
+            Some(schema),
+            &self.lookup_column_indices,
+        ) {
+            Ok(r) => r,
             Err(e) => {
                 return Box::new(PrefixLookupResultInner::from_error(
                     CLIENT_ERROR_CODE,
@@ -2416,7 +2454,7 @@ impl PrefixLookuper {
             }
         };
 
-        let lookup_result = match RUNTIME.block_on(self.inner.lookup(&generic_row)) {
+        let lookup_result = match RUNTIME.block_on(self.inner.lookup(generic_row.as_ref())) {
             Ok(r) => r,
             Err(e) => {
                 let ffi_err = err_from_core_error(&e);

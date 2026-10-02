@@ -8,7 +8,7 @@ sidebar_position: 3
 ## Introduction
 
 [Lance](https://lancedb.github.io/lance/) is a modern table format optimized for machine learning and AI applications. 
-To integrate Fluss with Lance, you must enable lakehouse storage and configure Lance as the lakehouse storage. For more details, see [Deploying Streaming Lakehouse](../../install-deploy/deploying-streaming-lakehouse.md).
+To integrate Fluss with Lance, you must enable lakehouse storage and configure Lance as the lakehouse storage. For more details, see [Deploying Lakestream](../../install-deploy/deploying-streaming-lakehouse.md).
 
 ## Dependencies
 
@@ -69,7 +69,7 @@ CREATE TABLE fluss_order_with_lake (
 ```
 
 ### Start Tiering Service to Lance
-Then, you must start the datalake tiering service to tier Fluss's data to Lance. For guidance, you can refer to [Deploying Streaming Lakehouse](../../install-deploy/deploying-streaming-lakehouse.md). Although the example uses Paimon, the process is also applicable to Lance.
+Then, you must start the datalake tiering service to tier Fluss's data to Lance. For guidance, you can refer to [Deploying Lakestream](../../install-deploy/deploying-streaming-lakehouse.md). Although the example uses Paimon, the process is also applicable to Lance.
 
 For required JARs, you should follow this guidance:
 - Put the Fluss Flink connector JAR into `${FLINK_HOME}/lib`; pick the connector matching your Flink version (see [Dependencies](../../engine-flink/getting-started.md#dependencies)). For Flink 1.20, use [fluss-flink-1.20-$FLUSS_VERSION$.jar]($FLUSS_MAVEN_REPO_URL$/org/apache/fluss/fluss-flink-1.20/$FLUSS_VERSION$/fluss-flink-1.20-$FLUSS_VERSION$.jar).

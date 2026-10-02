@@ -537,10 +537,24 @@ impl SchemaBuilder {
         primary_key: Option<&PrimaryKey>,
     ) -> Result<Vec<Column>> {
         let names: Vec<_> = columns.iter().map(|c| &c.name).collect();
+        if names.iter().any(|name| name.trim().is_empty()) {
+            return Err(Error::invalid_table(
+                "Field names must contain at least one non-whitespace character.",
+            ));
+        }
         if let Some(duplicates) = Self::find_duplicates(&names) {
             return Err(Error::invalid_table(format!(
                 "Duplicate column names found: {duplicates:?}"
             )));
+        }
+        for column in columns {
+            column
+                .data_type()
+                .validate_row_field_names()
+                .map_err(|error| match error {
+                    IllegalArgument { message } => Error::invalid_table(message),
+                    other => other,
+                })?;
         }
 
         let Some(pk) = primary_key else {
@@ -1710,6 +1724,20 @@ mod tests {
     }
 
     #[test]
+    fn blank_column_names_are_rejected() {
+        let err = Schema::builder()
+            .column(" \t", DataTypes::int())
+            .build()
+            .unwrap_err();
+
+        assert!(
+            err.to_string()
+                .contains("Field names must contain at least one non-whitespace character."),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
     fn multiple_primary_keys_are_rejected() {
         let err = Schema::builder()
             .column("id", DataTypes::int())
@@ -1721,6 +1749,29 @@ mod tests {
         assert!(
             err.to_string()
                 .contains("Multiple primary keys are not supported."),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn invalid_nested_row_field_names_are_rejected() {
+        let err = Schema::builder()
+            .column(
+                "payload",
+                DataTypes::array(DataTypes::map(
+                    DataTypes::string(),
+                    DataTypes::row(vec![
+                        DataTypes::field("value", DataTypes::int()),
+                        DataTypes::field("value", DataTypes::bigint()),
+                    ]),
+                )),
+            )
+            .build()
+            .unwrap_err();
+
+        assert!(
+            err.to_string()
+                .contains("Field names must be unique. Found duplicates:"),
             "unexpected error: {err}"
         );
     }

@@ -1032,6 +1032,10 @@ mod tests {
                     {"name": "id", "data_type": {"type": "STRING"}}
                 ]),
             ),
+            (
+                "columns",
+                json!([{"name": " ", "data_type": {"type": "BIGINT"}}]),
+            ),
         ] {
             let mut invalid = partitioned_table();
             invalid["validate_only"] = json!(true);
@@ -1045,6 +1049,29 @@ mod tests {
                     .as_str()
                     .unwrap()
                     .contains("invalid table")
+            );
+        }
+
+        for fields in [
+            json!([{"name": " ", "field_type": {"type": "INTEGER"}}]),
+            json!([
+                {"name": "value", "field_type": {"type": "INTEGER"}},
+                {"name": "value", "field_type": {"type": "STRING"}}
+            ]),
+        ] {
+            let mut invalid = partitioned_table();
+            invalid["validate_only"] = json!(true);
+            invalid["columns"][2]["data_type"] = json!({"type": "ROW", "fields": fields});
+            let (status, _, body) =
+                post(&app, "/v1/clusters/default/databases/sales/tables", invalid).await;
+            assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+            assert_eq!(body["error"]["code"], "invalid_argument");
+            assert!(
+                body["error"]["message"]
+                    .as_str()
+                    .unwrap()
+                    .contains("Field names must"),
+                "{body}"
             );
         }
 
@@ -1339,6 +1366,44 @@ mod tests {
             assert_eq!(changes.add_columns.len(), i);
             assert_eq!(changes.config_changes.len(), i);
         }
+    }
+
+    #[tokio::test]
+    async fn invalid_nested_row_fields_are_rejected_before_alter_table() {
+        let (backend, app) = gateway();
+
+        for fields in [
+            json!([{"name": " ", "field_type": {"type": "INTEGER"}}]),
+            json!([
+                {"name": "value", "field_type": {"type": "INTEGER"}},
+                {"name": "value", "field_type": {"type": "STRING"}}
+            ]),
+        ] {
+            let (status, _, body) = send(
+                &app,
+                Method::PATCH,
+                "/v1/clusters/default/databases/sales/tables/orders",
+                Some(json!({
+                    "changes": [{
+                        "kind": "add_column",
+                        "name": "payload",
+                        "data_type": {"type": "ROW", "fields": fields}
+                    }]
+                })),
+            )
+            .await;
+            assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+            assert_eq!(body["error"]["code"], "invalid_argument");
+            assert!(
+                body["error"]["message"]
+                    .as_str()
+                    .unwrap()
+                    .contains("Field names must"),
+                "{body}"
+            );
+        }
+
+        assert!(backend.calls().is_empty());
     }
 
     #[tokio::test]

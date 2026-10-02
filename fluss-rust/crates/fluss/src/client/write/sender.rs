@@ -43,6 +43,14 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 
+// Retry backoff applied to a write batch before it is handed back to the
+// accumulator. Without it a retriable server-side rejection is resent on every
+// poll cycle, which turns a transient ISR shrink into a request storm against the
+// rejecting leader. Shaped like Java's ExponentialBackoff; the initial delay and
+// the cap come from `writer_retry_backoff_ms` / `writer_retry_max_backoff_ms`.
+const RETRY_BACKOFF_MULTIPLIER: f64 = 2.0;
+const RETRY_BACKOFF_JITTER: f64 = 0.2;
+
 type SendFuture<'a> = Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>>;
 
 /// Result of a synchronous drain: send futures, optional delay, and unknown leader tables.
@@ -62,6 +70,8 @@ pub struct Sender {
     ack: i16,
     max_request_timeout_ms: i32,
     retries: i32,
+    retry_backoff_ms: u64,
+    retry_max_backoff_ms: u64,
     idempotence_manager: Arc<IdempotenceManager>,
     metrics: Arc<WriterMetrics>,
 }
@@ -75,6 +85,8 @@ impl Sender {
         max_request_timeout_ms: i32,
         ack: i16,
         retries: i32,
+        retry_backoff_ms: u64,
+        retry_max_backoff_ms: u64,
         idempotence_manager: Arc<IdempotenceManager>,
         metrics: Arc<WriterMetrics>,
     ) -> Self {
@@ -87,6 +99,8 @@ impl Sender {
             ack,
             max_request_timeout_ms,
             retries,
+            retry_backoff_ms,
+            retry_max_backoff_ms,
             idempotence_manager,
             metrics,
         }
@@ -804,7 +818,32 @@ impl Sender {
         self.remove_from_inflight_batches(&ready_write_batch);
         self.metrics
             .record_records_retry(ready_write_batch.write_batch.record_count());
+        // Stall the bucket before re-enqueueing: `re_enqueue` bumps `attempts`, so
+        // read it here to get the number of attempts already made (0 on the first
+        // retry, which yields the initial backoff).
+        let backoff_ms = self.retry_backoff_ms(ready_write_batch.write_batch.attempts());
+        self.accumulator
+            .set_retry_backoff(&ready_write_batch.table_bucket, backoff_ms);
         self.accumulator.re_enqueue(ready_write_batch);
+    }
+
+    /// Exponential backoff with jitter for a batch that has already made
+    /// `attempts` send attempts. 0 when backoff is disabled.
+    fn retry_backoff_ms(&self, attempts: i32) -> i64 {
+        use rand::Rng;
+        if self.retry_backoff_ms == 0 {
+            return 0;
+        }
+        let initial = self.retry_backoff_ms as f64;
+        let max = (self.retry_max_backoff_ms as f64).max(initial);
+        // Cap the exponent like Java's ExponentialBackoff.expMax so that jitter
+        // still produces a range at steady state instead of collapsing onto the max.
+        let exp_max = (max / initial).log2();
+        let exp = (attempts.max(0) as f64).min(exp_max);
+        let term = initial * RETRY_BACKOFF_MULTIPLIER.powf(exp);
+        let jitter_factor =
+            1.0 - RETRY_BACKOFF_JITTER + rand::rng().random::<f64>() * (2.0 * RETRY_BACKOFF_JITTER);
+        (term * jitter_factor) as i64
     }
 
     fn remove_from_inflight_batches(&self, ready_write_batch: &ReadyWriteBatch) {
@@ -1285,6 +1324,8 @@ mod tests {
             1000,
             1,
             1,
+            100,
+            1000,
             idempotence,
             Arc::new(crate::metrics::WriterMetrics::new()),
         );
@@ -1303,6 +1344,8 @@ mod tests {
             &mut Vec::new(),
         )?;
 
+        // Reach past the retry backoff to inspect the re-enqueued batch.
+        accumulator.clear_retry_backoff();
         let server = cluster.get_tablet_server(1).expect("server");
         let nodes = HashSet::from([server.clone()]);
         let mut batches = accumulator.drain(cluster, &nodes, 1024 * 1024)?;
@@ -1310,6 +1353,124 @@ mod tests {
         let batch = drained.pop().expect("batch");
         assert_eq!(batch.write_batch.attempts(), 1);
         Ok(())
+    }
+
+    /// A retriable error must not put the batch straight back on the wire: the
+    /// bucket stays undrainable for the backoff window. Without this the client
+    /// resends on every poll cycle, turning a rejecting leader into a request
+    /// storm (see the `isr_shrink_flood` integration test).
+    #[tokio::test]
+    async fn retriable_error_backs_the_bucket_off_before_the_next_send() -> Result<()> {
+        let table_path = Arc::new(TablePath::new("db".to_string(), "tbl".to_string()));
+        let cluster = build_cluster_arc(table_path.as_ref(), 1, 1);
+        let metadata = Arc::new(Metadata::new_for_test(cluster.clone()));
+        let idempotence = disabled_idempotence();
+        let accumulator = Arc::new(RecordAccumulator::new(
+            Config::default(),
+            Arc::clone(&idempotence),
+        ));
+        let sender = Sender::new(
+            metadata,
+            accumulator.clone(),
+            1024 * 1024,
+            1000,
+            1,
+            1,
+            100,
+            1000,
+            idempotence,
+            Arc::new(crate::metrics::WriterMetrics::new()),
+        );
+
+        let (batch, _handle) =
+            build_ready_batch(accumulator.as_ref(), cluster.clone(), table_path.clone())?;
+        let mut inflight = HashMap::new();
+        inflight.insert(1, vec![batch]);
+        sender.add_to_inflight_batches(&inflight);
+        let batch = inflight.remove(&1).unwrap().pop().unwrap();
+
+        sender.handle_write_batch_error(
+            batch,
+            FlussError::NotEnoughReplicasException,
+            "not enough replicas".to_string(),
+            &mut Vec::new(),
+        )?;
+
+        let server = cluster.get_tablet_server(1).expect("server");
+        let nodes = HashSet::from([server.clone()]);
+        let batches = accumulator.drain(cluster.clone(), &nodes, 1024 * 1024)?;
+        assert!(
+            batches.is_empty(),
+            "a re-enqueued batch must stay put until its retry backoff elapses"
+        );
+
+        accumulator.clear_retry_backoff();
+        let mut batches = accumulator.drain(cluster, &nodes, 1024 * 1024)?;
+        let batch = batches
+            .remove(&1)
+            .expect("drainable once the backoff elapses")
+            .pop()
+            .expect("batch");
+        assert_eq!(batch.write_batch.attempts(), 1);
+        Ok(())
+    }
+
+    /// A sender whose only interesting property is its retry backoff window.
+    fn sender_with_retry_backoff(initial_ms: u64, max_ms: u64) -> Sender {
+        let table_path = Arc::new(TablePath::new("db".to_string(), "tbl".to_string()));
+        let cluster = build_cluster_arc(table_path.as_ref(), 1, 1);
+        let idempotence = disabled_idempotence();
+        let accumulator = Arc::new(RecordAccumulator::new(
+            Config::default(),
+            Arc::clone(&idempotence),
+        ));
+        Sender::new(
+            Arc::new(Metadata::new_for_test(cluster)),
+            accumulator,
+            1024 * 1024,
+            1000,
+            1,
+            1,
+            initial_ms,
+            max_ms,
+            idempotence,
+            Arc::new(crate::metrics::WriterMetrics::new()),
+        )
+    }
+
+    #[test]
+    fn retry_backoff_grows_then_caps() {
+        let sender = sender_with_retry_backoff(100, 1000);
+        // Jitter is +/-20%, so every bound below is a range around the nominal value.
+        let first = sender.retry_backoff_ms(0);
+        assert!(
+            (80..=120).contains(&first),
+            "first retry should be ~100ms, got {first}"
+        );
+        let second = sender.retry_backoff_ms(1);
+        assert!(
+            (160..=240).contains(&second),
+            "second retry should be ~200ms, got {second}"
+        );
+        // Past the cap the delay stops growing, so a bucket that keeps failing
+        // still retries about once a second and recovers promptly.
+        for attempts in [4, 10, 1000, i32::MAX] {
+            let capped = sender.retry_backoff_ms(attempts);
+            assert!(
+                (800..=1200).contains(&capped),
+                "retry {attempts} should cap at ~1000ms, got {capped}"
+            );
+        }
+    }
+
+    /// Zero restores the pre-backoff behaviour of resending on the next poll
+    /// cycle, which is what the `isr_shrink_flood` baseline measurement needs.
+    #[test]
+    fn zero_retry_backoff_disables_the_stall() {
+        let sender = sender_with_retry_backoff(0, 1000);
+        for attempts in [0, 1, 5, i32::MAX] {
+            assert_eq!(sender.retry_backoff_ms(attempts), 0);
+        }
     }
 
     #[tokio::test]
@@ -1329,6 +1490,8 @@ mod tests {
             1000,
             1,
             1,
+            100,
+            1000,
             idempotence,
             Arc::new(crate::metrics::WriterMetrics::new()),
         );
@@ -1380,6 +1543,8 @@ mod tests {
         assert!(batches.is_empty());
 
         accumulator.update_throttle(&tb, 0.0);
+        // Backpressure is retriable, so the batch is also in retry backoff.
+        accumulator.clear_retry_backoff();
         let mut batches = accumulator.drain(cluster, &nodes, 1024 * 1024)?;
         let batch = batches.remove(&1).expect("drained").pop().expect("batch");
         assert_eq!(batch.write_batch.attempts(), 1);
@@ -1411,6 +1576,8 @@ mod tests {
                 1000,
                 1,
                 1,
+                100,
+                1000,
                 idempotence,
                 Arc::new(crate::metrics::WriterMetrics::new()),
             );
@@ -1473,6 +1640,8 @@ mod tests {
                 1000,
                 1,
                 1,
+                100,
+                1000,
                 idempotence,
                 Arc::new(crate::metrics::WriterMetrics::new()),
             );
@@ -1618,6 +1787,8 @@ mod tests {
                     1000,
                     1,
                     1,
+                    100,
+                    1000,
                     idempotence,
                     Arc::new(crate::metrics::WriterMetrics::new()),
                 );
@@ -1695,6 +1866,8 @@ mod tests {
                     1000,
                     1,
                     1,
+                    100,
+                    1000,
                     idempotence,
                     Arc::new(crate::metrics::WriterMetrics::new()),
                 );
@@ -1748,6 +1921,8 @@ mod tests {
             1000,
             1,
             0,
+            100,
+            1000,
             idempotence,
             Arc::new(crate::metrics::WriterMetrics::new()),
         );
@@ -1786,6 +1961,8 @@ mod tests {
             1000,
             1,
             0,
+            100,
+            1000,
             idempotence,
             Arc::new(crate::metrics::WriterMetrics::new()),
         );
@@ -1831,6 +2008,8 @@ mod tests {
             1000,
             -1,
             i32::MAX,
+            100,
+            1000,
             Arc::clone(&idempotence),
             Arc::new(crate::metrics::WriterMetrics::new()),
         );
@@ -1879,6 +2058,8 @@ mod tests {
             1000,
             -1,
             0,
+            100,
+            1000,
             Arc::clone(&idempotence),
             Arc::new(crate::metrics::WriterMetrics::new()),
         );
@@ -2001,6 +2182,8 @@ mod tests {
             10_000,
             -1,
             i32::MAX,
+            100,
+            1000,
             Arc::clone(&idempotence),
             Arc::new(crate::metrics::WriterMetrics::new()),
         ));
@@ -2053,6 +2236,8 @@ mod tests {
             assert_eq!(idempotence.in_flight_count(&bucket), 1);
 
             let node = cluster.get_tablet_server(1).expect("server").clone();
+            // Reach past the retry backoff to inspect the re-enqueued batch.
+            accumulator.clear_retry_backoff();
             let mut batches =
                 accumulator.drain(cluster.clone(), &HashSet::from([node]), 1024 * 1024)?;
             let retry = batches.remove(&1).expect("retry queued").pop().unwrap();
@@ -2121,6 +2306,8 @@ mod tests {
             1000,
             -1,
             i32::MAX,
+            100,
+            1000,
             Arc::clone(&idempotence),
             Arc::new(crate::metrics::WriterMetrics::new()),
         );
@@ -2383,6 +2570,8 @@ mod tests {
             1000,
             1,
             100,
+            100,
+            1000,
             idempotence,
             Arc::new(crate::metrics::WriterMetrics::new()),
         );
@@ -2488,6 +2677,8 @@ mod tests {
             1000,
             1,
             100,
+            100,
+            1000,
             idempotence,
             Arc::new(crate::metrics::WriterMetrics::new()),
         );
@@ -2559,6 +2750,8 @@ mod tests {
             1000,
             1,
             100,
+            100,
+            1000,
             idempotence,
             Arc::new(crate::metrics::WriterMetrics::new()),
         );
@@ -2595,6 +2788,8 @@ mod tests {
                 .get_table_id(table_path.as_ref())
                 .is_some()
         );
+        // Reach past the retry backoff to inspect the re-enqueued batch.
+        accumulator.clear_retry_backoff();
         let server = cluster.get_tablet_server(1).expect("server");
         let nodes = HashSet::from([server.clone()]);
         let mut batches = accumulator.drain(cluster, &nodes, 1024 * 1024)?;
@@ -2632,6 +2827,8 @@ mod tests {
             1000,
             1,
             100,
+            100,
+            1000,
             Arc::clone(&idempotence),
             Arc::new(crate::metrics::WriterMetrics::new()),
         );
@@ -2681,6 +2878,8 @@ mod tests {
             1000,
             1,
             100,
+            100,
+            1000,
             idempotence,
             Arc::new(crate::metrics::WriterMetrics::new()),
         );
@@ -2717,6 +2916,8 @@ mod tests {
                 .get_table_id(table_path.as_ref())
                 .is_some()
         );
+        // Reach past the retry backoff to inspect the re-enqueued batch.
+        accumulator.clear_retry_backoff();
         let server = cluster.get_tablet_server(1).expect("server");
         let nodes = HashSet::from([server.clone()]);
         let mut batches = accumulator.drain(cluster, &nodes, 1024 * 1024)?;
@@ -2753,6 +2954,8 @@ mod tests {
             1000,
             1,
             100,
+            100,
+            1000,
             idempotence,
             Arc::new(crate::metrics::WriterMetrics::new()),
         );
@@ -2788,6 +2991,8 @@ mod tests {
                 .get_table_id(table_path.as_ref())
                 .is_some()
         );
+        // Reach past the retry backoff to inspect the re-enqueued batch.
+        accumulator.clear_retry_backoff();
         let server = cluster.get_tablet_server(1).expect("server");
         let nodes = HashSet::from([server.clone()]);
         let mut batches = accumulator.drain(cluster, &nodes, 1024 * 1024)?;

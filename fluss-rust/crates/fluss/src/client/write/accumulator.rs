@@ -70,7 +70,20 @@ impl MemoryLimiter {
     /// Try to acquire `size` bytes. Blocks until memory is available,
     /// the timeout expires, or the limiter is closed.
     /// Returns a `MemoryPermit` on success.
+    #[cfg(test)]
     pub fn acquire(self: &Arc<Self>, size: usize) -> Result<MemoryPermit> {
+        self.acquire_within(size, None)
+    }
+
+    /// Like [`acquire`], but bounds the wait by `deadline` when provided instead of
+    /// the limiter's configured `wait_timeout`. A deadline already in the past makes
+    /// this non-blocking (fail fast if memory is unavailable), which callers use to
+    /// share the buffer wait budget with callback admission, not bound the whole API call.
+    pub fn acquire_within(
+        self: &Arc<Self>,
+        size: usize,
+        deadline: Option<Instant>,
+    ) -> Result<MemoryPermit> {
         if self.closed.load(Ordering::Acquire) {
             return Err(Error::WriterClosed {
                 message: "Memory limiter is closed".to_string(),
@@ -87,7 +100,7 @@ impl MemoryLimiter {
         }
 
         let mut used = self.state.lock();
-        let deadline = Instant::now() + self.wait_timeout;
+        let deadline = deadline.unwrap_or_else(|| Instant::now() + self.wait_timeout);
         while *used + size > self.max_memory {
             self.waiting_count.fetch_add(1, Ordering::Relaxed);
             let result = self.cond.wait_until(&mut used, deadline);
@@ -101,10 +114,9 @@ impl MemoryLimiter {
             if result.timed_out() && *used + size > self.max_memory {
                 return Err(Error::BufferExhausted {
                     message: format!(
-                        "Failed to allocate {} bytes for write batch within {}ms. \
+                        "Failed to allocate {} bytes for write batch within the buffer wait budget. \
                          {} of {} bytes in use, {} threads waiting.",
                         size,
-                        self.wait_timeout.as_millis(),
                         *used,
                         self.max_memory,
                         self.waiting_count.load(Ordering::Relaxed),
@@ -202,6 +214,10 @@ pub struct RecordAccumulator {
     /// Per-bucket backpressure throttle expiry timestamps in milliseconds.
     throttle_expiry_ms: DashMap<TableBucket, i64>,
     max_throttle_ms: i64,
+    /// Per-bucket retry backoff expiry timestamps in milliseconds. Kept separate
+    /// from `throttle_expiry_ms` so that a short retry backoff can never shorten a
+    /// server-driven backpressure throttle, nor the other way round.
+    retry_backoff_expiry_ms: DashMap<TableBucket, i64>,
 }
 
 impl RecordAccumulator {
@@ -229,6 +245,7 @@ impl RecordAccumulator {
             sender_wakeup: Notify::new(),
             throttle_expiry_ms: Default::default(),
             max_throttle_ms,
+            retry_backoff_expiry_ms: Default::default(),
         }
     }
 
@@ -407,7 +424,9 @@ impl RecordAccumulator {
         let batch_size = dynamic_target.unwrap_or(self.config.writer_batch_size as usize);
         let record_size = record.estimated_record_size();
         let alloc_size = batch_size.max(record_size);
-        let permit = self.memory_limiter.acquire(alloc_size)?;
+        let permit = self
+            .memory_limiter
+            .acquire_within(alloc_size, record.submit_deadline)?;
 
         // Re-acquire dq lock after memory is available
         let mut dq_guard = dq.lock();
@@ -429,6 +448,8 @@ impl RecordAccumulator {
     pub fn ready(&self, cluster: &Arc<Cluster>) -> Result<ReadyCheckResult> {
         let now = current_time_ms();
         self.throttle_expiry_ms.retain(|_, expiry| *expiry > now);
+        self.retry_backoff_expiry_ms
+            .retain(|_, expiry| *expiry > now);
 
         // Snapshot just the Arcs we need, avoiding cloning the entire BucketAndWriteBatches struct
         let entries: Vec<(Arc<PhysicalTablePath>, Option<PartitionId>, BucketBatches)> = self
@@ -532,6 +553,11 @@ impl RecordAccumulator {
                     continue;
                 }
             }
+            let retry_backoff_remaining = self.retry_backoff_remaining_ms(&table_bucket);
+            if retry_backoff_remaining > 0 {
+                next_delay = next_delay.min(retry_backoff_remaining);
+                continue;
+            }
             if let Some(leader) = cluster.leader_for(&table_bucket) {
                 next_delay = self.batch_ready(
                     leader,
@@ -605,6 +631,9 @@ impl RecordAccumulator {
         if self.is_throttled(table_bucket) {
             return true;
         }
+        if self.retry_backoff_remaining_ms(table_bucket) > 0 {
+            return true;
+        }
         if !self.idempotence_manager.is_enabled() {
             return false;
         }
@@ -649,6 +678,44 @@ impl RecordAccumulator {
         }
         self.throttle_expiry_ms.remove(table_bucket);
         false
+    }
+
+    /// Stalls a bucket for `delay_ms` so the sender spaces out retries of a failed
+    /// batch instead of resending it on every poll cycle. The batch keeps its place
+    /// at the head of the bucket deque, so batch sequence ordering -- and therefore
+    /// idempotence -- is unaffected.
+    ///
+    /// The window is keyed per bucket, but several batches can be in flight for one
+    /// bucket and a node-level failure re-enqueues all of them, each with its own
+    /// per-batch backoff. We keep the latest expiry so a fresh batch's short backoff
+    /// can never shorten an escalated one already set for the bucket.
+    pub(crate) fn set_retry_backoff(&self, table_bucket: &TableBucket, delay_ms: i64) {
+        if delay_ms <= 0 {
+            return;
+        }
+        let expiry = current_time_ms().saturating_add(delay_ms);
+        self.retry_backoff_expiry_ms
+            .entry(table_bucket.clone())
+            .and_modify(|current| *current = (*current).max(expiry))
+            .or_insert(expiry);
+    }
+
+    /// Milliseconds left in `table_bucket`'s retry backoff window, 0 when the
+    /// bucket is not currently backed off.
+    fn retry_backoff_remaining_ms(&self, table_bucket: &TableBucket) -> i64 {
+        self.retry_backoff_expiry_ms
+            .get(table_bucket)
+            .map(|expiry| expiry.saturating_sub(current_time_ms()))
+            .unwrap_or(0)
+            .max(0)
+    }
+
+    /// Drops every pending retry backoff so re-enqueued batches are immediately
+    /// drainable again. Tests use this to reach a re-enqueued batch without
+    /// waiting out the backoff, mirroring `update_throttle(bucket, 0.0)`.
+    #[cfg(test)]
+    pub(crate) fn clear_retry_backoff(&self) {
+        self.retry_backoff_expiry_ms.clear();
     }
 
     /// Updates the bucket throttle using `max_throttle * pressure²`.
@@ -2291,6 +2358,51 @@ mod tests {
 
         assert!(matches!(result.unwrap_err(), Error::BufferExhausted { .. }));
         assert!(elapsed >= Duration::from_millis(80)); // allow some timing slack
+    }
+
+    #[test]
+    fn test_memory_limiter_acquire_within_bounds_wait_by_deadline() {
+        // Writer default wait is effectively unbounded; a caller deadline must win.
+        let limiter = Arc::new(MemoryLimiter::new(1024, Duration::from_secs(3600)));
+        let _permit = limiter.acquire(1024).unwrap();
+
+        let start = Instant::now();
+        let result = limiter.acquire_within(512, Some(Instant::now() + Duration::from_millis(100)));
+        let elapsed = start.elapsed();
+
+        // Returns within the caller budget, not the 1h configured wait_timeout.
+        assert!(matches!(result.unwrap_err(), Error::BufferExhausted { .. }));
+        assert!(elapsed >= Duration::from_millis(80));
+        assert!(elapsed < Duration::from_secs(2));
+    }
+
+    #[test]
+    fn test_memory_limiter_acquire_within_past_deadline_is_nonblocking() {
+        // A deadline already in the past = try semantics (zero submit budget).
+        let limiter = Arc::new(MemoryLimiter::new(1024, Duration::from_secs(3600)));
+        let _permit = limiter.acquire(1024).unwrap();
+
+        let start = Instant::now();
+        let result = limiter.acquire_within(512, Some(Instant::now() - Duration::from_millis(1)));
+        let elapsed = start.elapsed();
+
+        assert!(matches!(result.unwrap_err(), Error::BufferExhausted { .. }));
+        assert!(elapsed < Duration::from_millis(50));
+    }
+
+    #[test]
+    fn test_memory_limiter_acquire_within_succeeds_when_capacity_available() {
+        // A bounded deadline must not prevent an allocation that fits right away.
+        let limiter = Arc::new(MemoryLimiter::new(1024, Duration::from_secs(3600)));
+
+        let start = Instant::now();
+        let permit = limiter
+            .acquire_within(512, Some(Instant::now() + Duration::from_millis(100)))
+            .unwrap();
+        assert!(start.elapsed() < Duration::from_millis(50));
+        assert_eq!(*limiter.state.lock(), 512);
+        drop(permit);
+        assert_eq!(*limiter.state.lock(), 0);
     }
 
     #[test]

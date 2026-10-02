@@ -25,7 +25,7 @@ For an in-depth look at the Tiering Service internals, see the blog series:
 - [Tiering Service Deep Dive — Part 2](https://fluss.apache.org/blog/fluss-tiering-service-deep-dive-part2/)
 - [Tiering Service Deep Dive — Part 3](https://fluss.apache.org/blog/fluss-tiering-service-deep-dive-part3/)
 
-For deployment instructions, see [Deploying Streaming Lakehouse](../install-deploy/deploying-streaming-lakehouse.md).
+For deployment instructions, see [Deploying Lakestream](../install-deploy/deploying-streaming-lakehouse.md).
 
 ## Architecture
 

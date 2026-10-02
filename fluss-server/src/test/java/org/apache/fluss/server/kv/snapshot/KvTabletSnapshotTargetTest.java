@@ -23,6 +23,8 @@ import org.apache.fluss.exception.FlussException;
 import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metrics.Counter;
+import org.apache.fluss.metrics.ThreadSafeSimpleCounter;
 import org.apache.fluss.server.SequenceIDCounter;
 import org.apache.fluss.server.kv.rocksdb.RocksDBExtension;
 import org.apache.fluss.server.kv.rocksdb.RocksDBKv;
@@ -88,6 +90,7 @@ class KvTabletSnapshotTargetTest {
     private ManuallyTriggeredScheduledExecutorService scheduledExecutorService;
     private PeriodicSnapshotManager periodicSnapshotManager;
     private final CloseableRegistry closeableRegistry = new CloseableRegistry();
+    private final Counter remoteKvCopyBytes = new ThreadSafeSimpleCounter();
 
     private AtomicLong snapshotIdGenerator;
     private AtomicLong logOffsetGenerator;
@@ -245,6 +248,7 @@ class KvTabletSnapshotTargetTest {
     @Test
     void testAddToSnapshotToStoreFail(@TempDir Path kvTabletDir) throws Exception {
         final String errMsg = "Add to snapshot handle failed.";
+        AtomicLong uploadedBytes = new AtomicLong();
         AtomicBoolean shouldFail = new AtomicBoolean(true);
         // we use a store will fail when the variable shouldFail is true
         // add the snapshot to store will fail
@@ -252,6 +256,10 @@ class KvTabletSnapshotTargetTest {
                 TestCompletedSnapshotHandleStore.newBuilder()
                         .setAddFunction(
                                 (snapshot) -> {
+                                    uploadedBytes.addAndGet(
+                                            snapshot.retrieveCompleteSnapshot()
+                                                    .getKvSnapshotHandle()
+                                                    .getIncrementalSize());
                                     if (shouldFail.get()) {
                                         throw new FlussException(errMsg);
                                     }
@@ -286,6 +294,10 @@ class KvTabletSnapshotTargetTest {
         // minRetainOffset shouldn't be updated when the snapshot failed
         assertThat(updateMinRetainOffsetConsumer.get()).isEqualTo(Long.MAX_VALUE);
 
+        assertThat(uploadedBytes.get()).isPositive();
+        assertThat(remoteKvCopyBytes.getCount()).isEqualTo(uploadedBytes.get());
+        long bytesAfterFailedCommit = remoteKvCopyBytes.getCount();
+
         // set it to false
         shouldFail.set(false);
         long snapshotId2 = 2;
@@ -302,6 +314,9 @@ class KvTabletSnapshotTargetTest {
         assertThat(snapshotPath2.getFileSystem().exists(snapshotPath2)).isTrue();
         // minRetainOffset should be updated because snapshot success
         assertThat(updateMinRetainOffsetConsumer.get()).isEqualTo(1L);
+        assertThat(remoteKvCopyBytes.getCount())
+                .isEqualTo(uploadedBytes.get())
+                .isGreaterThan(bytesAfterFailedCommit);
     }
 
     @Test
@@ -571,7 +586,8 @@ class KvTabletSnapshotTargetTest {
                 snapshotDataUploader,
                 rocksDBExtension.getRockDbDir(),
                 lastCompletedSnapshotId,
-                snapshotFailType);
+                snapshotFailType,
+                remoteKvCopyBytes);
     }
 
     private ZooKeeperClient createFailingZooKeeperClient() {
@@ -620,14 +636,16 @@ class KvTabletSnapshotTargetTest {
                 KvSnapshotDataUploader kvSnapshotDataUploader,
                 @Nonnull File instanceBasePath,
                 long lastCompletedSnapshotId,
-                SnapshotFailType snapshotFailType) {
+                SnapshotFailType snapshotFailType,
+                Counter remoteKvCopyBytes) {
             super(
                     uploadedSstFiles,
                     db,
                     rocksDBResourceGuard,
                     kvSnapshotDataUploader,
                     instanceBasePath,
-                    lastCompletedSnapshotId);
+                    lastCompletedSnapshotId,
+                    remoteKvCopyBytes);
             this.snapshotFailType = snapshotFailType;
         }
 

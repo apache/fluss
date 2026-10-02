@@ -407,6 +407,11 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
     </tr>
     <tr>
       <td rowspan="8">lakeTiering_table</td>
+      <td>freshness</td>
+      <td>The user-configured data freshness interval (in milliseconds) for this table.</td>
+      <td>Gauge</td>
+    </tr>
+    <tr>
       <td>tierLag</td>
       <td>Time in milliseconds since the last successful tiering operation for this table. For newly registered tables that have never completed a tiering round, the lag is measured from the time the table was registered.</td>
       <td>Gauge</td>
@@ -439,11 +444,6 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
     <tr>
       <td>pendingTime</td>
       <td>How long (in milliseconds) the table has been waiting in the pending queue for tiering. Returns 0 when the table is not currently pending.</td>
-      <td>Gauge</td>
-    </tr>
-    <tr>
-      <td>freshness</td>
-      <td>The user-configured data freshness interval (in milliseconds) for this table.</td>
       <td>Gauge</td>
     </tr>
   </tbody>
@@ -616,9 +616,9 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
       <td>Gauge</td>
     </tr>
     <tr>
-      <td>lookupCacheCapacityEvictions</td>
-      <td>The cumulative number of cached table lookupers evicted because the cache retains at most ten tables.</td>
-      <td>Counter</td>
+      <td>lookupCacheFileCapacityEvictions</td>
+      <td>The cumulative number of lookup files evicted to enforce the shared TabletServer disk budget. Expiration, replacement, and explicit invalidation are excluded.</td>
+      <td>Gauge</td>
     </tr>
     <tr>
       <td rowspan="2">logicalStorage</td>
@@ -806,8 +806,8 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
   </thead>
   <tbody>
     <tr>
-      <th rowspan="39"><strong>tabletserver</strong></th>
-      <td rowspan="20">table</td>
+      <th rowspan="41"><strong>tabletserver</strong></th>
+      <td rowspan="22">table</td>
       <td>messagesInPerSecond</td>
       <td>The number of messages written per second to this table.</td>
       <td>Meter</td>
@@ -905,6 +905,11 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
     <tr>
       <td>remoteLogDeleteErrorPerSecond</td>
       <td>The number of failed delete remote log requests to delete remote log after log ttl per second.</td>
+      <td>Meter</td>
+    </tr>
+    <tr>
+      <td>remoteKvCopyBytesPerSecond</td>
+      <td>The bytes of kv snapshot data uploaded to remote per second for this table. Only available for primary key tables.</td>
       <td>Meter</td>
     </tr>
     <tr>

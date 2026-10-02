@@ -79,6 +79,8 @@ impl WriterClient {
             30_000,
             ack,
             config.writer_retries,
+            config.writer_retry_backoff_ms,
+            config.writer_retry_max_backoff_ms,
             Arc::clone(&idempotence_manager),
             Arc::clone(&metrics),
         ));

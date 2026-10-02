@@ -62,6 +62,18 @@ TEST(FfiConverterTest, KvBackpressureConfiguration) {
     EXPECT_TRUE(fluss::ErrorCode::IsRetriable(72));
 }
 
+TEST(FfiConverterTest, WriterRetryBackoffConfiguration) {
+    fluss::Configuration config;
+    EXPECT_EQ(config.writer_retry_backoff_ms, 100u);
+    EXPECT_EQ(config.writer_retry_max_backoff_ms, 1000u);
+
+    config.writer_retry_backoff_ms = 250;
+    config.writer_retry_max_backoff_ms = 5000;
+    auto ffi_config = fluss::utils::to_ffi_config(config);
+    EXPECT_EQ(ffi_config.writer_retry_backoff_ms, 250u);
+    EXPECT_EQ(ffi_config.writer_retry_max_backoff_ms, 5000u);
+}
+
 // --- DataType value semantics ---
 
 TEST(DataTypeTest, DefaultNullable) { EXPECT_TRUE(DataType::Int().nullable()); }

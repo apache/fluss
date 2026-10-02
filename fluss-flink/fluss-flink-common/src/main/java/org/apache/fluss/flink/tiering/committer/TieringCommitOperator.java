@@ -91,9 +91,8 @@ public class TieringCommitOperator<WriteResult, Committable>
     // gateway to send event to flink source coordinator
     private final OperatorEventGateway operatorEventGateway;
 
-    // tableid -> write results
-    private final Map<Long, List<TableBucketWriteResult<WriteResult>>>
-            collectedTableBucketWriteResults;
+    // Table ID -> accumulator for the current tiering round.
+    private final Map<Long, TableWriteResultAccumulator<WriteResult>> tableWriteResultAccumulators;
 
     /**
      * The result of one table's commit round, holding the lake committable (nullable for empty
@@ -118,7 +117,7 @@ public class TieringCommitOperator<WriteResult, Committable>
             LakeTieringFactory<WriteResult, Committable> lakeTieringFactory) {
         this.lakeTieringFactory = lakeTieringFactory;
         this.flussTableLakeSnapshotCommitter = new FlussTableLakeSnapshotCommitter(flussConf);
-        this.collectedTableBucketWriteResults = new HashMap<>();
+        this.tableWriteResultAccumulators = new HashMap<>();
         this.flussConfig = flussConf;
         this.lakeTieringConfig = lakeTieringConfig;
         this.setup(
@@ -144,19 +143,21 @@ public class TieringCommitOperator<WriteResult, Committable>
         TableBucketWriteResult<WriteResult> tableBucketWriteResult = streamRecord.getValue();
         TableBucket tableBucket = tableBucketWriteResult.tableBucket();
         long tableId = tableBucket.getTableId();
-        registerTableBucketWriteResult(tableId, tableBucketWriteResult);
+        TableWriteResultAccumulator<WriteResult> accumulator =
+                tableWriteResultAccumulators.computeIfAbsent(
+                        tableId,
+                        ignored ->
+                                new TableWriteResultAccumulator<>(
+                                        tableBucketWriteResult.numberOfWriteResults()));
+        accumulator.add(tableBucketWriteResult);
 
-        // may collect all write results for the table
-        List<TableBucketWriteResult<WriteResult>> committableWriteResults =
-                collectTableAllBucketWriteResult(tableId);
-
-        if (committableWriteResults != null) {
+        if (accumulator.isComplete()) {
             try {
                 CommitResult commitResult =
                         commitWriteResults(
                                 tableId,
                                 tableBucketWriteResult.tablePath(),
-                                committableWriteResults);
+                                accumulator.bucketWriteResults);
                 // only emit downstream when actual data was written
                 if (commitResult.committable != null) {
                     output.collect(
@@ -176,7 +177,7 @@ public class TieringCommitOperator<WriteResult, Committable>
                         "Fail to commit tiering write result, will try to tier again in next round.",
                         e);
             } finally {
-                collectedTableBucketWriteResults.remove(tableId);
+                tableWriteResultAccumulators.remove(tableId);
             }
         }
     }
@@ -380,51 +381,6 @@ public class TieringCommitOperator<WriteResult, Committable>
         }
     }
 
-    private void registerTableBucketWriteResult(
-            long tableId, TableBucketWriteResult<WriteResult> tableBucketWriteResult) {
-        collectedTableBucketWriteResults
-                .computeIfAbsent(tableId, k -> new ArrayList<>())
-                .add(tableBucketWriteResult);
-    }
-
-    @Nullable
-    private List<TableBucketWriteResult<WriteResult>> collectTableAllBucketWriteResult(
-            long tableId) {
-        Set<TableBucket> collectedBuckets = new HashSet<>();
-        Integer numberOfWriteResults = null;
-        List<TableBucketWriteResult<WriteResult>> writeResults = new ArrayList<>();
-        for (TableBucketWriteResult<WriteResult> tableBucketWriteResult :
-                collectedTableBucketWriteResults.get(tableId)) {
-            if (!collectedBuckets.add(tableBucketWriteResult.tableBucket())) {
-                // it means the write results contain more than two write result
-                // for same table, it shouldn't happen, let's throw exception to
-                // avoid unexpected behavior
-                throw new IllegalStateException(
-                        String.format(
-                                "Found duplicate write results for bucket %s of table %s.",
-                                tableBucketWriteResult.tableBucket(), tableId));
-            }
-            if (numberOfWriteResults == null) {
-                numberOfWriteResults = tableBucketWriteResult.numberOfWriteResults();
-            } else {
-                // the numberOfWriteResults must be same across tableBucketWriteResults
-                checkState(
-                        numberOfWriteResults == tableBucketWriteResult.numberOfWriteResults(),
-                        "numberOfWriteResults is not same across TableBucketWriteResults for table %s, got %s and %s.",
-                        tableId,
-                        numberOfWriteResults,
-                        tableBucketWriteResult.numberOfWriteResults());
-            }
-            writeResults.add(tableBucketWriteResult);
-        }
-
-        if (numberOfWriteResults != null && writeResults.size() == numberOfWriteResults) {
-            return writeResults;
-        } else {
-            return null;
-        }
-    }
-
     @Override
     public void close() throws Exception {
         flussTableLakeSnapshotCommitter.close();
@@ -433,6 +389,39 @@ public class TieringCommitOperator<WriteResult, Committable>
         }
         if (connection != null) {
             connection.close();
+        }
+    }
+
+    /** Collects one table's tiering round with constant-time validation of each result. */
+    private static final class TableWriteResultAccumulator<WriteResult> {
+        private final int expectedNumberOfWriteResults;
+        private final Set<TableBucket> collectedBuckets = new HashSet<>();
+        private final List<TableBucketWriteResult<WriteResult>> bucketWriteResults =
+                new ArrayList<>();
+
+        private TableWriteResultAccumulator(int expectedNumberOfWriteResults) {
+            this.expectedNumberOfWriteResults = expectedNumberOfWriteResults;
+        }
+
+        private void add(TableBucketWriteResult<WriteResult> bucketWriteResult) {
+            TableBucket tableBucket = bucketWriteResult.tableBucket();
+            checkState(
+                    !collectedBuckets.contains(tableBucket),
+                    "Found duplicate write results for bucket %s of table %s.",
+                    tableBucket,
+                    tableBucket.getTableId());
+            checkState(
+                    expectedNumberOfWriteResults == bucketWriteResult.numberOfWriteResults(),
+                    "numberOfWriteResults is not same across TableBucketWriteResults for table %s, got %s and %s.",
+                    tableBucket.getTableId(),
+                    expectedNumberOfWriteResults,
+                    bucketWriteResult.numberOfWriteResults());
+            collectedBuckets.add(tableBucket);
+            bucketWriteResults.add(bucketWriteResult);
+        }
+
+        private boolean isComplete() {
+            return bucketWriteResults.size() == expectedNumberOfWriteResults;
         }
     }
 }

@@ -24,6 +24,10 @@ import org.apache.fluss.metrics.MetricNames;
 import org.apache.fluss.metrics.groups.GenericMetricGroup;
 import org.apache.fluss.metrics.groups.MetricGroup;
 import org.apache.fluss.metrics.util.NOPMetricsGroup;
+import org.apache.fluss.record.FileLogRecords;
+import org.apache.fluss.record.MemoryLogRecords;
+import org.apache.fluss.record.bytesview.MemorySegmentBytesView;
+import org.apache.fluss.rpc.TestingTabletGatewayService;
 import org.apache.fluss.rpc.messages.ApiVersionsRequest;
 import org.apache.fluss.rpc.messages.ApiVersionsResponse;
 import org.apache.fluss.rpc.messages.LookupRequest;
@@ -31,31 +35,48 @@ import org.apache.fluss.rpc.messages.LookupResponse;
 import org.apache.fluss.rpc.messages.PbApiVersion;
 import org.apache.fluss.rpc.messages.PbLookupReqForBucket;
 import org.apache.fluss.rpc.messages.PbLookupRespForBucket;
+import org.apache.fluss.rpc.messages.PbProduceLogReqForBucket;
 import org.apache.fluss.rpc.messages.PbValue;
+import org.apache.fluss.rpc.messages.ProduceLogRequest;
+import org.apache.fluss.rpc.messages.ProduceLogResponse;
 import org.apache.fluss.rpc.protocol.ApiKeys;
 import org.apache.fluss.rpc.protocol.ApiManager;
 import org.apache.fluss.rpc.protocol.Errors;
 import org.apache.fluss.rpc.protocol.MessageCodec;
+import org.apache.fluss.rpc.protocol.RequestType;
 import org.apache.fluss.security.auth.PlainTextAuthenticationPlugin;
 import org.apache.fluss.shaded.netty4.io.netty.buffer.ByteBuf;
 import org.apache.fluss.shaded.netty4.io.netty.buffer.ByteBufAllocator;
 import org.apache.fluss.shaded.netty4.io.netty.channel.Channel;
 import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelHandlerContext;
 import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelId;
+import org.apache.fluss.shaded.netty4.io.netty.channel.embedded.EmbeddedChannel;
 import org.apache.fluss.shaded.netty4.io.netty.util.concurrent.DefaultEventExecutor;
 import org.apache.fluss.shaded.netty4.io.netty.util.concurrent.ImmediateEventExecutor;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
 import java.net.InetSocketAddress;
+import java.net.SocketAddress;
+import java.nio.file.Path;
 import java.time.Duration;
 import java.util.Collections;
 import java.util.Deque;
 import java.util.HashSet;
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
+import static org.apache.fluss.record.TestData.DATA1;
+import static org.apache.fluss.testutils.DataTestUtils.genMemoryLogRecordsByObject;
 import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
@@ -82,6 +103,140 @@ final class NettyServerHandlerTest {
                         new PlainTextAuthenticationPlugin.PlainTextServerAuthenticator());
         this.ctx = mockChannelHandlerContext();
         serverHandler.channelActive(ctx);
+    }
+
+    @Test
+    void testInactiveLazyRequestIsRejectedBeforeQueuing() throws Exception {
+        RecordingRequestChannel channel = new RecordingRequestChannel();
+        NettyServerHandler handler = newServerHandler(channel);
+        TestEmbeddedChannel embeddedChannel = new TestEmbeddedChannel(handler);
+        ByteBuf requestBuffer = encodeProduceLogRequest();
+
+        try {
+            ChannelHandlerContext context = embeddedChannel.pipeline().context(handler);
+            handler.exceptionCaught(context, new RuntimeException("close connection"));
+            handler.channelRead(context, requestBuffer);
+
+            assertThat(channel.getPutRequestInvocations()).isZero();
+            assertThat(channel.requestsCount()).isZero();
+            assertThat(requestBuffer.refCnt()).isZero();
+        } finally {
+            embeddedChannel.finishAndReleaseAll();
+        }
+    }
+
+    @Test
+    void testActiveLazyRequestRetainsBufferUntilProcessed() throws Exception {
+        TestingRequestChannel channel = new TestingRequestChannel(100);
+        NettyServerHandler handler = newServerHandler(channel);
+        TestEmbeddedChannel embeddedChannel = new TestEmbeddedChannel(handler);
+        ByteBuf requestBuffer = encodeProduceLogRequest();
+
+        try {
+            handler.channelRead(embeddedChannel.pipeline().context(handler), requestBuffer);
+
+            assertThat(channel.requestsCount()).isOne();
+            assertThat(requestBuffer.refCnt()).isOne();
+
+            RpcRequest request = channel.pollRequest(0);
+            assertThat(request).isNotNull();
+            request.releaseBuffer();
+            assertThat(requestBuffer.refCnt()).isZero();
+        } finally {
+            embeddedChannel.finishAndReleaseAll();
+        }
+    }
+
+    @Test
+    void testInactiveProduceRequestCannotAppendReleasedBuffer(@TempDir Path tempDir)
+            throws Exception {
+        CompletableFuture<MemoryLogRecords> capturedRecords = new CompletableFuture<>();
+        CompletableFuture<Void> continueAppend = new CompletableFuture<>();
+        AtomicInteger produceInvocations = new AtomicInteger();
+        AtomicReference<Boolean> validBeforeRelease = new AtomicReference<>();
+        AtomicReference<Throwable> appendFailure = new AtomicReference<>();
+        AtomicReference<Throwable> coordinationFailure = new AtomicReference<>();
+        RequestChannel channel =
+                new CoordinatedRequestChannel(capturedRecords, coordinationFailure);
+        NettyServerHandler handler = newServerHandler(channel);
+        TestEmbeddedChannel embeddedChannel = new TestEmbeddedChannel(handler);
+        ChannelHandlerContext context = embeddedChannel.pipeline().context(handler);
+        ByteBuf requestBuffer = encodeProduceLogRequest();
+
+        try (FileLogRecords fileRecords =
+                FileLogRecords.open(tempDir.resolve("inactive-request.log").toFile())) {
+            TestingTabletGatewayService service =
+                    new TestingTabletGatewayService() {
+                        @Override
+                        public CompletableFuture<ProduceLogResponse> produceLog(
+                                ProduceLogRequest request) {
+                            produceInvocations.incrementAndGet();
+                            ByteBuf recordsSlice = request.getBucketsReqAt(0).getRecordsSlice();
+                            MemoryLogRecords records =
+                                    MemoryLogRecords.pointToByteBuffer(recordsSlice.nioBuffer());
+                            validBeforeRelease.set(records.batches().iterator().next().isValid());
+                            capturedRecords.complete(records);
+                            try {
+                                getWithTimeout(continueAppend, "permission to append records");
+                                fileRecords.append(records);
+                            } catch (Throwable t) {
+                                appendFailure.set(t);
+                            }
+                            return CompletableFuture.completedFuture(new ProduceLogResponse());
+                        }
+                    };
+            RequestHandler<?>[] requestHandlers =
+                    new RequestHandler<?>[RequestType.values().length - 1];
+            requestHandlers[RequestType.FLUSS.id] = new FlussRequestHandler(service);
+            RequestProcessor processor = new RequestProcessor(0, channel, service, requestHandlers);
+            ExecutorService executor = Executors.newSingleThreadExecutor();
+            Future<?> processorTask = executor.submit(processor);
+
+            try {
+                handler.exceptionCaught(context, new RuntimeException("close connection"));
+                handler.channelRead(context, requestBuffer);
+
+                assertThat(requestBuffer.refCnt()).isZero();
+                MemoryLogRecords records = capturedRecords.getNow(null);
+                if (records != null) {
+                    int lastByte = records.getPosition() + records.sizeInBytes() - 1;
+                    byte value = records.getMemorySegment().get(lastByte);
+                    // Model the Netty pool reusing released request memory before the append.
+                    records.getMemorySegment().put(lastByte, (byte) (value ^ 1));
+                }
+
+                processor.initiateShutdown();
+                continueAppend.complete(null);
+                processor.getShutdownFuture().get(5, TimeUnit.SECONDS);
+                processorTask.get(5, TimeUnit.SECONDS);
+
+                boolean validOnDisk =
+                        fileRecords.sizeInBytes() == 0
+                                || fileRecords.batches().iterator().next().isValid();
+                assertThat(coordinationFailure.get()).isNull();
+                assertThat(appendFailure.get()).isNull();
+                if (fileRecords.sizeInBytes() > 0) {
+                    assertThat(validBeforeRelease).hasValue(true);
+                    assertThat(validOnDisk).isFalse();
+                }
+                assertThat(fileRecords.sizeInBytes())
+                        .withFailMessage(
+                                "Inactive ProduceLogRequest appended %s bytes; valid before release: "
+                                        + "%s, valid on disk: %s",
+                                fileRecords.sizeInBytes(), validBeforeRelease.get(), validOnDisk)
+                        .isZero();
+                assertThat(produceInvocations)
+                        .as("inactive requests must not reach the RPC service")
+                        .hasValue(0);
+            } finally {
+                continueAppend.complete(null);
+                if (!processor.getShutdownFuture().isDone()) {
+                    processor.initiateShutdown();
+                }
+                executor.shutdownNow();
+                embeddedChannel.finishAndReleaseAll();
+            }
+        }
     }
 
     @Test
@@ -259,6 +414,41 @@ final class NettyServerHandlerTest {
         assertThat(inflightApiVersionResponses.size()).isEqualTo(5);
     }
 
+    private static NettyServerHandler newServerHandler(RequestChannel requestChannel) {
+        MetricGroup metricGroup = NOPMetricsGroup.newInstance();
+        return new NettyServerHandler(
+                requestChannel,
+                new ApiManager(ServerType.TABLET_SERVER),
+                "FLUSS",
+                true,
+                RequestsMetrics.createCoordinatorServerRequestMetrics(metricGroup),
+                new PlainTextAuthenticationPlugin.PlainTextServerAuthenticator());
+    }
+
+    private static ByteBuf encodeProduceLogRequest() throws Exception {
+        MemoryLogRecords records = genMemoryLogRecordsByObject(DATA1);
+        PbProduceLogReqForBucket bucketRequest =
+                new PbProduceLogReqForBucket()
+                        .setBucketId(0)
+                        .setRecordsBytesView(
+                                new MemorySegmentBytesView(
+                                        records.getMemorySegment(),
+                                        records.getPosition(),
+                                        records.sizeInBytes()));
+        ProduceLogRequest request =
+                new ProduceLogRequest()
+                        .setTableId(1001L)
+                        .setAcks(1)
+                        .setTimeoutMs(10_000)
+                        .addAllBucketsReqs(Collections.singletonList(bucketRequest));
+        return MessageCodec.encodeRequest(
+                ByteBufAllocator.DEFAULT,
+                ApiKeys.PRODUCE_LOG.id,
+                ApiKeys.PRODUCE_LOG.highestSupportedVersion,
+                1,
+                request);
+    }
+
     private static ChannelHandlerContext mockChannelHandlerContext() {
         ChannelId channelId = mock(ChannelId.class);
         when(channelId.asShortText()).thenReturn("short_text");
@@ -288,6 +478,81 @@ final class NettyServerHandlerTest {
                 .setMaxVersion(ApiKeys.API_VERSIONS.highestSupportedVersion);
         response.addAllApiVersions(Collections.singletonList(apiVersion));
         return response;
+    }
+
+    private static <T> T getWithTimeout(CompletableFuture<T> future, String operation) {
+        try {
+            return future.get(5, TimeUnit.SECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new AssertionError("Interrupted while waiting for " + operation, e);
+        } catch (Exception e) {
+            throw new AssertionError("Failed while waiting for " + operation, e);
+        }
+    }
+
+    private static final class RecordingRequestChannel extends RequestChannel {
+        private int putRequestInvocations;
+
+        private RecordingRequestChannel() {
+            super(100);
+        }
+
+        @Override
+        public void putRequest(RpcRequest request) {
+            putRequestInvocations++;
+            super.putRequest(request);
+        }
+
+        private int getPutRequestInvocations() {
+            return putRequestInvocations;
+        }
+    }
+
+    private static final class CoordinatedRequestChannel extends RequestChannel {
+        private final CompletableFuture<MemoryLogRecords> capturedRecords;
+        private final AtomicReference<Throwable> coordinationFailure;
+
+        private CoordinatedRequestChannel(
+                CompletableFuture<MemoryLogRecords> capturedRecords,
+                AtomicReference<Throwable> coordinationFailure) {
+            super(100);
+            this.capturedRecords = capturedRecords;
+            this.coordinationFailure = coordinationFailure;
+        }
+
+        @Override
+        public void putRequest(RpcRequest request) {
+            super.putRequest(request);
+            if (request != ShutdownRequest.INSTANCE) {
+                try {
+                    getWithTimeout(capturedRecords, "request processor to capture records");
+                } catch (Throwable t) {
+                    coordinationFailure.set(t);
+                    throw t;
+                }
+            }
+        }
+    }
+
+    private static final class TestEmbeddedChannel extends EmbeddedChannel {
+
+        private static final InetSocketAddress REMOTE_ADDRESS =
+                new InetSocketAddress("127.0.0.1", 8080);
+
+        private TestEmbeddedChannel(NettyServerHandler serverHandler) {
+            super(serverHandler);
+        }
+
+        @Override
+        protected SocketAddress remoteAddress0() {
+            return REMOTE_ADDRESS;
+        }
+
+        @Override
+        protected SocketAddress localAddress0() {
+            return new InetSocketAddress("127.0.0.1", 18080);
+        }
     }
 
     private LookupResponse makeLookupResponse() {

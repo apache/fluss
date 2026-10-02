@@ -56,10 +56,7 @@ class RowTtlCompactionFilterTest {
 
         try (FlinkCompactionFilter.FlinkCompactionFilterFactory filterFactory =
                         RowTtlCompactionFilterFactory.create(
-                                KvValueLayout.TAGGED,
-                                Duration.ofHours(1L),
-                                1L,
-                                new ManualClock(now));
+                                KvValueLayout.TAGGED, Duration.ofHours(1L), new ManualClock(now));
                 DBOptions dbOptions = new DBOptions().setCreateIfMissing(true);
                 ColumnFamilyOptions cfOptions =
                         new ColumnFamilyOptions().setCompactionFilterFactory(filterFactory);
@@ -83,10 +80,7 @@ class RowTtlCompactionFilterTest {
         assertThatThrownBy(
                         () ->
                                 RowTtlCompactionFilterFactory.create(
-                                        KvValueLayout.TAGGED,
-                                        Duration.ZERO,
-                                        1L,
-                                        new ManualClock(0L)))
+                                        KvValueLayout.TAGGED, Duration.ZERO, new ManualClock(0L)))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining(ConfigOptions.TABLE_KV_TTL.key());
     }

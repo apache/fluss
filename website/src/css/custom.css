@@ -756,6 +756,34 @@ h1, h2, h3, h4, h5, h6 {
   padding: 0 4px;
 }
 
+/* Keep navigation readable between the mobile and full desktop layouts. */
+@media (min-width: 997px) and (max-width: 1199px) {
+  .navbar__inner {
+    padding: 0 8px;
+  }
+
+  .navbar__brand {
+    flex-shrink: 0;
+  }
+
+  .navbar__link {
+    padding: 0 8px;
+    white-space: nowrap;
+  }
+
+  .navbar .DocSearch-Button {
+    width: 40px;
+    min-width: 40px;
+    padding: 0;
+    justify-content: center;
+  }
+
+  .navbar .DocSearch-Button-Placeholder,
+  .navbar .DocSearch-Button-Keys {
+    display: none;
+  }
+}
+
 /* Version dropdown badge */
 .navbar .navbar__item--version,
 .navbar .badge {

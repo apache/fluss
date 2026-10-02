@@ -112,8 +112,8 @@ public class MetricNames {
     // for historical lookup cache
     public static final String HISTORICAL_LOOKUP_CACHE_DISK_SIZE = "lookupCacheDiskSize";
     public static final String HISTORICAL_LOOKUP_CACHE_TABLE_COUNT = "lookupCacheTableCount";
-    public static final String HISTORICAL_LOOKUP_CACHE_CAPACITY_EVICTIONS =
-            "lookupCacheCapacityEvictions";
+    public static final String HISTORICAL_LOOKUP_CACHE_FILE_CAPACITY_EVICTIONS =
+            "lookupCacheFileCapacityEvictions";
 
     // --------------------------------------------------------------------------------------------
     // metrics for user
@@ -134,6 +134,8 @@ public class MetricNames {
             "totalProduceLogRequestsPerSecond";
     public static final String FAILED_PRODUCE_FETCH_LOG_REQUESTS_RATE =
             "failedProduceLogRequestsPerSecond";
+
+    public static final String REMOTE_KV_COPY_BYTES_RATE = "remoteKvCopyBytesPerSecond";
 
     public static final String REMOTE_LOG_COPY_BYTES_RATE = "remoteLogCopyBytesPerSecond";
     public static final String REMOTE_LOG_COPY_REQUESTS_RATE = "remoteLogCopyRequestsPerSecond";
@@ -336,6 +338,14 @@ public class MetricNames {
     public static final String WRITER_BYTES_PER_BATCH = "bytesPerBatch";
     public static final String WRITER_RECORDS_PER_BATCH = "recordsPerBatch";
     public static final String WRITER_SEND_LATENCY_MS = "sendLatencyMs";
+
+    // for record accumulator memory
+    public static final String WRITER_ACCUMULATOR_HEAP_MEMORY_USED_BYTES =
+            "accumulatorHeapMemoryUsedBytes";
+    public static final String WRITER_ACCUMULATOR_ARROW_MEMORY_USED_BYTES =
+            "accumulatorArrowMemoryUsedBytes";
+    public static final String WRITER_ACCUMULATOR_DIRECT_MEMORY_ALLOCATED_BYTES =
+            "accumulatorDirectMemoryAllocatedBytes";
 
     // for scanner
     public static final String SCANNER_TIME_MS_BETWEEN_POLL = "timeMsBetweenPoll";

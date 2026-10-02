@@ -45,15 +45,18 @@ import org.apache.arrow.vector.IntVector;
 import org.apache.arrow.vector.VarCharVector;
 import org.apache.arrow.vector.VectorSchemaRoot;
 import org.apache.paimon.CoreOptions;
+import org.apache.paimon.Snapshot;
 import org.apache.paimon.catalog.Catalog;
 import org.apache.paimon.catalog.CatalogContext;
 import org.apache.paimon.catalog.CatalogFactory;
 import org.apache.paimon.catalog.Identifier;
 import org.apache.paimon.data.InternalRow;
+import org.apache.paimon.manifest.ManifestCommittable;
 import org.apache.paimon.options.Options;
 import org.apache.paimon.partition.Partition;
 import org.apache.paimon.schema.Schema;
 import org.apache.paimon.table.FileStoreTable;
+import org.apache.paimon.table.sink.TableCommitImpl;
 import org.apache.paimon.table.source.DataSplit;
 import org.apache.paimon.table.source.ReadBuilder;
 import org.apache.paimon.table.source.Split;
@@ -84,6 +87,7 @@ import java.util.stream.Stream;
 
 import static org.apache.fluss.lake.committer.LakeCommitter.FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY;
 import static org.apache.fluss.lake.paimon.utils.PaimonConversions.toPaimon;
+import static org.apache.fluss.lake.writer.LakeTieringFactory.FLUSS_LAKE_TIERING_COMMIT_USER;
 import static org.apache.fluss.metadata.TableDescriptor.BUCKET_COLUMN_NAME;
 import static org.apache.fluss.metadata.TableDescriptor.OFFSET_COLUMN_NAME;
 import static org.apache.fluss.metadata.TableDescriptor.TIMESTAMP_COLUMN_NAME;
@@ -94,6 +98,7 @@ import static org.apache.fluss.record.ChangeType.UPDATE_AFTER;
 import static org.apache.fluss.record.ChangeType.UPDATE_BEFORE;
 import static org.apache.fluss.record.TestData.DEFAULT_REMOTE_DATA_DIR;
 import static org.apache.fluss.utils.PartitionUtils.HISTORICAL_PARTITION_VALUE;
+import static org.apache.paimon.table.sink.BatchWriteBuilder.COMMIT_IDENTIFIER;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** The UT for tiering to Paimon via {@link PaimonLakeTieringFactory}. */
@@ -326,6 +331,47 @@ class PaimonTieringTest {
             assertThat(committedLakeSnapshot.getLakeSnapshotId()).isOne();
             assertThat(committedLakeSnapshot.getSnapshotProperties())
                     .containsEntry("fluss-offsets", "offsets-path");
+        }
+    }
+
+    @Test
+    void testUniqueCommitUsersAndBackwardCompatibleRecovery() throws Exception {
+        TablePath tablePath = TablePath.of("paimon", "test_unique_commit_users");
+        TableInfo tableInfo = createNonPartitionedLogTable(tablePath);
+        FileStoreTable fileStoreTable =
+                ((FileStoreTable) paimonCatalog.getTable(toPaimon(tablePath)))
+                        .copy(Collections.singletonMap(CoreOptions.COMMIT_CALLBACKS.key(), ""));
+
+        ManifestCommittable legacyCommittable = new ManifestCommittable(COMMIT_IDENTIFIER);
+        legacyCommittable.addProperty(FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY, "legacy-offsets");
+        try (TableCommitImpl tableCommit =
+                fileStoreTable.newCommit(FLUSS_LAKE_TIERING_COMMIT_USER)) {
+            tableCommit.ignoreEmptyCommit(false).commit(legacyCommittable);
+        }
+        try (LakeCommitter<PaimonWriteResult, PaimonCommittable> lakeCommitter =
+                createLakeCommitter(tablePath, tableInfo, new Configuration())) {
+            CommittedLakeSnapshot legacySnapshot = lakeCommitter.getMissingLakeSnapshot(null);
+            assertThat(legacySnapshot).isNotNull();
+            assertThat(legacySnapshot.getLakeSnapshotId()).isOne();
+        }
+
+        long firstSnapshotId = commitEmptySnapshot(tablePath, tableInfo, "first-offsets");
+        long secondSnapshotId = commitEmptySnapshot(tablePath, tableInfo, "second-offsets");
+
+        Snapshot firstSnapshot = fileStoreTable.snapshotManager().snapshot(firstSnapshotId);
+        Snapshot secondSnapshot = fileStoreTable.snapshotManager().snapshot(secondSnapshotId);
+        String uniqueCommitUserPrefix = FLUSS_LAKE_TIERING_COMMIT_USER + "_";
+        assertThat(firstSnapshot.commitUser()).startsWith(uniqueCommitUserPrefix);
+        assertThat(secondSnapshot.commitUser())
+                .startsWith(uniqueCommitUserPrefix)
+                .isNotEqualTo(firstSnapshot.commitUser());
+
+        try (LakeCommitter<PaimonWriteResult, PaimonCommittable> lakeCommitter =
+                createLakeCommitter(tablePath, tableInfo, new Configuration())) {
+            CommittedLakeSnapshot missingSnapshot =
+                    lakeCommitter.getMissingLakeSnapshot(firstSnapshotId);
+            assertThat(missingSnapshot).isNotNull();
+            assertThat(missingSnapshot.getLakeSnapshotId()).isEqualTo(secondSnapshotId);
         }
     }
 
@@ -1122,6 +1168,19 @@ class PaimonTieringTest {
                 });
     }
 
+    private long commitEmptySnapshot(TablePath tablePath, TableInfo tableInfo, String offsets)
+            throws Exception {
+        try (LakeCommitter<PaimonWriteResult, PaimonCommittable> lakeCommitter =
+                createLakeCommitter(tablePath, tableInfo, new Configuration())) {
+            return lakeCommitter
+                    .commit(
+                            lakeCommitter.toCommittable(Collections.emptyList()),
+                            Collections.singletonMap(
+                                    FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY, offsets))
+                    .getCommittedSnapshotId();
+        }
+    }
+
     private void createTable(
             TablePath tablePath,
             boolean isPrimaryTable,
@@ -1152,6 +1211,22 @@ class PaimonTieringTest {
         }
         builder.options(options);
         doCreatePaimonTable(tablePath, builder);
+    }
+
+    private TableInfo createNonPartitionedLogTable(TablePath tablePath) throws Exception {
+        createTable(tablePath, false, false, null, Collections.emptyMap());
+        TableDescriptor descriptor =
+                TableDescriptor.builder()
+                        .schema(
+                                org.apache.fluss.metadata.Schema.newBuilder()
+                                        .column("c1", org.apache.fluss.types.DataTypes.INT())
+                                        .column("c2", org.apache.fluss.types.DataTypes.STRING())
+                                        .column("c3", org.apache.fluss.types.DataTypes.STRING())
+                                        .build())
+                        .distributedBy(1)
+                        .property(ConfigOptions.TABLE_DATALAKE_ENABLED, true)
+                        .build();
+        return TableInfo.of(tablePath, 0, 1, descriptor, DEFAULT_REMOTE_DATA_DIR, 1L, 1L);
     }
 
     private TableInfo createHistoricalTable(TablePath tablePath, boolean isPrimaryKeyTable)

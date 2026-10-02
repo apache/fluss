@@ -140,19 +140,18 @@ docker buildx imagetools inspect \
   apache/fluss-gateway:${RELEASE_VERSION}-rc${RC_NUM}
 ```
 
-Record the top-level image index `Digest` (including `sha256:`) in the vote
-thread as `GATEWAY_IMAGE_DIGEST`. Then verify that same digest on matching
-`amd64` and `arm64` Docker hosts:
+Then verify the release-candidate image on matching `amd64` and `arm64` Docker
+hosts:
 
 ```bash
-docker pull "apache/fluss-gateway@${GATEWAY_IMAGE_DIGEST:?Set the RC image index digest}"
-image_commit="$(docker run --rm --entrypoint cat "apache/fluss-gateway@${GATEWAY_IMAGE_DIGEST}" /opt/fluss/RELEASE_COMMIT)"
+docker pull apache/fluss-gateway:${RELEASE_VERSION}-rc${RC_NUM}
+image_commit="$(docker run --rm --entrypoint cat apache/fluss-gateway:${RELEASE_VERSION}-rc${RC_NUM} /opt/fluss/RELEASE_COMMIT)"
 test "${image_commit}" = "${RELEASE_COMMIT:?Set the recorded RC commit}"
 
 # Run the checked-in smoke test from the root of the extracted Fluss source
 # release, not from the Gateway binary distribution used above.
 cd /path/to/fluss-${RELEASE_VERSION}
-GATEWAY_IMAGE=apache/fluss-gateway@${GATEWAY_IMAGE_DIGEST} \
+GATEWAY_IMAGE=apache/fluss-gateway:${RELEASE_VERSION}-rc${RC_NUM} \
   docker/fluss-gateway/smoke-test.sh
 ```
 

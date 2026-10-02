@@ -5,7 +5,7 @@ sidebar_position: 3
 
 # Union Read
 
-Union Read is a core feature of Fluss's Streaming Lakehouse that combines real-time data from Fluss with historical data from the data lake in a single query.
+Union Read is a supported access path in a Fluss-enabled [Lakestream foundation](overview.mdx). It uses committed lake data and associated streaming progress to read the relevant data from both layers of one logical table.
 
 ## Overview
 

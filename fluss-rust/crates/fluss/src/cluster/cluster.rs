@@ -24,6 +24,7 @@ use crate::proto::{MetadataResponse, PbBucketMetadata};
 use crate::rpc::{from_pb_server_node, from_pb_table_path};
 use crate::{BucketId, PartitionId, TableId};
 use rand::random_range;
+use rand::seq::IteratorRandom;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -445,6 +446,16 @@ impl Cluster {
         }
         let offset = random_range(0..self.alive_tablet_servers.len());
         self.alive_tablet_servers.get(offset)
+    }
+
+    pub(crate) fn get_one_available_server_excluding(
+        &self,
+        unavailable_server_ids: &HashSet<i32>,
+    ) -> Option<&ServerNode> {
+        self.alive_tablet_servers
+            .iter()
+            .filter(|server| !unavailable_server_ids.contains(&server.id()))
+            .choose(&mut rand::rng())
     }
 
     pub fn get_bucket_count(&self, table_path: &TablePath) -> i32 {

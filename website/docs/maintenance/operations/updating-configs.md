@@ -20,6 +20,9 @@ Currently, the supported dynamically updatable server configurations include:
 - `datalake.enabled`: Control whether the cluster is ready to create and manage lakehouse tables. When this option is explicitly configured to true, `datalake.format` must also be configured.
 - `datalake.format`: Specify the lakehouse format, e.g., `paimon`, `iceberg`. When enabling lakehouse storage explicitly, use it together with `datalake.enabled = true`.
 - Options with prefix `datalake.${datalake.format}`
+- `log.retention.roll-active-segment.enabled`: Control whether a non-empty active segment can be
+  rolled after the effective local cleanup TTL expires and the high watermark reaches the log end
+  offset. See [TTL](../../table-design/data-distribution/ttl.md#active-segment-rolling).
 - `kv.rocksdb.shared-rate-limiter.bytes-per-sec`: Control RocksDB flush and compaction write rate shared across all RocksDB instances on the TabletServer. The rate limiter is always enabled. Set to a lower value (e.g., 100MB) to limit the rate, or a very high value to effectively disable rate limiting.
 - `security.sasl.plain.credentials`: Add, change, or remove the users that can authenticate with SASL/PLAIN, see [Authentication](security/authentication.md#managing-multiple-users).
 - `server.historical-partition.thread-pool.max-size`: Change the maximum number of threads used for historical partition operations.
@@ -74,6 +77,11 @@ CALL sys.set_cluster_configs(
 -- Set RocksDB shared rate limiter to 200MB/sec
 CALL sys.set_cluster_configs(
   config_pairs => 'kv.rocksdb.shared-rate-limiter.bytes-per-sec', '200MB'
+);
+
+-- Allow expired active log segments to be rolled
+CALL sys.set_cluster_configs(
+  config_pairs => 'log.retention.roll-active-segment.enabled', 'true'
 );
 ```
 

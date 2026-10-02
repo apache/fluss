@@ -25,12 +25,15 @@ import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.DatabaseSummary;
+import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.SchemaInfo;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableDescriptor;
+import org.apache.fluss.metadata.TablePartition;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.server.entity.RegisterTableBucketLeadAndIsrInfo;
+import org.apache.fluss.server.zk.ZkAsyncResponse.ZkGetDataResponse;
 import org.apache.fluss.server.zk.data.BucketAssignment;
 import org.apache.fluss.server.zk.data.BucketSnapshot;
 import org.apache.fluss.server.zk.data.CoordinatorAddress;
@@ -43,6 +46,7 @@ import org.apache.fluss.server.zk.data.TableAssignment;
 import org.apache.fluss.server.zk.data.TableRegistration;
 import org.apache.fluss.server.zk.data.TabletServerRegistration;
 import org.apache.fluss.server.zk.data.ZkData.BucketIdZNode;
+import org.apache.fluss.server.zk.data.ZkData.TableIdZNode;
 import org.apache.fluss.server.zk.data.lease.KvSnapshotLeaseMetadata;
 import org.apache.fluss.shaded.curator5.org.apache.curator.CuratorZookeeperClient;
 import org.apache.fluss.shaded.curator5.org.apache.curator.framework.CuratorFramework;
@@ -187,6 +191,19 @@ class ZooKeeperClientTest {
         assertThat(zookeeperClient.getTablesAssignments(Arrays.asList(tableId1, tableId2)))
                 .containsValues(tableAssignment1, tableAssignment2);
 
+        // An existing table id node may have no assignment when it only contains child nodes.
+        long tableIdWithoutAssignment = 3L;
+        zookeeperClient
+                .getCuratorClient()
+                .create()
+                .forPath(TableIdZNode.path(tableIdWithoutAssignment), new byte[0]);
+        assertThat(
+                        zookeeperClient.getTablesAssignments(
+                                Arrays.asList(tableId1, tableId2, tableIdWithoutAssignment)))
+                .containsOnlyKeys(tableId1, tableId2)
+                .containsEntry(tableId1, tableAssignment1)
+                .containsEntry(tableId2, tableAssignment2);
+
         // test update
         TableAssignment tableAssignment3 =
                 TableAssignment.builder().add(3, BucketAssignment.of(1, 5)).build();
@@ -197,6 +214,11 @@ class ZooKeeperClientTest {
         // test delete
         zookeeperClient.deleteTableAssignment(tableId1);
         assertThat(zookeeperClient.getTableAssignment(tableId1)).isEmpty();
+        assertThat(
+                        zookeeperClient.getTablesAssignments(
+                                Arrays.asList(tableId1, tableId2, tableIdWithoutAssignment)))
+                .containsOnlyKeys(tableId2)
+                .containsEntry(tableId2, tableAssignment2);
     }
 
     @Test
@@ -220,8 +242,13 @@ class ZooKeeperClientTest {
                 tableBucket2, leaderAndIsr2, zkEpoch.getCoordinatorEpochZkVersion());
         assertThat(zookeeperClient.getLeaderAndIsr(tableBucket1)).hasValue(leaderAndIsr1);
         assertThat(zookeeperClient.getLeaderAndIsr(tableBucket2)).hasValue(leaderAndIsr2);
-        assertThat(zookeeperClient.getLeaderAndIsrs(Arrays.asList(tableBucket1, tableBucket2)))
-                .containsValues(leaderAndIsr1, leaderAndIsr2);
+        Map<TableBucket, LeaderAndIsr> leaderAndIsrs =
+                zookeeperClient.getLeaderAndIsrs(
+                        Arrays.asList(tableBucket1, tableBucket2, new TableBucket(1, 3)));
+        assertThat(leaderAndIsrs)
+                .containsOnlyKeys(tableBucket1, tableBucket2)
+                .containsEntry(tableBucket1, leaderAndIsr1)
+                .containsEntry(tableBucket2, leaderAndIsr2);
 
         // test update
         leaderAndIsr1 =
@@ -234,6 +261,35 @@ class ZooKeeperClientTest {
         // test delete
         zookeeperClient.deleteLeaderAndIsr(tableBucket1);
         assertThat(zookeeperClient.getLeaderAndIsr(tableBucket1)).isEmpty();
+    }
+
+    @Test
+    void testProcessGetDataResponsesOrThrow() throws Exception {
+        String existingPath = "/existing";
+        List<ZkGetDataResponse> responses =
+                Arrays.asList(
+                        new ZkGetDataResponse(
+                                existingPath, KeeperException.Code.OK, new byte[] {1}, null),
+                        new ZkGetDataResponse(
+                                "/without-value", KeeperException.Code.OK, new byte[0], null),
+                        new ZkGetDataResponse("/missing", KeeperException.Code.NONODE, null, null));
+
+        Map<String, Integer> result =
+                ZooKeeperClient.processGetDataResponsesOrThrow(
+                        responses,
+                        ZkGetDataResponse::getPath,
+                        data -> data.length == 0 ? null : (int) data[0]);
+        assertThat(result).containsOnlyKeys(existingPath).containsEntry(existingPath, 1);
+
+        ZkGetDataResponse failedResponse =
+                new ZkGetDataResponse("/failed", KeeperException.Code.CONNECTIONLOSS, null, null);
+        assertThatThrownBy(
+                        () ->
+                                ZooKeeperClient.processGetDataResponsesOrThrow(
+                                        Collections.singletonList(failedResponse),
+                                        ZkGetDataResponse::getPath,
+                                        data -> data))
+                .isInstanceOf(KeeperException.ConnectionLossException.class);
     }
 
     @ParameterizedTest
@@ -752,6 +808,11 @@ class ZooKeeperClientTest {
                 tableId,
                 partitionAssignment.getBucketAssignments().size());
 
+        assertThat(zookeeperClient.getPartitionsAssignments(Arrays.asList(1L, 2L, 3L)))
+                .containsOnlyKeys(1L, 2L)
+                .containsEntry(1L, partitionAssignment)
+                .containsEntry(2L, partitionAssignment);
+
         // check created partitions
         partitions = zookeeperClient.getPartitions(tablePath);
         assertThat(partitions).containsExactly("p1", "p2");
@@ -759,8 +820,25 @@ class ZooKeeperClientTest {
         assertThat(partition.getPartitionId()).isEqualTo(1L);
         partition = zookeeperClient.getPartition(tablePath, "p2").get();
         assertThat(partition.getPartitionId()).isEqualTo(2L);
+        Map<String, PartitionRegistration> partitionRegistrations =
+                zookeeperClient.getPartitionRegistrations(tablePath);
+        assertThat(partitionRegistrations).containsOnlyKeys("p1", "p2");
+        assertThat(partitionRegistrations.get("p1").getPartitionId()).isEqualTo(1L);
+        assertThat(partitionRegistrations.get("p2").getPartitionId()).isEqualTo(2L);
         assertThat(zookeeperClient.getPartitionsForTables(Arrays.asList(tablePath)))
                 .containsValues(new ArrayList<>(partitions));
+
+        PhysicalTablePath partitionPath1 = PhysicalTablePath.of(tablePath, "p1");
+        PhysicalTablePath partitionPath2 = PhysicalTablePath.of(tablePath, "p2");
+        PhysicalTablePath missingPartitionPath = PhysicalTablePath.of(tablePath, "p3");
+        Map<PhysicalTablePath, TablePartition> partitionIds =
+                zookeeperClient.getPartitionIds(
+                        Arrays.asList(partitionPath1, partitionPath2, missingPartitionPath));
+        assertThat(partitionIds).containsOnlyKeys(partitionPath1, partitionPath2);
+        assertThat(partitionIds.get(partitionPath1).getTableId()).isEqualTo(tableId);
+        assertThat(partitionIds.get(partitionPath1).getPartitionId()).isEqualTo(1L);
+        assertThat(partitionIds.get(partitionPath2).getTableId()).isEqualTo(tableId);
+        assertThat(partitionIds.get(partitionPath2).getPartitionId()).isEqualTo(2L);
 
         // A batch read returns every registration and preserves the version needed by CAS updates.
         PartitionRegistration p1Registration = zookeeperClient.getPartition(tablePath, "p1").get();
