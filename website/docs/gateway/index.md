@@ -255,3 +255,7 @@ Dropping a non-empty database returns HTTP 409.
 `GET /v1/openapi.json` returns the generated OpenAPI document. See the
 [source specification](https://github.com/apache/fluss/blob/main/fluss-gateway/openapi.yaml)
 for table alterations, partitions, data types, pagination, and errors.
+
+## Community tools
+
+- [fluss-adk-toolkit](https://github.com/Ashfaqbs/fluss-adk-toolkit) — [Google ADK](https://google.github.io/adk-docs/) tools that let an agent manage databases, tables, and partitions and write records through the Gateway's REST API.
