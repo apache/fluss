@@ -24,7 +24,6 @@ import org.apache.fluss.metadata.SchemaGetter;
 import org.apache.fluss.record.BinaryValue;
 import org.apache.fluss.row.BinaryRow;
 import org.apache.fluss.row.decode.RowDecoder;
-import org.apache.fluss.types.DataType;
 
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -59,9 +58,7 @@ public class ValueDecoder {
                         schemaId,
                         (id) -> {
                             Schema schema = schemaGetter.getSchema(schemaId);
-                            return RowDecoder.create(
-                                    kvFormat,
-                                    schema.getRowType().getChildren().toArray(new DataType[0]));
+                            return RowDecoder.create(kvFormat, schema);
                         });
 
         BinaryRow row =

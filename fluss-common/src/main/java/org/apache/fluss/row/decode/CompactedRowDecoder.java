@@ -18,30 +18,41 @@
 package org.apache.fluss.row.decode;
 
 import org.apache.fluss.memory.MemorySegment;
+import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.row.compacted.CompactedRow;
 import org.apache.fluss.row.compacted.CompactedRowDeserializer;
 import org.apache.fluss.types.DataType;
 
+import java.util.BitSet;
+import java.util.Collections;
+import java.util.Map;
+
 /** A decoder to decode {@link CompactedRow} from a byte array or memory segment. */
-public class CompactedRowDecoder implements RowDecoder {
+public class CompactedRowDecoder extends AbstractRowDecoder {
 
     private final DataType[] fieldDataTypes;
     private final CompactedRowDeserializer deserializer;
 
     public CompactedRowDecoder(DataType[] fieldDataTypes) {
+        this(fieldDataTypes, new BitSet(), Collections.emptyMap());
+    }
+
+    CompactedRowDecoder(
+            DataType[] fieldDataTypes, BitSet decodedColumns, Map<Integer, String> tableConfigs) {
+        super(KvFormat.COMPACTED, fieldDataTypes, decodedColumns, tableConfigs);
         this.fieldDataTypes = fieldDataTypes;
         this.deserializer = new CompactedRowDeserializer(fieldDataTypes);
     }
 
     @Override
     public CompactedRow decode(byte[] values) {
-        return CompactedRow.from(fieldDataTypes, values, deserializer);
+        return (CompactedRow) decodeFields(CompactedRow.from(fieldDataTypes, values, deserializer));
     }
 
     @Override
     public CompactedRow decode(MemorySegment segment, int offset, int sizeInBytes) {
         CompactedRow compactedRow = new CompactedRow(fieldDataTypes.length, deserializer);
         compactedRow.pointTo(segment, offset, sizeInBytes);
-        return compactedRow;
+        return (CompactedRow) decodeFields(compactedRow);
     }
 }

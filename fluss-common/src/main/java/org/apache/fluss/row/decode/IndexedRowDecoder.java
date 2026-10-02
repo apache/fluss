@@ -18,26 +18,37 @@
 package org.apache.fluss.row.decode;
 
 import org.apache.fluss.memory.MemorySegment;
+import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.row.indexed.IndexedRow;
 import org.apache.fluss.types.DataType;
 
+import java.util.BitSet;
+import java.util.Collections;
+import java.util.Map;
+
 /** A decoder to decode {@link IndexedRow} from a byte array or memory segment. */
-public class IndexedRowDecoder implements RowDecoder {
+public class IndexedRowDecoder extends AbstractRowDecoder {
     private final DataType[] fieldDataTypes;
 
     public IndexedRowDecoder(DataType[] fieldDataTypes) {
+        this(fieldDataTypes, new BitSet(), Collections.emptyMap());
+    }
+
+    IndexedRowDecoder(
+            DataType[] fieldDataTypes, BitSet decodedColumns, Map<Integer, String> tableConfigs) {
+        super(KvFormat.INDEXED, fieldDataTypes, decodedColumns, tableConfigs);
         this.fieldDataTypes = fieldDataTypes;
     }
 
     @Override
     public IndexedRow decode(byte[] values) {
-        return IndexedRow.from(fieldDataTypes, values);
+        return (IndexedRow) decodeFields(IndexedRow.from(fieldDataTypes, values));
     }
 
     @Override
     public IndexedRow decode(MemorySegment segment, int offset, int sizeInBytes) {
         IndexedRow indexedRow = new IndexedRow(fieldDataTypes);
         indexedRow.pointTo(segment, offset, sizeInBytes);
-        return indexedRow;
+        return (IndexedRow) decodeFields(indexedRow);
     }
 }
