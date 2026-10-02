@@ -88,7 +88,7 @@ public class FlinkMetricRegistry implements MetricRegistry {
         registerMetric(currentMetricGroup, metric, metricName);
     }
 
-    /** Exposes the metrics of Fluss metics group for flink. */
+    /** Exposes the metrics of Fluss metrics group for flink. */
     public Metric getFlussMetric(String metricName) {
         return metrics.get(metricName);
     }
