@@ -41,7 +41,7 @@ Create the lookuper with `lookup_by(columns)` naming the prefix columns, then ca
 ```rust
 use fluss::row::{GenericRow, InternalRow};
 
-let mut prefix_lookuper = table
+let prefix_lookuper = table
     .new_lookup()?
     .lookup_by(vec!["user_id".to_string(), "session_id".to_string()])
     .create_lookuper()?;
@@ -85,7 +85,7 @@ let table_descriptor = TableDescriptor::builder()
 ```
 
 ```rust
-let mut prefix_lookuper = table
+let prefix_lookuper = table
     .new_lookup()?
     .lookup_by(vec![
         "region".to_string(),

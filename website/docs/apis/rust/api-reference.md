@@ -315,7 +315,7 @@ for record in records {
 
 | Method                                                                       |  Description                |
 |------------------------------------------------------------------------------|-----------------------------|
-| `async fn lookup(&mut self, key: &impl InternalRow) -> Result<LookupResult>` | Lookup a row by primary key |
+| `async fn lookup(&self, key: &impl InternalRow) -> Result<LookupResult>`     | Lookup a row by primary key |
 
 ## `LookupResult`
 

@@ -199,7 +199,7 @@ upsert_writer.flush().await?;
 Lookup requires all primary key columns including partition columns.
 
 ```rust
-let mut lookuper = table.new_lookup()?.create_lookuper()?;
+let lookuper = table.new_lookup()?.create_lookuper()?;
 
 let mut key = GenericRow::new(3);
 key.set_field(0, 1001);    // user_id
