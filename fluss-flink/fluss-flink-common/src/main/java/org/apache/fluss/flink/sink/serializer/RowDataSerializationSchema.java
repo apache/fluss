@@ -107,6 +107,16 @@ public class RowDataSerializationSchema implements FlussSerializationSchema<RowD
     @Nullable private transient ProjectedRow outputProjection;
 
     /**
+     * Projection to handle input rows with extra fields (e.g., computed columns like PROCTIME()
+     * that Flink adds during UPDATE). Lazily initialized in {@link #serialize(RowData)} when the
+     * actual RowData arity exceeds the expected input field count.
+     */
+    @Nullable private transient ProjectedRow inputProjection;
+
+    /** The expected field count of the input, used to detect extra computed columns. */
+    private transient int expectedInputFieldCount;
+
+    /**
      * Estimator for calculating the size of RowData instances. Maybe null if there is no need to
      * calculate size.
      */
@@ -134,6 +144,7 @@ public class RowDataSerializationSchema implements FlussSerializationSchema<RowD
         this.converter = new FlinkAsFlussRow();
         List<String> targetFieldNames = context.getRowSchema().getFieldNames();
         List<String> inputFieldNames = context.getInputRowSchema().getFieldNames();
+        this.expectedInputFieldCount = inputFieldNames.size();
         this.outputPadding = new PaddingRow(inputFieldNames.size());
         if (targetFieldNames.size() != inputFieldNames.size()) {
             // there is a schema evolution happens (e.g., ADD COLUMN), need to build index mapping
@@ -166,6 +177,29 @@ public class RowDataSerializationSchema implements FlussSerializationSchema<RowD
                     "Converter not initialized. The open() method must be called before serializing records.");
         }
         InternalRow row = converter.replace(value);
+        // Handle extra computed columns (e.g., PROCTIME()) that Flink may add during
+        // UPDATE statements. These columns don't exist in the Fluss table schema and
+        // need to be projected out. Lazily build a projection on first encounter.
+        //
+        // Assumption: Flink appends computed columns *after* all physical columns in
+        // the UPDATE row (i.e., physical columns occupy indices 0..expectedInputFieldCount-1).
+        // This holds for the row-level modification path used by UPDATE/DELETE today.
+        // A schema like (a INT, ptime AS PROCTIME(), b STRING) with a computed column
+        // in a non-trailing position is not yet supported and would silently produce
+        // incorrect results.  If that pattern needs to be handled, the proper fix is
+        // to source the full consumed row type (physical + computed, in definition order)
+        // at plan time and build a name-based projection in open() rather than an
+        // identity mapping here.
+        if (row.getFieldCount() > expectedInputFieldCount) {
+            if (inputProjection == null) {
+                int[] identityMapping = new int[expectedInputFieldCount];
+                for (int i = 0; i < expectedInputFieldCount; i++) {
+                    identityMapping[i] = i;
+                }
+                inputProjection = ProjectedRow.from(identityMapping);
+            }
+            row = inputProjection.replaceRow(row);
+        }
         // handling schema evolution for changes before job compilation
         if (row.getFieldCount() < outputPadding.getFieldCount()) {
             row = outputPadding.replaceRow(row);
