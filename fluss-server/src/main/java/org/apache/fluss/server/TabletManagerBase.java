@@ -240,28 +240,41 @@ public abstract class TabletManagerBase {
     // TODO: we should support get table info from local properties file instead of from zk
     public static TableInfo getTableInfo(ZooKeeperClient zkClient, TablePath tablePath)
             throws Exception {
-        int schemaId = zkClient.getCurrentSchemaId(tablePath);
-        Optional<SchemaInfo> schemaInfoOpt = zkClient.getSchemaById(tablePath, schemaId);
-        SchemaInfo schemaInfo;
-        if (!schemaInfoOpt.isPresent()) {
-            throw new SchemaNotExistException(
-                    String.format(
-                            "Failed to load table '%s': Table schema not found in zookeeper metadata.",
-                            tablePath));
-        } else {
-            schemaInfo = schemaInfoOpt.get();
+        Optional<SchemaInfo> schemaInfoOpt = getCurrentSchema(zkClient, tablePath);
+        Optional<TableRegistration> tableRegistrationOpt = zkClient.getTable(tablePath);
+        if (!schemaInfoOpt.isPresent() || !tableRegistrationOpt.isPresent()) {
+            // The coordinator writes the schema and the table registration before it sends
+            // NotifyLeaderAndIsr, but a ZooKeeper follower may not have applied them yet.
+            LOG.info(
+                    "Table metadata of '{}' not found in ZooKeeper, syncing with the ZooKeeper "
+                            + "leader and reading it again.",
+                    tablePath);
+            zkClient.syncTable(tablePath);
+            schemaInfoOpt = getCurrentSchema(zkClient, tablePath);
+            tableRegistrationOpt = zkClient.getTable(tablePath);
         }
 
+        SchemaInfo schemaInfo =
+                schemaInfoOpt.orElseThrow(
+                        () ->
+                                new SchemaNotExistException(
+                                        String.format(
+                                                "Failed to load table '%s': Table schema not found in zookeeper metadata.",
+                                                tablePath)));
         TableRegistration tableRegistration =
-                zkClient.getTable(tablePath)
-                        .orElseThrow(
-                                () ->
-                                        new LogStorageException(
-                                                String.format(
-                                                        "Failed to load table '%s': table info not found in zookeeper metadata.",
-                                                        tablePath)));
+                tableRegistrationOpt.orElseThrow(
+                        () ->
+                                new LogStorageException(
+                                        String.format(
+                                                "Failed to load table '%s': table info not found in zookeeper metadata.",
+                                                tablePath)));
 
         return tableRegistration.toTableInfo(tablePath, schemaInfo);
+    }
+
+    private static Optional<SchemaInfo> getCurrentSchema(
+            ZooKeeperClient zkClient, TablePath tablePath) throws Exception {
+        return zkClient.getSchemaById(tablePath, zkClient.getCurrentSchemaId(tablePath));
     }
 
     /** Create a tablet directory in the given dir. */
