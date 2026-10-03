@@ -17,6 +17,7 @@
 
 package org.apache.fluss.server.log.remote;
 
+import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.RemoteStorageException;
@@ -29,6 +30,7 @@ import org.apache.fluss.remote.RemoteLogManifest;
 import org.apache.fluss.remote.RemoteLogSegment;
 import org.apache.fluss.utils.CloseableRegistry;
 import org.apache.fluss.utils.ExceptionUtils;
+import org.apache.fluss.utils.ExponentialBackoff;
 import org.apache.fluss.utils.FlussPaths;
 import org.apache.fluss.utils.IOUtils;
 import org.apache.fluss.utils.concurrent.FutureUtils;
@@ -66,10 +68,16 @@ public class DefaultRemoteLogStorage implements RemoteLogStorage {
 
     private static final int READ_BUFFER_SIZE = 16 * 1024;
 
+    private static final int RETRY_BACKOFF_MULTIPLIER = 2;
+    private static final long RETRY_BACKOFF_MAX_MS = 10_000;
+    private static final double RETRY_BACKOFF_JITTER = 0.2;
+
     private final FsPath remoteLogDir;
     private final FileSystem fileSystem;
     private final ExecutorService ioExecutor;
     private final int writeBufferSize;
+    private final int retryMaxAttempts;
+    private final ExponentialBackoff retryBackoff;
 
     public DefaultRemoteLogStorage(Configuration conf, ExecutorService ioExecutor)
             throws IOException {
@@ -77,6 +85,13 @@ public class DefaultRemoteLogStorage implements RemoteLogStorage {
         this.fileSystem = remoteLogDir.getFileSystem();
         this.writeBufferSize = (int) conf.get(ConfigOptions.REMOTE_FS_WRITE_BUFFER_SIZE).getBytes();
         this.ioExecutor = ioExecutor;
+        this.retryMaxAttempts = conf.get(ConfigOptions.REMOTE_LOG_UPLOAD_RETRY_MAX_ATTEMPTS);
+        this.retryBackoff =
+                new ExponentialBackoff(
+                        conf.get(ConfigOptions.REMOTE_LOG_UPLOAD_RETRY_INITIAL_BACKOFF).toMillis(),
+                        RETRY_BACKOFF_MULTIPLIER,
+                        RETRY_BACKOFF_MAX_MS,
+                        RETRY_BACKOFF_JITTER);
     }
 
     @Override
@@ -106,6 +121,8 @@ public class DefaultRemoteLogStorage implements RemoteLogStorage {
         } catch (ExecutionException e) {
             Throwable throwable = ExceptionUtils.stripExecutionException(e);
             throwable = ExceptionUtils.stripException(throwable, RuntimeException.class);
+            // Clean up any partially uploaded segment files to avoid leaving orphaned data
+            cleanupSegmentFilesQuietly(remoteLogSegment);
             throw new RemoteStorageException(
                     "Failed to copy log segment and indexes to remote dir for path: "
                             + remoteLogSegment,
@@ -117,10 +134,27 @@ public class DefaultRemoteLogStorage implements RemoteLogStorage {
                             + remoteLogSegment,
                     e);
         } catch (Exception e) {
+            cleanupSegmentFilesQuietly(remoteLogSegment);
             throw new RemoteStorageException(
                     "Failed to copy log segment and indexes to remote for path: "
                             + remoteLogSegment,
                     e);
+        }
+    }
+
+    /**
+     * Attempts to delete already-uploaded segment files after a failed upload. Any errors during
+     * cleanup are logged but not propagated, so the original failure cause is preserved.
+     */
+    private void cleanupSegmentFilesQuietly(RemoteLogSegment remoteLogSegment) {
+        try {
+            deleteLogSegmentFiles(remoteLogSegment);
+            LOG.debug("Cleaned up partially uploaded segment files for: {}", remoteLogSegment);
+        } catch (Exception cleanupException) {
+            LOG.warn(
+                    "Failed to clean up partially uploaded segment files for: {}",
+                    remoteLogSegment,
+                    cleanupException);
         }
     }
 
@@ -286,14 +320,63 @@ public class DefaultRemoteLogStorage implements RemoteLogStorage {
                     CompletableFuture.runAsync(
                             ThrowingRunnable.unchecked(
                                     () ->
-                                            writeToRemote(
-                                                    Files.newInputStream(localFile),
+                                            writeToRemoteWithRetry(
+                                                    localFile,
                                                     rlsPath,
                                                     localFile.getFileName().toString())),
                             ioExecutor);
             list.add(voidCompletableFuture);
         }
         return list;
+    }
+
+    /**
+     * Writes a local file to remote storage with configurable retry on {@link IOException}.
+     *
+     * <p>On each retry attempt, a fresh input stream is opened from the local file. If all retry
+     * attempts are exhausted, the last exception is rethrown.
+     */
+    @VisibleForTesting
+    void writeToRemoteWithRetry(Path localFile, FsPath remoteDir, String remoteFileName)
+            throws IOException {
+        IOException lastException = null;
+        for (int attempt = 0; attempt <= retryMaxAttempts; attempt++) {
+            try {
+                writeToRemote(Files.newInputStream(localFile), remoteDir, remoteFileName);
+                return;
+            } catch (IOException e) {
+                lastException = e;
+                if (attempt == retryMaxAttempts) {
+                    break;
+                }
+                long retryDelayMs = retryBackoff.backoff(attempt);
+                LOG.warn(
+                        "Failed to upload file {} to remote path {} on attempt {}/{}. "
+                                + "Retry after {} ms.",
+                        remoteFileName,
+                        remoteDir,
+                        attempt + 1,
+                        retryMaxAttempts + 1,
+                        retryDelayMs,
+                        e);
+                try {
+                    Thread.sleep(retryDelayMs);
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    throw new IOException(
+                            "Interrupted while retrying file upload: " + remoteFileName, ie);
+                }
+            }
+        }
+        throw new IOException(
+                "Failed to upload file "
+                        + remoteFileName
+                        + " to remote path "
+                        + remoteDir
+                        + " after "
+                        + (retryMaxAttempts + 1)
+                        + " attempts",
+                lastException);
     }
 
     /**
@@ -304,8 +387,10 @@ public class DefaultRemoteLogStorage implements RemoteLogStorage {
      * @param remoteDir remote dir
      * @return remote file path including file name
      */
-    private @Nullable FsPath writeToRemote(
-            InputStream inputStream, FsPath remoteDir, String remoteFileName) throws IOException {
+    @VisibleForTesting
+    @Nullable
+    FsPath writeToRemote(InputStream inputStream, FsPath remoteDir, String remoteFileName)
+            throws IOException {
         try (CloseableRegistry closeableRegistry = new CloseableRegistry()) {
             final byte[] buffer = new byte[READ_BUFFER_SIZE];
             closeableRegistry.registerCloseable(inputStream);
