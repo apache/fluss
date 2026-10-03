@@ -62,8 +62,31 @@ class S3FileSystemPluginTest {
         org.apache.hadoop.conf.Configuration hadoopConfig =
                 plugin.buildHadoopConfiguration(flussConfig);
 
+        // When only role ARN is configured, AssumedRoleCredentialProvider should be used
+        String providers = hadoopConfig.get(PROVIDER_CONFIG, "");
+        assertThat(providers)
+                .isEqualTo("org.apache.hadoop.fs.s3a.auth.AssumedRoleCredentialProvider");
+        assertThat(providers).doesNotContain(DynamicTemporaryAWSCredentialsProvider.NAME);
+    }
+
+    @Test
+    void testServerModeWithStaticKeysAndRoleArn() {
+        // When both static keys and role ARN are provided, static keys should take precedence
+        Configuration flussConfig = new Configuration();
+        flussConfig.setString("fs.s3a.access.key", "testAccessKey");
+        flussConfig.setString("fs.s3a.secret.key", "testSecretKey");
+        flussConfig.setString(
+                "fs.s3a.assumed.role.arn", "arn:aws:iam::123456789012:role/test-role");
+
+        S3FileSystemPlugin plugin = new S3FileSystemPlugin();
+        org.apache.hadoop.conf.Configuration hadoopConfig =
+                plugin.buildHadoopConfiguration(flussConfig);
+
+        // Static keys take precedence, AssumedRoleCredentialProvider should NOT be set
         String providers = hadoopConfig.get(PROVIDER_CONFIG, "");
         assertThat(providers).doesNotContain(DynamicTemporaryAWSCredentialsProvider.NAME);
+        assertThat(providers)
+                .doesNotContain("org.apache.hadoop.fs.s3a.auth.AssumedRoleCredentialProvider");
     }
 
     @Test
