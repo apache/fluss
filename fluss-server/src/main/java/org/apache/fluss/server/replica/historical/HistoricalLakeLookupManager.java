@@ -414,7 +414,8 @@ class HistoricalLakeLookupManager implements AutoCloseable {
                         lakeBucketId,
                         (short) schemaInfo.getSchemaId(),
                         schemaInfo.getSchema().getRowType(),
-                        lookupMetricRecorder);
+                        lookupMetricRecorder,
+                        requiredLakeSnapshotIds.get(tableInfo.getTableId()));
         return new LookupContext(
                 tableInfo.getTableId(), schemaInfo.getSchemaId(), tablePath, lookupContext);
     }
