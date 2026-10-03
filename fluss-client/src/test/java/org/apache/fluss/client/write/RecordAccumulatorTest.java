@@ -51,6 +51,7 @@ import org.apache.fluss.rpc.RpcClient;
 import org.apache.fluss.rpc.gateway.TabletServerGateway;
 import org.apache.fluss.rpc.metrics.TestingClientMetricGroup;
 import org.apache.fluss.utils.CloseableIterator;
+import org.apache.fluss.utils.ExponentialBackoff;
 import org.apache.fluss.utils.clock.ManualClock;
 
 import org.apache.commons.lang3.RandomStringUtils;
@@ -1018,5 +1019,294 @@ class RecordAccumulatorTest {
                 .isNotNull()
                 .extracting(ReadyWriteBatch::tableBucket)
                 .containsExactly(tb2);
+    }
+
+    @Test
+    void testDiskBackoffIncreasesAndExpiresAtDeadline() throws Exception {
+        RecordAccumulator accum = createDiskAccumulator(new ExponentialBackoff(1000, 2, 10000, 0));
+        ReadyWriteBatch batch = appendAndDrain(accum, 0);
+        for (long delay : new long[] {1000, 2000, 4000, 8000, 10000, 10000}) {
+            assertThat(accum.backoffAfterDiskWriteLocked(batch)).isEqualTo(delay);
+            accum.reEnqueue(batch);
+            assertThat(accum.ready(cluster).readyNodes).isEmpty();
+            assertThat(accum.ready(cluster).nextReadyCheckDelayMs).isEqualTo(delay);
+            // Repeated readiness checks must neither resample nor extend the deadline.
+            assertThat(accum.ready(cluster).nextReadyCheckDelayMs).isEqualTo(delay);
+            clock.advanceTime(Duration.ofMillis(delay - 1));
+            assertThat(accum.ready(cluster).nextReadyCheckDelayMs).isOne();
+            assertThat(accum.drain(cluster, Collections.singleton(node1.id()), Integer.MAX_VALUE))
+                    .isEmpty();
+            clock.advanceTime(Duration.ofMillis(1));
+            assertThat(accum.ready(cluster).readyNodes).containsExactly(node1.id());
+            assertThat(
+                            accum.drain(
+                                            cluster,
+                                            Collections.singleton(node1.id()),
+                                            Integer.MAX_VALUE)
+                                    .get(node1.id()))
+                    .extracting(ReadyWriteBatch::writeBatch)
+                    .containsExactly(batch.writeBatch());
+        }
+        accum.abortAllBatches(new RuntimeException("test cleanup"));
+        accum.destroyResources();
+    }
+
+    @Test
+    void testRetriableWriteBackoffIncreasesAndExpiresAtDeadline() throws Exception {
+        RecordAccumulator accum =
+                createBackoffAccumulator(
+                        new ExponentialBackoff(100, 2, 1000, 0),
+                        new ExponentialBackoff(1000, 2, 10000, 0));
+        ReadyWriteBatch batch = appendAndDrain(accum, 0);
+        for (long delay : new long[] {100, 200, 400, 800, 1000, 1000}) {
+            assertThat(accum.backoffAfterRetriableWrite(batch)).isEqualTo(delay);
+            accum.reEnqueue(batch);
+            assertThat(accum.ready(cluster).readyNodes).isEmpty();
+            assertThat(accum.ready(cluster).nextReadyCheckDelayMs).isEqualTo(delay);
+            assertThat(accum.drain(cluster, Collections.singleton(node1.id()), Integer.MAX_VALUE))
+                    .isEmpty();
+            clock.advanceTime(Duration.ofMillis(delay));
+            assertThat(
+                            accum.drain(
+                                            cluster,
+                                            Collections.singleton(node1.id()),
+                                            Integer.MAX_VALUE)
+                                    .get(node1.id()))
+                    .extracting(ReadyWriteBatch::writeBatch)
+                    .containsExactly(batch.writeBatch());
+        }
+        accum.abortAllBatches(new RuntimeException("test cleanup"));
+        accum.destroyResources();
+    }
+
+    @Test
+    void testDiskBackoffDoesNotBlockHealthyBucketsOrUnknownMetadata() throws Exception {
+        RecordAccumulator accum = createDiskAccumulator(new ExponentialBackoff(1000, 2, 10000, 0));
+        ReadyWriteBatch blocked = appendAndDrain(accum, 0);
+        accum.backoffAfterDiskWriteLocked(blocked);
+        accum.reEnqueue(blocked);
+        appendDiskTestRecord(accum, 1);
+        appendDiskTestRecord(accum, 2);
+        assertThat(accum.ready(cluster).readyNodes)
+                .containsExactlyInAnyOrder(node1.id(), node2.id());
+        Map<Integer, List<ReadyWriteBatch>> drained =
+                accum.drain(
+                        cluster,
+                        new HashSet<>(Arrays.asList(node1.id(), node2.id())),
+                        Integer.MAX_VALUE);
+        assertThat(drained.get(node1.id()))
+                .extracting(ReadyWriteBatch::tableBucket)
+                .containsExactly(tb2);
+        assertThat(drained.get(node2.id()))
+                .extracting(ReadyWriteBatch::tableBucket)
+                .containsExactly(tb3);
+        // Even a caller supplying a ready node cannot bypass the disk gate.
+        assertThat(accum.drain(cluster, Collections.singleton(node1.id()), Integer.MAX_VALUE))
+                .isEmpty();
+        Cluster unknownLeaderCluster = updateCluster(Collections.singletonList(bucket2));
+        assertThat(accum.ready(unknownLeaderCluster).unknownLeaderTables)
+                .contains(DATA1_PHYSICAL_TABLE_PATH);
+        assertThat(accum.ready(unknownLeaderCluster).nextReadyCheckDelayMs).isZero();
+        accum.abortAllBatches(new RuntimeException("test cleanup"));
+        accum.destroyResources();
+    }
+
+    @Test
+    void testWriteBackoffsAreIndependentDuringFlushAndClose() throws Exception {
+        RecordAccumulator accum =
+                createBackoffAccumulator(
+                        new ExponentialBackoff(2000, 2, 2000, 0),
+                        new ExponentialBackoff(1000, 2, 10000, 0));
+        ReadyWriteBatch batch = appendAndDrain(accum, 0);
+        accum.backoffAfterRetriableWrite(batch);
+        accum.backoffAfterDiskWriteLocked(batch);
+        accum.reEnqueue(batch);
+        // Installing a new gate cannot advance eligibility.
+        assertThat(accum.updateThrottle(tb1, 1.0f)).isFalse();
+        assertThat(accum.ready(cluster).nextReadyCheckDelayMs).isEqualTo(3000);
+        // Shortening KV from three seconds to 30 ms advances the effective gate to the two-second
+        // general retry deadline.
+        assertThat(accum.updateThrottle(tb1, 0.1f)).isTrue();
+        assertThat(accum.ready(cluster).nextReadyCheckDelayMs).isEqualTo(2000);
+        // Clearing KV does not advance eligibility again while the retry gate still dominates.
+        assertThat(accum.updateThrottle(tb1, 0f)).isFalse();
+        accum.beginFlush();
+        accum.close();
+        assertThat(accum.ready(cluster).readyNodes).isEmpty();
+        assertThat(accum.ready(cluster).nextReadyCheckDelayMs).isEqualTo(2000);
+        assertThat(accum.drain(cluster, Collections.singleton(node1.id()), Integer.MAX_VALUE))
+                .isEmpty();
+        clock.advanceTime(Duration.ofSeconds(1));
+        assertThat(accum.ready(cluster).nextReadyCheckDelayMs).isEqualTo(1000);
+        clock.advanceTime(Duration.ofSeconds(1));
+        assertThat(accum.ready(cluster).readyNodes).containsExactly(node1.id());
+        accum.abortAllBatches(new RuntimeException("test cleanup"));
+        accum.destroyResources();
+        assertThat(accum.retriableWriteBackoffCount()).isZero();
+        assertThat(accum.diskWriteBackoffCount()).isZero();
+        assertThat(accum.backoffAfterRetriableWrite(batch)).isZero();
+        assertThat(accum.backoffAfterDiskWriteLocked(batch)).isZero();
+    }
+
+    @Test
+    void testConcurrentDiskBackoffsNeverShortenDeadlineAndSweepEmptyQueues() throws Exception {
+        RecordAccumulator accum = createDiskAccumulator(new ExponentialBackoff(1000, 2, 10000, 0));
+        ReadyWriteBatch shortBatch = appendAndDrain(accum, 0);
+        ReadyWriteBatch longBatch = appendAndDrain(accum, 0);
+        for (int i = 0; i < 4; i++) {
+            longBatch.writeBatch().reEnqueued();
+        }
+        for (int i = 0; i < 50; i++) {
+            CompletableFuture.allOf(
+                            CompletableFuture.runAsync(
+                                    () -> accum.backoffAfterDiskWriteLocked(shortBatch)),
+                            CompletableFuture.runAsync(
+                                    () -> accum.backoffAfterDiskWriteLocked(longBatch)),
+                            CompletableFuture.runAsync(accum::maybeEvictExpiredWriteBackoffs))
+                    .get();
+            assertThat(accum.diskWriteBackoffRemainingMs(tb1)).isEqualTo(10000);
+        }
+        clock.advanceTime(Duration.ofSeconds(10));
+        // Race expiry cleanup with a new rejection. Conditional removal must preserve the new gate.
+        CompletableFuture.allOf(
+                        CompletableFuture.runAsync(accum::maybeEvictExpiredWriteBackoffs),
+                        CompletableFuture.runAsync(() -> accum.diskWriteBackoffRemainingMs(tb1)),
+                        CompletableFuture.runAsync(
+                                () -> accum.backoffAfterDiskWriteLocked(longBatch)))
+                .get();
+        assertThat(accum.diskWriteBackoffRemainingMs(tb1)).isEqualTo(10000);
+        assertThat(accum.hasUnDrained()).isFalse();
+        clock.advanceTime(Duration.ofSeconds(10));
+        accum.maybeEvictExpiredWriteBackoffs();
+        assertThat(accum.diskWriteBackoffCount()).isZero();
+        accum.abortAllBatches(new RuntimeException("test cleanup"));
+        accum.destroyResources();
+    }
+
+    @Test
+    void testDiskBackoffHandlesNanosecondWrapAndRoundsUp() throws Exception {
+        clock.advanceTime(Long.MAX_VALUE - clock.nanoseconds() - 500000, TimeUnit.NANOSECONDS);
+        RecordAccumulator accum = createDiskAccumulator(new ExponentialBackoff(1, 2, 1, 0));
+        ReadyWriteBatch batch = appendAndDrain(accum, 0);
+        assertThat(accum.backoffAfterDiskWriteLocked(batch)).isOne();
+        clock.advanceTime(999999, TimeUnit.NANOSECONDS);
+        assertThat(accum.diskWriteBackoffRemainingMs(tb1)).isOne();
+        clock.advanceTime(1, TimeUnit.NANOSECONDS);
+        assertThat(accum.diskWriteBackoffRemainingMs(tb1)).isZero();
+        accum.abortAllBatches(new RuntimeException("test cleanup"));
+        accum.destroyResources();
+    }
+
+    @Test
+    void testProductionDiskBackoffJitterAndMinimumDelay() throws Exception {
+        RecordAccumulator accum = createDiskAccumulator(null);
+        ReadyWriteBatch batch = appendAndDrain(accum, 0);
+        for (int attempt = 0; attempt < 8; attempt++) {
+            long baseDelay = Math.min(1000L << attempt, 10000L);
+            long delay = accum.backoffAfterDiskWriteLocked(batch);
+            assertThat(delay)
+                    .isBetween(
+                            (long) (baseDelay * 0.8), Math.min((long) (baseDelay * 1.2), 10000L));
+            clock.advanceTime(Duration.ofMillis(delay));
+            batch.writeBatch().reEnqueued();
+        }
+        accum.abortAllBatches(new RuntimeException("test cleanup"));
+        accum.destroyResources();
+
+        accum = createDiskAccumulator(new ExponentialBackoff(0, 2, 0, 0));
+        batch = appendAndDrain(accum, 0);
+        assertThat(accum.backoffAfterDiskWriteLocked(batch)).isOne();
+        accum.abortAllBatches(new RuntimeException("test cleanup"));
+        accum.destroyResources();
+    }
+
+    @Test
+    void testInvalidDiskBackoffConfiguration() {
+        Duration[][] invalid = {
+            {Duration.ZERO, Duration.ofSeconds(10)},
+            {Duration.ofNanos(999999), Duration.ofSeconds(10)},
+            {Duration.ofMillis(-1), Duration.ofSeconds(10)},
+            {Duration.ofSeconds(11), Duration.ofSeconds(10)},
+            {Duration.ofMillis(1), Duration.ofMillis((long) Integer.MAX_VALUE + 1)},
+            {Duration.ofMillis(1), Duration.ofSeconds(Long.MAX_VALUE)}
+        };
+        for (Duration[] values : invalid) {
+            conf.set(ConfigOptions.CLIENT_WRITER_DISK_WRITE_LOCKED_BACKOFF, values[0]);
+            conf.set(ConfigOptions.CLIENT_WRITER_DISK_WRITE_LOCKED_BACKOFF_MAX, values[1]);
+            assertThatThrownBy(() -> createDiskAccumulator(null))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("client.writer.disk-write-locked.backoff");
+        }
+    }
+
+    @Test
+    void testInvalidRetriableWriteBackoffConfiguration() {
+        Duration[][] invalid = {
+            {Duration.ofMillis(-1), Duration.ofSeconds(1)},
+            {Duration.ofSeconds(2), Duration.ofSeconds(1)},
+            {Duration.ZERO, Duration.ofMillis((long) Integer.MAX_VALUE + 1)},
+            {Duration.ZERO, Duration.ofSeconds(Long.MAX_VALUE)}
+        };
+        for (Duration[] values : invalid) {
+            conf.set(ConfigOptions.CLIENT_WRITER_RETRY_BACKOFF, values[0]);
+            conf.set(ConfigOptions.CLIENT_WRITER_RETRY_BACKOFF_MAX, values[1]);
+            assertThatThrownBy(() -> createDiskAccumulator(null))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("client.writer.retry-backoff");
+        }
+    }
+
+    private RecordAccumulator createDiskAccumulator(ExponentialBackoff backoff) {
+        conf.set(ConfigOptions.CLIENT_WRITER_BATCH_TIMEOUT, Duration.ZERO);
+        conf.set(ConfigOptions.CLIENT_WRITER_BUFFER_MEMORY_SIZE, new MemorySize(1024 * 1024));
+        conf.set(ConfigOptions.CLIENT_WRITER_BATCH_SIZE, new MemorySize(1024));
+        conf.set(ConfigOptions.CLIENT_WRITER_BUFFER_PAGE_SIZE, new MemorySize(256));
+        IdempotenceManager manager = new IdempotenceManager(false, 5, null, null);
+        return backoff == null
+                ? new RecordAccumulator(
+                        conf,
+                        manager,
+                        TestingWriterMetricGroup.newInstance(),
+                        clock,
+                        (tableInfo, path) -> bucketAssigner)
+                : new RecordAccumulator(
+                        conf,
+                        manager,
+                        TestingWriterMetricGroup.newInstance(),
+                        clock,
+                        backoff,
+                        (tableInfo, path) -> bucketAssigner);
+    }
+
+    private RecordAccumulator createBackoffAccumulator(
+            ExponentialBackoff retryBackoff, ExponentialBackoff diskBackoff) {
+        conf.set(ConfigOptions.CLIENT_WRITER_BATCH_TIMEOUT, Duration.ZERO);
+        conf.set(ConfigOptions.CLIENT_WRITER_BUFFER_MEMORY_SIZE, new MemorySize(1024 * 1024));
+        conf.set(ConfigOptions.CLIENT_WRITER_BATCH_SIZE, new MemorySize(1024));
+        conf.set(ConfigOptions.CLIENT_WRITER_BUFFER_PAGE_SIZE, new MemorySize(256));
+        IdempotenceManager manager = new IdempotenceManager(false, 5, null, null);
+        return new RecordAccumulator(
+                conf,
+                manager,
+                TestingWriterMetricGroup.newInstance(),
+                clock,
+                retryBackoff,
+                diskBackoff,
+                (tableInfo, path) -> bucketAssigner);
+    }
+
+    private void appendDiskTestRecord(RecordAccumulator accum, int bucket) throws Exception {
+        bucketAssigner.setBucketId(bucket);
+        accum.append(
+                createRecord(indexedRow(DATA1_ROW_TYPE, new Object[] {1, "a"})),
+                (tb, offset, error) -> {},
+                cluster);
+    }
+
+    private ReadyWriteBatch appendAndDrain(RecordAccumulator accum, int bucket) throws Exception {
+        appendDiskTestRecord(accum, bucket);
+        return accum.drain(cluster, Collections.singleton(node1.id()), Integer.MAX_VALUE)
+                .get(node1.id())
+                .get(0);
     }
 }

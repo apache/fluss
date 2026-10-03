@@ -49,6 +49,7 @@ import javax.annotation.Nullable;
 import javax.annotation.concurrent.GuardedBy;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -247,6 +248,7 @@ public class Sender implements Runnable {
         // Refresh per-bucket throttle entries against the current cluster snapshot,
         // dropping any whose bucket has disappeared from metadata.
         accumulator.maybeEvictStaleThrottles(clusterSnapshot);
+        accumulator.maybeEvictExpiredWriteBackoffs();
 
         // get the list of buckets with data ready to send.
         ReadyCheckResult readyCheckResult = accumulator.ready(clusterSnapshot);
@@ -359,6 +361,7 @@ public class Sender implements Runnable {
         boolean reEnqueued = accumulator.reEnqueue(readyWriteBatch);
         maybeRemoveFromInflightBatches(readyWriteBatch);
 
+        wakeup();
         if (reEnqueued) {
             // metrics for retry record count.
             writerMetricGroup
@@ -629,6 +632,7 @@ public class Sender implements Runnable {
             long tableId,
             Map<WriteBatchKey, ReadyWriteBatch> writeBatchesByKey) {
         Set<PhysicalTablePath> invalidMetadataTablesSet = new HashSet<>();
+        boolean eligibilityAdvanced = false;
         for (PbPutKvRespForBucket respForBucket : putKvResponse.getBucketsRespsList()) {
             TableBucket tb =
                     new TableBucket(
@@ -638,7 +642,7 @@ public class Sender implements Runnable {
 
             // Update backpressure throttle from pressure signal
             if (respForBucket.hasPressure()) {
-                accumulator.updateThrottle(tb, respForBucket.getPressure());
+                eligibilityAdvanced |= accumulator.updateThrottle(tb, respForBucket.getPressure());
             }
 
             ReadyWriteBatch writeBatch =
@@ -664,6 +668,12 @@ public class Sender implements Runnable {
             }
         }
         metadataUpdater.invalidPhysicalTableBucketMeta(invalidMetadataTablesSet);
+        // A fresher latest-wins KV pressure signal may shorten the effective gate. Wake only after
+        // the whole response is applied so the sender observes completed batches and invalidated
+        // metadata together with the new deadline.
+        if (eligibilityAdvanced) {
+            wakeup();
+        }
     }
 
     private void handleWriteRequestException(Throwable t, List<ReadyWriteBatch> writeBatches) {
@@ -746,32 +756,6 @@ public class Sender implements Runnable {
         } else if (canRetry(readyWriteBatch, error.error())) {
             // if batch failed because of retrievable exception, we need to retry send all those
             // batches.
-            LOG.warn(
-                    "Get error write response on table bucket {}, retrying ({} attempts left). Error: {}",
-                    readyWriteBatch.tableBucket(),
-                    retries - writeBatch.attempts(),
-                    error.formatErrMsg());
-
-            if (!idempotenceManager.idempotenceEnabled()) {
-                reEnqueueBatch(readyWriteBatch);
-            } else if (idempotenceManager.hasWriterId(writeBatch.writerId())) {
-                // If idempotence is enabled only retry the request if the current writer id is
-                // the same as the writer id of the batch.
-                LOG.debug(
-                        "Retrying batch to table-bucket {}, Batch sequence : {}",
-                        readyWriteBatch.tableBucket(),
-                        writeBatch.batchSequence());
-                reEnqueueBatch(readyWriteBatch);
-            } else {
-                Exception exception =
-                        Errors.UNKNOWN_WRITER_ID_EXCEPTION.exception(
-                                String.format(
-                                        "Attempted to retry sending a batch but the writer id has changed from %s "
-                                                + "to %s in the mean time. This batch will be dropped.",
-                                        writeBatch.writerId(), idempotenceManager.writerId()));
-                failBatch(readyWriteBatch, exception, false);
-            }
-
             if (error.exception() instanceof InvalidMetadataException) {
                 if (error.exception() instanceof UnknownTableOrBucketException) {
                     LOG.warn(
@@ -784,10 +768,33 @@ public class Sender implements Runnable {
                             readyWriteBatch.tableBucket(),
                             error.exception());
                 }
-                // A historical batch remains keyed by its original partition path in the
-                // accumulator, but its RPC is sent to the internal historical partition. Invalidate
-                // the actual RPC target so the retry refreshes the historical bucket metadata.
-                invalidMetadataTables.add(writeTargetPath);
+                // Re-enqueuing publishes the retry to the sender and wakes it up. Invalidate the
+                // actual RPC target first so the retry cannot race ahead using stale metadata. A
+                // historical batch remains keyed by its original partition path in the
+                // accumulator, while its RPC is sent to the internal historical partition.
+                metadataUpdater.invalidPhysicalTableBucketMeta(
+                        Collections.singleton(writeTargetPath));
+            }
+            if (!idempotenceManager.idempotenceEnabled()) {
+                prepareWriteRetry(readyWriteBatch, error);
+                reEnqueueBatch(readyWriteBatch);
+            } else if (idempotenceManager.hasWriterId(writeBatch.writerId())) {
+                // If idempotence is enabled only retry the request if the current writer id is
+                // the same as the writer id of the batch.
+                LOG.debug(
+                        "Retrying batch to table-bucket {}, Batch sequence : {}",
+                        readyWriteBatch.tableBucket(),
+                        writeBatch.batchSequence());
+                prepareWriteRetry(readyWriteBatch, error);
+                reEnqueueBatch(readyWriteBatch);
+            } else {
+                Exception exception =
+                        Errors.UNKNOWN_WRITER_ID_EXCEPTION.exception(
+                                String.format(
+                                        "Attempted to retry sending a batch but the writer id has changed from %s "
+                                                + "to %s in the mean time. This batch will be dropped.",
+                                        writeBatch.writerId(), idempotenceManager.writerId()));
+                failBatch(readyWriteBatch, exception, false);
             }
         } else {
             LOG.warn(
@@ -800,6 +807,29 @@ public class Sender implements Runnable {
             failBatch(readyWriteBatch, error.exception(), writeBatch.attempts() < this.retries);
         }
         return invalidMetadataTables;
+    }
+
+    private void prepareWriteRetry(ReadyWriteBatch batch, ApiError error) {
+        long retryBackoffMs = accumulator.backoffAfterRetriableWrite(batch);
+        if (error.error() == Errors.DISK_WRITE_LOCKED) {
+            long diskBackoffMs = accumulator.backoffAfterDiskWriteLocked(batch);
+            LOG.warn(
+                    "Get error write response on table bucket {}, disk backoff {} ms and "
+                            + "retry backoff {} ms ({} attempts left). Error: {}",
+                    batch.tableBucket(),
+                    diskBackoffMs,
+                    retryBackoffMs,
+                    retries - batch.writeBatch().attempts(),
+                    error.formatErrMsg());
+        } else {
+            LOG.warn(
+                    "Get error write response on table bucket {}, retrying after {} ms "
+                            + "({} attempts left). Error: {}",
+                    batch.tableBucket(),
+                    retryBackoffMs,
+                    retries - batch.writeBatch().attempts(),
+                    error.formatErrMsg());
+        }
     }
 
     /**
