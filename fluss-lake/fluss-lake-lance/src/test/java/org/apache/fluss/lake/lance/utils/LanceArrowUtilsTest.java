@@ -298,4 +298,60 @@ class LanceArrowUtilsTest {
         assertThat(tagsChildren.get(0).getName()).isEqualTo("element");
         assertThat(tagsChildren.get(0).getType()).isEqualTo(ArrowType.Utf8.INSTANCE);
     }
+
+    @Test
+    void testVectorColumnToArrowSchema() {
+        // VECTOR(3) should produce a FixedSizeList(3) field with a non-nullable Float32 child
+        RowType rowType = DataTypes.ROW(DataTypes.FIELD("embedding", DataTypes.VECTOR(3)));
+
+        Schema schema = LanceArrowUtils.toArrowSchema(rowType);
+
+        assertThat(schema.getFields()).hasSize(1);
+        Field embeddingField = schema.findField("embedding");
+        assertThat(embeddingField).isNotNull();
+        assertThat(embeddingField.getType()).isInstanceOf(ArrowType.FixedSizeList.class);
+        assertThat(((ArrowType.FixedSizeList) embeddingField.getType()).getListSize()).isEqualTo(3);
+
+        // Child field must be named "element" and be non-nullable Float32
+        assertThat(embeddingField.getChildren()).hasSize(1);
+        Field childField = embeddingField.getChildren().get(0);
+        assertThat(childField.getName()).isEqualTo("element");
+        assertThat(childField.getType()).isInstanceOf(ArrowType.FloatingPoint.class);
+        assertThat(childField.getFieldType().isNullable()).isFalse();
+    }
+
+    @Test
+    void testVectorNotNullColumn() {
+        // VECTOR(4) NOT NULL should produce a non-nullable top-level field
+        RowType rowType =
+                DataTypes.ROW(DataTypes.FIELD("embedding", DataTypes.VECTOR(4).copy(false)));
+
+        Schema schema = LanceArrowUtils.toArrowSchema(rowType);
+
+        Field embeddingField = schema.findField("embedding");
+        assertThat(embeddingField).isNotNull();
+        assertThat(embeddingField.getFieldType().isNullable()).isFalse();
+        assertThat(embeddingField.getType()).isInstanceOf(ArrowType.FixedSizeList.class);
+        assertThat(((ArrowType.FixedSizeList) embeddingField.getType()).getListSize()).isEqualTo(4);
+    }
+
+    @Test
+    void testVectorNoTablePropertyNeeded() {
+        // VECTOR type produces correct FixedSizeList schema without any table property,
+        // unlike the legacy ARRAY path which requires ".arrow.fixed-size-list.size" property.
+        RowType rowType = DataTypes.ROW(DataTypes.FIELD("embedding", DataTypes.VECTOR(8)));
+
+        // No table properties passed
+        Schema schema = LanceArrowUtils.toArrowSchema(rowType, Collections.emptyMap());
+
+        Field embeddingField = schema.findField("embedding");
+        assertThat(embeddingField).isNotNull();
+        assertThat(embeddingField.getType()).isInstanceOf(ArrowType.FixedSizeList.class);
+        assertThat(((ArrowType.FixedSizeList) embeddingField.getType()).getListSize()).isEqualTo(8);
+        // Child must be Float32
+        assertThat(embeddingField.getChildren()).hasSize(1);
+        assertThat(embeddingField.getChildren().get(0).getName()).isEqualTo("element");
+        assertThat(embeddingField.getChildren().get(0).getType())
+                .isInstanceOf(ArrowType.FloatingPoint.class);
+    }
 }

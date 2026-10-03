@@ -22,6 +22,7 @@ import org.apache.fluss.row.InternalMap;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.types.ArrayType;
 import org.apache.fluss.types.DataType;
+import org.apache.fluss.types.FloatType;
 import org.apache.fluss.types.MapType;
 import org.apache.fluss.types.RowType;
 
@@ -30,6 +31,7 @@ import org.assertj.core.api.AbstractAssert;
 import static org.apache.fluss.types.DataTypeRoot.ARRAY;
 import static org.apache.fluss.types.DataTypeRoot.MAP;
 import static org.apache.fluss.types.DataTypeRoot.ROW;
+import static org.apache.fluss.types.DataTypeRoot.VECTOR;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** Extend assertj assertions to easily assert {@link InternalRow}. */
@@ -76,6 +78,13 @@ public class InternalRowAssert extends AbstractAssert<InternalRowAssert, Interna
                 if (fieldType.getTypeRoot() == ARRAY) {
                     InternalArrayAssert.assertThatArray((InternalArray) actualField)
                             .withElementType(((ArrayType) fieldType).getElementType())
+                            .as("InternalRow#get" + fieldType.getTypeRoot() + "(" + i + ")")
+                            .isEqualTo((InternalArray) expectedField);
+                } else if (fieldType.getTypeRoot() == VECTOR) {
+                    // VECTOR is represented as InternalArray<Float32> at runtime.
+                    // Compare element-by-element as floats using FloatType(false) element type.
+                    InternalArrayAssert.assertThatArray((InternalArray) actualField)
+                            .withElementType(new FloatType(false))
                             .as("InternalRow#get" + fieldType.getTypeRoot() + "(" + i + ")")
                             .isEqualTo((InternalArray) expectedField);
                 } else if (fieldType.getTypeRoot() == MAP) {

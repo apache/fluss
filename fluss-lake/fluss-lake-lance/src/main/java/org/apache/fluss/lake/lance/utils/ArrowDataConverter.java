@@ -123,6 +123,24 @@ public class ArrowDataConverter {
                             shadedVector.getClass().getSimpleName()));
         }
 
+        // Handle shaded FixedSizeListVector (for VECTOR type) — must come before the guard below
+        if (shadedVector
+                instanceof
+                org.apache.fluss.shaded.arrow.org.apache.arrow.vector.complex.FixedSizeListVector) {
+            if (!(nonShadedVector instanceof FixedSizeListVector)) {
+                throw new IllegalArgumentException(
+                        String.format(
+                                "Expected non-shaded FixedSizeListVector for VECTOR type column, got: %s",
+                                nonShadedVector.getClass().getSimpleName()));
+            }
+            copyFixedSizeListVectorData(
+                    (org.apache.fluss.shaded.arrow.org.apache.arrow.vector.complex
+                                    .FixedSizeListVector)
+                            shadedVector,
+                    (FixedSizeListVector) nonShadedVector);
+            return;
+        }
+
         if (nonShadedVector instanceof ListVector
                 || nonShadedVector instanceof FixedSizeListVector) {
             throw new IllegalArgumentException(
@@ -318,6 +336,51 @@ public class ArrowDataConverter {
                 }
             }
         }
+    }
+
+    /**
+     * Copies a shaded {@code FixedSizeListVector} (for the {@code VECTOR} type) to a non-shaded
+     * {@code FixedSizeListVector}.
+     *
+     * <p>Because both shaded and non-shaded Arrow use the same off-heap memory layout for
+     * FixedSizeList (validity buffer + stride-based child data), this is a direct bulk buffer copy
+     * — no offset remapping required (unlike the ListVector to FixedSizeListVector path).
+     */
+    private static void copyFixedSizeListVectorData(
+            org.apache.fluss.shaded.arrow.org.apache.arrow.vector.complex.FixedSizeListVector
+                    shadedFSLV,
+            FixedSizeListVector nonShadedFSLV) {
+
+        int valueCount = shadedFSLV.getValueCount();
+
+        // Recursively copy child (Float32) data vector
+        org.apache.fluss.shaded.arrow.org.apache.arrow.vector.FieldVector shadedDataVector =
+                shadedFSLV.getDataVector();
+        FieldVector nonShadedDataVector = nonShadedFSLV.getDataVector();
+        if (shadedDataVector != null && nonShadedDataVector != null) {
+            copyVectorData(shadedDataVector, nonShadedDataVector);
+        }
+
+        // Copy the validity buffer (first field buffer)
+        List<org.apache.fluss.shaded.arrow.org.apache.arrow.memory.ArrowBuf> shadedBuffers =
+                shadedFSLV.getFieldBuffers();
+        List<ArrowBuf> nonShadedBuffers = nonShadedFSLV.getFieldBuffers();
+
+        if (!shadedBuffers.isEmpty() && !nonShadedBuffers.isEmpty()) {
+            org.apache.fluss.shaded.arrow.org.apache.arrow.memory.ArrowBuf shadedValidityBuf =
+                    shadedBuffers.get(0);
+            ArrowBuf nonShadedValidityBuf = nonShadedBuffers.get(0);
+
+            long size = Math.min(shadedValidityBuf.capacity(), nonShadedValidityBuf.capacity());
+            if (size > 0) {
+                ByteBuffer srcBuffer = shadedValidityBuf.nioBuffer(0, (int) size);
+                srcBuffer.position(0);
+                srcBuffer.limit((int) Math.min(size, Integer.MAX_VALUE));
+                nonShadedValidityBuf.setBytes(0, srcBuffer);
+            }
+        }
+
+        nonShadedFSLV.setValueCount(valueCount);
     }
 
     private static void copyStructVectorData(

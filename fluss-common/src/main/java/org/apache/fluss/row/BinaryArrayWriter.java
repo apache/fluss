@@ -220,6 +220,7 @@ public final class BinaryArrayWriter extends AbstractBinaryWriter {
             case ARRAY:
             case MAP:
             case ROW:
+            case VECTOR:
                 return BinaryArrayWriter::setNullLong;
             case BOOLEAN:
                 return BinaryArrayWriter::setNullBoolean;
