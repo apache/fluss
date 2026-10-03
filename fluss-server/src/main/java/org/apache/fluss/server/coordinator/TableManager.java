@@ -39,6 +39,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ExecutorService;
+import java.util.stream.Collectors;
 
 /** A manager for tables. */
 public class TableManager {
@@ -209,22 +210,84 @@ public class TableManager {
      *
      * <p>It does the following:
      *
-     * <p>1. Move all the replicas to offline state. This will send stop replica request to the
-     * replicas.
+     * <p>1. Move replicas on live tablet servers to offline state. This sends stop replica requests
+     * so they stop fetching from their leaders.
      *
-     * <p>2. Move all the replicas to deletion started state. This will send stop replica request
-     * with delete=true which will delete all persistent data from all the replicas of the all the
-     * respective buckets.
+     * <p>2. Move those replicas to deletion started state and send stop replica requests with
+     * delete=true. Replicas on dead tablet servers are moved to deletion ineligible state and
+     * retried when their tablet servers come back.
      */
     private void onDeleteTableBucket(
             Set<TableBucket> tableBuckets, Set<TableBucketReplica> allReplicas) {
         coordinatorContext.removeKvBuckets(tableBuckets);
         updateObservedKvLeaderReplicaCount();
-        // to offline, send stop replica to all followers that are not in the OfflineReplica state
-        // so they stop sending fetch requests to the leader
-        replicaStateMachine.handleStateChanges(allReplicas, ReplicaState.OfflineReplica);
-        // to deletion started
-        replicaStateMachine.handleStateChanges(allReplicas, ReplicaState.ReplicaDeletionStarted);
+        Map<Boolean, Set<TableBucketReplica>> replicasByTabletServerLiveness =
+                allReplicas.stream()
+                        .collect(
+                                Collectors.partitioningBy(
+                                        replica ->
+                                                coordinatorContext
+                                                        .liveTabletServerSet()
+                                                        .contains(replica.getReplica()),
+                                        Collectors.toSet()));
+
+        Set<TableBucketReplica> replicasOnLiveServers = replicasByTabletServerLiveness.get(true);
+        Set<TableBucketReplica> replicasOnDeadServers = replicasByTabletServerLiveness.get(false);
+        // Replica state alone does not indicate whether a delete request can be sent: an
+        // OfflineReplica may still be hosted by a live tablet server. Only replicas on dead tablet
+        // servers have no active channel and must wait for the server to come back.
+        replicaStateMachine.handleStateChanges(replicasOnLiveServers, ReplicaState.OfflineReplica);
+        replicaStateMachine.handleStateChanges(
+                replicasOnDeadServers, ReplicaState.ReplicaDeletionIneligible);
+        replicaStateMachine.handleStateChanges(
+                replicasOnLiveServers, ReplicaState.ReplicaDeletionStarted);
+    }
+
+    /** Marks pending replica deletions on an offline tablet server as ineligible. */
+    public void failReplicaDeletion(int tabletServerId) {
+        Set<TableBucketReplica> replicas =
+                coordinatorContext.replicasOnTabletServer(tabletServerId).stream()
+                        .filter(
+                                replica ->
+                                        coordinatorContext.isToBeDeleted(replica.getTableBucket()))
+                        .filter(
+                                replica -> {
+                                    ReplicaState state =
+                                            coordinatorContext.getReplicaState(replica);
+                                    return state == ReplicaState.OfflineReplica
+                                            || state == ReplicaState.ReplicaDeletionStarted;
+                                })
+                        .collect(Collectors.toSet());
+        if (!replicas.isEmpty()) {
+            LOG.info(
+                    "Marking deletion of replicas {} ineligible because tablet server {} is offline.",
+                    replicas,
+                    tabletServerId);
+            replicaStateMachine.handleStateChanges(
+                    replicas, ReplicaState.ReplicaDeletionIneligible);
+        }
+    }
+
+    /** Retries ineligible replica deletions after a tablet server comes back. */
+    public void resumeReplicaDeletion(int tabletServerId) {
+        Set<TableBucketReplica> replicas =
+                coordinatorContext.replicasOnTabletServer(tabletServerId).stream()
+                        .filter(
+                                replica ->
+                                        coordinatorContext.isToBeDeleted(replica.getTableBucket()))
+                        .filter(
+                                replica ->
+                                        coordinatorContext.getReplicaState(replica)
+                                                == ReplicaState.ReplicaDeletionIneligible)
+                        .collect(Collectors.toSet());
+        if (!replicas.isEmpty()) {
+            LOG.info(
+                    "Retrying deletion of replicas {} after tablet server {} came back.",
+                    replicas,
+                    tabletServerId);
+            replicaStateMachine.handleStateChanges(replicas, ReplicaState.OfflineReplica);
+            replicaStateMachine.handleStateChanges(replicas, ReplicaState.ReplicaDeletionStarted);
+        }
     }
 
     private void updateObservedKvLeaderReplicaCount() {
@@ -343,17 +406,21 @@ public class TableManager {
 
     private boolean isEligibleForDeletion(long tableId) {
         // the table is queued for deletion and
-        // no any replica is in state deletion started
+        // no replica deletion is in progress or waiting for an offline tablet server
         return coordinatorContext.isTableQueuedForDeletion(tableId)
                 && !coordinatorContext.isAnyReplicaInState(
-                        tableId, ReplicaState.ReplicaDeletionStarted);
+                        tableId, ReplicaState.ReplicaDeletionStarted)
+                && !coordinatorContext.isAnyReplicaInState(
+                        tableId, ReplicaState.ReplicaDeletionIneligible);
     }
 
     private boolean isEligibleForDeletion(TablePartition tablePartition) {
         // the partition is queued for deletion and
-        // no any replica is in state deletion started
+        // no replica deletion is in progress or waiting for an offline tablet server
         return coordinatorContext.isPartitionQueuedForDeletion(tablePartition)
                 && !coordinatorContext.isAnyReplicaInState(
-                        tablePartition, ReplicaState.ReplicaDeletionStarted);
+                        tablePartition, ReplicaState.ReplicaDeletionStarted)
+                && !coordinatorContext.isAnyReplicaInState(
+                        tablePartition, ReplicaState.ReplicaDeletionIneligible);
     }
 }
