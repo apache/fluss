@@ -17,8 +17,12 @@
 
 package org.apache.fluss.metrics;
 
+import org.apache.fluss.utils.clock.ManualClock;
+
 import org.assertj.core.data.Offset;
 import org.junit.jupiter.api.Test;
+
+import java.time.Duration;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.offset;
@@ -48,6 +52,29 @@ class DescriptiveStatisticsHistogramTest {
 
         final DescriptiveStatisticsHistogramStatistics.CommonMetricsSnapshot copy = original.copy();
         assertOperations(copy);
+    }
+
+    @Test
+    void testExpiredSamplesAreRemovedWhenStatisticsAreCollected() {
+        ManualClock clock = new ManualClock();
+        DescriptiveStatisticsHistogram histogram =
+                new DescriptiveStatisticsHistogram(10, Duration.ofMinutes(5), clock);
+
+        histogram.update(100);
+        histogram.update(200);
+
+        assertThat(histogram.getStatistics().getValues()).containsExactly(100, 200);
+        assertThat(histogram.getCount()).isEqualTo(2);
+
+        clock.advanceTime(Duration.ofMinutes(5));
+
+        assertThat(histogram.getStatistics().size()).isZero();
+        assertThat(histogram.getCount()).isEqualTo(2);
+
+        histogram.update(10);
+
+        assertThat(histogram.getStatistics().getValues()).containsExactly(10);
+        assertThat(histogram.getCount()).isEqualTo(3);
     }
 
     private static void assertOperations(
