@@ -37,6 +37,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 /** Test for {@link ScanRecords}. */
 public class ScanRecordsTest {
+    private static final TableBucket TABLE_BUCKET = new TableBucket(1L, 0);
+
     @Test
     void iterator() {
         Map<TableBucket, List<ScanRecord>> records = new LinkedHashMap<>();
@@ -131,5 +133,21 @@ public class ScanRecordsTest {
         assertThat(scanRecords.consumedUpToOffset(progressOnlyBucket)).isEqualTo(10L);
         assertThat(scanRecords.count()).isEqualTo(1);
         assertThat(scanRecords.hasProgress()).isTrue();
+    }
+
+    @Test
+    void testFinishedOnlyBucketHasProgress() {
+        ScanRecords records =
+                new ScanRecords(
+                        Collections.emptyMap(),
+                        Collections.emptyMap(),
+                        Collections.singleton(TABLE_BUCKET));
+
+        assertThat(records.isEmpty()).isTrue();
+        assertThat(records.hasProgress()).isTrue();
+        assertThat(records.buckets()).containsExactly(TABLE_BUCKET);
+        assertThat(records.records(TABLE_BUCKET)).isEmpty();
+        assertThat(records.consumedUpToOffset(TABLE_BUCKET)).isNull();
+        assertThat(records.finishedBuckets()).containsExactly(TABLE_BUCKET);
     }
 }

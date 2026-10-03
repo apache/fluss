@@ -22,21 +22,46 @@ import org.apache.fluss.annotation.Internal;
 /** Structure used for lower level reads. */
 @Internal
 public class LogReadInfo {
+    public static final long NO_RESOLVED_EARLIEST_OFFSET = -1L;
 
     private final FetchDataInfo fetchedData;
     private final long highWatermark;
     private final long logEndOffset;
     private final long minRetainOffset;
+    private final long resolvedEarliestOffset;
 
     public LogReadInfo(
             FetchDataInfo fetchedData,
             long highWatermark,
             long logEndOffset,
             long minRetainOffset) {
+        this(
+                fetchedData,
+                highWatermark,
+                logEndOffset,
+                minRetainOffset,
+                NO_RESOLVED_EARLIEST_OFFSET);
+    }
+
+    public LogReadInfo(
+            FetchDataInfo fetchedData,
+            long highWatermark,
+            long logEndOffset,
+            long minRetainOffset,
+            long resolvedEarliestOffset) {
         this.fetchedData = fetchedData;
         this.highWatermark = highWatermark;
         this.logEndOffset = logEndOffset;
         this.minRetainOffset = minRetainOffset;
+        this.resolvedEarliestOffset = resolvedEarliestOffset;
+    }
+
+    /**
+     * Returns the physical log offset resolved from an EARLIEST fetch request, or {@link
+     * #NO_RESOLVED_EARLIEST_OFFSET} if this read did not resolve EARLIEST.
+     */
+    public long getResolvedEarliestOffset() {
+        return resolvedEarliestOffset;
     }
 
     public FetchDataInfo getFetchedData() {
@@ -70,6 +95,8 @@ public class LogReadInfo {
                 + logEndOffset
                 + ", minRetainOffset="
                 + minRetainOffset
+                + ", resolvedEarliestOffset="
+                + resolvedEarliestOffset
                 + ')';
     }
 }
