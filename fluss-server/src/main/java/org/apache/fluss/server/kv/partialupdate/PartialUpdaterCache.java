@@ -19,6 +19,7 @@ package org.apache.fluss.server.kv.partialupdate;
 
 import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.Schema;
+import org.apache.fluss.server.kv.rowmerger.SequenceGroups;
 
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
@@ -33,8 +34,15 @@ import java.util.Arrays;
 public class PartialUpdaterCache {
 
     private final Cache<String, PartialUpdater> rowPartialUpdaters;
+    private final boolean arbitrateSequenceGroups;
 
-    public PartialUpdaterCache() {
+    /**
+     * @param arbitrateSequenceGroups whether the cached updaters arbitrate the sequence groups
+     *     declared on the schema; otherwise they replace the target columns blindly, as required
+     *     when recovering by overwriting an already decided value
+     */
+    public PartialUpdaterCache(boolean arbitrateSequenceGroups) {
+        this.arbitrateSequenceGroups = arbitrateSequenceGroups;
         // currently, the cache is used per-bucket, so we limit the cache size to 5 to have a
         // maximal 5 parallel partial updaters. This is a temporary solution and should be
         // shared across all buckets in the future.
@@ -50,7 +58,13 @@ public class PartialUpdaterCache {
             KvFormat kvFormat, short schemaId, Schema schema, int[] targetColumns) {
         return rowPartialUpdaters.get(
                 getPartialUpdaterKey(targetColumns, schemaId),
-                k -> new PartialUpdater(kvFormat, schemaId, schema, targetColumns));
+                k ->
+                        new PartialUpdater(
+                                kvFormat,
+                                schemaId,
+                                schema,
+                                targetColumns,
+                                arbitrateSequenceGroups ? SequenceGroups.create(schema) : null));
     }
 
     private String getPartialUpdaterKey(int[] targetColumns, int schemaId) {

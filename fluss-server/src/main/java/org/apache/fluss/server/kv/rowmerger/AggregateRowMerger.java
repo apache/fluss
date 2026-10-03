@@ -25,6 +25,7 @@ import org.apache.fluss.metadata.SchemaGetter;
 import org.apache.fluss.record.BinaryValue;
 import org.apache.fluss.row.BinaryRow;
 import org.apache.fluss.row.encode.RowEncoder;
+import org.apache.fluss.server.kv.TargetColumns;
 import org.apache.fluss.server.kv.rowmerger.aggregate.AggregateFieldsProcessor;
 import org.apache.fluss.server.kv.rowmerger.aggregate.AggregationContext;
 import org.apache.fluss.server.kv.rowmerger.aggregate.AggregationContextCache;
@@ -70,6 +71,10 @@ public class AggregateRowMerger implements RowMerger {
     // the current target schema id which is updated before merge() operation
     private short targetSchemaId = -1;
 
+    // the all-fields bit set for the current target schema, computed on demand and reused
+    private @Nullable BitSet allTargetFields;
+    private int allTargetFieldsCount = -1;
+
     public AggregateRowMerger(
             TableConfig tableConfig, KvFormat kvFormat, SchemaGetter schemaGetter) {
         this.schemaGetter = schemaGetter;
@@ -86,15 +91,34 @@ public class AggregateRowMerger implements RowMerger {
 
     @Override
     public BinaryValue merge(@Nullable BinaryValue oldValue, BinaryValue newValue) {
-        // First write: no existing row
-        if (oldValue == null || oldValue.row == null) {
+        boolean firstWrite = oldValue == null || oldValue.row == null;
+        AggregationContext newContext = contextCache.getContext(newValue.schemaId);
+        AggregationContext targetContext = contextCache.getContext(targetSchemaId);
+        SequenceGroups sequenceGroups = targetContext.getSequenceGroups();
+        // arbitrate once for every path below, so the early-return checks and the field processor
+        // consume the same decisions instead of arbitrating the rows twice
+        if (sequenceGroups != null) {
+            sequenceGroups.arbitrate(firstWrite ? null : oldValue.row, newValue.row);
+        }
+        if (firstWrite && sequenceGroups == null) {
+            return newValue;
+        }
+        if (firstWrite && sequenceGroups.acceptsEveryArbitratedGroup()) {
             return newValue;
         }
 
-        // Get contexts for schema evolution support
-        AggregationContext oldContext = contextCache.getContext(oldValue.schemaId);
-        AggregationContext newContext = contextCache.getContext(newValue.schemaId);
-        AggregationContext targetContext = contextCache.getContext(targetSchemaId);
+        // a fully rejected write is a no-op: return the stored row itself, so the processor sees
+        // no change. Only under the target schema, since returning it keeps that schema.
+        if (!firstWrite
+                && sequenceGroups != null
+                && oldValue.schemaId == targetSchemaId
+                && sequenceGroups.rejectsEveryTargetField(allFields(targetContext), true)) {
+            return oldValue;
+        }
+
+        // Get the old context only when a stored row exists
+        AggregationContext oldContext =
+                firstWrite ? null : contextCache.getContext(oldValue.schemaId);
 
         // Use target schema encoder to ensure merged row uses latest schema
         RowEncoder encoder = targetContext.getRowEncoder();
@@ -102,10 +126,28 @@ public class AggregateRowMerger implements RowMerger {
 
         // Aggregate using target schema context to ensure output uses server's latest schema
         AggregateFieldsProcessor.aggregateAllFieldsWithTargetSchema(
-                oldValue.row, newValue.row, oldContext, newContext, targetContext, encoder);
+                firstWrite ? null : oldValue.row,
+                newValue.row,
+                oldContext,
+                newContext,
+                targetContext,
+                sequenceGroups,
+                encoder);
         BinaryRow mergedRow = encoder.finishRow();
 
         return new BinaryValue(targetSchemaId, mergedRow);
+    }
+
+    /** Returns a cached bit set covering every field of the given context's schema. */
+    private BitSet allFields(AggregationContext context) {
+        int fieldCount = context.getFieldCount();
+        if (allTargetFields == null || allTargetFieldsCount != fieldCount) {
+            BitSet all = new BitSet();
+            all.set(0, fieldCount);
+            this.allTargetFields = all;
+            this.allTargetFieldsCount = fieldCount;
+        }
+        return allTargetFields;
     }
 
     @Override
@@ -133,6 +175,7 @@ public class AggregateRowMerger implements RowMerger {
         return partialMergerCache.get(
                 cacheKey,
                 k -> {
+                    TargetColumns.checkSequenceGroupsAreFullyTargeted(latestSchema, targetColumns);
                     // TODO: Currently, this conversion is broken when DROP COLUMN is supported,
                     //  because `targetColumns` still references column indexes from an outdated
                     //  schema, which no longer align with the current (latest) schema.
@@ -242,6 +285,15 @@ public class AggregateRowMerger implements RowMerger {
         // operations
         private final Cache<Short, BitSet> targetPosBitSetCache;
 
+        // The groups restricted to the target fields, null when the schema declares none
+        private final @Nullable SequenceGroups sequenceGroups;
+
+        // the target fields as row field indexes, matching the schema this merger was built for
+        private final BitSet targetFieldPositions;
+
+        // whether every field of the schema is arbitrated, so the first write may return directly
+        private final boolean arbitratesEveryField;
+
         PartialAggregateRowMerger(
                 BitSet targetColumnIdBitSet,
                 DeleteBehavior deleteBehavior,
@@ -259,6 +311,19 @@ public class AggregateRowMerger implements RowMerger {
             AggregationContext context = contextCache.getOrCreateContext(schemaId, schema);
             context.sanityCheckTargetColumns(targetColumnIdBitSet);
 
+            // a group the write doesn't cover must not arbitrate, since its sequence is never
+            // stored
+            this.targetFieldPositions = targetPositions(schema, targetColumnIdBitSet);
+            SequenceGroups declared = context.getSequenceGroups();
+            this.sequenceGroups =
+                    declared == null ? null : declared.restrictTo(targetFieldPositions);
+            // a partial write leaves fields unarbitrated, so an incoming row must never be
+            // accepted as a whole, however its covered groups decide
+            this.arbitratesEveryField =
+                    this.sequenceGroups == null
+                            || this.targetFieldPositions.length()
+                                    == schema.getRowType().getFieldCount();
+
             // Initialize cache for target position BitSets
             this.targetPosBitSetCache =
                     Caffeine.newBuilder()
@@ -267,15 +332,45 @@ public class AggregateRowMerger implements RowMerger {
                             .build();
         }
 
+        /** Maps the target column ids onto the row field indexes of the given schema. */
+        private static BitSet targetPositions(Schema schema, BitSet targetColumnIdBitSet) {
+            BitSet positions = new BitSet();
+            List<Schema.Column> columns = schema.getColumns();
+            for (int pos = 0; pos < columns.size(); pos++) {
+                if (targetColumnIdBitSet.get(columns.get(pos).getColumnId())) {
+                    positions.set(pos);
+                }
+            }
+            return positions;
+        }
+
         @Override
         public BinaryValue merge(@Nullable BinaryValue oldValue, BinaryValue newValue) {
-            // First write: no existing row
-            if (oldValue == null || oldValue.row == null) {
+            boolean firstWrite = oldValue == null || oldValue.row == null;
+            // arbitrate once for every path below, so the early-return checks and the field
+            // processor consume the same decisions instead of arbitrating the rows twice
+            if (sequenceGroups != null) {
+                sequenceGroups.arbitrate(firstWrite ? null : oldValue.row, newValue.row);
+            }
+            if (firstWrite
+                    && (sequenceGroups == null
+                            || (arbitratesEveryField
+                                    && sequenceGroups.acceptsEveryArbitratedGroup()))) {
                 return newValue;
             }
 
+            // the same no-op shortcut as the full aggregation path, over this write's target
+            // fields; the groups here are already restricted to those fields
+            if (!firstWrite
+                    && sequenceGroups != null
+                    && oldValue.schemaId == targetSchemaId
+                    && sequenceGroups.rejectsEveryTargetField(targetFieldPositions, true)) {
+                return oldValue;
+            }
+
             // Get contexts for schema evolution support
-            AggregationContext oldContext = contextCache.getContext(oldValue.schemaId);
+            AggregationContext oldContext =
+                    firstWrite ? null : contextCache.getContext(oldValue.schemaId);
             AggregationContext newContext = contextCache.getContext(newValue.schemaId);
             AggregationContext targetContext = contextCache.getContext(targetSchemaId);
 
@@ -285,12 +380,13 @@ public class AggregateRowMerger implements RowMerger {
 
             // Aggregate using target schema to ensure output uses server's latest schema
             AggregateFieldsProcessor.aggregateTargetFieldsWithTargetSchema(
-                    oldValue.row,
+                    firstWrite ? null : oldValue.row,
                     newValue.row,
                     oldContext,
                     newContext,
                     targetContext,
                     targetColumnIdBitSet,
+                    sequenceGroups,
                     encoder);
             BinaryRow mergedRow = encoder.finishRow();
 
