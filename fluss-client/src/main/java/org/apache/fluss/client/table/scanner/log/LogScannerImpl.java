@@ -42,6 +42,8 @@ import java.time.Duration;
 import java.util.Collections;
 import java.util.ConcurrentModificationException;
 
+import static org.apache.fluss.utils.Preconditions.checkArgument;
+
 /**
  * The default impl of {@link LogScanner}.
  *
@@ -195,7 +197,7 @@ public class LogScannerImpl extends AbstractLogScanner<ScanRecords> implements L
             long startNanos = System.nanoTime();
             do {
                 ArrowScanRecords scanRecords = pollForRecordBatches();
-                if (scanRecords.isEmpty()) {
+                if (!scanRecords.hasProgress()) {
                     try {
                         if (!logFetcher.awaitNotEmpty(startNanos + timeoutNanos)) {
                             return scanRecords;
@@ -218,7 +220,7 @@ public class LogScannerImpl extends AbstractLogScanner<ScanRecords> implements L
 
     private ArrowScanRecords pollForRecordBatches() {
         ArrowScanRecords scanRecords = logFetcher.collectArrowFetch();
-        if (!scanRecords.isEmpty()) {
+        if (scanRecords.hasProgress()) {
             return scanRecords;
         }
 
@@ -235,16 +237,8 @@ public class LogScannerImpl extends AbstractLogScanner<ScanRecords> implements L
                             + "\"subscribe(long partitionId, int bucket, long offset)\" to "
                             + "subscribe a partitioned bucket instead.");
         }
-        acquireAndEnsureOpen();
-        try {
-            TableBucket tableBucket = new TableBucket(tableId, bucket);
-            this.logFetcher.registerTable(
-                    new TableScanSpec(tableInfo, projection, recordBatchFilter), schemaGetter);
-            this.metadataUpdater.checkAndUpdateTableMetadata(Collections.singleton(tablePath));
-            this.logScannerStatus.assignScanBuckets(Collections.singletonMap(tableBucket, offset));
-        } finally {
-            release();
-        }
+
+        subscribeRange(new TableBucket(tableId, bucket), offset, NO_STOPPING_OFFSET);
     }
 
     @Override
@@ -255,20 +249,36 @@ public class LogScannerImpl extends AbstractLogScanner<ScanRecords> implements L
                             + "\"subscribe(int bucket, long offset)\" to "
                             + "subscribe a non-partitioned bucket instead.");
         }
-        acquireAndEnsureOpen();
-        try {
-            TableBucket tableBucket = new TableBucket(tableId, partitionId, bucket);
-            this.logFetcher.registerTable(
-                    new TableScanSpec(tableInfo, projection, recordBatchFilter), schemaGetter);
-            // we make assumption that the partition id must belong to the current table
-            // if we can't find the partition id from the table path, we'll consider the table
-            // is not exist
-            metadataUpdater.checkAndUpdatePartitionMetadata(
-                    tablePath, Collections.singleton(partitionId));
-            logScannerStatus.assignScanBuckets(Collections.singletonMap(tableBucket, offset));
-        } finally {
-            release();
+
+        subscribeRange(new TableBucket(tableId, partitionId, bucket), offset, NO_STOPPING_OFFSET);
+    }
+
+    @Override
+    public void subscribeBounded(int bucket, long startingOffset, long stoppingOffset) {
+        if (isPartitionedTable) {
+            throw new IllegalStateException(
+                    "The table is a partitioned table, please use "
+                            + "\"subscribeBounded(long partitionId, int bucket, long startingOffset, long stoppingOffset)\" to "
+                            + "subscribe a partitioned bucket instead.");
         }
+
+        validateOffsets(startingOffset, stoppingOffset);
+        subscribeRange(new TableBucket(tableId, bucket), startingOffset, stoppingOffset);
+    }
+
+    @Override
+    public void subscribeBounded(
+            long partitionId, int bucket, long startingOffset, long stoppingOffset) {
+        if (!isPartitionedTable) {
+            throw new IllegalStateException(
+                    "The table is not a partitioned table, please use "
+                            + "\"subscribeBounded(int bucket, long startingOffset, long stoppingOffset)\" to "
+                            + "subscribe a non-partitioned bucket instead.");
+        }
+
+        validateOffsets(startingOffset, stoppingOffset);
+        subscribeRange(
+                new TableBucket(tableId, partitionId, bucket), startingOffset, stoppingOffset);
     }
 
     @Override
@@ -301,5 +311,34 @@ public class LogScannerImpl extends AbstractLogScanner<ScanRecords> implements L
         } finally {
             release();
         }
+    }
+
+    private void subscribeRange(TableBucket tableBucket, long startingOffset, long stoppingOffset) {
+        Long partitionId = tableBucket.getPartitionId();
+        acquireAndEnsureOpen();
+        try {
+            logFetcher.registerTable(
+                    new TableScanSpec(tableInfo, projection, recordBatchFilter), schemaGetter);
+            if (partitionId == null) {
+                metadataUpdater.checkAndUpdateTableMetadata(Collections.singleton(tablePath));
+            } else {
+                metadataUpdater.checkAndUpdatePartitionMetadata(
+                        tablePath, Collections.singleton(partitionId));
+            }
+            logScannerStatus.assignScanBucket(tableBucket, startingOffset, stoppingOffset);
+        } finally {
+            release();
+        }
+    }
+
+    private static void validateOffsets(long startingOffset, long stoppingOffset) {
+        checkArgument(
+                startingOffset >= 0 || startingOffset == EARLIEST_OFFSET,
+                "The starting offset must be non-negative or EARLIEST_OFFSET, but was %s.",
+                startingOffset);
+        checkArgument(
+                stoppingOffset >= 0,
+                "The stopping offset must be non-negative, but was %s.",
+                stoppingOffset);
     }
 }

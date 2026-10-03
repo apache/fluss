@@ -55,7 +55,6 @@ import org.apache.fluss.server.metadata.ClusterMetadata;
 import org.apache.fluss.server.metadata.PartitionMetadata;
 import org.apache.fluss.server.metadata.TableMetadata;
 import org.apache.fluss.utils.FlussPaths;
-
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
@@ -136,6 +135,59 @@ class ServerRpcMessageUtilsTest {
         request.setModifyBucketCount().setNewBucketCount(8);
         assertThat(ServerRpcMessageUtils.toAlterTableDistributionChanges(request))
                 .containsExactly(TableChange.modifyBucketCount(8));
+    }
+
+    @Test
+    void testFetchLogResponseResolvedEarliestOffset() {
+        TableBucket tableBucket = new TableBucket(1L, 0);
+        for (long offset : new long[] {-1L, 0L, 42L}) {
+            FetchLogResultForBucket result =
+                    offset < 0
+                            ? FetchLogResultForBucket.records(
+                                    tableBucket, MemoryLogRecords.EMPTY, 42L, -1L, -1L)
+                            : FetchLogResultForBucket.records(
+                                    tableBucket, MemoryLogRecords.EMPTY, 42L, -1L, -1L, offset);
+            PbFetchLogRespForBucket response =
+                    ServerRpcMessageUtils.makeFetchLogResponse(
+                                    Collections.singletonMap(tableBucket, result))
+                            .getTablesRespsList()
+                            .get(0)
+                            .getBucketsRespsList()
+                            .get(0);
+            assertThat(response.hasResolvedEarliestOffset()).isEqualTo(offset >= 0);
+            FetchLogResultForBucket decoded =
+                    CommonRpcMessageUtils.getFetchLogResultForBucket(
+                            tableBucket, TablePath.of("db", "table"), response);
+            assertThat(decoded.hasResolvedEarliestOffset()).isEqualTo(offset >= 0);
+            assertThat(decoded.getResolvedEarliestOffset()).isEqualTo(offset);
+        }
+    }
+
+    @Test
+    void testRemoteFetchLogResponseResolvedEarliestOffset() {
+        TableBucket tableBucket = new TableBucket(1L, 0);
+        RemoteLogFetchInfo remoteInfo =
+                new RemoteLogFetchInfo("remote/tablet", null, Collections.emptyList(), 0);
+        for (long offset : new long[] {-1L, 0L, 42L}) {
+            FetchLogResultForBucket result =
+                    offset < 0
+                            ? FetchLogResultForBucket.remote(tableBucket, remoteInfo, 100L)
+                            : FetchLogResultForBucket.remote(tableBucket, remoteInfo, 100L, offset);
+            PbFetchLogRespForBucket response =
+                    ServerRpcMessageUtils.makeFetchLogResponse(
+                                    Collections.singletonMap(tableBucket, result))
+                            .getTablesRespsList()
+                            .get(0)
+                            .getBucketsRespsList()
+                            .get(0);
+            assertThat(response.hasResolvedEarliestOffset()).isEqualTo(offset >= 0);
+            FetchLogResultForBucket decoded =
+                    CommonRpcMessageUtils.getFetchLogResultForBucket(
+                            tableBucket, TablePath.of("db", "table"), response);
+            assertThat(decoded.fetchFromRemote()).isTrue();
+            assertThat(decoded.hasResolvedEarliestOffset()).isEqualTo(offset >= 0);
+            assertThat(decoded.getResolvedEarliestOffset()).isEqualTo(offset);
+        }
     }
 
     @Test

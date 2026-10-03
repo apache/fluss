@@ -47,6 +47,9 @@ public class ScanRecords implements Iterable<ScanRecord> {
     /** The exclusive upper bound of consumed offsets per polled bucket in this round. */
     private final Map<TableBucket, Long> consumedUpToOffsets;
 
+    /** The bounded buckets that reached their stopping offsets in this poll round. */
+    private final Set<TableBucket> finishedBuckets;
+
     public ScanRecords(Map<TableBucket, List<ScanRecord>> records) {
         this(records, Collections.emptyMap());
     }
@@ -54,25 +57,43 @@ public class ScanRecords implements Iterable<ScanRecord> {
     public ScanRecords(
             Map<TableBucket, List<ScanRecord>> records,
             Map<TableBucket, Long> consumedUpToOffsets) {
-        this.records = withProgressOnlyBuckets(records, consumedUpToOffsets);
+        this(records, consumedUpToOffsets, Collections.emptySet());
+    }
+
+    ScanRecords(
+            Map<TableBucket, List<ScanRecord>> records,
+            Map<TableBucket, Long> consumedUpToOffsets,
+            Set<TableBucket> finishedBuckets) {
+        this.records = withProgressOrFinishedBuckets(records, consumedUpToOffsets, finishedBuckets);
         this.consumedUpToOffsets = consumedUpToOffsets;
+        this.finishedBuckets = finishedBuckets;
     }
 
     /**
-     * Ensures every bucket with a consumed offset has a (possibly empty) record list entry, so that
-     * {@link #buckets()} surfaces progress-only buckets as documented. Returns the original map
-     * when the invariant already holds (the common case for collector-produced results).
+     * Ensures every bucket with a consumed offset or completion event has a (possibly empty) record
+     * list entry, so that {@link #buckets()} surfaces progress-only and finished-only buckets as
+     * documented. Returns the original map when the invariant already holds (the common case for
+     * collector-produced results).
      */
-    private static Map<TableBucket, List<ScanRecord>> withProgressOnlyBuckets(
+    private static Map<TableBucket, List<ScanRecord>> withProgressOrFinishedBuckets(
             Map<TableBucket, List<ScanRecord>> records,
-            Map<TableBucket, Long> consumedUpToOffsets) {
-        if (records.keySet().containsAll(consumedUpToOffsets.keySet())) {
+            Map<TableBucket, Long> consumedUpToOffsets,
+            Set<TableBucket> finishedBuckets) {
+        if (records.keySet().containsAll(consumedUpToOffsets.keySet())
+                && records.keySet().containsAll(finishedBuckets)) {
             return records;
         }
+
         Map<TableBucket, List<ScanRecord>> merged = new LinkedHashMap<>(records);
+
         for (TableBucket bucket : consumedUpToOffsets.keySet()) {
             merged.putIfAbsent(bucket, Collections.emptyList());
         }
+
+        for (TableBucket bucket : finishedBuckets) {
+            merged.putIfAbsent(bucket, Collections.emptyList());
+        }
+
         return merged;
     }
 
@@ -91,7 +112,7 @@ public class ScanRecords implements Iterable<ScanRecord> {
 
     /**
      * Get the bucket ids that were polled in this round, including buckets whose record list is
-     * empty but whose log offset still advanced.
+     * empty but whose log offset still advanced or whose bounded subscription finished.
      */
     public Set<TableBucket> buckets() {
         return Collections.unmodifiableSet(records.keySet());
@@ -124,13 +145,25 @@ public class ScanRecords implements Iterable<ScanRecord> {
     }
 
     /**
-     * Returns {@code true} if this {@code ScanRecords} carries any scanner progress.
+     * Returns {@code true} if this {@code ScanRecords} carries any scanner progress, either by
+     * returning records, advancing a consumed offset, or completing a bounded subscription.
      *
      * <p>A result may have progress even when {@link #isEmpty()} is {@code true}, for example when
      * a bucket returns no materialized records but advances its consumed offset.
      */
     public boolean hasProgress() {
-        return count() > 0 || !consumedUpToOffsets.isEmpty();
+        return count() > 0 || !consumedUpToOffsets.isEmpty() || !finishedBuckets.isEmpty();
+    }
+
+    /**
+     * Returns the bounded buckets that finished in this poll round, including empty ranges.
+     *
+     * <p>Each subscription reports completion only once. A completion event may accompany the final
+     * records or arrive without any records. Callers must consume all records in this result before
+     * treating the corresponding buckets as fully read.
+     */
+    public Set<TableBucket> finishedBuckets() {
+        return Collections.unmodifiableSet(finishedBuckets);
     }
 
     @Override

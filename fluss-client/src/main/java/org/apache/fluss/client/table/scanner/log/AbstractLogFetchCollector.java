@@ -38,6 +38,9 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+
+import static org.apache.fluss.utils.Preconditions.checkState;
 
 /** Shared implementation for polling completed fetches into scanner results. */
 @ThreadSafe
@@ -69,12 +72,10 @@ abstract class AbstractLogFetchCollector<T, R> {
      *     defaultResetPolicy is NONE
      */
     public R collectFetch(final LogFetchBuffer logFetchBuffer) {
-        Map<TableBucket, List<T>> fetched = new HashMap<>();
-        Map<TableBucket, Long> consumedUpToOffsets = new HashMap<>();
-        int recordsRemaining = maxPollRecords;
+        PollAccumulator result = new PollAccumulator();
 
         try {
-            while (recordsRemaining > 0) {
+            while (result.recordsRemaining > 0) {
                 CompletedFetch nextInLineFetch = logFetchBuffer.nextInLineFetch();
                 if (nextInLineFetch == null || nextInLineFetch.isConsumed()) {
                     CompletedFetch completedFetch = logFetchBuffer.peek();
@@ -84,18 +85,27 @@ abstract class AbstractLogFetchCollector<T, R> {
 
                     if (!completedFetch.isInitialized()) {
                         try {
-                            CompletedFetch initialized = initialize(completedFetch);
+                            CompletedFetch initialized = initialize(completedFetch, result);
                             logFetchBuffer.setNextInLineFetch(initialized);
                             if (initialized == null) {
                                 completedFetch.drain();
                             }
                         } catch (Exception e) {
-                            // Remove a completedFetch upon a parse with exception if
-                            // (1) it contains no records, and
-                            // (2) there are no fetched records with actual content
-                            // preceding this exception.
-                            if (fetched.isEmpty() && completedFetch.sizeInBytes == 0) {
-                                logFetchBuffer.poll();
+                            // Deferred errors remain queued. Immediate failures are discarded only
+                            // when the failure policy says this response must not be retried.
+                            if (result.shouldPropagateImmediately(e)
+                                    && result.shouldDiscardFailedFetch(e, completedFetch)) {
+                                CompletedFetch removed = logFetchBuffer.poll();
+                                checkState(
+                                        removed == completedFetch,
+                                        "Expected failed fetch %s at the head of the buffer, but found %s.",
+                                        completedFetch,
+                                        removed);
+                                try {
+                                    completedFetch.drain();
+                                } catch (RuntimeException cleanupException) {
+                                    e.addSuppressed(cleanupException);
+                                }
                             }
                             throw e;
                         }
@@ -105,56 +115,56 @@ abstract class AbstractLogFetchCollector<T, R> {
 
                     logFetchBuffer.poll();
                 } else {
-                    List<T> records = fetchRecords(nextInLineFetch, recordsRemaining);
                     TableBucket tableBucket = nextInLineFetch.tableBucket;
-                    // Always record the advanced next fetch offset for this bucket, even when
-                    // the materialized record list is empty.
-                    consumedUpToOffsets.put(tableBucket, nextInLineFetch.nextFetchOffset());
-                    if (!records.isEmpty()) {
-                        List<T> currentRecords = fetched.get(tableBucket);
-                        if (currentRecords == null) {
-                            fetched.put(tableBucket, records);
-                        } else {
-                            // this case shouldn't usually happen because we only send one fetch
-                            // at a time per bucket, but it might conceivably happen in some rare
-                            // cases (such as bucket leader changes). we have to copy to a new list
-                            // because the old one may be immutable
-                            List<T> mergedRecords =
-                                    new ArrayList<>(records.size() + currentRecords.size());
-                            mergedRecords.addAll(currentRecords);
-                            mergedRecords.addAll(records);
-                            fetched.put(tableBucket, mergedRecords);
-                        }
+                    long stoppingOffset = logScannerStatus.getBucketStoppingOffset(tableBucket);
+                    boolean bounded = stoppingOffset != LogScanner.NO_STOPPING_OFFSET;
+                    Long offsetBeforeFetch =
+                            bounded ? logScannerStatus.getBucketOffset(tableBucket) : null;
+                    List<T> records = fetchRecords(nextInLineFetch, result.recordsRemaining);
 
-                        recordsRemaining -= recordCount(records);
+                    if (bounded) {
+                        Long offsetAfterFetch = logScannerStatus.getBucketOffset(tableBucket);
+                        if (offsetBeforeFetch != null
+                                && offsetAfterFetch != null
+                                && !offsetBeforeFetch.equals(offsetAfterFetch)) {
+                            result.recordProgress(tableBucket, offsetAfterFetch, true);
+                        }
                     } else {
-                        fetched.putIfAbsent(tableBucket, Collections.emptyList());
+                        // Preserve the existing unbounded behavior: every consumed fetch
+                        // contributes its next fetch offset to the poll result.
+                        result.recordProgress(
+                                tableBucket, nextInLineFetch.nextFetchOffset(), false);
                     }
+
+                    result.addRecords(tableBucket, records, bounded);
                 }
             }
-        } catch (FetchException e) {
-            if (fetched.isEmpty()) {
+        } catch (Exception e) {
+            if (result.shouldPropagateImmediately(e)) {
+                // Release any off-heap resources held by accumulated records. Pending completion
+                // events remain in scanner status until a poll successfully returns them.
+                closeFetchedRecords(result.fetched);
                 throw e;
             }
-        } catch (Exception e) {
-            // Release any off-heap resources (e.g. Arrow buffers) held by
-            // already-fetched records before propagating the unexpected error.
-            closeFetchedRecords(fetched);
-            throw e;
         }
 
-        return toResult(fetched, consumedUpToOffsets);
+        Set<TableBucket> finishedBuckets = logScannerStatus.drainFinishedBuckets();
+        return toResult(result.fetched, result.consumedUpToOffsets, finishedBuckets);
     }
 
     /** Initialize a {@link CompletedFetch} object. */
     @Nullable
-    private CompletedFetch initialize(CompletedFetch completedFetch) {
+    private CompletedFetch initialize(CompletedFetch completedFetch, PollAccumulator result) {
         TableBucket tb = completedFetch.tableBucket;
+        if (logScannerStatus.hasReachedStoppingOffset(tb)) {
+            log.trace("Discarding fetch response for finished bounded bucket {}.", tb);
+            return null;
+        }
         ApiError error = completedFetch.error;
 
         try {
             if (error.isSuccess()) {
-                return handleInitializeSuccess(completedFetch);
+                return handleInitializeSuccess(completedFetch, result);
             } else {
                 handleInitializeErrors(
                         completedFetch,
@@ -173,26 +183,52 @@ abstract class AbstractLogFetchCollector<T, R> {
         }
     }
 
-    private @Nullable CompletedFetch handleInitializeSuccess(CompletedFetch completedFetch) {
+    private @Nullable CompletedFetch handleInitializeSuccess(
+            CompletedFetch completedFetch, PollAccumulator result) {
         TableBucket tb = completedFetch.tableBucket;
-        long fetchOffset = completedFetch.nextFetchOffset();
+        long requestedFetchOffset = completedFetch.requestedFetchOffset();
 
         // we are interested in this fetch only if the beginning offset matches the
         // current consumed position.
-        Long offset = logScannerStatus.getBucketOffset(tb);
-        if (offset == null) {
+        Long currentOffset = logScannerStatus.getBucketOffset(tb);
+        if (currentOffset == null) {
             log.debug(
                     "Discarding stale fetch response for bucket {} since the expected offset is null which means the bucket has been unsubscribed.",
                     tb);
             return null;
         }
-        if (offset != fetchOffset) {
+        if (currentOffset != requestedFetchOffset) {
             log.warn(
                     "Discarding stale fetch response for bucket {} since its offset {} does not match the expected offset {}.",
                     tb,
-                    fetchOffset,
-                    offset);
+                    requestedFetchOffset,
+                    currentOffset);
             return null;
+        }
+
+        long stoppingOffset = logScannerStatus.getBucketStoppingOffset(tb);
+        boolean bounded = stoppingOffset != LogScanner.NO_STOPPING_OFFSET;
+
+        if (bounded && requestedFetchOffset == LogScanner.EARLIEST_OFFSET) {
+            long resolvedEarliestOffset = completedFetch.resolvedEarliestOffset();
+            if (resolvedEarliestOffset < 0) {
+                throw new UnsupportedBoundedEarliestException(
+                        "Bounded scanning from EARLIEST_OFFSET requires a server that reports resolved_earliest_offset."
+                                + " Upgrade the server or use an explicit starting offset.");
+            }
+            // Physical cursor used while reading this CompletedFetch.
+            completedFetch.applyResolvedEarliestOffset();
+            // Logical bounded cursor owned by LogScannerStatus.
+            Long logicalOffset =
+                    logScannerStatus.resolveBoundedStartingOffset(
+                            tb, requestedFetchOffset, resolvedEarliestOffset);
+            if (logicalOffset == null) {
+                return null;
+            }
+            result.recordProgress(tb, logicalOffset, true);
+            if (logScannerStatus.hasReachedStoppingOffset(tb)) {
+                return null;
+            }
         }
 
         long highWatermark = completedFetch.highWatermark;
@@ -208,7 +244,7 @@ abstract class AbstractLogFetchCollector<T, R> {
     private void handleInitializeErrors(
             CompletedFetch completedFetch, Errors error, String errorMessage, TablePath tablePath) {
         TableBucket tb = completedFetch.tableBucket;
-        long fetchOffset = completedFetch.nextFetchOffset();
+        long requestedFetchOffset = completedFetch.requestedFetchOffset();
         if (error == Errors.NOT_LEADER_OR_FOLLOWER
                 || error == Errors.LOG_STORAGE_EXCEPTION
                 || error == Errors.KV_STORAGE_EXCEPTION
@@ -227,25 +263,25 @@ abstract class AbstractLogFetchCollector<T, R> {
             throw new FetchException(
                     String.format(
                             "The fetching offset %s is out of range: %s",
-                            fetchOffset, error.exception(errorMessage)));
+                            requestedFetchOffset, error.exception(errorMessage)));
         } else if (error == Errors.AUTHORIZATION_EXCEPTION) {
             throw new AuthorizationException(errorMessage);
         } else if (error == Errors.UNKNOWN_SERVER_ERROR) {
             log.warn(
                     "Unknown server error while fetching offset {} for bucket {}: {}",
-                    fetchOffset,
+                    requestedFetchOffset,
                     tb,
                     error.exception(errorMessage));
         } else if (error == Errors.CORRUPT_MESSAGE) {
             throw new FetchException(
                     String.format(
                             "Encountered corrupt message when fetching offset %s for bucket %s: %s",
-                            fetchOffset, tb, error.exception(errorMessage)));
+                            requestedFetchOffset, tb, error.exception(errorMessage)));
         } else {
             throw new FetchException(
                     String.format(
                             "Unexpected error code %s while fetching at offset %s from bucket %s: %s",
-                            error, fetchOffset, tb, error.exception(errorMessage)));
+                            error, requestedFetchOffset, tb, error.exception(errorMessage)));
         }
     }
 
@@ -256,35 +292,60 @@ abstract class AbstractLogFetchCollector<T, R> {
             log.debug(
                     "Ignoring fetched records for {} at offset {} since the current offset is null which means the bucket has been unsubscribed.",
                     tb,
-                    nextInLineFetch.fetchOffset());
-        } else {
-            if (nextInLineFetch.nextFetchOffset() == offset) {
-                List<T> records = doFetchRecords(nextInLineFetch, maxRecords);
-                log.trace(
-                        "Returning {} fetched records at offset {} for assigned bucket {}.",
-                        records.size(),
-                        offset,
-                        tb);
+                    nextInLineFetch.requestedFetchOffset());
+        } else if (logScannerStatus.hasReachedStoppingOffset(tb)) {
+            log.trace("Ignoring fetched records for finished bounded bucket {}.", tb);
+        } else if (nextInLineFetch.nextFetchOffset() == offset) {
+            long stoppingOffset = logScannerStatus.getBucketStoppingOffset(tb);
+            boolean bounded = stoppingOffset != LogScanner.NO_STOPPING_OFFSET;
 
-                if (nextInLineFetch.nextFetchOffset() > offset) {
-                    log.trace(
-                            "Updating fetch offset from {} to {} for bucket {} and returning {} records from poll()",
-                            offset,
-                            nextInLineFetch.nextFetchOffset(),
-                            tb,
-                            records.size());
-                    logScannerStatus.updateOffset(tb, nextInLineFetch.nextFetchOffset());
-                }
-                return records;
-            } else {
-                // these records aren't next in line based on the last consumed offset, ignore them
-                // they must be from an obsolete request
-                log.warn(
-                        "Ignoring fetched records for {} at offset {} since the current offset is {}",
-                        nextInLineFetch.tableBucket,
-                        nextInLineFetch.nextFetchOffset(),
-                        offset);
+            List<T> records = doFetchRecords(nextInLineFetch, maxRecords);
+            long rawConsumedUpToOffset = nextInLineFetch.nextFetchOffset();
+
+            if (bounded && !records.isEmpty()) {
+                records = trimFetchedRecords(records, stoppingOffset);
             }
+
+            log.trace(
+                    "Returning {} fetched records at offset {} for assigned bucket {}.",
+                    records.size(),
+                    offset,
+                    tb);
+
+            long consumedUpToOffset =
+                    bounded
+                            ? Math.min(rawConsumedUpToOffset, stoppingOffset)
+                            : rawConsumedUpToOffset;
+
+            if (consumedUpToOffset > offset) {
+                log.trace(
+                        "Updating fetch offset from {} to {} for bucket {} and returning {} records "
+                                + "from poll()",
+                        offset,
+                        consumedUpToOffset,
+                        tb,
+                        records.size());
+
+                logScannerStatus.updateOffset(tb, consumedUpToOffset);
+            }
+
+            if (bounded && rawConsumedUpToOffset >= stoppingOffset) {
+                log.trace(
+                        "Reached stopping offset {} for bucket {}, draining remaining fetched records.",
+                        stoppingOffset,
+                        tb);
+                nextInLineFetch.drain();
+            }
+
+            return records;
+        } else {
+            // these records aren't next in line based on the last consumed offset, ignore them
+            // they must be from an obsolete request
+            log.warn(
+                    "Ignoring fetched records for {} at offset {} since the current offset is {}",
+                    nextInLineFetch.tableBucket,
+                    nextInLineFetch.nextFetchOffset(),
+                    offset);
         }
 
         log.trace("Draining fetched records for bucket {}", nextInLineFetch.tableBucket);
@@ -301,7 +362,11 @@ abstract class AbstractLogFetchCollector<T, R> {
     protected abstract int recordCount(List<T> fetchedRecords);
 
     protected abstract R toResult(
-            Map<TableBucket, List<T>> fetchedRecords, Map<TableBucket, Long> consumedUpToOffsets);
+            Map<TableBucket, List<T>> fetchedRecords,
+            Map<TableBucket, Long> consumedUpToOffsets,
+            Set<TableBucket> finishedBuckets);
+
+    protected abstract List<T> trimFetchedRecords(List<T> fetchedRecords, long stoppingOffset);
 
     /**
      * Release resources held by fetched records on failure. The default implementation is a no-op,
@@ -309,4 +374,72 @@ abstract class AbstractLogFetchCollector<T, R> {
      * off-heap resources (e.g. Arrow buffers) should override this to close them.
      */
     protected void closeFetchedRecords(Map<TableBucket, List<T>> fetched) {}
+
+    private final class PollAccumulator {
+        private final Map<TableBucket, List<T>> fetched = new HashMap<>();
+        private final Map<TableBucket, Long> consumedUpToOffsets = new HashMap<>();
+
+        private int recordsRemaining = maxPollRecords;
+        private boolean hasBoundedAccumulatedResult;
+
+        private boolean hasDeliverableResult() {
+            return !fetched.isEmpty()
+                    || !consumedUpToOffsets.isEmpty()
+                    || logScannerStatus.hasPendingFinishedBuckets();
+        }
+
+        private boolean shouldPropagateImmediately(Exception exception) {
+            if (exception instanceof FetchException) {
+                // Preserve the existing FetchException behavior: return any already
+                // accumulated records, progress, or bounded completion first.
+                return !hasDeliverableResult();
+            }
+
+            // Non-FetchException historically propagates immediately for unbounded
+            // scans. Defer it only when this poll has already consumed bounded data
+            // or progress that must be delivered before the error.
+            return !hasBoundedAccumulatedResult;
+        }
+
+        private boolean shouldDiscardFailedFetch(
+                Exception exception, CompletedFetch completedFetch) {
+            if (exception instanceof UnsupportedBoundedEarliestException) {
+                return true;
+            }
+
+            return fetched.isEmpty()
+                    && consumedUpToOffsets.isEmpty()
+                    && completedFetch.sizeInBytes == 0;
+        }
+
+        private void recordProgress(TableBucket tableBucket, long offset, boolean bounded) {
+            consumedUpToOffsets.merge(tableBucket, offset, Math::max);
+            hasBoundedAccumulatedResult |= bounded;
+        }
+
+        private void addRecords(TableBucket tableBucket, List<T> records, boolean bounded) {
+            if (records.isEmpty()) {
+                return;
+            }
+            List<T> current = fetched.get(tableBucket);
+            if (current == null) {
+                fetched.put(tableBucket, records);
+            } else {
+                List<T> merged = new ArrayList<>(current.size() + records.size());
+                merged.addAll(current);
+                merged.addAll(records);
+                fetched.put(tableBucket, merged);
+            }
+            recordsRemaining -= recordCount(records);
+            hasBoundedAccumulatedResult |= bounded;
+        }
+    }
+
+    private static final class UnsupportedBoundedEarliestException
+            extends UnsupportedOperationException {
+
+        private UnsupportedBoundedEarliestException(String message) {
+            super(message);
+        }
+    }
 }

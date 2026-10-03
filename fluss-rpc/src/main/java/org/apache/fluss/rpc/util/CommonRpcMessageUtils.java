@@ -56,6 +56,8 @@ import java.util.List;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
+import static org.apache.fluss.rpc.entity.FetchLogResultForBucket.NO_RESOLVED_EARLIEST_OFFSET;
+
 /**
  * Utils for making rpc request/response from inner object or convert inner class to rpc
  * request/response for client and server.
@@ -197,6 +199,10 @@ public class CommonRpcMessageUtils {
             fetchLogResultForBucket =
                     FetchLogResultForBucket.error(tb, ApiError.fromErrorMessage(respForBucket));
         } else {
+            long resolvedEarliestOffset =
+                    respForBucket.hasResolvedEarliestOffset()
+                            ? respForBucket.getResolvedEarliestOffset()
+                            : NO_RESOLVED_EARLIEST_OFFSET;
             if (respForBucket.hasRemoteLogFetchInfo()) {
                 PbRemoteLogFetchInfo pbRlfInfo = respForBucket.getRemoteLogFetchInfo();
                 String partitionName =
@@ -231,7 +237,10 @@ public class CommonRpcMessageUtils {
                                 pbRlfInfo.getFirstStartPos());
                 fetchLogResultForBucket =
                         FetchLogResultForBucket.remote(
-                                tb, rlFetchInfo, respForBucket.getHighWatermark());
+                                tb,
+                                rlFetchInfo,
+                                respForBucket.getHighWatermark(),
+                                resolvedEarliestOffset);
             } else {
                 ByteBuffer recordsBuffer = toByteBuffer(respForBucket.getRecordsSlice());
                 LogRecords records =
@@ -249,7 +258,8 @@ public class CommonRpcMessageUtils {
                                 hasFilteredEndOffset ? respForBucket.getFilteredEndOffset() : -1L,
                                 respForBucket.hasMinRetainOffset()
                                         ? respForBucket.getMinRetainOffset()
-                                        : -1L);
+                                        : -1L,
+                                resolvedEarliestOffset);
             }
         }
 
