@@ -44,7 +44,9 @@ import java.util.Collections;
 import java.util.Iterator;
 import java.util.List;
 
+import static org.apache.fluss.client.table.scanner.log.LogScanner.EARLIEST_OFFSET;
 import static org.apache.fluss.utils.Preconditions.checkArgument;
+import static org.apache.fluss.utils.Preconditions.checkState;
 
 /**
  * {@link CompletedFetch} represents the result that was returned from the tablet server via a fetch
@@ -61,7 +63,8 @@ public abstract class CompletedFetch {
     final ApiError error;
     final int sizeInBytes;
     final long highWatermark;
-    private final long fetchOffset;
+    private final long requestedFetchOffset;
+    private final long resolvedEarliestOffset;
     private final long filteredEndOffset;
 
     private final boolean isCheckCrcs;
@@ -90,7 +93,8 @@ public abstract class CompletedFetch {
             LogRecordReadContext readContext,
             LogScannerStatus logScannerStatus,
             boolean isCheckCrcs,
-            long fetchOffset,
+            long requestedFetchOffset,
+            long resolvedEarliestOffset,
             long filteredEndOffset) {
         this.tableBucket = tableBucket;
         this.tablePath = tablePath;
@@ -101,16 +105,33 @@ public abstract class CompletedFetch {
         this.readContext = readContext;
         this.isCheckCrcs = isCheckCrcs;
         this.logScannerStatus = logScannerStatus;
-        this.fetchOffset = fetchOffset;
         checkArgument(
-                filteredEndOffset == NO_FILTERED_END_OFFSET || filteredEndOffset >= fetchOffset,
-                "filteredEndOffset (%s) must be %s (NO_FILTERED_END_OFFSET) or >= fetchOffset (%s) for bucket %s.",
+                resolvedEarliestOffset >= -1L,
+                "resolvedEarliestOffset (%s) must be -1 or non-negative for bucket %s.",
+                resolvedEarliestOffset,
+                tableBucket);
+        checkArgument(
+                resolvedEarliestOffset < 0 || requestedFetchOffset == EARLIEST_OFFSET,
+                "resolvedEarliestOffset (%s) can only be set for an EARLIEST request, "
+                        + "but requestedFetchOffset was %s for bucket %s.",
+                resolvedEarliestOffset,
+                requestedFetchOffset,
+                tableBucket);
+        this.requestedFetchOffset = requestedFetchOffset;
+        this.resolvedEarliestOffset = resolvedEarliestOffset;
+        long effectiveStartOffset =
+                resolvedEarliestOffset >= 0 ? resolvedEarliestOffset : requestedFetchOffset;
+        checkArgument(
+                filteredEndOffset == NO_FILTERED_END_OFFSET
+                        || effectiveStartOffset < 0
+                        || filteredEndOffset >= effectiveStartOffset,
+                "filteredEndOffset (%s) must be %s or >= effective start offset (%s) for bucket %s.",
                 filteredEndOffset,
                 NO_FILTERED_END_OFFSET,
-                fetchOffset,
+                effectiveStartOffset,
                 tableBucket);
         this.filteredEndOffset = filteredEndOffset;
-        this.nextFetchOffset = fetchOffset;
+        this.nextFetchOffset = requestedFetchOffset;
     }
 
     // TODO: optimize this to avoid deep copying the record.
@@ -169,8 +190,25 @@ public abstract class CompletedFetch {
         return initialized;
     }
 
-    long fetchOffset() {
-        return fetchOffset;
+    long requestedFetchOffset() {
+        return requestedFetchOffset;
+    }
+
+    long resolvedEarliestOffset() {
+        return resolvedEarliestOffset;
+    }
+
+    void applyResolvedEarliestOffset() {
+        checkState(
+                requestedFetchOffset == LogScanner.EARLIEST_OFFSET,
+                "Resolved EARLIEST offset can only be applied to EARLIEST fetches.");
+
+        checkState(
+                resolvedEarliestOffset >= 0,
+                "Resolved EARLIEST offset is not available for bucket %s.",
+                tableBucket);
+
+        nextFetchOffset = resolvedEarliestOffset;
     }
 
     long nextFetchOffset() {

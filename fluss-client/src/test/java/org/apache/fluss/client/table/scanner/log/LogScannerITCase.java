@@ -564,6 +564,103 @@ public class LogScannerITCase extends ClientToServerITCaseBase {
         }
     }
 
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void testBoundedLogScan(boolean isPartitioned) throws Exception {
+        TablePath tablePath = TablePath.of("test_db_1", "test_bounded_log_scan_" + isPartitioned);
+        TableDescriptor.Builder builder =
+                TableDescriptor.builder().schema(DATA1_SCHEMA).distributedBy(1);
+        if (isPartitioned) {
+            builder.partitionedBy("b");
+        }
+        long tableId = createTable(tablePath, builder.build(), false);
+        Long partitionId = null;
+        if (isPartitioned) {
+            admin.createPartition(tablePath, newPartitionSpec("b", "p1"), false).get();
+            partitionId =
+                    FLUSS_CLUSTER_EXTENSION.waitUntilPartitionAllReady(tablePath, 1).get("p1");
+            assertThat(partitionId).isNotNull();
+            FLUSS_CLUSTER_EXTENSION.waitUntilTablePartitionReady(tableId, partitionId);
+        } else {
+            waitAllReplicasReady(tableId, 1);
+        }
+
+        TableBucket tableBucket = new TableBucket(tableId, partitionId, 0);
+        try (Table table = conn.getTable(tablePath)) {
+            AppendWriter writer = table.newAppend().createWriter();
+            for (int i = 0; i < 10; i++) {
+                writer.append(row(i, "p1")).get();
+            }
+            writer.flush();
+
+            try (LogScanner logScanner = table.newScan().createLogScanner()) {
+                if (isPartitioned) {
+                    logScanner.subscribeBounded(partitionId, 0, 2L, 5L);
+                } else {
+                    logScanner.subscribeBounded(0, 2L, 5L);
+                }
+
+                List<Long> offsets = new ArrayList<>();
+                ScanRecords lastScanRecords = ScanRecords.EMPTY;
+                boolean finished = false;
+                long deadline = System.nanoTime() + Duration.ofSeconds(30).toNanos();
+
+                while (!finished) {
+                    assertThat(System.nanoTime())
+                            .as("Timed out waiting for bounded log scan to finish")
+                            .isLessThan(deadline);
+
+                    ScanRecords scanRecords = logScanner.poll(Duration.ofSeconds(1));
+                    lastScanRecords = scanRecords;
+
+                    for (ScanRecord scanRecord : scanRecords) {
+                        offsets.add(scanRecord.logOffset());
+                    }
+
+                    Long consumedUpToOffset = scanRecords.consumedUpToOffset(tableBucket);
+                    if (consumedUpToOffset != null) {
+                        assertThat(consumedUpToOffset).isLessThanOrEqualTo(5L);
+                    }
+
+                    finished = scanRecords.finishedBuckets().contains(tableBucket);
+                }
+
+                assertThat(offsets).containsExactly(2L, 3L, 4L);
+                assertThat(lastScanRecords.consumedUpToOffset(tableBucket)).isEqualTo(5L);
+                assertThat(lastScanRecords.finishedBuckets()).containsExactly(tableBucket);
+            }
+        }
+    }
+
+    @Test
+    void testEmptyBoundedArrowRangeReturnsCompletion() throws Exception {
+        TablePath tablePath =
+                TablePath.of("test_db_1", "test_empty_bounded_arrow_range_completion");
+        TableDescriptor descriptor =
+                TableDescriptor.builder()
+                        .schema(DATA1_SCHEMA)
+                        .distributedBy(1)
+                        .logFormat(LogFormat.ARROW)
+                        .build();
+        long tableId = createTable(tablePath, descriptor, false);
+        waitAllReplicasReady(tableId, 1);
+
+        TableBucket tableBucket = new TableBucket(tableId, 0);
+        try (Table table = conn.getTable(tablePath);
+                LogScannerImpl scanner = (LogScannerImpl) table.newScan().createLogScanner()) {
+            scanner.subscribeBounded(0, 5L, 5L);
+
+            try (ArrowScanRecords scanRecords = scanner.pollRecordBatch(Duration.ofSeconds(1))) {
+                assertThat(scanRecords.hasProgress()).isTrue();
+                assertThat(scanRecords.count()).isZero();
+                assertThat(scanRecords.buckets()).containsExactly(tableBucket);
+                assertThat(scanRecords.records(tableBucket)).isEmpty();
+                assertThat(scanRecords.consumedUpToOffset(tableBucket)).isNull();
+                assertThat(scanRecords.finishedBuckets()).containsExactly(tableBucket);
+            }
+        }
+    }
+
     private void pollAndVerifyArrowBatches(
             LogScannerImpl scanner, int expectedRecords, int minExpectedOffset) {
         int count = 0;

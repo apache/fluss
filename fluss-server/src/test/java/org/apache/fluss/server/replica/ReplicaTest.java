@@ -100,6 +100,8 @@ import static org.apache.fluss.record.TestData.DATA2_SCHEMA;
 import static org.apache.fluss.record.TestData.DEFAULT_SCHEMA_ID;
 import static org.apache.fluss.server.coordinator.CoordinatorContext.INITIAL_COORDINATOR_EPOCH;
 import static org.apache.fluss.server.kv.KvTabletTestUtils.flushAndWait;
+import static org.apache.fluss.server.log.FetchParams.FETCH_FROM_EARLIEST_OFFSET;
+import static org.apache.fluss.server.log.LogReadInfo.NO_RESOLVED_EARLIEST_OFFSET;
 import static org.apache.fluss.server.zk.data.LeaderAndIsr.INITIAL_LEADER_EPOCH;
 import static org.apache.fluss.testutils.DataTestUtils.assertLogRecordsEquals;
 import static org.apache.fluss.testutils.DataTestUtils.createBasicMemoryLogRecords;
@@ -164,6 +166,55 @@ final class ReplicaTest extends ReplicaTestBase {
                                         new ListOffsetsParam(
                                                 -1, ListOffsetsParam.LATEST_OFFSET_TYPE, null)))
                 .isInstanceOf(NotLeaderOrFollowerException.class);
+    }
+
+    @Test
+    void testEarliestFetchReportsResolvedEarliestOffset() throws Exception {
+        TableBucket tableBucket = new TableBucket(DATA1_TABLE_ID, 1);
+        Replica replica = makeLogReplica(DATA1_PHYSICAL_TABLE_PATH, tableBucket);
+        makeLogReplicaAsLeader(replica);
+
+        replica.truncateFullyAndStartAt(42L);
+
+        assertThat(replica.getLogStartOffset()).isEqualTo(42L);
+        assertThat(replica.getLocalLogEndOffset()).isEqualTo(42L);
+        assertThat(replica.getLogHighWatermark()).isEqualTo(42L);
+
+        FetchParams fetchParams = new FetchParams(-1, Integer.MAX_VALUE);
+        fetchParams.setCurrentFetch(
+                DATA1_TABLE_ID,
+                FETCH_FROM_EARLIEST_OFFSET,
+                Integer.MAX_VALUE,
+                replica.getSchemaGetter(),
+                DEFAULT_COMPRESSION,
+                null,
+                new ProjectionPushdownCache());
+
+        LogReadInfo readInfo = replica.fetchRecords(fetchParams);
+
+        assertThat(readInfo.getFetchedData().getRecords().sizeInBytes()).isZero();
+        assertThat(readInfo.getResolvedEarliestOffset()).isEqualTo(42L);
+        assertThat(readInfo.getHighWatermark()).isEqualTo(42L);
+    }
+
+    @Test
+    void testExplicitFetchDoesNotReportResolvedEarliestOffset() throws Exception {
+        TableBucket tableBucket = new TableBucket(DATA1_TABLE_ID, 1);
+        Replica replica = makeLogReplica(DATA1_PHYSICAL_TABLE_PATH, tableBucket);
+        makeLogReplicaAsLeader(replica);
+
+        FetchParams fetchParams = new FetchParams(-1, Integer.MAX_VALUE);
+        fetchParams.setCurrentFetch(
+                DATA1_TABLE_ID,
+                0L,
+                Integer.MAX_VALUE,
+                replica.getSchemaGetter(),
+                DEFAULT_COMPRESSION,
+                null,
+                new ProjectionPushdownCache());
+
+        LogReadInfo readInfo = replica.fetchRecords(fetchParams);
+        assertThat(readInfo.getResolvedEarliestOffset()).isEqualTo(NO_RESOLVED_EARLIEST_OFFSET);
     }
 
     @Test

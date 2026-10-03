@@ -33,11 +33,14 @@ import static org.apache.fluss.utils.Preconditions.checkNotNull;
 /** Result of {@link FetchLogRequest} for each table bucket. */
 @Internal
 public class FetchLogResultForBucket extends ResultForBucket {
+    public static final long NO_RESOLVED_EARLIEST_OFFSET = -1L;
+
     private final @Nullable RemoteLogFetchInfo remoteLogFetchInfo;
     private final @Nullable LogRecords records;
     private final long highWatermark;
     private final long filteredEndOffset;
     private final long minRetainOffset;
+    private final long resolvedEarliestOffset;
 
     private FetchLogResultForBucket(
             TableBucket tableBucket,
@@ -46,6 +49,7 @@ public class FetchLogResultForBucket extends ResultForBucket {
             long highWatermark,
             long filteredEndOffset,
             long minRetainOffset,
+            long resolvedEarliestOffset,
             ApiError error) {
         super(tableBucket, error);
         this.remoteLogFetchInfo = remoteLogFetchInfo;
@@ -53,6 +57,7 @@ public class FetchLogResultForBucket extends ResultForBucket {
         this.highWatermark = highWatermark;
         this.filteredEndOffset = filteredEndOffset;
         this.minRetainOffset = minRetainOffset;
+        this.resolvedEarliestOffset = resolvedEarliestOffset;
     }
 
     /** Creates a successful local fetch result. */
@@ -62,7 +67,34 @@ public class FetchLogResultForBucket extends ResultForBucket {
             long highWatermark,
             long filteredEndOffset,
             long minRetainOffset) {
+        return records(
+                tableBucket,
+                records,
+                highWatermark,
+                filteredEndOffset,
+                minRetainOffset,
+                NO_RESOLVED_EARLIEST_OFFSET);
+    }
+
+    /**
+     * Creates a successful local fetch result with an EARLIEST offset resolution.
+     *
+     * <p>{@code resolvedEarliestOffset} must be non-negative when supplied, or {@link
+     * #NO_RESOLVED_EARLIEST_OFFSET} when this fetch did not resolve a symbolic starting offset.
+     */
+    public static FetchLogResultForBucket records(
+            TableBucket tableBucket,
+            LogRecords records,
+            long highWatermark,
+            long filteredEndOffset,
+            long minRetainOffset,
+            long resolvedEarliestOffset) {
         checkArgument(minRetainOffset >= -1L, "Min retain offset must be at least -1.");
+
+        checkArgument(
+                resolvedEarliestOffset >= NO_RESOLVED_EARLIEST_OFFSET,
+                "Resolved earliest offset must be at least %s.",
+                NO_RESOLVED_EARLIEST_OFFSET);
         return new FetchLogResultForBucket(
                 tableBucket,
                 null,
@@ -70,12 +102,26 @@ public class FetchLogResultForBucket extends ResultForBucket {
                 highWatermark,
                 filteredEndOffset,
                 minRetainOffset,
+                resolvedEarliestOffset,
                 ApiError.NONE);
     }
 
     /** Creates a successful remote fetch result. */
     public static FetchLogResultForBucket remote(
             TableBucket tableBucket, RemoteLogFetchInfo remoteLogFetchInfo, long highWatermark) {
+        return remote(tableBucket, remoteLogFetchInfo, highWatermark, NO_RESOLVED_EARLIEST_OFFSET);
+    }
+
+    /** Creates a successful remote fetch result with an EARLIEST offset resolution. */
+    public static FetchLogResultForBucket remote(
+            TableBucket tableBucket,
+            RemoteLogFetchInfo remoteLogFetchInfo,
+            long highWatermark,
+            long resolvedEarliestOffset) {
+        checkArgument(
+                resolvedEarliestOffset >= NO_RESOLVED_EARLIEST_OFFSET,
+                "Resolved earliest offset must be at least %s.",
+                NO_RESOLVED_EARLIEST_OFFSET);
         return new FetchLogResultForBucket(
                 tableBucket,
                 checkNotNull(remoteLogFetchInfo, "remote log fetch info can not be null"),
@@ -83,6 +129,7 @@ public class FetchLogResultForBucket extends ResultForBucket {
                 highWatermark,
                 -1L,
                 -1L,
+                resolvedEarliestOffset,
                 ApiError.NONE);
     }
 
@@ -90,12 +137,20 @@ public class FetchLogResultForBucket extends ResultForBucket {
     public static FetchLogResultForBucket empty(
             TableBucket tableBucket, long highWatermark, long filteredEndOffset) {
         return new FetchLogResultForBucket(
-                tableBucket, null, null, highWatermark, filteredEndOffset, -1L, ApiError.NONE);
+                tableBucket,
+                null,
+                null,
+                highWatermark,
+                filteredEndOffset,
+                -1L,
+                NO_RESOLVED_EARLIEST_OFFSET,
+                ApiError.NONE);
     }
 
     /** Creates a failed fetch result. */
     public static FetchLogResultForBucket error(TableBucket tableBucket, ApiError error) {
-        return new FetchLogResultForBucket(tableBucket, null, null, -1L, -1L, -1L, error);
+        return new FetchLogResultForBucket(
+                tableBucket, null, null, -1L, -1L, -1L, NO_RESOLVED_EARLIEST_OFFSET, error);
     }
 
     /**
@@ -123,6 +178,21 @@ public class FetchLogResultForBucket extends ResultForBucket {
 
     public @Nullable RemoteLogFetchInfo remoteLogFetchInfo() {
         return remoteLogFetchInfo;
+    }
+
+    /**
+     * Returns whether this response contains the physical offset resolved from an EARLIEST request.
+     */
+    public boolean hasResolvedEarliestOffset() {
+        return resolvedEarliestOffset >= 0;
+    }
+
+    /**
+     * Returns the physical offset resolved from an EARLIEST request, or {@link
+     * #NO_RESOLVED_EARLIEST_OFFSET} when absent.
+     */
+    public long getResolvedEarliestOffset() {
+        return resolvedEarliestOffset;
     }
 
     public long getHighWatermark() {
