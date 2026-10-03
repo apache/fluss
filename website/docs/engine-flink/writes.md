@@ -92,7 +92,7 @@ SELECT shop_id, user_id, num_orders FROM source;
 Fluss supports deleting data for primary-key tables in batch mode via `DELETE FROM` statement. The `WHERE` clause can be any condition and does not need to cover all primary key columns.
 
 :::note
-`DELETE FROM` and `UPDATE` are only supported for primary-key tables using the default merge engine. Tables with the `first_row`, `versioned`, or `aggregation` merge engine reject both statements.
+`DELETE FROM` and `UPDATE` are only supported for primary-key tables using the default or `update_if_changed` merge engine. Tables with the `first_row`, `versioned`, or `aggregation` merge engine reject both statements.
 :::
 
 ```sql title="Flink SQL"
