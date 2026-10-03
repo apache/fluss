@@ -36,6 +36,7 @@ public class LanceConfig implements Serializable {
     private static final String max_rows_per_group = "max_rows_per_group";
     private static final String max_bytes_per_file = "max_bytes_per_file";
     private static final String batch_size = "batch_size";
+    private static final String max_bytes_per_batch = "max_bytes_per_batch";
     private static final String warehouse = "warehouse";
 
     private final Map<String, String> options;
@@ -75,6 +76,31 @@ public class LanceConfig implements Serializable {
             return Integer.parseInt(options.get(batch_size));
         }
         return 512;
+    }
+
+    /**
+     * Returns the byte-based flush threshold for the tiering writer.
+     *
+     * <p>When a row-batch's underlying Arrow off-heap allocation reaches (or exceeds) this many
+     * bytes, {@link org.apache.fluss.lake.lance.tiering.LanceLakeWriter} will flush the batch as a
+     * new Lance fragment even if {@link #getBatchSize(LanceConfig)} rows have not yet been
+     * accumulated. This lets operators cap peak memory when rows are wide, and increase throughput
+     * when rows are very narrow.
+     *
+     * <p>A value of {@code 0} (the default) disables byte-based flushing and preserves the
+     * historical row-count-only behavior.
+     */
+    public static long getMaxBytesPerBatch(LanceConfig config) {
+        Map<String, String> options = config.getOptions();
+        if (options.containsKey(max_bytes_per_batch)) {
+            long v = Long.parseLong(options.get(max_bytes_per_batch));
+            if (v < 0) {
+                throw new IllegalArgumentException(
+                        "'max_bytes_per_batch' must be non-negative, but was " + v);
+            }
+            return v;
+        }
+        return 0L;
     }
 
     public Map<String, String> getOptions() {
