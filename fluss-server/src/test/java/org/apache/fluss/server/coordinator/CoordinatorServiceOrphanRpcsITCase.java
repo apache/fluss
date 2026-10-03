@@ -237,6 +237,15 @@ class CoordinatorServiceOrphanRpcsITCase {
                 CompletedSnapshotHandle completedSnapshotHandle) {}
 
         @Override
+        public void registerExternal(
+                TableBucket tableBucket,
+                CompletedSnapshotHandle snapshotHandle,
+                int coordinatorZkVersion) {
+            throw new UnsupportedOperationException(
+                    "External snapshot registration is not supported.");
+        }
+
+        @Override
         public void remove(TableBucket tableBucket, long snapshotId) {}
 
         @Override

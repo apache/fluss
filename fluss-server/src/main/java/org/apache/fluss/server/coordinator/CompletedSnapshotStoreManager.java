@@ -19,6 +19,7 @@ package org.apache.fluss.server.coordinator;
 
 import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.exception.ApiException;
+import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.metrics.MetricNames;
@@ -28,10 +29,15 @@ import org.apache.fluss.server.kv.snapshot.CompletedSnapshotHandle;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshotHandleStore;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshotStore;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshotStore.SnapshotInUseChecker;
+import org.apache.fluss.server.kv.snapshot.KvFileHandle;
+import org.apache.fluss.server.kv.snapshot.KvFileHandleAndLocalPath;
+import org.apache.fluss.server.kv.snapshot.KvSnapshotHandle;
 import org.apache.fluss.server.kv.snapshot.SharedKvFileRegistry;
 import org.apache.fluss.server.kv.snapshot.ZooKeeperCompletedSnapshotHandleStore;
 import org.apache.fluss.server.metrics.group.CoordinatorMetricGroup;
+import org.apache.fluss.server.zk.ZkSequenceIDCounter;
 import org.apache.fluss.server.zk.ZooKeeperClient;
+import org.apache.fluss.server.zk.data.ZkData;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -39,6 +45,10 @@ import org.slf4j.LoggerFactory;
 import javax.annotation.Nullable;
 import javax.annotation.concurrent.ThreadSafe;
 
+import java.io.File;
+import java.net.URI;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
@@ -163,6 +173,115 @@ public class CompletedSnapshotStoreManager {
                 });
     }
 
+    /**
+     * Registers an immutable, externally produced snapshot and adopts its files into retention.
+     *
+     * <p>The caller must keep the target replicas inactive until registration completes, use a
+     * snapshot ID reserved from the target bucket's snapshot counter, and produce files using the
+     * target table's schema IDs and KV encoding. Files must belong to the target and remain
+     * immutable; ownership transfers to snapshot retention after registration. This method does not
+     * copy files, migrate schemas or coordinate concurrent table writes. Every referenced file must
+     * have a canonical SHA-256 digest, use a safe local path, and private files must remain under
+     * the declared snapshot location.
+     *
+     * <p>Run this operation on an IO executor. A failed or uncertain registration can be retried
+     * with the same handle; callers must not delete its files on failure.
+     */
+    public void registerExternalSnapshot(
+            TablePath tablePath,
+            TableBucket tableBucket,
+            CompletedSnapshotHandle handle,
+            int coordinatorZkVersion)
+            throws Exception {
+        CompletedSnapshot snapshot = handle.retrieveCompleteSnapshot();
+        checkArgument(
+                tableBucket.equals(snapshot.getTableBucket()),
+                "Snapshot bucket does not match target.");
+        checkArgument(
+                handle.getSnapshotId() == snapshot.getSnapshotID()
+                        && handle.getLogOffset() == snapshot.getLogOffset()
+                        && handle.getMetadataFilePath().equals(snapshot.getMetadataFilePath()),
+                "Snapshot metadata does not match its handle.");
+        checkArgument(
+                snapshot.getSnapshotID() >= 0 && snapshot.getLogOffset() >= 0,
+                "Snapshot ID and log offset must be non-negative.");
+        validateExternalSnapshotFiles(snapshot);
+        long nextSnapshotId =
+                new ZkSequenceIDCounter(
+                                zooKeeperClient.getCuratorClient(),
+                                ZkData.BucketSnapshotSequenceIdZNode.path(tableBucket))
+                        .getCurrent();
+        checkArgument(
+                snapshot.getSnapshotID() < nextSnapshotId,
+                "External snapshot ID must be below the target bucket counter.");
+        getOrCreateCompletedSnapshotStore(tablePath, tableBucket)
+                .registerExternalSnapshot(snapshot, coordinatorZkVersion);
+    }
+
+    private static void validateExternalSnapshotFiles(CompletedSnapshot snapshot) {
+        KvSnapshotHandle snapshotHandle = snapshot.getKvSnapshotHandle();
+        Set<String> localPaths = new HashSet<>();
+        Set<String> remotePaths = new HashSet<>();
+        for (KvFileHandleAndLocalPath file : snapshotHandle.getSharedKvFileHandles()) {
+            validateExternalSnapshotFile(file, localPaths, remotePaths);
+        }
+        for (KvFileHandleAndLocalPath file : snapshotHandle.getPrivateFileHandles()) {
+            validateExternalSnapshotFile(file, localPaths, remotePaths);
+            requireWithinSnapshot(file.getKvFileHandle(), snapshot.getSnapshotLocation());
+        }
+        checkArgument(
+                snapshotHandle.getIncrementalSize() >= 0L,
+                "Snapshot incremental size must not be negative.");
+    }
+
+    private static void validateExternalSnapshotFile(
+            KvFileHandleAndLocalPath file, Set<String> localPaths, Set<String> remotePaths) {
+        KvFileHandle handle = file.getKvFileHandle();
+        checkArgument(handle.getSize() >= 0L, "Snapshot file size must not be negative.");
+        checkArgument(
+                handle.getSha256() != null && handle.getSha256().matches("[0-9a-f]{64}"),
+                "External snapshot files must have a canonical SHA-256.");
+        checkArgument(isSafeLocalPath(file.getLocalPath()), "Snapshot local path is unsafe.");
+        checkArgument(localPaths.add(file.getLocalPath()), "Duplicate snapshot local path.");
+        checkArgument(
+                remotePaths.add(handle.getFilePath()), "Duplicate snapshot remote file path.");
+    }
+
+    private static boolean isSafeLocalPath(String localPath) {
+        if (localPath == null
+                || localPath.isEmpty()
+                || localPath.startsWith("/")
+                || localPath.endsWith("/")
+                || localPath.indexOf('\\') >= 0
+                || localPath.contains("//")) {
+            return false;
+        }
+        String[] components = localPath.split("/", -1);
+        for (String component : components) {
+            if (component.isEmpty() || ".".equals(component) || "..".equals(component)) {
+                return false;
+            }
+        }
+        try {
+            Path normalized = Paths.get(localPath).normalize();
+            return !normalized.isAbsolute()
+                    && localPath.equals(normalized.toString().replace(File.separatorChar, '/'));
+        } catch (RuntimeException invalid) {
+            return false;
+        }
+    }
+
+    private static void requireWithinSnapshot(KvFileHandle file, FsPath snapshotLocation) {
+        URI child = new FsPath(file.getFilePath()).toUri().normalize();
+        URI root = snapshotLocation.toUri().normalize();
+        String rootPath = root.getPath().endsWith("/") ? root.getPath() : root.getPath() + '/';
+        checkArgument(
+                java.util.Objects.equals(child.getScheme(), root.getScheme())
+                        && java.util.Objects.equals(child.getAuthority(), root.getAuthority())
+                        && child.getPath().startsWith(rootPath),
+                "Snapshot private file escapes its snapshot location.");
+    }
+
     public void removeCompletedSnapshotStoreByTableBuckets(Set<TableBucket> tableBuckets) {
         for (TableBucket tableBucket : tableBuckets) {
             bucketCompletedSnapshotStores.remove(tableBucket);
@@ -244,10 +363,11 @@ public class CompletedSnapshotStoreManager {
     }
 
     /**
-     * Returns active snapshot IDs per bucket for the given (tableId, partitionId) scope. For
-     * buckets with an in-memory {@link CompletedSnapshotStore}, the cached active set is returned
-     * (completed snapshots ∪ still-in-use snapshots, no retention truncation). For other buckets,
-     * snapshot IDs are read directly from ZK children (no per-snapshot payload fetch).
+     * Returns active snapshot IDs per bucket for the given (tableId, partitionId) scope. The result
+     * includes both cached snapshots and every persistent snapshot handle. A registered external
+     * snapshot must remain protected even if its registration response is lost before the in-memory
+     * store adopts it. Failure to read persistent handles fails the query so callers cannot mistake
+     * an uncertain result for an empty active set.
      */
     public Map<Integer, Set<Long>> getActiveSnapshotIdsByBucket(
             long tableId, @Nullable Long partitionId, int numBuckets) {
@@ -255,11 +375,9 @@ public class CompletedSnapshotStoreManager {
         for (int i = 0; i < numBuckets; i++) {
             TableBucket tb = new TableBucket(tableId, partitionId, i);
             CompletedSnapshotStore store = bucketCompletedSnapshotStores.get(tb);
-            Set<Long> ids;
+            Set<Long> ids = new HashSet<>(readActiveSnapshotIdsFromZk(tb));
             if (store != null) {
-                ids = store.getActiveSnapshotIds();
-            } else {
-                ids = readActiveSnapshotIdsFromZk(tb);
+                ids.addAll(store.getActiveSnapshotIds());
             }
             if (!ids.isEmpty()) {
                 result.put(i, ids);

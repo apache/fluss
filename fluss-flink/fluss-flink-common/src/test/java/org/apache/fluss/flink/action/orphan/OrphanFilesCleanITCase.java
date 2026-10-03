@@ -582,7 +582,12 @@ abstract class OrphanFilesCleanITCase extends AbstractTestBase {
         TableInfo tableInfo = admin.getTableInfo(tablePath).get();
         TableBucket tableBucket = new TableBucket(tableInfo.getTableId(), 0);
 
-        // Seed a valid KV snapshot in ZK so listBucketSnapshots returns a child to decode.
+        // Seed a log manifest + active segment while the replica still has ordinary empty state.
+        // Updating the manifest can trigger a leader notification, which must complete before the
+        // intentionally synthetic snapshot metadata below is installed for the cleaner test.
+        Path activeLogSegment = seedActiveBucketManifest(tablePath);
+
+        // Seed a KV snapshot in ZK so listBucketSnapshots returns a child to decode.
         FsPath remoteKvTabletDir =
                 FlussPaths.remoteKvTabletDir(
                         new FsPath(remoteDataRoot().resolve("kv").toUri().toString()),
@@ -590,10 +595,6 @@ abstract class OrphanFilesCleanITCase extends AbstractTestBase {
                         tableBucket);
         long activeSnapshotId = 1L;
         seedKvSnapshots(tableBucket, remoteKvTabletDir, new long[] {activeSnapshotId});
-
-        // Seed a log manifest + active segment so the log bucket reaches RESOLVED in the
-        // active-file cleanup.
-        Path activeLogSegment = seedActiveBucketManifest(tablePath);
 
         // -----------------------------------------------------------------
         // Step 1 — baseline (no fault injection)
