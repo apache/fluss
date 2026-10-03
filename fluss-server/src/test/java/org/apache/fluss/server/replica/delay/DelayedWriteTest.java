@@ -21,7 +21,6 @@ import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.rpc.entity.ProduceLogResultForBucket;
 import org.apache.fluss.rpc.protocol.Errors;
 import org.apache.fluss.server.log.LogAppendInfo;
-import org.apache.fluss.server.metrics.group.TestingMetricGroups;
 import org.apache.fluss.server.replica.Replica;
 import org.apache.fluss.server.replica.ReplicaTestBase;
 import org.apache.fluss.server.replica.delay.DelayedWrite.DelayedBucketStatus;
@@ -184,6 +183,6 @@ final class DelayedWriteTest extends ReplicaTestBase {
                 new DelayedWriteMetadata<>(-1, bucketStatusMap),
                 replicaManager,
                 callback,
-                TestingMetricGroups.TABLET_SERVER_METRICS);
+                tabletServerMetricGroup);
     }
 }
