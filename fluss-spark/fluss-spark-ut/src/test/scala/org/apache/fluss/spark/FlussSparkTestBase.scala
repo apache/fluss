@@ -52,6 +52,8 @@ class FlussSparkTestBase extends QueryTest with SharedSparkSession {
     super.sparkConf
       .set(s"spark.sql.catalog.$DEFAULT_CATALOG", classOf[SparkCatalog].getName)
       .set(s"spark.sql.catalog.$DEFAULT_CATALOG.bootstrap.servers", flussServer.getBootstrapServers)
+      // Avoid Netty's quiet period for the short-lived clients created by Spark scans.
+      .set("spark.sql.fluss.netty.client.skip-shutdown-quiet-period", "true")
       .set("spark.sql.defaultCatalog", DEFAULT_CATALOG)
       .set("spark.sql.extensions", classOf[FlussSparkSessionExtensions].getName)
   }

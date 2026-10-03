@@ -76,6 +76,8 @@ public final class NettyClient implements RpcClient {
 
     private final Supplier<ClientAuthenticator> authenticatorSupplier;
 
+    private final boolean skipShutdownQuietPeriod;
+
     private volatile boolean isClosed = false;
 
     public NettyClient(Configuration conf, ClientMetricGroup clientMetricGroup) {
@@ -103,6 +105,8 @@ public final class NettyClient implements RpcClient {
                         .handler(new ClientChannelInitializer(connectionMaxIdle, preferHeap));
         this.clientMetricGroup = clientMetricGroup;
         this.authenticatorSupplier = AuthenticationFactory.loadClientAuthenticatorSupplier(conf);
+        this.skipShutdownQuietPeriod =
+                conf.getBoolean(ConfigOptions.NETTY_CLIENT_SKIP_SHUTDOWN_QUIET_PERIOD);
         NettyMetrics.registerNettyMetrics(clientMetricGroup, allocator);
     }
 
@@ -171,7 +175,10 @@ public final class NettyClient implements RpcClient {
                     shutdownFutures.add(conn.getValue().close());
                 }
             }
-            shutdownFutures.add(NettyUtils.shutdownGroup(eventGroup));
+            shutdownFutures.add(
+                    skipShutdownQuietPeriod
+                            ? NettyUtils.shutdownGroupImmediately(eventGroup)
+                            : NettyUtils.shutdownGroup(eventGroup));
             CompletableFuture.allOf(shutdownFutures.toArray(new CompletableFuture<?>[0]))
                     .get(10, TimeUnit.SECONDS);
             LOG.info("Netty client was shutdown successfully.");
