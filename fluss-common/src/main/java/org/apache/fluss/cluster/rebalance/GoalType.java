@@ -44,7 +44,13 @@ public enum GoalType {
      * Goal to generate replica movement tasks to ensure that the number of replicas on each
      * tabletServer is near balanced and the replicas are distributed across racks.
      */
-    RACK_AWARE(2);
+    RACK_AWARE(2),
+
+    /** Goal to balance replica counts independently for each table. */
+    TABLE_REPLICA_DISTRIBUTION(3),
+
+    /** Goal to balance leader replica counts independently for each table. */
+    TABLE_LEADER_DISTRIBUTION(4);
 
     public final int value;
 
@@ -59,6 +65,10 @@ public enum GoalType {
             return LEADER_DISTRIBUTION;
         } else if (value == RACK_AWARE.value) {
             return RACK_AWARE;
+        } else if (value == TABLE_REPLICA_DISTRIBUTION.value) {
+            return TABLE_REPLICA_DISTRIBUTION;
+        } else if (value == TABLE_LEADER_DISTRIBUTION.value) {
+            return TABLE_LEADER_DISTRIBUTION;
         } else {
             throw new IllegalArgumentException(
                     String.format(

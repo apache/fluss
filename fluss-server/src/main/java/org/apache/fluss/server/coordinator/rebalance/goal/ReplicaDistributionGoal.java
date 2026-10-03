@@ -167,7 +167,7 @@ public class ReplicaDistributionGoal extends ReplicaDistributionAbstractGoal {
             ServerModel server, ClusterModel cluster, Set<Goal> optimizedGoals) {
         SortedSet<ServerModel> candidateServers =
                 new TreeSet<>(
-                        Comparator.comparingInt(ServerModel::numReplicas)
+                        Comparator.comparingInt((ServerModel candidate) -> candidate.numReplicas())
                                 .thenComparingInt(ServerModel::id));
 
         candidateServers.addAll(

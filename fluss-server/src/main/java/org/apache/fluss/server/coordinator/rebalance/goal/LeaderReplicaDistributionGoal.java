@@ -216,7 +216,8 @@ public class LeaderReplicaDistributionGoal extends ReplicaDistributionAbstractGo
         SortedSet<ServerModel> candidateServers;
         candidateServers =
                 new TreeSet<>(
-                        Comparator.comparingInt(ServerModel::numLeaderReplicas)
+                        Comparator.comparingInt(
+                                        (ServerModel candidate) -> candidate.numLeaderReplicas())
                                 .thenComparingInt(ServerModel::id));
         candidateServers.addAll(
                 cluster.aliveServers().stream()
