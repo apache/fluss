@@ -71,14 +71,12 @@ public class SeekableLakeSnapshotSplitScanner implements BatchScanner {
             updateCurrentIterator();
         }
 
-        // has no next record in currentIterator, update currentIterator
-        if (currentLakeRecordIterator != null && !currentLakeRecordIterator.hasNext()) {
+        // A lake split can be empty after filtering. Only finish after checking every split.
+        while (currentLakeRecordIterator != null && !currentLakeRecordIterator.hasNext()) {
             updateCurrentIterator();
         }
 
-        return currentLakeRecordIterator != null && currentLakeRecordIterator.hasNext()
-                ? currentLakeRecordIterator
-                : null;
+        return currentLakeRecordIterator;
     }
 
     private void updateCurrentIterator() throws IOException {
