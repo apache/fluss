@@ -61,6 +61,7 @@ import org.apache.fluss.rpc.messages.RebalanceResponse;
 import org.apache.fluss.rpc.messages.RemoveServerTagByRackResponse;
 import org.apache.fluss.rpc.messages.RemoveServerTagResponse;
 import org.apache.fluss.rpc.protocol.ApiError;
+import org.apache.fluss.rpc.protocol.Errors;
 import org.apache.fluss.server.coordinator.event.AccessContextEvent;
 import org.apache.fluss.server.coordinator.event.AddServerTagByRackEvent;
 import org.apache.fluss.server.coordinator.event.AddServerTagEvent;
@@ -103,12 +104,14 @@ import org.apache.fluss.server.coordinator.lease.KvSnapshotLeaseManager;
 import org.apache.fluss.server.coordinator.rebalance.RebalanceManager;
 import org.apache.fluss.server.coordinator.statemachine.ReplicaLeaderElection.ControlledShutdownLeaderElection;
 import org.apache.fluss.server.coordinator.statemachine.ReplicaLeaderElection.ReassignmentLeaderElection;
+import org.apache.fluss.server.coordinator.statemachine.ReplicaState;
 import org.apache.fluss.server.coordinator.statemachine.ReplicaStateMachine;
 import org.apache.fluss.server.coordinator.statemachine.TableBucketStateMachine;
 import org.apache.fluss.server.entity.AdjustIsrResultForBucket;
 import org.apache.fluss.server.entity.CommitLakeTableSnapshotsData;
 import org.apache.fluss.server.entity.CommitRemoteLogManifestData;
 import org.apache.fluss.server.entity.DeleteReplicaResultForBucket;
+import org.apache.fluss.server.entity.NotifyLeaderAndIsrData;
 import org.apache.fluss.server.entity.NotifyLeaderAndIsrResultForBucket;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshot;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshotStore;
@@ -1228,19 +1231,57 @@ public class CoordinatorEventProcessor implements EventProcessor {
         // get the server that receives the response
         int serverId = notifyLeaderAndIsrResponseReceivedEvent.getResponseServerId();
         Set<TableBucketReplica> offlineReplicas = new HashSet<>();
+        Set<TableBucketReplica> replicasToRetry = new HashSet<>();
         List<TableBucket> succeededBuckets = new ArrayList<>();
         // get all the results for each bucket
         List<NotifyLeaderAndIsrResultForBucket> notifyLeaderAndIsrResultForBuckets =
                 notifyLeaderAndIsrResponseReceivedEvent.getNotifyLeaderAndIsrResultForBuckets();
         for (NotifyLeaderAndIsrResultForBucket notifyLeaderAndIsrResultForBucket :
                 notifyLeaderAndIsrResultForBuckets) {
-            // if the error code is not none, we will consider it as offline
-            if (notifyLeaderAndIsrResultForBucket.failed()) {
-                offlineReplicas.add(
-                        new TableBucketReplica(
-                                notifyLeaderAndIsrResultForBucket.getTableBucket(), serverId));
-            } else {
+            if (notifyLeaderAndIsrResultForBucket.succeeded()) {
                 succeededBuckets.add(notifyLeaderAndIsrResultForBucket.getTableBucket());
+                continue;
+            }
+
+            TableBucket tableBucket = notifyLeaderAndIsrResultForBucket.getTableBucket();
+            TableBucketReplica replica = new TableBucketReplica(tableBucket, serverId);
+            Errors error = notifyLeaderAndIsrResultForBucket.getError().error();
+            if (isRetriableNotifyLeaderAndIsrError(error)) {
+                NotifyLeaderAndIsrFailureAction action =
+                        reconcileNotifyLeaderAndIsrFailure(
+                                replica,
+                                notifyLeaderAndIsrResponseReceivedEvent
+                                        .getRequestData(tableBucket)
+                                        .orElse(null));
+                if (action == NotifyLeaderAndIsrFailureAction.RETRY) {
+                    LOG.info(
+                            "Retry NotifyLeaderAndIsr for replica {} with the latest Coordinator "
+                                    + "state after receiving {}.",
+                            replica,
+                            error);
+                    replicasToRetry.add(replica);
+                } else if (action == NotifyLeaderAndIsrFailureAction.MARK_OFFLINE) {
+                    LOG.warn(
+                            "Mark replica {} offline because TabletServer rejected the current "
+                                    + "Coordinator state with {}.",
+                            replica,
+                            error);
+                    offlineReplicas.add(replica);
+                } else {
+                    LOG.info(
+                            "Ignore stale NotifyLeaderAndIsr failure {} for replica {} because "
+                                    + "the replica is no longer active in the current Coordinator state.",
+                            error,
+                            replica);
+                }
+            } else {
+                // Like Kafka, a local storage failure means this replica cannot currently serve
+                // its assigned role. Unknown explicit errors are also handled conservatively.
+                LOG.warn(
+                        "Mark replica {} offline after NotifyLeaderAndIsr failed with {}.",
+                        replica,
+                        error);
+                offlineReplicas.add(replica);
             }
         }
         for (TableBucket tb : succeededBuckets) {
@@ -1253,6 +1294,9 @@ public class CoordinatorEventProcessor implements EventProcessor {
             // trigger replicas to offline
             onReplicaBecomeOffline(offlineReplicas);
         }
+        if (!replicasToRetry.isEmpty()) {
+            resendCurrentNotifyLeaderAndIsr(replicasToRetry);
+        }
 
         // Try to complete rebalance tasks for the buckets in the response.
         // This is essential for leader-only migrations to ensure they wait for the tablet
@@ -1261,6 +1305,100 @@ public class CoordinatorEventProcessor implements EventProcessor {
                 notifyLeaderAndIsrResultForBuckets) {
             tryToCompleteRebalanceTask(notifyLeaderAndIsrResultForBucket, serverId);
         }
+    }
+
+    /**
+     * Returns whether an explicit per-bucket failure can be retried with the latest Coordinator
+     * state.
+     *
+     * <p>These errors mean that the request was stale or that the TabletServer's local replica view
+     * did not match the request. They do not by themselves prove that the replica storage is
+     * unavailable. Storage errors, disk write protection, and unknown errors are deliberately not
+     * retriable here and continue through the offline-replica path.
+     */
+    @VisibleForTesting
+    static boolean isRetriableNotifyLeaderAndIsrError(Errors error) {
+        return error == Errors.FENCED_LEADER_EPOCH_EXCEPTION
+                || error == Errors.INVALID_UPDATE_VERSION_EXCEPTION
+                || error == Errors.UNKNOWN_TABLE_OR_BUCKET_EXCEPTION
+                || error == Errors.NOT_LEADER_OR_FOLLOWER;
+    }
+
+    private NotifyLeaderAndIsrFailureAction reconcileNotifyLeaderAndIsrFailure(
+            TableBucketReplica replica, @Nullable NotifyLeaderAndIsrData requestData) {
+        TableBucket tableBucket = replica.getTableBucket();
+        int serverId = replica.getReplica();
+
+        // The current Coordinator state is authoritative. Do not resurrect a deleting bucket,
+        // notify a dead server, or send a replica state to a server removed from the assignment.
+        if (coordinatorContext.isToBeDeleted(tableBucket)
+                || !coordinatorContext.getLiveTabletServers().containsKey(serverId)
+                || coordinatorContext.shuttingDownTabletServers().contains(serverId)
+                || !coordinatorContext.getAssignment(tableBucket).contains(serverId)) {
+            return NotifyLeaderAndIsrFailureAction.IGNORE;
+        }
+
+        ReplicaState replicaState = coordinatorContext.getReplicaState(replica);
+        if (replicaState != NewReplica && replicaState != OnlineReplica) {
+            return NotifyLeaderAndIsrFailureAction.IGNORE;
+        }
+
+        Optional<LeaderAndIsr> currentLeaderAndIsr =
+                coordinatorContext.getBucketLeaderAndIsr(tableBucket);
+        if (!currentLeaderAndIsr.isPresent()) {
+            return NotifyLeaderAndIsrFailureAction.IGNORE;
+        }
+
+        // Retry only when a newer Coordinator state is available. Retrying the identical request
+        // immediately would create a tight response/retry loop. If the current state is identical,
+        // the TabletServer has rejected the authoritative state, so the replica must go through the
+        // normal offline/re-election path.
+        if (requestData == null
+                || (requestData.getReplicas().equals(coordinatorContext.getAssignment(tableBucket))
+                        && requestData.getLeaderAndIsr().equals(currentLeaderAndIsr.get()))) {
+            return NotifyLeaderAndIsrFailureAction.MARK_OFFLINE;
+        }
+        return NotifyLeaderAndIsrFailureAction.RETRY;
+    }
+
+    private void resendCurrentNotifyLeaderAndIsr(Set<TableBucketReplica> replicas) {
+        coordinatorRequestBatch.newBatch();
+        int requestCount = 0;
+        for (TableBucketReplica replica : replicas) {
+            TableBucket tableBucket = replica.getTableBucket();
+            TablePath tablePath = coordinatorContext.getTablePathById(tableBucket.getTableId());
+            Optional<LeaderAndIsr> leaderAndIsr =
+                    coordinatorContext.getBucketLeaderAndIsr(tableBucket);
+            if (tablePath == null || !leaderAndIsr.isPresent()) {
+                continue;
+            }
+
+            String partitionName = null;
+            if (tableBucket.getPartitionId() != null) {
+                partitionName = coordinatorContext.getPartitionName(tableBucket.getPartitionId());
+                if (partitionName == null) {
+                    continue;
+                }
+            }
+
+            coordinatorRequestBatch.addNotifyLeaderRequestForTabletServers(
+                    Collections.singleton(replica.getReplica()),
+                    PhysicalTablePath.of(tablePath, partitionName),
+                    tableBucket,
+                    coordinatorContext.getAssignment(tableBucket),
+                    leaderAndIsr.get());
+            requestCount++;
+        }
+        if (requestCount > 0) {
+            coordinatorRequestBatch.sendRequestToTabletServers(
+                    coordinatorContext.getCoordinatorEpoch());
+        }
+    }
+
+    private enum NotifyLeaderAndIsrFailureAction {
+        RETRY,
+        IGNORE,
+        MARK_OFFLINE
     }
 
     private void onReplicaBecomeOffline(Set<TableBucketReplica> offlineReplicas) {
