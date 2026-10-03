@@ -17,6 +17,7 @@
 
 package org.apache.fluss.server.utils;
 
+import org.apache.fluss.cluster.CoordinatorServerInfo;
 import org.apache.fluss.cluster.Endpoint;
 import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.cluster.ServerType;
@@ -108,6 +109,7 @@ import org.apache.fluss.rpc.messages.PbAdjustIsrRespForTable;
 import org.apache.fluss.rpc.messages.PbAlterConfig;
 import org.apache.fluss.rpc.messages.PbBucketMetadata;
 import org.apache.fluss.rpc.messages.PbBucketOffset;
+import org.apache.fluss.rpc.messages.PbCoordinatorServerInfo;
 import org.apache.fluss.rpc.messages.PbCreateAclRespInfo;
 import org.apache.fluss.rpc.messages.PbDatabaseSummary;
 import org.apache.fluss.rpc.messages.PbDescribeConfig;
@@ -461,6 +463,7 @@ public class ServerRpcMessageUtils {
 
     public static MetadataResponse buildMetadataResponse(
             @Nullable ServerNode coordinatorServer,
+            List<CoordinatorServerInfo> coordinatorServerInfos,
             Set<ServerNode> aliveTabletServers,
             List<TableMetadata> tableMetadataList,
             List<PartitionMetadata> partitionMetadataList) {
@@ -472,6 +475,24 @@ public class ServerRpcMessageUtils {
                     .setNodeId(coordinatorServer.id())
                     .setHost(coordinatorServer.host())
                     .setPort(coordinatorServer.port());
+        }
+
+        // Add all coordinator servers with role and liveness information
+        List<PbCoordinatorServerInfo> pbCoordinatorServerInfos = new ArrayList<>();
+        for (CoordinatorServerInfo coordinatorServerInfo : coordinatorServerInfos) {
+            ServerNode node = coordinatorServerInfo.getNode();
+            int numericId = node.id();
+            PbCoordinatorServerInfo pbCoordinatorServerInfo =
+                    new PbCoordinatorServerInfo()
+                            .setId(numericId)
+                            .setRole(coordinatorServerInfo.getRole().getValue())
+                            .setIsAlive(coordinatorServerInfo.isAlive());
+            pbCoordinatorServerInfo
+                    .setCoordinatorServer()
+                    .setNodeId(numericId)
+                    .setHost(node.host())
+                    .setPort(node.port());
+            pbCoordinatorServerInfos.add(pbCoordinatorServerInfo);
         }
 
         List<PbServerNode> pbServerNodeList = new ArrayList<>();
@@ -496,10 +517,25 @@ public class ServerRpcMessageUtils {
                 partitionMetadata ->
                         pbPartitionMetadataList.add(toPbPartitionMetadata(partitionMetadata)));
 
+        metadataResponse.addAllCoordinatorServers(pbCoordinatorServerInfos);
         metadataResponse.addAllTabletServers(pbServerNodeList);
         metadataResponse.addAllTableMetadatas(pbTableMetadataList);
         metadataResponse.addAllPartitionMetadatas(pbPartitionMetadataList);
         return metadataResponse;
+    }
+
+    // Overload for backward compatibility
+    public static MetadataResponse buildMetadataResponse(
+            @Nullable ServerNode coordinatorServer,
+            Set<ServerNode> aliveTabletServers,
+            List<TableMetadata> tableMetadataList,
+            List<PartitionMetadata> partitionMetadataList) {
+        return buildMetadataResponse(
+                coordinatorServer,
+                Collections.emptyList(),
+                aliveTabletServers,
+                tableMetadataList,
+                partitionMetadataList);
     }
 
     public static UpdateMetadataRequest makeUpdateMetadataRequest(

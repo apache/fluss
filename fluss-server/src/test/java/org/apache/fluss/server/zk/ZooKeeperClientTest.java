@@ -46,10 +46,12 @@ import org.apache.fluss.server.zk.data.TableAssignment;
 import org.apache.fluss.server.zk.data.TableRegistration;
 import org.apache.fluss.server.zk.data.TabletServerRegistration;
 import org.apache.fluss.server.zk.data.ZkData.BucketIdZNode;
+import org.apache.fluss.server.zk.data.ZkData.CoordinatorElectionZNode;
 import org.apache.fluss.server.zk.data.ZkData.TableIdZNode;
 import org.apache.fluss.server.zk.data.lease.KvSnapshotLeaseMetadata;
 import org.apache.fluss.shaded.curator5.org.apache.curator.CuratorZookeeperClient;
 import org.apache.fluss.shaded.curator5.org.apache.curator.framework.CuratorFramework;
+import org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.CreateMode;
 import org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.KeeperException;
 import org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.ZooKeeper;
 import org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.client.ZKClientConfig;
@@ -66,6 +68,7 @@ import org.junit.jupiter.api.extension.RegisterExtension;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -136,6 +139,46 @@ class ZooKeeperClientTest {
         // check get leader address
         CoordinatorAddress gottenAddress = zookeeperClient.getCoordinatorLeaderAddress().get();
         assertThat(gottenAddress).isEqualTo(coordinatorAddress);
+    }
+
+    @Test
+    void testCoordinatorServerListAndAliveCoordinatorServerList() throws Exception {
+        CoordinatorAddress coordinatorAddress1 =
+                new CoordinatorAddress(
+                        "coordinator-1", Endpoint.fromListenersString("CLIENT://localhost1:10012"));
+        CoordinatorAddress coordinatorAddress2 =
+                new CoordinatorAddress(
+                        "coordinator-2", Endpoint.fromListenersString("CLIENT://localhost2:10013"));
+
+        zookeeperClient.registerCoordinatorServer(coordinatorAddress1);
+        zookeeperClient.registerCoordinatorServer(coordinatorAddress2);
+        zookeeperClient.registerCoordinatorLeader(coordinatorAddress2);
+
+        zookeeperClient
+                .getCuratorClient()
+                .create()
+                .creatingParentsIfNeeded()
+                .withMode(CreateMode.EPHEMERAL_SEQUENTIAL)
+                .forPath(
+                        CoordinatorElectionZNode.path() + "/latch-",
+                        "coordinator-1".getBytes(StandardCharsets.UTF_8));
+        zookeeperClient
+                .getCuratorClient()
+                .create()
+                .creatingParentsIfNeeded()
+                .withMode(CreateMode.EPHEMERAL_SEQUENTIAL)
+                .forPath(
+                        CoordinatorElectionZNode.path() + "/latch-",
+                        "coordinator-2".getBytes(StandardCharsets.UTF_8));
+
+        assertThat(zookeeperClient.getCoordinatorServerList())
+                .containsExactlyInAnyOrder("coordinator-1", "coordinator-2");
+        assertThat(zookeeperClient.getCoordinatorServers())
+                .containsExactlyInAnyOrder(coordinatorAddress1, coordinatorAddress2);
+        assertThat(zookeeperClient.getAliveCoordinatorServerList())
+                .containsExactlyInAnyOrder("coordinator-1", "coordinator-2");
+        assertThat(zookeeperClient.getAliveCoordinatorServerIds())
+                .containsExactlyInAnyOrder("coordinator-1", "coordinator-2");
     }
 
     @Test

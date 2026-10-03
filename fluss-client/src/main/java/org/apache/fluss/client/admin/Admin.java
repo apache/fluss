@@ -23,6 +23,7 @@ import org.apache.fluss.client.metadata.KvSnapshotMetadata;
 import org.apache.fluss.client.metadata.KvSnapshots;
 import org.apache.fluss.client.metadata.LakeSnapshot;
 import org.apache.fluss.client.metadata.RemoteLogManifestInfo;
+import org.apache.fluss.cluster.CoordinatorServerInfo;
 import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.cluster.rebalance.GoalType;
 import org.apache.fluss.cluster.rebalance.RebalanceProgress;
@@ -92,6 +93,20 @@ public interface Admin extends AutoCloseable {
 
     /** Get the current server node information. asynchronously. */
     CompletableFuture<List<ServerNode>> getServerNodes();
+
+    /**
+     * Get all coordinator servers with role and liveness information asynchronously.
+     *
+     * <p>This returns all coordinators (leader and standby) registered in the cluster with their
+     * current role and liveness status. This is useful for monitoring coordinator HA topology and
+     * implementing readiness checks for standby coordinators.
+     *
+     * @return A list of {@link CoordinatorServerInfo} containing coordinator id, node, role
+     *     (LEADER/STANDBY), and liveness information. Returns empty list if no coordinators are
+     *     registered.
+     * @since 1.0
+     */
+    CompletableFuture<List<CoordinatorServerInfo>> describeCoordinators();
 
     /**
      * Get the latest table schema of the given table asynchronously.
