@@ -17,14 +17,21 @@
 
 package org.apache.fluss.fs.oss;
 
+import org.apache.fluss.fs.FileSystemFailure;
+import org.apache.fluss.fs.FileSystemOperationException;
+import org.apache.fluss.fs.FileSystemPathNotFoundException;
 import org.apache.fluss.fs.hdfs.HadoopFileSystem;
 import org.apache.fluss.fs.oss.token.OSSSecurityTokenProvider;
 import org.apache.fluss.fs.token.ObtainedSecurityToken;
 
+import com.aliyun.oss.ClientException;
+import com.aliyun.oss.OSSException;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileSystem;
 
+import java.io.FileNotFoundException;
 import java.io.IOException;
+import java.net.SocketTimeoutException;
 
 /* This file is based on source code of Apache Flink Project (https://flink.apache.org/), licensed by the Apache
  * Software Foundation (ASF) under the Apache License, Version 2.0. See the NOTICE file distributed with this work for
@@ -44,6 +51,82 @@ class OSSFileSystem extends HadoopFileSystem {
         super(hadoopFileSystem);
         this.scheme = scheme;
         this.conf = conf;
+    }
+
+    @Override
+    protected IOException normalize(Exception failure, Operation operation) {
+        if (failure instanceof IOException && failure instanceof FileSystemFailure) {
+            return (IOException) failure;
+        }
+        OSSException serviceFailure = findCause(failure, OSSException.class);
+        if (serviceFailure == null) {
+            ClientException clientFailure = findCause(failure, ClientException.class);
+            if (clientFailure != null) {
+                return new FileSystemOperationException(
+                        FileSystemFailure.Kind.UNEXPECTED,
+                        FileSystemFailure.Resource.UNKNOWN,
+                        operation.code(),
+                        findCause(failure, SocketTimeoutException.class) != null,
+                        clientFailure.getErrorCode(),
+                        clientFailure.getRequestId(),
+                        failure);
+            }
+            // AliyunOSSFileSystem can discard a metadata request failure and synthesize a
+            // FileNotFoundException after an empty listing, even when metadata access was denied.
+            if (failure instanceof FileNotFoundException) {
+                return new FileSystemOperationException(
+                        FileSystemFailure.Kind.UNEXPECTED,
+                        FileSystemFailure.Resource.UNKNOWN,
+                        operation.code(),
+                        false,
+                        null,
+                        null,
+                        failure);
+            }
+            return super.normalize(failure, operation);
+        }
+
+        String code = serviceFailure.getErrorCode();
+        String requestId = serviceFailure.getRequestId();
+        if ("NoSuchKey".equals(code) && operation == Operation.OPEN) {
+            return new FileSystemPathNotFoundException(operation.code(), code, requestId, failure);
+        }
+        FileSystemFailure.Kind kind = FileSystemFailure.Kind.UNEXPECTED;
+        FileSystemFailure.Resource resource = FileSystemFailure.Resource.UNKNOWN;
+        boolean temporary = false;
+        if ("NoSuchBucket".equals(code)) {
+            kind = FileSystemFailure.Kind.NOT_FOUND;
+            resource = FileSystemFailure.Resource.ROOT;
+        } else if ("NoSuchKey".equals(code)) {
+            kind = FileSystemFailure.Kind.NOT_FOUND;
+        } else if ("AccessDenied".equals(code)
+                || "InvalidAccessKeyId".equals(code)
+                || "SignatureDoesNotMatch".equals(code)) {
+            kind = FileSystemFailure.Kind.PERMISSION_DENIED;
+        } else if ("TotalQpsLimitExceeded".equals(code)
+                || "MetaOperationQpsLimitExceeded".equals(code)
+                || "ActiveRequestLimitExceeded".equals(code)
+                || "DownloadTrafficRateLimitExceeded".equals(code)
+                || "UploadTrafficRateLimitExceeded".equals(code)
+                || "SlowDown".equals(code)) {
+            kind = FileSystemFailure.Kind.RATE_LIMITED;
+            temporary = true;
+        } else if ("ServiceUnavailable".equals(code)
+                || "InternalError".equals(code)
+                || "RequestTimeout".equals(code)) {
+            temporary = true;
+        }
+        return new FileSystemOperationException(
+                kind, resource, operation.code(), temporary, code, requestId, failure);
+    }
+
+    private static <T extends Throwable> T findCause(Throwable failure, Class<T> type) {
+        for (Throwable current = failure; current != null; current = current.getCause()) {
+            if (type.isInstance(current)) {
+                return type.cast(current);
+            }
+        }
+        return null;
     }
 
     @Override
