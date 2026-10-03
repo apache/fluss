@@ -20,6 +20,7 @@ on:
   schedule:
     # Run at 20:00 UTC daily which is the lowest traffic time for Fluss project.
     - cron: "0 20 * * *"
+  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.number || github.run_id }}
@@ -32,3 +33,4 @@ jobs:
     with:
       java-version: "8"
       maven-parameters: "-Pjava8"
+      run-spark-scala213: true
