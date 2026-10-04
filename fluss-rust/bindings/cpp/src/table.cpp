@@ -1979,7 +1979,7 @@ Lookuper& Lookuper::operator=(Lookuper&& other) noexcept {
 
 bool Lookuper::Available() const { return lookuper_ != nullptr; }
 
-Result Lookuper::Lookup(const GenericRow& pk_row, LookupResult& out) {
+Result Lookuper::Lookup(const GenericRow& pk_row, LookupResult& out) const {
     if (!Available()) {
         return utils::make_client_error("Lookuper not available");
     }
@@ -2030,7 +2030,7 @@ PrefixLookuper& PrefixLookuper::operator=(PrefixLookuper&& other) noexcept {
 
 bool PrefixLookuper::Available() const { return lookuper_ != nullptr; }
 
-Result PrefixLookuper::PrefixLookup(const GenericRow& prefix_row, PrefixLookupResult& out) {
+Result PrefixLookuper::PrefixLookup(const GenericRow& prefix_row, PrefixLookupResult& out) const {
     if (!Available()) {
         return utils::make_client_error("PrefixLookuper not available");
     }

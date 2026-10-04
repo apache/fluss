@@ -530,17 +530,19 @@ intended function type explicitly.
 
 ## `Lookuper`
 
-| Method                                                        |  Description                |
-|---------------------------------------------------------------|-----------------------------|
-| `Lookup(const GenericRow& pk_row, LookupResult& out) -> Result` | Lookup a row by primary key |
+Performs point lookups by primary key. Obtained from `TableLookup::CreateLookuper()`. Each call blocks until its result arrives. Threads can share one `Lookuper`, and their concurrent lookups go out to the server in the same batches.
+
+| Method                                                              |  Description                |
+|---------------------------------------------------------------------|-----------------------------|
+| `Lookup(const GenericRow& pk_row, LookupResult& out) const -> Result` | Lookup a row by primary key |
 
 ## `PrefixLookuper`
 
-Performs prefix (bucket-key) lookups, returning all rows whose primary key starts with the given prefix. Obtained from `Table::NewPrefixLookup()`. See the [Prefix Lookup example](./example/prefix-lookup.md).
+Performs prefix (bucket-key) lookups, returning all rows whose primary key starts with the given prefix. Obtained from `Table::NewPrefixLookup()`. Like a `Lookuper`, it can be shared by threads. See the [Prefix Lookup example](./example/prefix-lookup.md).
 
-| Method                                                                          |  Description                                  |
-|---------------------------------------------------------------------------------|-----------------------------------------------|
-| `PrefixLookup(const GenericRow& prefix_row, PrefixLookupResult& out) -> Result` | Look up all rows matching the prefix columns  |
+| Method                                                                                |  Description                                  |
+|---------------------------------------------------------------------------------------|-----------------------------------------------|
+| `PrefixLookup(const GenericRow& prefix_row, PrefixLookupResult& out) const -> Result` | Look up all rows matching the prefix columns  |
 
 ## `LogScanner`
 

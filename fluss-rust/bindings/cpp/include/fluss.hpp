@@ -2080,7 +2080,10 @@ class Lookuper {
 
     bool Available() const;
 
-    Result Lookup(const GenericRow& pk_row, LookupResult& out);
+    /// Looks up the row with the primary key set on `pk_row`, blocking until the result
+    /// arrives. Thread-safe: threads may share one Lookuper, and their concurrent lookups
+    /// go out in the same batches.
+    Result Lookup(const GenericRow& pk_row, LookupResult& out) const;
 
    private:
     friend class Table;
@@ -2103,8 +2106,9 @@ class PrefixLookuper {
 
     bool Available() const;
 
-    /// Looks up all rows matching the prefix columns set on `prefix_row`.
-    Result PrefixLookup(const GenericRow& prefix_row, PrefixLookupResult& out);
+    /// Looks up all rows matching the prefix columns set on `prefix_row`, blocking until the
+    /// result arrives. Thread-safe, like Lookuper::Lookup.
+    Result PrefixLookup(const GenericRow& prefix_row, PrefixLookupResult& out) const;
 
    private:
     friend class Table;

@@ -702,7 +702,7 @@ mod ffi {
 
         // Lookuper
         unsafe fn delete_lookuper(lookuper: *mut Lookuper);
-        fn lookup(self: &mut Lookuper, pk_row: &GenericRowInner) -> Box<LookupResultInner>;
+        fn lookup(self: &Lookuper, pk_row: &GenericRowInner) -> Box<LookupResultInner>;
 
         // LookupResultInner accessors
         fn lv_has_error(self: &LookupResultInner) -> bool;
@@ -760,7 +760,7 @@ mod ffi {
         // PrefixLookuper
         unsafe fn delete_prefix_lookuper(lookuper: *mut PrefixLookuper);
         fn prefix_lookup(
-            self: &mut PrefixLookuper,
+            self: &PrefixLookuper,
             prefix_row: &GenericRowInner,
         ) -> Box<PrefixLookupResultInner>;
 
@@ -1036,6 +1036,13 @@ pub struct PrefixLookuper {
     /// Full-schema indices of the lookup columns, used to compact the input row.
     lookup_column_indices: Vec<usize>,
 }
+
+// C++ callers may share one lookuper across threads.
+const _: () = {
+    const fn assert_sync<T: Sync>() {}
+    assert_sync::<Lookuper>();
+    assert_sync::<PrefixLookuper>();
+};
 
 /// Error code for client-side errors that did not originate from the server API protocol.
 /// Must be non-zero so that CPP `Result::Ok()` (which checks `error_code == 0`) correctly
@@ -2367,7 +2374,7 @@ unsafe fn delete_lookuper(lookuper: *mut Lookuper) {
 }
 
 impl Lookuper {
-    fn lookup(&mut self, pk_row: &GenericRowInner) -> Box<LookupResultInner> {
+    fn lookup(&self, pk_row: &GenericRowInner) -> Box<LookupResultInner> {
         let schema = self.table_info.get_schema();
         // Compact PK values (set at their full schema positions, e.g. [0, 2])
         // into the dense PK-only row the core KeyEncoder expects. Skips the
@@ -2436,7 +2443,7 @@ unsafe fn delete_prefix_lookuper(lookuper: *mut PrefixLookuper) {
 }
 
 impl PrefixLookuper {
-    fn prefix_lookup(&mut self, prefix_row: &GenericRowInner) -> Box<PrefixLookupResultInner> {
+    fn prefix_lookup(&self, prefix_row: &GenericRowInner) -> Box<PrefixLookupResultInner> {
         let schema = self.table_info.get_schema();
         // Compact prefix values (set at their full schema positions) into the
         // dense, lookup-column-ordered row the core prefix encoder expects.
