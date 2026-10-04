@@ -28,6 +28,11 @@ Complete API reference for the Fluss Python client.
 | `scanner_log_fetch_min_bytes`         | `scanner.log.fetch.min-bytes`         | Get/set minimum bytes the server must accumulate before returning a fetch response      |
 | `scanner_log_fetch_wait_max_time_ms`  | `scanner.log.fetch.wait-max-time-ms`  | Get/set maximum time (ms) the server may wait to satisfy min-bytes                      |
 | `scanner_log_fetch_max_bytes_for_bucket` | `scanner.log.fetch.max-bytes-for-bucket` | Get/set maximum bytes per fetch response per bucket for LogScanner                |
+| `lookup_queue_size`                   | `lookup.queue-size`                   | Get/set maximum number of pending lookups (default `25600`)                             |
+| `lookup_max_batch_size`               | `lookup.max-batch-size`               | Get/set maximum number of lookups merged into one request (default `128`)               |
+| `lookup_batch_timeout_ms`             | `lookup.batch-timeout-ms`             | Get/set maximum time in ms a lookup waits for its batch to fill (default `100`)         |
+| `lookup_max_inflight_requests`        | `lookup.max-inflight-requests`        | Get/set maximum number of unacknowledged lookup requests (default `128`)                |
+| `lookup_max_retries`                  | `lookup.max-retries`                  | Get/set maximum number of lookup retries (default `2147483647`)                         |
 | `connect_timeout_ms`                  | `connect-timeout`                     | Get/set TCP connect timeout in milliseconds                                             |
 | `security_protocol`                   | `security.protocol`                   | Get/set security protocol (`"PLAINTEXT"` or `"sasl"`)                                   |
 | `security_sasl_mechanism`             | `security.sasl.mechanism`             | Get/set SASL mechanism (only `"PLAIN"` is supported)                                    |
