@@ -22,6 +22,7 @@ Mirrors the Rust integration tests in crates/fluss/tests/integration/kv_table.rs
 
 import asyncio
 import math
+import time
 from datetime import date, datetime, timezone
 from datetime import time as dt_time
 from decimal import Decimal
@@ -118,6 +119,14 @@ async def test_upsert_delete_and_lookup(connection, admin):
     await admin.drop_table(table_path, ignore_if_not_exists=False)
 
 
+async def single_lookup_seconds(lookuper, key):
+    """Times one lookup, after a warm-up lookup that also fetches metadata."""
+    await lookuper.lookup(key)
+    started = time.monotonic()
+    await lookuper.lookup(key)
+    return time.monotonic() - started
+
+
 async def test_batched_concurrent_lookups(connection, admin):
     table_path = fluss.TablePath("fluss", "py_test_batched_concurrent_lookups")
     await admin.drop_table(table_path, ignore_if_not_exists=True)
@@ -136,6 +145,9 @@ async def test_batched_concurrent_lookups(connection, admin):
     await upsert_writer.flush()
 
     lookuper = table.new_lookup().create_lookuper()
+    # If one lookup is fast but the batch below times out, lookups are serialized.
+    single = await single_lookup_seconds(lookuper, {"id": 0})
+    assert single < 1, f"one lookup took {single:.2f} s"
     ids = [0] * 8 + list(range(128))
     # Serialized lookups take ~100 ms each and would miss the timeout.
     results = await asyncio.wait_for(
@@ -176,6 +188,9 @@ async def test_batched_concurrent_prefix_lookups(connection, admin):
     await upsert_writer.flush()
 
     prefix_lookuper = table.new_lookup().lookup_by(["id"]).create_lookuper()
+    # If one lookup is fast but the batch below times out, lookups are serialized.
+    single = await single_lookup_seconds(prefix_lookuper, {"id": 0})
+    assert single < 1, f"one prefix lookup took {single:.2f} s"
     ids = [0] * 8 + list(range(96))
     # Serialized lookups take ~100 ms each and would miss the timeout.
     results = await asyncio.wait_for(
