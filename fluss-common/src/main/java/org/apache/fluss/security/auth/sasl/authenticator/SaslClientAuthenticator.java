@@ -78,6 +78,15 @@ public class SaslClientAuthenticator implements ClientAuthenticator {
     }
 
     /**
+     * Returns the authorization id to include in the SASL handshake, or {@code null}. Plain SASL
+     * never requests another user; subclasses override for impersonation.
+     */
+    @Nullable
+    protected String authorizationId() {
+        return null;
+    }
+
+    /**
      * Validates that the provided JAAS configuration string only uses {@link PlainLoginModule}.
      *
      * @param jaasConfigStr the JAAS configuration string to validate
@@ -147,7 +156,8 @@ public class SaslClientAuthenticator implements ClientAuthenticator {
         }
 
         try {
-            saslClient = createSaslClient(mechanism, hostAddress, pros, loginManager);
+            saslClient =
+                    createSaslClient(mechanism, authorizationId(), hostAddress, pros, loginManager);
         } catch (Exception e) {
             throw new AuthenticationException("Failed to create SASL client", e);
         }

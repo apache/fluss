@@ -44,7 +44,10 @@ public class PlainSaslServerTest {
     private static final String PASSWORD_A = "passwordA";
     private static final String USER_B = "userB";
     private static final String PASSWORD_B = "passwordB";
+    private static final String USER_C = "userC";
+    private static final String PASSWORD_C = "passwordC";
 
+    private JaasContext jaasContext;
     private SaslServer saslServer;
     private LoginManager loginManager;
 
@@ -54,17 +57,11 @@ public class PlainSaslServerTest {
         Map<String, String> options = new HashMap<>();
         options.put("user_" + USER_A, PASSWORD_A);
         options.put("user_" + USER_B, PASSWORD_B);
+        options.put("user_" + USER_C, PASSWORD_C);
         jaasConfig.addEntry("jaasContext", PlainLoginModule.class.getName(), options);
-        JaasContext jaasContext =
-                new JaasContext("jaasContext", JaasContext.Type.SERVER, jaasConfig, null);
+        jaasContext = new JaasContext("jaasContext", JaasContext.Type.SERVER, jaasConfig, null);
         loginManager = LoginManager.acquireLoginManager(jaasContext);
-        saslServer =
-                SaslServerFactory.createSaslServer(
-                        "PLAIN",
-                        "127.0.0.1",
-                        options,
-                        loginManager,
-                        jaasContext.configurationEntries());
+        saslServer = createSaslServer(false);
     }
 
     @AfterEach
@@ -75,22 +72,65 @@ public class PlainSaslServerTest {
     @Test
     public void testNoAuthorizationIdSpecified() throws SaslException {
         assertThat(saslServer.evaluateResponse(saslMessage("", USER_A, PASSWORD_A))).isEmpty();
+        assertThat(saslServer.getAuthorizationID()).isEqualTo(USER_A);
         assertThat(saslServer.evaluateResponse(saslMessage("", USER_B, PASSWORD_B))).isEmpty();
+        assertThat(saslServer.getAuthorizationID()).isEqualTo(USER_B);
     }
 
     @Test
     public void testAuthorizationIdEqualsAuthenticationId() throws SaslException {
         assertThat(saslServer.evaluateResponse(saslMessage(USER_A, USER_A, PASSWORD_A))).isEmpty();
+        assertThat(saslServer.getAuthorizationID()).isEqualTo(USER_A);
         assertThat(saslServer.evaluateResponse(saslMessage(USER_B, USER_B, PASSWORD_B))).isEmpty();
+        assertThat(saslServer.getAuthorizationID()).isEqualTo(USER_B);
     }
 
     @Test
-    public void testAuthorizationIdNotEqualsAuthenticationId() {
+    public void testDifferentAuthorizationIdRejectedByDefault() {
         assertThatThrownBy(
                         () -> saslServer.evaluateResponse(saslMessage(USER_A, USER_B, PASSWORD_B)))
                 .isExactlyInstanceOf(AuthenticationException.class)
                 .hasMessage(
                         "Authentication failed: Client requested an authorization id that is different from username");
+    }
+
+    @Test
+    public void testDifferentAuthorizationIdIsOnlyReportedWhenEnabled() throws SaslException {
+        SaslServer impersonatingServer = createSaslServer(true);
+
+        assertThat(impersonatingServer.evaluateResponse(saslMessage(USER_A, USER_B, PASSWORD_B)))
+                .isEmpty();
+        // The mechanism never grants the requested id on its own, it only reports the request.
+        assertThat(impersonatingServer.getAuthorizationID()).isEqualTo(USER_B);
+        assertThat(
+                        impersonatingServer.getNegotiatedProperty(
+                                PlainSaslServer.REQUESTED_AUTHORIZATION_ID_PROP))
+                .isEqualTo(USER_A);
+    }
+
+    @Test
+    public void testNoRequestedAuthorizationIdReportedWhenIdMatches() throws SaslException {
+        SaslServer impersonatingServer = createSaslServer(true);
+
+        assertThat(impersonatingServer.evaluateResponse(saslMessage(USER_A, USER_A, PASSWORD_A)))
+                .isEmpty();
+        assertThat(impersonatingServer.getAuthorizationID()).isEqualTo(USER_A);
+        assertThat(
+                        impersonatingServer.getNegotiatedProperty(
+                                PlainSaslServer.REQUESTED_AUTHORIZATION_ID_PROP))
+                .isNull();
+    }
+
+    @Test
+    public void testAuthenticationIsCheckedBeforeReportingAuthorizationId() throws SaslException {
+        SaslServer impersonatingServer = createSaslServer(true);
+
+        assertThatThrownBy(
+                        () ->
+                                impersonatingServer.evaluateResponse(
+                                        saslMessage(USER_C, USER_A, PASSWORD_B)))
+                .isExactlyInstanceOf(AuthenticationException.class)
+                .hasMessage("Authentication failed: Invalid username or password");
     }
 
     @Test
@@ -128,6 +168,15 @@ public class PlainSaslServerTest {
                                         String.format("%s%s%s", "", nul, "u")
                                                 .getBytes(StandardCharsets.UTF_8)))
                 .hasMessage("Invalid SASL/PLAIN response: expected 3 tokens, got 2");
+    }
+
+    private SaslServer createSaslServer(boolean impersonationEnabled) throws SaslException {
+        Map<String, String> props = new HashMap<>();
+        if (impersonationEnabled) {
+            props.put(PlainSaslServer.IMPERSONATION_ENABLED_PROP, "true");
+        }
+        return SaslServerFactory.createSaslServer(
+                "PLAIN", "127.0.0.1", props, loginManager, jaasContext.configurationEntries());
     }
 
     private byte[] saslMessage(String authorizationId, String userName, String password) {
