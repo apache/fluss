@@ -77,6 +77,28 @@ public class ArrowDataConverter {
             org.apache.fluss.shaded.arrow.org.apache.arrow.vector.FieldVector shadedVector,
             FieldVector nonShadedVector) {
 
+        // Check MapVector before ListVector since MapVector extends ListVector.
+        // In Lance, Map is represented as List<Struct<key, value>>, so the non-shaded
+        // side is a ListVector.
+        if (shadedVector
+                instanceof
+                org.apache.fluss.shaded.arrow.org.apache.arrow.vector.complex.MapVector) {
+            if (!(nonShadedVector instanceof ListVector)) {
+                throw new IllegalArgumentException(
+                        String.format(
+                                "Shaded vector is MapVector but non-shaded vector is %s, expected ListVector.",
+                                nonShadedVector.getClass().getSimpleName()));
+            }
+            // MapVector extends ListVector, so we can reuse the ListVector copy logic.
+            // The memory layout is compatible: MapVector -> StructVector(entries) -> [key, value]
+            // maps to ListVector -> StructVector(element) -> [key, value]
+            copyListVectorData(
+                    (org.apache.fluss.shaded.arrow.org.apache.arrow.vector.complex.MapVector)
+                            shadedVector,
+                    (ListVector) nonShadedVector);
+            return;
+        }
+
         if (shadedVector
                 instanceof
                 org.apache.fluss.shaded.arrow.org.apache.arrow.vector.complex.ListVector) {
