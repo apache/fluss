@@ -35,7 +35,12 @@ import org.apache.fluss.types.RowType;
 import java.time.Instant;
 import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
+import java.time.format.DateTimeFormatterBuilder;
 import java.time.format.DateTimeParseException;
+import java.time.format.ResolverStyle;
+import java.time.temporal.ChronoField;
+import java.time.temporal.IsoFields;
+import java.time.temporal.TemporalAccessor;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -469,12 +474,57 @@ public class PartitionUtils {
             AutoPartitionTimeUnit timeUnit,
             AutoPartitionStrategy autoPartitionStrategy) {
         try {
-            DateTimeFormatter.ofPattern(getPartitionTimeFormat(timeUnit, autoPartitionStrategy))
-                    .parse(time);
-            return true;
+            TemporalAccessor parsed =
+                    buildPartitionTimeParser(
+                                    getPartitionTimeFormat(timeUnit, autoPartitionStrategy))
+                            .parse(time);
+            // a quarter without a day is not range-checked by the resolver
+            return !parsed.isSupported(IsoFields.QUARTER_OF_YEAR)
+                    || IsoFields.QUARTER_OF_YEAR
+                            .range()
+                            .isValidValue(parsed.getLong(IsoFields.QUARTER_OF_YEAR));
         } catch (DateTimeParseException e) {
             return false;
         }
+    }
+
+    /**
+     * Builds a strict parser for the given partition time pattern.
+     *
+     * <p>A single-letter quarter field ('Q' or 'q') is parsed as a fixed-width value, because the
+     * variable-width quarter of {@link DateTimeFormatter#ofPattern(String)} cannot follow an
+     * adjacent year field, e.g. "yyyyQ" fails to parse "20244". The {@link ResolverStyle#STRICT}
+     * resolver rejects non-existent times such as "20240230", and the default era lets the
+     * year-of-era field ('y') resolve under it.
+     */
+    private static DateTimeFormatter buildPartitionTimeParser(String pattern) {
+        DateTimeFormatterBuilder builder = new DateTimeFormatterBuilder();
+        StringBuilder pendingPattern = new StringBuilder();
+        boolean inLiteral = false;
+        for (int index = 0; index < pattern.length(); index++) {
+            char patternChar = pattern.charAt(index);
+            if (patternChar == '\'') {
+                inLiteral = !inLiteral;
+            } else if (!inLiteral
+                    && (patternChar == 'Q' || patternChar == 'q')
+                    && (index == 0 || pattern.charAt(index - 1) != patternChar)
+                    && (index + 1 == pattern.length()
+                            || pattern.charAt(index + 1) != patternChar)) {
+                if (pendingPattern.length() > 0) {
+                    builder.appendPattern(pendingPattern.toString());
+                    pendingPattern.setLength(0);
+                }
+                builder.appendValue(IsoFields.QUARTER_OF_YEAR, 1);
+                continue;
+            }
+            pendingPattern.append(patternChar);
+        }
+        if (pendingPattern.length() > 0) {
+            builder.appendPattern(pendingPattern.toString());
+        }
+        return builder.parseDefaulting(ChronoField.ERA, 1)
+                .toFormatter()
+                .withResolverStyle(ResolverStyle.STRICT);
     }
 
     private static String getFormattedTime(ZonedDateTime zonedDateTime, String format) {
