@@ -1,6 +1,7 @@
 ---
-title: "Architecture"
-sidebar_position: 1
+title: "Fluss Architecture"
+sidebar_position: 2
+displayed_sidebar: docsSidebar
 ---
 
 {/*
@@ -22,11 +23,11 @@ limitations under the License.
 
 import ThemedImage from '@site/src/components/ThemedImage';
 
-# Architecture
+# Fluss Architecture
 
 Apache Fluss is a distributed streaming storage system that exposes data as tables. It combines an ordered log for continuous data consumption with a key-value store for updates and lookups, and integrates with remote filesystems and open lakehouse formats for recovery and historical access.
 
-This chapter explains how those components work together and what their responsibilities mean for deployment and operation.
+This chapter explains how those components work together and what their responsibilities mean for deployment and operation. For the broader relationship between Fluss, independent compute engines, and the lakehouse, see [Streamhouse and Lakestream](streamhouse-and-lakestream.mdx).
 
 ## Architecture Overview
 
@@ -165,6 +166,8 @@ Replicas should also be placed across the failure domains the deployment must to
 When a TabletServer fails, the coordinator coordinates leadership and replica changes for affected buckets. Clients refresh their metadata and retry eligible operations against the current leader.
 
 For a primary key bucket, the new leader must also prepare its key-value state before serving it. The normal recovery path restores a completed remote snapshot and replays the log from the snapshot's recorded offset. When no snapshot is available, recovery relies on the required log history being available. Snapshot age, retained log volume, and storage bandwidth all influence how long recovery takes.
+
+Lake-backed historical partitions use a separate recovery path based on their lake data and retained changes. See [Historical Partition Access](../table-design/data-distribution/partitioning.md#historical-partition-access) for its scope and prerequisites.
 
 ## ZooKeeper
 

@@ -8,60 +8,60 @@ import { useColorMode } from '@docusaurus/theme-common';
 
 # What is Apache Fluss?
 
-**One platform. Streams, tables, and the lakehouse.** Apache Fluss is an open-source streaming storage system for real-time analytics and AI, designed to serve as the real-time data layer of a Lakehouse architecture.
+Apache Fluss is an open-source, lakehouse-native streaming storage system for real-time analytics and AI. Applications can consume table changes, look up rows by primary key, and access historical data through lakehouse integrations.
 
-Fluss collapses the message broker, the online key-value store, the stream-processing state backend, and the lakehouse cold store into a single coherent foundation, so the same table can be read at sub-second freshness for analytics, looked up by primary key for features, and tiered into open formats like Apache Iceberg, Apache Paimon, or Lance for historical scans.
+Fluss integrates with **Apache Flink** and **Apache Spark**, supports streaming reads and writes with sub-second latency, and uses columnar storage for projection and predicate pushdown. It offers two table types: append-only **Log Tables** and updatable **PrimaryKey Tables**.
+
+Fluss also enables **Lakestream**, the shared streaming and lakehouse table foundation of the **Streamhouse** architecture. Learn how storage and independent compute engines fit together in [Streamhouse and Lakestream](concepts/streamhouse-and-lakestream.mdx).
 
 {(() => {
   const { colorMode } = useColorMode();
   return (
-    <img src={colorMode === 'dark' ? '/img/fluss.png' : '/img/fluss_light_mode.png'} alt="arch" />
+    <img src={colorMode === 'dark' ? '/img/fluss.png' : '/img/fluss_light_mode.png'} alt="Apache Fluss architecture and lakehouse integrations" />
   );
 })()}
-
-It integrates first-class with **Apache Flink** and **Apache Spark**, supports streaming reads and writes with sub-second latency, stores data in a columnar layout for projection and predicate pushdown, and offers two table types (append-only **Log Tables** and updatable **PrimaryKey Tables**) to cover both event-stream and database-style workloads.
 
 **Fluss (German: river, pronounced `/flus/`)** carries streaming data continuously into lakes, like a river 🌊
 
 ## Use cases
 
-Fluss targets workloads where the same data must be read at multiple freshness layers (stream, point-lookup, and lake) without being copied across systems. Six use cases drive most deployments today.
+Fluss supports workloads that benefit from sharing maintained tables through streaming, primary-key lookup, and lake access. The access paths available depend on the table type and integration. Specialized copies may still be useful for an application's indexing, latency, or isolation requirements.
 
 ### 1. Real-time feature stores for ML serving and training
 
-The single largest use case. A Fluss **PrimaryKey Table** holds the live feature row in RocksDB on the leader for sub-millisecond key-value lookup at serving time, and the ordered changelog for training reads. Both views read the same underlying storage, so training/serving skew is structurally eliminated rather than monitored after the fact. Replaces the typical Redis-online-store plus Iceberg-offline-store pair with a single substrate.
+A Fluss **PrimaryKey Table** can expose maintained feature rows through key-value lookups and changes through streaming reads. Lake tiering supports historical access. Reusing feature definitions and maintained results can reduce duplicate pipelines; training and serving still need explicit freshness and point-in-time semantics.
 
 ### 2. Real-time risk, fraud detection, and decision audit
 
-PrimaryKey Tables emit a complete `+I / -U / +U / -D` changelog for every entity. When a real-time decision fires (decline a transaction, flag an account, deny a request), the exact feature values that drove it trace directly back to a specific changelog record, so the decision is fully reconstructible from the log itself, with no secondary audit pipeline.
+Applications can consume table changes and look up maintained entity data for real-time decisions. Reconstructing a decision also requires the application to record its inputs, rules or model version, and outcome, with suitable data retention.
 
 ### 3. Real-time entity profiles and Customer 360
 
-The **Aggregation Merge Engine** combined with **Roaring Bitmaps** lets the leader maintain large entity sets such as *"users who clicked in the last ten minutes"* or *"accounts that crossed a usage threshold today"*, via at-write-time read-modify-write. Profile composition reduces to set algebra (`AND` / `OR` / `AND NOT`) over bitmap columns. Multiple producers can write disjoint columns of the same wide row independently via partial updates.
+Compute engines can enrich source tables and publish reusable entity profiles. Supported merge engines and partial updates help maintain shared rows from multiple producers. Time windows and business transformations remain responsibilities of the producing computation.
 
 ### 4. AI agent memory and context engineering for LLM systems
 
-Four distinct memory primitives live in the same substrate under a consistent schema surface:
+Shared tables can supply maintained context for AI services:
 
 - **Session memory**: conversation logs
 - **Entity memory**: live key-value facts
 - **Behavioral memory**: streaming features
-- **Semantic memory**: vector store via Lance
+- **Semantic memory**: data accessed through a supported Lance integration
 
-An agent reads all four concurrently to assemble a grounded prompt, with no cross-system synchronization.
+Retrieval services use the access paths supported by each table and integration. The AI application owns prompt construction, retrieval policy, decision logging, and any additional indexes.
 
-### 5. Real-time operational analytics and OLAP hot-store replacement
+### 5. Real-time operational analytics
 
-The columnar Arrow log plus server-side compound pruning (partition pruning, predicate pushdown, column projection) lets analytical engines such as Flink batch, Spark, Trino, StarRocks, and DuckDB query the hot tier directly. The result is order-of-magnitude reductions in I/O, network, and deserialization cost. Replaces the typical "OLAP hot store" sitting alongside Kafka.
+Columnar storage, projection, and supported pruning reduce the data that query engines need to read. Engines may access Fluss, committed lake data, or both through a supported union-read integration. Query latency and the freshness of the data read should be evaluated separately.
 
-### 6. Streaming ETL with externalized state
+### 6. Streaming ETL with reusable results
 
-Stateful streaming ETL pipelines (joins, rolling aggregations, deduplication, reference-data enrichment, wide-row assembly across multiple producers) traditionally accumulate gigabytes of operator state inside Flink that must be checkpointed, recovered, and rebalanced on scale-out. With Fluss, that state moves into **PrimaryKey Tables** on the leader and the Flink job becomes stateless: dual-stream joins collapse into stateless index-key lookups via **delta joins**, rolling counts and velocity signals collapse into writes against the **Aggregation Merge Engine**, and multi-producer wide-row updates collapse into **partial-updates** against a shared row.
+Flink jobs can read shared tables, perform joins or aggregations, and publish maintained result tables for other workloads. Supported patterns such as delta joins and partial updates can reduce duplicated state. Windows, timers, and intermediate execution state remain private to the computation where required.
 
 ## Where to go next?
 
 - [QuickStart](quickstart/flink.md): Get started with Fluss in minutes.
-- [Architecture](concepts/architecture.mdx): Learn about Fluss's architecture.
+- [Fluss Architecture](concepts/architecture.mdx): Learn about Fluss's architecture.
 - [Table Design](table-design/overview.mdx): Explore Fluss's table types, partitions and buckets.
-- [Lakehouse](streaming-lakehouse/overview.mdx): Integrate Fluss with your Lakehouse to bring low-latency data to your Lakehouse analytics.
+- [Streamhouse and Lakestream](concepts/streamhouse-and-lakestream.mdx): Understand the architecture and its coordinated stream–lake table foundation.
 - [Development](/community/dev/ide-setup): Set up your development environment and contribute to the community.

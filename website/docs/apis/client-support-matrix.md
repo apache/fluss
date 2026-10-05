@@ -121,5 +121,5 @@ Admin operations are available under FlussAdmin interface.
 | Paimon  | ✔️                                  |             |               |            |
 
 :::tip
-For more details, see [Streaming Lakehouse](../streaming-lakehouse/overview.mdx).
+For more details, see [Lakestream](../streaming-lakehouse/overview.mdx).
 :::

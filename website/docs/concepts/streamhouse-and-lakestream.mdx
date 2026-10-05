@@ -1,0 +1,73 @@
+---
+title: "Streamhouse and Lakestream"
+sidebar_position: 1
+description: "How Streamhouse, Lakestream, and Apache Fluss relate: independent compute engines and shared streaming and lakehouse tables."
+---
+
+{/*
+Licensed to the Apache Software Foundation (ASF) under one or more
+contributor license agreements. See the NOTICE file distributed with
+this work for additional information regarding copyright ownership.
+The ASF licenses this file to You under the Apache License, Version 2.0
+(the "License"); you may not use this file except in compliance with
+the License. You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/}
+
+import ThemedImage from '@site/src/components/ThemedImage';
+
+# Streamhouse and Lakestream
+
+**Streamhouse is an open, table-centric architecture that brings streaming, operational serving, and analytics onto a shared, lakehouse-native data foundation.** It organizes workloads around reusable logical tables spanning fresh and historical data, so compatible consumers can share maintained data without each reconstructing an equivalent copy.
+
+<ThemedImage
+    alt="Streamhouse architecture with independent processing, application, and analytics engines sharing Lakestream tables"
+    light="Streamhouse-light.png"
+    dark="Streamhouse-dark.png"
+/>
+
+**Lakestream is Streamhouse's open table storage foundation, unifying fresh data in streams and historical data in open lakehouse tables as different freshness layers of one logical table.** Shared metadata, managed tiering, and supported access across the layers maintain that relationship.
+
+| Concept | Responsibility |
+| --- | --- |
+| <strong style={{whiteSpace: 'nowrap'}}>Streamhouse</strong> | The wider architecture: storage, independent compute engines, transformations, query and serving services, catalogs, governance, and applications. |
+| <strong style={{whiteSpace: 'nowrap'}}>Lakestream</strong> | The coordinated stream–lake storage foundation on which those workloads operate. |
+| <strong style={{whiteSpace: 'nowrap'}}>Apache Fluss</strong> | The streaming table layer and lakehouse integration that enable a concrete implementation of this foundation. |
+
+## From Event Delivery to Reusable Tables
+
+A topic organizes publishing, retention, consumption, and replay of records. A table makes a dataset directly usable through shared columns, types, and supported operations. Where primary keys are supported, they identify rows and define update and delete semantics. Append-only tables also benefit from a defined schema and direct table access.
+
+In a Streamhouse, an engine reads shared tables, performs a transformation, and writes its reusable result back as another table. Other workloads can access that maintained result through compatible interfaces. Engines still own their computations, including private execution state such as windows and timers. Catalogs make tables discoverable; governance defines ownership and access.
+
+## One Logical Table Across Streams and Lakes
+
+Lakestream coordinates the identity, schema, and interpretation of a table across its streaming and lakehouse representations. Streaming storage supports continuous changes and fresh access; lakehouse storage supports efficient scans and longer retention.
+
+Freshness describes how far each representation has progressed through incoming changes. A new update may change a key that has existed for years, and the physical representations may overlap. One logical table can therefore span multiple storage engines, layouts, and physical copies.
+
+<ThemedImage
+    alt="Lakestream foundation coordinating fresh Fluss data and historical lakehouse data through shared metadata, managed tiering, and union reads"
+    light="Lakestream-light.png"
+    dark="Lakestream-dark.png"
+/>
+
+## Independent Engines and Open Access
+
+Compute engines run transformations and queries, and publish reusable results as shared tables. Applications choose how to retrieve and use those results. Replicas, caches, and specialized indexes may still serve a distinct purpose.
+
+An engine may consume table changes, read committed lake data, or combine streaming and lake data through a supported union-read integration. A lake-compatible engine alone does not automatically provide union reads. Query response time and data freshness are separate concerns, and sharing tables does not imply a simultaneous snapshot across all tables and engines.
+
+## Explore Further
+
+- [Fluss Architecture](architecture.mdx): Understand the coordinator, tablet servers, and storage components.
+- [Lakestream Overview](../streaming-lakehouse/overview.mdx): Learn how Fluss coordinates metadata, tiering, and reads.
+- [Table Design](../table-design/overview.mdx): Choose table types, partitions, and buckets.
+- [Lakestream Quickstart](../quickstart/lakehouse.md): Try managed tiering and Union Read with Docker.
