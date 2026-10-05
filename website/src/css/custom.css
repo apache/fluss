@@ -928,16 +928,63 @@ div[class*='announcementBar'] a {
   background: var(--fluss-blue-50);
 }
 
-/* Sidebar toggle button at the bottom */
-.theme-doc-sidebar-container button {
-  border-color: var(--fluss-ink-100);
+/* Sidebar collapse button bar at the bottom */
+.theme-doc-sidebar-container button[class*='collapseSidebarButton'],
+button[class*='collapseSidebarButton'] {
+  background: transparent;
+  border: none;
+  border-top: 1px solid var(--fluss-ink-100);
+  border-radius: 0;
   color: var(--fluss-ink-500);
-  border-radius: var(--fluss-radius-sm);
+  box-shadow: none;
+  padding: 10px 16px;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transform: none;
+  transition: background-color var(--fluss-motion-fast) var(--fluss-ease-out),
+              color var(--fluss-motion-fast) var(--fluss-ease-out);
 }
 
-.theme-doc-sidebar-container button:hover {
-  border-color: var(--fluss-blue-300);
+.theme-doc-sidebar-container button[class*='collapseSidebarButton']::after,
+button[class*='collapseSidebarButton']::after {
+  content: none !important;
+  display: none !important;
+}
+
+.theme-doc-sidebar-container button[class*='collapseSidebarButton']:hover,
+button[class*='collapseSidebarButton']:hover {
   background: var(--fluss-blue-50);
+  color: var(--fluss-blue-700);
+  border-top-color: var(--fluss-ink-100);
+  transform: none;
+  box-shadow: none;
+}
+
+/* Expand button on left edge when sidebar is collapsed */
+div[class*='collapsedDocSidebar'],
+div[class*='expandButton'] {
+  background: var(--fluss-canvas-soft);
+  border-right: 1px solid var(--fluss-ink-100);
+  color: var(--fluss-ink-500);
+  cursor: pointer;
+  transition: background-color var(--fluss-motion-fast) var(--fluss-ease-out),
+              color var(--fluss-motion-fast) var(--fluss-ease-out);
+}
+
+div[class*='collapsedDocSidebar']:hover,
+div[class*='expandButton']:hover {
+  background: var(--fluss-blue-50);
+  color: var(--fluss-blue-700);
+}
+
+div[class*='collapsedDocSidebar'] button[class*='collapseSidebarButton'],
+div[class*='expandButton'] button[class*='collapseSidebarButton'] {
+  border: none;
+  background: transparent;
+  color: inherit;
 }
 
 /* -------------------------------------------------------------------------
@@ -1482,7 +1529,8 @@ a[class*='tag_']:hover {
 }
 
 /* Blog "Read more" button */
-.button.button--secondary {
+main[class*='blogListPage'] .button.button--secondary,
+a[class*='readMore'] {
   background: var(--fluss-blue-600);
   color: #FFFFFF;
   border: none;
@@ -1494,7 +1542,8 @@ a[class*='tag_']:hover {
               transform var(--fluss-motion-fast) var(--fluss-ease-out);
 }
 
-.button.button--secondary:hover {
+main[class*='blogListPage'] .button.button--secondary:hover,
+a[class*='readMore']:hover {
   background: var(--fluss-blue-700);
   color: #FFFFFF;
   transform: translateY(-1px);
@@ -2153,7 +2202,7 @@ article[itemtype='https://schema.org/BlogPosting'] header > div:not([class*='blo
 }
 
 /* "Read more" link with arrow */
-.button.button--secondary::after,
+main[class*='blogListPage'] .button.button--secondary::after,
 a[class*='readMore']::after {
   content: ' →';
   display: inline-block;
@@ -2161,7 +2210,7 @@ a[class*='readMore']::after {
   transition: transform var(--fluss-motion-base) var(--fluss-ease-out);
 }
 
-.button.button--secondary:hover::after,
+main[class*='blogListPage'] .button.button--secondary:hover::after,
 a[class*='readMore']:hover::after {
   transform: translateX(3px);
 }
@@ -2581,6 +2630,33 @@ button.clean-btn[class*='toggle'] svg {
 [data-theme='dark'] .theme-doc-sidebar-container {
   background: var(--fluss-canvas);
   border-right-color: rgba(255, 255, 255, 0.06);
+}
+
+[data-theme='dark'] .theme-doc-sidebar-container button[class*='collapseSidebarButton'],
+[data-theme='dark'] button[class*='collapseSidebarButton'] {
+  background: transparent;
+  border-top-color: rgba(255, 255, 255, 0.08);
+  color: #94A3B8;
+}
+
+[data-theme='dark'] .theme-doc-sidebar-container button[class*='collapseSidebarButton']:hover,
+[data-theme='dark'] button[class*='collapseSidebarButton']:hover {
+  background: rgba(56, 189, 248, 0.08);
+  color: var(--fluss-blue-300);
+  border-top-color: rgba(255, 255, 255, 0.08);
+}
+
+[data-theme='dark'] div[class*='collapsedDocSidebar'],
+[data-theme='dark'] div[class*='expandButton'] {
+  background: var(--fluss-canvas);
+  border-right-color: rgba(255, 255, 255, 0.08);
+  color: #94A3B8;
+}
+
+[data-theme='dark'] div[class*='collapsedDocSidebar']:hover,
+[data-theme='dark'] div[class*='expandButton']:hover {
+  background: rgba(56, 189, 248, 0.08);
+  color: var(--fluss-blue-300);
 }
 
 [data-theme='dark'] .menu__link {

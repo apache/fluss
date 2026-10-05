@@ -274,6 +274,12 @@ const config: Config = {
 
   ],
   themeConfig: {
+    docs: {
+      sidebar: {
+        hideable: true,
+        autoCollapseCategories: false,
+      },
+    },
     image: 'img/social/fluss-social-card.png',
     colorMode: {
       defaultMode: 'light',
