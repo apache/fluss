@@ -32,7 +32,9 @@ import org.apache.fluss.rpc.metrics.TestingClientMetricGroup;
 import org.apache.fluss.rpc.netty.client.NettyClient;
 import org.apache.fluss.rpc.netty.server.NettyServer;
 import org.apache.fluss.rpc.netty.server.RequestsMetrics;
+import org.apache.fluss.rpc.netty.server.Session;
 import org.apache.fluss.rpc.protocol.ApiKeys;
+import org.apache.fluss.security.acl.FlussPrincipal;
 import org.apache.fluss.utils.NetUtils;
 
 import org.junit.jupiter.api.AfterEach;
@@ -52,6 +54,7 @@ public class AuthenticationTest {
     private NettyServer nettyServer;
     private ServerNode usernamePasswordServerNode;
     private ServerNode mutualAuthServerNode;
+    private TestingAuthenticateGatewayService service;
 
     @BeforeEach
     public void setup() throws Exception {
@@ -106,6 +109,11 @@ public class AuthenticationTest {
         try (NettyClient nettyClient =
                 new NettyClient(clientConfig, TestingClientMetricGroup.newInstance())) {
             verifyGetTableNamesList(nettyClient, mutualAuthServerNode);
+            assertThat(service.getLastSession().getPrincipal()).isEqualTo(FlussPrincipal.ANONYMOUS);
+            assertThat(service.getLastSession().getAdditionalPrincipals())
+                    .containsExactly(
+                            new FlussPrincipal("data-engineers", "Group"),
+                            new FlussPrincipal("table-reader", "Role"));
         }
 
         // test invalid challenge from server
@@ -248,7 +256,7 @@ public class AuthenticationTest {
         // 3 worker threads is enough for this test
         configuration.setString(ConfigOptions.NETTY_SERVER_NUM_WORKER_THREADS.key(), "3");
         MetricGroup metricGroup = NOPMetricsGroup.newInstance();
-        TestingAuthenticateGatewayService service = new TestingAuthenticateGatewayService();
+        service = new TestingAuthenticateGatewayService();
         try (NetUtils.Port availablePort1 = getAvailablePort();
                 NetUtils.Port availablePort2 = getAvailablePort()) {
             this.nettyServer =
@@ -277,10 +285,17 @@ public class AuthenticationTest {
      * authentication.
      */
     public static class TestingAuthenticateGatewayService extends TestingTabletGatewayService {
+        private volatile Session lastSession;
+
         @Override
         public CompletableFuture<ListTablesResponse> listTables(ListTablesRequest request) {
+            lastSession = currentSession();
             return CompletableFuture.completedFuture(
                     new ListTablesResponse().addAllTableNames(Collections.singleton("test-table")));
+        }
+
+        Session getLastSession() {
+            return lastSession;
         }
     }
 }
