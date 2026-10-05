@@ -83,7 +83,7 @@ final class ReplicaFetcherThread extends ShutdownableThread {
     private final LeaderEndpoint leader;
     private final int fetchBackOffMs;
 
-    // manually add timout logic in here, todo remove this timeout logic if
+    // manually add timeout logic in here, todo remove this timeout logic if
     // we support global request timeout in #279
     private final int timeoutSeconds;
 

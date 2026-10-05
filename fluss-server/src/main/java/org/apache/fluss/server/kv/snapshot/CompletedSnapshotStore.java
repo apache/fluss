@@ -75,7 +75,7 @@ public class CompletedSnapshotStore {
 
     /**
      * Local copy of the completed snapshots in snapshot store. This is restored from snapshot
-     * handel store when recovering.
+     * handle store when recovering.
      */
     private final ArrayDeque<CompletedSnapshot> completedSnapshots;
 
