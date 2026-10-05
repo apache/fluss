@@ -244,40 +244,179 @@ final class SenderTest {
     }
 
     @ParameterizedTest
-    @ValueSource(booleans = {false, true})
-    void testInvalidatesMetadataBeforePublishingRetry(boolean kv) throws Exception {
+    @CsvSource({"false,false", "false,true", "true,false", "true,true"})
+    void testInvalidatesMetadataOnceBeforePublishingRetries(boolean kv, boolean rpcFailure)
+            throws Exception {
         sender.destroyResources();
-        Map<TablePath, TableInfo> tableInfos = new HashMap<>();
-        tableInfos.put(DATA1_TABLE_PATH, DATA1_TABLE_INFO);
-        tableInfos.put(DATA1_TABLE_PATH_PK, DATA1_TABLE_INFO_PK);
-        AtomicReference<Boolean> retryQueuedAtInvalidation = new AtomicReference<>();
+        TableInfo tableInfo = kv ? DATA1_TABLE_INFO_PK : DATA1_TABLE_INFO;
+        PhysicalTablePath path = PhysicalTablePath.of(tableInfo.getTablePath());
+        List<Set<PhysicalTablePath>> invalidations = new ArrayList<>();
+        List<Boolean> retriesQueuedAtInvalidation = new ArrayList<>();
         metadataUpdater =
-                new TestingMetadataUpdater(tableInfos) {
-                    @Override
-                    public void invalidPhysicalTableBucketMeta(
-                            Set<PhysicalTablePath> physicalTablesToInvalid) {
-                        if (!physicalTablesToInvalid.isEmpty()) {
-                            retryQueuedAtInvalidation.set(accumulator.hasUnDrained());
-                        }
-                        super.invalidPhysicalTableBucketMeta(physicalTablesToInvalid);
-                    }
-                };
+                metadataUpdaterRecordingInvalidations(
+                        tableInfo, invalidations, retriesQueuedAtInvalidation);
+        TableBucket firstBucket = new TableBucket(tableInfo.getTableId(), 0);
+        TableBucket secondBucket = new TableBucket(tableInfo.getTableId(), 1);
+        Cluster cluster =
+                new Cluster(
+                        Collections.singletonMap(
+                                TestingMetadataUpdater.NODE1.id(), TestingMetadataUpdater.NODE1),
+                        TestingMetadataUpdater.COORDINATOR,
+                        Collections.singletonMap(
+                                path,
+                                Arrays.asList(
+                                        new BucketLocation(path, firstBucket, 1, new int[] {1}),
+                                        new BucketLocation(path, secondBucket, 1, new int[] {1}))),
+                        Collections.singletonMap(tableInfo.getTablePath(), tableInfo.getTableId()),
+                        Collections.emptyMap(),
+                        Collections.singletonMap(
+                                TableOrPartition.ofTable(tableInfo.getTableId()),
+                                tableInfo.getNumBuckets()));
+        metadataUpdater.updateCluster(cluster);
         sender = setupWithIdempotenceState();
-        TableBucket bucket = kv ? new TableBucket(DATA1_TABLE_ID_PK, 0) : tb1;
-        CompletableFuture<Exception> result = appendDiskTestRecord(kv, bucket, 1);
+        CompletableFuture<Exception> firstResult = appendDiskTestRecord(kv, firstBucket, 1);
+        CompletableFuture<Exception> secondResult = appendDiskTestRecord(kv, secondBucket, 2);
         sender.runOnce();
 
-        finishRequest(
-                tb1,
-                0,
-                kv
-                        ? createPutKvResponse(bucket, Errors.NOT_LEADER_OR_FOLLOWER)
-                        : createProduceLogResponse(bucket, Errors.NOT_LEADER_OR_FOLLOWER));
+        TestTabletServerGateway gateway = node1Gateway();
+        assertThat(gateway.pendingRequestSize()).isOne();
+        ApiMessage request = gateway.getRequest(0);
+        assertThat(
+                        kv
+                                ? ((PutKvRequest) request).getBucketsReqsCount()
+                                : ((ProduceLogRequest) request).getBucketsReqsCount())
+                .isEqualTo(2);
+        if (rpcFailure) {
+            gateway.failRequest(0, Errors.NOT_LEADER_OR_FOLLOWER.exception());
+        } else {
+            gateway.response(
+                    0,
+                    kv
+                            ? makePutKvResponse(
+                                    Arrays.asList(
+                                            new PutKvResultForBucket(
+                                                    firstBucket,
+                                                    Errors.NOT_LEADER_OR_FOLLOWER.toApiError()),
+                                            new PutKvResultForBucket(
+                                                    secondBucket,
+                                                    Errors.NOT_LEADER_OR_FOLLOWER.toApiError())))
+                            : makeProduceLogResponse(
+                                    Arrays.asList(
+                                            new ProduceLogResultForBucket(
+                                                    firstBucket,
+                                                    Errors.NOT_LEADER_OR_FOLLOWER.toApiError()),
+                                            new ProduceLogResultForBucket(
+                                                    secondBucket,
+                                                    Errors.NOT_LEADER_OR_FOLLOWER.toApiError()))));
+        }
 
-        assertThat(retryQueuedAtInvalidation.get()).isFalse();
-        assertThat(result).isNotDone();
+        assertThat(invalidations).containsExactly(Collections.singleton(path));
+        assertThat(retriesQueuedAtInvalidation).containsExactly(false);
+        assertThat(firstResult).isNotDone();
+        assertThat(secondResult).isNotDone();
+        assertThat(writerMetricGroup.recordsRetryTotal().getCount()).isEqualTo(2);
+        assertThat(metadataUpdater.getCluster().getBucketLocation(firstBucket)).isEmpty();
+        assertThat(metadataUpdater.getCluster().getBucketLocation(secondBucket)).isEmpty();
         assertThat(accumulator.hasUnDrained()).isTrue();
         accumulator.abortAllBatches(new RuntimeException("test cleanup"));
+    }
+
+    @ParameterizedTest
+    @CsvSource({"false,false", "false,true", "true,false", "true,true"})
+    void testInvalidatesHistoricalTargetOnceBeforePublishingRetries(boolean kv, boolean rpcFailure)
+            throws Exception {
+        sender.destroyResources();
+        TableInfo info = createHistoricalTableInfo(AutoPartitionTimeUnit.DAY, 7, kv);
+        PhysicalTablePath firstOriginal = PhysicalTablePath.of(info.getTablePath(), "20000101");
+        PhysicalTablePath secondOriginal = PhysicalTablePath.of(info.getTablePath(), "20000102");
+        PhysicalTablePath historical =
+                PhysicalTablePath.of(info.getTablePath(), HISTORICAL_PARTITION_VALUE);
+        TableBucket bucket = new TableBucket(info.getTableId(), 22L, 0);
+        List<Set<PhysicalTablePath>> invalidations = new ArrayList<>();
+        List<Boolean> retriesQueuedAtInvalidation = new ArrayList<>();
+        metadataUpdater =
+                metadataUpdaterRecordingInvalidations(
+                        info, invalidations, retriesQueuedAtInvalidation);
+        metadataUpdater.updateCluster(
+                partitionedCluster(info, Collections.singletonMap(historical, bucket)));
+        sender = setupWithIdempotenceState();
+        accumulator.checkAndCacheHistoricalPartitionEnabled(info);
+        List<CompletableFuture<Exception>> results = new ArrayList<>();
+        for (PhysicalTablePath original : Arrays.asList(firstOriginal, secondOriginal)) {
+            accumulator.routeWritesTo(info, original, historical, bucket.getPartitionId());
+            if (kv) {
+                results.add(appendKvRecord(info, original, 1, metadataUpdater.getCluster()));
+            } else {
+                CompletableFuture<Exception> result = new CompletableFuture<>();
+                results.add(result);
+                bucketAssigner.setBucketId(0);
+                accumulator.append(
+                        WriteRecord.forArrowAppend(
+                                info, original, row(1, original.getPartitionName()), null),
+                        (tb, offset, error) -> result.complete(error),
+                        metadataUpdater.getCluster());
+            }
+        }
+        sender.runOnce();
+        TestTabletServerGateway gateway = node1Gateway();
+        assertThat(gateway.pendingRequestSize()).isOne();
+        ApiMessage request = gateway.getRequest(0);
+        assertThat(
+                        kv
+                                ? ((PutKvRequest) request).getBucketsReqsCount()
+                                : ((ProduceLogRequest) request).getBucketsReqsCount())
+                .isEqualTo(2);
+        if (rpcFailure) {
+            gateway.failRequest(0, Errors.NOT_LEADER_OR_FOLLOWER.exception());
+        } else {
+            gateway.response(
+                    0,
+                    kv
+                            ? makePutKvResponse(
+                                    Arrays.asList(
+                                            PutKvResultForBucket.historicalFailure(
+                                                    bucket,
+                                                    Errors.NOT_LEADER_OR_FOLLOWER.toApiError(),
+                                                    firstOriginal.getPartitionName()),
+                                            PutKvResultForBucket.historicalFailure(
+                                                    bucket,
+                                                    Errors.NOT_LEADER_OR_FOLLOWER.toApiError(),
+                                                    secondOriginal.getPartitionName())))
+                            : makeProduceLogResponse(
+                                    Arrays.asList(
+                                            ProduceLogResultForBucket.historicalFailure(
+                                                    bucket,
+                                                    Errors.NOT_LEADER_OR_FOLLOWER.toApiError(),
+                                                    firstOriginal.getPartitionName()),
+                                            ProduceLogResultForBucket.historicalFailure(
+                                                    bucket,
+                                                    Errors.NOT_LEADER_OR_FOLLOWER.toApiError(),
+                                                    secondOriginal.getPartitionName()))));
+        }
+        assertThat(invalidations).containsExactly(Collections.singleton(historical));
+        assertThat(retriesQueuedAtInvalidation).containsExactly(false);
+        results.forEach(result -> assertThat(result).isNotDone());
+        assertThat(writerMetricGroup.recordsRetryTotal().getCount()).isEqualTo(2);
+        assertThat(metadataUpdater.getCluster().getBucketLocation(bucket)).isEmpty();
+        assertThat(accumulator.hasUnDrained()).isTrue();
+        accumulator.abortAllBatches(new RuntimeException("test cleanup"));
+    }
+
+    private TestingMetadataUpdater metadataUpdaterRecordingInvalidations(
+            TableInfo info,
+            List<Set<PhysicalTablePath>> invalidations,
+            List<Boolean> retriesQueuedAtInvalidation) {
+        return new TestingMetadataUpdater(Collections.singletonMap(info.getTablePath(), info)) {
+            @Override
+            public void invalidPhysicalTableBucketMeta(
+                    Set<PhysicalTablePath> physicalTablesToInvalid) {
+                if (!physicalTablesToInvalid.isEmpty()) {
+                    invalidations.add(new HashSet<>(physicalTablesToInvalid));
+                    retriesQueuedAtInvalidation.add(accumulator.hasUnDrained());
+                }
+                super.invalidPhysicalTableBucketMeta(physicalTablesToInvalid);
+            }
+        };
     }
 
     @ParameterizedTest
