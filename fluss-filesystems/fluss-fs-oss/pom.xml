@@ -123,6 +123,7 @@
                 <executions>
                     <execution>
                         <goals>
+                            <goal>test-jar</goal>
                             <goal>jar</goal>
                         </goals>
                     </execution>
@@ -234,18 +235,6 @@
                                 </relocation>
                             </relocations>
                         </configuration>
-                    </execution>
-                </executions>
-            </plugin>
-
-            <plugin>
-                <groupId>org.apache.maven.plugins</groupId>
-                <artifactId>maven-jar-plugin</artifactId>
-                <executions>
-                    <execution>
-                        <goals>
-                            <goal>test-jar</goal>
-                        </goals>
                     </execution>
                 </executions>
             </plugin>
