@@ -32,7 +32,6 @@ import org.apache.fluss.shaded.netty4.io.netty.channel.unix.Errors;
 import org.apache.fluss.shaded.netty4.io.netty.util.concurrent.DefaultThreadFactory;
 
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.TimeUnit;
 
 /** Utils of netty. */
 public class NettyUtils {
@@ -75,25 +74,6 @@ public class NettyUtils {
         CompletableFuture<Void> shutdownFuture = new CompletableFuture<>();
         if (group != null) {
             group.shutdownGracefully()
-                    .addListener(
-                            finished -> {
-                                if (finished.isSuccess()) {
-                                    shutdownFuture.complete(null);
-                                } else {
-                                    shutdownFuture.completeExceptionally(finished.cause());
-                                }
-                            });
-        } else {
-            shutdownFuture.complete(null);
-        }
-        return shutdownFuture;
-    }
-
-    /** Shut down a client event loop without Netty's default quiet period. */
-    public static CompletableFuture<Void> shutdownGroupImmediately(EventLoopGroup group) {
-        CompletableFuture<Void> shutdownFuture = new CompletableFuture<>();
-        if (group != null) {
-            group.shutdownGracefully(0, 15, TimeUnit.SECONDS)
                     .addListener(
                             finished -> {
                                 if (finished.isSuccess()) {

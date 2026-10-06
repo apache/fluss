@@ -28,7 +28,7 @@ import org.apache.fluss.row.{encode, InternalRow => FlussInternalRow, KeyValueRo
 import org.apache.fluss.spark.SparkFlussConf
 import org.apache.fluss.spark.utils.LogChangesIterator
 import org.apache.fluss.types.{DataField, RowType}
-import org.apache.fluss.utils.CloseableIterator
+import org.apache.fluss.utils.{CloseableIterator, IOUtils}
 
 import org.apache.spark.internal.Logging
 
@@ -62,7 +62,7 @@ class FlussUpsertPartitionReader(
   private val timeRange: Option[FlussTimeRange] = flussPartition.timeRange
   private val logScanFinished = logStartingOffset >= logStoppingOffset || logStoppingOffset <= 0
 
-  private val (projectionWithPks, pkProjection) = {
+  private val (projectionWithPks, pkProjection) = initializeResources {
     val pkIndexes = tableInfo.getSchema.getPrimaryKeyIndexes
     var i = 0
     val _pkProjection = mutable.ArrayBuffer.empty[Int]
@@ -86,7 +86,7 @@ class FlussUpsertPartitionReader(
   private var mergedIterator: Iterator[FlussInternalRow] = _
 
   // initialize scanners
-  initialize()
+  initializeResources(initialize())
 
   override def next0(): Boolean = {
     if (closed) {
@@ -248,18 +248,10 @@ class FlussUpsertPartitionReader(
   }
 
   override def close0(): Unit = {
-    if (mergedIterator != null) {
-      mergedIterator match {
-        case closeable: AutoCloseable => closeable.close()
-        case _ => // Do nothing
-      }
+    val closeableIterator = mergedIterator match {
+      case closeable: AutoCloseable => closeable
+      case _ => null
     }
-
-    if (logScanner != null) {
-      logScanner.close()
-    }
-    if (snapshotScanner != null) {
-      snapshotScanner.close()
-    }
+    IOUtils.closeAll(closeableIterator, logScanner, snapshotScanner)
   }
 }
