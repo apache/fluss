@@ -31,7 +31,9 @@ import javax.annotation.Nullable;
 import javax.net.ssl.KeyManagerFactory;
 import javax.net.ssl.SSLEngine;
 import javax.net.ssl.SSLParameters;
+import javax.net.ssl.TrustManager;
 import javax.net.ssl.TrustManagerFactory;
+import javax.net.ssl.X509TrustManager;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -211,11 +213,11 @@ public final class SslContextFactory {
     private static TrustManagerFactory trustManagerFactory(
             Store store, String path, String type, @Nullable String storePassword) {
         KeyStore trustStore = loadKeyStore(store, path, type, storePassword);
-        checkHoldsCertificate(store, trustStore, path);
         try {
             TrustManagerFactory tmf =
                     TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm());
             tmf.init(trustStore);
+            checkHoldsCertificate(store, tmf, path, storePassword);
             return tmf;
         } catch (GeneralSecurityException e) {
             throw new FlussRuntimeException(
@@ -260,25 +262,26 @@ public final class SslContextFactory {
      * on PKCS12. The handshake failure it produces - "the trustAnchors parameter must be non-empty"
      * - names neither the file nor the option.
      */
-    private static void checkHoldsCertificate(Store store, KeyStore trustStore, String path) {
-        try {
-            Enumeration<String> aliases = trustStore.aliases();
-            while (aliases.hasMoreElements()) {
-                if (trustStore.isCertificateEntry(aliases.nextElement())) {
-                    return;
-                }
+    private static void checkHoldsCertificate(
+            Store store, TrustManagerFactory tmf, String path, @Nullable String storePassword) {
+        for (TrustManager tm : tmf.getTrustManagers()) {
+            if (tm instanceof X509TrustManager
+                    && ((X509TrustManager) tm).getAcceptedIssuers().length > 0) {
+                return;
             }
-        } catch (KeyStoreException e) {
-            throw new FlussRuntimeException(
-                    String.format("Failed to read the %s at '%s'.", store.what, path), e);
         }
+        String hint =
+                storePassword == null
+                        ? String.format(
+                                " A PKCS12 store loads empty when '%s' is not set.",
+                                store.passwordKey)
+                        : "";
         throw new FlussRuntimeException(
                 String.format(
-                        "The %s at '%s', configured by '%s', holds no trusted certificates. A "
-                                + "PKCS12 store loads empty when '%s' is not set. Every TLS "
-                                + "handshake would fail with \"the trustAnchors parameter must be "
-                                + "non-empty\".",
-                        store.what, path, store.pathKey, store.passwordKey));
+                        "The %s at '%s', configured by '%s', holds no trusted certificates.%s "
+                                + "Every TLS handshake would fail with \"the trustAnchors "
+                                + "parameter must be non-empty\".",
+                        store.what, path, store.pathKey, hint));
     }
 
     /**
