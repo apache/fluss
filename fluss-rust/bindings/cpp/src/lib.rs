@@ -15,8 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
+mod lookup;
 mod types;
 mod write_callback;
+use lookup::{
+    PendingLookup, PendingPrefixLookup, delete_pending_lookup, delete_pending_prefix_lookup,
+};
 use write_callback::ensure_callback_executor;
 
 use std::collections::HashMap;
@@ -423,6 +427,8 @@ mod ffi {
         type UpsertWriter;
         type Lookuper;
         type PrefixLookuper;
+        type PendingLookup;
+        type PendingPrefixLookup;
 
         // Opaque types for optimized FFI
         type ScanResultInner;
@@ -703,6 +709,12 @@ mod ffi {
         // Lookuper
         unsafe fn delete_lookuper(lookuper: *mut Lookuper);
         fn lookup(self: &Lookuper, pk_row: &GenericRowInner) -> Box<LookupResultInner>;
+        fn lookup_async(self: &Lookuper, pk_row: &GenericRowInner) -> FfiPtrResult;
+
+        // PendingLookup. A negative timeout_ms waits without limit.
+        unsafe fn delete_pending_lookup(pending: *mut PendingLookup);
+        fn lookup_wait(self: &mut PendingLookup, timeout_ms: i64) -> Box<LookupResultInner>;
+        fn lookup_is_pending(self: &PendingLookup) -> bool;
 
         // LookupResultInner accessors
         fn lv_has_error(self: &LookupResultInner) -> bool;
@@ -763,6 +775,16 @@ mod ffi {
             self: &PrefixLookuper,
             prefix_row: &GenericRowInner,
         ) -> Box<PrefixLookupResultInner>;
+        fn prefix_lookup_async(self: &PrefixLookuper, prefix_row: &GenericRowInner)
+        -> FfiPtrResult;
+
+        // PendingPrefixLookup. A negative timeout_ms waits without limit.
+        unsafe fn delete_pending_prefix_lookup(pending: *mut PendingPrefixLookup);
+        fn prefix_lookup_wait(
+            self: &mut PendingPrefixLookup,
+            timeout_ms: i64,
+        ) -> Box<PrefixLookupResultInner>;
+        fn prefix_lookup_is_pending(self: &PendingPrefixLookup) -> bool;
 
         // PrefixLookupResultInner accessors — like LookupResultInner but indexed
         // by record, since a prefix lookup returns zero-or-more rows.
@@ -1026,13 +1048,13 @@ pub struct UpsertWriter {
 }
 
 pub struct Lookuper {
-    inner: fcore::client::Lookuper,
-    table_info: fcore::metadata::TableInfo,
+    inner: Arc<fcore::client::Lookuper>,
+    table_info: Arc<TableInfo>,
 }
 
 pub struct PrefixLookuper {
-    inner: PrefixKeyLookuper,
-    table_info: TableInfo,
+    inner: Arc<PrefixKeyLookuper>,
+    table_info: Arc<TableInfo>,
     /// Full-schema indices of the lookup columns, used to compact the input row.
     lookup_column_indices: Vec<usize>,
 }
@@ -2145,8 +2167,8 @@ impl Table {
         };
 
         let ptr = Box::into_raw(Box::new(Lookuper {
-            inner: lookuper,
-            table_info: self.table_info.clone(),
+            inner: Arc::new(lookuper),
+            table_info: Arc::new(self.table_info.clone()),
         }));
         ok_ptr(ptr as usize)
     }
@@ -2176,8 +2198,8 @@ impl Table {
         };
 
         let ptr = Box::into_raw(Box::new(PrefixLookuper {
-            inner: lookuper,
-            table_info: self.table_info.clone(),
+            inner: Arc::new(lookuper),
+            table_info: Arc::new(self.table_info.clone()),
             lookup_column_indices,
         }));
         ok_ptr(ptr as usize)
@@ -2373,137 +2395,12 @@ unsafe fn delete_lookuper(lookuper: *mut Lookuper) {
     }
 }
 
-impl Lookuper {
-    fn lookup(&self, pk_row: &GenericRowInner) -> Box<LookupResultInner> {
-        let schema = self.table_info.get_schema();
-        // Compact PK values (set at their full schema positions, e.g. [0, 2])
-        // into the dense PK-only row the core KeyEncoder expects. Skips the
-        // rebuild when the row is already dense and needs no conversion.
-        let pk_indices = schema.primary_key_indexes();
-        let generic_row =
-            match types::resolve_dense_row_types(&pk_row.row, Some(schema), &pk_indices) {
-                Ok(r) => r,
-                Err(e) => {
-                    return Box::new(LookupResultInner::from_error(
-                        CLIENT_ERROR_CODE,
-                        e.to_string(),
-                    ));
-                }
-            };
-
-        let lookup_result = match RUNTIME.block_on(self.inner.lookup(generic_row.as_ref())) {
-            Ok(r) => r,
-            Err(e) => {
-                let ffi_err = err_from_core_error(&e);
-                return Box::new(LookupResultInner::from_error(
-                    ffi_err.error_code,
-                    ffi_err.error_message,
-                ));
-            }
-        };
-
-        let columns = self.table_info.get_schema().columns().to_vec();
-        match lookup_result.get_single_row() {
-            Ok(Some(row)) => match types::compacted_row_to_owned(&row, &self.table_info) {
-                Ok(owned_row) => Box::new(LookupResultInner {
-                    error: None,
-                    found: true,
-                    row: Some(owned_row),
-                    columns,
-                }),
-                Err(e) => Box::new(LookupResultInner::from_error(
-                    CLIENT_ERROR_CODE,
-                    e.to_string(),
-                )),
-            },
-            Ok(None) => Box::new(LookupResultInner {
-                error: None,
-                found: false,
-                row: None,
-                columns,
-            }),
-            Err(e) => {
-                let ffi_err = err_from_core_error(&e);
-                Box::new(LookupResultInner::from_error(
-                    ffi_err.error_code,
-                    ffi_err.error_message,
-                ))
-            }
-        }
-    }
-}
-
 // PrefixLookuper implementation
 unsafe fn delete_prefix_lookuper(lookuper: *mut PrefixLookuper) {
     if !lookuper.is_null() {
         unsafe {
             drop(Box::from_raw(lookuper));
         }
-    }
-}
-
-impl PrefixLookuper {
-    fn prefix_lookup(&self, prefix_row: &GenericRowInner) -> Box<PrefixLookupResultInner> {
-        let schema = self.table_info.get_schema();
-        // Compact prefix values (set at their full schema positions) into the
-        // dense, lookup-column-ordered row the core prefix encoder expects.
-        // Skips the rebuild when the row is already dense and needs no
-        // conversion.
-        let generic_row = match types::resolve_dense_row_types(
-            &prefix_row.row,
-            Some(schema),
-            &self.lookup_column_indices,
-        ) {
-            Ok(r) => r,
-            Err(e) => {
-                return Box::new(PrefixLookupResultInner::from_error(
-                    CLIENT_ERROR_CODE,
-                    e.to_string(),
-                ));
-            }
-        };
-
-        let lookup_result = match RUNTIME.block_on(self.inner.lookup(generic_row.as_ref())) {
-            Ok(r) => r,
-            Err(e) => {
-                let ffi_err = err_from_core_error(&e);
-                return Box::new(PrefixLookupResultInner::from_error(
-                    ffi_err.error_code,
-                    ffi_err.error_message,
-                ));
-            }
-        };
-
-        let lookup_rows = match lookup_result.get_rows() {
-            Ok(rows) => rows,
-            Err(e) => {
-                let ffi_err = err_from_core_error(&e);
-                return Box::new(PrefixLookupResultInner::from_error(
-                    ffi_err.error_code,
-                    ffi_err.error_message,
-                ));
-            }
-        };
-
-        let mut rows = Vec::with_capacity(lookup_rows.len());
-        for row in &lookup_rows {
-            match types::compacted_row_to_owned(row, &self.table_info) {
-                Ok(owned_row) => rows.push(owned_row),
-                Err(e) => {
-                    return Box::new(PrefixLookupResultInner::from_error(
-                        CLIENT_ERROR_CODE,
-                        e.to_string(),
-                    ));
-                }
-            }
-        }
-
-        let columns = self.table_info.get_schema().columns().to_vec();
-        Box::new(PrefixLookupResultInner {
-            error: None,
-            rows,
-            columns,
-        })
     }
 }
 

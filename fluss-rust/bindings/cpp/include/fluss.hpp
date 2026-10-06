@@ -56,6 +56,8 @@ struct BatchScanner;
 struct UpsertWriter;
 struct Lookuper;
 struct PrefixLookuper;
+struct PendingLookup;
+struct PendingPrefixLookup;
 struct ScanResultInner;
 struct GenericRowInner;
 struct LookupResultInner;
@@ -1250,6 +1252,9 @@ class PrefixLookupResult {
 
    private:
     friend class PrefixLookuper;
+    friend class PendingPrefixLookup;
+    /// Takes ownership of `inner`, or returns its error.
+    Result Adopt(ffi::PrefixLookupResultInner* inner);
     std::shared_ptr<const detail::PrefixData> data_;
 };
 
@@ -1576,12 +1581,15 @@ class LookupResult : public detail::NamedGetters<LookupResult> {
 
    private:
     friend class Lookuper;
+    friend class PendingLookup;
     size_t Resolve(const std::string& name) const {
         if (!column_map_) {
             BuildColumnMap();
         }
         return detail::ResolveColumn(*column_map_, name);
     }
+    /// Takes ownership of `inner`, or returns its error.
+    Result Adopt(ffi::LookupResultInner* inner);
     void Destroy() noexcept;
     void BuildColumnMap() const;
     ffi::LookupResultInner* inner_{nullptr};
@@ -2068,6 +2076,67 @@ class UpsertWriter {
     std::shared_ptr<ffi::WriteCallbackCapacity> callback_capacity_;
 };
 
+/// A lookup started by Lookuper::Lookup(pk_row, PendingLookup&). Move-only. Destroying it
+/// before Wait() returns abandons the lookup.
+class PendingLookup {
+   public:
+    PendingLookup() noexcept;
+    ~PendingLookup() noexcept;
+
+    PendingLookup(const PendingLookup&) = delete;
+    PendingLookup& operator=(const PendingLookup&) = delete;
+    PendingLookup(PendingLookup&& other) noexcept;
+    PendingLookup& operator=(PendingLookup&& other) noexcept;
+
+    /// False once Wait() has returned anything but a timeout.
+    bool Available() const;
+
+    /// Blocks until the row arrives.
+    Result Wait(LookupResult& out);
+
+    /// Blocks for at most `timeout_ms`. On REQUEST_TIME_OUT the lookup keeps running, and
+    /// Wait() may be called again.
+    Result Wait(LookupResult& out, int64_t timeout_ms);
+
+   private:
+    friend class Lookuper;
+    explicit PendingLookup(ffi::PendingLookup* pending) noexcept;
+    // A negative timeout_ms waits without limit.
+    Result DoWait(LookupResult& out, int64_t timeout_ms);
+    void Destroy() noexcept;
+    ffi::PendingLookup* pending_{nullptr};
+};
+
+/// A prefix lookup started by PrefixLookuper::PrefixLookup(prefix_row, PendingPrefixLookup&).
+/// Behaves like PendingLookup.
+class PendingPrefixLookup {
+   public:
+    PendingPrefixLookup() noexcept;
+    ~PendingPrefixLookup() noexcept;
+
+    PendingPrefixLookup(const PendingPrefixLookup&) = delete;
+    PendingPrefixLookup& operator=(const PendingPrefixLookup&) = delete;
+    PendingPrefixLookup(PendingPrefixLookup&& other) noexcept;
+    PendingPrefixLookup& operator=(PendingPrefixLookup&& other) noexcept;
+
+    /// False once Wait() has returned anything but a timeout.
+    bool Available() const;
+
+    /// Blocks until the rows arrive.
+    Result Wait(PrefixLookupResult& out);
+
+    /// Blocks for at most `timeout_ms`, like PendingLookup::Wait.
+    Result Wait(PrefixLookupResult& out, int64_t timeout_ms);
+
+   private:
+    friend class PrefixLookuper;
+    explicit PendingPrefixLookup(ffi::PendingPrefixLookup* pending) noexcept;
+    // A negative timeout_ms waits without limit.
+    Result DoWait(PrefixLookupResult& out, int64_t timeout_ms);
+    void Destroy() noexcept;
+    ffi::PendingPrefixLookup* pending_{nullptr};
+};
+
 class Lookuper {
    public:
     Lookuper() noexcept;
@@ -2084,6 +2153,10 @@ class Lookuper {
     /// arrives. Thread-safe: threads may share one Lookuper, and their concurrent lookups
     /// go out in the same batches.
     Result Lookup(const GenericRow& pk_row, LookupResult& out) const;
+
+    /// Starts the lookup without blocking; `out` waits for its row. Lookups started this way
+    /// share batches too, so one thread can keep many in flight.
+    Result Lookup(const GenericRow& pk_row, PendingLookup& out) const;
 
    private:
     friend class Table;
@@ -2109,6 +2182,9 @@ class PrefixLookuper {
     /// Looks up all rows matching the prefix columns set on `prefix_row`, blocking until the
     /// result arrives. Thread-safe, like Lookuper::Lookup.
     Result PrefixLookup(const GenericRow& prefix_row, PrefixLookupResult& out) const;
+
+    /// Starts the lookup without blocking, like Lookuper::Lookup(pk_row, PendingLookup&).
+    Result PrefixLookup(const GenericRow& prefix_row, PendingPrefixLookup& out) const;
 
    private:
     friend class Table;

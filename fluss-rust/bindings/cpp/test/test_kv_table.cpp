@@ -2065,3 +2065,146 @@ TEST_F(KvTableTest, AllSupportedDatatypes) {
 
     ASSERT_OK(adm.DropTable(table_path, false));
 }
+
+namespace {
+
+// Ids 0..63, each with sequence numbers 0 and 1, bucketed by id: the full key
+// (id, seq) serves a Lookuper and the prefix (id) a PrefixLookuper.
+void CreateSequenceTable(fluss::Admin& adm, fluss::Connection& conn, const fluss::TablePath& path) {
+    auto schema = fluss::Schema::NewBuilder()
+                      .AddColumn("id", DataType::Int())
+                      .AddColumn("seq", DataType::BigInt())
+                      .AddColumn("name", DataType::String())
+                      .SetPrimaryKeys({"id", "seq"})
+                      .Build();
+    auto table_descriptor = fluss::TableDescriptor::NewBuilder()
+                                .SetSchema(schema)
+                                .SetBucketCount(3)
+                                .SetBucketKeys({"id"})
+                                .SetProperty("table.replication.factor", "1")
+                                .Build();
+    fluss_test::CreateTable(adm, path, table_descriptor);
+
+    fluss::Table table;
+    ASSERT_OK(conn.GetTable(path, table));
+    fluss::UpsertWriter upsert_writer;
+    ASSERT_OK(table.NewUpsert().CreateWriter(upsert_writer));
+    for (int32_t id = 0; id < 64; ++id) {
+        for (int64_t seq = 0; seq < 2; ++seq) {
+            fluss::GenericRow row(3);
+            row.SetInt32(0, id);
+            row.SetInt64(1, seq);
+            row.SetString(2, std::to_string(id) + "-" + std::to_string(seq));
+            ASSERT_OK(upsert_writer.Upsert(row));
+        }
+    }
+    ASSERT_OK(upsert_writer.Flush());
+}
+
+fluss::GenericRow Key(int32_t id, int64_t seq) {
+    fluss::GenericRow row(3);
+    row.SetInt32(0, id);
+    row.SetInt64(1, seq);
+    return row;
+}
+
+fluss::GenericRow Prefix(int32_t id) {
+    fluss::GenericRow row(3);
+    row.SetInt32(0, id);
+    return row;
+}
+
+// A connection whose lookups each wait `batch_timeout_ms` for their batch to fill,
+// so a lookup is still running when a shorter timeout passes.
+void ConnectSlowLookups(fluss::Connection& out, uint64_t batch_timeout_ms) {
+    fluss::Configuration config;
+    config.bootstrap_servers = fluss_test::FlussTestEnvironment::Instance()->GetBootstrapServers();
+    config.lookup_batch_timeout_ms = batch_timeout_ms;
+    ASSERT_OK(fluss::Connection::Create(config, out));
+}
+
+}  // namespace
+
+TEST_F(KvTableTest, OneThreadKeepsManyLookupsInFlight) {
+    fluss::TablePath path("fluss", "test_pending_lookups_cpp");
+    CreateSequenceTable(admin(), connection(), path);
+    fluss::Table table;
+    ASSERT_OK(connection().GetTable(path, table));
+    fluss::Lookuper lookuper;
+    ASSERT_OK(table.NewLookup().CreateLookuper(lookuper));
+    fluss::PrefixLookuper prefix_lookuper;
+    ASSERT_OK(table.NewPrefixLookup({"id"}, prefix_lookuper));
+
+    // The first lookups also fetch metadata.
+    fluss::LookupResult first;
+    ASSERT_OK(lookuper.Lookup(Key(0, 0), first));
+    fluss::PrefixLookupResult first_rows;
+    ASSERT_OK(prefix_lookuper.PrefixLookup(Prefix(0), first_rows));
+
+    // One at a time, these 192 lookups take ~19 s, since each waits for a batch.
+    constexpr int32_t kKeys = 96;
+    std::vector<fluss::PendingLookup> pending(kKeys);
+    std::vector<fluss::PendingPrefixLookup> pending_rows(kKeys);
+    auto started = std::chrono::steady_clock::now();
+    for (int32_t id = 0; id < kKeys; ++id) {
+        ASSERT_OK(lookuper.Lookup(Key(id, 1), pending[id]));
+        ASSERT_OK(prefix_lookuper.PrefixLookup(Prefix(id), pending_rows[id]));
+    }
+    for (int32_t id = 0; id < kKeys; ++id) {
+        fluss::LookupResult result;
+        ASSERT_OK(pending[id].Wait(result));
+        EXPECT_FALSE(pending[id].Available());
+        if (id < 64) {
+            ASSERT_TRUE(result.Found()) << "id=" << id;
+            EXPECT_EQ(result.GetString("name"), std::to_string(id) + "-1");
+        } else {
+            EXPECT_FALSE(result.Found()) << "id=" << id;
+        }
+        fluss::PrefixLookupResult rows;
+        ASSERT_OK(pending_rows[id].Wait(rows));
+        EXPECT_EQ(rows.Size(), id < 64 ? 2u : 0u) << "id=" << id;
+    }
+    EXPECT_LT(std::chrono::steady_clock::now() - started, std::chrono::seconds(5));
+
+    // A lookup that was waited for is used up.
+    fluss::LookupResult again;
+    EXPECT_FALSE(pending[0].Wait(again).Ok());
+
+    ASSERT_OK(admin().DropTable(path, false));
+}
+
+TEST_F(KvTableTest, WaitingForALookupWithATimeout) {
+    fluss::TablePath path("fluss", "test_lookup_wait_timeout_cpp");
+    CreateSequenceTable(admin(), connection(), path);
+
+    // Each lookup through this connection takes about 2 s.
+    fluss::Connection slow;
+    ConnectSlowLookups(slow, 2000);
+    fluss::Table table;
+    ASSERT_OK(slow.GetTable(path, table));
+    fluss::Lookuper lookuper;
+    ASSERT_OK(table.NewLookup().CreateLookuper(lookuper));
+    fluss::PrefixLookuper prefix_lookuper;
+    ASSERT_OK(table.NewPrefixLookup({"id"}, prefix_lookuper));
+
+    // A wait that times out leaves the lookup running, to be waited for again.
+    fluss::PendingLookup pending;
+    ASSERT_OK(lookuper.Lookup(Key(1, 0), pending));
+    fluss::LookupResult result;
+    auto timed_out = pending.Wait(result, 100);
+    EXPECT_EQ(timed_out.error_code, fluss::ErrorCode::REQUEST_TIME_OUT);
+    EXPECT_TRUE(timed_out.IsRetriable());
+    ASSERT_TRUE(pending.Available());
+    ASSERT_OK(pending.Wait(result));
+    EXPECT_EQ(result.GetString("name"), "1-0");
+
+    fluss::PendingPrefixLookup pending_rows;
+    ASSERT_OK(prefix_lookuper.PrefixLookup(Prefix(1), pending_rows));
+    fluss::PrefixLookupResult rows;
+    EXPECT_EQ(pending_rows.Wait(rows, 100).error_code, fluss::ErrorCode::REQUEST_TIME_OUT);
+    ASSERT_TRUE(pending_rows.Available());
+    ASSERT_OK(pending_rows.Wait(rows));
+    EXPECT_EQ(rows.Size(), 2u);
+
+    ASSERT_OK(admin().DropTable(path, false));
+}
