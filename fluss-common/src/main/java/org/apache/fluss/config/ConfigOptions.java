@@ -656,6 +656,89 @@ public class ConfigOptions {
                                     + "from 'security.sasl.plain.credentials' when that credential map is set, "
                                     + "and can also be configured directly for compatibility.");
 
+    // ------------------------------------------------------------------------
+    //  Server-side TLS (transport encryption + mTLS) options
+    // ------------------------------------------------------------------------
+
+    public static final ConfigOption<List<String>> SERVER_SSL_ENABLED_LISTENERS =
+            key("security.ssl.enabled.listeners")
+                    .stringType()
+                    .asList()
+                    .noDefaultValue()
+                    .withDescription(
+                            "Listener names with TLS enabled, e.g. `CLIENT,INTERNAL`; others "
+                                    + "accept plaintext. Requires `security.ssl.keystore.path`. A "
+                                    + "listener whose `security.protocol.map` entry is `mTLS` must "
+                                    + "be listed here, since it authenticates by certificate. Names "
+                                    + "match exactly: spell and case them as in `bind.listeners` "
+                                    + "and `security.protocol.map`, or no listener is selected.");
+
+    public static final ConfigOption<List<String>> SERVER_SSL_ENABLED_PROTOCOLS =
+            key("security.ssl.enabled.protocols")
+                    .stringType()
+                    .asList()
+                    .defaultValues("TLSv1.2", "TLSv1.3")
+                    .withDescription(
+                            "TLS protocols enabled for incoming connections. `TLSv1.2` is kept "
+                                    + "by default for JDK 8 builds older than 8u261.");
+
+    public static final ConfigOption<List<String>> SERVER_SSL_CIPHER_SUITES =
+            key("security.ssl.cipher.suites")
+                    .stringType()
+                    .asList()
+                    .noDefaultValue()
+                    .withDescription(
+                            "Cipher suites enabled for TLS connections. Empty uses the provider "
+                                    + "defaults.");
+
+    public static final ConfigOption<String> SERVER_SSL_KEYSTORE_PATH =
+            key("security.ssl.keystore.path")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "Keystore file with the server certificate and key. Required with "
+                                    + "`security.ssl.enabled.listeners`.");
+
+    public static final ConfigOption<Password> SERVER_SSL_KEYSTORE_PASSWORD =
+            key("security.ssl.keystore.password")
+                    .passwordType()
+                    .noDefaultValue()
+                    .withDescription("The password to access the server keystore.");
+
+    public static final ConfigOption<String> SERVER_SSL_KEYSTORE_TYPE =
+            key("security.ssl.keystore.type")
+                    .stringType()
+                    .defaultValue("JKS")
+                    .withDescription("Format of the server keystore: `JKS` or `PKCS12`.");
+
+    public static final ConfigOption<Password> SERVER_SSL_KEY_PASSWORD =
+            key("security.ssl.key.password")
+                    .passwordType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "Password of the server private key. Defaults to "
+                                    + "`security.ssl.keystore.password`.");
+
+    public static final ConfigOption<String> SERVER_SSL_TRUSTSTORE_PATH =
+            key("security.ssl.truststore.path")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "Truststore file holding the certificates the server trusts. Required "
+                                    + "for `mTLS` listeners, to validate client certificates.");
+
+    public static final ConfigOption<Password> SERVER_SSL_TRUSTSTORE_PASSWORD =
+            key("security.ssl.truststore.password")
+                    .passwordType()
+                    .noDefaultValue()
+                    .withDescription("The password to access the server truststore.");
+
+    public static final ConfigOption<String> SERVER_SSL_TRUSTSTORE_TYPE =
+            key("security.ssl.truststore.type")
+                    .stringType()
+                    .defaultValue("JKS")
+                    .withDescription("Format of the server truststore: `JKS` or `PKCS12`.");
+
     public static final ConfigOption<Integer> TABLET_SERVER_ID =
             key("tablet-server.id")
                     .intType()
@@ -1508,6 +1591,87 @@ public class ConfigOptions {
                                     + "This is useful for standalone tools or scripts that run outside "
                                     + "the server JVM but still need to load authentication plugins "
                                     + "shipped in plugins/.");
+
+    // ------------------------------------------------------------------------
+    //  Client-side TLS (transport encryption + mTLS) options
+    // ------------------------------------------------------------------------
+
+    public static final ConfigOption<Boolean> CLIENT_SSL_ENABLED =
+            key("client.security.ssl.enabled")
+                    .booleanType()
+                    .defaultValue(false)
+                    .withDescription(
+                            "Whether the client connects over TLS. Must match the listener it "
+                                    + "connects to (`security.ssl.enabled.listeners`).");
+
+    public static final ConfigOption<List<String>> CLIENT_SSL_ENABLED_PROTOCOLS =
+            key("client.security.ssl.enabled.protocols")
+                    .stringType()
+                    .asList()
+                    .defaultValues("TLSv1.2", "TLSv1.3")
+                    .withDescription("TLS protocols enabled for client connections.");
+
+    public static final ConfigOption<List<String>> CLIENT_SSL_CIPHER_SUITES =
+            key("client.security.ssl.cipher.suites")
+                    .stringType()
+                    .asList()
+                    .defaultValues()
+                    .withDescription("Cipher suites enabled for client connections.");
+
+    public static final ConfigOption<String> CLIENT_SSL_TRUSTSTORE_PATH =
+            key("client.security.ssl.truststore.path")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "Truststore file holding the certificates the client trusts. If "
+                                    + "unset, the JVM default truststore is used.");
+
+    public static final ConfigOption<String> CLIENT_SSL_TRUSTSTORE_PASSWORD =
+            key("client.security.ssl.truststore.password")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription("The password to access the client truststore.");
+
+    public static final ConfigOption<String> CLIENT_SSL_TRUSTSTORE_TYPE =
+            key("client.security.ssl.truststore.type")
+                    .stringType()
+                    .defaultValue("JKS")
+                    .withDescription("Format of the client truststore: `JKS` or `PKCS12`.");
+
+    public static final ConfigOption<String> CLIENT_SSL_KEYSTORE_PATH =
+            key("client.security.ssl.keystore.path")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription("Keystore file with the client certificate and key.");
+
+    public static final ConfigOption<String> CLIENT_SSL_KEYSTORE_PASSWORD =
+            key("client.security.ssl.keystore.password")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription("The password to access the client keystore.");
+
+    public static final ConfigOption<String> CLIENT_SSL_KEYSTORE_TYPE =
+            key("client.security.ssl.keystore.type")
+                    .stringType()
+                    .defaultValue("JKS")
+                    .withDescription("Format of the client keystore: `JKS` or `PKCS12`.");
+
+    public static final ConfigOption<String> CLIENT_SSL_KEY_PASSWORD =
+            key("client.security.ssl.key.password")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "Password of the client private key. Defaults to "
+                                    + "`client.security.ssl.keystore.password`.");
+
+    public static final ConfigOption<String> CLIENT_SSL_ENDPOINT_IDENTIFICATION_ALGORITHM =
+            key("client.security.ssl.endpoint.identification.algorithm")
+                    .stringType()
+                    .defaultValue("https")
+                    .withDescription(
+                            "Algorithm verifying the server hostname against its certificate: "
+                                    + "`https` or `ldaps`. Empty disables the check, which is not "
+                                    + "recommended in production.");
 
     public static final ConfigOption<MemorySize> CLIENT_SCANNER_LOG_FETCH_MAX_BYTES =
             key("client.scanner.log.fetch.max-bytes")
