@@ -31,6 +31,10 @@ import org.junit.jupiter.params.provider.ValueSource;
 
 import java.time.Duration;
 import java.util.Collections;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 
 import static org.apache.fluss.record.TestData.DATA1_TABLE_ID;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_INFO;
@@ -167,6 +171,45 @@ class LogScannerTest {
                     .hasMessage(
                             "The table is a partitioned table, please use \"%s\" to subscribe a partitioned bucket instead.",
                             partitionedMethod);
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void testCompletedBoundedScanDoesNotWaitForPollTimeout(boolean arrow) throws Exception {
+        try (RemoteFileDownloader downloader = new RemoteFileDownloader(1);
+                LogScannerImpl scanner = createScanner(downloader)) {
+            TableBucket bucket = new TableBucket(DATA1_TABLE_ID, 0);
+            scanner.subscribeBounded(0, 0L, 0L);
+            if (arrow) {
+                try (ArrowScanRecords completion = scanner.pollRecordBatch(Duration.ZERO)) {
+                    assertThat(completion.finishedBuckets()).containsExactly(bucket);
+                }
+            } else {
+                assertThat(scanner.poll(Duration.ZERO).finishedBuckets()).containsExactly(bucket);
+            }
+
+            ExecutorService executor = Executors.newSingleThreadExecutor();
+            try {
+                if (arrow) {
+                    Future<Boolean> future =
+                            executor.submit(
+                                    () -> {
+                                        try (ArrowScanRecords records =
+                                                scanner.pollRecordBatch(Duration.ofMinutes(1))) {
+                                            return records.hasProgress();
+                                        }
+                                    });
+                    assertThat(future.get(3, TimeUnit.SECONDS)).isFalse();
+                } else {
+                    Future<ScanRecords> future =
+                            executor.submit(() -> scanner.poll(Duration.ofMinutes(1)));
+                    assertThat(future.get(3, TimeUnit.SECONDS).hasProgress()).isFalse();
+                }
+            } finally {
+                scanner.wakeup();
+                executor.shutdownNow();
+            }
         }
     }
 

@@ -191,6 +191,15 @@ public class LogScannerStatus {
         return finishedBuckets;
     }
 
+    synchronized boolean hasActiveSubscriptions() {
+        for (BucketScanStatus bucketScanStatus : bucketStatusMap.bucketStatusMap().values()) {
+            if (!bucketScanStatus.hasReachedStoppingOffset()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     private BucketScanStatus bucketStatus(TableBucket tableBucket) {
         return bucketStatusMap.statusValue(tableBucket);
     }

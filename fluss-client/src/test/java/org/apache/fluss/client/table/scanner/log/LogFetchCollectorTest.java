@@ -22,6 +22,7 @@ import org.apache.fluss.client.metadata.TestingMetadataUpdater;
 import org.apache.fluss.client.table.scanner.ScanRecord;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.exception.UnsupportedBoundedEarliestException;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.record.ArrowBatchData;
@@ -116,7 +117,7 @@ public class LogFetchCollectorTest {
                         : logFetchCollector;
 
         assertThatThrownBy(() -> collector.collectFetch(logFetchBuffer))
-                .isInstanceOf(UnsupportedOperationException.class)
+                .isInstanceOf(UnsupportedBoundedEarliestException.class)
                 .hasMessageContaining("resolved_earliest_offset");
         assertThat(logFetchBuffer.peek()).isNull();
         assertThat(logScannerStatus.getBucketOffset(tb)).isEqualTo(EARLIEST_OFFSET);
