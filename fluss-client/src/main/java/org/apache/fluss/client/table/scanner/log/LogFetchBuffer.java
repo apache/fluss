@@ -308,6 +308,26 @@ public class LogFetchBuffer implements AutoCloseable {
         }
     }
 
+    /**
+     * Removes the expected completed fetch from the head of the buffer without propagating
+     * asynchronous buffer failures.
+     *
+     * <p>This is used only for cleanup after the caller has already obtained the fetch from {@link
+     * #peek()} and decided to discard it. Any asynchronous failure remains recorded in the buffer
+     * and will be propagated by the next normal buffer operation.
+     */
+    boolean removeCompletedFetch(CompletedFetch expectedFetch) {
+        return inLock(
+                lock,
+                () -> {
+                    if (completedFetches.peek() != expectedFetch) {
+                        return false;
+                    }
+                    completedFetches.poll();
+                    return true;
+                });
+    }
+
     @Override
     public void close() throws Exception {
         inLock(lock, () -> retainAll(Collections.emptySet()));

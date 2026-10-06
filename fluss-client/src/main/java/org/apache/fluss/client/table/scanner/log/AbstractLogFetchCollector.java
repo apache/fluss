@@ -23,6 +23,7 @@ import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.AuthorizationException;
 import org.apache.fluss.exception.FetchException;
+import org.apache.fluss.exception.UnsupportedBoundedEarliestException;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.rpc.protocol.ApiError;
@@ -95,16 +96,19 @@ abstract class AbstractLogFetchCollector<T, R> {
                             // when the failure policy says this response must not be retried.
                             if (result.shouldPropagateImmediately(e)
                                     && result.shouldDiscardFailedFetch(e, completedFetch)) {
-                                CompletedFetch removed = logFetchBuffer.poll();
-                                checkState(
-                                        removed == completedFetch,
-                                        "Expected failed fetch %s at the head of the buffer, but found %s.",
-                                        completedFetch,
-                                        removed);
                                 try {
-                                    completedFetch.drain();
+                                    checkState(
+                                            logFetchBuffer.removeCompletedFetch(completedFetch),
+                                            "Expected failed fetch %s at the head of the buffer.",
+                                            completedFetch);
                                 } catch (RuntimeException cleanupException) {
                                     e.addSuppressed(cleanupException);
+                                } finally {
+                                    try {
+                                        completedFetch.drain();
+                                    } catch (RuntimeException cleanupException) {
+                                        e.addSuppressed(cleanupException);
+                                    }
                                 }
                             }
                             throw e;
@@ -383,15 +387,14 @@ abstract class AbstractLogFetchCollector<T, R> {
         private boolean hasBoundedAccumulatedResult;
 
         private boolean hasDeliverableResult() {
-            return !fetched.isEmpty()
-                    || !consumedUpToOffsets.isEmpty()
-                    || logScannerStatus.hasPendingFinishedBuckets();
+            return !fetched.isEmpty() || !consumedUpToOffsets.isEmpty();
         }
 
         private boolean shouldPropagateImmediately(Exception exception) {
             if (exception instanceof FetchException) {
-                // Preserve the existing FetchException behavior: return any already
-                // accumulated records, progress, or bounded completion first.
+                // Preserve the existing FetchException behavior: return records or offset progress
+                // already consumed by this poll before propagating the error. A completion that was
+                // already pending before this poll must not delay an unrelated bucket's failure.
                 return !hasDeliverableResult();
             }
 
@@ -432,14 +435,6 @@ abstract class AbstractLogFetchCollector<T, R> {
             }
             recordsRemaining -= recordCount(records);
             hasBoundedAccumulatedResult |= bounded;
-        }
-    }
-
-    private static final class UnsupportedBoundedEarliestException
-            extends UnsupportedOperationException {
-
-        private UnsupportedBoundedEarliestException(String message) {
-            super(message);
         }
     }
 }

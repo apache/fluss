@@ -18,6 +18,7 @@
 package org.apache.fluss.client.table.scanner.log;
 
 import org.apache.fluss.annotation.PublicEvolving;
+import org.apache.fluss.exception.UnsupportedBoundedEarliestException;
 
 import java.time.Duration;
 
@@ -104,10 +105,10 @@ public interface LogScanner extends AutoCloseable {
      * <p>The stopping offset is exclusive, so the subscribed range is {@code [startingOffset,
      * stoppingOffset)}. The stopping offset must be non-negative.
      *
-     * <p>When {@link #EARLIEST_OFFSET} needs to be resolved by the server for a non-empty bounded
-     * range, the server must report the physical offset to which EARLIEST was resolved. If the
-     * connected server does not support this capability, polling fails with {@link
-     * UnsupportedOperationException}.
+     * <p>When scanning from{@link #EARLIEST_OFFSET}, the server must report the resolved starting
+     * offset unless the range can be completed locally, such as when the stopping offset is zero.
+     * If the connected server does not support this capability, a subsequent poll fails with {@link
+     * UnsupportedBoundedEarliestException}.
      *
      * <p>The starting offset must be non-negative or {@link #EARLIEST_OFFSET}. A resolved starting
      * offset at or beyond the stopping offset represents an empty range. A stopping offset of zero
@@ -117,6 +118,10 @@ public interface LogScanner extends AutoCloseable {
      * ScanRecords#finishedBuckets()}. The final result can contain records that must be consumed
      * before completing the read. The exclusive boundary takes precedence over keeping
      * UPDATE_BEFORE and UPDATE_AFTER together.
+     *
+     * <p>Once all currently subscribed buckets are bounded and have completed, subsequent polls
+     * return immediately without waiting for the requested timeout. A later subscription may make
+     * the scanner active again.
      *
      * <p>Please use {@link #subscribeBounded(long, int, long, long)} to subscribe a partitioned
      * table.
@@ -140,10 +145,10 @@ public interface LogScanner extends AutoCloseable {
      * <p>The stopping offset is exclusive, so the subscribed range is {@code [startingOffset,
      * stoppingOffset)}. The stopping offset must be non-negative.
      *
-     * <p>When {@link #EARLIEST_OFFSET} needs to be resolved by the server for a non-empty bounded
-     * range, the server must report the physical offset to which EARLIEST was resolved. If the
-     * connected server does not support this capability, polling fails with {@link
-     * UnsupportedOperationException}.
+     * <p>When scanning from{@link #EARLIEST_OFFSET}, the server must report the resolved starting
+     * offset unless the range can be completed locally, such as when the stopping offset is zero.
+     * If the connected server does not support this capability, a subsequent poll fails with {@link
+     * UnsupportedBoundedEarliestException}.
      *
      * <p>The starting offset must be non-negative or {@link #EARLIEST_OFFSET}. A resolved starting
      * offset at or beyond the stopping offset represents an empty range. A stopping offset of zero
@@ -153,6 +158,10 @@ public interface LogScanner extends AutoCloseable {
      * ScanRecords#finishedBuckets()}. The final result can contain records that must be consumed
      * before completing the read. The exclusive boundary takes precedence over keeping
      * UPDATE_BEFORE and UPDATE_AFTER together.
+     *
+     * <p>Once all currently subscribed buckets are bounded and have completed, subsequent polls
+     * return immediately without waiting for the requested timeout. A later subscription may make
+     * the scanner active again.
      *
      * <p>Please use {@link #subscribeBounded(int, long, long)} to subscribe a non-partitioned
      * table.

@@ -456,6 +456,17 @@ public class LogFetcher implements Closeable {
                                             : null,
                                     respForBucket.getBucketId());
 
+                    FetchLogResultForBucket fetchResultForBucket =
+                            getFetchLogResultForBucket(tb, tablePathForResp, respForBucket);
+
+                    // If the fetch failed, handle metadata-related side effects first.
+                    // The error response is still buffered below so that the collector
+                    // can deliver the exception with the normal poll semantics.
+                    if (fetchResultForBucket.getErrorCode() != Errors.NONE.code()) {
+                        ApiError error = ApiError.fromErrorMessage(respForBucket);
+                        handleFetchLogExceptionForBucket(tb, destination, error);
+                    }
+
                     Long requestedFetchOffset = fetchRequestContext.requestedOffsets.get(tb);
                     Long currentFetchOffset = logScannerStatus.getBucketOffset(tb);
 
@@ -470,17 +481,6 @@ public class LogFetcher implements Closeable {
                                 requestedFetchOffset,
                                 currentFetchOffset);
                         continue;
-                    }
-
-                    FetchLogResultForBucket fetchResultForBucket =
-                            getFetchLogResultForBucket(tb, tablePathForResp, respForBucket);
-
-                    // If the fetch failed, handle metadata-related side effects first.
-                    // The error response is still buffered below so that the collector
-                    // can deliver the exception with the normal poll semantics.
-                    if (fetchResultForBucket.getErrorCode() != Errors.NONE.code()) {
-                        ApiError error = ApiError.fromErrorMessage(respForBucket);
-                        handleFetchLogExceptionForBucket(tb, destination, error);
                     }
 
                     long stoppingOffset = logScannerStatus.getBucketStoppingOffset(tb);

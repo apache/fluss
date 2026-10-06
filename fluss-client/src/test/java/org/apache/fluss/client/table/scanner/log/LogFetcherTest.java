@@ -154,6 +154,34 @@ public class LogFetcherTest {
     }
 
     @Test
+    void testStaleLeaderErrorInvalidatesMetadataAfterResubscription() {
+        IOUtils.closeQuietly(logFetcher);
+        DelayedTabletServerGateway delayedGateway = new DelayedTabletServerGateway();
+        metadataUpdater = initializeMetadataUpdater(delayedGateway);
+        logFetcher = createLogFetcher(new Configuration());
+        LogScannerStatus status = logFetcher.getLogScannerStatus();
+        status.assignScanBuckets(Collections.singletonMap(tb1, 10L));
+
+        Map<Integer, FetchLogRequest> requestMap =
+                logFetcher.prepareFetchLogRequests(Collections.singletonList(tb1));
+        assertThat(getFetchLogData(requestMap.get(1)).get(tb1).getFetchOffset()).isEqualTo(10L);
+        logFetcher.sendFetchRequest(1, requestMap.get(1));
+
+        // Change the subscription while the request for offset 10 is still in flight.
+        status.assignScanBuckets(Collections.singletonMap(tb1, 100L));
+        assertThat(delayedGateway.getRequestCount()).isEqualTo(1);
+        assertThat(metadataUpdater.getBucketLocation(tb1)).isPresent();
+        assertThat(logFetcher.getCompletedFetchesSize()).isZero();
+
+        // The stale NOT_LEADER_OR_FOLLOWER response must still invalidate the cached route.
+        delayedGateway.completeResponse();
+
+        assertThat(metadataUpdater.getBucketLocation(tb1)).isNotPresent();
+        assertThat(logFetcher.getCompletedFetchesSize()).isZero();
+        assertThat(status.getBucketOffset(tb1)).isEqualTo(100L);
+    }
+
+    @Test
     void testUnregisterTableDiscardsBufferedFetches() {
         Map<Integer, FetchLogRequest> requestMap =
                 logFetcher.prepareFetchLogRequests(Collections.singletonList(tb1));

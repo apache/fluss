@@ -32,17 +32,21 @@ import org.apache.fluss.record.MemoryLogRecords;
 import org.apache.fluss.rpc.entity.FetchLogResultForBucket;
 import org.apache.fluss.rpc.protocol.ApiError;
 import org.apache.fluss.rpc.protocol.Errors;
+import org.apache.fluss.shaded.netty4.io.netty.buffer.ByteBuf;
+import org.apache.fluss.shaded.netty4.io.netty.buffer.Unpooled;
 
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicBoolean;
 
+import static org.apache.fluss.client.table.scanner.log.LogScanner.EARLIEST_OFFSET;
 import static org.apache.fluss.compression.ArrowCompressionInfo.DEFAULT_COMPRESSION;
 import static org.apache.fluss.record.LogRecordBatchFormat.NO_BATCH_SEQUENCE;
 import static org.apache.fluss.record.LogRecordBatchFormat.NO_WRITER_ID;
@@ -56,6 +60,7 @@ import static org.apache.fluss.record.TestData.TEST_SCHEMA_GETTER;
 import static org.apache.fluss.testutils.DataTestUtils.createBasicMemoryLogRecords;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.catchThrowable;
 
 /** Tests error delivery alongside progress and completion for both collector formats. */
 class LogFetchCollectorErrorTest {
@@ -92,19 +97,22 @@ class LogFetchCollectorErrorTest {
 
     @ParameterizedTest
     @ValueSource(booleans = {false, true})
-    void testCompletionDefersFetchErrorUntilNextPoll(boolean arrow) {
+    void testPendingCompletionDoesNotDeferFetchError(boolean arrow) {
         AbstractLogFetchCollector<?, ?> collector = collector(arrow);
+        // Completion exists before this poll starts.
         status.assignScanBucket(finishedBucket, 0L, 0L);
         CompletedFetch failed = addError(Errors.LOG_OFFSET_OUT_OF_RANGE_EXCEPTION);
-
+        assertThatThrownBy(() -> collector.collectFetch(buffer)).isInstanceOf(FetchException.class);
+        // The failed zero-byte response is discarded after immediate propagation.
+        assertThat(failed.isConsumed()).isTrue();
+        assertThat(buffer.peek()).isNull();
+        // Throwing the unrelated error must not consume the pending completion.
+        assertThat(status.hasPendingFinishedBuckets()).isTrue();
         ScanRecords result = collectProgressOnly(collector);
         assertThat(result.finishedBuckets()).containsExactly(finishedBucket);
         assertThat(result.isEmpty()).isTrue();
-        assertThat(buffer.peek()).isSameAs(failed);
-        assertThat(failed.isConsumed()).isFalse();
-        assertThatThrownBy(() -> collector.collectFetch(buffer)).isInstanceOf(FetchException.class);
-        assertThat(failed.isConsumed()).isTrue();
-        assertThat(buffer.peek()).isNull();
+        // Completion is one-shot.
+        assertThat(status.hasPendingFinishedBuckets()).isFalse();
         assertThat(collectProgressOnly(collector).hasProgress()).isFalse();
     }
 
@@ -128,15 +136,53 @@ class LogFetchCollectorErrorTest {
     }
 
     @ParameterizedTest
-    @CsvSource({"false, false", "false, true", "true, false", "true, true"})
-    void testRecordErrorDefersForProgressOrCompletion(boolean arrow, boolean completion) {
+    @ValueSource(booleans = {false, true})
+    void testPendingCompletionDoesNotDeferRecordError(boolean arrow) {
         AbstractLogFetchCollector<?, ?> collector = collector(arrow);
-        if (completion) {
-            status.assignScanBucket(finishedBucket, 0L, 0L);
-        } else {
-            status.assignScanBucket(finishedBucket, 0L, LogScanner.NO_STOPPING_OFFSET);
-            buffer.add(makeFetch(FetchLogResultForBucket.empty(finishedBucket, 10L, 10L)));
-        }
+        // The completion already exists before this poll starts.
+        status.assignScanBucket(finishedBucket, 0L, 0L);
+        status.assignScanBucket(errorBucket, 0L, LogScanner.NO_STOPPING_OFFSET);
+
+        FetchException failure = new FetchException("record decoding failed");
+        CompletedFetch failed =
+                new DefaultCompletedFetch(
+                        errorBucket,
+                        DATA1_TABLE_PATH,
+                        FetchLogResultForBucket.empty(errorBucket, 10L, -1L),
+                        readContext,
+                        status,
+                        true,
+                        0L,
+                        null) {
+                    @Override
+                    public List<ScanRecord> fetchRecords(int maxRecords) {
+                        throw failure;
+                    }
+
+                    @Override
+                    List<ArrowBatchData> fetchArrowBatches(int maxRecords) {
+                        throw failure;
+                    }
+                };
+        buffer.add(failed);
+        CompletedFetch queued = makeFetch(FetchLogResultForBucket.empty(errorBucket, 10L, -1L));
+        buffer.add(queued);
+        assertThatThrownBy(() -> collector.collectFetch(buffer)).isSameAs(failure);
+        // The unrelated completion must not delay the record decoding failure.
+        assertThat(status.hasPendingFinishedBuckets()).isTrue();
+        // A decoding failure remains attached to the in-flight fetch and must not
+        // dequeue the following response.
+        assertThat(buffer.nextInLineFetch()).isSameAs(failed);
+        assertThat(buffer.peek()).isSameAs(queued);
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void testRecordErrorIsDeferredAfterProgress(boolean arrow) {
+        AbstractLogFetchCollector<?, ?> collector = collector(arrow);
+        status.assignScanBucket(finishedBucket, 0L, LogScanner.NO_STOPPING_OFFSET);
+        // This fetch advances the scanner during this poll.
+        buffer.add(makeFetch(FetchLogResultForBucket.empty(finishedBucket, 10L, 10L)));
         status.assignScanBucket(errorBucket, 0L, LogScanner.NO_STOPPING_OFFSET);
         FetchException failure = new FetchException("record decoding failed");
         CompletedFetch failed =
@@ -162,19 +208,19 @@ class LogFetchCollectorErrorTest {
         buffer.add(failed);
         CompletedFetch queued = makeFetch(FetchLogResultForBucket.empty(errorBucket, 10L, -1L));
         buffer.add(queued);
-
+        // The first poll has already advanced another bucket, so that progress
+        // must be delivered before propagating the decoding failure.
         ScanRecords result = collectProgressOnly(collector);
         assertThat(result.hasProgress()).isTrue();
         assertThat(result.isEmpty()).isTrue();
-        if (completion) {
-            assertThat(result.finishedBuckets()).containsExactly(finishedBucket);
-        } else {
-            assertThat(result.consumedUpToOffset(finishedBucket)).isEqualTo(10L);
-        }
+        assertThat(result.consumedUpToOffset(finishedBucket)).isEqualTo(10L);
+        assertThat(result.finishedBuckets()).isEmpty();
         assertThat(buffer.nextInLineFetch()).isSameAs(failed);
         assertThat(buffer.peek()).isSameAs(queued);
+        // With no newly accumulated result, the decoding failure is now propagated.
         assertThatThrownBy(() -> collector.collectFetch(buffer)).isSameAs(failure);
-        // Record errors stay attached to the in-flight fetch; do not dequeue another response.
+        // Record errors stay attached to the in-flight fetch; the next queued
+        // response must not be removed accidentally.
         assertThat(buffer.nextInLineFetch()).isSameAs(failed);
         assertThat(buffer.peek()).isSameAs(queued);
     }
@@ -343,6 +389,102 @@ class LogFetchCollectorErrorTest {
                 .hasMessageContaining("fetching offset 123");
     }
 
+    @Test
+    void testAsyncBufferFailureDoesNotInterruptFailedFetchCleanup() throws Exception {
+        TableBucket failedBucket = new TableBucket(DATA1_TABLE_ID, 0);
+        TableBucket remoteBucket = new TableBucket(DATA1_TABLE_ID, 1);
+        // Bounded EARLIEST requires the server to report the resolved starting offset.
+        // The response below intentionally uses the old records(...) overload, so
+        // initialize() will fail with UnsupportedBoundedEarliestException.
+        status.assignScanBucket(failedBucket, EARLIEST_OFFSET, 100L);
+
+        RuntimeException remoteFailure = new RuntimeException("remote download failed");
+
+        InjectingFailureLogFetchBuffer testBuffer =
+                new InjectingFailureLogFetchBuffer(remoteBucket, remoteFailure);
+        ByteBuf parsedByteBuf = Unpooled.buffer(1);
+        assertThat(parsedByteBuf.refCnt()).isEqualTo(1);
+
+        FetchLogResultForBucket result =
+                FetchLogResultForBucket.records(failedBucket, data1Records(), 100L, -1L, -1L);
+        CompletedFetch failedFetch =
+                new DefaultCompletedFetch(
+                        failedBucket,
+                        DATA1_TABLE_PATH,
+                        result,
+                        readContext,
+                        status,
+                        true,
+                        EARLIEST_OFFSET,
+                        parsedByteBuf);
+
+        testBuffer.add(failedFetch);
+        AbstractLogFetchCollector<?, ?> collector = collector(false);
+        // The initialization failure remains the primary failure even though an
+        // asynchronous remote-download failure is injected immediately before
+        // the failed fetch is removed from the buffer.
+        assertThatThrownBy(() -> collector.collectFetch(testBuffer))
+                .isInstanceOf(UnsupportedOperationException.class)
+                .hasMessageContaining("resolved_earliest_offset");
+
+        // The failed fetch must always be drained.
+        assertThat(failedFetch.isConsumed()).isTrue();
+
+        // DefaultCompletedFetch.drain() owns releasing the retained network buffer.
+        assertThat(parsedByteBuf.refCnt()).isZero();
+
+        // The failed fetch was removed rather than being left in the completed queue.
+        // bufferedBuckets() does not surface the pending asynchronous failure, so it
+        // can be used to inspect queue membership here.
+        assertThat(testBuffer.bufferedBuckets()).doesNotContain(failedBucket);
+
+        // The unrelated asynchronous failure was not consumed or lost by cleanup.
+        // It remains in the buffer and is propagated by the next normal operation.
+        assertThatThrownBy(testBuffer::peek)
+                .isInstanceOf(FetchException.class)
+                .hasRootCauseMessage("remote download failed");
+    }
+
+    @Test
+    void testFailedFetchCleanupExceptionIsSuppressed() throws Exception {
+        TableBucket failedBucket = new TableBucket(DATA1_TABLE_ID, 0);
+        status.assignScanBucket(failedBucket, EARLIEST_OFFSET, 100L);
+        RuntimeException cleanupFailure = new RuntimeException("cleanup failed");
+
+        FetchLogResultForBucket result =
+                FetchLogResultForBucket.records(failedBucket, data1Records(), 100L, -1L, -1L);
+
+        CompletedFetch failedFetch =
+                new DefaultCompletedFetch(
+                        failedBucket,
+                        DATA1_TABLE_PATH,
+                        result,
+                        readContext,
+                        status,
+                        true,
+                        EARLIEST_OFFSET,
+                        null) {
+                    @Override
+                    void drain() {
+                        super.drain();
+                        throw cleanupFailure;
+                    }
+                };
+
+        buffer.add(failedFetch);
+
+        AbstractLogFetchCollector<?, ?> collector = collector(false);
+        Throwable thrown = catchThrowable(() -> collector.collectFetch(buffer));
+        assertThat(thrown)
+                .isInstanceOf(UnsupportedOperationException.class)
+                .hasMessageContaining("resolved_earliest_offset");
+        assertThat(thrown.getSuppressed()).containsExactly(cleanupFailure);
+        // super.drain() ran before the synthetic cleanup failure.
+        assertThat(failedFetch.isConsumed()).isTrue();
+        // Removal happened before drain, so the failed response must not remain queued.
+        assertThat(buffer.peek()).isNull();
+    }
+
     private AbstractLogFetchCollector<?, ?> collector(boolean arrow) {
         TestingMetadataUpdater metadata =
                 new TestingMetadataUpdater(
@@ -409,5 +551,28 @@ class LogFetchCollectorErrorTest {
                 LogFormat.ARROW,
                 DEFAULT_COMPRESSION,
                 true);
+    }
+
+    private static final class InjectingFailureLogFetchBuffer extends LogFetchBuffer {
+        private final TableBucket remoteBucket;
+        private final RuntimeException remoteFailure;
+        private final AtomicBoolean failureInjected = new AtomicBoolean();
+
+        private InjectingFailureLogFetchBuffer(
+                TableBucket remoteBucket, RuntimeException remoteFailure) {
+            this.remoteBucket = remoteBucket;
+            this.remoteFailure = remoteFailure;
+        }
+
+        @Override
+        boolean removeCompletedFetch(CompletedFetch expectedFetch) {
+            if (failureInjected.compareAndSet(false, true)) {
+                // This is the same entry point used by the remote-download completion
+                // callback. Inject the failure after collector.peek() has succeeded but
+                // immediately before the failed response is removed.
+                tryComplete(remoteBucket, remoteFailure);
+            }
+            return super.removeCompletedFetch(expectedFetch);
+        }
     }
 }

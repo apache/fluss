@@ -198,6 +198,9 @@ public class LogScannerImpl extends AbstractLogScanner<ScanRecords> implements L
             do {
                 ArrowScanRecords scanRecords = pollForRecordBatches();
                 if (!scanRecords.hasProgress()) {
+                    if (!logScannerStatus.hasActiveSubscriptions()) {
+                        return scanRecords;
+                    }
                     try {
                         if (!logFetcher.awaitNotEmpty(startNanos + timeoutNanos)) {
                             return scanRecords;

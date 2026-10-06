@@ -222,4 +222,47 @@ public class LogScannerStatusTest {
         assertThat(scannerStatus.hasReachedStoppingOffset(TABLE_BUCKET)).isFalse();
         assertThat(scannerStatus.hasPendingFinishedBuckets()).isFalse();
     }
+
+    @Test
+    void testFinishedBoundedSubscriptionsAreNotActive() {
+        LogScannerStatus scannerStatus = new LogScannerStatus();
+        TableBucket first = new TableBucket(1L, 0);
+        TableBucket second = new TableBucket(1L, 1);
+
+        scannerStatus.assignScanBucket(first, 0L, 5L);
+        scannerStatus.assignScanBucket(second, 10L, 20L);
+        assertThat(scannerStatus.hasActiveSubscriptions()).isTrue();
+
+        scannerStatus.updateOffset(first, 5L);
+        assertThat(scannerStatus.hasActiveSubscriptions()).isTrue();
+
+        scannerStatus.updateOffset(second, 20L);
+        assertThat(scannerStatus.hasActiveSubscriptions()).isFalse();
+    }
+
+    @Test
+    void testUnboundedSubscriptionRemainsActiveAfterBoundedSubscriptionFinishes() {
+        LogScannerStatus scannerStatus = new LogScannerStatus();
+        TableBucket bounded = new TableBucket(1L, 0);
+        TableBucket unbounded = new TableBucket(1L, 1);
+
+        scannerStatus.assignScanBucket(bounded, 0L, 5L);
+        scannerStatus.assignScanBucket(unbounded, 0L, NO_STOPPING_OFFSET);
+        scannerStatus.updateOffset(bounded, 5L);
+
+        assertThat(scannerStatus.hasReachedStoppingOffset(bounded)).isTrue();
+        assertThat(scannerStatus.hasActiveSubscriptions()).isTrue();
+    }
+
+    @Test
+    void testResubscribeReactivatesFinishedBucket() {
+        LogScannerStatus scannerStatus = new LogScannerStatus();
+
+        scannerStatus.assignScanBucket(TABLE_BUCKET, 0L, 5L);
+        scannerStatus.updateOffset(TABLE_BUCKET, 5L);
+        assertThat(scannerStatus.hasActiveSubscriptions()).isFalse();
+
+        scannerStatus.assignScanBucket(TABLE_BUCKET, 5L, 10L);
+        assertThat(scannerStatus.hasActiveSubscriptions()).isTrue();
+    }
 }
