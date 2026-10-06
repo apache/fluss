@@ -535,14 +535,43 @@ Performs point lookups by primary key. Obtained from `TableLookup::CreateLookupe
 | Method                                                              |  Description                |
 |---------------------------------------------------------------------|-----------------------------|
 | `Lookup(const GenericRow& pk_row, LookupResult& out) const -> Result` | Lookup a row by primary key |
+| `Lookup(const GenericRow& pk_row, PendingLookup& out) const -> Result` | Start a lookup without blocking; `out` waits for its row |
+
+Each blocking lookup waits for its batch, up to `lookup_batch_timeout_ms`. To look up many keys from one thread, start them all, then wait for each:
+
+```cpp
+std::vector<fluss::PendingLookup> pending(keys.size());
+for (size_t i = 0; i < keys.size(); ++i) {
+    if (!lookuper.Lookup(keys[i], pending[i]).Ok()) {
+        // This lookup did not start.
+    }
+}
+for (auto& lookup : pending) {
+    fluss::LookupResult result;
+    if (lookup.Available() && lookup.Wait(result).Ok() && result.Found()) {
+        // Use result.
+    }
+}
+```
+
+## `PendingLookup`
+
+A lookup started by `Lookuper::Lookup(pk_row, PendingLookup&)`. Move-only. Destroying it before `Wait` returns abandons the lookup.
+
+| Method | Description |
+|---|---|
+| `Wait(LookupResult& out) -> Result` | Block until the row arrives |
+| `Wait(LookupResult& out, int64_t timeout_ms) -> Result` | Block for at most `timeout_ms`. After the retriable `REQUEST_TIME_OUT` the lookup keeps running, and `Wait` can be called again |
+| `Available() const -> bool` | Whether `Wait` can still be called |
 
 ## `PrefixLookuper`
 
-Performs prefix (bucket-key) lookups, returning all rows whose primary key starts with the given prefix. Obtained from `Table::NewPrefixLookup()`. Like a `Lookuper`, it can be shared by threads. See the [Prefix Lookup example](./example/prefix-lookup.md).
+Performs prefix (bucket-key) lookups, returning all rows whose primary key starts with the given prefix. Obtained from `Table::NewPrefixLookup()`. Like a `Lookuper`, it can be shared by threads, and it can start a lookup without blocking. `PendingPrefixLookup` has the same methods as `PendingLookup`. See the [Prefix Lookup example](./example/prefix-lookup.md).
 
 | Method                                                                                |  Description                                  |
 |---------------------------------------------------------------------------------------|-----------------------------------------------|
 | `PrefixLookup(const GenericRow& prefix_row, PrefixLookupResult& out) const -> Result` | Look up all rows matching the prefix columns  |
+| `PrefixLookup(const GenericRow& prefix_row, PendingPrefixLookup& out) const -> Result` | Start a lookup without blocking; `out` waits for its rows |
 
 ## `LogScanner`
 
