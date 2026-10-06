@@ -4,24 +4,21 @@ sidebar_position: 1
 slug: /
 ---
 
-import { useColorMode } from '@docusaurus/theme-common';
+import ThemedImage from '@site/src/components/ThemedImage';
 
 # What is Apache Fluss?
 
-Apache Fluss is an open-source, lakehouse-native streaming storage system for real-time analytics and AI. Applications can consume table changes, look up rows by primary key, and access historical data through lakehouse integrations.
+Apache Fluss (German for "river," pronounced `/flus/`) is an open-source, lakehouse-native streaming storage system for real-time analytics and AI. It lets applications consume table changes as streams, look up rows by primary key, and access historical data through lakehouse integrations.
 
-Fluss integrates with **Apache Flink** and **Apache Spark**, supports streaming reads and writes with sub-second latency, and uses columnar storage for projection and predicate pushdown. It offers two table types: append-only **Log Tables** and updatable **PrimaryKey Tables**.
+Fluss integrates with **Apache Flink** and **Apache Spark** and supports streaming reads and writes with sub-second latency. Its columnar storage enables projection and predicate pushdown. Data is organized into two table types: append-only **Log Tables** and updatable **PrimaryKey Tables**.
 
 Fluss also enables **Lakestream**, the shared streaming and lakehouse table foundation of the **Streamhouse** architecture. Learn how storage and independent compute engines fit together in [Streamhouse and Lakestream](concepts/streamhouse-and-lakestream.mdx).
 
-{(() => {
-  const { colorMode } = useColorMode();
-  return (
-    <img src={colorMode === 'dark' ? '/img/fluss.png' : '/img/fluss_light_mode.png'} alt="Apache Fluss architecture and lakehouse integrations" />
-  );
-})()}
-
-**Fluss (German: river, pronounced `/flus/`)** carries streaming data continuously into lakes, like a river 🌊
+<ThemedImage
+    alt="Apache Fluss overview with data sources, Gateway, read patterns, and lakehouse integrations"
+    light="fluss-overview-light.png"
+    dark="fluss-overview-dark.png"
+/>
 
 ## Use cases
 
