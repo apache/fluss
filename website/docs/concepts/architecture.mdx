@@ -34,10 +34,12 @@ This chapter explains how those components work together and what their responsi
 A Fluss cluster separates coordination from data serving. The **CoordinatorServer** manages metadata and placement, while **TabletServers** host table data and serve client requests. **ZooKeeper** provides shared metadata and coordination. Remote storage holds tiered log segments and key-value snapshots; an optional lakehouse integration maintains data in an open lake format.
 
 <ThemedImage
-    alt="Architecture"
-    light="architecture_light.png"
-    dark="architecture.png"
+    alt="Fluss architecture with CoordinatorServers, TabletServers, Gateway, and lake tiering"
+    light="fluss-architecture-light.png"
+    dark="fluss-architecture-dark.png"
 />
+
+<br />
 
 | Component | Responsibility |
 | --- | --- |
@@ -46,6 +48,7 @@ A Fluss cluster separates coordination from data serving. The **CoordinatorServe
 | ZooKeeper | Stores cluster metadata and supports server registration and coordinator leader election. |
 | Remote storage | Stores Fluss log segments and key-value snapshots outside individual TabletServers. |
 | Clients and connectors | Discover metadata, route requests, and expose table operations to applications and compute engines. |
+| Fluss Gateway | Provides a stateless HTTP/REST entry point for metadata, DDL, and schema-aware batch writes, using a native client to access the cluster. |
 | Lakehouse tiering service | Runs as a separate Flink job to maintain an open lakehouse representation of enabled tables. |
 
 The coordinator participates in metadata and administrative operations. Once a client has discovered the relevant servers, normal table reads and writes go directly to TabletServers. This separates the volume of data traffic from the coordination workload.
@@ -57,6 +60,12 @@ Fluss distributes a table through three related abstractions:
 - A **table** defines a schema, table type, and storage properties.
 - A **partition**, when configured, groups rows by partition column values, such as a date or region. Each partition has its own buckets.
 - A **bucket** is the unit of data distribution, log ordering, and replica assignment. A non-partitioned table has one set of buckets.
+
+<ThemedImage
+    alt="Layout of a partitioned primary key table, showing buckets, LogTablet segments, and KvTablet storage in RocksDB"
+    light="fluss-table-layout-light.png"
+    dark="fluss-table-layout-dark.png"
+/>
 
 The client selects a bucket using the table's distribution rules. Primary key tables use hash bucketing so operations on the same key reach the same bucket. Log tables can use hash bucketing or distribute records with sticky or round-robin assignment. See [Bucketing](../table-design/data-distribution/bucketing.md) and [Partitioning](../table-design/data-distribution/partitioning.md) for configuration and constraints.
 
@@ -198,9 +207,15 @@ Supported behavior varies by lake format, table type, engine, and execution mode
 
 Applications can access Fluss through native clients, including Java, Rust, Python, and C++, or through compute engine integrations such as Flink and Spark. Clients expose table and administrative operations; the compute engines execute queries, joins, aggregations, and pipelines using those interfaces.
 
-The optional **Fluss Gateway** provides a stateless REST entry point for metadata, DDL, and schema-aware batch writes. It connects to the underlying cluster as a client and can be deployed separately from CoordinatorServers and TabletServers. Its preview API has a narrower scope than the native clients; see [Fluss Gateway](../gateway/index.md) for supported operations and deployment requirements.
-
 Start with the [Java Client](../apis/java/index.md), [Client Support Matrix](../apis/client-support-matrix.md), [Flink Integration](../engine-flink/getting-started.md), or [Spark Integration](../engine-spark/getting-started.md) for the access method appropriate to your application.
+
+## Fluss Gateway
+
+The optional **Fluss Gateway** is a stateless HTTP/REST service that lets applications and AI agents discover tables, inspect schemas, manage databases and tables, and submit schema-aware batch writes without embedding a native Fluss client. Supported writes include append, upsert, partial update, and delete.
+
+The Gateway uses a native Fluss client internally: metadata and DDL operations go to the CoordinatorServer, while writes are routed to the appropriate TabletServers. It runs separately from CoordinatorServers and TabletServers and keeps no session, cursor, or replay state. Any instance can handle any request, allowing Gateway instances to scale horizontally behind a load balancer independently of the storage cluster.
+
+The 1.0 preview supports HTTP/REST metadata, DDL, and writes; record reads, log scans, and primary-key or prefix lookups require a native client or a supported compute engine integration. See [Fluss Gateway](../gateway/index.md) for the supported API scope and [Deploying Fluss Gateway](../install-deploy/deploying-gateway.md) for deployment and security requirements.
 
 ## Deployment and Operational Considerations
 
