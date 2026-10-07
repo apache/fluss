@@ -24,6 +24,7 @@ import org.apache.fluss.client.table.Table;
 import org.apache.fluss.client.table.writer.AppendWriter;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.exception.FetchException;
 import org.apache.fluss.metadata.DatabaseDescriptor;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.TableBucket;
@@ -46,6 +47,7 @@ import static org.apache.fluss.record.TestData.DATA1_SCHEMA;
 import static org.apache.fluss.testutils.DataTestUtils.row;
 import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Tests bounded subscriptions after retention advances the server's earliest offset. */
 @Execution(ExecutionMode.SAME_THREAD)
@@ -71,9 +73,7 @@ class BoundedLogScannerRetentionITCase {
 
         try (Connection connection = ConnectionFactory.createConnection(CLUSTER.getClientConfig());
                 Admin admin = connection.getAdmin()) {
-
             admin.createDatabase(tablePath.getDatabaseName(), DatabaseDescriptor.EMPTY, true).get();
-
             admin.createTable(
                             tablePath,
                             TableDescriptor.builder()
@@ -86,7 +86,6 @@ class BoundedLogScannerRetentionITCase {
                     .get();
 
             long tableId = admin.getTableInfo(tablePath).get().getTableId();
-
             TableBucket bucket = new TableBucket(tableId, 0);
             LogTablet logTablet = CLUSTER.waitAndGetLeaderReplica(bucket).getLogTablet();
 
@@ -123,6 +122,67 @@ class BoundedLogScannerRetentionITCase {
                 // Exercise both scanner APIs against the same retained log state.
                 assertBoundedScanFinishes(table, bucket, false);
                 assertBoundedScanFinishes(table, bucket, true);
+            }
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void testExplicitStartingOffsetBeforeLogStartFails(boolean useArrowPoll) throws Exception {
+        TablePath tablePath =
+                TablePath.of("bounded_retention", "explicit_offset_out_of_range_" + useArrowPoll);
+        try (Connection connection = ConnectionFactory.createConnection(CLUSTER.getClientConfig());
+                Admin admin = connection.getAdmin()) {
+            admin.createDatabase(tablePath.getDatabaseName(), DatabaseDescriptor.EMPTY, true).get();
+            admin.createTable(
+                            tablePath,
+                            TableDescriptor.builder()
+                                    .schema(DATA1_SCHEMA)
+                                    .distributedBy(1)
+                                    .logFormat(LogFormat.ARROW)
+                                    .property(ConfigOptions.TABLE_LOG_TTL, Duration.ofHours(1))
+                                    .build(),
+                            false)
+                    .get();
+
+            long tableId = admin.getTableInfo(tablePath).get().getTableId();
+            TableBucket bucket = new TableBucket(tableId, 0);
+            LogTablet logTablet = CLUSTER.waitAndGetLeaderReplica(bucket).getLogTablet();
+
+            try (Table table = connection.getTable(tablePath)) {
+                AppendWriter writer = table.newAppend().createWriter();
+                appendExpiredRecords(writer);
+                retry(
+                        Duration.ofSeconds(10),
+                        () ->
+                                assertThat(logTablet.getHighWatermark())
+                                        .isEqualTo((long) EXPIRED_RECORDS));
+
+                // Move offsets [0, EXPIRED_RECORDS) into a closed segment and expire them.
+                logTablet.roll(Optional.empty());
+                CLOCK.advanceTime(Duration.ofHours(2));
+                logTablet.deleteExpiredSegments();
+
+                assertThat(logTablet.logStartOffset()).isEqualTo((long) EXPIRED_RECORDS);
+                assertThat(logTablet.localLogEndOffset()).isEqualTo((long) EXPIRED_RECORDS);
+
+                try (LogScannerImpl scanner = (LogScannerImpl) table.newScan().createLogScanner()) {
+
+                    // Unlike EARLIEST_OFFSET, an explicit historical offset must not
+                    // be silently advanced to the current log start.
+                    scanner.subscribeBounded(0, 0L, EXPIRED_RECORDS + 5L);
+                    if (useArrowPoll) {
+                        assertThatThrownBy(() -> scanner.pollRecordBatch(Duration.ofSeconds(1)))
+                                .isInstanceOf(FetchException.class)
+                                .hasMessageContaining("offset 0")
+                                .hasMessageContaining("out of range");
+                    } else {
+                        assertThatThrownBy(() -> scanner.poll(Duration.ofSeconds(1)))
+                                .isInstanceOf(FetchException.class)
+                                .hasMessageContaining("offset 0")
+                                .hasMessageContaining("out of range");
+                    }
+                }
             }
         }
     }

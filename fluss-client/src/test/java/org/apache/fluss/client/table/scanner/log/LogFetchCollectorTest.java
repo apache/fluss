@@ -169,9 +169,9 @@ public class LogFetchCollectorTest {
                 assertThat(result.records(tb)).isEmpty();
                 assertThat(result.hasProgress()).isEqualTo(expectedProgress);
                 if (finished) {
-                    assertThat(result.finishedBuckets().contains(tb));
+                    assertThat(result.finishedBuckets().contains(tb)).isTrue();
                 } else {
-                    assertThat(result.finishedBuckets().isEmpty());
+                    assertThat(result.finishedBuckets().isEmpty()).isTrue();
                 }
                 if (expectedProgress) {
                     assertThat(result.consumedUpToOffset(tb)).isEqualTo(expectedOffset);
@@ -190,9 +190,9 @@ public class LogFetchCollectorTest {
             assertThat(result.records(tb)).isEmpty();
             assertThat(result.hasProgress()).isEqualTo(expectedProgress);
             if (finished) {
-                assertThat(result.finishedBuckets().contains(tb));
+                assertThat(result.finishedBuckets().contains(tb)).isTrue();
             } else {
-                assertThat(result.finishedBuckets().isEmpty());
+                assertThat(result.finishedBuckets().isEmpty()).isTrue();
             }
             if (expectedProgress) {
                 assertThat(result.consumedUpToOffset(tb)).isEqualTo(expectedOffset);
