@@ -105,7 +105,7 @@ public interface LogScanner extends AutoCloseable {
      * <p>The stopping offset is exclusive, so the subscribed range is {@code [startingOffset,
      * stoppingOffset)}. The stopping offset must be non-negative.
      *
-     * <p>When scanning from{@link #EARLIEST_OFFSET}, the server must report the resolved starting
+     * <p>When scanning from {@link #EARLIEST_OFFSET}, the server must report the resolved starting
      * offset unless the range can be completed locally, such as when the stopping offset is zero.
      * If the connected server does not support this capability, a subsequent poll fails with {@link
      * UnsupportedBoundedEarliestException}.
@@ -145,7 +145,7 @@ public interface LogScanner extends AutoCloseable {
      * <p>The stopping offset is exclusive, so the subscribed range is {@code [startingOffset,
      * stoppingOffset)}. The stopping offset must be non-negative.
      *
-     * <p>When scanning from{@link #EARLIEST_OFFSET}, the server must report the resolved starting
+     * <p>When scanning from {@link #EARLIEST_OFFSET}, the server must report the resolved starting
      * offset unless the range can be completed locally, such as when the stopping offset is zero.
      * If the connected server does not support this capability, a subsequent poll fails with {@link
      * UnsupportedBoundedEarliestException}.
