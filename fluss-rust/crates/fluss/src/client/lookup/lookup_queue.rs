@@ -80,15 +80,13 @@ impl LookupQueue {
                 break;
             }
 
-            // Prioritize re-enqueued lookups.
+            // Re-enqueued lookups go first. A batch they fill still takes one new lookup, so
+            // retries for a bucket without a leader can't hold back the other lookups.
             while lookups.len() < self.max_batch_size {
                 match self.re_enqueue_rx.try_recv() {
                     Ok(lookup) => lookups.push(lookup),
                     Err(_) => break,
                 }
-            }
-            if lookups.len() >= self.max_batch_size {
-                break;
             }
 
             let sleep = tokio::time::sleep(remaining);
@@ -144,5 +142,41 @@ impl LookupQueue {
     /// Returns true if there are undrained lookups in the queue.
     pub fn has_undrained(&self) -> bool {
         !self.lookup_rx.is_empty() || !self.re_enqueue_rx.is_empty()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::client::lookup::PrimaryLookupQuery;
+    use crate::metadata::{TableBucket, TablePath};
+    use bytes::Bytes;
+    use tokio::sync::oneshot;
+
+    fn lookup(key: &'static [u8]) -> QueuedLookup {
+        let (result_tx, _result_rx) = oneshot::channel();
+        QueuedLookup::Primary(PrimaryLookupQuery::new(
+            TablePath::new("db", "tbl"),
+            TableBucket::new(1, 0),
+            1,
+            Bytes::from_static(key),
+            result_tx,
+        ))
+    }
+
+    #[tokio::test]
+    async fn a_batch_full_of_retries_still_takes_a_new_lookup() {
+        let (_cluster_tx, cluster_rx) = watch::channel(0);
+        let (mut queue, lookup_tx, re_enqueue_tx) = LookupQueue::new(8, 2, 60_000, cluster_rx);
+        re_enqueue_tx.send(lookup(b"retry")).unwrap();
+        re_enqueue_tx.send(lookup(b"retry")).unwrap();
+        lookup_tx.send(lookup(b"new")).await.unwrap();
+
+        let lookups = tokio::time::timeout(Duration::from_secs(10), queue.drain())
+            .await
+            .expect("a full batch does not wait for the batch timeout");
+
+        let keys: Vec<&[u8]> = lookups.iter().map(|lookup| lookup.key().as_ref()).collect();
+        assert_eq!(keys, [b"retry".as_slice(), b"retry", b"new"]);
     }
 }
