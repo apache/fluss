@@ -99,7 +99,8 @@ impl StickyBucketAssigner {
                 new_bucket
             };
         }
-        self.current_bucket_id.load(Ordering::Relaxed)
+        // Return the bucket checked above. Another producer may have replaced it since.
+        old_bucket
     }
 }
 
