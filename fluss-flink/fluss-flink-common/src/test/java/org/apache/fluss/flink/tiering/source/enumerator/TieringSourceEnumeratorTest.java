@@ -42,10 +42,13 @@ import org.apache.fluss.rpc.messages.PbLakeTableSnapshotInfo;
 import org.apache.flink.api.connector.source.SourceEvent;
 import org.apache.flink.api.connector.source.SplitsAssignment;
 import org.apache.flink.api.connector.source.mocks.MockSplitEnumeratorContext;
+import org.apache.flink.api.java.tuple.Tuple3;
 import org.apache.flink.util.FlinkRuntimeException;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import javax.annotation.Nullable;
 
@@ -56,6 +59,7 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
@@ -80,6 +84,92 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
     @BeforeEach
     protected void beforeEach() throws Exception {
         super.beforeEach();
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void testCloseReportsEmptyRoundBeforeNextHeartbeat(boolean primaryKey) throws Throwable {
+        TablePath tablePath = TablePath.of(DEFAULT_DB, "close-empty-round-" + primaryKey);
+        TableDescriptor descriptor =
+                primaryKey ? DEFAULT_PK_TABLE_DESCRIPTOR : DEFAULT_LOG_TABLE_DESCRIPTOR;
+        long tableId = createTable(tablePath, descriptor);
+        AtomicInteger generatedRounds = new AtomicInteger();
+        TestingLakeTieringFactory factory =
+                new TestingLakeTieringFactory() {
+                    @Override
+                    public void validateTable(TableInfo tableInfo) {
+                        generatedRounds.incrementAndGet();
+                    }
+                };
+
+        try (FlussMockSplitEnumeratorContext<TieringSplit> context =
+                        new FlussMockSplitEnumeratorContext<>(1);
+                TieringSourceEnumerator enumerator =
+                        createTieringSourceEnumerator(flussConf, context, factory)) {
+            enumerator.start();
+            registerSingleReaderAndHandleSplitRequests(context, enumerator, 0, 0);
+            assertThat(generatedRounds.get()).isOne();
+            assertThat(context.getSplitsAssignmentSequence()).isEmpty();
+
+            // Do not run another heartbeat: the empty round has only been finished locally.
+            enumerator.close();
+
+            // Queued async work must not acquire a new round or access closed clients.
+            context.runPeriodicCallable(0);
+            enumerator.generateAndAssignSplits(Tuple3.of(tableId, 1L, tablePath), null);
+            assertThat(generatedRounds.get()).isOne();
+            assertThat(context.getSplitsAssignmentSequence()).isEmpty();
+        }
+
+        // The next service must tier newly written data without waiting for the two-minute
+        // coordinator timeout that would otherwise reclaim the abandoned empty round.
+        if (primaryKey) {
+            upsertRow(tablePath, descriptor, 0, 10);
+        } else {
+            appendRow(tablePath, descriptor, 0, 10);
+        }
+        assertNextEnumeratorCanAcquireTable(tablePath);
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void testCloseReleasesActiveOrFinishedRound(boolean finished) throws Exception {
+        TablePath tablePath =
+                TablePath.of(DEFAULT_DB, "close-active-or-finished-round-" + finished);
+        long tableId = createTable(tablePath, DEFAULT_LOG_TABLE_DESCRIPTOR);
+        appendRow(tablePath, DEFAULT_LOG_TABLE_DESCRIPTOR, 0, 10);
+        try (FlussMockSplitEnumeratorContext<TieringSplit> context =
+                        new FlussMockSplitEnumeratorContext<>(1);
+                TieringSourceEnumerator enumerator =
+                        createTieringSourceEnumerator(flussConf, context)) {
+            enumerator.start();
+            registerSingleReaderAndHandleSplitRequests(context, enumerator, 0, 0);
+            assertThat(context.getSplitsAssignmentSequence()).isNotEmpty();
+            if (finished) {
+                // Queue a completion report, but close before its async heartbeat executes.
+                enumerator.handleSourceEvent(0, new FinishedTieringEvent(tableId));
+            }
+        }
+        assertNextEnumeratorCanAcquireTable(tablePath);
+    }
+
+    private void assertNextEnumeratorCanAcquireTable(TablePath tablePath) throws Exception {
+        try (FlussMockSplitEnumeratorContext<TieringSplit> context =
+                        new FlussMockSplitEnumeratorContext<>(1);
+                TieringSourceEnumerator enumerator =
+                        createTieringSourceEnumerator(flussConf, context)) {
+            enumerator.start();
+            context.registerSourceReader(0, 0, "localhost-0");
+            enumerator.addReader(0);
+            retry(
+                    Duration.ofSeconds(15),
+                    () -> {
+                        enumerator.handleSplitRequest(0, "localhost-0");
+                        assertThat(context.getSplitsAssignmentSequence()).isNotEmpty();
+                    });
+            assertThat(context.getSplitsAssignmentSequence().get(0).assignment().get(0))
+                    .allSatisfy(split -> assertThat(split.getTablePath()).isEqualTo(tablePath));
+        }
     }
 
     @Test

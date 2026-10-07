@@ -119,6 +119,10 @@ public class TieringSourceEnumerator
     private final Map<Long, TieringFinishInfo> finishedTables;
     private final Set<Long> tieringReachMaxDurationsTables;
 
+    // Serialize heartbeat acknowledgements and table-state transitions with shutdown. An
+    // in-flight heartbeat may acquire a new table that the final heartbeat must also release.
+    private final Object lifecycleLock = new Object();
+
     // lazily instantiated
     private RpcClient rpcClient;
     private CoordinatorGateway coordinatorGateway;
@@ -301,6 +305,15 @@ public class TieringSourceEnumerator
 
     @Override
     public void handleSourceEvent(int subtaskId, SourceEvent sourceEvent) {
+        synchronized (lifecycleLock) {
+            if (closed) {
+                return;
+            }
+            handleTieringEvent(sourceEvent);
+        }
+    }
+
+    private void handleTieringEvent(SourceEvent sourceEvent) {
         if (sourceEvent instanceof FinishedTieringEvent) {
             FinishedTieringEvent finishedTieringEvent = (FinishedTieringEvent) sourceEvent;
             long finishedTableId = finishedTieringEvent.getTableId();
@@ -346,18 +359,23 @@ public class TieringSourceEnumerator
     }
 
     private void handleSourceReaderFailOver() {
-        LOG.info(
-                "Handling source reader fail over, mark current tiering table epoch {} as failed.",
-                tieringTableEpochs);
-        // we need to make all as failed
-        failedTableEpochs.putAll(new HashMap<>(tieringTableEpochs));
-        tieringTableEpochs.clear();
-        tieringReachMaxDurationsTables.clear();
-        // also clean all pending splits since we mark all as failed
-        pendingSplits.clear();
-        if (!failedTableEpochs.isEmpty()) {
-            // call one round of heartbeat to notify table has been finished or failed
-            requestTableAndAssign(0);
+        synchronized (lifecycleLock) {
+            if (closed) {
+                return;
+            }
+            LOG.info(
+                    "Handling source reader fail over, mark current tiering table epoch {} as failed.",
+                    tieringTableEpochs);
+            // we need to make all as failed
+            failedTableEpochs.putAll(new HashMap<>(tieringTableEpochs));
+            tieringTableEpochs.clear();
+            tieringReachMaxDurationsTables.clear();
+            // also clean all pending splits since we mark all as failed
+            pendingSplits.clear();
+            if (!failedTableEpochs.isEmpty()) {
+                // call one round of heartbeat to notify table has been finished or failed
+                requestTableAndAssign(0);
+            }
         }
     }
 
@@ -392,18 +410,23 @@ public class TieringSourceEnumerator
     @VisibleForTesting
     void generateAndAssignSplits(
             @Nullable Tuple3<Long, Long, TablePath> tieringTable, Throwable throwable) {
-        if (throwable != null) {
-            ExceptionUtils.rethrow(throwable);
+        synchronized (lifecycleLock) {
+            if (closed) {
+                return;
+            }
+            if (throwable != null) {
+                ExceptionUtils.rethrow(throwable);
+            }
+            if (tieringTable != null) {
+                generateTieringSplits(tieringTable);
+            }
+            assignSplits();
         }
-        if (tieringTable != null) {
-            generateTieringSplits(tieringTable);
-        }
-        assignSplits();
     }
 
     private void assignSplits() {
-        // we don't assign splits during failover
-        if (isFailOvering) {
+        // Do not assign splits during failover or after shutdown.
+        if (closed || isFailOvering) {
             return;
         }
         if (!readersAwaitingSplit.isEmpty()) {
@@ -424,6 +447,12 @@ public class TieringSourceEnumerator
     }
 
     private @Nullable Tuple3<Long, Long, TablePath> requestTieringTableSplitsViaHeartBeat() {
+        synchronized (lifecycleLock) {
+            return requestTieringTableSplits();
+        }
+    }
+
+    private @Nullable Tuple3<Long, Long, TablePath> requestTieringTableSplits() {
         if (closed) {
             return null;
         }
@@ -581,58 +610,61 @@ public class TieringSourceEnumerator
 
     @Override
     public void close() throws IOException {
-        closed = true;
-        timerService.shutdownNow();
-        if (rpcClient != null) {
-            failedTableEpochs.putAll(tieringTableEpochs);
-            tieringTableEpochs.clear();
-            if (!failedTableEpochs.isEmpty()) {
-                reportFailedTable(basicHeartBeat(), failedTableEpochs);
+        synchronized (lifecycleLock) {
+            if (closed) {
+                return;
+            }
+            closed = true;
+            timerService.shutdownNow();
+            if (rpcClient != null) {
+                failedTableEpochs.putAll(tieringTableEpochs);
+                tieringTableEpochs.clear();
+                try {
+                    // Empty split rounds and finished events may still be waiting for the next
+                    // heartbeat. Report them as finished (including force-finish and stats), while
+                    // releasing unfinished rounds as failed. Never request another table on close.
+                    if (!finishedTables.isEmpty() || !failedTableEpochs.isEmpty()) {
+                        waitHeartbeatResponse(
+                                coordinatorGateway.lakeTieringHeartbeat(
+                                        tieringTableHeartBeat(
+                                                basicHeartBeat(),
+                                                Collections.emptyMap(),
+                                                finishedTables,
+                                                failedTableEpochs,
+                                                flussCoordinatorEpoch)));
+                        finishedTables.clear();
+                        failedTableEpochs.clear();
+                    }
+                } catch (Exception e) {
+                    // The coordinator timeout remains the fallback if it cannot be notified.
+                    // Reporting failure must not prevent the clients from being closed.
+                    LOG.warn("Failed to report final tiering table states during close.", e);
+                }
+                try {
+                    LOG.info(
+                            "Closing Tiering Source Enumerator of at {}.",
+                            System.currentTimeMillis());
+                    rpcClient.close();
+                } catch (Exception e) {
+                    LOG.error("Failed to close Tiering Source enumerator.", e);
+                }
             }
             try {
-                LOG.info("Closing Tiering Source Enumerator of at {}.", System.currentTimeMillis());
-                rpcClient.close();
+                if (flussAdmin != null) {
+                    LOG.info("Closing Fluss Admin client...");
+                    flussAdmin.close();
+                }
             } catch (Exception e) {
-                LOG.error("Failed to close Tiering Source enumerator.", e);
+                LOG.error("Failed to close Fluss Admin client.", e);
             }
-        }
-        try {
-            if (flussAdmin != null) {
-                LOG.info("Closing Fluss Admin client...");
-                flussAdmin.close();
+            try {
+                if (connection != null) {
+                    LOG.info("Closing Fluss connection...");
+                    connection.close();
+                }
+            } catch (Exception e) {
+                LOG.error("Failed to close Fluss connection.", e);
             }
-        } catch (Exception e) {
-            LOG.error("Failed to close Fluss Admin client.", e);
-        }
-        try {
-            if (connection != null) {
-                LOG.info("Closing Fluss connection...");
-                connection.close();
-            }
-        } catch (Exception e) {
-            LOG.error("Failed to close Fluss connection.", e);
-        }
-    }
-
-    /**
-     * Report failed table to Fluss coordinator via HeartBeat, this method should be called when
-     * {@link TieringSourceEnumerator} is closed or receives failed table from downstream lake
-     * committer.
-     */
-    private void reportFailedTable(
-            LakeTieringHeartbeatRequest heartbeatRequest, Map<Long, Long> failedTableEpochs)
-            throws FlinkRuntimeException {
-        try {
-            waitHeartbeatResponse(
-                    coordinatorGateway.lakeTieringHeartbeat(
-                            failedTableHeartBeat(
-                                    heartbeatRequest, failedTableEpochs, flussCoordinatorEpoch)));
-            LOG.info("Report failed table to Fluss Coordinator success");
-
-        } catch (Exception e) {
-            LOG.error("Errors happens when report failed table to Fluss cluster.", e);
-            throw new FlinkRuntimeException(
-                    "Errors happens when report failed table to Fluss cluster.", e);
         }
     }
 
