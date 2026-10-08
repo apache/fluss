@@ -47,6 +47,10 @@ import javax.annotation.concurrent.ThreadSafe;
 import java.io.Closeable;
 import java.io.File;
 import java.io.IOException;
+import java.io.InputStream;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -172,6 +176,131 @@ public class RemoteLogManager implements Closeable {
         // leader needs to register the remote log metrics
         remoteLog.registerMetrics(replica.bucketMetrics());
         remoteLogs.put(tableBucket, remoteLog);
+    }
+
+    /**
+     * Initializes an empty KV replica log at the latest boundary covered by its snapshot or
+     * committed remote logs. Non-empty local logs are never truncated by this recovery path.
+     *
+     * <p>Offsets are exclusive ends. For example, with a snapshot at 100 and remote WAL ending at
+     * 150, the empty local log starts at 150 and the caller replays remote WAL [100, 150) into KV.
+     * With a snapshot at 150 and remote WAL ending at 100, the local log also starts at 150, but no
+     * WAL replay is needed: the snapshot already contains the KV state at that boundary. It does
+     * not recreate the missing historical WAL [100, 150).
+     *
+     * <p>Only the durable prefix is recoverable after losing all local replicas. Acknowledged
+     * writes beyond this boundary may be lost. The caller must finish KV replay before exposing the
+     * replica as a leader, and must hold the replica's leadership write lock.
+     */
+    public void recoverEmptyKvLog(Replica replica, long snapshotOffset)
+            throws IOException, RemoteStorageException {
+        LogTablet log = replica.getLogTablet();
+        long localEndOffset = log.localLogEndOffset();
+        // A surviving local tail may contain writes newer than both remote recovery sources.
+        // Only reposition an empty log; using the remote boundary for a non-empty log could
+        // discard recoverable data.
+        if (log.localLogStartOffset() != localEndOffset) {
+            return;
+        }
+
+        TableBucket bucket = replica.getTableBucket();
+        RemoteLogTablet remoteLog = remoteLogs.get(bucket);
+        long remoteEndOffset =
+                remoteLog == null ? -1L : remoteLog.getRemoteLogEndOffset().orElse(-1L);
+        long recoveredEndOffset = Math.max(snapshotOffset, remoteEndOffset);
+        // An empty log can still retain a higher boundary from earlier local progress.
+        // Do not rewind it just because the available remote recovery sources end earlier.
+        if (recoveredEndOffset < localEndOffset) {
+            return;
+        }
+
+        // A manifest's copied watermark is not proof that its expired records are still readable.
+        // For example, if WAL was copied through 150 but all remote segments have expired,
+        // a snapshot at 120 cannot recover [120, 150). A snapshot at 150 would cover that state.
+        if (remoteLog != null && remoteLog.getHighestCopiedEndOffset() > recoveredEndOffset) {
+            throw new IOException(
+                    String.format(
+                            "Cannot recover empty KV log for %s: copied offset %s is beyond "
+                                    + "snapshot offset %s and readable remote end %s",
+                            bucket,
+                            remoteLog.getHighestCopiedEndOffset(),
+                            snapshotOffset,
+                            remoteEndOffset));
+        }
+
+        if (remoteEndOffset > snapshotOffset) {
+            // The maximum remote offset alone does not prove replay is possible. A snapshot at
+            // 100 plus WAL [100, 120) and [130, 150) still lacks [120, 130), so recovery must fail.
+            // Gaps before the snapshot do not matter because their KV state is already included.
+            long nextOffset = snapshotOffset;
+            for (RemoteLogSegment segment : remoteLog.relevantRemoteLogSegments(snapshotOffset)) {
+                if (segment.logicalStartOffset() > nextOffset) {
+                    break;
+                }
+                nextOffset = segment.logicalEndOffset();
+            }
+            if (nextOffset != remoteEndOffset) {
+                throw new IOException(
+                        String.format(
+                                "Cannot recover empty KV log for %s: remote log is missing "
+                                        + "offsets [%s, %s) needed after snapshot offset %s",
+                                bucket, nextOffset, remoteEndOffset, snapshotOffset));
+            }
+        }
+
+        // Download before changing the log boundary. The last segment's writer snapshot covers
+        // the remote end and preserves duplicate detection for the surviving writes.
+        // If the KV snapshot is ahead of the remote end, that writer snapshot is stale: it cannot
+        // establish writer sequence numbers at the newer recovery boundary.
+        Path writerSnapshot = null;
+        try {
+            if (remoteEndOffset == recoveredEndOffset) {
+                List<RemoteLogSegment> lastSegments =
+                        remoteLog.relevantRemoteLogSegments(remoteEndOffset - 1);
+                RemoteLogSegment lastSegment = lastSegments.get(lastSegments.size() - 1);
+                if (lastSegment.isEndOffsetClipped()) {
+                    // A physical segment [100, 150) exposed only as [100, 120) still carries a
+                    // writer snapshot for 150. Loading it at 120 would include discarded writes.
+                    throw new IOException(
+                            "Cannot restore writer state from a clipped remote log segment for "
+                                    + bucket);
+                }
+                writerSnapshot =
+                        Files.createTempFile(log.getLogDir().toPath(), "writer-recovery-", ".tmp");
+                try (InputStream input =
+                        remoteLogStorage.fetchIndex(
+                                lastSegment, RemoteLogStorage.IndexType.WRITER_ID_SNAPSHOT)) {
+                    Files.copy(input, writerSnapshot, StandardCopyOption.REPLACE_EXISTING);
+                }
+            }
+
+            if (localEndOffset < recoveredEndOffset) {
+                LOG.warn(
+                        "Recovering empty KV log for {} from offset {} to durable offset {} "
+                                + "(snapshot={}, remote={}). Writes beyond the durable boundary "
+                                + "cannot be recovered from remote storage.",
+                        bucket,
+                        localEndOffset,
+                        recoveredEndOffset,
+                        snapshotOffset,
+                        remoteEndOffset);
+                logManager.truncateFullyAndStartAt(bucket, recoveredEndOffset);
+            }
+            if (writerSnapshot != null) {
+                // Also repair an interrupted recovery that advanced the log boundary before
+                // installing the writer snapshot. For example, an empty log already at 150
+                // still needs its writer state restored when retrying recovery to 150.
+                log.restoreWriterSnapshot(writerSnapshot, recoveredEndOffset);
+            }
+            // A missing HW checkpoint must not leave the watermark below an empty log's start.
+            // The recovered boundary is backed by a completed snapshot or committed remote WAL,
+            // so an empty log starting at 150 must also have HW 150, even with no local records.
+            log.updateHighWatermark(recoveredEndOffset);
+        } finally {
+            if (writerSnapshot != null) {
+                Files.deleteIfExists(writerSnapshot);
+            }
+        }
     }
 
     /** Start the log tiering task for the given replica. */

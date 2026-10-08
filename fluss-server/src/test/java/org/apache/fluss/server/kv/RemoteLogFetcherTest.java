@@ -22,6 +22,7 @@ import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.exception.RemoteStorageException;
+import org.apache.fluss.fs.FileSystem;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metrics.groups.MetricGroup;
@@ -141,6 +142,62 @@ class RemoteLogFetcherTest extends RemoteLogTestBase {
                 assertThat(batch.baseLogOffset()).isGreaterThan(prevOffset);
                 prevOffset = batch.baseLogOffset();
             }
+        }
+    }
+
+    @ParameterizedTest
+    @CsvSource({"1,10", "2,20"})
+    void testMissingRemoteRangeFailsBeforeDownloading(int missingSegment, long missingOffset)
+            throws Exception {
+        TableBucket bucket = new TableBucket(DATA1_TABLE_ID, 0);
+        makeLogTableAsLeader(bucket, false);
+        LogTablet log = replicaManager.getReplicaOrException(bucket).getLogTablet();
+        addMultiSegmentsToLogTablet(log, 4);
+        remoteLogTaskScheduler.triggerPeriodicScheduledTasks();
+
+        List<RemoteLogSegment> segments =
+                new ArrayList<>(remoteLogManager.relevantRemoteLogSegments(bucket, 0));
+        assertThat(segments).hasSize(3);
+        segments.remove(missingSegment);
+        remoteLogManager
+                .remoteLogTablet(bucket)
+                .loadRemoteLogManifest(
+                        new RemoteLogManifest(log.getPhysicalTablePath(), bucket, segments, 30));
+
+        try (RemoteLogFetcher fetcher = newFetcher(bucket, log.getLogDir())) {
+            assertThatThrownBy(() -> fetcher.fetch(0, 30))
+                    .isInstanceOf(RemoteStorageException.class)
+                    .hasMessageContaining("missing offsets [" + missingOffset + ", 30)");
+            assertThat(remoteLogStorage.fetchLogDataInvocationCount()).isZero();
+        }
+    }
+
+    @ParameterizedTest
+    @CsvSource({"0,0,30", "1,10,20", "2,20,30"})
+    void testTruncatedRemoteFileCannotSkipRequiredRecords(
+            int truncatedSegment, long missingOffset, long endOffset) throws Exception {
+        TableBucket bucket = new TableBucket(DATA1_TABLE_ID, 0);
+        makeLogTableAsLeader(bucket, false);
+        LogTablet log = replicaManager.getReplicaOrException(bucket).getLogTablet();
+        addMultiSegmentsToLogTablet(log, 4);
+        remoteLogTaskScheduler.triggerPeriodicScheduledTasks();
+        RemoteLogSegment segment =
+                remoteLogManager.relevantRemoteLogSegments(bucket, 0).get(truncatedSegment);
+        FsPath logFile =
+                FlussPaths.remoteLogSegmentFile(
+                        FlussPaths.remoteLogSegmentDir(remoteLogStorage.getRemoteLogDir(), segment),
+                        segment.remoteLogStartOffset());
+        logFile.getFileSystem().create(logFile, FileSystem.WriteMode.OVERWRITE).close();
+
+        try (RemoteLogFetcher fetcher = newFetcher(bucket, log.getLogDir())) {
+            assertThatThrownBy(
+                            () -> {
+                                for (LogRecordBatch ignored : fetcher.fetch(0, endOffset)) {
+                                    // Consume the whole requested range to detect truncated files.
+                                }
+                            })
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("offset " + missingOffset);
         }
     }
 
