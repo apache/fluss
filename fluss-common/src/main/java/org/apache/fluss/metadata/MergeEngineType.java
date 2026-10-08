@@ -17,6 +17,8 @@
 
 package org.apache.fluss.metadata;
 
+import java.util.Locale;
+
 /**
  * The merge engine for the primary key table.
  *
@@ -78,7 +80,7 @@ public enum MergeEngineType {
 
     /** Creates a {@link MergeEngineType} from the given string. */
     public static MergeEngineType fromString(String type) {
-        switch (type.toUpperCase()) {
+        switch (type.toUpperCase(Locale.ROOT)) {
             case "FIRST_ROW":
                 return FIRST_ROW;
             case "VERSIONED":
