@@ -1090,6 +1090,67 @@ TableDescriptor.builder()
 </TabItem>
 </Tabs>
 
+### last_n
+
+Appends input arrays to the stored array and keeps the last `size` elements.
+
+- **Supported Data Types**: `ARRAY`
+- **Behavior**: Appends the input elements, then drops the oldest elements beyond `size`
+- **Null Handling**: A null input leaves the column unchanged
+- **Size**: Required, a positive integer
+
+Every update rewrites the stored array, so it is best suited to small `size` values.
+
+**Example:**
+<Tabs>
+<TabItem value="flink-sql" label="Flink SQL" default>
+
+```sql
+CREATE TABLE test_last_n (
+    user_id BIGINT,
+    recent_events ARRAY<STRING>,
+    PRIMARY KEY (user_id) NOT ENFORCED
+) WITH (
+    'table.merge-engine' = 'aggregation',
+    'fields.recent_events.agg' = 'last_n',
+    'fields.recent_events.last_n.size' = '3'
+);
+
+INSERT INTO test_last_n VALUES
+    (1, ARRAY['login']),
+    (1, ARRAY['search']),
+    (1, ARRAY['view', 'add_to_cart']);
+
+SELECT * FROM test_last_n WHERE user_id = 1;
++------------+----------------------------------+
+| user_id    | recent_events                    |
++------------+----------------------------------+
+|          1 | [search, view, add_to_cart]      |
++------------+----------------------------------+
+```
+
+</TabItem>
+<TabItem value="java-client" label="Java Client">
+
+```java
+Schema schema = Schema.newBuilder()
+    .column("user_id", DataTypes.BIGINT())
+    .column("recent_events", DataTypes.ARRAY(DataTypes.STRING()), AggFunctions.LAST_N(3))
+    .primaryKey("user_id")
+    .build();
+
+TableDescriptor.builder()
+    .schema(schema)
+    .property("table.merge-engine", "aggregation")
+    .build();
+
+// Input: (1, ['login']), (1, ['search']), (1, ['view', 'add_to_cart'])
+// Result: (1, ['search', 'view', 'add_to_cart'])
+```
+
+</TabItem>
+</Tabs>
+
 ## Delete Behavior
 
 The aggregation merge engine provides limited support for delete operations. You can configure the behavior using the `'table.delete.behavior'` option:
