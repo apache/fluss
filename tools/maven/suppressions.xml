@@ -23,6 +23,8 @@
 
 <suppressions>
     <suppress files="DataTypes.java" checks="MethodNameCheck"/>
+    <!-- TODO: Remove this suppression once https://github.com/apache/fluss/issues/4578 is resolved. -->
+    <suppress files="[\\/]ConfigOptions\.java$" checks="FileLength"/>
 
     <!-- TODO: Refactor CoordinatorEventProcessor and split its tests by responsibility,
          then remove these FileLength suppressions. Track: https://github.com/apache/fluss/issues/4312 -->
