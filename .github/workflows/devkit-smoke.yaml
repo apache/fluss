@@ -55,16 +55,7 @@ jobs:
           tool: just@1.40.0
 
       - name: Validate managed profile dependency versions
-        working-directory: devkit
-        run: |
-          set -euo pipefail
-          paimon_version=$(sed -n 's:.*<paimon.version>\([^<]*\)</paimon.version>.*:\1:p' ../pom.xml)
-          iceberg_version=$(sed -n 's:.*<iceberg.version>\([^<]*\)</iceberg.version>.*:\1:p' ../pom.xml)
-          grep -Fq "/paimon-s3/${paimon_version}/paimon-s3-${paimon_version}.jar" profiles/paimon/jars.urls
-          grep -Fq "/paimon-flink-1.20/${paimon_version}/paimon-flink-1.20-${paimon_version}.jar" profiles/paimon/flink.urls
-          grep -Fq "/iceberg-aws/${iceberg_version}/iceberg-aws-${iceberg_version}.jar" profiles/iceberg/jars.urls
-          grep -Fq "/iceberg-aws-bundle/${iceberg_version}/iceberg-aws-bundle-${iceberg_version}.jar" profiles/iceberg/jars.urls
-          grep -Fq "/iceberg-flink-runtime-1.20/${iceberg_version}/iceberg-flink-runtime-1.20-${iceberg_version}.jar" profiles/iceberg/flink.urls
+        run: bash devkit/validate-managed-dependency-versions.sh
 
       - name: Run Gateway and Paimon smoke tests
         working-directory: devkit

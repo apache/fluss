@@ -15,6 +15,8 @@
 # limitations under the License.
 
 set dotenv-load := false
+set unstable
+set lists
 
 # --- Paths --------------------------------------------------------------------
 
@@ -24,12 +26,7 @@ PROFILES_DIR := DEVKIT_DIR + "/profiles"
 DEPS_DIR := DEVKIT_DIR + "/.deps"
 CACHE_DIR := DEPS_DIR + "/cache"
 ACTIVE_PROFILE_FILE := DEPS_DIR + "/active-profile"
-
-# --- Docker Compose commands --------------------------------------------------
-
-COMPOSE := "docker compose -f " + DEVKIT_DIR + "/docker-compose.yml"
-ALL_COMPOSE := COMPOSE + " -f " + DEVKIT_DIR + "/compose/tiering.yml -f " + DEVKIT_DIR + "/compose/gateway.yml -f " + DEVKIT_DIR + "/compose/lake-common.yml -f " + DEVKIT_DIR + "/compose/iceberg.yml"
-ALL_PROFILES := "--profile single --profile cluster --profile flink --profile tiering --profile gateway"
+BUILT_PROFILE_FILE := DEPS_DIR + "/built-profile"
 
 _default:
     @just --list
@@ -40,7 +37,9 @@ build profile="core":
     set -e
     PROFILE={{ quote(profile) }}
     just validate-profile "$PROFILE"
+    rm -f "{{ BUILT_PROFILE_FILE }}"
     TARGETS=$(just profile-runtime-targets "$PROFILE")
+    echo "Preparing dependencies for $PROFILE..."
     just deps "$PROFILE"
     clean_dist() {
         cd "{{ FLUSS_DEV_HOME }}"
@@ -72,13 +71,18 @@ build profile="core":
           cargo build --locked --bin fluss-gateway
     }
     if grep -Fxq tiering <<<"$TARGETS"; then
+      echo "Building Java artifacts for $PROFILE..."
       build_tiering
     elif grep -Eq '^(core|flink)$' <<<"$TARGETS"; then
+      echo "Building Java artifacts for $PROFILE..."
       build_core
     fi
     if grep -Fxq gateway <<<"$TARGETS"; then
+      echo "Building Gateway with Cargo..."
       build_gateway
     fi
+    printf '%s\n' "$PROFILE" > "{{ BUILT_PROFILE_FILE }}"
+    echo "Build ready for $PROFILE."
 
 [private]
 ensure-dist:
@@ -173,7 +177,7 @@ compose profile topology *ARGS:
     set -e
     PROFILE={{ quote(profile) }}
     TOPOLOGY={{ quote(topology) }}
-    ARGS=( {{ ARGS }} )
+    ARGS=( {{ quote(ARGS) }} )
     just validate-profile "$PROFILE"
     case "$TOPOLOGY" in
       single) REPLICATION_FACTOR=1 ;;
@@ -217,7 +221,7 @@ compose profile topology *ARGS:
 compose-active *ARGS:
     #!/usr/bin/env bash
     set -e
-    ARGS=( {{ ARGS }} )
+    ARGS=( {{ quote(ARGS) }} )
     if [ -f "{{ ACTIVE_PROFILE_FILE }}" ]; then
       read -r PROFILE TOPOLOGY < "{{ ACTIVE_PROFILE_FILE }}"
       if just validate-profile "$PROFILE" >/dev/null 2>&1; then
@@ -225,7 +229,8 @@ compose-active *ARGS:
         exit 0
       fi
     fi
-    {{ ALL_COMPOSE }} {{ ALL_PROFILES }} "${ARGS[@]}"
+    echo "No active profile. Run: just up <profile>" >&2
+    exit 1
 
 [private]
 deps profile:
@@ -235,15 +240,33 @@ deps profile:
     just validate-profile "$PROFILE"
     PROFILE_DIR="{{ PROFILES_DIR }}/$PROFILE"
     mkdir -p "{{ CACHE_DIR }}"
+    verify() {
+      local TARGET="$1" CHECKSUM="$2" EXPECTED ACTUAL
+      EXPECTED=$(awk '{print $1}' "$CHECKSUM")
+      ACTUAL=$(shasum -a 1 "$TARGET" | awk '{print $1}')
+      [ -n "$EXPECTED" ] && [ "$EXPECTED" = "$ACTUAL" ]
+    }
     for FILE in "$PROFILE_DIR"/{jars,server,flink}.urls; do
       [ -f "$FILE" ] || continue
       while IFS= read -r URL; do
         NAME="$(basename "${URL%%\?*}")"
         TARGET="{{ CACHE_DIR }}/$NAME"
-        [ -s "$TARGET" ] && continue
+        CHECKSUM="${TARGET}.sha1"
+        curl -fsSL --retry 3 -o "${CHECKSUM}.tmp" "${URL}.sha1"
+        if [ -s "$TARGET" ] && verify "$TARGET" "${CHECKSUM}.tmp"; then
+          mv "${CHECKSUM}.tmp" "$CHECKSUM"
+          continue
+        fi
+        rm -f "${TARGET}.tmp"
         echo "Downloading $(basename "$TARGET")..."
         curl -fL --retry 3 -o "${TARGET}.tmp" "$URL"
+        verify "${TARGET}.tmp" "${CHECKSUM}.tmp" || {
+          rm -f "${TARGET}.tmp"
+          echo "SHA-1 verification failed for $URL" >&2
+          exit 1
+        }
         mv "${TARGET}.tmp" "$TARGET"
+        mv "${CHECKSUM}.tmp" "$CHECKSUM"
       done < <(sed 's/#.*//; s/[[:space:]]//g; /^$/d' "$FILE")
     done
 
@@ -348,6 +371,21 @@ up profile="core" nodes="1":
       3) TOPOLOGY=cluster ;;
       *) echo "nodes must be 1 or 3"; exit 1 ;;
     esac
+    if [ -s "{{ ACTIVE_PROFILE_FILE }}" ]; then
+      read -r ACTIVE_PROFILE ACTIVE_TOPOLOGY < "{{ ACTIVE_PROFILE_FILE }}"
+      if [ "$ACTIVE_PROFILE" != "$PROFILE" ]; then
+        echo "Active profile is $ACTIVE_PROFILE; run 'just clean' before switching to $PROFILE" >&2
+        exit 1
+      fi
+      STOP_TOPOLOGY="$ACTIVE_TOPOLOGY"
+    else
+      STOP_TOPOLOGY="$TOPOLOGY"
+    fi
+    if [ ! -s "{{ BUILT_PROFILE_FILE }}" ] || [ "$(cat "{{ BUILT_PROFILE_FILE }}")" != "$PROFILE" ]; then
+      echo "Profile $PROFILE is not built. Run: just build $PROFILE" >&2
+      exit 1
+    fi
+    just compose "$PROFILE" "$TOPOLOGY" config --quiet
     ENABLE_TIERING=false
     for TARGET in $(just profile-runtime-targets "$PROFILE"); do
       case "$TARGET" in
@@ -365,10 +403,11 @@ up profile="core" nodes="1":
     if [ "$ENABLE_TIERING" = "true" ]; then
       just ensure-tiering "$PROFILE"
     fi
-    just compose-active down --remove-orphans >/dev/null 2>&1 || true
-    just compose "$PROFILE" "$TOPOLOGY" config --quiet
     mkdir -p "{{ DEPS_DIR }}"
+    # Keep the target profile addressable if startup fails, so `logs`, `status`,
+    # and `clean` can diagnose and remove a partially started stack.
     printf '%s %s\n' "$PROFILE" "$TOPOLOGY" > "{{ ACTIVE_PROFILE_FILE }}"
+    just compose "$PROFILE" "$STOP_TOPOLOGY" down --remove-orphans >/dev/null 2>&1 || true
     just compose "$PROFILE" "$TOPOLOGY" up -d --wait --wait-timeout 180
     just check "$PROFILE"
 
@@ -380,7 +419,14 @@ down:
 clean:
     #!/usr/bin/env bash
     set -e
-    just compose-active down -v --remove-orphans
+    if [ -s "{{ ACTIVE_PROFILE_FILE }}" ]; then
+      read -r PROFILE _ < "{{ ACTIVE_PROFILE_FILE }}"
+      if just validate-profile "$PROFILE" >/dev/null 2>&1; then
+        just compose-active down -v --remove-orphans
+      else
+        echo "Removing stale active profile: $PROFILE"
+      fi
+    fi
     rm -f "{{ ACTIVE_PROFILE_FILE }}"
     for JAR in "{{ FLUSS_DEV_HOME }}"/build-target/plugins/*/devkit-*.jar; do
       [ -f "$JAR" ] || continue
@@ -404,7 +450,7 @@ logs service="" tail="100":
 
 [doc("Run a command in a service. Example: just exec tablet-server-0 java -version")]
 exec service *CMD:
-    @just compose-active exec "{{ service }}" {{ CMD }}
+    @just compose-active exec {{ quote(service) }} {{ quote(CMD) }}
 
 [private]
 check profile:
@@ -484,12 +530,22 @@ run-sql file:
       echo "SQL file not found: $FILE"
       exit 1
     fi
+    if [ ! -s "{{ ACTIVE_PROFILE_FILE }}" ]; then
+      echo "No active profile. Run: just up <profile>"
+      exit 1
+    fi
+    read -r PROFILE _ < "{{ ACTIVE_PROFILE_FILE }}"
+    if ! just profile-runtime-targets "$PROFILE" | grep -Fxq flink; then
+      echo "Active profile $PROFILE does not provide Flink SQL execution"
+      exit 1
+    fi
+    OUTPUT_FILE=$(mktemp)
+    trap 'rm -f "$OUTPUT_FILE"' EXIT
     set +e
-    OUTPUT=$(just compose-active exec -T jobmanager /opt/flink/bin/sql-client.sh -f /dev/stdin < "$FILE" 2>&1)
-    STATUS=$?
+    just compose-active exec -T jobmanager /opt/flink/bin/sql-client.sh -f /dev/stdin < "$FILE" 2>&1 | tee "$OUTPUT_FILE"
+    STATUS=${PIPESTATUS[0]}
     set -e
-    printf '%s\n' "$OUTPUT"
-    if [ "$STATUS" -ne 0 ] || printf '%s\n' "$OUTPUT" | grep -Eq '\[ERROR\]|Could not execute SQL statement'; then
+    if [ "$STATUS" -ne 0 ] || grep -Eq '\[ERROR\]|Could not execute SQL statement' "$OUTPUT_FILE"; then
       exit 1
     fi
 
@@ -511,4 +567,33 @@ tiering-status:
       echo "Flink is not running. Run: just up $PROFILE"
       exit 1
     fi
+    just check-tiering "$FORMAT"
+
+[doc("Resubmit the active profile's Tiering Job after a JobManager restart")]
+tiering-restart:
+    #!/usr/bin/env bash
+    set -e
+    if [ ! -s "{{ ACTIVE_PROFILE_FILE }}" ]; then
+      echo "No active profile. Run: just up <lake-profile>"
+      exit 1
+    fi
+    read -r PROFILE _ < "{{ ACTIVE_PROFILE_FILE }}"
+    FORMAT=$(just profile-format "$PROFILE")
+    if ! just profile-runtime-targets "$PROFILE" | grep -Fxq tiering || [ -z "$FORMAT" ]; then
+      echo "Active profile $PROFILE does not include Lake Tiering"
+      exit 1
+    fi
+    for _ in {1..30}; do
+      if just compose-active exec -T jobmanager curl -fsS http://localhost:8081/overview >/dev/null 2>&1; then
+        break
+      fi
+      sleep 2
+    done
+    just compose-active exec -T jobmanager curl -fsS http://localhost:8081/overview >/dev/null
+    if just compose-active exec -T jobmanager curl -fsS http://localhost:8081/jobs/overview | grep -Fq "Fluss Lake Tiering Service - $FORMAT"; then
+      echo "$FORMAT tiering job is already present"
+      just check-tiering "$FORMAT"
+      exit 0
+    fi
+    just compose-active run --rm tiering-submit
     just check-tiering "$FORMAT"

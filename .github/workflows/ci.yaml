@@ -49,6 +49,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
+      - name: Validate DevKit managed dependency versions
+        run: bash devkit/validate-managed-dependency-versions.sh
       - name: Set up JDK 8
         uses: actions/setup-java@v5
         with:
