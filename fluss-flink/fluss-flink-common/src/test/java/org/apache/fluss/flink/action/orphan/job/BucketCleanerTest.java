@@ -32,7 +32,10 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.attribute.FileTime;
+import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashSet;
+import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -110,6 +113,59 @@ class BucketCleanerTest {
         assertThat(stats.emptyDirsRemoved).isEqualTo(0L);
         assertThat(Files.exists(dotFile)).isTrue();
         assertThat(Files.exists(segmentDir)).isTrue();
+    }
+
+    @Test
+    void scansSharedDirectoryAndDeletesOrphanSst(@TempDir Path tmp) throws IOException {
+        Path bucketRoot = Files.createDirectories(tmp.resolve("bucket"));
+        Path sharedDir = Files.createDirectories(bucketRoot.resolve("shared"));
+        Path activeSst = Files.write(sharedDir.resolve("active.sst"), new byte[] {0x42});
+        Path orphanSst = Files.write(sharedDir.resolve("orphan.sst"), new byte[] {0x42});
+        long cutoff = System.currentTimeMillis() - 1000L;
+        makeOld(activeSst, cutoff - 1000L);
+        makeOld(orphanSst, cutoff - 1000L);
+        makeOld(sharedDir, cutoff - 1000L);
+        makeOld(bucketRoot, cutoff - 1000L);
+
+        Set<String> activeSharedSstFiles = new HashSet<>(Arrays.asList("active.sst"));
+        BucketActiveRefs activeRefs =
+                new BucketActiveRefs(
+                        Collections.<String>emptySet(),
+                        Collections.<String>emptySet(),
+                        Collections.<String>emptySet(),
+                        activeSharedSstFiles);
+
+        BucketCleaner cleaner = createCleaner(bucketRoot, cutoff);
+        BucketCleaner.BucketCleanStats stats =
+                cleaner.clean(activeRefs, new FsPath(bucketRoot.toString()));
+
+        assertThat(stats.scanned).isEqualTo(2L);
+        // orphan.sst deleted; active.sst kept
+        assertThat(stats.deleted).isGreaterThanOrEqualTo(1L);
+        assertThat(Files.exists(activeSst)).isTrue();
+        assertThat(Files.exists(orphanSst)).isFalse();
+    }
+
+    @Test
+    void keepsAllSharedSstWhenActiveSetIsEmpty(@TempDir Path tmp) throws IOException {
+        Path bucketRoot = Files.createDirectories(tmp.resolve("bucket"));
+        Path sharedDir = Files.createDirectories(bucketRoot.resolve("shared"));
+        Path sst1 = Files.write(sharedDir.resolve("file1.sst"), new byte[] {0x42});
+        Path sst2 = Files.write(sharedDir.resolve("file2.sst"), new byte[] {0x42});
+        long cutoff = System.currentTimeMillis() - 1000L;
+        makeOld(sst1, cutoff - 1000L);
+        makeOld(sst2, cutoff - 1000L);
+        makeOld(sharedDir, cutoff - 1000L);
+        makeOld(bucketRoot, cutoff - 1000L);
+
+        // Empty active set = conservative keep-all behavior
+        BucketCleaner cleaner = createCleaner(bucketRoot, cutoff);
+        BucketCleaner.BucketCleanStats stats =
+                cleaner.clean(BucketActiveRefs.empty(), new FsPath(bucketRoot.toString()));
+
+        // Both files kept (KEEP_ACTIVE due to empty active set)
+        assertThat(Files.exists(sst1)).isTrue();
+        assertThat(Files.exists(sst2)).isTrue();
     }
 
     private static void makeOld(Path path, long timestampMillis) throws IOException {
