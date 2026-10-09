@@ -60,11 +60,15 @@ pub(crate) struct FetchErrorContext {
 }
 
 /// Represents a completed fetch that can be consumed
-pub trait CompletedFetch: Send + Sync {
+pub(crate) trait CompletedFetch: Send + Sync {
     fn table_bucket(&self) -> &TableBucket;
     fn api_error(&self) -> Option<&ApiError>;
     fn fetch_error_context(&self) -> Option<&FetchErrorContext>;
     fn take_error(&mut self) -> Option<Error>;
+    /// Whether a previous batch read failed after returning partial results.
+    fn has_pending_error(&self) -> bool;
+    /// Retain a read error for the next poll without discarding earlier results.
+    fn defer_error(&mut self, error: Error);
     fn fetch_records(&mut self, max_records: usize) -> Result<FetchResult<Vec<ScanRecord>>>;
     fn fetch_batches(&mut self, max_batches: usize)
     -> Result<FetchResult<Vec<(RecordBatch, i64)>>>;
@@ -693,6 +697,15 @@ impl CompletedFetch for DefaultCompletedFetch {
         self.error.take()
     }
 
+    fn has_pending_error(&self) -> bool {
+        self.error.is_some()
+    }
+
+    fn defer_error(&mut self, error: Error) {
+        self.error = Some(error);
+        self.consumed = false;
+    }
+
     fn fetch_records(&mut self, max_records: usize) -> Result<FetchResult<Vec<ScanRecord>>> {
         if let Some(error) = self.error.take() {
             return Err(error);
@@ -764,6 +777,7 @@ impl CompletedFetch for DefaultCompletedFetch {
         max_batches: usize,
     ) -> Result<FetchResult<Vec<(RecordBatch, i64)>>> {
         if let Some(error) = self.error.take() {
+            self.drain();
             return Err(error);
         }
 
@@ -783,8 +797,19 @@ impl CompletedFetch for DefaultCompletedFetch {
         let mut batches = Vec::with_capacity(max_batches.min(16));
 
         for _ in 0..max_batches {
-            match self.next_fetched_batch()? {
-                FetchStep::InProgress(batch_with_offset) => batches.push(batch_with_offset),
+            let step = match self.next_fetched_batch() {
+                Ok(step) => step,
+                Err(error) => {
+                    if batches.is_empty() {
+                        self.drain();
+                        return Err(error);
+                    }
+                    self.defer_error(error);
+                    return Ok(FetchResult::Data(batches));
+                }
+            };
+            match step {
+                FetchStep::InProgress(fetched_batch) => batches.push(fetched_batch),
                 FetchStep::End => break,
                 FetchStep::SchemaRequired(schema_id) => {
                     if batches.is_empty() {
@@ -871,6 +896,14 @@ impl CompletedFetch for RemoteCompletedFetch {
 
     fn take_error(&mut self) -> Option<Error> {
         self.inner.take_error()
+    }
+
+    fn has_pending_error(&self) -> bool {
+        self.inner.has_pending_error()
+    }
+
+    fn defer_error(&mut self, error: Error) {
+        self.inner.defer_error(error);
     }
 
     fn fetch_records(&mut self, max_records: usize) -> Result<FetchResult<Vec<ScanRecord>>> {
@@ -1038,6 +1071,53 @@ mod tests {
                 panic!("unexpected missing schema {schema_id}")
             }
         }
+    }
+
+    #[test]
+    fn batch_decode_error_follows_already_collected_data() -> Result<()> {
+        let table_path = TablePath::new("db", "tbl");
+        let table_info = Arc::new(build_table_info_with_columns(
+            table_path.clone(),
+            1,
+            1,
+            vec![DataField::new("id", DataTypes::int(), None)],
+        ));
+        let row_type = table_info.get_row_type();
+        let mut builder = MemoryLogRecordsArrowBuilder::new(
+            uncompressed_arrow_batch_config(1, row_type, usize::MAX),
+            false,
+        )?;
+        let mut row = GenericRow::new(1);
+        row.set_field(0, 42_i32);
+        builder.append(&WriteRecord::for_append(
+            table_info.clone(),
+            Arc::new(PhysicalTablePath::of(Arc::new(table_path))),
+            1,
+            &row,
+        ))?;
+        let mut data = builder.build()?;
+        let mut corrupted = data.clone();
+        corrupted[..8].copy_from_slice(&1_i64.to_le_bytes());
+        corrupted[RECORDS_OFFSET..].fill(0);
+        data.extend(corrupted);
+
+        let mut fetch = DefaultCompletedFetch::new(
+            TableBucket::new(1, 0),
+            LogRecordsBatches::new(data.clone()),
+            data.len(),
+            test_resolver()?,
+            false,
+            0,
+            0,
+        );
+        let batches = expect_data(fetch.fetch_batches(10)?);
+        assert_eq!(batches.len(), 1);
+        assert_eq!(fetch.records_read(), 1);
+        assert_eq!(fetch.next_fetch_offset(), 1);
+        assert!(!fetch.is_consumed());
+        assert!(fetch.fetch_batches(10).is_err());
+        assert!(fetch.is_consumed());
+        Ok(())
     }
 
     fn test_resolver() -> Result<Arc<ReadContextResolver>> {

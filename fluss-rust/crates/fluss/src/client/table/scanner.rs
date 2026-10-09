@@ -1143,6 +1143,9 @@ impl LogScanner {
 // Implementation for RecordBatchLogScanner (batches mode)
 impl RecordBatchLogScanner {
     /// Poll for batches with metadata (bucket and offset information).
+    /// If a later batch fails to decode, already decoded batches are returned first.
+    /// The read error is reported by the next poll, unless the bucket is unsubscribed
+    /// or its offset is changed before that poll.
     pub async fn poll(&self, timeout: Duration) -> Result<Vec<ScanBatch>> {
         self.inner.poll_batches(timeout).await
     }
@@ -2230,8 +2233,23 @@ impl LogFetcher {
 
                 match next_in_line {
                     Some(mut next_fetch) if !next_fetch.is_consumed() => {
-                        let fetch_result =
-                            self.fetch_batches_from_fetch(&mut next_fetch, batches_remaining)?;
+                        if !result.is_empty() && next_fetch.has_pending_error() {
+                            self.log_fetch_buffer
+                                .set_next_in_line_fetch(Some(next_fetch));
+                            return Ok(result);
+                        }
+                        let fetch_result = match self
+                            .fetch_batches_from_fetch(&mut next_fetch, batches_remaining)
+                        {
+                            Ok(fetch_result) => fetch_result,
+                            Err(error) if !result.is_empty() => {
+                                next_fetch.defer_error(error);
+                                self.log_fetch_buffer
+                                    .set_next_in_line_fetch(Some(next_fetch));
+                                return Ok(result);
+                            }
+                            Err(error) => return Err(error),
+                        };
                         match fetch_result {
                             FetchResult::Data(scan_batches) => {
                                 let batch_count = scan_batches.len();
@@ -2667,6 +2685,7 @@ mod tests {
     use crate::metadata::{DataTypes, PhysicalTablePath, Schema, TableInfo, TablePath};
     use crate::proto::{PbFetchLogRespForBucket, PbFetchLogRespForTable};
     use crate::record::MemoryLogRecordsArrowBuilder;
+    use crate::record::RECORDS_OFFSET;
     use crate::row::{Datum, GenericRow};
     use crate::rpc::FlussError;
     use crate::test_utils::{
@@ -2783,6 +2802,132 @@ mod tests {
         let fetched = fetcher.collect_fetches().await?;
         assert_eq!(fetched.get(&bucket).unwrap().len(), 1);
         assert_eq!(status.get_bucket_offset(&bucket), Some(1));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn collect_batches_preserves_partial_results_and_error_order() -> Result<()> {
+        // Cover failures within one fetch and in the next fetch, including no preceding data.
+        let cases = [
+            (false, 0, 0),
+            (false, 0, 1),
+            (false, 0, 2),
+            (false, 1, 0),
+            (false, 1, 1),
+            (false, 1, 2),
+            (false, 2, 0),
+            (false, 2, 1),
+            (false, 2, 2),
+            (true, 0, 0),
+            (true, 0, 1),
+            (true, 0, 2),
+            (true, 1, 0),
+            (true, 1, 1),
+            (true, 1, 2),
+            (true, 2, 0),
+            (true, 2, 1),
+            (true, 2, 2),
+        ];
+        for (same_fetch, good_batches, subscription_change) in cases {
+            let table_path = TablePath::new("db", "tbl");
+            let table_info = build_table_info(table_path.clone(), 1, 1);
+            let metadata = Arc::new(Metadata::new_for_test(build_cluster_arc(&table_path, 1, 1)));
+            let status = Arc::new(LogScannerStatus::new());
+            let fetcher = LogFetcher::new(
+                table_info.clone(),
+                Arc::new(RpcClient::new()),
+                metadata.clone(),
+                status.clone(),
+                &Config::default(),
+                None,
+                false,
+                None,
+                test_scanner_metrics(&table_path),
+                test_schema_getter(&table_info, &metadata),
+            )?;
+            let bucket = TableBucket::new(1, 0);
+            status.assign_scan_bucket(bucket.clone(), 0);
+            let data = build_records(&table_info, Arc::new(table_path))?;
+            let make_fetch = |data: Vec<u8>, offset| {
+                let mut fetch = DefaultCompletedFetch::new(
+                    bucket.clone(),
+                    LogRecordsBatches::new(data.clone()),
+                    data.len(),
+                    test_resolver(&table_info),
+                    false,
+                    offset,
+                    0,
+                );
+                fetch.set_initialized();
+                Box::new(fetch) as Box<dyn CompletedFetch>
+            };
+            let mut combined = Vec::new();
+            for offset in 0..good_batches {
+                let mut good = data.clone();
+                good[..8].copy_from_slice(&(offset as i64).to_le_bytes());
+                if same_fetch {
+                    combined.extend(good);
+                } else {
+                    fetcher
+                        .log_fetch_buffer
+                        .add(make_fetch(good, offset as i64));
+                    // Empty fetches must not change the partial results.
+                    fetcher
+                        .log_fetch_buffer
+                        .add(make_fetch(Vec::new(), offset as i64 + 1));
+                }
+            }
+            let mut corrupted = data.clone();
+            corrupted[..8].copy_from_slice(&(good_batches as i64).to_le_bytes());
+            corrupted[RECORDS_OFFSET..].fill(0);
+            if same_fetch {
+                combined.extend(corrupted);
+                fetcher.log_fetch_buffer.add(make_fetch(combined, 0));
+            } else {
+                fetcher
+                    .log_fetch_buffer
+                    .add(make_fetch(corrupted, good_batches as i64));
+            }
+            let first = fetcher.collect_batches().await;
+            if good_batches == 0 {
+                assert!(first.is_err());
+            } else {
+                let batches = first?;
+                assert_eq!(batches.len(), good_batches);
+                for (offset, batch) in batches.iter().enumerate() {
+                    assert_eq!(batch.base_offset(), offset as i64);
+                    assert_eq!(batch.batch().num_rows(), 1);
+                }
+            }
+            assert_eq!(status.get_bucket_offset(&bucket), Some(good_batches as i64));
+            match subscription_change {
+                0 => {
+                    if good_batches > 0 {
+                        assert!(fetcher.collect_batches().await.is_err());
+                    }
+                }
+                1 => status.unassign_scan_buckets(std::slice::from_ref(&bucket)),
+                2 => status.update_offset(&bucket, good_batches as i64 + 1),
+                _ => unreachable!(),
+            }
+            // Seeking/unsubscribing discards the deferred error from the old position.
+            // A later fetch at the current offset must still succeed after an error.
+            let recovery_offset = good_batches as i64 + i64::from(subscription_change == 2);
+            let mut recovery = data.clone();
+            recovery[..8].copy_from_slice(&recovery_offset.to_le_bytes());
+            fetcher
+                .log_fetch_buffer
+                .add(make_fetch(recovery, recovery_offset));
+            let recovered = fetcher.collect_batches().await?;
+            if subscription_change == 1 {
+                assert!(recovered.is_empty());
+                assert_eq!(status.get_bucket_offset(&bucket), None);
+            } else {
+                assert_eq!(recovered.len(), 1);
+                assert_eq!(recovered[0].base_offset(), recovery_offset);
+                assert_eq!(status.get_bucket_offset(&bucket), Some(recovery_offset + 1));
+            }
+        }
         Ok(())
     }
 
