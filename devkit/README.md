@@ -235,7 +235,8 @@ just logs tablet-server-0 200
 just exec tablet-server-0 java -version
 ```
 
-After changing source code, run `just build <profile>` and `just up <profile>` again. Running
+After changing source code, run `just build <profile>` and `just up <profile>` again. For a
+three-TabletServer environment, keep using `just up <profile> 3` when restarting. Running
 containers are not hot-reloaded. If the JobManager is restarted, run `just tiering-restart` to
 submit the active profile's Tiering Job again. Restarting the same profile preserves named volumes; switching
 to another profile requires `just clean` first so lake metadata and objects from different formats
