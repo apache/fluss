@@ -25,7 +25,9 @@ use crate::client::table::log_fetch_buffer::{
     FetchResult, LogFetchBuffer, NO_FILTERED_END_OFFSET, RemotePendingFetch,
 };
 use crate::client::table::read_context_resolver::ReadContextResolver;
-use crate::client::table::remote_log::{RemoteLogDownloader, RemoteLogFetchInfo};
+use crate::client::table::remote_log::{
+    RemoteLogDirectory, RemoteLogDownloader, RemoteLogFetchInfo,
+};
 use crate::config::Config;
 use crate::error::Error::UnsupportedOperation;
 use crate::error::{ApiError, Error, FlussError, Result};
@@ -58,7 +60,6 @@ use std::{
     },
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
-use tempfile::TempDir;
 use tokio::task::JoinHandle;
 use tokio::time::MissedTickBehavior;
 
@@ -1454,7 +1455,7 @@ impl LogFetcher {
         }
         let resolver = Arc::new(resolver);
 
-        let tmp_dir = TempDir::with_prefix("fluss-remote-logs")?;
+        let tmp_dir = RemoteLogDirectory::new(config);
         let log_fetch_buffer = Arc::new(LogFetchBuffer::new(Arc::clone(&resolver)));
 
         // Create security token manager for background token refresh

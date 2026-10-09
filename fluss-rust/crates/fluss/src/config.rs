@@ -130,6 +130,11 @@ pub struct Config {
     #[arg(long, default_value_t = DEFAULT_SCANNER_REMOTE_LOG_READ_CONCURRENCY)]
     pub scanner_remote_log_read_concurrency: usize,
 
+    /// Parent directory for downloaded remote logs. None uses the OS temporary directory plus `/fluss`.
+    /// Missing parent directories are created when a remote file is downloaded.
+    #[arg(long)]
+    pub scanner_io_tmp_dir: Option<String>,
+
     /// Maximum number of records returned in a single call to poll() for LogScanner.
     /// Default: 500 (matching Java CLIENT_SCANNER_LOG_MAX_POLL_RECORDS)
     #[arg(long, default_value_t = DEFAULT_MAX_POLL_RECORDS)]
@@ -262,6 +267,7 @@ impl std::fmt::Debug for Config {
                 "scanner_remote_log_prefetch_num",
                 &self.scanner_remote_log_prefetch_num,
             )
+            .field("scanner_io_tmp_dir", &self.scanner_io_tmp_dir)
             .field(
                 "remote_file_download_thread_num",
                 &self.remote_file_download_thread_num,
@@ -334,6 +340,7 @@ impl Default for Config {
             scanner_remote_log_prefetch_num: DEFAULT_PREFETCH_NUM,
             remote_file_download_thread_num: DEFAULT_DOWNLOAD_THREADS,
             scanner_remote_log_read_concurrency: DEFAULT_SCANNER_REMOTE_LOG_READ_CONCURRENCY,
+            scanner_io_tmp_dir: None,
             scanner_log_max_poll_records: DEFAULT_MAX_POLL_RECORDS,
             scanner_log_fetch_max_bytes: DEFAULT_SCANNER_LOG_FETCH_MAX_BYTES,
             scanner_log_fetch_min_bytes: DEFAULT_SCANNER_LOG_FETCH_MIN_BYTES,
