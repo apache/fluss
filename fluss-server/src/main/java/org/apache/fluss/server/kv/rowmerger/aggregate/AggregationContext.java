@@ -52,6 +52,7 @@ public class AggregationContext {
     final FieldAggregator[] aggregators;
     final RowEncoder rowEncoder;
     final int fieldCount;
+    private final boolean requiresAggOnFirstWrite;
 
     /**
      * Mapping from column ID to field index in this schema. This is used for schema evolution to
@@ -77,6 +78,11 @@ public class AggregationContext {
         this.aggregators = aggregators;
         this.rowEncoder = rowEncoder;
         this.fieldCount = rowType.getFieldCount();
+        boolean aggOnFirstWrite = false;
+        for (FieldAggregator aggregator : aggregators) {
+            aggOnFirstWrite |= aggregator.requiresAggOnFirstWrite();
+        }
+        this.requiresAggOnFirstWrite = aggOnFirstWrite;
 
         // Build columnId to index mapping for schema evolution support
         this.columnIdToIndex = new HashMap<>();
@@ -90,6 +96,11 @@ public class AggregationContext {
         for (int pkIndex : schema.getPrimaryKeyIndexes()) {
             primaryKeyColsBitSet.set(pkIndex);
         }
+    }
+
+    /** Whether any field must be aggregated when the first row for a key is written. */
+    public boolean requiresAggOnFirstWrite() {
+        return requiresAggOnFirstWrite;
     }
 
     public Schema getSchema() {

@@ -73,6 +73,34 @@ class FieldLastNAggTest {
     }
 
     @Test
+    void testInputExactlySize() {
+        FieldLastNAgg agg = new FieldLastNAgg(BIGINTS, 3);
+        GenericArray input = longs(1, 2, 3);
+        assertThat(agg.agg(null, input)).isSameAs(input);
+        assertThat(toList(agg.agg(longs(0), input))).containsExactly(1L, 2L, 3L);
+    }
+
+    @Test
+    void testEmptyInputWithoutAccumulator() {
+        FieldLastNAgg agg = new FieldLastNAgg(BIGINTS, 2);
+        assertThat(((InternalArray) agg.agg(null, longs())).size()).isZero();
+    }
+
+    @Test
+    void testNullElements() {
+        FieldLastNAgg agg = new FieldLastNAgg(BIGINTS, 3);
+        Object acc =
+                agg.agg(
+                        new GenericArray(new Object[] {1L, null}),
+                        new GenericArray(new Object[] {null, 4L}));
+        InternalArray result = (InternalArray) acc;
+        assertThat(result.size()).isEqualTo(3);
+        assertThat(result.isNullAt(0)).isTrue();
+        assertThat(result.isNullAt(1)).isTrue();
+        assertThat(result.getLong(2)).isEqualTo(4L);
+    }
+
+    @Test
     void testReversedOrderTreatsInputAsOlder() {
         FieldLastNAgg agg = new FieldLastNAgg(BIGINTS, 3);
         assertThat(toList(agg.aggReversed(longs(3, 4), longs(1, 2)))).containsExactly(2L, 3L, 4L);
@@ -92,6 +120,13 @@ class FieldLastNAggTest {
     }
 
     @Test
+    void testRequiresAggOnFirstWrite() {
+        assertThat(new FieldLastNAgg(BIGINTS, 2).requiresAggOnFirstWrite()).isTrue();
+        assertThat(toList(new FieldLastNAgg(BIGINTS, 2).agg(null, longs(1, 2, 3))))
+                .containsExactly(2L, 3L);
+    }
+
+    @Test
     void testFactoryAndValidation() {
         FieldAggregatorFactory factory = FieldAggregatorFactory.getFactory(AggFunctionType.LAST_N);
         assertThat(factory.create(BIGINTS, AggFunctions.LAST_N(4)))
@@ -104,6 +139,8 @@ class FieldLastNAggTest {
                 .isInstanceOf(IllegalArgumentException.class);
         AggFunctionType.LAST_N.validateParameter("size", "1000");
         AggFunctionType.LAST_N.validateDataType(BIGINTS);
+        assertThatThrownBy(() -> new FieldLastNAgg(BIGINTS, 0))
+                .isInstanceOf(IllegalArgumentException.class);
     }
 
     private static GenericArray longs(long... values) {

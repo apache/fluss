@@ -22,6 +22,8 @@ import org.apache.fluss.row.GenericArray;
 import org.apache.fluss.row.InternalArray;
 import org.apache.fluss.types.ArrayType;
 
+import static org.apache.fluss.utils.Preconditions.checkArgument;
+
 /** Appends input arrays to the accumulator and keeps the last {@code size} elements. */
 public class FieldLastNAgg extends FieldAggregator {
 
@@ -32,6 +34,7 @@ public class FieldLastNAgg extends FieldAggregator {
 
     public FieldLastNAgg(ArrayType dataType, int size) {
         super(dataType);
+        checkArgument(size > 0, "size must be positive, but was %s", size);
         this.size = size;
         this.elementGetter = InternalArray.createElementGetter(dataType.getElementType());
     }
@@ -43,6 +46,12 @@ public class FieldLastNAgg extends FieldAggregator {
         }
         InternalArray older = (InternalArray) accumulator;
         InternalArray newer = (InternalArray) inputField;
+        if (older != null && newer.size() == 0) {
+            return accumulator;
+        }
+        if (older == null && newer.size() <= size) {
+            return inputField;
+        }
         int olderSize = older == null ? 0 : older.size();
         int total = olderSize + newer.size();
         int skip = Math.max(0, total - size);
@@ -54,5 +63,10 @@ public class FieldLastNAgg extends FieldAggregator {
                             : elementGetter.getElementOrNull(newer, i - olderSize);
         }
         return new GenericArray(result);
+    }
+
+    @Override
+    public boolean requiresAggOnFirstWrite() {
+        return true;
     }
 }

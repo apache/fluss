@@ -1584,6 +1584,10 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
                         "INSERT INTO last_n_agg VALUES "
                                 + "(1, ARRAY['c', 'd'], CAST(NULL AS ARRAY<BIGINT>))")
                 .await();
+        tEnv.executeSql(
+                        "INSERT INTO last_n_agg VALUES "
+                                + "(2, ARRAY['x', 'y', 'z'], ARRAY[CAST(1 AS BIGINT)])")
+                .await();
 
         CloseableIterator<Row> rowIter = tEnv.executeSql("SELECT * FROM last_n_agg").collect();
         List<String> expectedRows =
@@ -1592,7 +1596,8 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
                         "-U[1, [a], [1]]",
                         "+U[1, [a, b], [1, 2]]",
                         "-U[1, [a, b], [1, 2]]",
-                        "+U[1, [c, d], [1, 2]]");
+                        "+U[1, [c, d], [1, 2]]",
+                        "+I[2, [y, z], [1]]");
         assertResultsIgnoreOrder(rowIter, expectedRows, true);
     }
 
