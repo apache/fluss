@@ -40,6 +40,8 @@ pub struct InnerWriteBatch {
     batch_sequence: i32,
     writer_id: i64,
     last_acked_sequence_at_send: i32,
+    /// The bucket count the bucket id was computed with, or 0 before routing sets it.
+    routing_bucket_count: i32,
 }
 
 impl InnerWriteBatch {
@@ -61,6 +63,7 @@ impl InnerWriteBatch {
             batch_sequence: NO_BATCH_SEQUENCE,
             writer_id: NO_WRITER_ID,
             last_acked_sequence_at_send: -1,
+            routing_bucket_count: 0,
         }
     }
 
@@ -253,6 +256,14 @@ impl WriteBatch {
     /// Refreshes the acknowledged-sequence snapshot on every send, including retries.
     pub(crate) fn set_last_acked_sequence_at_send(&mut self, sequence: i32) {
         self.inner_batch_mut().last_acked_sequence_at_send = sequence;
+    }
+
+    pub(crate) fn routing_bucket_count(&self) -> Option<i32> {
+        Some(self.inner_batch().routing_bucket_count).filter(|count| *count > 0)
+    }
+
+    pub(crate) fn set_routing_bucket_count(&mut self, bucket_count: i32) {
+        self.inner_batch_mut().routing_bucket_count = bucket_count;
     }
 
     pub fn set_writer_state(&mut self, writer_id: i64, batch_base_sequence: i32) {

@@ -19,6 +19,7 @@ use crate::proto::ErrorResponse;
 use std::fmt::{Debug, Display, Formatter};
 
 /// API error response from Fluss server
+#[derive(Clone)]
 pub struct ApiError {
     pub code: i32,
     pub message: String,
@@ -171,8 +172,40 @@ pub enum FlussError {
     InvalidAlterTableException = 56,
     /// Deletion operations are disabled on this table.
     DeletionDisabledException = 57,
+    /// The server does not exist.
+    ServerNotExistException = 58,
+    /// The server tag already exists.
+    ServerTagAlreadyExistException = 59,
+    /// The server tag does not exist.
+    ServerTagNotExistException = 60,
+    /// The rebalance task failed.
+    RebalanceFailureException = 61,
+    /// No rebalance task is in progress.
+    NoRebalanceInProgressException = 62,
+    /// The client used an invalid producer ID.
+    InvalidProducerIdException = 63,
+    /// A configuration error occurred.
+    ConfigException = 64,
+    /// The coordinator is not the leader and cannot process the request.
+    NotCoordinatorLeaderException = 65,
+    /// The scanner session expired due to inactivity.
+    ScannerExpired = 66,
+    /// The server does not recognize the scanner id.
+    UnknownScannerId = 67,
+    /// The scan request is invalid.
+    InvalidScanRequest = 68,
+    /// The per-bucket or per-server scanner session limit has been reached.
+    TooManyScanners = 69,
+    /// The tablet server rejected writes because its data disk reached the write-limit ratio.
+    DiskWriteLocked = 70,
+    /// The cluster does not have enough KV leader replica capacity.
+    InsufficientKvLeaderReplicaCapacity = 71,
     /// The KV storage engine rejected a write due to backpressure.
     StorageBackpressureException = 72,
+    /// The historical partition request was throttled because too many are in flight.
+    HistoricalPartitionThrottled = 73,
+    /// The request's bucket routing is missing or stale; refresh metadata and rebuild it.
+    InvalidBucketRouting = 74,
 }
 
 impl FlussError {
@@ -198,6 +231,22 @@ impl FlussError {
                 | FlussError::NotEnoughReplicasException
                 | FlussError::LeaderNotAvailableException
                 | FlussError::StorageBackpressureException
+                | FlussError::DiskWriteLocked
+                | FlussError::HistoricalPartitionThrottled
+        )
+    }
+
+    /// Whether the client's metadata for the failed bucket is stale, so it must be refreshed
+    /// before a retry can reach the right leader with the right bucket count.
+    pub(crate) fn invalidates_metadata(&self) -> bool {
+        matches!(
+            self,
+            FlussError::NotLeaderOrFollower
+                | FlussError::LeaderNotAvailableException
+                | FlussError::FencedLeaderEpochException
+                | FlussError::UnknownTableOrBucketException
+                | FlussError::InvalidCoordinatorException
+                | FlussError::InvalidBucketRouting
         )
     }
 
@@ -304,6 +353,36 @@ impl FlussError {
             FlussError::StorageBackpressureException => {
                 "The tablet server has rejected the write because the KV storage engine has reached its write-pressure threshold."
             }
+            FlussError::ServerNotExistException => "The server does not exist.",
+            FlussError::ServerTagAlreadyExistException => "The server tag already exists.",
+            FlussError::ServerTagNotExistException => "The server tag does not exist.",
+            FlussError::RebalanceFailureException => "The rebalance task failed.",
+            FlussError::NoRebalanceInProgressException => "No rebalance task is in progress.",
+            FlussError::InvalidProducerIdException => {
+                "The client has attempted to perform an operation with an invalid producer ID."
+            }
+            FlussError::ConfigException => "A configuration error occurred.",
+            FlussError::NotCoordinatorLeaderException => {
+                "The coordinator is not a leader and cannot process request."
+            }
+            FlussError::ScannerExpired => "The scanner session has expired due to inactivity.",
+            FlussError::UnknownScannerId => "The scanner id is not recognized by the server.",
+            FlussError::InvalidScanRequest => "The scan request is invalid.",
+            FlussError::TooManyScanners => {
+                "The per-bucket or per-server scanner session limit has been reached."
+            }
+            FlussError::DiskWriteLocked => {
+                "The tablet server has rejected writes because its data disk usage reached the configured write-limit ratio."
+            }
+            FlussError::InsufficientKvLeaderReplicaCapacity => {
+                "The cluster does not have enough KV leader replica capacity."
+            }
+            FlussError::HistoricalPartitionThrottled => {
+                "Historical partition request is throttled because too many historical requests are in flight."
+            }
+            FlussError::InvalidBucketRouting => {
+                "The request's bucket routing information is missing or invalid. The client should refresh partition metadata and rebuild the request."
+            }
         }
     }
 
@@ -378,7 +457,23 @@ impl FlussError {
             55 => FlussError::IneligibleReplicaException,
             56 => FlussError::InvalidAlterTableException,
             57 => FlussError::DeletionDisabledException,
+            58 => FlussError::ServerNotExistException,
+            59 => FlussError::ServerTagAlreadyExistException,
+            60 => FlussError::ServerTagNotExistException,
+            61 => FlussError::RebalanceFailureException,
+            62 => FlussError::NoRebalanceInProgressException,
+            63 => FlussError::InvalidProducerIdException,
+            64 => FlussError::ConfigException,
+            65 => FlussError::NotCoordinatorLeaderException,
+            66 => FlussError::ScannerExpired,
+            67 => FlussError::UnknownScannerId,
+            68 => FlussError::InvalidScanRequest,
+            69 => FlussError::TooManyScanners,
+            70 => FlussError::DiskWriteLocked,
+            71 => FlussError::InsufficientKvLeaderReplicaCapacity,
             72 => FlussError::StorageBackpressureException,
+            73 => FlussError::HistoricalPartitionThrottled,
+            74 => FlussError::InvalidBucketRouting,
             _ => FlussError::UnknownServerError,
         }
     }
@@ -421,6 +516,7 @@ mod tests {
             FlussError::for_code(72),
             FlussError::StorageBackpressureException
         );
+        assert_eq!(FlussError::for_code(74), FlussError::InvalidBucketRouting);
         assert_eq!(FlussError::for_code(9999), FlussError::UnknownServerError);
     }
 
@@ -485,6 +581,8 @@ mod tests {
             FlussError::NotEnoughReplicasException,
             FlussError::LeaderNotAvailableException,
             FlussError::StorageBackpressureException,
+            FlussError::DiskWriteLocked,
+            FlussError::HistoricalPartitionThrottled,
         ];
         for err in &retriable {
             assert!(err.is_retriable(), "{err:?} should be retriable");
@@ -505,6 +603,7 @@ mod tests {
             FlussError::FencedLeaderEpochException,
             FlussError::FencedTieringEpochException,
             FlussError::RetriableAuthenticateException,
+            FlussError::InvalidBucketRouting,
         ];
         for err in &non_retriable {
             assert!(!err.is_retriable(), "{err:?} should not be retriable");

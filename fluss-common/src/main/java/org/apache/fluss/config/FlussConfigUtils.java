@@ -49,6 +49,7 @@ public class FlussConfigUtils {
                 Arrays.asList(
                         ConfigOptions.TABLE_DATALAKE_ENABLED.key(),
                         ConfigOptions.TABLE_DATALAKE_HISTORICAL_PARTITION_ENABLED.key(),
+                        ConfigOptions.TABLE_DATALAKE_HISTORICAL_PARTITION_LOOKUP_MODE.key(),
                         ConfigOptions.TABLE_DATALAKE_DATABASE_NAME.key(),
                         ConfigOptions.TABLE_DATALAKE_TABLE_NAME.key(),
                         ConfigOptions.TABLE_DATALAKE_FRESHNESS.key(),
@@ -124,6 +125,8 @@ public class FlussConfigUtils {
 
     public static void validateCoordinatorConfigs(Configuration conf) {
         validateServerConfigs(conf);
+        validMinDuration(conf, ConfigOptions.COORDINATOR_CONTROL_REQUEST_RETRY_BACKOFF, 1);
+        validMinDuration(conf, ConfigOptions.COORDINATOR_CONTROL_REQUEST_TIMEOUT, 1);
     }
 
     public static void validateTabletConfigs(Configuration conf) {

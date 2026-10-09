@@ -19,10 +19,12 @@ use super::{LookupQueue, QueuedLookup};
 use crate::client::lookup::lookup_query::LookupQuery;
 use crate::client::metadata::Metadata;
 use crate::error::{Error, FlussError, Result};
-use crate::metadata::{TableBucket, TablePath};
+use crate::metadata::{PhysicalTablePath, TableBucket, TablePath};
 use crate::proto::{LookupResponse, PrefixLookupResponse};
-use crate::rpc::ServerConnection;
-use crate::rpc::message::{LookupRequest, PrefixLookupRequest, ReadType, RequestBody, WriteType};
+use crate::rpc::message::{
+    BucketLookupKeys, LookupRequest, PrefixLookupRequest, ReadType, RequestBody, WriteType,
+};
+use crate::rpc::{ApiError, ServerConnection};
 use crate::{BucketId, PartitionId, TableId};
 use bytes::Bytes;
 use futures::stream::{FuturesUnordered, StreamExt};
@@ -55,10 +57,7 @@ trait LookupProtocol {
 
     const OP_NAME: &'static str;
 
-    fn build_request(
-        table_id: TableId,
-        keys_by_bucket: Vec<(BucketId, Option<PartitionId>, Vec<Bytes>)>,
-    ) -> Self::Request;
+    fn build_request(table_id: TableId, keys_by_bucket: Vec<BucketLookupKeys>) -> Self::Request;
 
     fn decode_buckets(
         response: Self::Response,
@@ -73,10 +72,7 @@ impl LookupProtocol for Primary {
 
     const OP_NAME: &'static str = "Lookup";
 
-    fn build_request(
-        table_id: TableId,
-        keys_by_bucket: Vec<(BucketId, Option<PartitionId>, Vec<Bytes>)>,
-    ) -> Self::Request {
+    fn build_request(table_id: TableId, keys_by_bucket: Vec<BucketLookupKeys>) -> Self::Request {
         LookupRequest::new_batched(table_id, keys_by_bucket)
     }
 
@@ -101,10 +97,7 @@ impl LookupProtocol for Prefix {
 
     const OP_NAME: &'static str = "Prefix lookup";
 
-    fn build_request(
-        table_id: TableId,
-        keys_by_bucket: Vec<(BucketId, Option<PartitionId>, Vec<Bytes>)>,
-    ) -> Self::Request {
+    fn build_request(table_id: TableId, keys_by_bucket: Vec<BucketLookupKeys>) -> Self::Request {
         PrefixLookupRequest::new_batched(table_id, keys_by_bucket)
     }
 
@@ -211,10 +204,17 @@ impl<T> LookupBatch<T> {
         }
     }
 
-    fn keys_tuple(&mut self) -> (BucketId, Option<PartitionId>, Vec<Bytes>) {
+    fn keys_tuple(&mut self) -> BucketLookupKeys {
+        // All lookups of a bucket share one routing count.
+        let routing_bucket_count = self
+            .lookups
+            .first()
+            .map(|lookup| lookup.routing_bucket_count())
+            .filter(|count| *count > 0);
         (
             self.table_bucket.bucket_id(),
             self.table_bucket.partition_id(),
+            routing_bucket_count,
             std::mem::take(&mut self.keys),
         )
     }
@@ -461,8 +461,11 @@ impl LookupSender {
         let tablet_server = match cluster.get_tablet_server(destination) {
             Some(server) => server.clone(),
             None => {
-                let err_msg = format!("Server {} is not found in metadata cache", destination);
-                self.fail_all_batches(&err_msg, true, batches_by_table);
+                let error = Error::UnexpectedError {
+                    message: format!("Server {destination} is not found in metadata cache"),
+                    source: None,
+                };
+                self.fail_all_batches(&error, true, batches_by_table);
                 return None;
             }
         };
@@ -470,8 +473,11 @@ impl LookupSender {
         match self.metadata.get_connection(&tablet_server).await {
             Ok(conn) => Some(conn),
             Err(e) => {
-                let err_msg = format!("Failed to get connection to server {}: {}", destination, e);
-                self.fail_all_batches(&err_msg, true, batches_by_table);
+                let error = with_context(
+                    e,
+                    format!("Failed to get connection to server {destination}"),
+                );
+                self.fail_all_batches(&error, true, batches_by_table);
                 None
             }
         }
@@ -479,7 +485,7 @@ impl LookupSender {
 
     fn fail_all_batches<T>(
         &self,
-        err_msg: &str,
+        error: &Error,
         is_retriable: bool,
         batches_by_table: &mut HashMap<TableId, Vec<LookupBatch<T>>>,
     ) where
@@ -487,7 +493,7 @@ impl LookupSender {
     {
         for batches in batches_by_table.values_mut() {
             for batch in batches.iter_mut() {
-                self.handle_batch_error(err_msg, is_retriable, batch);
+                self.handle_batch_error(error, is_retriable, batch);
             }
         }
     }
@@ -512,10 +518,10 @@ impl LookupSender {
                 self.handle_response::<P>(table_id, destination, response, &mut batches);
             }
             Err(e) => {
-                let err_msg = format!("{} request failed: {}", P::OP_NAME, e);
                 let is_retriable = e.is_retriable();
+                let error = with_context(e, format!("{} request failed", P::OP_NAME));
                 for batch in &mut batches {
-                    self.handle_batch_error(&err_msg, is_retriable, batch);
+                    self.handle_batch_error(&error, is_retriable, batch);
                 }
             }
         }
@@ -567,13 +573,13 @@ impl LookupSender {
             processed[idx] = true;
             let batch = &mut batches[idx];
 
-            if let Some(err) = extract_bucket_error(
-                bucket_resp.error_code,
-                bucket_resp.error_message,
-                &table_bucket,
-                P::OP_NAME,
-            ) {
-                self.handle_batch_error(&err.message, err.is_retriable, batch);
+            if let Some(api_error) = bucket_error(bucket_resp.error_code, bucket_resp.error_message)
+            {
+                if FlussError::for_code(api_error.code).invalidates_metadata() {
+                    self.invalidate_bucket_metadata(&table_bucket);
+                }
+                let is_retriable = api_error.is_retriable();
+                self.handle_batch_error(&Error::FlussAPIError { api_error }, is_retriable, batch);
                 continue;
             }
 
@@ -581,6 +587,27 @@ impl LookupSender {
         }
 
         self.fail_unprocessed_batches(&processed, batches, destination, P::OP_NAME);
+    }
+
+    /// Drops the cached leaders of `table_bucket`'s table or partition, so the next lookup
+    /// for it waits for a metadata refresh.
+    fn invalidate_bucket_metadata(&self, table_bucket: &TableBucket) {
+        let cluster = self.metadata.get_cluster();
+        let Some(table_path) = cluster.get_table_path_by_id(table_bucket.table_id()) else {
+            return;
+        };
+        let table_path = Arc::new(table_path.clone());
+        let physical_table_path = match table_bucket.partition_id() {
+            Some(partition_id) => match cluster.get_partition_name(partition_id) {
+                Some(partition_name) => {
+                    PhysicalTablePath::of_partitioned(table_path, Some(partition_name.clone()))
+                }
+                None => return,
+            },
+            None => PhysicalTablePath::of(table_path),
+        };
+        self.metadata
+            .invalidate_physical_table_meta(&HashSet::from([physical_table_path]));
     }
 
     fn fail_unprocessed_batches<T>(
@@ -595,18 +622,21 @@ impl LookupSender {
         for (idx, was_processed) in processed.iter().enumerate() {
             if !was_processed {
                 let batch = &mut batches[idx];
-                let err_msg = format!(
-                    "Bucket {} {} response missing from server {}",
-                    batch.table_bucket.bucket_id(),
-                    op_name,
-                    destination
-                );
-                self.handle_batch_error(&err_msg, true, batch);
+                let error = Error::UnexpectedError {
+                    message: format!(
+                        "Bucket {} {} response missing from server {}",
+                        batch.table_bucket.bucket_id(),
+                        op_name,
+                        destination
+                    ),
+                    source: None,
+                };
+                self.handle_batch_error(&error, true, batch);
             }
         }
     }
 
-    fn handle_batch_error<T>(&self, error_msg: &str, is_retriable: bool, batch: &mut LookupBatch<T>)
+    fn handle_batch_error<T>(&self, error: &Error, is_retriable: bool, batch: &mut LookupBatch<T>)
     where
         LookupQuery<T>: Into<QueuedLookup>,
     {
@@ -620,10 +650,7 @@ impl LookupSender {
                 self.re_enqueue_lookup(lookup.into());
                 retried += 1;
             } else {
-                lookup.complete_with_error(Error::UnexpectedError {
-                    message: error_msg.to_string(),
-                    source: None,
-                });
+                lookup.complete_with_error(copy_error(error));
                 failed += 1;
             }
         }
@@ -631,13 +658,13 @@ impl LookupSender {
         if retried > 0 {
             warn!(
                 "Lookup error for bucket {}, retrying {} lookups: {}",
-                table_bucket, retried, error_msg
+                table_bucket, retried, error
             );
         }
         if failed > 0 {
             warn!(
                 "Lookup failed for bucket {} ({} lookups): {}",
-                table_bucket, failed, error_msg
+                table_bucket, failed, error
             );
         }
     }
@@ -682,30 +709,125 @@ fn build_bucket_index<T>(batches: &[LookupBatch<T>]) -> HashMap<TableBucket, usi
         .collect()
 }
 
-struct BucketError {
-    message: String,
-    is_retriable: bool,
-}
-
-fn extract_bucket_error(
-    error_code: Option<i32>,
-    error_message: Option<String>,
-    table_bucket: &TableBucket,
-    op: &str,
-) -> Option<BucketError> {
+fn bucket_error(error_code: Option<i32>, error_message: Option<String>) -> Option<ApiError> {
     let code = error_code?;
     let fluss_error = FlussError::for_code(code);
     if fluss_error == FlussError::None {
         return None;
     }
-    Some(BucketError {
-        message: format!(
-            "{} error for bucket {}: code={}, message={}",
-            op,
+    let message = error_message.unwrap_or_else(|| fluss_error.message().to_string());
+    Some(ApiError { code, message })
+}
+
+/// Leaves API errors as they are, so callers keep the error code.
+fn with_context(error: Error, context: String) -> Error {
+    match error {
+        Error::FlussAPIError { .. } => error,
+        other => Error::UnexpectedError {
+            message: format!("{context}: {other}"),
+            source: None,
+        },
+    }
+}
+
+fn copy_error(error: &Error) -> Error {
+    match error {
+        Error::FlussAPIError { api_error } => Error::FlussAPIError {
+            api_error: api_error.clone(),
+        },
+        Error::UnexpectedError { message, .. } => Error::UnexpectedError {
+            message: message.clone(),
+            source: None,
+        },
+        other => Error::UnexpectedError {
+            message: other.to_string(),
+            source: None,
+        },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::client::lookup::LookupQueue;
+    use crate::proto::PbLookupRespForBucket;
+    use crate::test_utils::build_cluster_arc;
+    use tokio::sync::oneshot;
+
+    const TABLE_ID: TableId = 1;
+
+    fn table_path() -> TablePath {
+        TablePath::new("db", "tbl")
+    }
+
+    fn sender(max_retries: i32) -> LookupSender {
+        let cluster = build_cluster_arc(&table_path(), TABLE_ID, 1);
+        let metadata = Arc::new(Metadata::new_for_test(cluster));
+        let (queue, _lookup_tx, re_enqueue_tx) =
+            LookupQueue::new(8, 8, 100, metadata.subscribe_cluster_changes());
+        let (_shutdown_tx, shutdown_rx) = watch::channel(false);
+        LookupSender::new(metadata, queue, re_enqueue_tx, 1, max_retries, shutdown_rx)
+    }
+
+    fn fail_with_bucket_error(sender: &LookupSender, error_code: i32) -> Error {
+        let table_bucket = TableBucket::new(TABLE_ID, 0);
+        let (result_tx, mut result_rx) = oneshot::channel();
+        let mut batch = LookupBatch::new(table_bucket.clone());
+        batch.add_lookup(LookupQuery::new(
+            table_path(),
             table_bucket,
-            code,
-            error_message.unwrap_or_default()
-        ),
-        is_retriable: fluss_error.is_retriable(),
-    })
+            1,
+            Bytes::from_static(b"key"),
+            result_tx,
+        ));
+        let response = LookupResponse {
+            buckets_resp: vec![PbLookupRespForBucket {
+                bucket_id: 0,
+                error_code: Some(error_code),
+                error_message: Some("from the server".to_string()),
+                ..Default::default()
+            }],
+        };
+        sender.handle_response::<Primary>(TABLE_ID, 1, response, std::slice::from_mut(&mut batch));
+        result_rx
+            .try_recv()
+            .expect("lookup completed")
+            .expect_err("lookup failed")
+    }
+
+    #[test]
+    fn a_bucket_error_fails_its_lookups_with_the_api_error() {
+        let error = fail_with_bucket_error(&sender(3), FlussError::InvalidBucketRouting.code());
+        assert_eq!(error.api_error(), Some(FlussError::InvalidBucketRouting));
+        assert!(error.to_string().contains("from the server"), "{error}");
+    }
+
+    #[test]
+    fn a_retriable_bucket_error_keeps_its_code_once_retries_run_out() {
+        let error = fail_with_bucket_error(&sender(0), FlussError::NotLeaderOrFollower.code());
+        assert_eq!(error.api_error(), Some(FlussError::NotLeaderOrFollower));
+    }
+
+    #[test]
+    fn a_routing_error_drops_the_cached_leaders() {
+        let sender = sender(3);
+        let table_bucket = TableBucket::new(TABLE_ID, 0);
+        assert!(
+            sender
+                .metadata
+                .get_cluster()
+                .leader_for(&table_bucket)
+                .is_some()
+        );
+
+        fail_with_bucket_error(&sender, FlussError::InvalidBucketRouting.code());
+
+        assert!(
+            sender
+                .metadata
+                .get_cluster()
+                .leader_for(&table_bucket)
+                .is_none()
+        );
+    }
 }

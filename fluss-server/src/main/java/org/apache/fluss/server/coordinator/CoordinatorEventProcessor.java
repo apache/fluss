@@ -47,6 +47,7 @@ import org.apache.fluss.metadata.TableBucketReplica;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePartition;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.rpc.messages.AddServerTagByRackResponse;
 import org.apache.fluss.rpc.messages.AddServerTagResponse;
 import org.apache.fluss.rpc.messages.AdjustIsrResponse;
 import org.apache.fluss.rpc.messages.CancelRebalanceResponse;
@@ -57,9 +58,11 @@ import org.apache.fluss.rpc.messages.ControlledShutdownResponse;
 import org.apache.fluss.rpc.messages.ListRebalanceProgressResponse;
 import org.apache.fluss.rpc.messages.PbCommitLakeTableSnapshotRespForTable;
 import org.apache.fluss.rpc.messages.RebalanceResponse;
+import org.apache.fluss.rpc.messages.RemoveServerTagByRackResponse;
 import org.apache.fluss.rpc.messages.RemoveServerTagResponse;
 import org.apache.fluss.rpc.protocol.ApiError;
 import org.apache.fluss.server.coordinator.event.AccessContextEvent;
+import org.apache.fluss.server.coordinator.event.AddServerTagByRackEvent;
 import org.apache.fluss.server.coordinator.event.AddServerTagEvent;
 import org.apache.fluss.server.coordinator.event.AdjustIsrReceivedEvent;
 import org.apache.fluss.server.coordinator.event.CancelRebalanceEvent;
@@ -87,6 +90,7 @@ import org.apache.fluss.server.coordinator.event.NotifyLeaderAndIsrResponseRecei
 import org.apache.fluss.server.coordinator.event.RebalanceEvent;
 import org.apache.fluss.server.coordinator.event.RebalanceTaskTimeoutEvent;
 import org.apache.fluss.server.coordinator.event.RecoverRebalanceEvent;
+import org.apache.fluss.server.coordinator.event.RemoveServerTagByRackEvent;
 import org.apache.fluss.server.coordinator.event.RemoveServerTagEvent;
 import org.apache.fluss.server.coordinator.event.ResumeDropEvent;
 import org.apache.fluss.server.coordinator.event.RetryOfflineLeaderEvent;
@@ -371,6 +375,11 @@ public class CoordinatorEventProcessor implements EventProcessor {
 
     public int getCoordinatorEpoch() {
         return coordinatorContext.getCoordinatorEpoch();
+    }
+
+    /** The ZK version of the coordinator epoch znode, used for epoch fencing of ZK mutations. */
+    public int getCoordinatorZkVersion() {
+        return coordinatorContext.getCoordinatorZkVersion();
     }
 
     private void initCoordinatorContext() throws Exception {
@@ -735,11 +744,22 @@ public class CoordinatorEventProcessor implements EventProcessor {
             completeFromCallable(
                     addServerTagEvent.getRespCallback(),
                     () -> processAddServerTag(addServerTagEvent));
+        } else if (event instanceof AddServerTagByRackEvent) {
+            AddServerTagByRackEvent addServerTagByRackEvent = (AddServerTagByRackEvent) event;
+            completeFromCallable(
+                    addServerTagByRackEvent.getRespCallback(),
+                    () -> processAddServerTagByRack(addServerTagByRackEvent));
         } else if (event instanceof RemoveServerTagEvent) {
             RemoveServerTagEvent removeServerTagEvent = (RemoveServerTagEvent) event;
             completeFromCallable(
                     removeServerTagEvent.getRespCallback(),
                     () -> processRemoveServerTag(removeServerTagEvent));
+        } else if (event instanceof RemoveServerTagByRackEvent) {
+            RemoveServerTagByRackEvent removeServerTagByRackEvent =
+                    (RemoveServerTagByRackEvent) event;
+            completeFromCallable(
+                    removeServerTagByRackEvent.getRespCallback(),
+                    () -> processRemoveServerTagByRack(removeServerTagByRackEvent));
         } else if (event instanceof RebalanceEvent) {
             RebalanceEvent rebalanceEvent = (RebalanceEvent) event;
             completeFromCallable(
@@ -927,7 +947,8 @@ public class CoordinatorEventProcessor implements EventProcessor {
                         oldTableInfo.getRemoteDataDir(),
                         oldTableInfo.getComment().orElse(null),
                         oldTableInfo.getCreatedTime(),
-                        System.currentTimeMillis()));
+                        System.currentTimeMillis(),
+                        oldTableInfo.getBucketCountEpoch()));
 
         updateTabletServerMetadataCache(
                 new HashSet<>(coordinatorContext.getLiveTabletServers().values()),
@@ -1005,6 +1026,19 @@ public class CoordinatorEventProcessor implements EventProcessor {
                     newAutoPartitionStrategy);
             autoPartitionManager.handleAutoPartitionStrategyChange(
                     newTableInfo, oldAutoPartitionStrategy, newAutoPartitionStrategy);
+        } else if (newAutoPartitionStrategy.isAutoPartitionEnabled()
+                && oldTableInfo.getNumBuckets() != newTableInfo.getNumBuckets()) {
+            // bucket.num changed (e.g. via ALTER TABLE) without any auto-partition strategy
+            // change. Refresh the cached TableInfo so that newly auto-created partitions use
+            // the updated table-level bucket count as their per-partition bucket count.
+            LOG.info(
+                    "Updating auto-partition metadata for table {} (tableId={}) after "
+                            + "bucket.num changed from {} to {}.",
+                    newTableInfo.getTablePath(),
+                    newTableInfo.getTableId(),
+                    oldTableInfo.getNumBuckets(),
+                    newTableInfo.getNumBuckets());
+            autoPartitionManager.updateAutoPartitionTables(newTableInfo);
         }
 
         // If standby replica config changed, trigger re-election for all online buckets
@@ -1421,12 +1455,22 @@ public class CoordinatorEventProcessor implements EventProcessor {
     }
 
     private AddServerTagResponse processAddServerTag(AddServerTagEvent event) {
-        AddServerTagResponse addServerTagResponse = new AddServerTagResponse();
-        List<Integer> serverIds = event.getServerIds();
-        ServerTag serverTag = event.getServerTag();
+        addServerTags(event.getServerIds(), event.getServerTag());
+        return new AddServerTagResponse();
+    }
+
+    private AddServerTagByRackResponse processAddServerTagByRack(AddServerTagByRackEvent event) {
+        addServerTags(serverIdsInRacks(event.getRacks()), event.getServerTag());
+        return new AddServerTagByRackResponse();
+    }
+
+    private void addServerTags(List<Integer> serverIds, ServerTag serverTag) {
+        if (serverIds.isEmpty()) {
+            return;
+        }
 
         // Verify that dose serverTag exist for input serverIds. If any of them exists for one
-        // serverId and the server ta isg different, an ServerNotExistException error will be thrown
+        // serverId and the server tag is different, an ServerNotExistException error will be thrown
         // and none of them will be written to coordinatorContext and zk.
         Map<Integer, ServerInfo> liveTabletServers = coordinatorContext.getLiveTabletServers();
         for (Integer serverId : serverIds) {
@@ -1471,14 +1515,32 @@ public class CoordinatorEventProcessor implements EventProcessor {
                 coordinatorContext.getCoordinatorServerInfo(),
                 new HashSet<>(coordinatorContext.getLiveTabletServers().values()),
                 coordinatorContext.getServerTags());
-
-        return addServerTagResponse;
     }
 
     private RemoveServerTagResponse processRemoveServerTag(RemoveServerTagEvent event) {
-        RemoveServerTagResponse removeServerTagResponse = new RemoveServerTagResponse();
-        List<Integer> serverIds = event.getServerIds();
-        ServerTag serverTag = event.getServerTag();
+        removeServerTags(event.getServerIds(), event.getServerTag());
+        return new RemoveServerTagResponse();
+    }
+
+    private RemoveServerTagByRackResponse processRemoveServerTagByRack(
+            RemoveServerTagByRackEvent event) {
+        removeServerTags(serverIdsInRacks(event.getRacks()), event.getServerTag());
+        return new RemoveServerTagByRackResponse();
+    }
+
+    private List<Integer> serverIdsInRacks(List<String> requestedRacks) {
+        Set<String> racks = new HashSet<>(requestedRacks);
+        return coordinatorContext.getLiveTabletServers().values().stream()
+                .filter(serverInfo -> racks.contains(serverInfo.rack()))
+                .map(ServerInfo::id)
+                .sorted()
+                .collect(Collectors.toList());
+    }
+
+    private void removeServerTags(List<Integer> serverIds, ServerTag serverTag) {
+        if (serverIds.isEmpty()) {
+            return;
+        }
 
         // Verify that does serverTag not exist for input serverIds. If the server tag does not
         // exist for any one of the tabletServers, throw an error and none of them will be removed
@@ -1524,8 +1586,6 @@ public class CoordinatorEventProcessor implements EventProcessor {
                 coordinatorContext.getCoordinatorServerInfo(),
                 new HashSet<>(coordinatorContext.getLiveTabletServers().values()),
                 coordinatorContext.getServerTags());
-
-        return removeServerTagResponse;
     }
 
     private RebalanceResponse processRebalance(RebalanceEvent rebalanceEvent) {

@@ -35,6 +35,7 @@ import org.apache.fluss.exception.HistoricalPartitionThrottledException;
 import org.apache.fluss.exception.IneligibleReplicaException;
 import org.apache.fluss.exception.InsufficientKvLeaderReplicaCapacityException;
 import org.apache.fluss.exception.InvalidAlterTableException;
+import org.apache.fluss.exception.InvalidBucketRoutingException;
 import org.apache.fluss.exception.InvalidColumnProjectionException;
 import org.apache.fluss.exception.InvalidConfigException;
 import org.apache.fluss.exception.InvalidCoordinatorException;
@@ -285,7 +286,12 @@ public enum Errors {
     HISTORICAL_PARTITION_THROTTLED(
             73,
             "Historical partition request is throttled because too many historical requests are in flight.",
-            HistoricalPartitionThrottledException::new);
+            HistoricalPartitionThrottledException::new),
+    INVALID_BUCKET_ROUTING(
+            74,
+            "The request's bucket routing information is missing or invalid. The client should "
+                    + "refresh partition metadata and rebuild the request.",
+            InvalidBucketRoutingException::new);
 
     private static final Logger LOG = LoggerFactory.getLogger(Errors.class);
 

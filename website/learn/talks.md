@@ -29,7 +29,7 @@ A cross-project panel on building resilient governance and lowering barriers to 
 ### Fluss: A Streaming Storage for Real-Time Lakehouse
 **Jark Wu** • Carnegie Mellon Future Data Systems Seminar Series 2025 • December 2025
 
-This seminar session explores Fluss as the foundation of a Streaming Lakehouse model, where real-time data in Fluss and historical data in Lakehouse (Iceberg) are seamlessly unified for truly real-time analytics. Built on Apache Arrow, Fluss provides the columnar streaming storage and sub-second ingestion that make this unified model possible.
+This seminar session explores Fluss as the streaming table layer of a Lakestream foundation, where real-time data in Fluss and historical data in Lakehouse (Iceberg) are seamlessly unified for truly real-time analytics. Built on Apache Arrow, Fluss provides the columnar streaming storage and sub-second ingestion that make this unified model possible.
 
 [📹 Watch on YouTube](https://www.youtube.com/watch?v=mcFHZFb1CAo) | [Slides](https://speakerdeck.com/jark/cmu-db-2025fall-apache-fluss-a-streaming-storage-for-real-time-lakehouse)
 
@@ -38,7 +38,7 @@ This seminar session explores Fluss as the foundation of a Streaming Lakehouse m
 ### The Seven Deadly Sins of Streaming
 **Giannis Polyzos** • Big Data Conference Europe 2025 • December 2025
 
-Exploring the Streaming Lakehouse model, powered by Fluss’s columnar streaming storage, addresses the “Seven Deadly Sins of Streaming,” from redundant data copies and unqueryable streams to stale lakehouse data and costly architectures. By unifying streaming and lakehouse systems through streaming tables, Fluss enables real-time dashboards, streaming ETL, and Customer 360 use cases within a single, modern architecture that delivers fresher, more efficient real-time analytics.
+Exploring the Lakestream model, powered by Fluss’s columnar streaming storage, addresses the “Seven Deadly Sins of Streaming,” from redundant data copies and unqueryable streams to stale lakehouse data and costly architectures. By unifying streaming and lakehouse systems through streaming tables, Fluss enables real-time dashboards, streaming ETL, and Customer 360 use cases within a single, modern architecture that delivers fresher, more efficient real-time analytics.
 
 [📹 Watch on YouTube](https://www.youtube.com/watch?v=ZOh9XH4zGLM)
 
@@ -83,7 +83,7 @@ Exploring Fluss's core architecture and key technological breakthroughs, coverin
 ### Webinar: Fluss 0.7 - A New Stream of Possibilities
 **Giannis Polyzos, Jark Wu & Mehul Batra** • Community Webinar • June 2025
 
-Deep dive into the new features and capabilities introduced in Fluss 0.7, including enhanced stability, new streaming lakehouse architecture, and enterprise-grade security features.
+Deep dive into the new features and capabilities introduced in Fluss 0.7, including enhanced stability, new Lakestream capabilities, and enterprise-grade security features.
 
 [📹 Watch on YouTube](https://youtu.be/G-1yiYN2qoo?si=4LFSW45GehWSIj_9) | [Slides](https://speakerdeck.com/jark/fluss-0-dot-7-webinar)
 

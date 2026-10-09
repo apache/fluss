@@ -24,16 +24,22 @@ import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.record.TestData;
 import org.apache.fluss.row.encode.KvValueLayout;
+import org.apache.fluss.rpc.messages.DescribeBucketsResponse;
+import org.apache.fluss.rpc.messages.PbBucketInfo;
+import org.apache.fluss.server.metadata.BucketMetadata;
 
 import org.junit.jupiter.api.Test;
 
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Map;
 
 import static org.apache.fluss.server.RpcServiceBase.validateKvSnapshotMetadataVersion;
+import static org.apache.fluss.server.zk.data.LeaderAndIsr.NO_LEADER;
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-/** Tests KV snapshot metadata API compatibility. */
+/** Tests for {@link RpcServiceBase}. */
 class RpcServiceBaseTest {
 
     @Test
@@ -45,6 +51,23 @@ class RpcServiceBaseTest {
                 .isInstanceOf(UnsupportedVersionException.class);
         validateKvSnapshotMetadataVersion((short) 1, taggedTableInfo);
         validateKvSnapshotMetadataVersion((short) 0, plainTableInfo);
+    }
+
+    @Test
+    void testAddBucketInfoNormalizesNoLeader() {
+        DescribeBucketsResponse response = new DescribeBucketsResponse();
+        BucketMetadata bucketMetadata =
+                new BucketMetadata(0, NO_LEADER, 3, Arrays.asList(1, 2, 3), Arrays.asList(1, 2), 4);
+
+        RpcServiceBase.addBucketInfo(response, null, null, bucketMetadata);
+
+        PbBucketInfo bucketInfo = response.getBucketInfosList().get(0);
+        assertThat(bucketInfo.hasLeaderId()).isFalse();
+        assertThat(bucketInfo.hasLeaderEpoch()).isFalse();
+        assertThat(bucketInfo.hasBucketEpoch()).isTrue();
+        assertThat(bucketInfo.getBucketEpoch()).isEqualTo(4);
+        assertThat(bucketInfo.getReplicaIds()).containsExactly(1, 2, 3);
+        assertThat(bucketInfo.getIsrs()).containsExactly(1, 2);
     }
 
     private static TableInfo tableInfo(KvValueLayout layout) {

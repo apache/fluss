@@ -18,11 +18,13 @@
 package org.apache.fluss.client.table.scanner.batch;
 
 import org.apache.fluss.client.metadata.MetadataUpdater;
+import org.apache.fluss.cluster.Cluster;
 import org.apache.fluss.exception.LeaderNotAvailableException;
 import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.SchemaGetter;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
+import org.apache.fluss.metadata.TableOrPartition;
 import org.apache.fluss.record.DefaultValueRecordBatch;
 import org.apache.fluss.record.LogRecord;
 import org.apache.fluss.record.LogRecordBatch;
@@ -103,10 +105,14 @@ public class LimitBatchScanner implements BatchScanner {
                         .setBucketId(tableBucket.getBucket())
                         .setLimit(limit);
 
+        metadataUpdater.checkAndUpdateMetadata(tableInfo.getTablePath(), tableBucket);
+        Cluster cluster = metadataUpdater.getCluster();
         if (tableBucket.getPartitionId() != null) {
             limitScanRequest.setPartitionId(tableBucket.getPartitionId());
-            metadataUpdater.checkAndUpdateMetadata(tableInfo.getTablePath(), tableBucket);
         }
+        cluster.getBucketCount(
+                        TableOrPartition.of(tableBucket.getTableId(), tableBucket.getPartitionId()))
+                .ifPresent(limitScanRequest::setRoutingBucketCount);
 
         // because that rocksdb is not suitable to projection, thus do it in client.
         int leader = metadataUpdater.leaderFor(tableInfo.getTablePath(), tableBucket);

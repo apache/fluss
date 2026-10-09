@@ -356,3 +356,46 @@ This product bundles Jackson JSON processor with the following in its NOTICE:
 | from the source code management (SCM) system project uses.
 
 ------------------------------------------------------------------------------------
+
+This product includes code from the following Apache projects:
+
+Apache Flink
+Copyright 2014-2024 The Apache Software Foundation
+
+Apache Kafka
+Copyright 2012-2024 The Apache Software Foundation
+
+Apache Paimon
+Copyright 2023-2024 The Apache Software Foundation
+
+Apache Arrow Java
+Copyright 2016-2025 The Apache Software Foundation
+
+Apache Spark
+Copyright 2014 and onwards The Apache Software Foundation.
+
+------------------------------------------------------------------------------------
+
+Apache Commons Math
+Copyright 2001-2016 The Apache Software Foundation
+
+This product includes software developed for Orekit by
+CS Systèmes d'Information (http://www.c-s.fr/)
+Copyright 2010-2012 CS Systèmes d'Information
+
+------------------------------------------------------------------------------------
+
+Paimon 2.0.0 bundles scala-library, scala-reflect and scala-compiler 2.12.18.
+The 2.12.15 versions listed in paimon-codegen/META-INF/NOTICE in the upstream
+paimon-bundle-2.0.0.jar are outdated. The following notice applies to the
+bundled Scala 2.12.18 code:
+
+Scala
+Copyright (c) 2002-2023 EPFL
+Copyright (c) 2011-2023 Lightbend, Inc.
+
+Scala includes software developed at
+LAMP/EPFL (https://lamp.epfl.ch/) and
+Lightbend, Inc. (https://www.lightbend.com/).
+
+------------------------------------------------------------------------------------

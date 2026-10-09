@@ -35,26 +35,26 @@ type Pillar = {
 const PILLARS: Pillar[] = [
     {
         number: '01',
-        title: 'Unified Architecture',
-        summary: 'One system for messaging, applications, analytics, and AI.',
-        body: 'Replaces the message queue, key-value store, and OLAP engine with a single platform serving transport, lookups, and queries from the same data.',
-        basis: 'Dual representation of PK Tables (Log Store & KV Store).',
+        title: 'Streamhouse Architecture',
+        summary: 'Reusable tables for streaming, serving, and analytics.',
+        body: 'Independent engines and applications share maintained datasets through supported interfaces, reducing repeated ingestion and reconstruction of equivalent data.',
+        basis: 'Shared table schemas, row semantics, and supported access paths.',
         Svg: require('@site/static/img/feature_update.svg').default,
     },
     {
         number: '02',
-        title: 'Stream & Lakehouse Unification',
-        summary: 'One copy of data across real-time and batch layers.',
-        body: 'Hot and cold tiers share the same schema and are queryable as one substrate, so streaming and historical reads hit one source of truth.',
-        basis: 'Tiering Service and Union Read across Iceberg, Paimon, and Lance.',
+        title: 'Lakestream Foundation',
+        summary: 'Fresh and historical data as one logical table.',
+        body: 'Streaming and lakehouse representations remain coordinated through shared metadata, managed tiering, and supported reads across their different freshness layers.',
+        basis: 'Table metadata, committed tiering progress, and Union Read integrations.',
         Svg: require('@site/static/img/feature_lake.svg').default,
     },
     {
         number: '03',
         title: 'Compute / Storage Separation',
-        summary: 'Lean, elastic, stateless compute with fast recovery.',
-        body: 'Stateless compute recovers in seconds and runs up to 85% cheaper than Kafka-based topologies. State lives on the Fluss leader, not Flink slots.',
-        basis: 'Stateless compute model with leader-resident state and KV snapshots.',
+        summary: 'Independent engines operating on shared tables.',
+        body: 'Engines run transformations and publish reusable result tables. Private execution state, including windows and timers, remains the responsibility of each computation.',
+        basis: 'Separate compute and storage services with supported table interfaces.',
         Svg: require('@site/static/img/feature_real_time.svg').default,
     },
     {
@@ -68,17 +68,17 @@ const PILLARS: Pillar[] = [
     {
         number: '05',
         title: 'Feature & Context Stores',
-        summary: 'Multi-modal data on one substrate, ready for ML and AI.',
-        body: 'Row, columnar, and vector data on one store. Online features, RAG context, and analytics collapse into one PK Table accessed through different views.',
-        basis: 'Unified substrate spanning structured features and vector context.',
+        summary: 'Maintained data for ML serving and AI context.',
+        body: 'Applications retrieve shared features and context through supported interfaces while owning their retrieval policies, decision logs, and any specialized indexes.',
+        basis: 'Primary-key lookups, streaming reads, and lake format integrations.',
         Svg: require('@site/static/img/feature_query.svg').default,
     },
     {
         number: '06',
         title: 'Ecosystem Openness',
-        summary: 'Open formats. No vendor lock-in.',
-        body: 'Readable by Flink, Spark, Trino, StarRocks, Doris, and DuckDB. Native hot tier plus Iceberg, Paimon, and Lance for the cold tier, open formats end to end.',
-        basis: 'Open lake formats throughout, governed at the Apache Software Foundation.',
+        summary: 'Documented formats and supported APIs.',
+        body: 'Compatible engines read streams, committed lake data, or both through a supported union integration. Capabilities depend on the engine and lake format.',
+        basis: 'Streaming APIs, open lake formats, and catalog integrations.',
         Svg: require('@site/static/img/feature_changelog.svg').default,
     },
 ];
@@ -113,9 +113,9 @@ export default function HomepageFeatures(): JSX.Element {
                         The benefits, grounded in the architecture.
                     </Heading>
                     <p className={styles.lead}>
-                        Each pillar is a direct consequence of a specific architectural
-                        mechanism. Together they collapse the fragmented real-time stack
-                        into a single coherent foundation.
+                        Apache Fluss enables shared table maintenance and access
+                        across streaming and lakehouse storage, with independent
+                        engines providing computation, queries, and serving.
                     </p>
                 </div>
 

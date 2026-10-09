@@ -25,6 +25,7 @@ import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.HistoricalPartitionThrottledException;
 import org.apache.fluss.exception.InvalidPartitionException;
 import org.apache.fluss.lake.lakestorage.LakeTableLookuper;
+import org.apache.fluss.memory.MemorySegment;
 import org.apache.fluss.metadata.ChangelogImage;
 import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.PhysicalTablePath;
@@ -50,18 +51,25 @@ import org.apache.fluss.row.encode.ValueEncoder;
 import org.apache.fluss.rpc.entity.FetchLogResultForBucket;
 import org.apache.fluss.rpc.entity.LookupResultForBucket;
 import org.apache.fluss.rpc.entity.PutKvResultForBucket;
+import org.apache.fluss.rpc.messages.NotifyLakeTableOffsetResponse;
 import org.apache.fluss.rpc.protocol.ApiKeys;
 import org.apache.fluss.rpc.protocol.Errors;
 import org.apache.fluss.rpc.protocol.MergeMode;
 import org.apache.fluss.server.entity.FetchReqInfo;
+import org.apache.fluss.server.entity.LakeBucketOffset;
 import org.apache.fluss.server.entity.LookupDataForBucket;
+import org.apache.fluss.server.entity.NotifyLakeTableOffsetData;
 import org.apache.fluss.server.entity.NotifyLeaderAndIsrData;
 import org.apache.fluss.server.entity.NotifyLeaderAndIsrResultForBucket;
 import org.apache.fluss.server.entity.PutKvDataForBucket;
 import org.apache.fluss.server.kv.KvStateLookupResult;
 import org.apache.fluss.server.kv.KvTablet;
+import org.apache.fluss.server.kv.historical.HistoricalKvKeyEncoder;
+import org.apache.fluss.server.kv.historical.HistoricalKvTombstone;
 import org.apache.fluss.server.log.FetchParams;
 import org.apache.fluss.server.log.LogAppendInfo;
+import org.apache.fluss.server.log.LogSegment;
+import org.apache.fluss.server.log.LogTablet;
 import org.apache.fluss.server.metadata.BucketMetadata;
 import org.apache.fluss.server.metadata.ClusterMetadata;
 import org.apache.fluss.server.metadata.PartitionMetadata;
@@ -83,9 +91,13 @@ import org.apache.fluss.utils.types.Tuple2;
 import com.github.benmanes.caffeine.cache.Scheduler;
 import com.github.benmanes.caffeine.cache.Ticker;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
+import org.rocksdb.FlushOptions;
 
 import javax.annotation.Nullable;
 
+import java.io.IOException;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -93,6 +105,7 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -108,6 +121,7 @@ import static org.apache.fluss.testutils.DataTestUtils.compactedRow;
 import static org.apache.fluss.testutils.DataTestUtils.genKvRecordBatch;
 import static org.apache.fluss.testutils.DataTestUtils.row;
 import static org.apache.fluss.testutils.InternalRowAssert.assertThatRow;
+import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.apache.fluss.utils.PartitionUtils.HISTORICAL_PARTITION_VALUE;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -123,6 +137,10 @@ class HistoricalPartitionManagerTest extends ReplicaTestBase {
     private static final String ANOTHER_ORIGINAL_PARTITION = "20240108";
     private static final String HISTORICAL_PARTITION = HISTORICAL_PARTITION_VALUE;
     private static final TableBucket TABLE_BUCKET = new TableBucket(TABLE_ID, PARTITION_ID, 0);
+    private static final RowType KEY_TYPE =
+            DataTypes.ROW(
+                    new DataField("id", DataTypes.INT()),
+                    new DataField("region", DataTypes.STRING()));
 
     @Test
     void testResolvesMultipleLakeMissesWithoutPrewriteRollback() throws Exception {
@@ -132,45 +150,30 @@ class HistoricalPartitionManagerTest extends ReplicaTestBase {
         assertThat(kvTablet).isNotNull();
         TestingHistoricalLakeLookupManager lakeLookupManager =
                 new TestingHistoricalLakeLookupManager(lookupConfiguration());
-        HistoricalPartitionManager historicalPartitionManager =
-                new HistoricalPartitionManager(
-                        new HistoricalPartitionTaskExecutor(lookupConfiguration()),
-                        lakeLookupManager);
 
-        RowType keyType =
-                DataTypes.ROW(
-                        new DataField("id", DataTypes.INT()),
-                        new DataField("region", DataTypes.STRING()));
-        CompactedKeyEncoder keyEncoder = new CompactedKeyEncoder(keyType);
-        byte[] firstKey = keyEncoder.encodeKey(row(1, "us"));
-        byte[] secondKey = keyEncoder.encodeKey(row(2, "eu"));
+        byte[] firstKey = key(1, "us");
+        byte[] secondKey = key(2, "eu");
+        byte[] thirdKey = key(3, "ap");
         KvRecordBatch insertBatch =
                 batch(
-                        keyType,
                         tableInfo.getRowType(),
-                        Tuple2.of(
-                                new Object[] {1, "us"},
-                                new Object[] {1, "us", ORIGINAL_PARTITION, "v1"}),
+                        upsert(1, "us", ORIGINAL_PARTITION, "v1"),
                         // The second record reuses the first record's staged state and must not
                         // trigger another lake lookup for the same key.
-                        Tuple2.of(
-                                new Object[] {1, "us"},
-                                new Object[] {1, "us", ORIGINAL_PARTITION, "v1-updated"}),
-                        Tuple2.of(
-                                new Object[] {2, "eu"},
-                                new Object[] {2, "eu", ORIGINAL_PARTITION, "v2"}));
+                        upsert(1, "us", ORIGINAL_PARTITION, "v1-updated"),
+                        upsert(2, "eu", ORIGINAL_PARTITION, "v2"),
+                        // The absent delete is a no-op. The following upsert must still see the
+                        // resolved absence without another lake lookup.
+                        delete(3, "ap"),
+                        upsert(3, "ap", ORIGINAL_PARTITION, "v3"));
         long truncateCount =
                 replicaManager.getServerMetricGroup().kvTruncateAsErrorCount().getCount();
 
-        try {
-            historicalPartitionManager.processPut(
-                    replica,
-                    new PutKvDataForBucket(TABLE_BUCKET, insertBatch, ORIGINAL_PARTITION),
-                    null,
-                    MergeMode.DEFAULT,
-                    1);
+        try (HistoricalPartitionManager historicalPartitionManager =
+                createHistoricalPartitionManager(lakeLookupManager)) {
+            writeBatch(historicalPartitionManager, replica, ORIGINAL_PARTITION, insertBatch);
 
-            assertThat(lakeLookupManager.lookupCount).hasValue(2);
+            assertThat(lakeLookupManager.lookupCount).hasValue(3);
             assertThat(lakeLookupManager.lookupBatchCount).hasValue(1);
             assertThat(replicaManager.getServerMetricGroup().kvTruncateAsErrorCount().getCount())
                     .isEqualTo(truncateCount);
@@ -187,8 +190,91 @@ class HistoricalPartitionManagerTest extends ReplicaTestBase {
                     secondKey,
                     tableInfo,
                     row(2, "eu", ORIGINAL_PARTITION, "v2"));
-        } finally {
-            historicalPartitionManager.close();
+            assertHistoricalValue(
+                    kvTablet,
+                    ORIGINAL_PARTITION,
+                    thirdKey,
+                    tableInfo,
+                    row(3, "ap", ORIGINAL_PARTITION, "v3"));
+        }
+    }
+
+    @Test
+    void testReusesLocalProbeResultsWhenEntriesDisappearBeforeApply() throws Exception {
+        TableInfo tableInfo = registerHistoricalTableAndBecomeLeader();
+        Replica replica = replicaManager.getReplicaOrException(TABLE_BUCKET);
+        KvTablet kvTablet = replica.getKvTablet();
+        assertThat(kvTablet).isNotNull();
+        TestingHistoricalLakeLookupManager lakeLookupManager =
+                new TestingHistoricalLakeLookupManager(lookupConfiguration());
+
+        RowType rowType = tableInfo.getRowType();
+        byte[] valueKey = key(1, "us");
+        byte[] tombstoneKey = key(2, "eu");
+        byte[] missingKey = key(3, "ap");
+
+        try (HistoricalPartitionManager historicalPartitionManager =
+                createHistoricalPartitionManager(lakeLookupManager)) {
+            // Seed exactly the two local states that compaction can remove between phases.
+            kvTablet.getRocksDBKv()
+                    .put(
+                            HistoricalKvKeyEncoder.encode(ORIGINAL_PARTITION, valueKey),
+                            ValueEncoder.forLayout(KvValueLayout.TAGGED)
+                                    .encodeValue(
+                                            new BinaryValue(
+                                                    (short) tableInfo.getSchemaId(),
+                                                    compactedRow(
+                                                            rowType,
+                                                            new Object[] {
+                                                                1, "us", ORIGINAL_PARTITION, "v1"
+                                                            })),
+                                            0L));
+            kvTablet.getRocksDBKv()
+                    .put(
+                            HistoricalKvKeyEncoder.encode(ORIGINAL_PARTITION, tombstoneKey),
+                            HistoricalKvTombstone.encode(1L));
+
+            // The third key forces lake I/O after all three keys have been probed. Remove the
+            // value and tombstone during that I/O to model compaction between probe and apply.
+            lakeLookupManager.setLookupHook(
+                    () -> {
+                        deleteHistoricalRocksDbKey(kvTablet, valueKey);
+                        deleteHistoricalRocksDbKey(kvTablet, tombstoneKey);
+                    });
+
+            LogAppendInfo appendInfo =
+                    writeBatch(
+                            historicalPartitionManager,
+                            replica,
+                            ORIGINAL_PARTITION,
+                            batch(
+                                    rowType,
+                                    upsert(1, "us", ORIGINAL_PARTITION, "v2"),
+                                    upsert(2, "eu", ORIGINAL_PARTITION, "recreated"),
+                                    upsert(3, "ap", ORIGINAL_PARTITION, "inserted")));
+
+            assertThat(appendInfo.numMessages()).isEqualTo(4);
+            assertThat(lakeLookupManager.lookupCount).hasValue(1);
+            assertThat(lakeLookupManager.lookupBatchCount).hasValue(1);
+            flushAndWait(kvTablet, Long.MAX_VALUE);
+            assertHistoricalValue(
+                    kvTablet,
+                    ORIGINAL_PARTITION,
+                    valueKey,
+                    tableInfo,
+                    row(1, "us", ORIGINAL_PARTITION, "v2"));
+            assertHistoricalValue(
+                    kvTablet,
+                    ORIGINAL_PARTITION,
+                    tombstoneKey,
+                    tableInfo,
+                    row(2, "eu", ORIGINAL_PARTITION, "recreated"));
+            assertHistoricalValue(
+                    kvTablet,
+                    ORIGINAL_PARTITION,
+                    missingKey,
+                    tableInfo,
+                    row(3, "ap", ORIGINAL_PARTITION, "inserted"));
         }
     }
 
@@ -200,31 +286,14 @@ class HistoricalPartitionManagerTest extends ReplicaTestBase {
         assertThat(kvTablet).isNotNull();
         TestingHistoricalLakeLookupManager lakeLookupManager =
                 new TestingHistoricalLakeLookupManager(lookupConfiguration());
-        HistoricalPartitionManager historicalPartitionManager =
-                new HistoricalPartitionManager(
-                        new HistoricalPartitionTaskExecutor(lookupConfiguration()),
-                        lakeLookupManager);
 
-        RowType keyType =
-                DataTypes.ROW(
-                        new DataField("id", DataTypes.INT()),
-                        new DataField("region", DataTypes.STRING()));
-        byte[] primaryKey = new CompactedKeyEncoder(keyType).encodeKey(row(1, "us"));
+        byte[] primaryKey = key(1, "us");
         KvRecordBatch insertBatch =
-                batch(
-                        keyType,
-                        tableInfo.getRowType(),
-                        Tuple2.of(
-                                new Object[] {1, "us"},
-                                new Object[] {1, "us", ORIGINAL_PARTITION, "v1"}));
+                batch(tableInfo.getRowType(), upsert(1, "us", ORIGINAL_PARTITION, "v1"));
 
-        try {
-            historicalPartitionManager.processPut(
-                    replica,
-                    new PutKvDataForBucket(TABLE_BUCKET, insertBatch, ORIGINAL_PARTITION),
-                    null,
-                    MergeMode.DEFAULT,
-                    1);
+        try (HistoricalPartitionManager historicalPartitionManager =
+                createHistoricalPartitionManager(lakeLookupManager)) {
+            writeBatch(historicalPartitionManager, replica, ORIGINAL_PARTITION, insertBatch);
 
             assertThat(lakeLookupManager.lookupCount).hasValue(0);
             assertThat(lakeLookupManager.lookupBatchCount).hasValue(0);
@@ -235,8 +304,6 @@ class HistoricalPartitionManagerTest extends ReplicaTestBase {
                     primaryKey,
                     tableInfo,
                     row(1, "us", ORIGINAL_PARTITION, "v1"));
-        } finally {
-            historicalPartitionManager.close();
         }
     }
 
@@ -249,36 +316,20 @@ class HistoricalPartitionManagerTest extends ReplicaTestBase {
         assertThat(kvManager.getKv(TABLE_BUCKET)).contains(kvTablet);
         TestingHistoricalLakeLookupManager lakeLookupManager =
                 new TestingHistoricalLakeLookupManager(lookupConfiguration());
-        HistoricalPartitionManager historicalPartitionManager =
-                new HistoricalPartitionManager(
-                        new HistoricalPartitionTaskExecutor(lookupConfiguration()),
-                        lakeLookupManager);
 
-        RowType keyType =
-                DataTypes.ROW(
-                        new DataField("id", DataTypes.INT()),
-                        new DataField("region", DataTypes.STRING()));
         RowType rowType = tableInfo.getRowType();
-        byte[] primaryKey = new CompactedKeyEncoder(keyType).encodeKey(row(1, "us"));
+        byte[] primaryKey = key(1, "us");
 
-        try {
+        try (HistoricalPartitionManager historicalPartitionManager =
+                createHistoricalPartitionManager(lakeLookupManager)) {
             // The first write misses both local state and lake, so it creates a local overlay.
-            KvRecordBatch insertBatch =
-                    batch(
-                            keyType,
-                            rowType,
-                            Tuple2.of(
-                                    new Object[] {1, "us"},
-                                    new Object[] {1, "us", "20240107", "v1"}));
+            KvRecordBatch insertBatch = batch(rowType, upsert(1, "us", "20240107", "v1"));
             assertThat(
-                            historicalPartitionManager
-                                    .processPut(
+                            writeBatch(
+                                            historicalPartitionManager,
                                             replica,
-                                            new PutKvDataForBucket(
-                                                    TABLE_BUCKET, insertBatch, ORIGINAL_PARTITION),
-                                            null,
-                                            MergeMode.DEFAULT,
-                                            1)
+                                            ORIGINAL_PARTITION,
+                                            insertBatch)
                                     .lastOffset())
                     .isZero();
             flushAndWait(kvTablet, Long.MAX_VALUE);
@@ -293,19 +344,12 @@ class HistoricalPartitionManagerTest extends ReplicaTestBase {
 
             // The same primary key in another original partition must use a separate state entry.
             KvRecordBatch anotherPartitionBatch =
-                    batch(
-                            keyType,
-                            rowType,
-                            Tuple2.of(
-                                    new Object[] {1, "us"},
-                                    new Object[] {1, "us", "20240108", "another"}));
-            historicalPartitionManager.processPut(
+                    batch(rowType, upsert(1, "us", "20240108", "another"));
+            writeBatch(
+                    historicalPartitionManager,
                     replica,
-                    new PutKvDataForBucket(
-                            TABLE_BUCKET, anotherPartitionBatch, ANOTHER_ORIGINAL_PARTITION),
-                    null,
-                    MergeMode.DEFAULT,
-                    1);
+                    ANOTHER_ORIGINAL_PARTITION,
+                    anotherPartitionBatch);
             flushAndWait(kvTablet, Long.MAX_VALUE);
             assertHistoricalValue(
                     kvTablet,
@@ -322,13 +366,7 @@ class HistoricalPartitionManagerTest extends ReplicaTestBase {
             assertThat(lakeLookupManager.lookupCount).hasValue(2);
 
             // Exercise the ReplicaManager entry point; the update should reuse the local overlay.
-            KvRecordBatch updateBatch =
-                    batch(
-                            keyType,
-                            rowType,
-                            Tuple2.of(
-                                    new Object[] {1, "us"},
-                                    new Object[] {1, "us", "20240107", "v2"}));
+            KvRecordBatch updateBatch = batch(rowType, upsert(1, "us", "20240107", "v2"));
             CompletableFuture<List<PutKvResultForBucket>> updateResponse =
                     new CompletableFuture<>();
             assertThat(replica.tableMetrics().totalHistoricalPutKvRequests().getCount()).isZero();
@@ -386,14 +424,8 @@ class HistoricalPartitionManagerTest extends ReplicaTestBase {
             assertThat(lookedUpValue.row.getString(3)).isEqualTo(BinaryString.fromString("v2"));
 
             // Keep a tombstone locally so a later lookup cannot resurrect the value from lake.
-            KvRecordBatch deleteBatch =
-                    batch(keyType, rowType, Tuple2.of(new Object[] {1, "us"}, null));
-            historicalPartitionManager.processPut(
-                    replica,
-                    new PutKvDataForBucket(TABLE_BUCKET, deleteBatch, ORIGINAL_PARTITION),
-                    null,
-                    MergeMode.DEFAULT,
-                    1);
+            KvRecordBatch deleteBatch = batch(rowType, delete(1, "us"));
+            writeBatch(historicalPartitionManager, replica, ORIGINAL_PARTITION, deleteBatch);
             flushAndWait(kvTablet, Long.MAX_VALUE);
             assertThat(kvTablet.lookupHistoricalLocal(ORIGINAL_PARTITION, primaryKey))
                     .isEqualTo(KvStateLookupResult.deleted());
@@ -425,8 +457,204 @@ class HistoricalPartitionManagerTest extends ReplicaTestBase {
                                     replica.putRecordsToLeader(
                                             insertBatch, null, MergeMode.DEFAULT, 1))
                     .isInstanceOf(InvalidPartitionException.class);
-        } finally {
-            historicalPartitionManager.close();
+        }
+    }
+
+    @Test
+    void testHistoricalMutationsUseProducingWalOffsetsAsTags() throws Exception {
+        TableInfo tableInfo = registerHistoricalTableAndBecomeLeader();
+        Replica replica = replicaManager.getReplicaOrException(TABLE_BUCKET);
+        KvTablet kvTablet = replica.getKvTablet();
+        assertThat(kvTablet).isNotNull();
+        RowType rowType = tableInfo.getRowType();
+        byte[] primaryKey = key(1, "us");
+
+        try (HistoricalPartitionManager historicalPartitionManager =
+                createHistoricalPartitionManager(
+                        new TestingHistoricalLakeLookupManager(lookupConfiguration()))) {
+            LogAppendInfo insertAppend =
+                    writeBatch(
+                            historicalPartitionManager,
+                            replica,
+                            ORIGINAL_PARTITION,
+                            batch(rowType, upsert(1, "us", ORIGINAL_PARTITION, "v1")));
+            flushAndWait(kvTablet, Long.MAX_VALUE);
+            assertHistoricalValueTag(
+                    kvTablet, ORIGINAL_PARTITION, primaryKey, insertAppend.lastOffset());
+
+            LogAppendInfo updateAppend =
+                    writeBatch(
+                            historicalPartitionManager,
+                            replica,
+                            ORIGINAL_PARTITION,
+                            batch(rowType, upsert(1, "us", ORIGINAL_PARTITION, "v2")));
+            assertThat(updateAppend.numMessages()).isEqualTo(2);
+            flushAndWait(kvTablet, Long.MAX_VALUE);
+            // In FULL changelog mode, UPDATE_AFTER is the second WAL record and produces state.
+            assertHistoricalValueTag(
+                    kvTablet, ORIGINAL_PARTITION, primaryKey, updateAppend.lastOffset());
+
+            LogAppendInfo deleteAppend =
+                    writeBatch(
+                            historicalPartitionManager,
+                            replica,
+                            ORIGINAL_PARTITION,
+                            batch(rowType, delete(1, "us")));
+            flushAndWait(kvTablet, Long.MAX_VALUE);
+            byte[] tombstone = historicalRawValue(kvTablet, ORIGINAL_PARTITION, primaryKey);
+            assertThat(tombstone).hasSize(Long.BYTES);
+            assertHistoricalValueTag(
+                    kvTablet, ORIGINAL_PARTITION, primaryKey, deleteAppend.lastOffset());
+        }
+    }
+
+    @Test
+    void testCompactionRespectsRetentionAndFallsBackToLake() throws Exception {
+        TableInfo tableInfo = registerHistoricalTableAndBecomeLeader(ChangelogImage.WAL);
+        Replica replica = replicaManager.getReplicaOrException(TABLE_BUCKET);
+        KvTablet kvTablet = replica.getKvTablet();
+        assertThat(kvTablet).isNotNull();
+        TestingHistoricalLakeLookupManager lakeLookupManager =
+                new TestingHistoricalLakeLookupManager(lookupConfiguration());
+        byte[] coveredKey = key(1, "us");
+        byte[] retainedKey = key(2, "eu");
+        int retentionOffsetDistance = 60_000;
+        long cleanupOffset = retentionOffsetDistance + 1L;
+
+        try (HistoricalPartitionManager historicalPartitionManager =
+                createHistoricalPartitionManager(lakeLookupManager)) {
+            writeBatch(
+                    historicalPartitionManager,
+                    replica,
+                    ORIGINAL_PARTITION,
+                    batch(
+                            tableInfo.getRowType(),
+                            upsert(1, "us", ORIGINAL_PARTITION, "covered"),
+                            upsert(2, "eu", ORIGINAL_PARTITION, "retained")));
+            // Repeated WAL-mode updates advance the log by one offset each without creating
+            // thousands of distinct local keys. This fills the hardcoded retention window.
+            writeBatch(
+                    historicalPartitionManager,
+                    replica,
+                    ORIGINAL_PARTITION,
+                    genKvRecordBatch(
+                            KEY_TYPE,
+                            tableInfo.getRowType(),
+                            Collections.nCopies(
+                                    retentionOffsetDistance,
+                                    upsert(3, "ap", ORIGINAL_PARTITION, "padding"))));
+            assertThat(replica.getLocalLogEndOffset()).isEqualTo(cleanupOffset + 1L);
+            flushAndWait(kvTablet, Long.MAX_VALUE);
+            assertHistoricalValueTag(kvTablet, ORIGINAL_PARTITION, coveredKey, 0L);
+            assertHistoricalValueTag(kvTablet, ORIGINAL_PARTITION, retainedKey, 1L);
+
+            historicalPartitionManager.onLakeProgress(replica, 6L, retentionOffsetDistance);
+
+            // Lake coverage alone does not remove values still within the retained offset range.
+            compactHistoricalKv(kvTablet);
+            assertHistoricalValueTag(kvTablet, ORIGINAL_PARTITION, coveredKey, 0L);
+            assertHistoricalValueTag(kvTablet, ORIGINAL_PARTITION, retainedKey, 1L);
+
+            historicalPartitionManager.onLakeProgress(replica, 7L, cleanupOffset);
+
+            assertThat(kvTablet.getHistoricalCleanupOffset()).isEqualTo(cleanupOffset);
+            compactHistoricalKv(kvTablet);
+            assertThat(historicalRawValue(kvTablet, ORIGINAL_PARTITION, coveredKey)).isNull();
+            assertHistoricalValueTag(kvTablet, ORIGINAL_PARTITION, retainedKey, 1L);
+
+            // A miss caused by cleanup must enter lake lookup only after the covering snapshot
+            // token has been published.
+            lakeLookupManager.putLakeValue(
+                    ORIGINAL_PARTITION,
+                    ValueEncoder.encodeValue(
+                            (short) tableInfo.getSchemaId(),
+                            compactedRow(
+                                    tableInfo.getRowType(),
+                                    new Object[] {
+                                        1, "us", ORIGINAL_PARTITION, "covered-from-lake"
+                                    })));
+            lakeLookupManager.setLookupHook(
+                    () -> {
+                        assertThat(lakeLookupManager.requiredSnapshotCount).hasValue(2);
+                        assertThat(kvTablet.getHistoricalCleanupOffset()).isEqualTo(cleanupOffset);
+                    });
+            LookupResultForBucket fallbackResult =
+                    historicalPartitionManager
+                            .lookup(
+                                    replica,
+                                    new LookupDataForBucket(
+                                            TABLE_BUCKET,
+                                            Collections.singletonList(coveredKey),
+                                            ORIGINAL_PARTITION),
+                                    (lookupTimeNanos, lookupFileDownloaded) -> {})
+                            .get(10, TimeUnit.SECONDS);
+            assertThat(fallbackResult.failed()).isFalse();
+            BinaryValue fallbackValue =
+                    new ValueDecoder(
+                                    schemaGetter(tableInfo),
+                                    tableInfo.getTableConfig().getKvFormat(),
+                                    KvValueLayout.PLAIN)
+                            .decodeValue(fallbackResult.lookupValues().get(0).toByteArray());
+            assertThat(fallbackValue.row.getString(3))
+                    .isEqualTo(BinaryString.fromString("covered-from-lake"));
+
+            historicalPartitionManager.onLakeProgress(replica, 8L, cleanupOffset + 1L);
+            compactHistoricalKv(kvTablet);
+            assertThat(historicalRawValue(kvTablet, ORIGINAL_PARTITION, retainedKey)).isNull();
+        }
+    }
+
+    @Test
+    void testLakeProgressPublishesSnapshotBeforeCleanupOffset() throws Exception {
+        TableInfo tableInfo = registerHistoricalTableAndBecomeLeader(ChangelogImage.WAL);
+        Replica replica = replicaManager.getReplicaOrException(TABLE_BUCKET);
+        KvTablet kvTablet = replica.getKvTablet();
+        assertThat(kvTablet).isNotNull();
+        TestingHistoricalLakeLookupManager lakeLookupManager =
+                new TestingHistoricalLakeLookupManager(lookupConfiguration());
+
+        try (HistoricalPartitionManager historicalPartitionManager =
+                createHistoricalPartitionManager(lakeLookupManager)) {
+            writeBatch(
+                    historicalPartitionManager,
+                    replica,
+                    ORIGINAL_PARTITION,
+                    batch(
+                            tableInfo.getRowType(),
+                            upsert(1, "us", ORIGINAL_PARTITION, "v1"),
+                            upsert(2, "eu", ORIGINAL_PARTITION, "v2")));
+
+            // The covering snapshot must be published before entries become eligible for cleanup.
+            lakeLookupManager.setRequireSnapshotHook(
+                    () -> assertThat(kvTablet.getHistoricalCleanupOffset()).isZero());
+            historicalPartitionManager.onLakeProgress(replica, 7L, 1L);
+            assertThat(lakeLookupManager.requiredSnapshotCount).hasValue(1);
+            assertThat(kvTablet.getHistoricalCleanupOffset()).isOne();
+
+            // A new opaque snapshot token at the same offset is still published to the lookuper.
+            lakeLookupManager.setRequireSnapshotHook(
+                    () -> assertThat(kvTablet.getHistoricalCleanupOffset()).isOne());
+            historicalPartitionManager.onLakeProgress(replica, 8L, 1L);
+            assertThat(lakeLookupManager.requiredSnapshotCount).hasValue(2);
+            assertThat(kvTablet.getHistoricalCleanupOffset()).isOne();
+
+            // A regressing cleanup offset is ignored before it can publish an older required
+            // snapshot.
+            historicalPartitionManager.onLakeProgress(replica, 9L, 0L);
+            assertThat(lakeLookupManager.requiredSnapshotCount).hasValue(2);
+            assertThat(kvTablet.getHistoricalCleanupOffset()).isOne();
+
+            // The RPC entry point uses ReplicaManager's own historical manager.
+            CompletableFuture<NotifyLakeTableOffsetResponse> notifyFuture =
+                    new CompletableFuture<>();
+            replicaManager.notifyLakeTableOffset(
+                    new NotifyLakeTableOffsetData(
+                            1,
+                            Collections.singletonMap(
+                                    TABLE_BUCKET, new LakeBucketOffset(10L, null, 2L, null))),
+                    notifyFuture::complete);
+            notifyFuture.get(10, TimeUnit.SECONDS);
+            assertThat(kvTablet.getHistoricalCleanupOffset()).isEqualTo(2L);
         }
     }
 
@@ -439,20 +667,12 @@ class HistoricalPartitionManagerTest extends ReplicaTestBase {
 
         TestingHistoricalLakeLookupManager lakeLookupManager =
                 new TestingHistoricalLakeLookupManager(lookupConfiguration());
-        HistoricalPartitionManager historicalPartitionManager =
-                new HistoricalPartitionManager(
-                        new HistoricalPartitionTaskExecutor(lookupConfiguration()),
-                        lakeLookupManager);
 
-        RowType keyType =
-                DataTypes.ROW(
-                        new DataField("id", DataTypes.INT()),
-                        new DataField("region", DataTypes.STRING()));
         RowType rowType = tableInfo.getRowType();
         String updatePartition = "20240109";
         String deletePartition = "20240110";
-        byte[] updateKey = new CompactedKeyEncoder(keyType).encodeKey(row(1, "us"));
-        byte[] deleteKey = new CompactedKeyEncoder(keyType).encodeKey(row(2, "eu"));
+        byte[] updateKey = key(1, "us");
+        byte[] deleteKey = key(2, "eu");
         short schemaId = (short) tableInfo.getSchemaId();
         // Seed lake-only values so the first local operations must use lake fallback.
         lakeLookupManager.putLakeValue(
@@ -466,39 +686,35 @@ class HistoricalPartitionManagerTest extends ReplicaTestBase {
                         schemaId,
                         compactedRow(rowType, new Object[] {2, "eu", deletePartition, "lake-v1"})));
 
-        try {
-            // Updating a lake-only value emits the before and after images.
+        try (HistoricalPartitionManager historicalPartitionManager =
+                createHistoricalPartitionManager(lakeLookupManager)) {
+            // Same-key records must see this batch's buffered values and deletes, even though
+            // the saved lake result still contains lake-v1. The repeated delete is a no-op.
             KvRecordBatch updateBatch =
                     batch(
-                            keyType,
                             rowType,
-                            Tuple2.of(
-                                    new Object[] {1, "us"},
-                                    new Object[] {1, "us", updatePartition, "lake-v2"}));
+                            upsert(1, "us", updatePartition, "lake-v2"),
+                            delete(1, "us"),
+                            delete(1, "us"),
+                            upsert(1, "us", updatePartition, "recreated-v3"),
+                            upsert(1, "us", updatePartition, "updated-v4"));
             assertThat(
-                            historicalPartitionManager
-                                    .processPut(
+                            writeBatch(
+                                            historicalPartitionManager,
                                             replica,
-                                            new PutKvDataForBucket(
-                                                    TABLE_BUCKET, updateBatch, updatePartition),
-                                            null,
-                                            MergeMode.DEFAULT,
-                                            1)
+                                            updatePartition,
+                                            updateBatch)
                                     .numMessages())
-                    .isEqualTo(2);
+                    .isEqualTo(6);
 
             // Deleting a lake-only value emits a delete and leaves a local tombstone.
-            KvRecordBatch deleteBatch =
-                    batch(keyType, rowType, Tuple2.of(new Object[] {2, "eu"}, null));
+            KvRecordBatch deleteBatch = batch(rowType, delete(2, "eu"));
             assertThat(
-                            historicalPartitionManager
-                                    .processPut(
+                            writeBatch(
+                                            historicalPartitionManager,
                                             replica,
-                                            new PutKvDataForBucket(
-                                                    TABLE_BUCKET, deleteBatch, deletePartition),
-                                            null,
-                                            MergeMode.DEFAULT,
-                                            1)
+                                            deletePartition,
+                                            deleteBatch)
                                     .numMessages())
                     .isOne();
 
@@ -509,7 +725,7 @@ class HistoricalPartitionManagerTest extends ReplicaTestBase {
                     updatePartition,
                     updateKey,
                     tableInfo,
-                    row(1, "us", updatePartition, "lake-v2"));
+                    row(1, "us", updatePartition, "updated-v4"));
             assertThat(kvTablet.lookupHistoricalLocal(deletePartition, deleteKey))
                     .isEqualTo(KvStateLookupResult.deleted());
             assertThat(lakeLookupManager.lookupCount).hasValue(2);
@@ -527,10 +743,63 @@ class HistoricalPartitionManagerTest extends ReplicaTestBase {
                                     new Object[] {1, "us", updatePartition, "lake-v2"}),
                             Tuple2.of(
                                     ChangeType.DELETE,
+                                    new Object[] {1, "us", updatePartition, "lake-v2"}),
+                            Tuple2.of(
+                                    ChangeType.INSERT,
+                                    new Object[] {1, "us", updatePartition, "recreated-v3"}),
+                            Tuple2.of(
+                                    ChangeType.UPDATE_BEFORE,
+                                    new Object[] {1, "us", updatePartition, "recreated-v3"}),
+                            Tuple2.of(
+                                    ChangeType.UPDATE_AFTER,
+                                    new Object[] {1, "us", updatePartition, "updated-v4"}),
+                            Tuple2.of(
+                                    ChangeType.DELETE,
                                     new Object[] {2, "eu", deletePartition, "lake-v1"})),
                     schemaGetter(tableInfo));
-        } finally {
-            historicalPartitionManager.close();
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void testLakeNotificationsAdvanceLogRetentionOnLeaderAndFollower(boolean leader)
+            throws Exception {
+        TableInfo tableInfo = registerHistoricalTableAndBecomeLeader(ChangelogImage.WAL);
+        Replica replica = replicaManager.getReplicaOrException(TABLE_BUCKET);
+        try (HistoricalPartitionManager historicalPartitionManager =
+                createHistoricalPartitionManager(
+                        new TestingHistoricalLakeLookupManager(lookupConfiguration()))) {
+            writeBatch(
+                    historicalPartitionManager,
+                    replica,
+                    ORIGINAL_PARTITION,
+                    batch(
+                            tableInfo.getRowType(),
+                            upsert(1, "us", ORIGINAL_PARTITION, "v1"),
+                            upsert(2, "eu", ORIGINAL_PARTITION, "v2")));
+        }
+
+        if (!leader) {
+            assertThat(replica.makeFollower(followerState())).isTrue();
+            assertThat(replica.getKvTablet()).isNull();
+        }
+        assertThat(replica.getLogTablet().getMinRetainOffset()).isZero();
+
+        // Followers have no local KV state or snapshot callbacks, but must still advance their
+        // WAL retention boundary. Repeated and stale notifications must not move it backwards.
+        long expectedRetainOffset = 0L;
+        for (long lakeOffset : new long[] {1L, 1L, 0L, 2L}) {
+            CompletableFuture<NotifyLakeTableOffsetResponse> future = new CompletableFuture<>();
+            replicaManager.notifyLakeTableOffset(
+                    new NotifyLakeTableOffsetData(
+                            INITIAL_COORDINATOR_EPOCH,
+                            Collections.singletonMap(
+                                    TABLE_BUCKET,
+                                    new LakeBucketOffset(10L, null, lakeOffset, null))),
+                    future::complete);
+            future.get(10, TimeUnit.SECONDS);
+            expectedRetainOffset = Math.max(expectedRetainOffset, lakeOffset);
+            assertThat(replica.getLogTablet().getMinRetainOffset()).isEqualTo(expectedRetainOffset);
         }
     }
 
@@ -541,9 +810,7 @@ class HistoricalPartitionManagerTest extends ReplicaTestBase {
         TestingHistoricalLakeLookupManager lakeLookupManager =
                 new TestingHistoricalLakeLookupManager(lookupConfiguration());
         HistoricalPartitionManager historicalPartitionManager =
-                new HistoricalPartitionManager(
-                        new HistoricalPartitionTaskExecutor(lookupConfiguration()),
-                        lakeLookupManager);
+                createHistoricalPartitionManager(lakeLookupManager);
         CountDownLatch lakeLookupStarted = new CountDownLatch(1);
         CountDownLatch finishLakeLookup = new CountDownLatch(1);
         lakeLookupManager.setLookupHook(
@@ -552,17 +819,8 @@ class HistoricalPartitionManagerTest extends ReplicaTestBase {
                     await(finishLakeLookup);
                 });
 
-        RowType keyType =
-                DataTypes.ROW(
-                        new DataField("id", DataTypes.INT()),
-                        new DataField("region", DataTypes.STRING()));
         KvRecordBatch insertBatch =
-                batch(
-                        keyType,
-                        tableInfo.getRowType(),
-                        Tuple2.of(
-                                new Object[] {1, "us"},
-                                new Object[] {1, "us", ORIGINAL_PARTITION, "v1"}));
+                batch(tableInfo.getRowType(), upsert(1, "us", ORIGINAL_PARTITION, "v1"));
         long logEndOffsetBeforeWrite = replica.getLocalLogEndOffset();
 
         try {
@@ -591,96 +849,91 @@ class HistoricalPartitionManagerTest extends ReplicaTestBase {
         }
     }
 
-    @Test
-    void testRecoversHistoricalOverlayFromLakeCommitOffset() throws Exception {
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void testRecoversHistoricalOverlayFromLakeCommitOffset(boolean removeCoveredSegments)
+            throws Exception {
         TableInfo tableInfo = registerHistoricalTableAndBecomeLeader();
         Replica replica = replicaManager.getReplicaOrException(TABLE_BUCKET);
+        LogTablet logTablet = replica.getLogTablet();
         TestingHistoricalLakeLookupManager lakeLookupManager =
                 new TestingHistoricalLakeLookupManager(lookupConfiguration());
-        HistoricalPartitionManager historicalPartitionManager =
-                new HistoricalPartitionManager(
-                        new HistoricalPartitionTaskExecutor(lookupConfiguration()),
-                        lakeLookupManager);
 
-        RowType keyType =
-                DataTypes.ROW(
-                        new DataField("id", DataTypes.INT()),
-                        new DataField("region", DataTypes.STRING()));
-        CompactedKeyEncoder keyEncoder = new CompactedKeyEncoder(keyType);
-        byte[] tieredPrimaryKey = keyEncoder.encodeKey(row(1, "us"));
-        byte[] deletedPrimaryKey = keyEncoder.encodeKey(row(2, "eu"));
+        byte[] tieredPrimaryKey = key(1, "us");
+        byte[] deletedPrimaryKey = key(2, "eu");
 
-        try {
-            LogAppendInfo firstAppend =
-                    historicalPartitionManager.processPut(
+        try (HistoricalPartitionManager historicalPartitionManager =
+                createHistoricalPartitionManager(lakeLookupManager)) {
+            writeBatch(
+                    historicalPartitionManager,
+                    replica,
+                    ORIGINAL_PARTITION,
+                    batch(tableInfo.getRowType(), upsert(1, "us", ORIGINAL_PARTITION, "v1")));
+            LogAppendInfo lakeAppend =
+                    writeBatch(
+                            historicalPartitionManager,
                             replica,
-                            new PutKvDataForBucket(
-                                    TABLE_BUCKET,
-                                    batch(
-                                            keyType,
-                                            tableInfo.getRowType(),
-                                            Tuple2.of(
-                                                    new Object[] {1, "us"},
-                                                    new Object[] {
-                                                        1, "us", ORIGINAL_PARTITION, "v1"
-                                                    })),
-                                    ORIGINAL_PARTITION),
-                            null,
-                            MergeMode.DEFAULT,
-                            1);
-            historicalPartitionManager.processPut(
-                    replica,
-                    new PutKvDataForBucket(
-                            TABLE_BUCKET,
+                            ANOTHER_ORIGINAL_PARTITION,
                             batch(
-                                    keyType,
                                     tableInfo.getRowType(),
-                                    Tuple2.of(
-                                            new Object[] {1, "us"},
-                                            new Object[] {
-                                                1, "us", ANOTHER_ORIGINAL_PARTITION, "another"
-                                            })),
-                            ANOTHER_ORIGINAL_PARTITION),
-                    null,
-                    MergeMode.DEFAULT,
-                    1);
-            historicalPartitionManager.processPut(
-                    replica,
-                    new PutKvDataForBucket(
-                            TABLE_BUCKET,
+                                    upsert(1, "us", ANOTHER_ORIGINAL_PARTITION, "another-v1")));
+            long lakeCommitOffset = lakeAppend.lastOffset() + 1;
+            LogSegment coveredSegment = logTablet.activeLogSegment();
+            logTablet.roll(Optional.empty());
+
+            // Keep a newer value and a tombstone in WAL beyond the lake commit boundary.
+            LogAppendInfo anotherPartitionAppend =
+                    writeBatch(
+                            historicalPartitionManager,
+                            replica,
+                            ANOTHER_ORIGINAL_PARTITION,
                             batch(
-                                    keyType,
                                     tableInfo.getRowType(),
-                                    Tuple2.of(
-                                            new Object[] {2, "eu"},
-                                            new Object[] {
-                                                2, "eu", ORIGINAL_PARTITION, "delete-me"
-                                            })),
-                            ORIGINAL_PARTITION),
-                    null,
-                    MergeMode.DEFAULT,
-                    1);
-            historicalPartitionManager.processPut(
+                                    upsert(1, "us", ANOTHER_ORIGINAL_PARTITION, "another-v2")));
+            writeBatch(
+                    historicalPartitionManager,
                     replica,
-                    new PutKvDataForBucket(
-                            TABLE_BUCKET,
-                            batch(
-                                    keyType,
-                                    tableInfo.getRowType(),
-                                    Tuple2.of(new Object[] {2, "eu"}, null)),
-                            ORIGINAL_PARTITION),
-                    null,
-                    MergeMode.DEFAULT,
-                    1);
+                    ORIGINAL_PARTITION,
+                    batch(
+                            tableInfo.getRowType(),
+                            upsert(2, "eu", ORIGINAL_PARTITION, "delete-me")));
+            LogAppendInfo deleteAppend =
+                    writeBatch(
+                            historicalPartitionManager,
+                            replica,
+                            ORIGINAL_PARTITION,
+                            batch(tableInfo.getRowType(), delete(2, "eu")));
             KvTablet kvTabletBeforeFollower = replica.getKvTablet();
             assertThat(kvTabletBeforeFollower).isNotNull();
             flushAndWait(kvTabletBeforeFollower, Long.MAX_VALUE);
-            assertThat(replica.getLogHighWatermark()).isEqualTo(replica.getLocalLogEndOffset());
+            // The flush listener advances the high watermark after releasing the KV lock.
+            retry(
+                    Duration.ofSeconds(10),
+                    () ->
+                            assertThat(replica.getLogHighWatermark())
+                                    .isEqualTo(replica.getLocalLogEndOffset()));
 
-            // Persist the exclusive end offset of the first write as the lake recovery point. The
-            // replica has not received this offset locally, so becoming leader must load it before
-            // creating the historical overlay.
-            long lakeCommitOffset = firstAppend.lastOffset() + 1;
+            // The default retention keeps two segments. Rolling again allows the lake-covered
+            // segment to be deleted while retaining the WAL suffix and the empty active segment.
+            logTablet.roll(Optional.empty());
+            assertThat(logTablet.getSegments()).hasSize(3);
+            assertThat(coveredSegment.getFileLogRecords().file()).exists();
+            lakeLookupManager.putLakeValue(
+                    ORIGINAL_PARTITION,
+                    ValueEncoder.encodeValue(
+                            (short) tableInfo.getSchemaId(),
+                            compactedRow(
+                                    tableInfo.getRowType(),
+                                    new Object[] {1, "us", ORIGINAL_PARTITION, "v1"})));
+            lakeLookupManager.putLakeValue(
+                    ANOTHER_ORIGINAL_PARTITION,
+                    ValueEncoder.encodeValue(
+                            (short) tableInfo.getSchemaId(),
+                            compactedRow(
+                                    tableInfo.getRowType(),
+                                    new Object[] {
+                                        1, "us", ANOTHER_ORIGINAL_PARTITION, "another-v1"
+                                    })));
             new LakeTableHelper(zkClient, DEFAULT_REMOTE_DATA_DIR)
                     .registerLakeTableSnapshotV1(
                             TABLE_ID,
@@ -688,10 +941,30 @@ class HistoricalPartitionManagerTest extends ReplicaTestBase {
                                     1L, Collections.singletonMap(TABLE_BUCKET, lakeCommitOffset)));
             assertThat(replica.getLakeLogEndOffset()).isEqualTo(-1L);
 
-            // Dropping and recreating the leader KV tablet forces the overlay to be rebuilt only
-            // from WAL after the lake commit offset. The recovered tombstone must remain
-            // authoritative over lake fallback.
+            // Dropping the leader KV tablet forces promotion to rebuild the historical overlay.
             assertThat(replica.makeFollower(followerState())).isTrue();
+            assertThat(replica.getKvTablet()).isNull();
+            if (removeCoveredSegments) {
+                // Mark the WAL as uploaded, then let lake progress reclaim the covered segment
+                // on the follower before promotion. No remote WAL files are supplied for recovery.
+                long logEndOffset = replica.getLocalLogEndOffset();
+                logTablet.updateRemoteLogOffsets(0L, logEndOffset, logEndOffset);
+                CompletableFuture<NotifyLakeTableOffsetResponse> notifyFuture =
+                        new CompletableFuture<>();
+                replicaManager.notifyLakeTableOffset(
+                        new NotifyLakeTableOffsetData(
+                                INITIAL_COORDINATOR_EPOCH,
+                                Collections.singletonMap(
+                                        TABLE_BUCKET,
+                                        new LakeBucketOffset(1L, null, lakeCommitOffset, null))),
+                        notifyFuture::complete);
+                notifyFuture.get(10, TimeUnit.SECONDS);
+                assertThat(logTablet.localLogStartOffset()).isEqualTo(lakeCommitOffset);
+                assertThat(logTablet.getSegments()).hasSize(2).doesNotContain(coveredSegment);
+                assertThat(coveredSegment.getFileLogRecords().file()).doesNotExist();
+            }
+
+            // Without the notification, promotion must load the recovery point from ZooKeeper.
             CompletableFuture<List<NotifyLeaderAndIsrResultForBucket>> leaderFuture =
                     new CompletableFuture<>();
             replicaManager.becomeLeaderOrFollower(
@@ -704,11 +977,15 @@ class HistoricalPartitionManagerTest extends ReplicaTestBase {
             KvTablet recoveredKvTablet = replica.getKvTablet();
             assertThat(recoveredKvTablet).isNotNull();
             assertThat(replica.getLakeLogEndOffset()).isEqualTo(lakeCommitOffset);
+            assertThat(recoveredKvTablet.getHistoricalCleanupOffset()).isEqualTo(lakeCommitOffset);
+            // Recovery retries can reuse the same tablet and restore offset.
+            assertThat(recoveredKvTablet.advanceHistoricalCleanupOffset(lakeCommitOffset))
+                    .isFalse();
             assertThat(replica.getKvSnapshotManager()).isNull();
             assertThat(recoveredKvTablet.getFlushedLogOffset())
                     .isEqualTo(replica.getLogHighWatermark());
             assertThat(recoveredKvTablet.getRocksDBKv().limitScan(10)).hasSize(2);
-            // The first record is covered by the lake commit offset and is not replayed locally.
+            // The lake-only value is not replayed locally; newer WAL values and tombstones are.
             assertThat(
                             recoveredKvTablet.lookupHistoricalLocal(
                                     ORIGINAL_PARTITION, tieredPrimaryKey))
@@ -722,9 +999,78 @@ class HistoricalPartitionManagerTest extends ReplicaTestBase {
                     ANOTHER_ORIGINAL_PARTITION,
                     tieredPrimaryKey,
                     tableInfo,
-                    row(1, "us", ANOTHER_ORIGINAL_PARTITION, "another"));
-        } finally {
-            historicalPartitionManager.close();
+                    row(1, "us", ANOTHER_ORIGINAL_PARTITION, "another-v2"));
+            assertHistoricalValueTag(
+                    recoveredKvTablet,
+                    ANOTHER_ORIGINAL_PARTITION,
+                    tieredPrimaryKey,
+                    anotherPartitionAppend.lastOffset());
+            assertHistoricalValueTag(
+                    recoveredKvTablet,
+                    ORIGINAL_PARTITION,
+                    deletedPrimaryKey,
+                    deleteAppend.lastOffset());
+
+            int lakeLookupsBeforeRecoveryChecks = lakeLookupManager.lookupCount.get();
+            assertHistoricalLookup(
+                    historicalPartitionManager,
+                    replica,
+                    tableInfo,
+                    ORIGINAL_PARTITION,
+                    tieredPrimaryKey,
+                    row(1, "us", ORIGINAL_PARTITION, "v1"));
+            assertHistoricalLookup(
+                    historicalPartitionManager,
+                    replica,
+                    tableInfo,
+                    ANOTHER_ORIGINAL_PARTITION,
+                    tieredPrimaryKey,
+                    row(1, "us", ANOTHER_ORIGINAL_PARTITION, "another-v2"));
+            assertHistoricalLookup(
+                    historicalPartitionManager,
+                    replica,
+                    tableInfo,
+                    ORIGINAL_PARTITION,
+                    deletedPrimaryKey,
+                    null);
+            // Only the lake-only key falls back; replayed values and tombstones take precedence.
+            assertThat(lakeLookupManager.lookupCount).hasValue(lakeLookupsBeforeRecoveryChecks + 1);
+
+            // An update after promotion must resolve the old value from lake and remain readable.
+            LogAppendInfo updateAppend =
+                    writeBatch(
+                            historicalPartitionManager,
+                            replica,
+                            ORIGINAL_PARTITION,
+                            batch(
+                                    tableInfo.getRowType(),
+                                    upsert(1, "us", ORIGINAL_PARTITION, "v2")));
+            flushAndWait(recoveredKvTablet, Long.MAX_VALUE);
+            assertHistoricalLookup(
+                    historicalPartitionManager,
+                    replica,
+                    tableInfo,
+                    ORIGINAL_PARTITION,
+                    tieredPrimaryKey,
+                    row(1, "us", ORIGINAL_PARTITION, "v2"));
+            assertThat(lakeLookupManager.lookupCount).hasValue(lakeLookupsBeforeRecoveryChecks + 2);
+            retry(
+                    Duration.ofSeconds(10),
+                    () ->
+                            assertThat(replica.getLogHighWatermark())
+                                    .isEqualTo(replica.getLocalLogEndOffset()));
+            assertLogRecordsEqualsWithRowKind(
+                    tableInfo.getSchemaId(),
+                    tableInfo.getRowType(),
+                    fetchLog(updateAppend.firstOffset()),
+                    Arrays.asList(
+                            Tuple2.of(
+                                    ChangeType.UPDATE_BEFORE,
+                                    new Object[] {1, "us", ORIGINAL_PARTITION, "v1"}),
+                            Tuple2.of(
+                                    ChangeType.UPDATE_AFTER,
+                                    new Object[] {1, "us", ORIGINAL_PARTITION, "v2"})),
+                    schemaGetter(tableInfo));
         }
     }
 
@@ -739,11 +1085,7 @@ class HistoricalPartitionManagerTest extends ReplicaTestBase {
                         new HistoricalPartitionTaskExecutor(lookupConfiguration(), executor),
                         new TestingHistoricalLakeLookupManager(lookupConfiguration()));
 
-        RowType keyType =
-                DataTypes.ROW(
-                        new DataField("id", DataTypes.INT()),
-                        new DataField("region", DataTypes.STRING()));
-        byte[] primaryKey = new CompactedKeyEncoder(keyType).encodeKey(row(1, "us"));
+        byte[] primaryKey = key(1, "us");
         LookupDataForBucket lookupData =
                 new LookupDataForBucket(
                         TABLE_BUCKET, Collections.singletonList(primaryKey), ORIGINAL_PARTITION);
@@ -774,6 +1116,39 @@ class HistoricalPartitionManagerTest extends ReplicaTestBase {
         } finally {
             historicalPartitionManager.close();
         }
+    }
+
+    private HistoricalPartitionManager createHistoricalPartitionManager(
+            TestingHistoricalLakeLookupManager lakeLookupManager) {
+        return new HistoricalPartitionManager(
+                new HistoricalPartitionTaskExecutor(lookupConfiguration()), lakeLookupManager);
+    }
+
+    private static LogAppendInfo writeBatch(
+            HistoricalPartitionManager manager,
+            Replica replica,
+            String originalPartition,
+            KvRecordBatch records)
+            throws Exception {
+        return manager.processPut(
+                replica,
+                new PutKvDataForBucket(TABLE_BUCKET, records, originalPartition),
+                null,
+                MergeMode.DEFAULT,
+                1);
+    }
+
+    private static byte[] key(int id, String region) {
+        return new CompactedKeyEncoder(KEY_TYPE).encodeKey(row(id, region));
+    }
+
+    private static Tuple2<Object[], Object[]> upsert(
+            int id, String region, String partition, String value) {
+        return Tuple2.of(new Object[] {id, region}, new Object[] {id, region, partition, value});
+    }
+
+    private static Tuple2<Object[], Object[]> delete(int id, String region) {
+        return Tuple2.of(new Object[] {id, region}, null);
     }
 
     private LogRecords fetchLog(long fetchOffset) throws Exception {
@@ -889,7 +1264,9 @@ class HistoricalPartitionManagerTest extends ReplicaTestBase {
                                         Collections.singletonList(TABLET_SERVER_ID),
                                         Collections.emptyList(),
                                         INITIAL_COORDINATOR_EPOCH,
-                                        INITIAL_BUCKET_EPOCH))),
+                                        INITIAL_BUCKET_EPOCH),
+                                3,
+                                0L)),
                 leaderFuture::complete);
         assertThat(leaderFuture.get(10, TimeUnit.SECONDS))
                 .containsOnly(new NotifyLeaderAndIsrResultForBucket(TABLE_BUCKET));
@@ -909,7 +1286,9 @@ class HistoricalPartitionManagerTest extends ReplicaTestBase {
                         replicas,
                         Collections.emptyList(),
                         INITIAL_COORDINATOR_EPOCH,
-                        INITIAL_BUCKET_EPOCH + 1));
+                        INITIAL_BUCKET_EPOCH + 1),
+                3,
+                0L);
     }
 
     private static NotifyLeaderAndIsrData leaderStateAfterFollower() {
@@ -924,7 +1303,9 @@ class HistoricalPartitionManagerTest extends ReplicaTestBase {
                         replicas,
                         Collections.emptyList(),
                         INITIAL_COORDINATOR_EPOCH,
-                        INITIAL_BUCKET_EPOCH + 2));
+                        INITIAL_BUCKET_EPOCH + 2),
+                3,
+                0L);
     }
 
     private static void await(CountDownLatch latch) {
@@ -937,11 +1318,42 @@ class HistoricalPartitionManagerTest extends ReplicaTestBase {
     }
 
     @SafeVarargs
-    private static KvRecordBatch batch(
-            RowType keyType, RowType rowType, Tuple2<Object[], Object[]>... keyAndValues)
+    private static KvRecordBatch batch(RowType rowType, Tuple2<Object[], Object[]>... keyAndValues)
             throws Exception {
         List<Tuple2<Object[], Object[]>> records = Arrays.asList(keyAndValues);
-        return genKvRecordBatch(keyType, rowType, records);
+        return genKvRecordBatch(KEY_TYPE, rowType, records);
+    }
+
+    private static void assertHistoricalLookup(
+            HistoricalPartitionManager manager,
+            Replica replica,
+            TableInfo tableInfo,
+            String originalPartition,
+            byte[] primaryKey,
+            @Nullable InternalRow expectedRow)
+            throws Exception {
+        LookupResultForBucket result =
+                manager.lookup(
+                                replica,
+                                new LookupDataForBucket(
+                                        TABLE_BUCKET,
+                                        Collections.singletonList(primaryKey),
+                                        originalPartition),
+                                (lookupTimeNanos, lookupFileDownloaded) -> {})
+                        .get(10, TimeUnit.SECONDS);
+        assertThat(result.failed()).isFalse();
+        assertThat(result.lookupValues()).hasSize(1);
+        if (expectedRow == null) {
+            assertThat(result.lookupValues().get(0)).isNull();
+        } else {
+            BinaryValue value =
+                    new ValueDecoder(
+                                    schemaGetter(tableInfo),
+                                    tableInfo.getTableConfig().getKvFormat(),
+                                    KvValueLayout.PLAIN)
+                            .decodeValue(result.lookupValues().get(0).toByteArray());
+            assertThatRow(value.row).withSchema(tableInfo.getRowType()).isEqualTo(expectedRow);
+        }
     }
 
     private static void assertHistoricalValue(
@@ -957,9 +1369,40 @@ class HistoricalPartitionManagerTest extends ReplicaTestBase {
                 new ValueDecoder(
                                 schemaGetter(tableInfo),
                                 tableInfo.getTableConfig().getKvFormat(),
-                                KvValueLayout.fromTableConfig(tableInfo.getTableConfig()))
+                                KvValueLayout.TAGGED)
                         .decodeValue(result.value());
         assertThatRow(value.row).withSchema(tableInfo.getRowType()).isEqualTo(expectedRow);
+    }
+
+    private static void assertHistoricalValueTag(
+            KvTablet kvTablet, String originalPartition, byte[] primaryKey, long expectedLogOffset)
+            throws IOException {
+        byte[] rawValue = historicalRawValue(kvTablet, originalPartition, primaryKey);
+        assertThat(rawValue).isNotNull();
+        assertThat(KvValueLayout.TAGGED.readValueTag(MemorySegment.wrap(rawValue)))
+                .isEqualTo(expectedLogOffset);
+    }
+
+    private static byte[] historicalRawValue(
+            KvTablet kvTablet, String originalPartition, byte[] primaryKey) throws IOException {
+        return kvTablet.getRocksDBKv()
+                .get(HistoricalKvKeyEncoder.encode(originalPartition, primaryKey));
+    }
+
+    private static void compactHistoricalKv(KvTablet kvTablet) throws Exception {
+        try (FlushOptions flushOptions = new FlushOptions().setWaitForFlush(true)) {
+            kvTablet.getRocksDBKv().getDb().flush(flushOptions);
+            kvTablet.getRocksDBKv().getDb().compactRange();
+        }
+    }
+
+    private static void deleteHistoricalRocksDbKey(KvTablet kvTablet, byte[] primaryKey) {
+        try {
+            kvTablet.getRocksDBKv()
+                    .delete(HistoricalKvKeyEncoder.encode(ORIGINAL_PARTITION, primaryKey));
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        }
     }
 
     private static SchemaGetter schemaGetter(TableInfo tableInfo) {
@@ -970,8 +1413,10 @@ class HistoricalPartitionManagerTest extends ReplicaTestBase {
     private final class TestingHistoricalLakeLookupManager extends HistoricalLakeLookupManager {
         private final AtomicInteger lookupCount = new AtomicInteger();
         private final AtomicInteger lookupBatchCount = new AtomicInteger();
+        private final AtomicInteger requiredSnapshotCount = new AtomicInteger();
         private final Map<String, byte[]> lakeValuesByPartition = new HashMap<>();
         private volatile @Nullable Runnable lookupHook;
+        private volatile @Nullable Runnable requireSnapshotHook;
 
         private TestingHistoricalLakeLookupManager(Configuration configuration) {
             super(
@@ -990,6 +1435,20 @@ class HistoricalPartitionManagerTest extends ReplicaTestBase {
 
         private void setLookupHook(Runnable lookupHook) {
             this.lookupHook = lookupHook;
+        }
+
+        private void setRequireSnapshotHook(Runnable requireSnapshotHook) {
+            this.requireSnapshotHook = requireSnapshotHook;
+        }
+
+        @Override
+        void requireLakeSnapshot(long tableId, long snapshotId) {
+            super.requireLakeSnapshot(tableId, snapshotId);
+            requiredSnapshotCount.incrementAndGet();
+            Runnable hook = requireSnapshotHook;
+            if (hook != null) {
+                hook.run();
+            }
         }
 
         @Override

@@ -29,6 +29,7 @@ mod reader_test {
     };
     use fluss::config::{Config, NoKeyAssigner};
     use fluss::metadata::{DataTypes, Schema, TableBucket, TableDescriptor, TablePath};
+    use fluss::predicate::col;
     use fluss::rpc::message::OffsetSpec;
     use futures::TryStreamExt;
     use std::collections::HashMap;
@@ -836,6 +837,86 @@ mod reader_test {
             vec![1, 2, 3, 4, 5],
             "into_stream should yield the same records next_batch would return"
         );
+
+        admin
+            .drop_table(&table_path, false)
+            .await
+            .expect("Failed to drop table");
+    }
+
+    #[tokio::test]
+    async fn until_latest_finishes_when_filter_prunes_tail() {
+        let cluster = get_shared_cluster();
+        let connection = cluster.get_fluss_connection().await;
+        let admin = connection.get_admin().expect("Failed to get admin");
+
+        let table_path = TablePath::new("fluss", "test_reader_filter_pruned_tail");
+        // Remote segments bypass server-side filtering, so keep them local.
+        let table_descriptor = TableDescriptor::builder()
+            .schema(
+                Schema::builder()
+                    .column("id", DataTypes::int())
+                    .column("name", DataTypes::string())
+                    .build()
+                    .expect("Failed to build schema"),
+            )
+            .property("table.statistics.columns", "*")
+            .property("table.log.tiered.local-segments", "100")
+            .build()
+            .expect("Failed to build table");
+        create_table(&admin, &table_path, &table_descriptor).await;
+
+        let table = connection
+            .get_table(&table_path)
+            .await
+            .expect("Failed to get table");
+        let writer = table
+            .new_append()
+            .expect("Failed to create append")
+            .create_writer()
+            .expect("Failed to create writer");
+        writer
+            .append_arrow_batch(
+                record_batch!(("id", Int32, [1, 2, 3]), ("name", Utf8, ["a", "b", "c"])).unwrap(),
+            )
+            .expect("Failed to append batch 1");
+        writer
+            .append_arrow_batch(
+                record_batch!(
+                    ("id", Int32, [100, 101, 102]),
+                    ("name", Utf8, ["x", "y", "z"])
+                )
+                .unwrap(),
+            )
+            .expect("Failed to append batch 2");
+        writer.flush().await.expect("Failed to flush");
+
+        for (filter, expected) in [
+            (col("id").lt(100), vec![1, 2, 3]),
+            (col("id").ge(1000), vec![]),
+        ] {
+            let scanner = table
+                .new_scan()
+                .filter(filter)
+                .expect("Failed to set filter")
+                .create_record_batch_log_scanner()
+                .expect("Failed to create record batch scanner");
+            scanner
+                .subscribe(0, EARLIEST_OFFSET)
+                .await
+                .expect("Failed to subscribe bucket");
+
+            let mut reader = RecordBatchLogReader::new_until_latest(scanner, &admin)
+                .await
+                .expect("Failed to create latest-offset reader");
+            let batches =
+                tokio::time::timeout(Duration::from_secs(10), reader.collect_all_batches())
+                    .await
+                    .expect("Reader did not finish after the filter pruned the tail")
+                    .expect("Failed to collect filtered reader batches");
+
+            assert_eq!(extract_ids_from_batches(&batches), expected);
+        }
 
         admin
             .drop_table(&table_path, false)

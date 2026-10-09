@@ -21,6 +21,7 @@ import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.exception.ConfigException;
 import org.apache.fluss.utils.ExecutorUtils;
 import org.apache.fluss.utils.concurrent.ExecutorThreadFactory;
 
@@ -59,12 +60,13 @@ public final class HistoricalPartitionTaskExecutor implements AutoCloseable {
     private static final Duration SHUTDOWN_TIMEOUT = Duration.ofSeconds(10);
     private static final String THREAD_NAME_PREFIX = "historical-partition-io";
 
-    private final int maxQueuedHistoricalRequests;
+    private volatile int maxQueuedHistoricalRequests;
     // Shared by lookup and write tasks, including tasks waiting in the executor queue.
-    private final Semaphore requestPermits;
+    private final AdjustableSemaphore requestPermits;
     // Keep accepted requests so close() can cancel work that remains after executor shutdown.
     private final Set<CompletableFuture<?>> pendingRequests;
     private final ExecutorService executor;
+    private volatile int maxThreadPoolSize;
     private final Object orderedTasksLock = new Object();
 
     // The latest accepted task for each ordering key. A completed tail is removed only when it is
@@ -98,7 +100,8 @@ public final class HistoricalPartitionTaskExecutor implements AutoCloseable {
                 historicalPartitionExecutor == null
                         ? createHistoricalPartitionExecutor(maxThreadPoolSize)
                         : historicalPartitionExecutor;
-        this.requestPermits = new Semaphore(maxQueuedHistoricalRequests);
+        this.maxThreadPoolSize = maxThreadPoolSize;
+        this.requestPermits = new AdjustableSemaphore(maxQueuedHistoricalRequests);
         this.pendingRequests = ConcurrentHashMap.newKeySet();
         this.orderedTaskTails = new HashMap<>();
     }
@@ -188,6 +191,38 @@ public final class HistoricalPartitionTaskExecutor implements AutoCloseable {
         return maxQueuedHistoricalRequests - requestPermits.availablePermits();
     }
 
+    /** Applies dynamic historical partition executor configuration changes. */
+    public synchronized void reconfigure(Configuration newConf) {
+        checkNotNull(newConf, "newConf must not be null.");
+        int newMaxQueuedHistoricalRequests =
+                newConf.get(ConfigOptions.NETTY_SERVER_MAX_QUEUED_HISTORICAL_REQUESTS);
+        int newMaxThreadPoolSize =
+                newConf.get(ConfigOptions.SERVER_HISTORICAL_PARTITION_THREAD_POOL_MAX_SIZE);
+
+        if (newMaxThreadPoolSize <= 0) {
+            throw new ConfigException(
+                    String.format(
+                            "Invalid configuration for %s, it must be greater than 0.",
+                            ConfigOptions.SERVER_HISTORICAL_PARTITION_THREAD_POOL_MAX_SIZE.key()));
+        }
+        if (newMaxQueuedHistoricalRequests <= 0) {
+            throw new ConfigException(
+                    String.format(
+                            "Invalid configuration for %s, it must be greater than 0.",
+                            ConfigOptions.NETTY_SERVER_MAX_QUEUED_HISTORICAL_REQUESTS.key()));
+        }
+
+        if (newMaxThreadPoolSize != maxThreadPoolSize) {
+            resizeThreadPool(newMaxThreadPoolSize);
+            maxThreadPoolSize = newMaxThreadPoolSize;
+        }
+        if (newMaxQueuedHistoricalRequests != maxQueuedHistoricalRequests) {
+            requestPermits.adjustPermits(
+                    newMaxQueuedHistoricalRequests - maxQueuedHistoricalRequests);
+            maxQueuedHistoricalRequests = newMaxQueuedHistoricalRequests;
+        }
+    }
+
     @Override
     public void close() {
         ExecutorUtils.gracefulShutdown(
@@ -206,5 +241,37 @@ public final class HistoricalPartitionTaskExecutor implements AutoCloseable {
                         new ExecutorThreadFactory(THREAD_NAME_PREFIX));
         executor.allowCoreThreadTimeOut(true);
         return executor;
+    }
+
+    private void resizeThreadPool(int newMaxThreadPoolSize) {
+        if (!(executor instanceof ThreadPoolExecutor)) {
+            throw new IllegalStateException(
+                    "Historical partition executor does not support dynamic resizing.");
+        }
+        ThreadPoolExecutor threadPoolExecutor = (ThreadPoolExecutor) executor;
+        int currentMaxThreadPoolSize = threadPoolExecutor.getMaximumPoolSize();
+        if (newMaxThreadPoolSize > currentMaxThreadPoolSize) {
+            threadPoolExecutor.setMaximumPoolSize(newMaxThreadPoolSize);
+            threadPoolExecutor.setCorePoolSize(newMaxThreadPoolSize);
+        } else if (newMaxThreadPoolSize < currentMaxThreadPoolSize) {
+            threadPoolExecutor.setCorePoolSize(newMaxThreadPoolSize);
+            threadPoolExecutor.setMaximumPoolSize(newMaxThreadPoolSize);
+        }
+    }
+
+    private static final class AdjustableSemaphore extends Semaphore {
+        private static final long serialVersionUID = 1L;
+
+        private AdjustableSemaphore(int permits) {
+            super(permits);
+        }
+
+        private void adjustPermits(int delta) {
+            if (delta > 0) {
+                release(delta);
+            } else if (delta < 0) {
+                reducePermits(-delta);
+            }
+        }
     }
 }

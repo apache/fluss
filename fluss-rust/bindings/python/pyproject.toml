@@ -24,7 +24,7 @@ name = "pyfluss"
 description = "Apache Fluss Python client"
 authors = [{name = "Apache Fluss", email = "dev@fluss.apache.org"}]
 license = "Apache-2.0"
-license-files = ["LICENSE", "NOTICE"]
+license-files = ["LICENSE", "NOTICE", "LICENSE-bin", "NOTICE-bin"]
 readme = "PYPI_README.md"
 requires-python = ">=3.9"
 classifiers = [

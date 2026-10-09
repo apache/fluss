@@ -1,0 +1,33 @@
+Apache Fluss Python
+Copyright 2025-2026 The Apache Software Foundation
+
+This product includes software developed at
+The Apache Software Foundation (http://www.apache.org/).
+
+Apache Flink
+Copyright 2014-2024 The Apache Software Foundation
+
+Apache Kafka
+Copyright 2012-2024 The Apache Software Foundation
+
+Apache Paimon
+Copyright 2023-2024 The Apache Software Foundation
+
+
+--------------------------------------------------------------------------------
+
+The following notice applies to: arrow-arith@59.0.0, arrow-array@59.0.0, arrow-buffer@59.0.0, arrow-cast@59.0.0, arrow-csv@59.0.0, arrow-data@59.0.0, arrow-ipc@59.0.0, arrow-json@59.0.0, arrow-ord@59.0.0, arrow-row@59.0.0, arrow-schema@59.0.0, arrow-select@59.0.0, arrow-string@59.0.0, arrow@59.0.0
+
+Apache Arrow
+Copyright 2016-2026 The Apache Software Foundation
+
+This product includes software developed at
+The Apache Software Foundation (http://www.apache.org/).
+
+This product includes software from the chronoutil crate (MIT)
+ * Copyright (c) 2020-2022 Oliver Margetts
+ * https://github.com/olliemath/chronoutil
+
+This product includes software from the compact-thrift project (Apache 2.0)
+ * Copyright Jörn Horstmann
+ * https://github.com/jhorstmann/compact-thrift

@@ -30,7 +30,8 @@ use crate::config::Config;
 use crate::error::Error::UnsupportedOperation;
 use crate::error::{ApiError, Error, FlussError, Result};
 use crate::metadata::{
-    LogFormat, PhysicalTablePath, RowType, SchemaInfo, TableBucket, TableInfo, TablePath,
+    LogFormat, PhysicalTablePath, RowType, SchemaInfo, TableBucket, TableInfo, TableOrPartition,
+    TablePath,
 };
 use crate::metrics::ScannerMetrics;
 use crate::predicate::{Predicate, to_pb_predicate};
@@ -186,12 +187,21 @@ impl<'a> TableScan<'a> {
                 ),
             });
         }
-        let num_buckets = self.table_info.get_num_buckets();
-        if table_bucket.bucket_id() < 0 || table_bucket.bucket_id() >= num_buckets {
+        // An uncached count is checked by the scan once it fetches the partition's metadata.
+        let bucket_count = self
+            .metadata
+            .get_cluster()
+            .bucket_count(table_bucket.table_or_partition());
+        if table_bucket.bucket_id() < 0
+            || bucket_count.is_some_and(|bucket_count| table_bucket.bucket_id() >= bucket_count)
+        {
             return Err(Error::IllegalArgument {
                 message: format!(
-                    "Bucket id {} out of range for table with {num_buckets} buckets",
-                    table_bucket.bucket_id()
+                    "Bucket id {} out of range{}",
+                    table_bucket.bucket_id(),
+                    bucket_count
+                        .map(|count| format!(" for {count} buckets"))
+                        .unwrap_or_default()
                 ),
             });
         }
@@ -449,7 +459,7 @@ pub struct RecordBatchLogScanner {
 struct LogScannerInner {
     table_path: TablePath,
     table_id: TableId,
-    num_buckets: i32,
+    table_info: TableInfo,
     metadata: Arc<Metadata>,
     log_scanner_status: Arc<LogScannerStatus>,
     log_fetcher: LogFetcher,
@@ -647,7 +657,7 @@ impl LogScannerInner {
         Ok(Self {
             table_path: table_info.table_path.clone(),
             table_id: table_info.table_id,
-            num_buckets: table_info.get_num_buckets(),
+            table_info: table_info.clone(),
             is_partitioned_table: table_info.is_partitioned(),
             metadata: metadata.clone(),
             log_scanner_status: log_scanner_status.clone(),
@@ -1200,8 +1210,48 @@ impl RecordBatchLogScanner {
         self.inner.table_id
     }
 
-    pub(crate) fn num_buckets(&self) -> i32 {
-        self.inner.num_buckets
+    pub(crate) fn bucket_count(&self, partition_id: Option<PartitionId>) -> Option<i32> {
+        self.inner
+            .metadata
+            .get_cluster()
+            .bucket_count(TableOrPartition::of(
+                self.inner.table_info.table_id,
+                partition_id,
+            ))
+    }
+
+    /// Fetches the metadata of the partitions of `buckets` whose bucket count is not cached.
+    pub(crate) async fn cache_bucket_counts<'a>(
+        &self,
+        buckets: impl IntoIterator<Item = &'a TableBucket>,
+    ) -> Result<()> {
+        let cluster = self.inner.metadata.get_cluster();
+        let partition_ids: Vec<PartitionId> = buckets
+            .into_iter()
+            .filter(|bucket| {
+                bucket.table_id() == self.inner.table_info.table_id
+                    && cluster.bucket_count(bucket.table_or_partition()).is_none()
+            })
+            .filter_map(|bucket| bucket.partition_id())
+            .collect::<HashSet<_>>()
+            .into_iter()
+            .collect();
+        if partition_ids.is_empty() {
+            return Ok(());
+        }
+        self.inner
+            .metadata
+            .update_tables_metadata(
+                &HashSet::from([&self.inner.table_path]),
+                &HashSet::new(),
+                partition_ids,
+            )
+            .await
+    }
+
+    /// Next fetch offset of `bucket`, which moves past batches the server pruned.
+    pub(crate) fn bucket_offset(&self, bucket: &TableBucket) -> Option<i64> {
+        self.inner.log_scanner_status.get_bucket_offset(bucket)
     }
 
     /// Subscribes non-partitioned ranges while the caller holds the active
@@ -1494,6 +1544,13 @@ impl LogFetcher {
                     "Received unknown table or bucket error in fetch for bucket {table_bucket}"
                 ),
             },
+            FlussError::InvalidBucketRouting => FetchErrorContext {
+                action: FetchErrorAction::Ignore,
+                log_level: FetchErrorLogLevel::Warn,
+                log_message: format!(
+                    "Invalid bucket routing in fetch for bucket {table_bucket}, refreshing metadata: {error_message}"
+                ),
+            },
             FlussError::LogOffsetOutOfRangeException => FetchErrorContext {
                 action: FetchErrorAction::LogOffsetOutOfRange,
                 log_level: FetchErrorLogLevel::Debug,
@@ -1530,17 +1587,6 @@ impl LogFetcher {
                 ),
             },
         }
-    }
-
-    fn should_invalidate_table_meta(error: FlussError) -> bool {
-        matches!(
-            error,
-            FlussError::NotLeaderOrFollower
-                | FlussError::LeaderNotAvailableException
-                | FlussError::FencedLeaderEpochException
-                | FlussError::UnknownTableOrBucketException
-                | FlussError::InvalidCoordinatorException
-        )
     }
 
     async fn check_and_update_metadata(&self, table_buckets: &[TableBucket]) -> Result<()> {
@@ -1747,7 +1793,7 @@ impl LogFetcher {
                     .into();
 
                     let error = FlussError::for_code(error_code);
-                    if Self::should_invalidate_table_meta(error) {
+                    if error.invalidates_metadata() {
                         let table_id = table_bucket.table_id();
                         let cluster = metadata.get_cluster();
                         if let Some(table_path) = cluster.get_table_path_by_id(table_id) {
@@ -2357,6 +2403,10 @@ impl LogFetcher {
                             bucket_id: bucket.bucket_id(),
                             fetch_offset: offset,
                             max_fetch_bytes: self.fetch_max_bytes_for_bucket,
+                            routing_bucket_count: self
+                                .metadata
+                                .get_cluster()
+                                .bucket_count(bucket.table_or_partition()),
                         };
 
                         fetch_log_req_for_buckets

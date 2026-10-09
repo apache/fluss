@@ -56,6 +56,7 @@ public class KvWriteBatch extends WriteBatch {
     public KvWriteBatch(
             long tableId,
             int bucketId,
+            int bucketCount,
             PhysicalTablePath physicalTablePath,
             int schemaId,
             KvFormat kvFormat,
@@ -68,6 +69,7 @@ public class KvWriteBatch extends WriteBatch {
         super(
                 tableId,
                 bucketId,
+                bucketCount,
                 physicalTablePath,
                 schemaId,
                 WriteFormat.fromKvFormat(kvFormat),

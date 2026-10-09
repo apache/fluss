@@ -236,11 +236,13 @@ public class LogFetchCollectorTest {
         ScanRecords firstPoll = collector.collectFetch(logFetchBuffer);
         assertThat(firstPoll.records(tb).size()).isEqualTo(2);
         assertThat(logScannerStatus.getBucketOffset(tb)).isEqualTo(2L);
+        assertThat(logScannerStatus.recordsLag()).isEqualTo(8L);
         assertThat(completedFetch.isConsumed()).isFalse();
 
         ScanRecords secondPoll = collector.collectFetch(logFetchBuffer);
         assertThat(secondPoll.records(tb).size()).isEqualTo(2);
         assertThat(logScannerStatus.getBucketOffset(tb)).isEqualTo(4L);
+        assertThat(logScannerStatus.recordsLag()).isEqualTo(6L);
         assertThat(completedFetch.isConsumed()).isFalse();
     }
 

@@ -27,17 +27,21 @@ import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.MemorySize;
 import org.apache.fluss.exception.AuthorizationException;
+import org.apache.fluss.exception.FlussRuntimeException;
+import org.apache.fluss.exception.InvalidBucketRoutingException;
 import org.apache.fluss.exception.NetworkException;
 import org.apache.fluss.exception.OutOfOrderSequenceException;
 import org.apache.fluss.exception.PartitionNotExistException;
 import org.apache.fluss.exception.TableNotExistException;
 import org.apache.fluss.exception.TimeoutException;
+import org.apache.fluss.exception.TooManyPartitionsException;
 import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
+import org.apache.fluss.metadata.TableOrPartition;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.record.MemoryLogRecords;
 import org.apache.fluss.row.BinaryRow;
@@ -60,6 +64,9 @@ import org.apache.fluss.utils.clock.SystemClock;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -74,6 +81,12 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.apache.fluss.record.LogRecordBatchFormat.NO_WRITER_ID;
 import static org.apache.fluss.record.TestData.DATA1_ROW_TYPE;
@@ -98,6 +111,7 @@ import static org.apache.fluss.testutils.DataTestUtils.row;
 import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.apache.fluss.utils.PartitionUtils.HISTORICAL_PARTITION_VALUE;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** ITCase for {@link Sender}. */
 final class SenderTest {
@@ -112,6 +126,7 @@ final class SenderTest {
     private final TableBucket tb1 = new TableBucket(DATA1_TABLE_ID, 0);
     private TestingMetadataUpdater metadataUpdater;
     private RecordAccumulator accumulator = null;
+    private TestingBucketAssigner bucketAssigner;
     private Sender sender = null;
     private TestingWriterMetricGroup writerMetricGroup;
 
@@ -131,7 +146,7 @@ final class SenderTest {
 
     @Test
     void testPotentialExpirationUsesAutoPartitionTimeUnit() {
-        TableInfo tableInfo = createHistoricalTableInfo(AutoPartitionTimeUnit.HOUR, 48);
+        TableInfo tableInfo = createPartitionedTableInfo(AutoPartitionTimeUnit.HOUR, 48, true);
         Instant now = Instant.parse("2026-08-24T00:00:00Z");
 
         assertThat(
@@ -148,8 +163,10 @@ final class SenderTest {
                 .isFalse();
     }
 
-    @Test
-    void testReroutesWriteAfterExplicitMissingPartitionResponse() throws Exception {
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void testReroutesWriteAfterExplicitMissingPartitionResponse(boolean historicalCountKnown)
+            throws Exception {
         sender.destroyResources();
         TableInfo tableInfo = createHistoricalTableInfo();
         PhysicalTablePath originalPath = PhysicalTablePath.of(tableInfo.getTablePath(), "20990101");
@@ -161,7 +178,19 @@ final class SenderTest {
         Map<PhysicalTablePath, TableBucket> tableBucketsByPath = new HashMap<>();
         tableBucketsByPath.put(originalPath, originalBucket);
         tableBucketsByPath.put(historicalPath, historicalBucket);
-        metadataUpdater.updateCluster(partitionedCluster(tableInfo, tableBucketsByPath));
+        Map<TableOrPartition, Integer> bucketCounts = new HashMap<>();
+        bucketCounts.put(
+                TableOrPartition.ofPartition(originalBucket.getPartitionId()),
+                tableInfo.getNumBuckets());
+        if (historicalCountKnown) {
+            bucketCounts.put(
+                    TableOrPartition.ofPartition(historicalBucket.getPartitionId()),
+                    tableInfo.getNumBuckets());
+        }
+        // Historical rerouting only needs the target partition ID. Its bucket count is fixed,
+        // including when legacy metadata does not expose the historical partition's count.
+        metadataUpdater.updateCluster(
+                partitionedCluster(tableInfo, tableBucketsByPath, bucketCounts));
         IdempotenceManager idempotenceManager = createIdempotenceManager(true);
         idempotenceManager.setWriterId(0L);
         sender = setupWithIdempotenceState(idempotenceManager);
@@ -190,6 +219,8 @@ final class SenderTest {
                 .isEqualTo(historicalBucket.getPartitionId());
         assertThat(historicalRequest.getBucketsReqAt(0).getOriginalPartitionName())
                 .isEqualTo(originalPath.getPartitionName());
+        assertThat(historicalRequest.getBucketsReqAt(0).getRoutingBucketCount())
+                .isEqualTo(tableInfo.getNumBuckets());
         List<PutKvDataForBucket> historicalData = toPutKvDataForBuckets(historicalRequest);
         assertThat(historicalData).hasSize(1);
         assertThat(historicalData.get(0).records().writerId()).isEqualTo(0L);
@@ -203,6 +234,50 @@ final class SenderTest {
                                 PutKvResultForBucket.historicalSuccess(
                                         historicalBucket, 1L, originalPath.getPartitionName()))));
         assertThat(future.get()).isNull();
+    }
+
+    @ParameterizedTest
+    @CsvSource({"2, 4", "4, 2"})
+    void testServerValidatesResolvedBucketCount(int initialCount, int updatedCount)
+            throws Exception {
+        sender.destroyResources();
+        TableInfo tableInfo = createPartitionedTableInfo(AutoPartitionTimeUnit.DAY, 7, false);
+        PhysicalTablePath partitionPath =
+                PhysicalTablePath.of(tableInfo.getTablePath(), "20990101");
+        TableBucket tableBucket = new TableBucket(tableInfo.getTableId(), 21L, 0);
+        Map<TableOrPartition, Integer> bucketCounts = new HashMap<>();
+        bucketCounts.put(TableOrPartition.ofPartition(tableBucket.getPartitionId()), initialCount);
+        metadataUpdater.updateCluster(
+                partitionedCluster(
+                        tableInfo,
+                        Collections.singletonMap(partitionPath, tableBucket),
+                        bucketCounts));
+        sender = setupWithIdempotenceState();
+
+        CompletableFuture<Exception> future =
+                appendKvRecord(tableInfo, partitionPath, 1, metadataUpdater.getCluster());
+        bucketCounts.put(TableOrPartition.ofPartition(tableBucket.getPartitionId()), updatedCount);
+        metadataUpdater.updateCluster(
+                partitionedCluster(
+                        tableInfo,
+                        Collections.singletonMap(partitionPath, tableBucket),
+                        bucketCounts));
+        sender.runOnce();
+
+        PutKvRequest request = (PutKvRequest) node1Gateway().getRequest(0);
+        assertThat(request.getBucketsReqsCount()).isOne();
+        assertThat(request.getBucketsReqAt(0).getRoutingBucketCount()).isEqualTo(initialCount);
+        assertThat(future).isNotDone();
+        assertThat(sender.isRunning()).isTrue();
+
+        // Metadata changes do not rewrite or reject resolved batches. The server validates
+        // the count carried by the request and reports any stale routing.
+        finishRequest(
+                tableBucket, 0, createPutKvResponse(tableBucket, Errors.INVALID_BUCKET_ROUTING));
+        assertThat(sender.isRunning()).isFalse();
+        sender.runOnce();
+        assertThat(future.get()).isInstanceOf(InvalidBucketRoutingException.class);
+        assertThat(accumulator.hasIncomplete()).isFalse();
     }
 
     @Test
@@ -285,9 +360,9 @@ final class SenderTest {
         CompletableFuture<Exception> activeFuture =
                 appendKvRecord(tableInfo, activePath, 1, metadataUpdater.getCluster());
         accumulator.routeWritesTo(
-                firstOriginalPath, historicalPath, historicalBucket.getPartitionId());
+                tableInfo, firstOriginalPath, historicalPath, historicalBucket.getPartitionId());
         accumulator.routeWritesTo(
-                secondOriginalPath, historicalPath, historicalBucket.getPartitionId());
+                tableInfo, secondOriginalPath, historicalPath, historicalBucket.getPartitionId());
         CompletableFuture<Exception> firstHistoricalFuture =
                 appendKvRecord(tableInfo, firstOriginalPath, 2, metadataUpdater.getCluster());
         CompletableFuture<Exception> secondHistoricalFuture =
@@ -336,6 +411,98 @@ final class SenderTest {
         assertThat(secondHistoricalFuture.get()).isNull();
     }
 
+    @ParameterizedTest
+    @CsvSource({"false, true", "true, true", "false, false", "true, false"})
+    void testSynchronousFailureOnlyAffectsOwnedPartitionRequest(
+            boolean failHistorical, boolean retriable) throws Exception {
+        sender.destroyResources();
+        TableInfo tableInfo = createHistoricalTableInfo();
+        PhysicalTablePath activePath = PhysicalTablePath.of(tableInfo.getTablePath(), "20990101");
+        PhysicalTablePath originalPath = PhysicalTablePath.of(tableInfo.getTablePath(), "20000101");
+        PhysicalTablePath historicalPath =
+                PhysicalTablePath.of(tableInfo.getTablePath(), HISTORICAL_PARTITION_VALUE);
+        TableBucket activeBucket = new TableBucket(tableInfo.getTableId(), 21L, 0);
+        TableBucket historicalBucket = new TableBucket(tableInfo.getTableId(), 22L, 0);
+        RuntimeException sendFailure =
+                retriable
+                        ? new NetworkException("synchronous send failure")
+                        : new AuthorizationException("synchronous send failure");
+        AtomicBoolean failOnce = new AtomicBoolean(true);
+        TestTabletServerGateway gateway =
+                new TestTabletServerGateway(false, Collections.emptySet()) {
+                    @Override
+                    public CompletableFuture<PutKvResponse> putKv(PutKvRequest request) {
+                        if (request.getBucketsReqAt(0).hasOriginalPartitionName() == failHistorical
+                                && failOnce.getAndSet(false)) {
+                            throw sendFailure;
+                        }
+                        return super.putKv(request);
+                    }
+                };
+        metadataUpdater =
+                TestingMetadataUpdater.builder(
+                                Collections.singletonMap(tableInfo.getTablePath(), tableInfo))
+                        .withTabletServerGateway(TestingMetadataUpdater.NODE1.id(), gateway)
+                        .build();
+        Map<PhysicalTablePath, TableBucket> tableBucketsByPath = new HashMap<>();
+        tableBucketsByPath.put(activePath, activeBucket);
+        tableBucketsByPath.put(historicalPath, historicalBucket);
+        Cluster cluster = partitionedCluster(tableInfo, tableBucketsByPath);
+        metadataUpdater.updateCluster(cluster);
+        sender = setupWithIdempotenceState();
+
+        CompletableFuture<Exception> activeFuture =
+                appendKvRecord(tableInfo, activePath, 1, cluster);
+        accumulator.routeWritesTo(
+                tableInfo, originalPath, historicalPath, historicalBucket.getPartitionId());
+        CompletableFuture<Exception> historicalFuture =
+                appendKvRecord(tableInfo, originalPath, 2, cluster);
+        PutKvResponse activeResponse = createPutKvResponse(activeBucket, 1L);
+        PutKvResponse historicalResponse =
+                makePutKvResponse(
+                        Collections.singletonList(
+                                PutKvResultForBucket.historicalSuccess(
+                                        historicalBucket, 1L, originalPath.getPartitionName())));
+        TableBucket failedBucket = failHistorical ? historicalBucket : activeBucket;
+        TableBucket unaffectedBucket = failHistorical ? activeBucket : historicalBucket;
+        CompletableFuture<Exception> failedFuture =
+                failHistorical ? historicalFuture : activeFuture;
+        CompletableFuture<Exception> unaffectedFuture =
+                failHistorical ? activeFuture : historicalFuture;
+
+        sender.runOnce();
+
+        // Even when the first RPC fails, the other request is sent and retains its in-flight state.
+        assertThat(gateway.pendingRequestSize()).isOne();
+        assertThat(sender.numOfInFlightBatches(unaffectedBucket)).isOne();
+        assertThat(sender.numOfInFlightBatches(failedBucket)).isZero();
+        assertThat(unaffectedFuture).isNotDone();
+        assertThat(writerMetricGroup.recordsRetryTotal().getCount()).isEqualTo(retriable ? 1L : 0L);
+        if (retriable) {
+            assertThat(failedFuture).isNotDone();
+        } else {
+            assertThat(failedFuture).isCompleted();
+            assertThat(failedFuture.get()).isInstanceOf(AuthorizationException.class);
+        }
+        gateway.response(0, failHistorical ? activeResponse : historicalResponse);
+        assertThat(unaffectedFuture.get()).isNull();
+
+        if (retriable) {
+            metadataUpdater.updateCluster(cluster);
+            sender.runOnce();
+            assertThat(gateway.pendingRequestSize()).isOne();
+            PutKvRequest retryRequest = (PutKvRequest) gateway.getRequest(0);
+            assertThat(retryRequest.getBucketsReqAt(0).hasOriginalPartitionName())
+                    .isEqualTo(failHistorical);
+            assertThat(sender.numOfInFlightBatches(unaffectedBucket)).isZero();
+            assertThat(sender.numOfInFlightBatches(failedBucket)).isOne();
+            gateway.response(0, failHistorical ? historicalResponse : activeResponse);
+            assertThat(failedFuture.get()).isNull();
+        }
+        assertThat(accumulator.hasUnDrained()).isFalse();
+        assertThat(accumulator.hasIncomplete()).isFalse();
+    }
+
     @Test
     void testSimple() throws Exception {
         long offset = 0;
@@ -351,9 +518,97 @@ final class SenderTest {
     }
 
     @Test
+    void testSynchronousGatewayErrorStopsSenderAndReleasesDrainedKvBatch() throws Exception {
+        sender.destroyResources();
+
+        Map<TablePath, TableInfo> tableInfos = new HashMap<>();
+        tableInfos.put(DATA1_TABLE_PATH, DATA1_TABLE_INFO);
+        tableInfos.put(DATA1_TABLE_PATH_PK, DATA1_TABLE_INFO_PK);
+        OutOfMemoryError error = new OutOfMemoryError("Direct buffer memory");
+        TestTabletServerGateway failingGateway =
+                new TestTabletServerGateway(false, Collections.emptySet()) {
+                    @Override
+                    public CompletableFuture<PutKvResponse> putKv(PutKvRequest request) {
+                        throw error;
+                    }
+                };
+        metadataUpdater =
+                TestingMetadataUpdater.builder(tableInfos)
+                        .withTabletServerGateway(TestingMetadataUpdater.NODE1.id(), failingGateway)
+                        .build();
+        writerMetricGroup = TestingWriterMetricGroup.newInstance();
+        sender = setupWithIdempotenceState();
+
+        TableBucket kvBucket = new TableBucket(DATA1_TABLE_ID_PK, 0);
+        CompletableFuture<Exception> future = new CompletableFuture<>();
+        appendKvToAccumulator(
+                kvBucket,
+                compactedRow(DATA1_ROW_TYPE, new Object[] {1, "a"}),
+                (tb, leo, e) -> future.complete(e));
+
+        assertThatThrownBy(sender::run).isSameAs(error);
+
+        assertThat(future).isCompleted();
+        assertThat(future.get()).hasCause(error);
+        assertThat(sender.isRunning()).isFalse();
+        assertThat(sender.numOfInFlightBatches(kvBucket)).isZero();
+        assertThat(accumulator.hasIncomplete()).isFalse();
+        assertThatThrownBy(
+                        () ->
+                                appendKvToAccumulator(
+                                        kvBucket,
+                                        compactedRow(DATA1_ROW_TYPE, new Object[] {2, "b"}),
+                                        (tb, leo, e) -> {}))
+                .isInstanceOf(FlussRuntimeException.class)
+                .hasMessage("Writer closed while send in progress");
+    }
+
+    @Test
+    void testAsynchronousGatewayErrorIsCleanedUpBySenderThread() throws Exception {
+        TableBucket kvBucket = new TableBucket(DATA1_TABLE_ID_PK, 0);
+        CompletableFuture<Exception> resultFuture = new CompletableFuture<>();
+        AtomicReference<Thread> callbackThread = new AtomicReference<>();
+        AtomicReference<Thread> senderThread = new AtomicReference<>();
+        appendKvToAccumulator(
+                kvBucket,
+                compactedRow(DATA1_ROW_TYPE, new Object[] {1, "a"}),
+                (tb, leo, e) -> {
+                    callbackThread.set(Thread.currentThread());
+                    resultFuture.complete(e);
+                });
+
+        ExecutorService executor = Executors.newSingleThreadExecutor();
+        Future<?> senderTask =
+                executor.submit(
+                        () -> {
+                            senderThread.set(Thread.currentThread());
+                            sender.run();
+                        });
+        try {
+            retry(
+                    Duration.ofSeconds(20),
+                    () -> assertThat(pendingRequestSize(kvBucket)).isEqualTo(1));
+
+            OutOfMemoryError error = new OutOfMemoryError("Direct buffer memory");
+            failRequest(kvBucket, 0, error);
+            senderTask.get(20, TimeUnit.SECONDS);
+
+            assertThat(resultFuture.get()).hasCause(error);
+            assertThat(callbackThread.get()).isSameAs(senderThread.get());
+            assertThat(sender.isRunning()).isFalse();
+            assertThat(sender.numOfInFlightBatches(kvBucket)).isZero();
+            assertThat(accumulator.hasIncomplete()).isFalse();
+        } finally {
+            sender.forceClose();
+            executor.shutdownNow();
+            assertThat(executor.awaitTermination(20, TimeUnit.SECONDS)).isTrue();
+        }
+    }
+
+    @Test
     void testRetries() throws Exception {
-        // create a sender with retries = 1.
-        int maxRetries = 1;
+        // Allow multiple retries so a duplicated attempt increment exhausts the budget too early.
+        int maxRetries = 2;
         Sender sender1 =
                 setupWithIdempotenceState(
                         new IdempotenceManager(
@@ -381,10 +636,13 @@ final class SenderTest {
         sender1.runOnce();
         assertThat(sender1.numOfInFlightBatches(tb1)).isEqualTo(1);
 
-        // timeout error can retry send.
-        finishRequest(tb1, 0, createProduceLogResponse(tb1, Errors.REQUEST_TIME_OUT));
-        sender1.runOnce();
-        assertThat(sender1.numOfInFlightBatches(tb1)).isEqualTo(1);
+        // Every allowed retry must leave the write pending until the next response.
+        for (int retry = 0; retry < maxRetries; retry++) {
+            finishRequest(tb1, 0, createProduceLogResponse(tb1, Errors.REQUEST_TIME_OUT));
+            assertThat(future2).isNotDone();
+            sender1.runOnce();
+            assertThat(sender1.numOfInFlightBatches(tb1)).isEqualTo(1);
+        }
 
         // Even if timeout error can retry send, but the retry number > maxRetries, which will
         // return error.
@@ -1189,7 +1447,8 @@ final class SenderTest {
                         oldCluster.getCoordinatorServer(),
                         oldCluster.getBucketLocationsByPath(),
                         oldCluster.getTableIdByPath(),
-                        oldCluster.getPartitionIdByPath());
+                        oldCluster.getPartitionIdByPath(),
+                        Collections.emptyMap());
 
         metadataUpdater.updateCluster(newCluster);
 
@@ -1270,6 +1529,7 @@ final class SenderTest {
         int[] pkIndex = DATA1_SCHEMA_PK.getPrimaryKeyIndexes();
         byte[] key = new CompactedKeyEncoder(DATA1_ROW_TYPE, pkIndex).encodeKey(row);
         CompletableFuture<Exception> future = new CompletableFuture<>();
+        bucketAssigner.setBucketId(0);
         accumulator.append(
                 WriteRecord.forUpsert(
                         DATA1_TABLE_INFO_PK,
@@ -1280,9 +1540,7 @@ final class SenderTest {
                         WriteFormat.COMPACTED_KV,
                         null),
                 (tb, leo, e) -> future.complete(e),
-                metadataUpdater.getCluster(),
-                0,
-                false);
+                metadataUpdater.getCluster());
         sender.runOnce();
         finishRequest(tableBucket, 0, createPutKvResponse(tableBucket, SCHEMA_NOT_EXIST));
         assertThat(sender.numOfInFlightBatches(tableBucket)).isEqualTo(0);
@@ -1469,6 +1727,60 @@ final class SenderTest {
         assertThat(future2.get()).isNull();
     }
 
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void testPartitionCreationFailureStopsCurrentAndFutureAppends(boolean batchRegistered)
+            throws Exception {
+        CompletableFuture<Exception> completion = new CompletableFuture<>();
+        if (batchRegistered) {
+            appendToAccumulator(tb1, row(1, "pending"), (tb, leo, e) -> completion.complete(e));
+        }
+        TooManyPartitionsException failure =
+                new TooManyPartitionsException("Partition limit reached");
+        sender.recordFatalError(failure);
+        assertThat(sender.isRunning()).isFalse();
+        assertThat(sender.getFatalError()).isSameAs(failure);
+        assertThatThrownBy(() -> appendToAccumulator(tb1, row(1, "late"), (tb, leo, e) -> {}))
+                .hasMessageContaining("Writer closed");
+        sender.runOnce();
+        if (batchRegistered) {
+            assertThat(completion.get(10, TimeUnit.SECONDS)).isSameAs(failure);
+        }
+        assertThat(accumulator.hasIncomplete()).isFalse();
+        assertThat(accumulator.hasUnDrained()).isFalse();
+    }
+
+    @Test
+    void testInvalidBucketRoutingStopsQueuedAndInflightWrites() throws Exception {
+        TableBucket tb2 = new TableBucket(DATA1_TABLE_ID, 1);
+        CompletableFuture<Exception> first = new CompletableFuture<>();
+        CompletableFuture<Exception> inflight = new CompletableFuture<>();
+        CompletableFuture<Exception> queued = new CompletableFuture<>();
+        appendToAccumulator(tb1, row(1, "v1"), (tb, leo, e) -> first.complete(e));
+        sender.runOnce();
+        appendToAccumulator(tb2, row(2, "other bucket"), (tb, leo, e) -> inflight.complete(e));
+        sender.runOnce();
+        appendToAccumulator(tb1, row(1, "v2"), (tb, leo, e) -> queued.complete(e));
+        TestTabletServerGateway secondGateway =
+                (TestTabletServerGateway)
+                        metadataUpdater.newTabletServerClientForNode(
+                                metadataUpdater.leaderFor(DATA1_TABLE_PATH, tb2));
+        finishRequest(tb1, 0, createProduceLogResponse(tb1, Errors.INVALID_BUCKET_ROUTING));
+        assertThat(sender.isRunning()).isFalse();
+        assertThatThrownBy(() -> appendToAccumulator(tb1, row(1, "retry"), (tb, leo, e) -> {}))
+                .hasMessageContaining("Writer closed");
+        // A success arriving after rejection but before sender cleanup must not complete v2.
+        secondGateway.response(0, createProduceLogResponse(tb2, 0, 1));
+        assertThat(inflight).isNotDone();
+        sender.runOnce();
+        assertThat(first.get()).isInstanceOf(InvalidBucketRoutingException.class);
+        assertThat(inflight.get()).isInstanceOf(InvalidBucketRoutingException.class);
+        assertThat(queued.get()).isInstanceOf(InvalidBucketRoutingException.class);
+        assertThat(sender.numOfInFlightBatches(tb1)).isZero();
+        assertThat(sender.numOfInFlightBatches(tb2)).isZero();
+        assertThat(accumulator.hasIncomplete()).isFalse();
+    }
+
     private TestingMetadataUpdater initializeMetadataUpdater() {
         Map<TablePath, TableInfo> tableInfos = new HashMap<>();
         tableInfos.put(DATA1_TABLE_PATH, DATA1_TABLE_INFO);
@@ -1485,11 +1797,11 @@ final class SenderTest {
     }
 
     private static TableInfo createHistoricalTableInfo() {
-        return createHistoricalTableInfo(AutoPartitionTimeUnit.DAY, 7);
+        return createPartitionedTableInfo(AutoPartitionTimeUnit.DAY, 7, true);
     }
 
-    private static TableInfo createHistoricalTableInfo(
-            AutoPartitionTimeUnit timeUnit, int numToRetain) {
+    private static TableInfo createPartitionedTableInfo(
+            AutoPartitionTimeUnit timeUnit, int numToRetain, boolean historicalPartitionEnabled) {
         Schema schema =
                 Schema.newBuilder()
                         .column("id", DataTypes.INT())
@@ -1507,7 +1819,9 @@ final class SenderTest {
                         .property(ConfigOptions.TABLE_AUTO_PARTITION_TIMEZONE, "UTC")
                         .property(ConfigOptions.TABLE_DATALAKE_ENABLED, true)
                         .property(ConfigOptions.TABLE_DATALAKE_FORMAT, DataLakeFormat.PAIMON)
-                        .property(ConfigOptions.TABLE_DATALAKE_HISTORICAL_PARTITION_ENABLED, true)
+                        .property(
+                                ConfigOptions.TABLE_DATALAKE_HISTORICAL_PARTITION_ENABLED,
+                                historicalPartitionEnabled)
                         .build();
         return TableInfo.of(
                 DATA1_TABLE_PATH_PK,
@@ -1540,6 +1854,19 @@ final class SenderTest {
 
     private static Cluster partitionedCluster(
             TableInfo tableInfo, Map<PhysicalTablePath, TableBucket> tableBucketsByPath) {
+        Map<TableOrPartition, Integer> bucketCounts = new HashMap<>();
+        for (TableBucket bucket : tableBucketsByPath.values()) {
+            bucketCounts.put(
+                    TableOrPartition.ofPartition(bucket.getPartitionId()),
+                    tableInfo.getNumBuckets());
+        }
+        return partitionedCluster(tableInfo, tableBucketsByPath, bucketCounts);
+    }
+
+    private static Cluster partitionedCluster(
+            TableInfo tableInfo,
+            Map<PhysicalTablePath, TableBucket> tableBucketsByPath,
+            Map<TableOrPartition, Integer> bucketCountByTableOrPartition) {
         int[] replicas = new int[] {TestingMetadataUpdater.NODE1.id()};
         Map<PhysicalTablePath, List<BucketLocation>> bucketLocationsByPath = new HashMap<>();
         Map<PhysicalTablePath, Long> partitionIdsByPath = new HashMap<>();
@@ -1561,7 +1888,8 @@ final class SenderTest {
                 TestingMetadataUpdater.COORDINATOR,
                 bucketLocationsByPath,
                 Collections.singletonMap(tableInfo.getTablePath(), tableInfo.getTableId()),
-                partitionIdsByPath);
+                partitionIdsByPath,
+                bucketCountByTableOrPartition);
     }
 
     private CompletableFuture<Exception> appendKvRecord(
@@ -1578,6 +1906,7 @@ final class SenderTest {
                                 tableInfo.getSchema().getPrimaryKeyIndexes())
                         .encodeKey(row);
         CompletableFuture<Exception> future = new CompletableFuture<>();
+        bucketAssigner.setBucketId(0);
         accumulator.append(
                 WriteRecord.forUpsert(
                         tableInfo,
@@ -1588,9 +1917,7 @@ final class SenderTest {
                         WriteFormat.COMPACTED_KV,
                         null),
                 (tableBucket, logEndOffset, error) -> future.complete(error),
-                cluster,
-                0,
-                false);
+                cluster);
         return future;
     }
 
@@ -1602,13 +1929,12 @@ final class SenderTest {
     private void appendToAccumulator(
             TableInfo tableInfo, TableBucket tb, GenericRow row, WriteCallback writeCallback)
             throws Exception {
+        bucketAssigner.setBucketId(tb.getBucket());
         accumulator.append(
                 WriteRecord.forArrowAppend(
                         tableInfo, PhysicalTablePath.of(tableInfo.getTablePath()), row, null),
                 writeCallback,
-                metadataUpdater.getCluster(),
-                tb.getBucket(),
-                false);
+                metadataUpdater.getCluster());
     }
 
     private void appendKvToAccumulator(
@@ -1624,6 +1950,7 @@ final class SenderTest {
             throws Exception {
         int[] pkIndex = DATA1_SCHEMA_PK.getPrimaryKeyIndexes();
         byte[] key = new CompactedKeyEncoder(DATA1_ROW_TYPE, pkIndex).encodeKey(row);
+        bucketAssigner.setBucketId(tableBucket.getBucket());
         accumulator.append(
                 WriteRecord.forUpsert(
                         tableInfo,
@@ -1634,9 +1961,7 @@ final class SenderTest {
                         WriteFormat.COMPACTED_KV,
                         null),
                 writeCallback,
-                metadataUpdater.getCluster(),
-                tableBucket.getBucket(),
-                false);
+                metadataUpdater.getCluster());
     }
 
     private TestTabletServerGateway node1Gateway() {
@@ -1761,9 +2086,14 @@ final class SenderTest {
         conf.set(ConfigOptions.CLIENT_WRITER_BATCH_SIZE, new MemorySize(BATCH_SIZE));
         conf.set(ConfigOptions.CLIENT_WRITER_BUFFER_PAGE_SIZE, new MemorySize(PAGE_SIZE));
         conf.set(ConfigOptions.CLIENT_WRITER_BATCH_TIMEOUT, Duration.ofMillis(batchTimeoutMs));
+        bucketAssigner = new TestingBucketAssigner();
         accumulator =
                 new RecordAccumulator(
-                        conf, idempotenceManager, writerMetricGroup, SystemClock.getInstance());
+                        conf,
+                        idempotenceManager,
+                        writerMetricGroup,
+                        SystemClock.getInstance(),
+                        (tableInfo, path) -> bucketAssigner);
         return new Sender(
                 accumulator,
                 REQUEST_TIMEOUT,

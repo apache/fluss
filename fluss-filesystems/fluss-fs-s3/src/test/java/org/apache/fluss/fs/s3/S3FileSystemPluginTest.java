@@ -32,7 +32,6 @@ import org.junit.jupiter.api.Test;
 import java.util.Collections;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Tests for server/client detection in {@link S3FileSystemPlugin}. */
 class S3FileSystemPluginTest {
@@ -111,7 +110,7 @@ class S3FileSystemPluginTest {
     }
 
     @Test
-    void testConfiguredCredentialProviderWithRoleArnThrows() {
+    void testConfiguredCredentialProviderWithRoleArnIsAccepted() {
         Configuration flussConfig = new Configuration();
         flussConfig.setString(
                 PROVIDER_CONFIG,
@@ -121,10 +120,14 @@ class S3FileSystemPluginTest {
 
         S3FileSystemPlugin plugin = new S3FileSystemPlugin();
 
-        assertThatThrownBy(() -> plugin.buildHadoopConfiguration(flussConfig))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("AssumeRole")
-                .hasMessageContaining("custom AWS credentials provider");
+        org.apache.hadoop.conf.Configuration hadoopConfig =
+                plugin.buildHadoopConfiguration(flussConfig);
+        assertThat(hadoopConfig.get(PROVIDER_CONFIG))
+                .isEqualTo(
+                        S3DelegationTokenProviderTest.RefreshableCredentialsProvider.class
+                                .getName());
+        assertThat(hadoopConfig.get("fs.s3a.assumed.role.arn"))
+                .isEqualTo("arn:aws:iam::123456789012:role/test-role");
     }
 
     @Test

@@ -17,7 +17,6 @@
 
 package org.apache.fluss.server.kv;
 
-import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.row.encode.KvValueLayout;
 import org.apache.fluss.server.utils.RowTtlUtils;
 import org.apache.fluss.utils.clock.Clock;
@@ -26,6 +25,7 @@ import org.rocksdb.FlinkCompactionFilter;
 import org.rocksdb.RocksDB;
 
 import java.time.Duration;
+import java.util.function.LongSupplier;
 
 import static org.apache.fluss.utils.Preconditions.checkArgument;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
@@ -40,29 +40,47 @@ public final class RowTtlCompactionFilterFactory {
     /** Creates a configured native compaction filter factory for row TTL cleanup. */
     public static FlinkCompactionFilter.FlinkCompactionFilterFactory create(
             KvValueLayout kvValueLayout, Duration ttl, Clock clock) {
-        return create(kvValueLayout, ttl, QUERY_TIME_AFTER_NUM_ENTRIES, clock);
+        long ttlMillis = RowTtlUtils.validateAndConvertTtlDurationToMillis(ttl);
+        checkNotNull(clock, "clock must not be null.");
+        return create(kvValueLayout, ttlMillis, clock::milliseconds);
     }
 
-    @VisibleForTesting
+    /** Removes values using the default interval for refreshing the supplied current value. */
     static FlinkCompactionFilter.FlinkCompactionFilterFactory create(
-            KvValueLayout kvValueLayout, Duration ttl, long queryTimeAfterNumEntries, Clock clock) {
-        long ttlMillis = RowTtlUtils.validateAndConvertTtlDurationToMillis(ttl);
+            KvValueLayout kvValueLayout,
+            long expirationDistance,
+            LongSupplier currentValueSupplier) {
+        return create(
+                kvValueLayout,
+                expirationDistance,
+                QUERY_TIME_AFTER_NUM_ENTRIES,
+                currentValueSupplier);
+    }
+
+    /** Removes a value when {@code valueTag + expirationDistance <= currentValue}. */
+    static FlinkCompactionFilter.FlinkCompactionFilterFactory create(
+            KvValueLayout kvValueLayout,
+            long expirationDistance,
+            long queryCurrentValueAfterNumEntries,
+            LongSupplier currentValueSupplier) {
         checkNotNull(kvValueLayout, "kvValueLayout must not be null.");
-        checkNotNull(clock, "clock must not be null.");
-        checkArgument(kvValueLayout.hasValueTag(), "Row TTL requires a tagged KV value layout.");
+        checkNotNull(currentValueSupplier, "currentValueSupplier must not be null.");
+        checkArgument(kvValueLayout.hasValueTag(), "Compaction filter requires a tagged layout.");
+        checkArgument(expirationDistance >= 0L, "Expiration distance must be non-negative.");
         checkArgument(
-                queryTimeAfterNumEntries > 0,
-                "queryTimeAfterNumEntries must be greater than zero.");
+                queryCurrentValueAfterNumEntries > 0L,
+                "queryCurrentValueAfterNumEntries must be greater than zero.");
 
         RocksDB.loadLibrary();
         FlinkCompactionFilter.FlinkCompactionFilterFactory factory =
-                new FlinkCompactionFilter.FlinkCompactionFilterFactory(clock::milliseconds);
+                new FlinkCompactionFilter.FlinkCompactionFilterFactory(
+                        currentValueSupplier::getAsLong);
         factory.configure(
                 FlinkCompactionFilter.Config.createNotList(
                         FlinkCompactionFilter.StateType.Value,
                         kvValueLayout.valueTagOffset(),
-                        ttlMillis,
-                        queryTimeAfterNumEntries));
+                        expirationDistance,
+                        queryCurrentValueAfterNumEntries));
         return factory;
     }
 }

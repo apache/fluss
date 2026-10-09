@@ -275,6 +275,11 @@ public class RocksDBResourceContainer implements AutoCloseable {
 
         currentOptions.setMaxOpenFiles(internalGetOption(ConfigOptions.KV_MAX_OPEN_FILES));
 
+        currentOptions.setUseDirectReads(internalGetOption(ConfigOptions.KV_USE_DIRECT_READS));
+
+        currentOptions.setUseDirectIoForFlushAndCompaction(
+                internalGetOption(ConfigOptions.KV_USE_DIRECT_IO_FOR_FLUSH_AND_COMPACTION));
+
         currentOptions.setInfoLogLevel(
                 toRocksDbInfoLogLevel(internalGetOption(ConfigOptions.KV_LOG_LEVEL)));
 

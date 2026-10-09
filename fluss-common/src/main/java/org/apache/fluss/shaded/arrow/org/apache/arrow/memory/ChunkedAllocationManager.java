@@ -18,11 +18,13 @@
 package org.apache.fluss.shaded.arrow.org.apache.arrow.memory;
 
 import org.apache.fluss.annotation.VisibleForTesting;
-import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.util.MemoryUtil;
+import org.apache.fluss.shaded.netty4.io.netty.buffer.ByteBuf;
+import org.apache.fluss.shaded.netty4.io.netty.buffer.UnpooledByteBufAllocator;
 
 import java.util.ArrayDeque;
 import java.util.Deque;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * An {@link AllocationManager} that packs small allocations into large pre-allocated chunks using a
@@ -79,7 +81,8 @@ import java.util.concurrent.atomic.AtomicInteger;
  * <h3>How it works</h3>
  *
  * <ul>
- *   <li>Allocates large chunks (default 4MB) from native memory via {@code Unsafe}.
+ *   <li>Allocates large chunks (default 4MB) from Netty direct buffers ({@code
+ *       UnpooledByteBufAllocator}).
  *   <li>For each small allocation request, bumps a pointer within the current active chunk.
  *   <li>Only switches to a new chunk when the current one has no room.
  *   <li>Reference-counts each chunk: when all sub-allocations are released, the chunk is recycled
@@ -106,7 +109,7 @@ import java.util.concurrent.atomic.AtomicInteger;
  * }</pre>
  *
  * <p>For allocations >= chunkSize, a dedicated memory region is allocated directly (no bump
- * pointer), behaving identically to {@code UnsafeAllocationManager}.
+ * pointer), using a dedicated Netty {@code ByteBuf}.
  */
 public class ChunkedAllocationManager extends AllocationManager {
 
@@ -114,7 +117,7 @@ public class ChunkedAllocationManager extends AllocationManager {
     private static final long ALIGNMENT = 8;
 
     /** Default chunk size: 4MB (matches Netty 4.1+ maxOrder=9). */
-    private static final long DEFAULT_CHUNK_SIZE = 4L * 1024 * 1024;
+    private static final int DEFAULT_CHUNK_SIZE = 4 * 1024 * 1024;
 
     /** Default maximum number of empty chunks to keep in the free-list. */
     private static final int DEFAULT_MAX_FREE_CHUNKS = 3;
@@ -126,7 +129,8 @@ public class ChunkedAllocationManager extends AllocationManager {
     private final long offsetInChunk;
 
     // --- Fields for direct allocation (large request, owns its own memory) ---
-    private final long directAddress;
+    private final ByteBuf directByteBuf;
+    private final ChunkedFactory chunkedFactory;
 
     /** Sub-allocation carved from a shared {@link Chunk}. */
     private ChunkedAllocationManager(
@@ -135,16 +139,22 @@ public class ChunkedAllocationManager extends AllocationManager {
         this.chunk = chunk;
         this.offsetInChunk = offset;
         this.allocatedSize = size;
-        this.directAddress = 0;
+        this.directByteBuf = null;
+        this.chunkedFactory = null;
     }
 
     /** Direct allocation for oversized requests (>= chunkSize). Owns its own memory region. */
-    private ChunkedAllocationManager(BufferAllocator accountingAllocator, long address, long size) {
+    private ChunkedAllocationManager(
+            BufferAllocator accountingAllocator,
+            ByteBuf directByteBuf,
+            long size,
+            ChunkedFactory chunkedFactory) {
         super(accountingAllocator);
         this.chunk = null;
         this.offsetInChunk = 0;
         this.allocatedSize = size;
-        this.directAddress = address;
+        this.directByteBuf = directByteBuf;
+        this.chunkedFactory = chunkedFactory;
     }
 
     @Override
@@ -155,9 +165,9 @@ public class ChunkedAllocationManager extends AllocationManager {
     @Override
     protected long memoryAddress() {
         if (chunk != null) {
-            return chunk.address + offsetInChunk;
+            return chunk.directByteBuf.memoryAddress() + offsetInChunk;
         }
-        return directAddress;
+        return directByteBuf.memoryAddress();
     }
 
     @Override
@@ -165,7 +175,8 @@ public class ChunkedAllocationManager extends AllocationManager {
         if (chunk != null) {
             chunk.releaseSubAllocation();
         } else {
-            MemoryUtil.UNSAFE.freeMemory(directAddress);
+            directByteBuf.release();
+            chunkedFactory.decrementDirectMemoryBytes(allocatedSize);
         }
     }
 
@@ -174,12 +185,12 @@ public class ChunkedAllocationManager extends AllocationManager {
     // -------------------------------------------------------------------------
 
     /**
-     * A contiguous native memory region that holds multiple small allocations via bump-pointer.
+     * A contiguous direct memory region that holds multiple small allocations via bump-pointer.
      * Reference-counted: when all sub-allocations are released (count reaches 0), the chunk is
      * recycled back to the factory's free-list.
      */
     static class Chunk {
-        final long address;
+        final ByteBuf directByteBuf;
         final long capacity;
         /** Bump pointer — only accessed under the factory's synchronized lock. */
         long used;
@@ -198,8 +209,8 @@ public class ChunkedAllocationManager extends AllocationManager {
         /** Back-reference to the owning factory for recycling on drain. */
         final ChunkedFactory factory;
 
-        Chunk(long capacity, ChunkedFactory factory) {
-            this.address = MemoryUtil.UNSAFE.allocateMemory(capacity);
+        Chunk(int capacity, ChunkedFactory factory) {
+            this.directByteBuf = UnpooledByteBufAllocator.DEFAULT.directBuffer(capacity);
             this.capacity = capacity;
             this.used = 0;
             this.factory = factory;
@@ -266,9 +277,9 @@ public class ChunkedAllocationManager extends AllocationManager {
             // subAllocCount is already 0 at this point.
         }
 
-        /** Frees the underlying native memory. */
+        /** Deterministically releases the underlying direct memory. */
         void destroy() {
-            MemoryUtil.UNSAFE.freeMemory(address);
+            directByteBuf.release();
         }
     }
 
@@ -288,7 +299,7 @@ public class ChunkedAllocationManager extends AllocationManager {
      */
     public static class ChunkedFactory implements AllocationManager.Factory {
 
-        private final long chunkSize;
+        private final int chunkSize;
         private final int maxFreeChunks;
 
         /** The chunk currently receiving bump allocations. May be null initially. */
@@ -296,6 +307,9 @@ public class ChunkedAllocationManager extends AllocationManager {
 
         /** Pool of empty chunks available for reuse. */
         private final Deque<Chunk> freeChunks = new ArrayDeque<>();
+
+        /** Total direct memory, in bytes, currently allocated by this factory. */
+        private final AtomicLong directMemoryAllocatedBytes = new AtomicLong();
 
         /** Set to true when {@link #close()} is called. */
         private boolean closed;
@@ -311,7 +325,7 @@ public class ChunkedAllocationManager extends AllocationManager {
          * @param chunkSize maximum size of each chunk (bytes). Allocations >= this go direct.
          * @param maxFreeChunks maximum number of empty chunks to keep cached for reuse.
          */
-        public ChunkedFactory(long chunkSize, int maxFreeChunks) {
+        public ChunkedFactory(int chunkSize, int maxFreeChunks) {
             this.chunkSize = chunkSize;
             this.maxFreeChunks = maxFreeChunks;
         }
@@ -319,10 +333,18 @@ public class ChunkedAllocationManager extends AllocationManager {
         @Override
         public synchronized AllocationManager create(
                 BufferAllocator accountingAllocator, long size) {
+            if (closed) {
+                throw new IllegalStateException("ChunkedFactory has been closed.");
+            }
             if (size > chunkSize) {
-                // Large allocation: give it its own memory region.
-                long address = MemoryUtil.UNSAFE.allocateMemory(size);
-                return new ChunkedAllocationManager(accountingAllocator, address, size);
+                // Large allocation: use Netty direct buffer for deterministic release.
+                if (size > Integer.MAX_VALUE) {
+                    throw new IllegalArgumentException(
+                            "Allocation size " + size + " exceeds maximum " + Integer.MAX_VALUE);
+                }
+                ByteBuf directByteBuf = UnpooledByteBufAllocator.DEFAULT.directBuffer((int) size);
+                directMemoryAllocatedBytes.addAndGet(size);
+                return new ChunkedAllocationManager(accountingAllocator, directByteBuf, size, this);
             }
 
             // Align to 8 bytes for safe direct-memory access.
@@ -352,7 +374,9 @@ public class ChunkedAllocationManager extends AllocationManager {
                 recycled.resetBump();
                 return recycled;
             }
-            return new Chunk(chunkSize, this);
+            Chunk chunk = new Chunk(chunkSize, this);
+            directMemoryAllocatedBytes.addAndGet(chunkSize);
+            return chunk;
         }
 
         /**
@@ -381,7 +405,7 @@ public class ChunkedAllocationManager extends AllocationManager {
 
             if (closed) {
                 // Factory is closed — no one will ever reuse this chunk. Free it.
-                chunk.destroy();
+                destroyChunk(chunk);
             } else if (chunk == activeChunk) {
                 // Still the active chunk — just reset bump pointer for continued use.
                 chunk.resetBump();
@@ -389,8 +413,8 @@ public class ChunkedAllocationManager extends AllocationManager {
                 // Not active, pool has room — recycle.
                 freeChunks.offerFirst(chunk);
             } else {
-                // Pool is full — free native memory.
-                chunk.destroy();
+                // Pool is full — free direct memory.
+                destroyChunk(chunk);
             }
         }
 
@@ -403,12 +427,31 @@ public class ChunkedAllocationManager extends AllocationManager {
             closed = true;
             while (!freeChunks.isEmpty()) {
                 Chunk poll = freeChunks.poll();
-                poll.destroy();
+                destroyChunk(poll);
             }
-            if (activeChunk != null && activeChunk.subAllocCount.get() == 0) {
-                activeChunk.destroy();
-            }
+            Chunk chunk = activeChunk;
             activeChunk = null;
+            if (chunk != null && chunk.subAllocCount.get() == 0) {
+                // Invalidate a pending onChunkDrained callback that observed this zero count before
+                // close acquired the factory lock.
+                chunk.drainGeneration++;
+                destroyChunk(chunk);
+            }
+        }
+
+        /** Returns the direct memory, in bytes, currently allocated by this factory. */
+        public long getDirectMemoryAllocatedBytes() {
+            return directMemoryAllocatedBytes.get();
+        }
+
+        private void destroyChunk(Chunk chunk) {
+            long cap = chunk.capacity;
+            chunk.destroy();
+            directMemoryAllocatedBytes.addAndGet(-cap);
+        }
+
+        void decrementDirectMemoryBytes(long size) {
+            directMemoryAllocatedBytes.addAndGet(-size);
         }
 
         @VisibleForTesting

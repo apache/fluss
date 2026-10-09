@@ -20,6 +20,7 @@ package org.apache.fluss.lake.lakestorage;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.TableAlreadyExistException;
 import org.apache.fluss.exception.TableNotExistException;
+import org.apache.fluss.lake.lakestorage.LakeTableLookuperManager.LookupCacheOptions;
 import org.apache.fluss.lake.source.LakeSource;
 import org.apache.fluss.lake.writer.LakeTieringFactory;
 import org.apache.fluss.metadata.TableChange;
@@ -29,6 +30,7 @@ import org.apache.fluss.plugin.PluginManager;
 
 import org.junit.jupiter.api.Test;
 
+import java.time.Duration;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.Iterator;
@@ -41,6 +43,18 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 /** Tests for the {@link LakeStorage} base class. */
 class LakeStorageTest {
     private static final String TEST_LAKE_PLUGIN_FORMAT = "test-plugin";
+
+    @Test
+    void testLookupCacheOptionsRejectInvalidResourceLimits() {
+        assertThatThrownBy(() -> new LookupCacheOptions(0L, Duration.ofHours(1)))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new LookupCacheOptions(1024L, Duration.ZERO))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new LookupCacheOptions(1024L, Duration.ofSeconds(-1)))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new LookupCacheOptions(1024L, null))
+                .isInstanceOf(NullPointerException.class);
+    }
 
     @Test
     void testContextWithoutCurrentLakeTablePath() {
@@ -96,6 +110,24 @@ class LakeStorageTest {
                         ((PluginLakeStorageWrapper.ClassLoaderFixingLakeCatalog) lakeCatalog)
                                 .getWrappedDelegate())
                 .isInstanceOf(TestPaimonLakeCatalog.class);
+
+        LakeTableLookuperManager lookuperManager =
+                lakeStorage.createLakeTableLookuperManager(
+                        "lookup-dir", new LookupCacheOptions(1024L, Duration.ofHours(3)));
+        assertThat(lookuperManager)
+                .isInstanceOf(
+                        PluginLakeStorageWrapper.ClassLoaderFixingLakeTableLookuperManager.class);
+        TestLakeTableLookuperManager innerLookuperManager =
+                (TestLakeTableLookuperManager)
+                        ((PluginLakeStorageWrapper.ClassLoaderFixingLakeTableLookuperManager)
+                                        lookuperManager)
+                                .getWrappedDelegate();
+        LookupCacheOptions updatedOptions = new LookupCacheOptions(2048L, Duration.ofMinutes(30));
+        lookuperManager.reconfigure(updatedOptions);
+        assertThat(innerLookuperManager.options).isSameAs(updatedOptions);
+        assertThat(lookuperManager.fileCacheCapacityEvictions()).isEqualTo(3L);
+        lookuperManager.close();
+        assertThat(innerLookuperManager.closed).isTrue();
     }
 
     private static class TestingPluginManager implements PluginManager {
@@ -129,7 +161,6 @@ class LakeStorageTest {
     }
 
     private static class TestPaimonLakeStorage implements LakeStorage {
-
         public TestPaimonLakeStorage() {}
 
         @Override
@@ -145,6 +176,38 @@ class LakeStorageTest {
         @Override
         public LakeSource<?> createLakeSource(TablePath tablePath) {
             throw new UnsupportedOperationException("Not implemented");
+        }
+
+        @Override
+        public LakeTableLookuperManager createLakeTableLookuperManager(
+                String ioTmpDir, LookupCacheOptions options) {
+            return new TestLakeTableLookuperManager();
+        }
+    }
+
+    private static class TestLakeTableLookuperManager implements LakeTableLookuperManager {
+
+        private boolean closed;
+        private LookupCacheOptions options;
+
+        @Override
+        public LakeTableLookuper createLakeTableLookuper(TablePath tablePath, Context context) {
+            throw new UnsupportedOperationException("Not implemented");
+        }
+
+        @Override
+        public void reconfigure(LookupCacheOptions options) {
+            this.options = options;
+        }
+
+        @Override
+        public long fileCacheCapacityEvictions() {
+            return 3L;
+        }
+
+        @Override
+        public void close() {
+            closed = true;
         }
     }
 

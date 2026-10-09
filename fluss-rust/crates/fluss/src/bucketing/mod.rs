@@ -144,6 +144,49 @@ mod tests {
             expected, actual,
             "Expecting bucket to be {expected} but got {actual}"
         );
+
+        let expected = 2;
+        let actual = default_bucketing.bucketing(&[0x80u8, 0x01u8], 7).unwrap();
+        assert_eq!(
+            expected, actual,
+            "Expecting bucket to be {expected} but got {actual}"
+        );
+
+        let expected = 3;
+        let actual = default_bucketing
+            .bucketing(&[0xBFu8, 0x84u8, 0x3Du8], 12)
+            .unwrap();
+        assert_eq!(
+            expected, actual,
+            "Expecting bucket to be {expected} but got {actual}"
+        );
+
+        let expected = 10;
+        let actual = default_bucketing
+            .bucketing(&[0x00u8, 0x0Au8, 0x0Au8, 0x0Au8, 0xFFu8], 16)
+            .unwrap();
+        assert_eq!(
+            expected, actual,
+            "Expecting bucket to be {expected} but got {actual}"
+        );
+
+        let expected = 1;
+        let actual = default_bucketing
+            .bucketing("caf\u{e9}".as_bytes(), 8)
+            .unwrap();
+        assert_eq!(
+            expected, actual,
+            "Expecting bucket to be {expected} but got {actual}"
+        );
+
+        let expected = 1;
+        let actual = default_bucketing
+            .bucketing(&[0xFFu8, 0xFFu8, 0xFFu8, 0xFFu8], 5)
+            .unwrap();
+        assert_eq!(
+            expected, actual,
+            "Expecting bucket to be {expected} but got {actual}"
+        );
     }
 
     #[test]
@@ -178,6 +221,49 @@ mod tests {
         let expected = 0;
         let actual = paimon_bucketing
             .bucketing("The quick brown fox jumps over the lazy dog".as_bytes(), 8)
+            .unwrap();
+        assert_eq!(
+            expected, actual,
+            "Expecting bucket to be {expected} but got {actual}"
+        );
+
+        let expected = 2;
+        let actual = paimon_bucketing.bucketing(&[0x80u8, 0x01u8], 7).unwrap();
+        assert_eq!(
+            expected, actual,
+            "Expecting bucket to be {expected} but got {actual}"
+        );
+
+        let expected = 6;
+        let actual = paimon_bucketing
+            .bucketing(&[0xBFu8, 0x84u8, 0x3Du8], 12)
+            .unwrap();
+        assert_eq!(
+            expected, actual,
+            "Expecting bucket to be {expected} but got {actual}"
+        );
+
+        let expected = 9;
+        let actual = paimon_bucketing
+            .bucketing(&[0x00u8, 0x0Au8, 0x0Au8, 0x0Au8, 0xFFu8], 16)
+            .unwrap();
+        assert_eq!(
+            expected, actual,
+            "Expecting bucket to be {expected} but got {actual}"
+        );
+
+        let expected = 4;
+        let actual = paimon_bucketing
+            .bucketing("caf\u{e9}".as_bytes(), 8)
+            .unwrap();
+        assert_eq!(
+            expected, actual,
+            "Expecting bucket to be {expected} but got {actual}"
+        );
+
+        let expected = 2;
+        let actual = paimon_bucketing
+            .bucketing(&[0xFFu8, 0xFFu8, 0xFFu8, 0xFFu8], 5)
             .unwrap();
         assert_eq!(
             expected, actual,
@@ -222,6 +308,49 @@ mod tests {
             expected, actual,
             "Expecting bucket to be {expected} but got {actual}"
         );
+
+        let expected = 2;
+        let actual = lance_bucketing.bucketing(&[0x80u8, 0x01u8], 7).unwrap();
+        assert_eq!(
+            expected, actual,
+            "Expecting bucket to be {expected} but got {actual}"
+        );
+
+        let expected = 3;
+        let actual = lance_bucketing
+            .bucketing(&[0xBFu8, 0x84u8, 0x3Du8], 12)
+            .unwrap();
+        assert_eq!(
+            expected, actual,
+            "Expecting bucket to be {expected} but got {actual}"
+        );
+
+        let expected = 10;
+        let actual = lance_bucketing
+            .bucketing(&[0x00u8, 0x0Au8, 0x0Au8, 0x0Au8, 0xFFu8], 16)
+            .unwrap();
+        assert_eq!(
+            expected, actual,
+            "Expecting bucket to be {expected} but got {actual}"
+        );
+
+        let expected = 1;
+        let actual = lance_bucketing
+            .bucketing("caf\u{e9}".as_bytes(), 8)
+            .unwrap();
+        assert_eq!(
+            expected, actual,
+            "Expecting bucket to be {expected} but got {actual}"
+        );
+
+        let expected = 1;
+        let actual = lance_bucketing
+            .bucketing(&[0xFFu8, 0xFFu8, 0xFFu8, 0xFFu8], 5)
+            .unwrap();
+        assert_eq!(
+            expected, actual,
+            "Expecting bucket to be {expected} but got {actual}"
+        );
     }
 
     #[test]
@@ -256,6 +385,49 @@ mod tests {
         let expected = 3;
         let actual = iceberg_bucketing
             .bucketing("The quick brown fox jumps over the lazy dog".as_bytes(), 8)
+            .unwrap();
+        assert_eq!(
+            expected, actual,
+            "Expecting bucket to be {expected} but got {actual}"
+        );
+
+        let expected = 5;
+        let actual = iceberg_bucketing.bucketing(&[0x80u8, 0x01u8], 7).unwrap();
+        assert_eq!(
+            expected, actual,
+            "Expecting bucket to be {expected} but got {actual}"
+        );
+
+        let expected = 1;
+        let actual = iceberg_bucketing
+            .bucketing(&[0xBFu8, 0x84u8, 0x3Du8], 12)
+            .unwrap();
+        assert_eq!(
+            expected, actual,
+            "Expecting bucket to be {expected} but got {actual}"
+        );
+
+        let expected = 9;
+        let actual = iceberg_bucketing
+            .bucketing(&[0x00u8, 0x0Au8, 0x0Au8, 0x0Au8, 0xFFu8], 16)
+            .unwrap();
+        assert_eq!(
+            expected, actual,
+            "Expecting bucket to be {expected} but got {actual}"
+        );
+
+        let expected = 0;
+        let actual = iceberg_bucketing
+            .bucketing("caf\u{e9}".as_bytes(), 8)
+            .unwrap();
+        assert_eq!(
+            expected, actual,
+            "Expecting bucket to be {expected} but got {actual}"
+        );
+
+        let expected = 3;
+        let actual = iceberg_bucketing
+            .bucketing(&[0xFFu8, 0xFFu8, 0xFFu8, 0xFFu8], 5)
             .unwrap();
         assert_eq!(
             expected, actual,

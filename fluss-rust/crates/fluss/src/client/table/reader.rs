@@ -182,7 +182,7 @@ impl RecordBatchLogReader {
         validate_read_buckets(
             scanner.table_id(),
             scanner.is_partitioned(),
-            scanner.num_buckets(),
+            |bucket| scanner.bucket_count(bucket.partition_id()),
             subscribed.iter().map(|(bucket, _)| bucket),
         )?;
 
@@ -227,7 +227,7 @@ impl RecordBatchLogReader {
         validate_read_buckets(
             scanner.table_id(),
             scanner.is_partitioned(),
-            scanner.num_buckets(),
+            |bucket| scanner.bucket_count(bucket.partition_id()),
             stopping_offsets.keys(),
         )?;
         let completed =
@@ -265,10 +265,13 @@ impl RecordBatchLogReader {
         // public subscription check that intentionally rejects active readers.
         let activation = ReaderActivationGuard::acquire(&scanner)?;
 
+        scanner
+            .cache_bucket_counts(ranges.iter().map(|range| &range.bucket))
+            .await?;
         validate_read_ranges(
             scanner.table_id(),
             scanner.is_partitioned(),
-            scanner.num_buckets(),
+            |bucket| scanner.bucket_count(bucket.partition_id()),
             &ranges,
         )?;
         if !scanner.get_subscribed_buckets().is_empty() {
@@ -339,10 +342,11 @@ impl RecordBatchLogReader {
             });
         }
 
+        scanner.cache_bucket_counts(buckets).await?;
         validate_read_buckets(
             scanner.table_id(),
             scanner.is_partitioned(),
-            scanner.num_buckets(),
+            |bucket| scanner.bucket_count(bucket.partition_id()),
             buckets,
         )?;
         if buckets.is_empty() {
@@ -481,13 +485,13 @@ impl RecordBatchLogReader {
             }
 
             let scan_batches = self.scanner.poll(timeout - elapsed).await?;
+            let polled_nothing = scan_batches.is_empty();
 
-            if scan_batches.is_empty() {
-                return Ok(RecordBatchReadOutcome::TimedOut);
-            }
-
-            let completed =
+            let mut completed =
                 filter_batches(scan_batches, &mut self.stopping_offsets, &mut self.buffer);
+            completed.extend(complete_at_position(&mut self.stopping_offsets, |bucket| {
+                self.scanner.bucket_offset(bucket)
+            }));
 
             // Use the `_sync` unsubscribe variants here: the active-reader
             // guard rejects calls to the async `unsubscribe*` methods, but
@@ -503,6 +507,10 @@ impl RecordBatchLogReader {
                 } else {
                     self.scanner.unsubscribe_sync(tb.bucket_id());
                 }
+            }
+
+            if polled_nothing && !self.stopping_offsets.is_empty() {
+                return Ok(RecordBatchReadOutcome::TimedOut);
             }
         }
     }
@@ -622,11 +630,11 @@ impl arrow::record_batch::RecordBatchReader for SyncRecordBatchLogReader {
 }
 
 /// Validate that every bucket in a bounded read belongs to the scanned table
-/// and appears exactly once.
+/// and appears exactly once. An unknown bucket count leaves the range check to the server.
 fn validate_read_buckets<'a>(
     table_id: TableId,
     is_partitioned: bool,
-    num_buckets: i32,
+    bucket_count_of: impl Fn(&TableBucket) -> Option<i32>,
     buckets: impl IntoIterator<Item = &'a TableBucket>,
 ) -> Result<()> {
     let mut seen = HashSet::new();
@@ -647,11 +655,17 @@ fn validate_read_buckets<'a>(
                 },
             });
         }
-        if bucket.bucket_id() < 0 || bucket.bucket_id() >= num_buckets {
+        let bucket_count = bucket_count_of(bucket);
+        if bucket.bucket_id() < 0
+            || bucket_count.is_some_and(|bucket_count| bucket.bucket_id() >= bucket_count)
+        {
             return Err(Error::IllegalArgument {
                 message: format!(
-                    "Bounded read bucket id {} is out of range for a table with {num_buckets} buckets.",
-                    bucket.bucket_id()
+                    "Bounded read bucket id {} is out of range{}.",
+                    bucket.bucket_id(),
+                    bucket_count
+                        .map(|count| format!(" for {count} buckets"))
+                        .unwrap_or_default()
                 ),
             });
         }
@@ -669,13 +683,13 @@ fn validate_read_buckets<'a>(
 fn validate_read_ranges(
     table_id: TableId,
     is_partitioned: bool,
-    num_buckets: i32,
+    bucket_count_of: impl Fn(&TableBucket) -> Option<i32>,
     ranges: &[BoundedLogReadRange],
 ) -> Result<()> {
     validate_read_buckets(
         table_id,
         is_partitioned,
-        num_buckets,
+        bucket_count_of,
         ranges.iter().map(|range| &range.bucket),
     )?;
     for range in ranges {
@@ -986,6 +1000,23 @@ fn filter_batches(
     completed
 }
 
+/// Removes and returns the buckets whose scanner position reached their stop,
+/// since a tail pruned by a filter never yields a batch at the stop.
+fn complete_at_position(
+    stopping_offsets: &mut HashMap<TableBucket, i64>,
+    position: impl Fn(&TableBucket) -> Option<i64>,
+) -> Vec<TableBucket> {
+    let mut completed = Vec::new();
+    stopping_offsets.retain(|bucket, stop_at| {
+        let reached = position(bucket).is_some_and(|offset| offset >= *stop_at);
+        if reached {
+            completed.push(bucket.clone());
+        }
+        !reached
+    });
+    completed
+}
+
 // Rust-level end-to-end coverage for `new_until_latest`, partitioned tables,
 // and `new_until_offsets` stopping semantics lives in
 // `crates/fluss/tests/integration/record_batch_log_reader.rs`. Drop cleanup and the
@@ -1042,14 +1073,14 @@ mod tests {
     fn validate_read_ranges_accepts_empty_and_non_empty_ranges() {
         let ranges = vec![range(bucket(0), 5, 5), range(bucket(1), 0, 10)];
 
-        validate_read_ranges(1, false, 2, &ranges).unwrap();
+        validate_read_ranges(1, false, |_| Some(2), &ranges).unwrap();
     }
 
     #[test]
     fn validate_read_ranges_rejects_bucket_of_another_table() {
         let ranges = vec![range(TableBucket::new(2, 0), 0, 10)];
 
-        let result = validate_read_ranges(1, false, 1, &ranges);
+        let result = validate_read_ranges(1, false, |_| Some(1), &ranges);
 
         assert!(matches!(result, Err(Error::IllegalArgument { .. })));
     }
@@ -1060,11 +1091,11 @@ mod tests {
         let partitioned = vec![range(TableBucket::new_with_partition(1, Some(7), 0), 0, 10)];
 
         assert!(matches!(
-            validate_read_ranges(1, true, 1, &unpartitioned),
+            validate_read_ranges(1, true, |_| Some(1), &unpartitioned),
             Err(Error::IllegalArgument { .. })
         ));
         assert!(matches!(
-            validate_read_ranges(1, false, 1, &partitioned),
+            validate_read_ranges(1, false, |_| Some(1), &partitioned),
             Err(Error::IllegalArgument { .. })
         ));
     }
@@ -1073,7 +1104,7 @@ mod tests {
     fn validate_read_ranges_rejects_out_of_range_bucket() {
         let ranges = vec![range(bucket(2), 0, 10)];
 
-        let result = validate_read_ranges(1, false, 2, &ranges);
+        let result = validate_read_ranges(1, false, |_| Some(2), &ranges);
 
         assert!(matches!(result, Err(Error::IllegalArgument { .. })));
     }
@@ -1082,7 +1113,7 @@ mod tests {
     fn validate_read_ranges_rejects_duplicate_bucket() {
         let ranges = vec![range(bucket(0), 0, 10), range(bucket(0), 10, 20)];
 
-        let result = validate_read_ranges(1, false, 1, &ranges);
+        let result = validate_read_ranges(1, false, |_| Some(1), &ranges);
 
         assert!(matches!(result, Err(Error::IllegalArgument { .. })));
     }
@@ -1091,7 +1122,7 @@ mod tests {
     fn validate_read_ranges_rejects_inverted_range() {
         let ranges = vec![range(bucket(0), 20, 10)];
 
-        let result = validate_read_ranges(1, false, 1, &ranges);
+        let result = validate_read_ranges(1, false, |_| Some(1), &ranges);
 
         assert!(matches!(result, Err(Error::IllegalArgument { .. })));
     }
@@ -1100,7 +1131,7 @@ mod tests {
     fn validate_read_ranges_rejects_negative_stopping_offset() {
         let ranges = vec![range(bucket(0), crate::client::EARLIEST_OFFSET, -1)];
 
-        let result = validate_read_ranges(1, false, 1, &ranges);
+        let result = validate_read_ranges(1, false, |_| Some(1), &ranges);
 
         assert!(matches!(result, Err(Error::IllegalArgument { .. })));
     }
@@ -1109,7 +1140,7 @@ mod tests {
     fn validate_read_ranges_rejects_unknown_negative_starting_offset() {
         let ranges = vec![range(bucket(0), -1, 10)];
 
-        let result = validate_read_ranges(1, false, 1, &ranges);
+        let result = validate_read_ranges(1, false, |_| Some(1), &ranges);
 
         assert!(matches!(result, Err(Error::IllegalArgument { .. })));
     }
@@ -1325,5 +1356,40 @@ mod tests {
         let sb = &buffer[0];
         assert_eq!(sb.base_offset(), 10);
         assert_eq!(*sb.bucket(), bucket(0));
+    }
+
+    #[test]
+    fn position_at_or_past_stop_completes_bucket() {
+        let mut offsets = HashMap::from([(bucket(0), 10), (bucket(1), 10)]);
+        let positions = HashMap::from([(bucket(0), 10), (bucket(1), 25)]);
+
+        let mut completed = complete_at_position(&mut offsets, |b| positions.get(b).copied());
+        completed.sort_by_key(|b| b.bucket_id());
+
+        assert!(offsets.is_empty());
+        assert_eq!(completed, vec![bucket(0), bucket(1)]);
+    }
+
+    #[test]
+    fn position_before_stop_keeps_bucket() {
+        let mut offsets = HashMap::from([(bucket(0), 10)]);
+
+        let completed = complete_at_position(&mut offsets, |_| Some(9));
+
+        assert!(completed.is_empty());
+        assert!(offsets.contains_key(&bucket(0)));
+    }
+
+    #[test]
+    fn unresolved_position_keeps_bucket() {
+        let mut offsets = HashMap::from([(bucket(0), 10)]);
+
+        let completed =
+            complete_at_position(&mut offsets, |_| Some(crate::client::EARLIEST_OFFSET));
+        assert!(completed.is_empty());
+
+        let completed = complete_at_position(&mut offsets, |_| None);
+        assert!(completed.is_empty());
+        assert!(offsets.contains_key(&bucket(0)));
     }
 }

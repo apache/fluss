@@ -250,6 +250,7 @@ public class CompactedLogWriteBatchTest {
         return new CompactedLogWriteBatch(
                 tb.getTableId(),
                 tb.getBucket(),
+                DATA1_TABLE_INFO.getNumBuckets(),
                 DATA1_PHYSICAL_TABLE_PATH,
                 DATA1_TABLE_INFO.getSchemaId(),
                 writeLimit,

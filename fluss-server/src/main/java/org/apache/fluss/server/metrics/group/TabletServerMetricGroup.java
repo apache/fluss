@@ -215,6 +215,18 @@ public class TabletServerMetricGroup extends AbstractMetricGroup {
         this.sharedWriteBufferCapacity = capacity;
     }
 
+    /**
+     * Registers gauges for the server-wide WAL memory pool used by primary key tables. Called once
+     * by KvManager when creating the server buffer pool.
+     *
+     * @param usageSupplier supplier for the bytes currently allocated from the pool
+     * @param capacity the total pool capacity in bytes
+     */
+    public void registerKvWalMemoryPoolMetrics(LongSupplier usageSupplier, long capacity) {
+        gauge(MetricNames.KV_WAL_MEMORY_POOL_USAGE, usageSupplier::getAsLong);
+        gauge(MetricNames.KV_WAL_MEMORY_POOL_CAPACITY, () -> capacity);
+    }
+
     @Override
     protected final void putVariables(Map<String, String> variables) {
         variables.put("cluster_id", clusterId);

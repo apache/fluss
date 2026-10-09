@@ -86,8 +86,14 @@ impl ListOffsetsRequest {
                 partition_id,
                 bucket_id: bucket_ids,
                 start_timestamp: offset_spec.start_timestamp(),
+                routing_bucket_count: None,
             },
         }
+    }
+
+    pub fn with_routing_bucket_count(mut self, routing_bucket_count: Option<i32>) -> Self {
+        self.inner_request.routing_bucket_count = routing_bucket_count;
+        self
     }
 }
 

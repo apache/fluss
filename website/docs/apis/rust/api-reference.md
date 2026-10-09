@@ -315,7 +315,7 @@ for record in records {
 
 | Method                                                                       |  Description                |
 |------------------------------------------------------------------------------|-----------------------------|
-| `async fn lookup(&mut self, key: &impl InternalRow) -> Result<LookupResult>` | Lookup a row by primary key |
+| `async fn lookup(&self, key: &impl InternalRow) -> Result<LookupResult>`     | Lookup a row by primary key |
 
 ## `LookupResult`
 
@@ -442,10 +442,11 @@ A schema together with its server-assigned version id. Returned by [`FlussAdmin:
 
 ## `PartitionInfo`
 
-| Method                                   |  Description       |
-|------------------------------------------|--------------------|
-| `fn get_partition_id(&self) -> i64`      | Get partition ID   |
-| `fn get_partition_name(&self) -> String` | Get partition name |
+| Method                                   |  Description               |
+|------------------------------------------|----------------------------|
+| `fn get_partition_id(&self) -> i64`      | Get partition ID           |
+| `fn get_partition_name(&self) -> String` | Get partition name         |
+| `fn get_bucket_count(&self) -> i32`      | Get partition bucket count |
 
 ## `DatabaseDescriptor`
 

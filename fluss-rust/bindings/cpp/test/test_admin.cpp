@@ -206,6 +206,7 @@ TEST_F(AdminTest, PartitionApis) {
     ASSERT_OK(adm.ListPartitionInfos(table_path, partitions));
     ASSERT_EQ(partitions.size(), 1u);
     EXPECT_EQ(partitions[0].partition_name, "2024-01-15$EMEA");
+    EXPECT_EQ(partitions[0].bucket_count, 3);
 
     // List with partial spec filter - should find the partition
     std::unordered_map<std::string, std::string> partial_spec = {{"dt", "2024-01-15"}};

@@ -7,7 +7,7 @@ sidebar_position: 3
 
 Fluss leverages well-known Lakehouse storage solutions like Apache Paimon, Apache Iceberg, Apache Hudi, and Lance as the tiered storage layer. The Tiering Service continuously tiers Fluss data to Lakehouse storage, where it can be read by Fluss clients in a streaming manner and accessed directly by external systems such as Flink, Spark, StarRocks, and others.
 
-For deployment instructions, see [Deploying Streaming Lakehouse](../../install-deploy/deploying-streaming-lakehouse.md).
+For deployment instructions, see [Deploying Lakestream](../../install-deploy/deploying-streaming-lakehouse.md).
 
 For architecture details, see [Tiering Service](../../streaming-lakehouse/tiering-service.md).
 

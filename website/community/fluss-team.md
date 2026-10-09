@@ -15,7 +15,7 @@ We'd like to thank the following members and committers to the Apache Fluss proj
 | Jark Wu              | Alibaba Cloud | [@wuchong](https://github.com/wuchong)                     | [jark](https://people.apache.org/committer-index.html#jark)                   | PMC Chair             |
 | Anton Borisov        | Fresha        | [@fresh-borzoni](https://github.com/fresh-borzoni)         | [aborisov](https://people.apache.org/committer-index.html#aborisov)           | PMC Member            |
 | Becket Qin           | LinkedIn      | [@becketqin](https://github.com/becketqin)                 | [jqin](https://people.apache.org/committer-index.html#jqin)                   | PMC Member            |
-| Giannis Polyzos      | Ververica     | [@polyzos](https://github.com/polyzos)                     | [ipolyzos](https://people.apache.org/committer-index.html#ipolyzos)           | PMC Member            |
+| Giannis Polyzos      | Fresha        | [@polyzos](https://github.com/polyzos)                     | [ipolyzos](https://people.apache.org/committer-index.html#ipolyzos)           | PMC Member            |
 | Jean-Baptiste Onofré | Dremio        | [@jbonofre](https://github.com/jbonofre)                   | [jbonofre](https://people.apache.org/committer-index.html#jbonofre)           | PMC Member            |
 | Jingsong Lee         | Alibaba Cloud | [@JingsongLi](https://github.com/JingsongLi)               | [lzljs3620320](https://people.apache.org/committer-index.html#lzljs3620320)   | PMC Member            |
 | Keith Lee            | Confluent     | [@leekeiabstraction](https://github.com/leekeiabstraction) | [leekei](https://people.apache.org/committer-index.html#leekei)               | PMC Member            |

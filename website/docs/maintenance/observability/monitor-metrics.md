@@ -407,6 +407,11 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
     </tr>
     <tr>
       <td rowspan="8">lakeTiering_table</td>
+      <td>freshness</td>
+      <td>The user-configured data freshness interval (in milliseconds) for this table.</td>
+      <td>Gauge</td>
+    </tr>
+    <tr>
       <td>tierLag</td>
       <td>Time in milliseconds since the last successful tiering operation for this table. For newly registered tables that have never completed a tiering round, the lag is measured from the time the table was registered.</td>
       <td>Gauge</td>
@@ -441,11 +446,6 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
       <td>How long (in milliseconds) the table has been waiting in the pending queue for tiering. Returns 0 when the table is not currently pending.</td>
       <td>Gauge</td>
     </tr>
-    <tr>
-      <td>freshness</td>
-      <td>The user-configured data freshness interval (in milliseconds) for this table.</td>
-      <td>Gauge</td>
-    </tr>
   </tbody>
 </table>
 
@@ -463,8 +463,8 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
   </thead>
   <tbody>
     <tr>
-      <th rowspan="37"><strong>tabletserver</strong></th>
-      <td style={{textAlign: 'center', verticalAlign: 'middle' }} rowspan="25">-</td>
+      <th rowspan="39"><strong>tabletserver</strong></th>
+      <td style={{textAlign: 'center', verticalAlign: 'middle' }} rowspan="27">-</td>
       <td>messagesInPerSecond</td>
       <td>The number of messages written per second to this server.</td>
       <td>Meter</td>
@@ -590,6 +590,16 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
       <td>Meter</td>
     </tr>
     <tr>
+      <td>kvWalMemoryPoolUsage</td>
+      <td>Memory currently allocated from the server-wide WAL memory pool for primary key tables in this server (in bytes). The pool capacity is configured by <code>server.buffer.memory-size</code>.</td>
+      <td>Gauge</td>
+    </tr>
+    <tr>
+      <td>kvWalMemoryPoolCapacity</td>
+      <td>Total capacity of the server-wide WAL memory pool for primary key tables in this server (in bytes).</td>
+      <td>Gauge</td>
+    </tr>
+    <tr>
       <td rowspan="4">historical</td>
       <td>inflightRequests</td>
       <td>The number of accepted historical requests that have not completed.</td>
@@ -606,9 +616,9 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
       <td>Gauge</td>
     </tr>
     <tr>
-      <td>lookupCacheCapacityEvictions</td>
-      <td>The cumulative number of cached table lookupers evicted because the cache retains at most ten tables.</td>
-      <td>Counter</td>
+      <td>lookupCacheFileCapacityEvictions</td>
+      <td>The cumulative number of lookup files evicted to enforce the shared TabletServer disk budget. Expiration, replacement, and explicit invalidation are excluded.</td>
+      <td>Gauge</td>
     </tr>
     <tr>
       <td rowspan="2">logicalStorage</td>
@@ -683,7 +693,7 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
       <td>Gauge</td>
     </tr>
     <tr>
-      <th rowspan="9">tabletserver</th>
+      <th rowspan="10">tabletserver</th>
       <td rowspan="1">request</td>
       <td>requestQueueSize</td>
       <td>The TabletServer node network waiting queue size.</td>
@@ -741,6 +751,12 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
       <td>Time to send the response	for each request type.</td>
       <td>Histogram</td>
     </tr>
+    <tr>
+      <td rowspan="1">request_error</td>
+      <td>errorsPerSecond</td>
+      <td>The number of failed RPC responses processed per second for each request type and <code>error</code> name. One event is recorded for each failed RPC response; <code>NONE</code> and errors in successful response buckets are excluded. A series appears only after its request/error first occurs.</td>
+      <td>Meter</td>
+    </tr>
      <tr>
       <th rowspan="6">client</th>
       <td rowspan="6">request</td>
@@ -790,8 +806,8 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
   </thead>
   <tbody>
     <tr>
-      <th rowspan="39"><strong>tabletserver</strong></th>
-      <td rowspan="20">table</td>
+      <th rowspan="41"><strong>tabletserver</strong></th>
+      <td rowspan="22">table</td>
       <td>messagesInPerSecond</td>
       <td>The number of messages written per second to this table.</td>
       <td>Meter</td>
@@ -889,6 +905,11 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
     <tr>
       <td>remoteLogDeleteErrorPerSecond</td>
       <td>The number of failed delete remote log requests to delete remote log after log ttl per second.</td>
+      <td>Meter</td>
+    </tr>
+    <tr>
+      <td>remoteKvCopyBytesPerSecond</td>
+      <td>The bytes of kv snapshot data uploaded to remote per second for this table. Only available for primary key tables.</td>
       <td>Meter</td>
     </tr>
     <tr>
@@ -1256,6 +1277,12 @@ How to Use Flink Metrics, you can see [Flink Metrics](https://nightlies.apache.o
             <td>currentFetchEventTimeLag</td>
             <td>Flink Source Operator</td>
             <td>Time difference between reading the data file and file creation.</td>
+            <td>Gauge</td>
+        </tr>
+        <tr>
+            <td>pendingRecords</td>
+            <td>Flink Source Operator</td>
+            <td>The number of log records that are available after the current source fetch offset. Only the streaming log part is counted, snapshot and lake records are excluded.</td>
             <td>Gauge</td>
         </tr>
     </tbody>

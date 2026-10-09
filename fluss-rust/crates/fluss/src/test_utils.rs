@@ -23,7 +23,7 @@ use crate::compression::{
 };
 use crate::metadata::{
     DataField, DataTypes, PhysicalTablePath, RowType, Schema, TableBucket, TableDescriptor,
-    TableInfo, TablePath,
+    TableInfo, TableOrPartition, TablePath,
 };
 use crate::metrics::{LABEL_DATABASE, LABEL_TABLE, ScannerMetrics};
 use crate::record::{
@@ -135,6 +135,7 @@ pub(crate) fn build_cluster_with_port(
         table_id_by_path,
         table_info_by_path,
         HashMap::new(),
+        HashMap::from([(TableOrPartition::Table(table_id), buckets)]),
     )
 }
 

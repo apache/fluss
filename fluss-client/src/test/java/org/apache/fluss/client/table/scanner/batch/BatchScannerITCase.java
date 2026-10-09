@@ -81,8 +81,7 @@ class BatchScannerITCase extends ClientToServerITCaseBase {
             new CompactedKeyEncoder(
                     DEFAULT_SCHEMA.getRowType(), DEFAULT_SCHEMA.getPrimaryKeyIndexes());
 
-    private static final HashBucketAssigner DEFAULT_BUCKET_ASSIGNER =
-            new HashBucketAssigner(DEFAULT_BUCKET_NUM);
+    private static final HashBucketAssigner DEFAULT_BUCKET_ASSIGNER = new HashBucketAssigner();
 
     private static final String DEFAULT_DB = "test-snapshot-scan-db";
 

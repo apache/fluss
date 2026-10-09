@@ -69,9 +69,11 @@ class TieringCommitOperatorTest extends FlinkTestBase {
     private TieringCommitOperator<TestingWriteResult, TestingCommittable> committerOperator;
     private MockOperatorEventGateway mockOperatorEventGateway;
     private StreamOperatorParameters<CommittableMessage<TestingCommittable>> parameters;
+    private List<CommittableMessage<TestingCommittable>> output;
 
     @BeforeEach
     public void beforeEach() throws Exception {
+        output = new ArrayList<>();
         mockOperatorEventGateway = new MockOperatorEventGateway();
         MockOperatorEventDispatcher mockOperatorEventDispatcher =
                 new MockOperatorEventDispatcher(mockOperatorEventGateway);
@@ -79,7 +81,7 @@ class TieringCommitOperatorTest extends FlinkTestBase {
                 StreamOperatorParametersAdapter.create(
                         new SourceOperatorStreamTask<String>(new DummyEnvironment()),
                         new MockStreamConfig(new Configuration(), 1),
-                        new MockOutput<>(new ArrayList<>()),
+                        new MockOutput<>(output),
                         null,
                         mockOperatorEventDispatcher,
                         null);
@@ -96,6 +98,52 @@ class TieringCommitOperatorTest extends FlinkTestBase {
     @AfterEach
     void afterEach() throws Exception {
         committerOperator.close();
+    }
+
+    @Test
+    void testDuplicateBucketWriteResult() throws Exception {
+        TablePath tablePath = TablePath.of("fluss", "duplicate_bucket");
+        long tableId = createTable(tablePath, DEFAULT_PK_TABLE_DESCRIPTOR);
+        TableBucket tableBucket = new TableBucket(tableId, 0);
+        committerOperator.processElement(
+                createTableBucketWriteResultStreamRecord(tablePath, tableBucket, 1, 1, 1, 2));
+
+        // The duplicate would reach the expected count, but must fail instead of committing.
+        assertThatThrownBy(
+                        () ->
+                                committerOperator.processElement(
+                                        createTableBucketWriteResultStreamRecord(
+                                                tablePath, tableBucket, 2, 2, 2, 2)))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage(
+                        "Found duplicate write results for bucket %s of table %s.",
+                        tableBucket, tableId);
+        verifyNoLakeSnapshot(tablePath);
+    }
+
+    @Test
+    void testInconsistentWriteResultCounts() throws Exception {
+        TablePath tablePath = TablePath.of("fluss", "inconsistent_result_counts");
+        long tableId = createTable(tablePath, DEFAULT_PK_TABLE_DESCRIPTOR);
+        committerOperator.processElement(
+                createTableBucketWriteResultStreamRecord(
+                        tablePath, new TableBucket(tableId, 0), 1, 1, 1, 2));
+
+        assertThatThrownBy(
+                        () ->
+                                committerOperator.processElement(
+                                        createTableBucketWriteResultStreamRecord(
+                                                tablePath,
+                                                new TableBucket(tableId, 1),
+                                                2,
+                                                2,
+                                                2,
+                                                3)))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage(
+                        "numberOfWriteResults is not same across TableBucketWriteResults for table %s, got %s and %s.",
+                        tableId, 2, 3);
+        verifyNoLakeSnapshot(tablePath);
     }
 
     @Test
@@ -299,7 +347,7 @@ class TieringCommitOperatorTest extends FlinkTestBase {
     void testTableCommitWhenFlussMissingLakeSnapshot() throws Exception {
         TablePath tablePath = TablePath.of("fluss", "test_commit_when_fluss_missing_lake_snapshot");
         long tableId = createTable(tablePath, DEFAULT_PK_TABLE_DESCRIPTOR);
-        int numberOfWriteResults = 3;
+        int numberOfWriteResults = 2;
 
         Map<TableBucket, Long> expectedLogEndOffsets = new HashMap<>();
         for (int bucket = 0; bucket < 3; bucket++) {
@@ -320,7 +368,7 @@ class TieringCommitOperatorTest extends FlinkTestBase {
                         new TestingLakeTieringFactory(testingLakeCommitter));
         committerOperator.open();
 
-        for (int bucket = 0; bucket < 3; bucket++) {
+        for (int bucket = 0; bucket < numberOfWriteResults; bucket++) {
             TableBucket tableBucket = new TableBucket(tableId, bucket);
             committerOperator.processElement(
                     createTableBucketWriteResultStreamRecord(
@@ -340,19 +388,33 @@ class TieringCommitOperatorTest extends FlinkTestBase {
                         tablePath,
                         tableId,
                         mockMissingCommittedLakeSnapshot));
+        assertThat(output).isEmpty();
 
+        // Retry with a different count and arrival order to verify the failed round was cleared.
+        numberOfWriteResults = 3;
         expectedLogEndOffsets = new HashMap<>();
-        for (int bucket = 0; bucket < 3; bucket++) {
+        for (int bucket : new int[] {2, 0, 1}) {
             TableBucket tableBucket = new TableBucket(tableId, bucket);
             long offset = bucket * bucket;
             long timestamp = bucket * bucket;
             committerOperator.processElement(
                     createTableBucketWriteResultStreamRecord(
-                            tablePath, tableBucket, 3, offset, timestamp, numberOfWriteResults));
+                            tablePath,
+                            tableBucket,
+                            bucket,
+                            offset,
+                            timestamp,
+                            numberOfWriteResults));
             expectedLogEndOffsets.put(tableBucket, offset);
         }
 
         verifyLakeSnapshot(tablePath, tableId, 1, expectedLogEndOffsets);
+        assertThat(output)
+                .singleElement()
+                .satisfies(
+                        message ->
+                                assertThat(message.committable().writeResults())
+                                        .containsExactly(2, 0, 1));
     }
 
     @Test

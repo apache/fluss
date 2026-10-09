@@ -1798,6 +1798,40 @@ async def test_filter_with_overlapping_statistics_returns_whole_batch(
     await admin.drop_table(table_path, ignore_if_not_exists=False)
 
 
+async def test_to_arrow_with_filter_finishes_when_tail_is_pruned(connection, admin):
+    table_path = fluss.TablePath("fluss", "py_test_filter_to_arrow_pruned_tail")
+    await admin.drop_table(table_path, ignore_if_not_exists=True)
+
+    arrow_schema = pa.schema(
+        [pa.field("id", pa.int32()), pa.field("name", pa.string())]
+    )
+    schema = fluss.Schema(arrow_schema)
+    await admin.create_table(
+        table_path, _stats_descriptor(schema), ignore_if_exists=False
+    )
+
+    table = await connection.get_table(table_path)
+    writer = table.new_append().create_writer()
+    for base in (1, 100):
+        ids = list(range(base, base + 3))
+        writer.write_arrow_batch(
+            pa.RecordBatch.from_arrays(
+                [pa.array(ids, type=pa.int32()), pa.array([f"v{i}" for i in ids])],
+                schema=arrow_schema,
+            )
+        )
+    await writer.flush()
+
+    scanner = await (
+        table.new_scan().filter(fluss.col("id") < 100).create_record_batch_log_scanner()
+    )
+    scanner.subscribe_buckets({0: fluss.EARLIEST_OFFSET})
+    result = await asyncio.wait_for(scanner.to_arrow(), timeout=10)
+    assert sorted(result.column("id").to_pylist()) == [1, 2, 3]
+
+    await admin.drop_table(table_path, ignore_if_not_exists=False)
+
+
 async def test_filter_pushdown_prunes_row_appended_batches(connection, admin):
     """Row appends go through the row-to-Arrow builder and still carry statistics."""
     table_path = fluss.TablePath("fluss", "py_test_filter_row_append")

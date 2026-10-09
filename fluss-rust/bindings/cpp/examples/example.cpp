@@ -20,9 +20,13 @@
 #include <arrow/record_batch.h>
 #include <arrow/type.h>
 
+#include <atomic>
 #include <chrono>
 #include <iostream>
+#include <memory>
+#include <mutex>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 #include "fluss.hpp"
@@ -39,6 +43,10 @@ int main() {
     // 1) Connect
     fluss::Configuration config;
     config.bootstrap_servers = "127.0.0.1:9123";
+    // Callback capacity and buffer waits share this budget. The default UINT64_MAX
+    // waits indefinitely; a finite value allows handling overload instead. Zero fails
+    // fast when either resource is unavailable. This is not a whole-call deadline.
+    config.writer_buffer_wait_timeout_ms = 30000;
 
     fluss::Connection conn;
     check("create", fluss::Connection::Create(config, conn));
@@ -85,6 +93,10 @@ int main() {
 
     // 5) Write rows with scalar and temporal values
     fluss::AppendWriter writer;
+    // Use the default per-writer limit of 262144 outstanding callback operations.
+    // This is independent of config.writer_buffer_memory_size (per Connection).
+    // To tune it, pass WriteCallbackOptions based on measured completion latency
+    // and capture memory; a smaller limit can throttle writes before the buffer fills.
     check("new_append_writer", table.NewAppend().CreateWriter(writer));
 
     struct RowData {
@@ -141,6 +153,75 @@ int main() {
         check("append", writer.Append(row, wr));
         check("wait", wr.Wait());
         std::cout << "Row acknowledged by server" << std::endl;
+    }
+
+    // Callback acknowledgment
+    {
+        // The SDK runs callbacks; no application waiting thread is required.
+        // Callbacks run on one shared worker, so keep them short and
+        // non-blocking: do not Flush/Wait or retry synchronously inside a callback.
+        // This example counts outcomes only. It does not implement durable recovery.
+        struct CallbackState {
+            std::atomic<size_t> succeeded{0};
+            std::atomic<size_t> failed{0};
+            std::mutex mutex;
+            int32_t first_failed_id{0};
+            fluss::Result first_failure;
+        };
+        // Shared ownership also keeps state alive if submission throws or flushing fails.
+        auto state = std::make_shared<CallbackState>();
+        bool submission_failed = false;
+        for (const auto& r : rows) {
+            const int32_t id = 1000 + r.id;
+            fluss::GenericRow row;
+            row.SetInt32(0, id);
+            row.SetString(1, r.name);
+            row.SetFloat32(2, r.score);
+            row.SetInt32(3, r.age);
+            row.SetDate(4, r.date);
+            row.SetTime(5, r.time);
+            row.SetTimestampNtz(6, r.ts_ntz);
+            row.SetTimestampLtz(7, r.ts_ltz);
+            auto submitted = writer.Append(
+                row, [id, state](const fluss::WriteCompletion& notification) {
+                    const auto& result = notification.result;
+                    if (result.Ok()) {
+                        ++state->succeeded;
+                    } else {
+                        // Copy the invocation-scoped result. Do not log, perform I/O,
+                        // or retry here: one slow callback delays every writer.
+                        if (state->failed.fetch_add(1) == 0) {
+                            std::lock_guard<std::mutex> lock(state->mutex);
+                            state->first_failed_id = id;
+                            state->first_failure = result;
+                        }
+                    }
+                });
+            if (!submitted.Ok()) {
+                // No callback will run for this submission; handle this path too.
+                submission_failed = true;
+                std::cerr << "Submission failed for id=" << id << ": " << submitted.error_message
+                          << '\n';
+                break;
+            }
+        }
+        // Stop submissions, then drain accepted callbacks. Flush success alone does
+        // not mean every write succeeded. Writer/Connection destruction is not a drain.
+        check("flush", writer.Flush());
+        std::cout << "Callback writes: succeeded=" << state->succeeded.load()
+                  << " failed=" << state->failed.load() << '\n';
+        if (state->failed.load() != 0) {
+            std::lock_guard<std::mutex> lock(state->mutex);
+            std::cerr << "First failed id=" << state->first_failed_id
+                      << ": " << state->first_failure.error_message << '\n';
+        }
+        // A failed write may have reached the server. Recover outside the callback
+        // using retained input or a replayable source and application-level deduplication.
+        // Advance a source position only after Flush and all relevant writes succeed.
+        // This example reports failure and exits; it does not implement durable recovery.
+        if (submission_failed || state->failed.load() != 0) {
+            return 1;
+        }
     }
 
     // Append a row with all fields null (matches Rust log_table.rs all_supported_datatypes)

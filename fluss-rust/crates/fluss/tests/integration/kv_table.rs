@@ -88,7 +88,7 @@ mod kv_table_test {
         upsert_writer.flush().await.expect("Failed to flush");
 
         // Lookup records
-        let mut lookuper = table
+        let lookuper = table
             .new_lookup()
             .expect("Failed to create lookup")
             .create_lookuper()
@@ -233,7 +233,7 @@ mod kv_table_test {
         upsert_writer.flush().await.expect("Failed to flush");
 
         // Lookup with composite key
-        let mut lookuper = table
+        let lookuper = table
             .new_lookup()
             .expect("Failed to create lookup")
             .create_lookuper()
@@ -356,7 +356,7 @@ mod kv_table_test {
             .await
             .expect("ack initial");
 
-        let mut lookuper = table
+        let lookuper = table
             .new_lookup()
             .expect("lookup")
             .create_lookuper()
@@ -551,7 +551,7 @@ mod kv_table_test {
         }
         upsert_writer.flush().await.expect("flush");
 
-        let mut lookuper = table
+        let lookuper = table
             .new_lookup()
             .expect("lookup")
             .create_lookuper()
@@ -724,18 +724,15 @@ mod kv_table_test {
         }
         writer.flush().await.expect("Failed to flush");
 
-        let mut lookupers: Vec<_> = (0..regions.len() * 5)
-            .map(|_| {
-                table
-                    .new_lookup()
-                    .expect("Failed to create lookup")
-                    .create_lookuper()
-                    .expect("Failed to create lookuper")
-            })
-            .collect();
+        let lookuper = table
+            .new_lookup()
+            .expect("Failed to create lookup")
+            .create_lookuper()
+            .expect("Failed to create lookuper");
 
         let mut futures = FuturesUnordered::new();
-        for (i, lookuper) in lookupers.iter_mut().enumerate() {
+        for i in 0..regions.len() * 5 {
+            let lookuper = &lookuper;
             let region = regions[i / 5];
             let id = (i % 5) as i32;
 
@@ -840,7 +837,7 @@ mod kv_table_test {
         }
         writer.flush().await.expect("Failed to flush");
 
-        let mut prefix_lookuper = table
+        let prefix_lookuper = table
             .new_lookup()
             .expect("Failed to create lookup")
             .lookup_by(vec!["a".to_string(), "b".to_string()])
@@ -952,7 +949,7 @@ mod kv_table_test {
         }
         writer.flush().await.expect("Failed to flush");
 
-        let mut prefix_lookuper = table
+        let prefix_lookuper = table
             .new_lookup()
             .expect("Failed to create lookup")
             .lookup_by(vec!["region".to_string(), "a".to_string(), "b".to_string()])
@@ -1116,21 +1113,17 @@ mod kv_table_test {
         // Wait for all upserts to be acknowledged
         while upsert_futures.next().await.is_some() {}
 
-        // Create multiple lookupers for concurrent lookups
-        let num_lookupers = 50i32;
-        let mut lookupers: Vec<_> = (0..num_lookupers)
-            .map(|_| {
-                table
-                    .new_lookup()
-                    .expect("Failed to create lookup")
-                    .create_lookuper()
-                    .expect("Failed to create lookuper")
-            })
-            .collect();
+        let num_lookups = 50usize;
+        let lookuper = table
+            .new_lookup()
+            .expect("Failed to create lookup")
+            .create_lookuper()
+            .expect("Failed to create lookuper");
 
         // Run concurrent lookups
         let mut futures = FuturesUnordered::new();
-        for (i, lookuper) in lookupers.iter_mut().enumerate() {
+        for i in 0..num_lookups {
+            let lookuper = &lookuper;
             // First 10 lookupers all lookup id=0 (same key multiple times)
             let id = if i < 10 { 0 } else { i as i32 };
             let expects_result = id % 2 == 0; // Even IDs exist
@@ -1163,17 +1156,13 @@ mod kv_table_test {
         }
 
         // Collect all results and verify
-        let mut results = Vec::with_capacity(num_lookupers as usize);
+        let mut results = Vec::with_capacity(num_lookups);
         while let Some(result) = futures.next().await {
             results.push(result);
         }
 
         // Verify all lookups completed successfully
-        assert_eq!(
-            results.len(),
-            num_lookupers as usize,
-            "Not all lookups completed"
-        );
+        assert_eq!(results.len(), num_lookups, "Not all lookups completed");
 
         // Verify we had the expected mix of scenarios
         let same_key_lookups = results.iter().filter(|(id, _)| *id == 0).count();
@@ -1183,6 +1172,106 @@ mod kv_table_test {
         assert!(
             non_existing_lookups > 0,
             "Should have some non-existing key lookups"
+        );
+
+        admin
+            .drop_table(&table_path, false)
+            .await
+            .expect("Failed to drop table");
+    }
+
+    #[tokio::test]
+    async fn batched_concurrent_prefix_lookups() {
+        let cluster = get_shared_cluster();
+        let connection = cluster.get_fluss_connection().await;
+        let admin = connection.get_admin().expect("Failed to get admin");
+
+        let table_path = TablePath::new("fluss", "test_batched_concurrent_prefix_lookups");
+        let table_descriptor = TableDescriptor::builder()
+            .schema(
+                Schema::builder()
+                    .column("a", DataTypes::int())
+                    .column("b", DataTypes::bigint())
+                    .column("c", DataTypes::string())
+                    .primary_key(vec!["a", "b"])
+                    .unwrap()
+                    .build()
+                    .expect("Failed to build schema"),
+            )
+            .distributed_by(Some(3), vec!["a".to_string()])
+            .build()
+            .expect("Failed to build table");
+        create_table(&admin, &table_path, &table_descriptor).await;
+
+        let table = connection
+            .get_table(&table_path)
+            .await
+            .expect("Failed to get table");
+        let writer = table
+            .new_upsert()
+            .expect("Failed to create upsert")
+            .create_writer()
+            .expect("Failed to create writer");
+        for a in 0..20i32 {
+            for b in 0..3i64 {
+                let mut row = GenericRow::new(3);
+                row.set_field(0, a);
+                row.set_field(1, b);
+                row.set_field(2, format!("{a}-{b}"));
+                writer.upsert(&row).expect("Failed to upsert");
+            }
+        }
+        writer.flush().await.expect("Failed to flush");
+
+        let prefix_lookuper = table
+            .new_lookup()
+            .expect("Failed to create lookup")
+            .lookup_by(vec!["a".to_string()])
+            .create_lookuper()
+            .expect("Failed to create prefix lookuper");
+
+        // Five lookups of the same prefix, then 20 existing and 5 missing prefixes.
+        let prefixes: Vec<i32> = std::iter::repeat_n(0, 5).chain(0..25).collect();
+        let mut futures = FuturesUnordered::new();
+        for a in prefixes.iter().copied() {
+            let prefix_lookuper = &prefix_lookuper;
+            futures.push(async move {
+                let mut prefix = GenericRow::new(1);
+                prefix.set_field(0, a);
+                let result = prefix_lookuper
+                    .lookup(&prefix)
+                    .await
+                    .expect("Failed to prefix lookup");
+                let mut rows: Vec<(i64, String)> = result
+                    .get_rows()
+                    .expect("Failed to decode rows")
+                    .iter()
+                    .map(|row| {
+                        assert_eq!(row.get_int(0).unwrap(), a, "prefix mismatch");
+                        (
+                            row.get_long(1).unwrap(),
+                            row.get_string(2).unwrap().to_string(),
+                        )
+                    })
+                    .collect();
+                rows.sort();
+                let expected: Vec<(i64, String)> = if a < 20 {
+                    (0..3i64).map(|b| (b, format!("{a}-{b}"))).collect()
+                } else {
+                    Vec::new()
+                };
+                assert_eq!(rows, expected, "rows mismatch for prefix {a}");
+            });
+        }
+
+        let mut completed = 0;
+        while futures.next().await.is_some() {
+            completed += 1;
+        }
+        assert_eq!(
+            completed,
+            prefixes.len(),
+            "Not all prefix lookups completed"
         );
 
         admin
@@ -1251,7 +1340,7 @@ mod kv_table_test {
         // prefix lookup
         let mut lookup_row = GenericRow::new(1);
         lookup_row.set_field(0, 1);
-        let mut prefix_lookup = table
+        let prefix_lookup = table
             .new_lookup()
             .expect("Failed to create lookup")
             .lookup_by(vec!["a".to_string()])
@@ -1311,7 +1400,7 @@ mod kv_table_test {
         }
         upsert_writer.flush().await.expect("Failed to flush");
 
-        let mut lookuper = table
+        let lookuper = table
             .new_lookup()
             .expect("Failed to create lookup")
             .create_lookuper()
@@ -1477,7 +1566,7 @@ mod kv_table_test {
             .expect("Failed to upsert second paimon row");
         upsert_writer.flush().await.expect("Failed to flush");
 
-        let mut lookuper = table
+        let lookuper = table
             .new_lookup()
             .expect("Failed to create lookup")
             .create_lookuper()
@@ -1877,7 +1966,7 @@ mod kv_table_test {
             .await
             .expect("ack row3");
 
-        let mut lookuper = table
+        let lookuper = table
             .new_lookup()
             .expect("lookup")
             .create_lookuper()

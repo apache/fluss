@@ -24,6 +24,7 @@ import org.apache.fluss.cluster.BucketLocation;
 import org.apache.fluss.cluster.Cluster;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.exception.BucketRescaleException;
 import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.exception.TableNotExistException;
 import org.apache.fluss.memory.LazyMemorySegmentPool;
@@ -32,6 +33,7 @@ import org.apache.fluss.memory.PreAllocatedPagedOutputView;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
+import org.apache.fluss.metadata.TableOrPartition;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.metrics.MetricNames;
 import org.apache.fluss.record.LogRecordBatchStatisticsCollector;
@@ -47,6 +49,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import javax.annotation.Nullable;
+import javax.annotation.concurrent.GuardedBy;
 
 import java.io.IOException;
 import java.util.ArrayDeque;
@@ -58,11 +61,9 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
-import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
-import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.apache.fluss.record.LogRecordBatchFormat.NO_BATCH_SEQUENCE;
@@ -85,8 +86,8 @@ public final class RecordAccumulator {
 
     private volatile boolean closed;
     private final AtomicInteger flushesInProgress;
-    private final AtomicInteger appendsInProgress;
     private final int batchSize;
+    private final BucketAssignerFactory bucketAssignerFactory;
 
     /**
      * An artificial delay time to add before declaring a records instance that isn't full ready for
@@ -105,11 +106,14 @@ public final class RecordAccumulator {
     /** The arrow buffer allocator to allocate memory for arrow log write batch. */
     private final BufferAllocator bufferAllocator;
 
-    /** The chunked allocation manager factory, stored for explicit native memory release. */
+    /** The chunked allocation manager factory, stored for explicit direct memory release. */
     private final ChunkedAllocationManager.ChunkedFactory chunkedFactory;
 
-    /** Guard to make {@link #destroyResources()} idempotent. */
-    private final AtomicBoolean resourcesDestroyed = new AtomicBoolean(false);
+    /** Coordinates batch memory deallocation with resource destruction. */
+    private final Object resourcesLock = new Object();
+
+    @GuardedBy("resourcesLock")
+    private boolean resourcesDestroyed;
 
     /** The pool of lazily created arrow {@link ArrowWriter}s for arrow log write batch. */
     private final ArrowWriterPool arrowWriterPool;
@@ -150,9 +154,24 @@ public final class RecordAccumulator {
             IdempotenceManager idempotenceManager,
             WriterMetricGroup writerMetricGroup,
             Clock clock) {
+        this(
+                conf,
+                idempotenceManager,
+                writerMetricGroup,
+                clock,
+                BucketAssignerFactory.defaultFactory(conf));
+    }
+
+    @VisibleForTesting
+    RecordAccumulator(
+            Configuration conf,
+            IdempotenceManager idempotenceManager,
+            WriterMetricGroup writerMetricGroup,
+            Clock clock,
+            BucketAssignerFactory bucketAssignerFactory) {
+        this.bucketAssignerFactory = checkNotNull(bucketAssignerFactory);
         this.closed = false;
         this.flushesInProgress = new AtomicInteger(0);
-        this.appendsInProgress = new AtomicInteger(0);
 
         this.batchTimeoutMs =
                 Math.min(
@@ -187,74 +206,85 @@ public final class RecordAccumulator {
         // The number of user threads blocked waiting for buffer memory to enqueue their records
         writerMetricGroup.gauge(
                 MetricNames.WRITER_BUFFER_WAITING_THREADS, writerBufferPool::queued);
+        writerMetricGroup.gauge(
+                MetricNames.WRITER_ACCUMULATOR_HEAP_MEMORY_USED_BYTES,
+                () -> writerBufferPool.totalSize() - writerBufferPool.availableMemory());
+        writerMetricGroup.gauge(
+                MetricNames.WRITER_ACCUMULATOR_ARROW_MEMORY_USED_BYTES,
+                bufferAllocator::getAllocatedMemory);
+        writerMetricGroup.gauge(
+                MetricNames.WRITER_ACCUMULATOR_DIRECT_MEMORY_ALLOCATED_BYTES,
+                chunkedFactory::getDirectMemoryAllocatedBytes);
     }
 
-    /**
-     * Add a record to the accumulator, return to append result.
-     *
-     * <p>The append result will contain the future metadata, and flag for whether the appended
-     * batch is full or a new batch is created.
-     */
-    public RecordAppendResult append(
-            WriteRecord writeRecord,
-            WriteCallback callback,
-            Cluster cluster,
-            int bucketId,
-            boolean abortIfBatchFull)
+    /** Assigns and appends a record using the layout owned by its write context. */
+    public RecordAppendResult append(WriteRecord record, WriteCallback callback, Cluster cluster)
             throws Exception {
-        PhysicalTablePath physicalTablePath = writeRecord.getPhysicalTablePath();
-        TableInfo tableInfo = writeRecord.getTableInfo();
-        // The metadata may return null for the partition id, but it is fine to pass null here,
-        // because we will fill the partitionId in bucketReady() before send the batch.
-        Optional<Long> partitionIdOpt = cluster.getPartitionId(physicalTablePath);
-        BucketAndWriteBatches bucketAndWriteBatches =
+        PhysicalTablePath path = record.getPhysicalTablePath();
+        TableInfo tableInfo = record.getTableInfo();
+        BucketAndWriteBatches context =
                 writeBatches.computeIfAbsent(
-                        physicalTablePath,
-                        k ->
-                                new BucketAndWriteBatches(
-                                        partitionIdOpt.orElse(null),
-                                        tableInfo.isPartitioned(),
-                                        physicalTablePath));
-
-        // We keep track of the number of appending thread to make sure we do not miss batches in
-        // abortIncompleteBatches().
-        appendsInProgress.incrementAndGet();
-        List<MemorySegment> memorySegments = Collections.emptyList();
-        try {
-            // check if we have an in-progress batch
-            Deque<WriteBatch> dq =
-                    bucketAndWriteBatches.batches.computeIfAbsent(
-                            bucketId, k -> new ArrayDeque<>());
-            synchronized (dq) {
-                RecordAppendResult appendResult = tryAppend(writeRecord, callback, dq);
-                if (appendResult != null) {
-                    return appendResult;
-                }
+                        path, k -> createBucketAndWriteBatches(tableInfo, path, cluster));
+        checkAndCacheHistoricalPartitionEnabled(tableInfo);
+        RecordAppendResult appendResult;
+        if (context.bucketCount == null) {
+            synchronized (context) {
+                appendResult = tryAppend(record, callback, cluster, context);
             }
-
-            // we don't have an in-progress record batch try to allocate a new batch
-            if (abortIfBatchFull) {
-                // Return a result that will cause another call to append.
-                return new RecordAppendResult(true, false, true);
-            }
-
-            memorySegments = allocateMemorySegments(writeRecord, physicalTablePath);
-            synchronized (dq) {
-                RecordAppendResult appendResult =
-                        appendNewBatch(
-                                writeRecord, callback, bucketId, tableInfo, dq, memorySegments);
-                if (appendResult.newBatchCreated) {
-                    memorySegments = Collections.emptyList();
-                }
-                return appendResult;
-            }
-        } finally {
-            // Other append operations by the Sender thread may have created a new batch, causing
-            // the temporarily allocated memorySegments here to go unused, and therefore, it needs
-            // to be released.
-            writerBufferPool.returnAll(memorySegments);
-            appendsInProgress.decrementAndGet();
+        } else {
+            appendResult = tryAppend(record, callback, cluster, context);
         }
+        BucketAssignment newBatchAssignment = appendResult.newBatchAssignment;
+        if (newBatchAssignment == null) {
+            return appendResult;
+        }
+
+        // Resolving routing may need to free batches to satisfy this allocation.
+        List<MemorySegment> memorySegments = allocateMemorySegments(record, path);
+        try {
+            RecordAppendResult result =
+                    appendWithAllocatedMemory(
+                            record,
+                            callback,
+                            cluster,
+                            context,
+                            newBatchAssignment.bucketId,
+                            newBatchAssignment.bucketCount,
+                            memorySegments);
+            if (result.newBatchCreated) {
+                memorySegments = Collections.emptyList();
+            }
+            return result;
+        } finally {
+            writerBufferPool.returnAll(memorySegments);
+        }
+    }
+
+    private BucketAndWriteBatches createBucketAndWriteBatches(
+            TableInfo tableInfo, PhysicalTablePath path, Cluster cluster) {
+        int tempBucketCount =
+                cluster.getBucketCount(TableOrPartition.ofTable(tableInfo.getTableId()))
+                        .orElse(tableInfo.getNumBuckets());
+        Long partitionId = null;
+        Integer bucketCount = tempBucketCount;
+        if (tableInfo.isPartitioned()) {
+            // The metadata may return null for the partition id, and bucketCount,
+            // but it is fine to pass null here, because we will fill the partitionId and
+            // bucketCount in bucketReady() before send the batch.
+            partitionId = cluster.getPartitionId(path).orElse(null);
+            bucketCount =
+                    partitionId == null
+                            ? null
+                            : cluster.getBucketCount(TableOrPartition.ofPartition(partitionId))
+                                    .orElse(null);
+        }
+        return new BucketAndWriteBatches(
+                partitionId,
+                bucketCount,
+                tempBucketCount,
+                bucketAssignerFactory.createBucketAssigner(tableInfo, path),
+                tableInfo.isPartitioned(),
+                path);
     }
 
     /**
@@ -323,20 +353,22 @@ public final class RecordAccumulator {
         return batches;
     }
 
-    public void reEnqueue(ReadyWriteBatch readyWriteBatch) {
+    /** Re-enqueue a batch unless it was completed concurrently. */
+    public boolean reEnqueue(ReadyWriteBatch readyWriteBatch) {
         WriteBatch batch = readyWriteBatch.writeBatch();
-        if (batch.isDone()) {
-            return;
-        }
-        batch.reEnqueued();
         Deque<WriteBatch> deque =
-                getOrCreateDeque(readyWriteBatch.tableBucket(), batch.physicalTablePath());
+                getDequeOrThrow(readyWriteBatch.tableBucket(), batch.physicalTablePath());
         synchronized (deque) {
+            if (batch.isDone()) {
+                return false;
+            }
+            batch.reEnqueued();
             if (idempotenceManager.idempotenceEnabled()) {
                 insertInSequenceOrder(deque, batch, readyWriteBatch.tableBucket());
             } else {
                 deque.addFirst(batch);
             }
+            return true;
         }
     }
 
@@ -351,12 +383,25 @@ public final class RecordAccumulator {
      * no incomplete batch. This method never moves queued or inflight batches between physical
      * partitions.
      *
+     * <p>Tables with historical partition support cannot be rescaled, so every target uses the
+     * table's fixed bucket count.
+     *
      * @throws FlussRuntimeException if a different target was fixed previously
      */
     void routeWritesTo(
-            PhysicalTablePath originalPath, PhysicalTablePath targetPath, long targetPartitionId) {
+            TableInfo tableInfo,
+            PhysicalTablePath originalPath,
+            PhysicalTablePath targetPath,
+            long targetPartitionId) {
+        int bucketCount = tableInfo.getNumBuckets();
         BucketAndWriteBatches resolvedTarget =
-                new BucketAndWriteBatches(targetPartitionId, true, targetPath);
+                new BucketAndWriteBatches(
+                        targetPartitionId,
+                        bucketCount,
+                        bucketCount,
+                        bucketAssignerFactory.createBucketAssigner(tableInfo, targetPath),
+                        true,
+                        targetPath);
         // Install the route atomically before append can create the first queue for this path.
         BucketAndWriteBatches existing = writeBatches.putIfAbsent(originalPath, resolvedTarget);
         if (existing == null) {
@@ -380,6 +425,7 @@ public final class RecordAccumulator {
                                     originalPath, targetPath, existing.targetPath));
                 }
                 existing.switchToHistoricalTarget(targetPath, targetPartitionId);
+                existing.bucketCount = bucketCount;
                 return;
             }
 
@@ -435,7 +481,7 @@ public final class RecordAccumulator {
         return Boolean.TRUE.equals(historicalPartitionEnabledByTable.get(tablePath));
     }
 
-    /** Reroutes queued batches for {@code originalPath} to the historical target. */
+    /** Reroutes queued batches to the historical target, retaining their fixed bucket layout. */
     void rerouteQueuedWritesToHistorical(
             PhysicalTablePath originalPath,
             PhysicalTablePath historicalPath,
@@ -497,26 +543,37 @@ public final class RecordAccumulator {
     }
 
     private void abortBatch(final Exception reason, WriteBatch batch) {
-        Deque<WriteBatch> dq = getDeque(batch.physicalTablePath(), batch.bucketId());
-        synchronized (dq) {
-            batch.abortRecordAppends();
-            dq.remove(batch);
+        Deque<WriteBatch> deque = getDequeOrThrow(batch.physicalTablePath(), batch.bucketId());
+        boolean aborted;
+        synchronized (deque) {
+            aborted = batch.trySetAborted();
+            if (aborted) {
+                batch.abortRecordAppends();
+            }
+            deque.remove(batch);
         }
-        batch.abort(reason);
-        deallocate(batch);
+
+        // A response may have completed the batch after abortAllBatches() took its snapshot. In
+        // that case, skip the abort callback but still claim deallocation if it is still pending.
+        try {
+            if (aborted) {
+                batch.completeAbort(reason);
+            }
+        } finally {
+            deallocate(batch);
+        }
     }
 
-    /** Get the deque for the given table-bucket, creating it if necessary. */
-    private Deque<WriteBatch> getOrCreateDeque(
+    /** Get the deque for the given table-bucket, or throw exception if it doesn't exist. */
+    private Deque<WriteBatch> getDequeOrThrow(
             TableBucket tableBucket, PhysicalTablePath physicalTablePath) {
-        BucketAndWriteBatches bucketAndWriteBatches =
-                writeBatches.computeIfAbsent(
-                        physicalTablePath,
-                        k ->
-                                new BucketAndWriteBatches(
-                                        tableBucket.getPartitionId(),
-                                        physicalTablePath.getPartitionName() != null,
-                                        physicalTablePath));
+        BucketAndWriteBatches bucketAndWriteBatches = writeBatches.get(physicalTablePath);
+        if (bucketAndWriteBatches == null) {
+            throw new TableNotExistException(
+                    String.format(
+                            "Table %s does not exist in the accumulator for bucket %d.",
+                            physicalTablePath, tableBucket.getBucket()));
+        }
         return bucketAndWriteBatches.batches.computeIfAbsent(
                 tableBucket.getBucket(), k -> new ArrayDeque<>());
     }
@@ -563,16 +620,25 @@ public final class RecordAccumulator {
         }
     }
 
-    /** Deallocate the record batch. */
+    /**
+     * Deallocate the record batch if this call wins ownership of it.
+     *
+     * <p>Response handling and fatal cleanup may race, so removing the batch from the incomplete
+     * set determines which caller returns its memory. The same lock prevents resource destruction
+     * from overtaking that return.
+     */
     public void deallocate(WriteBatch batch) {
-        incomplete.remove(batch);
-        writerBufferPool.returnAll(batch.pooledMemorySegments());
+        synchronized (resourcesLock) {
+            if (incomplete.removeIfPresent(batch) && !resourcesDestroyed) {
+                writerBufferPool.returnAll(batch.pooledMemorySegments());
+            }
+        }
     }
 
     /**
      * Get the ready deque for the given table path and bucket id, or null if it does not exist. A
-     * deque is considered ready if it's not a partitioned table or the partition is created and
-     * partition_id is fetched.
+     * deque is ready only after its bucket count and, for a partitioned table, partition ID have
+     * been resolved and any incompatible tentative batches have been aborted.
      */
     @VisibleForTesting
     Deque<WriteBatch> getReadyDeque(PhysicalTablePath path, int bucketId) {
@@ -582,7 +648,9 @@ public final class RecordAccumulator {
         }
 
         // for the partitioned tables, we need to check whether the partition is ready
-        if (bucketAndWriteBatches.isPartitionedTable && bucketAndWriteBatches.partitionId == null) {
+        if (bucketAndWriteBatches.bucketCount == null
+                || (bucketAndWriteBatches.isPartitionedTable
+                        && bucketAndWriteBatches.partitionId == null)) {
             return null;
         }
 
@@ -594,7 +662,8 @@ public final class RecordAccumulator {
      *
      * <p>Note: this method does not check whether the partition is ready for partitioned tables.
      */
-    private Deque<WriteBatch> getDeque(PhysicalTablePath path, int bucketId) {
+    @VisibleForTesting
+    Deque<WriteBatch> getDequeOrThrow(PhysicalTablePath path, int bucketId) {
         BucketAndWriteBatches bucketAndWriteBatches = writeBatches.get(path);
         if (bucketAndWriteBatches == null) {
             return null;
@@ -642,25 +711,30 @@ public final class RecordAccumulator {
             Set<PhysicalTablePath> unknownLeaderTables,
             Cluster cluster,
             long nextReadyCheckDelayMs) {
-        // first check this table has partitionId.
         PhysicalTablePath targetPath = bucketAndWriteBatches.targetPath;
-        if (bucketAndWriteBatches.isPartitionedTable && bucketAndWriteBatches.partitionId == null) {
-            Optional<Long> optionIdOpt = cluster.getPartitionId(targetPath);
-            if (optionIdOpt.isPresent()) {
-                bucketAndWriteBatches.partitionId = optionIdOpt.get();
-            } else {
-                LOG.debug(
-                        "Partition not exists for {}, bucket will not be set to ready", targetPath);
-                // TODO: we shouldn't add unready partitions to unknownLeaderTables,
-                //  because it cases PartitionNotExistException later
+        Long partitionId =
+                bucketAndWriteBatches.isPartitionedTable
+                        ? cluster.getPartitionId(targetPath).orElse(null)
+                        : null;
+        Long tableId = cluster.getTableId(targetPath.getTablePath()).orElse(null);
+        if (tableId == null || (bucketAndWriteBatches.isPartitionedTable && partitionId == null)) {
+            unknownLeaderTables.add(targetPath);
+            return nextReadyCheckDelayMs;
+        }
+        if (bucketAndWriteBatches.bucketCount == null) {
+            Integer actualBucketCount =
+                    cluster.getBucketCount(TableOrPartition.of(tableId, partitionId)).orElse(null);
+            if (actualBucketCount == null) {
                 unknownLeaderTables.add(targetPath);
                 return nextReadyCheckDelayMs;
             }
+            // Resolve both values from this snapshot. Do not cache a partition ID while its count
+            // is missing: a later snapshot may already refer to a recreated partition.
+            applyNewBucketCount(bucketAndWriteBatches, partitionId, actualBucketCount);
         }
 
         Map<Integer, Deque<WriteBatch>> batches = bucketAndWriteBatches.batches;
         // Collect the queue sizes for available buckets to be used in adaptive bucket allocate.
-
         boolean exhausted = writerBufferPool.queued() > 0;
         for (Map.Entry<Integer, Deque<WriteBatch>> entry : batches.entrySet()) {
             Deque<WriteBatch> deque = entry.getValue();
@@ -687,48 +761,115 @@ public final class RecordAccumulator {
             }
 
             int bucketId = entry.getKey();
-            Optional<Long> tableIdOpt = cluster.getTableId(targetPath.getTablePath());
-            if (!tableIdOpt.isPresent()) {
+            TableBucket tableBucket = cluster.getTableBucket(tableId, targetPath, bucketId);
+
+            // If this bucket is throttled, don't mark its node as ready.
+            // Instead, factor the remaining throttle time into the next check delay.
+            Long throttleExpiry = throttleExpiryMs.get(tableBucket);
+            if (throttleExpiry != null) {
+                long now = clock.milliseconds();
+                if (now < throttleExpiry) {
+                    nextReadyCheckDelayMs = Math.min(nextReadyCheckDelayMs, throttleExpiry - now);
+                    continue;
+                }
+                // Expired — evict here to reclaim entries for buckets whose deque
+                // has gone empty and won't reach the drain-time throttle check.
+                throttleExpiryMs.remove(tableBucket);
+            }
+
+            Integer leader = cluster.leaderFor(tableBucket);
+            if (leader == null) {
+                // This is a bucket for which leader is not known, but messages are
+                // available to send. Note that entries are currently not removed from
+                // batches when deque is empty.
                 unknownLeaderTables.add(targetPath);
             } else {
-                TableBucket tableBucket =
-                        cluster.getTableBucket(tableIdOpt.get(), targetPath, bucketId);
-
-                // If this bucket is throttled, don't mark its node as ready.
-                // Instead, factor the remaining throttle time into the next check delay.
-                Long throttleExpiry = throttleExpiryMs.get(tableBucket);
-                if (throttleExpiry != null) {
-                    long now = clock.milliseconds();
-                    if (now < throttleExpiry) {
-                        nextReadyCheckDelayMs =
-                                Math.min(nextReadyCheckDelayMs, throttleExpiry - now);
-                        continue;
-                    }
-                    // Expired — evict here to reclaim entries for buckets whose deque
-                    // has gone empty and won't reach the drain-time throttle check.
-                    throttleExpiryMs.remove(tableBucket);
-                }
-
-                Integer leader = cluster.leaderFor(tableBucket);
-                if (leader == null) {
-                    // This is a bucket for which leader is not known, but messages are
-                    // available to send. Note that entries are currently not removed from
-                    // batches when deque is empty.
-                    unknownLeaderTables.add(targetPath);
-                } else {
-                    nextReadyCheckDelayMs =
-                            batchReady(
-                                    exhausted,
-                                    leader,
-                                    waitedTimeMs,
-                                    full,
-                                    readyNodes,
-                                    nextReadyCheckDelayMs);
-                }
+                nextReadyCheckDelayMs =
+                        batchReady(
+                                exhausted,
+                                leader,
+                                waitedTimeMs,
+                                full,
+                                readyNodes,
+                                nextReadyCheckDelayMs);
             }
         }
 
         return nextReadyCheckDelayMs;
+    }
+
+    private void applyNewBucketCount(
+            BucketAndWriteBatches context, @Nullable Long partitionId, int newBucketCount) {
+        List<WriteBatch> aborted = new ArrayList<>();
+        synchronized (context) {
+            if (context.bucketCount == null) {
+                boolean failBatches =
+                        context.tempBucketCount != newBucketCount
+                                && (isHashAssigner(context.bucketAssigner)
+                                        || hasOutOfRangeBatches(context, newBucketCount));
+                for (Deque<WriteBatch> deque : context.batches.values()) {
+                    synchronized (deque) {
+                        if (failBatches) {
+                            WriteBatch batch;
+                            while ((batch = deque.pollFirst()) != null) {
+                                if (batch.trySetAborted()) {
+                                    // This also releases an Arrow batch's writer without building
+                                    // it.
+                                    batch.abortRecordAppends();
+                                    aborted.add(batch);
+                                }
+                            }
+                        } else {
+                            for (WriteBatch batch : deque) {
+                                batch.setBucketCount(newBucketCount);
+                            }
+                        }
+                    }
+                }
+                context.partitionId = partitionId;
+                // Publish last so the Sender can drain only after every queued batch agrees
+                // with the resolved layout.
+                context.bucketCount = newBucketCount;
+            }
+        }
+
+        if (!aborted.isEmpty()) {
+            BucketRescaleException failure =
+                    new BucketRescaleException(
+                            String.format(
+                                    "Bucket rescale changed the bucket count for %s "
+                                            + "from %d to %d. Buffered records using the "
+                                            + "temporary count were not sent. Retry the "
+                                            + "failed records with the same writer to "
+                                            + "use the updated bucket count.",
+                                    context.targetPath, context.tempBucketCount, newBucketCount));
+            // Callbacks may retry using the resolved count. Invoke them outside the context and
+            // deque locks, after detaching every incompatible batch across all bucket queues.
+            for (WriteBatch batch : aborted) {
+                try {
+                    batch.completeAbort(failure);
+                } finally {
+                    deallocate(batch);
+                }
+            }
+        }
+    }
+
+    private boolean isHashAssigner(BucketAssigner assigner) {
+        return assigner instanceof HashBucketAssigner;
+    }
+
+    private boolean hasOutOfRangeBatches(BucketAndWriteBatches context, int bucketCount) {
+        for (Map.Entry<Integer, Deque<WriteBatch>> entry : context.batches.entrySet()) {
+            if (entry.getKey() >= bucketCount) {
+                synchronized (entry.getValue()) {
+                    if (!entry.getValue().isEmpty()) {
+                        return true;
+                    }
+                }
+            }
+        }
+        return false;
     }
 
     private long batchReady(
@@ -766,42 +907,90 @@ public final class RecordAccumulator {
         return flushesInProgress.get() > 0;
     }
 
+    private RecordAppendResult tryAppend(
+            WriteRecord record,
+            WriteCallback callback,
+            Cluster cluster,
+            BucketAndWriteBatches context)
+            throws Exception {
+        int bucketCount = context.routingBucketCount();
+        int bucketId =
+                context.bucketAssigner.assignBucket(record.getBucketKey(), cluster, bucketCount);
+        Deque<WriteBatch> deque =
+                context.batches.computeIfAbsent(bucketId, k -> new ArrayDeque<>());
+        synchronized (deque) {
+            RecordAppendResult result = tryAppend(record, callback, bucketCount, deque);
+            if (result != null) {
+                return result;
+            }
+        }
+        if (context.bucketAssigner.abortIfBatchFull()) {
+            context.bucketAssigner.onNewBatch(cluster, bucketCount, bucketId);
+            bucketId =
+                    context.bucketAssigner.assignBucket(
+                            record.getBucketKey(), cluster, bucketCount);
+        }
+        return new RecordAppendResult(new BucketAssignment(bucketId, bucketCount));
+    }
+
+    private RecordAppendResult appendWithAllocatedMemory(
+            WriteRecord record,
+            WriteCallback callback,
+            Cluster cluster,
+            BucketAndWriteBatches context,
+            int bucketId,
+            int bucketCount,
+            List<MemorySegment> segments)
+            throws Exception {
+        // Tentative routing resolution and historical target switches must wait for registration.
+        // Resolved normal buckets append independently using only their deque locks.
+        if (context.bucketCount == null
+                || isHistoricalPartitionEnabled(record.getPhysicalTablePath().getTablePath())) {
+            synchronized (context) {
+                return appendNewBatch(
+                        record, callback, cluster, context, bucketId, bucketCount, segments);
+            }
+        }
+        return appendNewBatch(record, callback, cluster, context, bucketId, bucketCount, segments);
+    }
+
     private RecordAppendResult appendNewBatch(
             WriteRecord writeRecord,
             WriteCallback callback,
+            Cluster cluster,
+            BucketAndWriteBatches context,
             int bucketId,
-            TableInfo tableInfo,
-            Deque<WriteBatch> deque,
+            int bucketCount,
             List<MemorySegment> segments)
             throws Exception {
-        PhysicalTablePath physicalTablePath = writeRecord.getPhysicalTablePath();
-        BucketAndWriteBatches bucketAndWriteBatches =
-                checkNotNull(
-                        writeBatches.get(physicalTablePath),
-                        "Write batches for %s must exist.",
-                        physicalTablePath);
-        // Historical-enabled tables coordinate with routeWritesTo(). Other tables reuse the
-        // deque monitor already held by the caller, avoiding cross-bucket serialization.
-        Object routeLock =
-                isHistoricalPartitionEnabled(physicalTablePath.getTablePath())
-                        ? bucketAndWriteBatches
-                        : deque;
-        synchronized (routeLock) {
-            RecordAppendResult appendResult = tryAppend(writeRecord, callback, deque);
+        // Memory allocation runs without locks, so the count may have been resolved meanwhile.
+        int currentBucketCount = context.routingBucketCount();
+        if (bucketCount != currentBucketCount) {
+            bucketCount = currentBucketCount;
+            bucketId =
+                    context.bucketAssigner.assignBucket(
+                            writeRecord.getBucketKey(), cluster, bucketCount);
+        }
+        Deque<WriteBatch> deque =
+                context.batches.computeIfAbsent(bucketId, k -> new ArrayDeque<>());
+        synchronized (deque) {
+            RecordAppendResult appendResult = tryAppend(writeRecord, callback, bucketCount, deque);
             if (appendResult != null) {
-                // Somebody else found us a batch, return the one we waited for! Hopefully this
-                // doesn't happen often...
+                // Somebody else found us a batch while we were allocating memory.
                 return appendResult;
             }
 
+            PhysicalTablePath physicalTablePath = writeRecord.getPhysicalTablePath();
+            TableInfo tableInfo = writeRecord.getTableInfo();
             PreAllocatedPagedOutputView outputView = new PreAllocatedPagedOutputView(segments);
             int schemaId = tableInfo.getSchemaId();
             WriteFormat writeFormat = writeRecord.getWriteFormat();
-            boolean isHistoricalPartition = bucketAndWriteBatches.isHistoricalWriteTarget();
+            boolean isHistoricalPartition = context.isHistoricalWriteTarget();
             final WriteBatch batch =
                     createWriteBatch(
                             writeRecord,
                             bucketId,
+                            bucketCount,
                             tableInfo,
                             writeFormat,
                             physicalTablePath,
@@ -812,13 +1001,14 @@ public final class RecordAccumulator {
             batch.tryAppend(writeRecord, callback);
             deque.addLast(batch);
             incomplete.add(batch);
-            return new RecordAppendResult(deque.size() > 1 || batch.isClosed(), true, false);
+            return new RecordAppendResult(deque.size() > 1 || batch.isClosed(), true);
         }
     }
 
     private WriteBatch createWriteBatch(
             WriteRecord writeRecord,
             int bucketId,
+            int bucketCount,
             TableInfo tableInfo,
             WriteFormat writeFormat,
             PhysicalTablePath physicalTablePath,
@@ -826,16 +1016,18 @@ public final class RecordAccumulator {
             int schemaId,
             boolean isHistoricalPartition) {
         // If the table is kv table we need to create a kv batch, otherwise we create a log batch.
+        int writeLimit = outputView.getPreAllocatedSize();
         switch (writeFormat) {
             case COMPACTED_KV:
             case INDEXED_KV:
                 return new KvWriteBatch(
                         tableInfo.getTableId(),
                         bucketId,
+                        bucketCount,
                         physicalTablePath,
                         tableInfo.getSchemaId(),
                         writeFormat.toKvFormat(),
-                        outputView.getPreAllocatedSize(),
+                        writeLimit,
                         outputView,
                         writeRecord.getTargetColumns(),
                         writeRecord.getMergeMode(),
@@ -847,7 +1039,7 @@ public final class RecordAccumulator {
                         arrowWriterPool.getOrCreateWriter(
                                 tableInfo.getTableId(),
                                 schemaId,
-                                outputView.getPreAllocatedSize(),
+                                writeLimit,
                                 tableInfo.getRowType(),
                                 tableInfo.getTableConfig().getArrowCompressionInfo());
                 LogRecordBatchStatisticsCollector statisticsCollector = null;
@@ -859,6 +1051,7 @@ public final class RecordAccumulator {
                 return new ArrowLogWriteBatch(
                         tableInfo.getTableId(),
                         bucketId,
+                        bucketCount,
                         physicalTablePath,
                         tableInfo.getSchemaId(),
                         arrowWriter,
@@ -871,9 +1064,10 @@ public final class RecordAccumulator {
                 return new CompactedLogWriteBatch(
                         tableInfo.getTableId(),
                         bucketId,
+                        bucketCount,
                         physicalTablePath,
                         schemaId,
-                        outputView.getPreAllocatedSize(),
+                        writeLimit,
                         outputView,
                         isHistoricalPartition,
                         clock.milliseconds());
@@ -882,9 +1076,10 @@ public final class RecordAccumulator {
                 return new IndexedLogWriteBatch(
                         tableInfo.getTableId(),
                         bucketId,
+                        bucketCount,
                         physicalTablePath,
                         tableInfo.getSchemaId(),
-                        outputView.getPreAllocatedSize(),
+                        writeLimit,
                         outputView,
                         isHistoricalPartition,
                         clock.milliseconds());
@@ -895,18 +1090,22 @@ public final class RecordAccumulator {
     }
 
     private RecordAppendResult tryAppend(
-            WriteRecord writeRecord, WriteCallback callback, Deque<WriteBatch> deque)
+            WriteRecord writeRecord,
+            WriteCallback callback,
+            int bucketCount,
+            Deque<WriteBatch> deque)
             throws Exception {
         if (closed) {
             throw new FlussRuntimeException("Writer closed while send in progress");
         }
         WriteBatch last = deque.peekLast();
         if (last != null) {
-            boolean success = last.tryAppend(writeRecord, callback);
+            boolean success =
+                    last.getBucketCount() == bucketCount && last.tryAppend(writeRecord, callback);
             if (!success) {
-                // The last batch is either full/closed or belongs to a different table/write
-                // format/schema. Close it so the incoming record rolls over to a compatible new
-                // batch.
+                // The last batch is either full/closed or belongs to a different table, write
+                // format, schema, or bucket layout. Close it so the incoming record rolls over to
+                // a compatible new batch.
                 // TODO For ArrowLogWriteBatch, close here is a heavy operation (including build
                 // logic), we need to avoid do that in an lock which locked dq. However, why we not
                 // remove build logic out of close for ArrowLogWriteBatch is that we want to release
@@ -914,7 +1113,7 @@ public final class RecordAccumulator {
                 // need to introduce a more reasonable way to solve these two problems.
                 last.close();
             } else {
-                return new RecordAppendResult(deque.size() > 1 || last.isClosed(), false, false);
+                return new RecordAppendResult(deque.size() > 1 || last.isClosed(), false);
             }
         }
         return null;
@@ -1315,14 +1514,31 @@ public final class RecordAccumulator {
     public static final class RecordAppendResult {
         public final boolean batchIsFull;
         public final boolean newBatchCreated;
-        /** Whether this record was abort because the new batch created in record accumulator. */
-        public final boolean abortRecordForNewBatch;
 
-        public RecordAppendResult(
-                boolean batchIsFull, boolean newBatchCreated, boolean abortRecordForNewBatch) {
+        @Nullable private final BucketAssignment newBatchAssignment;
+
+        /** Creates the result describing batch fullness and whether a batch was created. */
+        public RecordAppendResult(boolean batchIsFull, boolean newBatchCreated) {
             this.batchIsFull = batchIsFull;
             this.newBatchCreated = newBatchCreated;
-            this.abortRecordForNewBatch = abortRecordForNewBatch;
+            this.newBatchAssignment = null;
+        }
+
+        private RecordAppendResult(BucketAssignment newBatchAssignment) {
+            this.batchIsFull = false;
+            this.newBatchCreated = false;
+            this.newBatchAssignment = newBatchAssignment;
+        }
+    }
+
+    /** Routing retained only when an append needs to allocate memory for a new batch. */
+    private static final class BucketAssignment {
+        private final int bucketId;
+        private final int bucketCount;
+
+        private BucketAssignment(int bucketId, int bucketCount) {
+            this.bucketId = bucketId;
+            this.bucketCount = bucketCount;
         }
     }
 
@@ -1345,6 +1561,16 @@ public final class RecordAccumulator {
     /** Close this accumulator to reject new appends. */
     public void close() {
         closed = true;
+        for (BucketAndWriteBatches context : writeBatches.values()) {
+            synchronized (context) {
+                // Resolved normal appends only hold their deque lock during registration.
+                for (Deque<WriteBatch> deque : context.batches.values()) {
+                    synchronized (deque) {
+                        // Wait for registration before fatal cleanup takes its snapshot.
+                    }
+                }
+            }
+        }
     }
 
     /**
@@ -1359,20 +1585,36 @@ public final class RecordAccumulator {
      */
     @VisibleForTesting
     public void destroyResources() {
-        if (!resourcesDestroyed.compareAndSet(false, true)) {
-            return;
+        synchronized (resourcesLock) {
+            if (resourcesDestroyed) {
+                return;
+            }
+            resourcesDestroyed = true;
+            writerBufferPool.close();
+            arrowWriterPool.close();
+            bufferAllocator.close();
+            chunkedFactory.close();
         }
-        writerBufferPool.close();
-        arrowWriterPool.close();
-        bufferAllocator.close();
-        chunkedFactory.close();
     }
 
     /** Per table bucket and write batches. */
     private static class BucketAndWriteBatches {
         public final boolean isPartitionedTable;
+
+        /**
+         * The temporary bucket count used for routing before the authoritative bucket count is
+         * known.
+         */
+        private final int tempBucketCount;
+
+        /** The bucket assigner to assign record to bucket id for the given path. */
+        private final BucketAssigner bucketAssigner;
+
         /** The physical partition used for metadata lookup, leader discovery, and write RPCs. */
         private volatile PhysicalTablePath targetPath;
+
+        /** Null until every queued batch agrees with the authoritative layout. */
+        private volatile @Nullable Integer bucketCount;
 
         public volatile @Nullable Long partitionId;
         // Write batches for each bucket in queue.
@@ -1380,11 +1622,22 @@ public final class RecordAccumulator {
 
         private BucketAndWriteBatches(
                 @Nullable Long partitionId,
+                @Nullable Integer bucketCount,
+                int tempBucketCount,
+                BucketAssigner bucketAssigner,
                 boolean isPartitionedTable,
                 PhysicalTablePath targetPath) {
             this.partitionId = partitionId;
+            this.bucketCount = bucketCount;
+            this.tempBucketCount = tempBucketCount;
+            this.bucketAssigner = bucketAssigner;
             this.isPartitionedTable = isPartitionedTable;
             this.targetPath = targetPath;
+        }
+
+        private int routingBucketCount() {
+            Integer current = bucketCount;
+            return current == null ? tempBucketCount : current;
         }
 
         public boolean isHistoricalWriteTarget() {

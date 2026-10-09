@@ -163,9 +163,11 @@ public class RemoteLogManager implements Closeable {
                             remoteLogManifestHandleOpt.get().getRemoteLogManifestPath());
             remoteLog.loadRemoteLogManifest(manifest);
         }
-        log.updateHighestCopiedEndOffset(remoteLog.getHighestCopiedEndOffset());
-        log.updateRemoteLogEndOffset(remoteLog.getRemoteLogEndOffset().orElse(-1L));
-        log.updateRemoteLogStartOffset(remoteLog.getRemoteLogStartOffset());
+
+        log.updateRemoteLogOffsets(
+                remoteLog.getRemoteLogStartOffset(),
+                remoteLog.getRemoteLogEndOffset().orElse(-1L),
+                remoteLog.getHighestCopiedEndOffset());
         log.updateRemoteLogSize(remoteLog.getRemoteSizeInBytes());
         // leader needs to register the remote log metrics
         remoteLog.registerMetrics(replica.bucketMetrics());

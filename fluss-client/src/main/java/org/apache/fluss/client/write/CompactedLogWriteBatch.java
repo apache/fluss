@@ -42,6 +42,7 @@ public final class CompactedLogWriteBatch extends AbstractRowLogWriteBatch<Compa
     public CompactedLogWriteBatch(
             long tableId,
             int bucketId,
+            int bucketCount,
             PhysicalTablePath physicalTablePath,
             int schemaId,
             int writeLimit,
@@ -51,6 +52,7 @@ public final class CompactedLogWriteBatch extends AbstractRowLogWriteBatch<Compa
         super(
                 tableId,
                 bucketId,
+                bucketCount,
                 physicalTablePath,
                 schemaId,
                 WriteFormat.COMPACTED_LOG,

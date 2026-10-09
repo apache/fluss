@@ -18,8 +18,10 @@
 # Publish the fluss Rust crate to crates.io.
 # Trigger: push tag only (e.g. v0.1.0).
 # Pre-release tags (containing '-') do not publish; release tags publish to crates.io.
+# A pre-release tag still authenticates, to prove the publish path before release day.
 #
-# Token auth: add secret CARGO_REGISTRY_TOKEN for crates.io publishing.
+# Auth: crates.io Trusted Publishing (OIDC). The crate's Trusted Publishing config on
+# crates.io must name this repository and this workflow file; no secret is involved.
 
 name: Release Rust
 
@@ -37,6 +39,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      id-token: write  # mint the short-lived crates.io publish token
     steps:
       - uses: actions/checkout@v6
 
@@ -57,8 +60,21 @@ jobs:
       - name: Dry run (crates/fluss)
         run: cargo publish -p fluss-rs --dry-run --locked
 
+      # crates.io trades the job's OIDC identity for a publish token that lasts
+      # about 30 minutes; the action revokes it when the job ends.
+      #
+      # This runs on pre-release tags too, even though they never publish. The dry run
+      # above never contacts the registry, so without this the Trusted Publishing config
+      # is first exercised on the release tag itself. Authenticating during the RC turns a
+      # misconfigured publisher (wrong repository, renamed workflow file) into an RC
+      # failure rather than a release-day one.
+      - name: Authenticate with crates.io
+        id: auth
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18 # v1.0.5
+
       - name: Publish fluss-rs to crates.io
         if: startsWith(github.ref, 'refs/tags/') && !contains(github.ref, '-')
         run: cargo publish -p fluss-rs --locked
         env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}

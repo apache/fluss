@@ -22,12 +22,12 @@ use crate::client::metadata::Metadata;
 use crate::client::table::FlussTable;
 use crate::config::Config;
 use crate::error::{Error, FlussError, Result};
-use crate::metadata::TablePath;
-
-#[cfg(feature = "integration_tests")]
-use crate::metadata::PhysicalTablePath;
+use crate::metadata::{PhysicalTablePath, TableInfo, TableOrPartition, TablePath};
 use crate::rpc::RpcClient;
-use parking_lot::RwLock;
+use crate::{PartitionId, TableId};
+use log::warn;
+use parking_lot::{Mutex, RwLock};
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -38,6 +38,8 @@ pub struct FlussConnection {
     writer_client: RwLock<Option<Arc<WriterClient>>>,
     admin_client: RwLock<Option<Arc<FlussAdmin>>>,
     lookup_client: RwLock<Option<Arc<LookupClient>>>,
+    /// Per table, the bucket-count epoch and the rescaled partitions `get_table` cached.
+    rescaled_partitions: Mutex<HashMap<TableId, (i64, Vec<PartitionId>)>>,
 }
 
 impl FlussConnection {
@@ -73,6 +75,7 @@ impl FlussConnection {
             writer_client: Default::default(),
             admin_client: RwLock::new(None),
             lookup_client: Default::default(),
+            rescaled_partitions: Default::default(),
         })
     }
 
@@ -196,6 +199,67 @@ impl FlussConnection {
                 }
             })?
             .clone();
+        if table_info.is_partitioned() && table_info.get_bucket_count_epoch() > 0 {
+            self.cache_rescaled_partitions(&table_info).await;
+        }
         Ok(FlussTable::new(self, self.metadata.clone(), table_info))
+    }
+
+    /// Caches partitions whose bucket count differs from the table's, so a writer's first keyed
+    /// write to one doesn't fail with `InvalidBucketRouting`. Runs once per `bucket.num` change.
+    async fn cache_rescaled_partitions(&self, table_info: &TableInfo) {
+        let table_id = table_info.table_id;
+        let epoch = table_info.get_bucket_count_epoch();
+        let is_cached = |partition_id: &PartitionId| {
+            self.metadata
+                .get_cluster()
+                .bucket_count(TableOrPartition::Partition(*partition_id))
+                .is_some()
+        };
+        if let Some((cached_epoch, partition_ids)) = self.rescaled_partitions.lock().get(&table_id)
+        {
+            if *cached_epoch == epoch && partition_ids.iter().all(is_cached) {
+                return;
+            }
+        }
+        let result = async {
+            let table_path = Arc::new(table_info.table_path.clone());
+            let rescaled: Vec<(PartitionId, String)> = self
+                .get_admin()?
+                .list_partition_infos(&table_info.table_path)
+                .await?
+                .into_iter()
+                .filter(|info| info.get_bucket_count() != table_info.num_buckets)
+                .map(|info| (info.get_partition_id(), info.get_partition_name()))
+                .collect();
+            let uncached: Vec<Arc<PhysicalTablePath>> = rescaled
+                .iter()
+                .filter(|(partition_id, _)| !is_cached(partition_id))
+                .map(|(_, partition_name)| {
+                    Arc::new(PhysicalTablePath::of_partitioned(
+                        table_path.clone(),
+                        Some(partition_name.clone()),
+                    ))
+                })
+                .collect();
+            if !uncached.is_empty() {
+                self.metadata
+                    .update_physical_table_metadata(&uncached)
+                    .await?;
+            }
+            Ok::<_, Error>(rescaled.into_iter().map(|(id, _)| id).collect())
+        }
+        .await;
+        match result {
+            Ok(partition_ids) => {
+                self.rescaled_partitions
+                    .lock()
+                    .insert(table_id, (epoch, partition_ids));
+            }
+            Err(e) => warn!(
+                "Failed to cache the rescaled partitions of {}: {e}",
+                table_info.table_path
+            ),
+        }
     }
 }

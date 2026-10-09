@@ -77,6 +77,18 @@ class TabletServerMetricGroupTest {
                 .isEqualTo(128L);
     }
 
+    @Test
+    void testWalMemoryPoolMetrics() {
+        TabletServerMetricGroup metricGroup =
+                new TabletServerMetricGroup(
+                        NOPMetricRegistry.INSTANCE, "cluster", "rack", "host", 0);
+        metricGroup.registerKvWalMemoryPoolMetrics(() -> 100L, 256L);
+
+        assertThat(gaugeValue(metricGroup, MetricNames.KV_WAL_MEMORY_POOL_USAGE)).isEqualTo(100L);
+        assertThat(gaugeValue(metricGroup, MetricNames.KV_WAL_MEMORY_POOL_CAPACITY))
+                .isEqualTo(256L);
+    }
+
     private static Object gaugeValue(TabletServerMetricGroup metricGroup, String metricName) {
         return ((Gauge<?>) metricGroup.getMetrics().get(metricName)).getValue();
     }

@@ -17,14 +17,9 @@
 
 package org.apache.fluss.client.utils;
 
-import org.apache.fluss.client.metadata.MetadataUpdater;
-import org.apache.fluss.client.table.getter.PartitionGetter;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.exception.IllegalConfigurationException;
-import org.apache.fluss.exception.PartitionNotExistException;
-import org.apache.fluss.metadata.PhysicalTablePath;
-import org.apache.fluss.metadata.TablePath;
-import org.apache.fluss.row.InternalRow;
+import org.apache.fluss.metadata.TableInfo;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -34,8 +29,6 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
-
-import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
 /** Utils for Fluss Client. */
 public final class ClientUtils {
@@ -116,20 +109,20 @@ public final class ClientUtils {
     }
 
     /**
-     * Return the id of the partition the row belongs to. It'll try to update the metadata if the
-     * partition doesn't exist. If the partition doesn't exist yet after update metadata, it'll
-     * throw {@link PartitionNotExistException}.
+     * Resolves the routing bucket count when it is unavailable in the metadata. Falling back to the
+     * table-level count is safe only when {@code bucketCountEpoch == 0}, which proves the table was
+     * never rescaled; otherwise this fails instead of silently returning a wrong answer.
      */
-    public static Long getPartitionId(
-            InternalRow row,
-            PartitionGetter partitionGetter,
-            TablePath tablePath,
-            MetadataUpdater metadataUpdater)
-            throws PartitionNotExistException {
-        checkNotNull(partitionGetter, "partitionGetter shouldn't be null.");
-        String partitionName = partitionGetter.getPartition(row);
-        PhysicalTablePath physicalTablePath = PhysicalTablePath.of(tablePath, partitionName);
-        metadataUpdater.checkAndUpdatePartitionMetadata(physicalTablePath);
-        return metadataUpdater.getCluster().getPartitionIdOrElseThrow(physicalTablePath);
+    public static int fallbackBucketCountOrFail(TableInfo tableInfo, Object target) {
+        long epoch = tableInfo.getBucketCountEpoch();
+        if (epoch > 0) {
+            throw new IllegalStateException(
+                    "Routing bucket count is unavailable for "
+                            + target
+                            + " at bucketCountEpoch "
+                            + epoch
+                            + "; refusing to fall back to the table-level count.");
+        }
+        return tableInfo.getNumBuckets();
     }
 }

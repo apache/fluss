@@ -48,6 +48,26 @@ class BucketingFunctionTest {
                                         .getBytes(StandardCharsets.UTF_8),
                                 8))
                 .isEqualTo(6);
+
+        assertThat(defaultBucketing.bucketing(new byte[] {(byte) 0x80, (byte) 0x01}, 7))
+                .isEqualTo(2);
+        assertThat(
+                        defaultBucketing.bucketing(
+                                new byte[] {(byte) 0xBF, (byte) 0x84, (byte) 0x3D}, 12))
+                .isEqualTo(3);
+        assertThat(
+                        defaultBucketing.bucketing(
+                                new byte[] {
+                                    (byte) 0x00, (byte) 0x0A, (byte) 0x0A, (byte) 0x0A, (byte) 0xFF
+                                },
+                                16))
+                .isEqualTo(10);
+        assertThat(defaultBucketing.bucketing("caf\u00e9".getBytes(StandardCharsets.UTF_8), 8))
+                .isEqualTo(1);
+        assertThat(
+                        defaultBucketing.bucketing(
+                                new byte[] {(byte) 0xFF, (byte) 0xFF, (byte) 0xFF, (byte) 0xFF}, 5))
+                .isEqualTo(1);
     }
 
     @Test
@@ -71,6 +91,26 @@ class BucketingFunctionTest {
                                         .getBytes(StandardCharsets.UTF_8),
                                 8))
                 .isEqualTo(0);
+
+        assertThat(paimonBucketing.bucketing(new byte[] {(byte) 0x80, (byte) 0x01}, 7))
+                .isEqualTo(2);
+        assertThat(
+                        paimonBucketing.bucketing(
+                                new byte[] {(byte) 0xBF, (byte) 0x84, (byte) 0x3D}, 12))
+                .isEqualTo(6);
+        assertThat(
+                        paimonBucketing.bucketing(
+                                new byte[] {
+                                    (byte) 0x00, (byte) 0x0A, (byte) 0x0A, (byte) 0x0A, (byte) 0xFF
+                                },
+                                16))
+                .isEqualTo(9);
+        assertThat(paimonBucketing.bucketing("caf\u00e9".getBytes(StandardCharsets.UTF_8), 8))
+                .isEqualTo(4);
+        assertThat(
+                        paimonBucketing.bucketing(
+                                new byte[] {(byte) 0xFF, (byte) 0xFF, (byte) 0xFF, (byte) 0xFF}, 5))
+                .isEqualTo(2);
     }
 
     @Test
@@ -94,6 +134,23 @@ class BucketingFunctionTest {
                                         .getBytes(StandardCharsets.UTF_8),
                                 8))
                 .isEqualTo(6);
+
+        assertThat(lanceBucketing.bucketing(new byte[] {(byte) 0x80, (byte) 0x01}, 7)).isEqualTo(2);
+        assertThat(lanceBucketing.bucketing(new byte[] {(byte) 0xBF, (byte) 0x84, (byte) 0x3D}, 12))
+                .isEqualTo(3);
+        assertThat(
+                        lanceBucketing.bucketing(
+                                new byte[] {
+                                    (byte) 0x00, (byte) 0x0A, (byte) 0x0A, (byte) 0x0A, (byte) 0xFF
+                                },
+                                16))
+                .isEqualTo(10);
+        assertThat(lanceBucketing.bucketing("caf\u00e9".getBytes(StandardCharsets.UTF_8), 8))
+                .isEqualTo(1);
+        assertThat(
+                        lanceBucketing.bucketing(
+                                new byte[] {(byte) 0xFF, (byte) 0xFF, (byte) 0xFF, (byte) 0xFF}, 5))
+                .isEqualTo(1);
     }
 
     @Test
@@ -116,6 +173,26 @@ class BucketingFunctionTest {
                                 "The quick brown fox jumps over the lazy dog"
                                         .getBytes(StandardCharsets.UTF_8),
                                 8))
+                .isEqualTo(3);
+
+        assertThat(icebergBucketing.bucketing(new byte[] {(byte) 0x80, (byte) 0x01}, 7))
+                .isEqualTo(5);
+        assertThat(
+                        icebergBucketing.bucketing(
+                                new byte[] {(byte) 0xBF, (byte) 0x84, (byte) 0x3D}, 12))
+                .isEqualTo(1);
+        assertThat(
+                        icebergBucketing.bucketing(
+                                new byte[] {
+                                    (byte) 0x00, (byte) 0x0A, (byte) 0x0A, (byte) 0x0A, (byte) 0xFF
+                                },
+                                16))
+                .isEqualTo(9);
+        assertThat(icebergBucketing.bucketing("caf\u00e9".getBytes(StandardCharsets.UTF_8), 8))
+                .isEqualTo(0);
+        assertThat(
+                        icebergBucketing.bucketing(
+                                new byte[] {(byte) 0xFF, (byte) 0xFF, (byte) 0xFF, (byte) 0xFF}, 5))
                 .isEqualTo(3);
     }
 }

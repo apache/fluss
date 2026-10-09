@@ -31,12 +31,12 @@ import static org.apache.fluss.utils.Preconditions.checkNotNull;
 @Internal
 abstract class StaticBucketAssigner implements BucketAssigner {
 
-    protected abstract int assignBucket(byte[] bucketKey);
+    protected abstract int assignBucket(byte[] bucketKey, int bucketCount);
 
     @Override
-    public int assignBucket(@Nullable byte[] bucketKey, Cluster cluster) {
+    public int assignBucket(@Nullable byte[] bucketKey, Cluster cluster, int bucketCount) {
         checkNotNull(bucketKey);
-        return assignBucket(bucketKey);
+        return assignBucket(bucketKey, bucketCount);
     }
 
     @Override
@@ -45,7 +45,7 @@ abstract class StaticBucketAssigner implements BucketAssigner {
     }
 
     @Override
-    public void onNewBatch(Cluster cluster, int prevBucketId) {
+    public void onNewBatch(Cluster cluster, int bucketCount, int prevBucketId) {
         // do nothing
     }
 }

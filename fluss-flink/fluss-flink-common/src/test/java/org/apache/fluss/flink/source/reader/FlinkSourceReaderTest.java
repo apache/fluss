@@ -21,6 +21,7 @@ import org.apache.fluss.client.metadata.KvSnapshots;
 import org.apache.fluss.client.table.Table;
 import org.apache.fluss.client.table.writer.UpsertResult;
 import org.apache.fluss.client.table.writer.UpsertWriter;
+import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.flink.lake.split.LakeSnapshotAndFlussLogSplit;
 import org.apache.fluss.flink.source.deserializer.DeserializerInitContextImpl;
@@ -56,6 +57,10 @@ import org.apache.flink.connector.base.source.reader.RecordsWithSplitIds;
 import org.apache.flink.connector.base.source.reader.synchronization.FutureCompletingBlockingQueue;
 import org.apache.flink.connector.testutils.source.reader.TestingReaderContext;
 import org.apache.flink.connector.testutils.source.reader.TestingReaderOutput;
+import org.apache.flink.metrics.Gauge;
+import org.apache.flink.metrics.testutils.MetricListener;
+import org.apache.flink.runtime.metrics.MetricNames;
+import org.apache.flink.runtime.metrics.groups.InternalSourceReaderMetricGroup;
 import org.apache.flink.table.data.RowData;
 import org.junit.jupiter.api.Test;
 
@@ -68,6 +73,7 @@ import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -409,6 +415,75 @@ class FlinkSourceReaderTest extends FlinkTestBase {
         }
     }
 
+    @Test
+    void testPendingRecordsMetricAfterFetcherRecreation() throws Exception {
+        TablePath tablePath =
+                TablePath.of(DEFAULT_DB, "test_pending_records_after_fetcher_recreation");
+        TableDescriptor tableDescriptor = DEFAULT_AUTO_PARTITIONED_LOG_TABLE_DESCRIPTOR;
+        long tableId = createTable(tablePath, tableDescriptor);
+
+        Map<Long, String> partitionNameByIds =
+                waitUntilPartitions(FLUSS_CLUSTER_EXTENSION.getZooKeeperClient(), tablePath);
+        assertThat(partitionNameByIds).hasSizeGreaterThanOrEqualTo(2);
+        Iterator<Map.Entry<Long, String>> partitionIterator =
+                partitionNameByIds.entrySet().iterator();
+        Map.Entry<Long, String> firstPartition = partitionIterator.next();
+        Map.Entry<Long, String> secondPartition = partitionIterator.next();
+
+        appendRowsToPartition(tablePath, firstPartition.getValue(), 100);
+        appendRowsToPartition(tablePath, secondPartition.getValue(), 100);
+
+        Configuration sourceConf = new Configuration(clientConf);
+        sourceConf.setInt(ConfigOptions.CLIENT_SCANNER_LOG_MAX_POLL_RECORDS, 1);
+        sourceConf.setString(
+                ConfigOptions.CLIENT_SCANNER_LOG_FETCH_MAX_BYTES_FOR_BUCKET.key(), "1b");
+
+        MetricListener metricListener = new MetricListener();
+        TestingReaderContext readerContext =
+                new TestingReaderContext(
+                        new org.apache.flink.configuration.Configuration(),
+                        InternalSourceReaderMetricGroup.mock(metricListener.getMetricGroup()));
+        FlinkSourceReaderMetrics sourceReaderMetrics =
+                new FlinkSourceReaderMetrics(readerContext.metricGroup());
+
+        try (TestingFlinkSourceReader<RowData> reader =
+                createReader(
+                        sourceConf,
+                        tablePath,
+                        tableDescriptor.getSchema().getRowType(),
+                        readerContext,
+                        null,
+                        sourceReaderMetrics)) {
+            assertThat(metricListener.getGauge(MetricNames.PENDING_RECORDS)).isEmpty();
+
+            reader.addSplits(createLogSplits(tableId, firstPartition));
+            Optional<Gauge<Long>> pendingRecords =
+                    metricListener.getGauge(MetricNames.PENDING_RECORDS);
+            assertThat(pendingRecords).isPresent();
+            Gauge<Long> registeredPendingRecords = pendingRecords.get();
+            retry(
+                    Duration.ofMinutes(1),
+                    () -> assertThat((long) registeredPendingRecords.getValue()).isPositive());
+
+            TestingReaderOutput<RowData> output = new TestingReaderOutput<>();
+            removePartitionAndWaitForFetcherShutdown(reader, firstPartition, output);
+            assertThat((long) registeredPendingRecords.getValue()).isZero();
+
+            reader.addSplits(createLogSplits(tableId, secondPartition));
+            assertThat(reader.getNumAliveFetchers()).isOne();
+            assertThat(metricListener.getGauge(MetricNames.PENDING_RECORDS).get())
+                    .isSameAs(registeredPendingRecords);
+            retry(
+                    Duration.ofMinutes(1),
+                    () -> assertThat((long) registeredPendingRecords.getValue()).isPositive());
+
+            // The recreated fetcher has a monotonically increasing ID. Removing its partition
+            // must target the currently running fetcher rather than assuming the original ID.
+            removePartitionAndWaitForFetcherShutdown(reader, secondPartition, output);
+            assertThat((long) registeredPendingRecords.getValue()).isZero();
+        }
+    }
+
     private UpsertResult upsert(TablePath tablePath, InternalRow row) throws Exception {
         try (Table table = conn.getTable(tablePath)) {
             UpsertWriter writer = table.newUpsert().createWriter();
@@ -418,12 +493,67 @@ class FlinkSourceReaderTest extends FlinkTestBase {
         }
     }
 
-    private FlinkSourceReader<RowData> createReader(
+    private void appendRowsToPartition(TablePath tablePath, String partitionName, int numRows)
+            throws Exception {
+        List<InternalRow> rows = new ArrayList<>(numRows);
+        for (int i = 0; i < numRows; i++) {
+            rows.add(row(i, partitionName));
+        }
+        writeRows(conn, tablePath, rows, true);
+    }
+
+    private List<SourceSplitBase> createLogSplits(long tableId, Map.Entry<Long, String> partition) {
+        List<SourceSplitBase> splits = new ArrayList<>(DEFAULT_BUCKET_NUM);
+        for (int bucket = 0; bucket < DEFAULT_BUCKET_NUM; bucket++) {
+            splits.add(
+                    new LogSplit(
+                            new TableBucket(tableId, partition.getKey(), bucket),
+                            partition.getValue(),
+                            0L));
+        }
+        return splits;
+    }
+
+    private void removePartitionAndWaitForFetcherShutdown(
+            TestingFlinkSourceReader<RowData> reader,
+            Map.Entry<Long, String> partition,
+            TestingReaderOutput<RowData> output)
+            throws Exception {
+        reader.handleSourceEvents(
+                new PartitionsRemovedEvent(
+                        Collections.singletonMap(partition.getKey(), partition.getValue())));
+        retry(
+                Duration.ofMinutes(1),
+                () -> {
+                    reader.pollNext(output);
+                    assertThat(reader.getNumberOfCurrentlyAssignedSplits()).isZero();
+                    assertThat(reader.getNumAliveFetchers()).isZero();
+                });
+    }
+
+    private TestingFlinkSourceReader<RowData> createReader(
             Configuration flussConf,
             TablePath tablePath,
             RowType sourceOutputType,
             SourceReaderContext context,
             LakeSource<LakeSplit> lakeSource)
+            throws Exception {
+        return createReader(
+                flussConf,
+                tablePath,
+                sourceOutputType,
+                context,
+                lakeSource,
+                new FlinkSourceReaderMetrics(context.metricGroup()));
+    }
+
+    private TestingFlinkSourceReader<RowData> createReader(
+            Configuration flussConf,
+            TablePath tablePath,
+            RowType sourceOutputType,
+            SourceReaderContext context,
+            LakeSource<LakeSplit> lakeSource,
+            FlinkSourceReaderMetrics flinkSourceReaderMetrics)
             throws Exception {
         FutureCompletingBlockingQueue<RecordsWithSplitIds<RecordAndPos>> elementsQueue =
                 new FutureCompletingBlockingQueue<>();
@@ -436,17 +566,44 @@ class FlinkSourceReaderTest extends FlinkTestBase {
                         sourceOutputType));
         FlinkRecordEmitter<RowData> recordEmitter = new FlinkRecordEmitter<>(deserializationSchema);
 
-        return new FlinkSourceReader<>(
+        return new TestingFlinkSourceReader<>(
                 elementsQueue,
                 flussConf,
                 tablePath,
                 sourceOutputType,
                 context,
-                null,
-                null,
-                new FlinkSourceReaderMetrics(context.metricGroup()),
+                flinkSourceReaderMetrics,
                 recordEmitter,
                 lakeSource);
+    }
+
+    private static final class TestingFlinkSourceReader<OUT> extends FlinkSourceReader<OUT> {
+
+        private TestingFlinkSourceReader(
+                FutureCompletingBlockingQueue<RecordsWithSplitIds<RecordAndPos>> elementsQueue,
+                Configuration flussConfig,
+                TablePath tablePath,
+                RowType sourceOutputType,
+                SourceReaderContext context,
+                FlinkSourceReaderMetrics flinkSourceReaderMetrics,
+                FlinkRecordEmitter<OUT> recordEmitter,
+                LakeSource<LakeSplit> lakeSource) {
+            super(
+                    elementsQueue,
+                    flussConfig,
+                    tablePath,
+                    sourceOutputType,
+                    context,
+                    null,
+                    null,
+                    flinkSourceReaderMetrics,
+                    recordEmitter,
+                    lakeSource);
+        }
+
+        private int getNumAliveFetchers() {
+            return splitFetcherManager.getNumAliveFetchers();
+        }
     }
 
     private static final class TrackingLakeSource extends TestingLakeSource {

@@ -151,6 +151,8 @@ class RocksDBResourceContainerTest {
         configuration.setString(ConfigOptions.KV_TARGET_FILE_SIZE_BASE.key(), "8 mb");
         configuration.setString(ConfigOptions.KV_MAX_SIZE_LEVEL_BASE.key(), "128MB");
         configuration.setString(ConfigOptions.KV_MAX_BACKGROUND_THREADS.key(), "4");
+        configuration.set(ConfigOptions.KV_USE_DIRECT_READS, true);
+        configuration.set(ConfigOptions.KV_USE_DIRECT_IO_FOR_FLUSH_AND_COMPACTION, true);
         configuration.setString(ConfigOptions.KV_MAX_WRITE_BUFFER_NUMBER.key(), "4");
         configuration.setString(ConfigOptions.KV_MIN_WRITE_BUFFER_NUMBER_TO_MERGE.key(), "2");
         configuration.setString(ConfigOptions.KV_WRITE_BUFFER_SIZE.key(), "64 MB");
@@ -170,6 +172,8 @@ class RocksDBResourceContainerTest {
 
             DBOptions dbOptions = optionsContainer.getDbOptions();
             assertThat(dbOptions.maxOpenFiles()).isEqualTo(-1);
+            assertThat(dbOptions.useDirectReads()).isTrue();
+            assertThat(dbOptions.useDirectIoForFlushAndCompaction()).isTrue();
             assertThat(dbOptions.infoLogLevel()).isEqualTo(InfoLogLevel.DEBUG_LEVEL);
             assertThat(dbOptions.dbLogDir()).isEqualTo("/tmp/rocksdb-logs/");
             assertThat(dbOptions.keepLogFileNum()).isEqualTo(10);

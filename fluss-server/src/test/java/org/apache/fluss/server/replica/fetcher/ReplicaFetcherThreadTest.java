@@ -248,7 +248,7 @@ public class ReplicaFetcherThreadTest {
         leaderReplica.getLogTablet().updateHighWatermark(30L);
         followerReplica.getLogTablet().updateHighWatermark(30L);
         leaderReplica.getLogTablet().updateMinRetainOffset(30L);
-        followerReplica.getLogTablet().updateHighestCopiedEndOffset(30L);
+        followerReplica.getLogTablet().updateRemoteLogOffsets(Long.MAX_VALUE, -1L, 30L);
 
         assertThat(leaderReplica.getLocalLogEndOffset()).isEqualTo(30L);
         assertThat(followerReplica.getLocalLogEndOffset()).isEqualTo(30L);
@@ -570,7 +570,9 @@ public class ReplicaFetcherThreadTest {
                                         Arrays.asList(leaderServerId, followerServerId),
                                         Collections.emptyList(),
                                         INITIAL_COORDINATOR_EPOCH,
-                                        INITIAL_BUCKET_EPOCH))),
+                                        INITIAL_BUCKET_EPOCH),
+                                3,
+                                0L)),
                 result -> {});
         followerRM.becomeLeaderOrFollower(
                 INITIAL_COORDINATOR_EPOCH,
@@ -585,7 +587,9 @@ public class ReplicaFetcherThreadTest {
                                         Arrays.asList(leaderServerId, followerServerId),
                                         Collections.emptyList(),
                                         INITIAL_COORDINATOR_EPOCH,
-                                        INITIAL_BUCKET_EPOCH))),
+                                        INITIAL_BUCKET_EPOCH),
+                                3,
+                                0L)),
                 result -> {});
     }
 
