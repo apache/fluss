@@ -74,6 +74,7 @@ mod ffi {
         scanner_remote_log_prefetch_num: usize,
         remote_file_download_thread_num: usize,
         scanner_remote_log_read_concurrency: usize,
+        scanner_io_tmp_dir: String,
         scanner_log_max_poll_records: usize,
         scanner_log_fetch_max_bytes: i32,
         scanner_log_fetch_min_bytes: i32,
@@ -1193,6 +1194,8 @@ fn new_connection(config: &ffi::FfiConfig) -> ffi::FfiPtrResult {
         scanner_remote_log_prefetch_num: config.scanner_remote_log_prefetch_num,
         remote_file_download_thread_num: config.remote_file_download_thread_num,
         scanner_remote_log_read_concurrency: config.scanner_remote_log_read_concurrency,
+        scanner_io_tmp_dir: (!config.scanner_io_tmp_dir.is_empty())
+            .then(|| config.scanner_io_tmp_dir.to_string()),
         scanner_log_max_poll_records: config.scanner_log_max_poll_records,
         scanner_log_fetch_max_bytes: config.scanner_log_fetch_max_bytes,
         scanner_log_fetch_min_bytes: config.scanner_log_fetch_min_bytes,

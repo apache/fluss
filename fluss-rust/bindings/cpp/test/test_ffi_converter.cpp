@@ -62,6 +62,15 @@ TEST(FfiConverterTest, KvBackpressureConfiguration) {
     EXPECT_TRUE(fluss::ErrorCode::IsRetriable(72));
 }
 
+TEST(FfiConverterTest, RemoteLogDirectoryConfiguration) {
+    fluss::Configuration config;
+    EXPECT_TRUE(config.scanner_io_tmp_dir.empty());
+    EXPECT_TRUE(fluss::utils::to_ffi_config(config).scanner_io_tmp_dir.empty());
+    config.scanner_io_tmp_dir = "/tmp/fluss logs";
+    auto ffi_config = fluss::utils::to_ffi_config(config);
+    EXPECT_EQ(std::string(ffi_config.scanner_io_tmp_dir), "/tmp/fluss logs");
+}
+
 TEST(FfiConverterTest, WriterRetryBackoffConfiguration) {
     fluss::Configuration config;
     EXPECT_EQ(config.writer_retry_backoff_ms, 100u);
