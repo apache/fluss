@@ -54,12 +54,18 @@ import org.apache.fluss.rpc.gateway.CoordinatorGateway;
 import org.apache.fluss.rpc.gateway.TabletServerGateway;
 import org.apache.fluss.rpc.messages.ControlledShutdownRequest;
 import org.apache.fluss.rpc.messages.DescribeClusterRequest;
+import org.apache.fluss.rpc.messages.FetchLogRequest;
+import org.apache.fluss.rpc.messages.FetchLogResponse;
 import org.apache.fluss.rpc.messages.GetKvSnapshotMetadataRequest;
 import org.apache.fluss.rpc.messages.InitWriterRequest;
 import org.apache.fluss.rpc.messages.InitWriterResponse;
 import org.apache.fluss.rpc.messages.MetadataRequest;
+import org.apache.fluss.rpc.messages.PbFetchLogReqForBucket;
+import org.apache.fluss.rpc.messages.PbFetchLogReqForTable;
+import org.apache.fluss.rpc.messages.PbFetchLogRespForBucket;
 import org.apache.fluss.rpc.messages.ReleaseKvSnapshotLeaseRequest;
 import org.apache.fluss.rpc.metrics.TestingClientMetricGroup;
+import org.apache.fluss.rpc.protocol.Errors;
 import org.apache.fluss.security.acl.AccessControlEntry;
 import org.apache.fluss.security.acl.AccessControlEntryFilter;
 import org.apache.fluss.security.acl.AclBinding;
@@ -84,6 +90,7 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
@@ -93,6 +100,7 @@ import java.util.Map;
 import java.util.concurrent.ExecutionException;
 
 import static org.apache.fluss.config.ConfigOptions.DATALAKE_FORMAT;
+import static org.apache.fluss.record.TestData.DATA1;
 import static org.apache.fluss.record.TestData.DATA1_SCHEMA;
 import static org.apache.fluss.record.TestData.DATA1_SCHEMA_PK;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_DESCRIPTOR;
@@ -103,6 +111,8 @@ import static org.apache.fluss.record.TestData.DATA1_TABLE_PATH_PK;
 import static org.apache.fluss.security.acl.AccessControlEntry.WILD_CARD_HOST;
 import static org.apache.fluss.security.acl.FlussPrincipal.WILD_CARD_PRINCIPAL;
 import static org.apache.fluss.security.acl.OperationType.READ;
+import static org.apache.fluss.server.testutils.RpcMessageTestUtils.newProduceLogRequest;
+import static org.apache.fluss.testutils.DataTestUtils.genMemoryLogRecordsByObject;
 import static org.apache.fluss.testutils.DataTestUtils.row;
 import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -707,6 +717,108 @@ public class FlussAuthorizationITCase {
                                             + " Resource{type=TABLE, name='%s'} ",
                                     noWriteAclTable));
         }
+    }
+
+    @Test
+    void testFetchAuthorizationPreservesBucketOrder() throws Exception {
+        TablePath allowedPath = TablePath.of("test_db_1", "fetch_order_allowed");
+        rootAdmin
+                .createTable(
+                        allowedPath,
+                        TableDescriptor.builder().schema(DATA1_SCHEMA).distributedBy(9).build(),
+                        false)
+                .get();
+        long allowedTableId = rootAdmin.getTableInfo(allowedPath).get().getTableId();
+        FLUSS_CLUSTER_EXTENSION.waitUntilTableReady(allowedTableId);
+
+        Map<Integer, List<TableBucket>> bucketsByLeader = new HashMap<>();
+        for (int bucketId = 0; bucketId < 9; bucketId++) {
+            TableBucket bucket = new TableBucket(allowedTableId, bucketId);
+            int leader = FLUSS_CLUSTER_EXTENSION.waitAndGetLeader(bucket);
+            bucketsByLeader.computeIfAbsent(leader, ignored -> new ArrayList<>()).add(bucket);
+        }
+        Map.Entry<Integer, List<TableBucket>> sameLeader =
+                bucketsByLeader.entrySet().stream()
+                        .filter(entry -> entry.getValue().size() >= 2)
+                        .findFirst()
+                        .get();
+        TableBucket first = sameLeader.getValue().get(0);
+        TableBucket second = sameLeader.getValue().get(1);
+        FLUSS_CLUSTER_EXTENSION.waitUntilAllReplicaReady(first);
+        FLUSS_CLUSTER_EXTENSION.waitUntilAllReplicaReady(second);
+        TabletServerGateway rootGateway =
+                ((FlussConnection) rootConn)
+                        .getMetadataUpdater()
+                        .newTabletServerClientForNode(sameLeader.getKey());
+        for (TableBucket bucket : Arrays.asList(first, second)) {
+            rootGateway
+                    .produceLog(
+                            newProduceLogRequest(
+                                    allowedTableId,
+                                    bucket.getBucket(),
+                                    -1,
+                                    genMemoryLogRecordsByObject(DATA1)))
+                    .get();
+        }
+
+        List<AclBinding> readAcl =
+                Collections.singletonList(
+                        new AclBinding(
+                                Resource.table(allowedPath),
+                                new AccessControlEntry(
+                                        guestPrincipal, "*", READ, PermissionType.ALLOW)));
+        rootAdmin.createAcls(readAcl).all().get();
+        FLUSS_CLUSTER_EXTENSION.waitUntilAuthenticationSync(readAcl, true);
+        TabletServerGateway guestGateway =
+                ((FlussConnection) guestConn)
+                        .getMetadataUpdater()
+                        .newTabletServerClientForNode(sameLeader.getKey());
+        long deniedTableId = rootAdmin.getTableInfo(DATA1_TABLE_PATH_PK).get().getTableId();
+
+        for (TableBucket leading : Arrays.asList(first, second)) {
+            TableBucket trailing = leading.equals(first) ? second : first;
+            FetchLogRequest request = new FetchLogRequest().setFollowerServerId(-1).setMaxBytes(1);
+            request.addAllTablesReqs(
+                    Arrays.asList(
+                            fetchTableRequest(allowedTableId, leading.getBucket()),
+                            fetchTableRequest(deniedTableId, 0),
+                            fetchTableRequest(allowedTableId, trailing.getBucket())));
+            FetchLogResponse response = guestGateway.fetchLog(request).get();
+            try {
+                assertThat(fetchBucketResponse(response, leading).getRecordsSize()).isPositive();
+                assertThat(fetchBucketResponse(response, trailing).getRecordsSize()).isZero();
+                assertThat(
+                                fetchBucketResponse(response, new TableBucket(deniedTableId, 0))
+                                        .getErrorCode())
+                        .isEqualTo(Errors.AUTHORIZATION_EXCEPTION.code());
+            } finally {
+                if (response.getParsedByteBuf() != null) {
+                    response.getParsedByteBuf().release();
+                }
+            }
+        }
+    }
+
+    private static PbFetchLogReqForTable fetchTableRequest(long tableId, int bucketId) {
+        PbFetchLogReqForTable request =
+                new PbFetchLogReqForTable().setTableId(tableId).setProjectionPushdownEnabled(false);
+        request.addAllBucketsReqs(
+                Collections.singletonList(
+                        new PbFetchLogReqForBucket()
+                                .setBucketId(bucketId)
+                                .setFetchOffset(0L)
+                                .setMaxFetchBytes(Integer.MAX_VALUE)));
+        return request;
+    }
+
+    private static PbFetchLogRespForBucket fetchBucketResponse(
+            FetchLogResponse response, TableBucket bucket) {
+        return response.getTablesRespsList().stream()
+                .filter(table -> table.getTableId() == bucket.getTableId())
+                .flatMap(table -> table.getBucketsRespsList().stream())
+                .filter(result -> result.getBucketId() == bucket.getBucket())
+                .findFirst()
+                .get();
     }
 
     @Test
