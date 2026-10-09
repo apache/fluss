@@ -495,8 +495,7 @@ The `--web` flag opens browser for final review before submission.
 
 ### DevKit
 
-Use DevKit to start the affected profile locally and run the corresponding README/example workflow against the current checkout.
-Verify the user-visible result, then run `just clean`.
+When a code change needs end-to-end validation, use DevKit to quickly start Fluss services from the current checkout. Choose a profile for the workflow; it determines the services and configuration. See `devkit/README.md` for details.
 
 ### Never Do (Without Explicit Permission)
 
