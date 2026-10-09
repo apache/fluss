@@ -34,4 +34,14 @@ public class TieringSourceOptions {
                     .defaultValue(Duration.ofSeconds(30))
                     .withDescription(
                             "The fixed interval to request tiering table from Fluss cluster, by default 30 seconds.");
+
+    public static final ConfigOption<Duration> TIERING_FORCE_COMPLETE_FINISH_TIMEOUT =
+            key("tiering.force-complete.finish.timeout")
+                    .durationType()
+                    .defaultValue(Duration.ZERO)
+                    .withDescription(
+                            "After a table reaches max tiering duration and force-complete is "
+                                    + "triggered, fail the tiering job if FinishedTieringEvent is not "
+                                    + "received from source readers within this timeout. Zero disables "
+                                    + "the watchdog.");
 }
