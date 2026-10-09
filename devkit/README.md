@@ -1,7 +1,8 @@
 # Fluss DevKit
 
-DevKit runs end-to-end tests against the Fluss code in your current checkout. It builds local Fluss,
-Flink, lake, and Gateway artifacts, then runs the selected test scenario with Docker Compose.
+DevKit starts a local Fluss environment so you can exercise workflows against the code in your
+current checkout. It builds local Fluss, Flink, lake, and Gateway artifacts, then runs the selected
+workflow with Docker Compose.
 
 Use DevKit when you have changed Fluss code and want to exercise that change locally. For a first
 Fluss tutorial, use the [Quickstart](../website/docs/quickstart/flink.md). For persistent or
@@ -17,7 +18,7 @@ You need:
 - [just 1.58.0](https://github.com/casey/just)
 - Network access to Maven Central and container registries on first use
 
-Start by choosing the scenario closest to the code path you changed:
+Start by choosing the workflow closest to the code path you changed:
 
 | Profile | Use it when you need to test | Starts |
 |---|---|---|
@@ -34,6 +35,8 @@ cd devkit
 just build core
 just up core
 ```
+
+If another profile is active, run `just clean` before switching profiles.
 
 `core` is the default, so `just build` and `just up` use that profile. For another scenario, pass
 its name to both commands:
@@ -52,25 +55,26 @@ dependencies, or detect source changes.
 
 ### Core and Flink
 
-After starting the `core` profile, create the sample catalog and tables:
+After starting the `core` profile, create the sample catalog and tables. Run this setup once before
+trying the other Core examples:
 
 ```bash
-just run-sql examples/core/01-setup.sql
+just run-sql examples/core/setup.sql
 ```
 
 Then choose the example that covers your change:
 
 | Example | Covers |
 |---|---|
-| `examples/core/02-scan.sql` | Bounded batch scans of Log and Primary Key Tables |
-| `examples/core/02-streaming-scan.sql` | Long-running streaming scan of a Log Table |
-| `examples/core/03-lookup-join.sql` | Point and prefix lookup joins |
-| `examples/core/04-changelog-binlog.sql` | Changelog and binlog virtual tables |
+| `examples/core/batch-scan.sql` | Bounded batch scans and a primary-key lookup |
+| `examples/core/streaming-scan.sql` | Long-running streaming scan of a Log Table |
+| `examples/core/lookup-join.sql` | Point and prefix lookup joins |
+| `examples/core/changelog-binlog.sql` | Changelog and binlog virtual tables |
 
 ```bash
-just run-sql examples/core/02-scan.sql
+just run-sql examples/core/batch-scan.sql
 # Run separately; this command intentionally remains running.
-just run-sql examples/core/02-streaming-scan.sql
+just run-sql examples/core/streaming-scan.sql
 ```
 
 The scan example runs in Flink batch mode. It reads the current bounded contents
@@ -85,13 +89,22 @@ stopped and cancel it if it is still running. Canceling a Job keeps the DevKit s
 The Lookup Join example prints the joined rows to the TaskManager logs:
 
 ```bash
-just run-sql examples/core/03-lookup-join.sql
+just run-sql examples/core/lookup-join.sql
 just logs taskmanager 100
 ```
 
 Look for `POINT_LOOKUP` rows mapping orders `1000`, `1001`, and `1002` to Alice, Bob, and Carol.
 The submitted lookup query is also a streaming Job; cancel it in the Flink UI after inspecting the
 results. To try the prefix lookup, follow the comments in the SQL file and run that section alone.
+
+To inspect the changelog and binlog virtual tables, run:
+
+```bash
+just run-sql examples/core/changelog-binlog.sql
+```
+
+The batch query prints the changes from `events$changelog` and the before/after images from
+`profiles$binlog`, then exits.
 
 You can also run your own SQL file:
 
@@ -163,10 +176,23 @@ If the lake-only query is empty, wait a few seconds and run it again until it re
 Tiering is asynchronous. `just tiering-status` is only a diagnostic check that the
 job is running; the lake-only query itself must return the sample data before the
 workflow is considered successful.
-Iceberg examples are under `examples/lake/iceberg/`. Lance examples are under
-`examples/lake/lance/`; Lance has no Flink SQL Lake-only reader. The CI smoke opens the dataset
-through RustFS's S3 API with the same Python example shown below. The Lance example uses an
-append-only `embedding_events` Log Table:
+For Iceberg, run the complete tiering workflow with:
+
+```bash
+just build iceberg
+just up iceberg
+just run-sql examples/lake/iceberg/create-table.sql
+just run-sql examples/lake/iceberg/write-data.sql
+just run-sql examples/lake/iceberg/query-lake.sql
+```
+
+The Lake query is asynchronous; run it again after a few seconds if it is empty. It should return
+the aggregate for the three rows (`row_count = 3`, `id_sum = 6`, and `payload_count = 3`).
+
+Lance examples are under
+`examples/lake/lance/`; Lance has no Flink SQL Lake-only reader. The Python example opens the
+dataset through the S3 endpoint provided by RustFS. The Lance example uses an append-only
+`embedding_events` Log Table:
 
 ```bash
 just build lance
@@ -237,9 +263,9 @@ Run `just --list` for all commands. Fluss metrics and JDWP ports are defined in
 
 ## Profile Reference
 
-A profile is a complete, repeatable local test scenario under `profiles/<profile>/`. It keeps the
-scenario's server configuration, dependencies, and supporting services together. Both
-`just build <profile>` and `just up <profile>` use its name; a profile names a scenario, not an
+A profile is a complete, repeatable local workflow under `profiles/<profile>/`. It keeps the
+workflow's server configuration, dependencies, and supporting services together. Both
+`just build <profile>` and `just up <profile>` use its name; a profile names a workflow, not an
 individual process or build step.
 
 `runtime.targets` is the profile's only declaration of DevKit-managed runtime groups. Each target
