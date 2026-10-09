@@ -2332,7 +2332,7 @@ impl LogFetcher {
 
         if fetch_offset == current_offset {
             match next_in_line_fetch.fetch_batches(max_batches)? {
-                FetchResult::Data(batches_with_offsets) => {
+                FetchResult::Data(fetched_batches) => {
                     let next_fetch_offset = next_in_line_fetch.next_fetch_offset();
 
                     if next_fetch_offset > current_offset {
@@ -2340,12 +2340,17 @@ impl LogFetcher {
                             .update_offset(&table_bucket, next_fetch_offset);
                     }
 
-                    // Convert to ScanBatch with bucket info
+                    // Convert to ScanBatch with bucket and log-batch metadata.
                     Ok(FetchResult::Data(
-                        batches_with_offsets
+                        fetched_batches
                             .into_iter()
-                            .map(|(batch, base_offset)| {
-                                ScanBatch::new(table_bucket.clone(), batch, base_offset)
+                            .map(|fetched| {
+                                ScanBatch::new(
+                                    table_bucket.clone(),
+                                    fetched.batch,
+                                    fetched.base_offset,
+                                )
+                                .with_commit_timestamp(fetched.commit_timestamp)
                             })
                             .collect(),
                     ))

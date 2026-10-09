@@ -24,6 +24,7 @@ mod batch_scanner_test {
         AddColumn, AlterTableChanges, ColumnPositionType, DataTypes, JsonSerde, LogFormat, Schema,
         TableBucket, TableDescriptor, TablePath,
     };
+    use fluss::record::NO_COMMIT_TIMESTAMP;
     use fluss::row::GenericRow;
     use futures::TryStreamExt;
     use std::collections::HashMap;
@@ -83,6 +84,9 @@ mod batch_scanner_test {
             .expect("first batch should be Some");
 
         assert_eq!(first.bucket(), &bucket);
+        // A limit scan concatenates every log batch the server returned into one
+        // Arrow batch, so there is no single commit timestamp to report.
+        assert_eq!(first.commit_timestamp(), NO_COMMIT_TIMESTAMP);
         // The server may return fewer rows than the limit on the first call,
         // but must never exceed it.
         assert!(

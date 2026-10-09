@@ -273,12 +273,17 @@ for record in scan_records:
 
 ## `RecordBatch`
 
-| Property                   | Description                  |
-|----------------------------|------------------------------|
-| `.batch -> pa.RecordBatch` | Arrow RecordBatch data       |
-| `.bucket -> TableBucket`   | Bucket this batch belongs to |
-| `.base_offset -> int`      | First record offset          |
-| `.last_offset -> int`      | Last record offset           |
+| Property                   | Description                       |
+|----------------------------|-----------------------------------|
+| `.batch -> pa.RecordBatch` | Arrow RecordBatch data            |
+| `.bucket -> TableBucket`   | Bucket this batch belongs to      |
+| `.base_offset -> int`      | First record offset               |
+| `.last_offset -> int`      | Last record offset                |
+| `.commit_timestamp -> int` | Commit time in epoch milliseconds |
+
+`.commit_timestamp` is `fluss.NO_COMMIT_TIMESTAMP` (`-1`) when the batch carries
+no single timestamp, which is the case for a limit scan because it merges several
+log batches into one Arrow batch.
 
 ## `Schema`
 

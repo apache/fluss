@@ -250,6 +250,7 @@ mod ffi {
         partition_id: i64,
         bucket_id: i32,
         base_offset: i64,
+        commit_timestamp: i64,
     }
 
     struct FfiArrowRecordBatches {
