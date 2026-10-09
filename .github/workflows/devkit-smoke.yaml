@@ -67,8 +67,8 @@ jobs:
           set -euo pipefail
           just build core
           just up core
-          just run-sql examples/core/01-setup.sql
-          core_output=$(just run-sql examples/core/02-scan.sql)
+          just run-sql examples/core/setup.sql
+          core_output=$(just run-sql examples/core/batch-scan.sql)
           printf '%s\n' "$core_output"
           grep -Fq 'Alice' <<<"$core_output"
           grep -Fq 'Bob' <<<"$core_output"
