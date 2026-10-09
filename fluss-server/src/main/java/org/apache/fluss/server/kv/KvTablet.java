@@ -124,7 +124,7 @@ public final class KvTablet {
     private static final int MAX_FLUSH_RETRY_BACKOFF_SHIFT =
             64 - Long.numberOfLeadingZeros(MAX_FLUSH_RETRY_DELAY_MS / MIN_FLUSH_RETRY_DELAY_MS);
 
-    private static final long ROW_COUNT_DISABLED = -1;
+    public static final long ROW_COUNT_DISABLED = -1;
 
     // Retain recent historical KV state within this WAL offset distance of lake progress.
     // TODO: Consider time-based retention after lake coverage is confirmed.
@@ -137,11 +137,38 @@ public final class KvTablet {
      */
     private static final int TARGET_ENTRIES_PER_NATIVE_WRITE = 500;
 
+    /** Pins an opened lazy tablet until closed; eager tablets use a no-op guard. */
+    public static final class Guard implements AutoCloseable {
+        private final KvTablet tablet;
+        private final @Nullable KvTabletLazyLifecycle lifecycle;
+        private boolean released;
+
+        Guard(KvTablet tablet, @Nullable KvTabletLazyLifecycle lifecycle) {
+            this.tablet = tablet;
+            this.lifecycle = lifecycle;
+        }
+
+        /** Returns the opened tablet, valid until this guard is closed. */
+        public KvTablet getTablet() {
+            return tablet;
+        }
+
+        @Override
+        public void close() {
+            if (!released && lifecycle != null) {
+                released = true;
+                lifecycle.releasePin();
+            }
+        }
+    }
+
+    private final Guard eagerGuard = new Guard(this, null);
+
     private final PhysicalTablePath physicalPath;
     private final TableBucket tableBucket;
     private final boolean historicalPartition;
 
-    private final LogTablet logTablet;
+    final LogTablet logTablet;
 
     private final File kvTabletDir;
     private final long writeBatchSize;
@@ -149,7 +176,7 @@ public final class KvTablet {
     private final KvPreWriteBuffer kvPreWriteBuffer;
     private final KvStateAccessor kvStateAccessor;
     private final KvWriteProcessor kvWriteProcessor;
-    private final TabletServerMetricGroup serverMetricGroup;
+    final TabletServerMetricGroup serverMetricGroup;
     private final KvFlushScheduler kvFlushScheduler;
     private final boolean closeFlushScheduler;
 
@@ -192,6 +219,12 @@ public final class KvTablet {
     @GuardedBy("kvLock")
     private volatile boolean isClosed = false;
 
+    @Nullable private final KvTabletLazyLifecycle lifecycle;
+
+    // Keep the opened tablet intact: queued flushes and snapshot callbacks retain its locks
+    // and state until close has drained all RocksDB resource leases.
+    @Nullable private volatile KvTablet openedTablet;
+
     private KvTablet(
             PhysicalTablePath physicalPath,
             TableBucket tableBucket,
@@ -219,6 +252,7 @@ public final class KvTablet {
             @Nullable RowTtlTimestampProvider rowTtlTimestampProvider,
             Clock clock,
             boolean rowTtlEnabled) {
+        this.lifecycle = null;
         this.physicalPath = physicalPath;
         this.tableBucket = tableBucket;
         this.historicalPartition =
@@ -267,6 +301,89 @@ public final class KvTablet {
                 historicalPartition || changelogImage == ChangelogImage.WAL || rowTtlEnabled
                         ? ROW_COUNT_DISABLED
                         : 0L;
+    }
+
+    KvTablet(
+            PhysicalTablePath physicalPath,
+            TableBucket tableBucket,
+            LogTablet logTablet,
+            File kvTabletDir,
+            @Nullable TabletServerMetricGroup serverMetricGroup) {
+        this.physicalPath = physicalPath;
+        this.tableBucket = tableBucket;
+        this.logTablet = logTablet;
+        this.serverMetricGroup = serverMetricGroup;
+        this.historicalPartition =
+                HISTORICAL_PARTITION_VALUE.equals(physicalPath.getPartitionName());
+        this.kvTabletDir = kvTabletDir;
+        this.writeBatchSize = 0;
+        this.rocksDBKv = null;
+        this.kvPreWriteBuffer = null;
+        this.kvStateAccessor = null;
+        this.kvWriteProcessor = null;
+        this.kvFlushScheduler = null;
+        this.closeFlushScheduler = false;
+        this.kvValueLayout = null;
+        this.stateValueEncoder = null;
+        this.historicalCleanupOffset = new AtomicLong();
+        this.rowTtlTimestampProvider = null;
+        this.rowTtlEnabled = false;
+        this.autoIncrementManager = null;
+        this.rocksDBStatistics = null;
+        this.lifecycle = new KvTabletLazyLifecycle(this);
+    }
+
+    /** Returns the lazy lifecycle, or null for an eagerly opened tablet. */
+    @Nullable
+    public KvTabletLazyLifecycle getLifecycle() {
+        return lifecycle;
+    }
+
+    void installRocksDB(KvTablet source) {
+        checkState(source.lifecycle == null, "Only an eager tablet can be installed.");
+        synchronized (historicalCleanupOffset) {
+            if (historicalPartition) {
+                source.advanceHistoricalCleanupOffset(historicalCleanupOffset.get());
+            }
+            this.openedTablet = source;
+        }
+    }
+
+    void detachRocksDB(KvCloseMode closeMode) {
+        KvTablet opened = openedTablet;
+        if (opened != null) {
+            try {
+                opened.close(closeMode);
+            } catch (Exception e) {
+                throw new KvStorageException("Failed to close KV tablet " + tableBucket, e);
+            }
+            openedTablet = null;
+        }
+    }
+
+    KvTablet requireOpenedTablet() {
+        return checkNotNull(openedTablet, "RocksDB is not open for %s", tableBucket);
+    }
+
+    long currentRowCount() {
+        KvTablet opened = openedTablet;
+        return lifecycle == null || opened == null ? rowCount : opened.rowCount;
+    }
+
+    boolean hasActiveResourceLeases() {
+        KvTablet opened = openedTablet;
+        return opened != null && opened.rocksDBKv.getResourceGuard().getLeaseCount() > 0;
+    }
+
+    void deleteLocalDirectory() {
+        File dir = getKvTabletDir();
+        if (dir != null) {
+            try {
+                FileUtils.deleteDirectory(dir);
+            } catch (IOException e) {
+                throw new KvStorageException("Failed to delete KV directory " + dir, e);
+            }
+        }
     }
 
     /**
@@ -630,6 +747,11 @@ public final class KvTablet {
     }
 
     public long getAutoIncrementCacheSize() {
+        if (lifecycle != null) {
+            KvTablet opened = openedTablet;
+            return opened == null ? 0 : opened.getAutoIncrementCacheSize();
+        }
+
         return autoIncrementManager.getAutoIncrementCacheSize();
     }
 
@@ -648,6 +770,11 @@ public final class KvTablet {
 
     /** Returns the total size in bytes of the live RocksDB SST files. */
     public long liveSstFilesSize() {
+        if (lifecycle != null) {
+            KvTablet opened = openedTablet;
+            return opened == null ? 0L : opened.liveSstFilesSize();
+        }
+
         return rocksDBKv.liveSstFilesSize();
     }
 
@@ -658,6 +785,11 @@ public final class KvTablet {
      */
     @Nullable
     public RocksDBStatistics getRocksDBStatistics() {
+        if (lifecycle != null) {
+            KvTablet opened = openedTablet;
+            return opened == null ? null : opened.getRocksDBStatistics();
+        }
+
         return rocksDBStatistics;
     }
 
@@ -673,6 +805,13 @@ public final class KvTablet {
 
     // row_count is volatile, so it's safe to read without lock
     public long getRowCount() {
+        if (lifecycle != null) {
+            KvTablet opened = openedTablet;
+            if (opened != null) {
+                return opened.getRowCount();
+            }
+        }
+
         if (rowCount == ROW_COUNT_DISABLED) {
             if (rowTtlEnabled) {
                 throw new InvalidTableException(
@@ -701,6 +840,10 @@ public final class KvTablet {
      */
     @GuardedBy("kvLock")
     public TabletState getTabletState() {
+        if (lifecycle != null) {
+            return requireOpenedTablet().getTabletState();
+        }
+
         return new TabletState(
                 flushedLogOffset,
                 rowCount == ROW_COUNT_DISABLED ? null : rowCount,
@@ -858,6 +1001,16 @@ public final class KvTablet {
     }
 
     public void requestFlush(long exclusiveUpToLogOffset, FatalErrorHandler fatalErrorHandler) {
+        if (lifecycle != null) {
+            KvTablet opened = openedTablet;
+            if (opened != null) {
+                // Enqueue flushes even while release drains an existing writer. The opened
+                // tablet serializes requests with close and ignores requests after closing.
+                opened.requestFlush(exclusiveUpToLogOffset, fatalErrorHandler);
+            }
+            return;
+        }
+
         asyncFatalErrorHandler = fatalErrorHandler;
         inWriteLock(kvLock, () -> requestFlushInternal(exclusiveUpToLogOffset));
     }
@@ -869,11 +1022,28 @@ public final class KvTablet {
     }
 
     public long getFlushedLogOffset() {
+        if (lifecycle != null) {
+            KvTablet opened = openedTablet;
+            return opened == null ? flushedLogOffset : opened.getFlushedLogOffset();
+        }
+
         return flushedLogOffset;
     }
 
     /** Advances the exclusive historical cleanup offset without allowing it to move backwards. */
     public boolean advanceHistoricalCleanupOffset(long cleanupOffset) {
+        if (lifecycle != null) {
+            checkState(historicalPartition, "%s is not a historical KV tablet", tableBucket);
+            checkArgument(cleanupOffset >= 0L, "Historical cleanup offset must be non-negative.");
+            synchronized (historicalCleanupOffset) {
+                long previous = historicalCleanupOffset.getAndAccumulate(cleanupOffset, Math::max);
+                KvTablet opened = openedTablet;
+                return opened == null
+                        ? cleanupOffset > previous
+                        : opened.advanceHistoricalCleanupOffset(cleanupOffset);
+            }
+        }
+
         checkState(historicalPartition, "%s is not a historical KV tablet", tableBucket);
         checkArgument(cleanupOffset >= 0L, "Historical cleanup offset must be non-negative.");
         long previousCleanupOffset =
@@ -883,6 +1053,13 @@ public final class KvTablet {
 
     /** Returns the current exclusive cleanup offset for a historical overlay. */
     public long getHistoricalCleanupOffset() {
+        if (lifecycle != null) {
+            KvTablet opened = openedTablet;
+            return opened == null
+                    ? historicalCleanupOffset.get()
+                    : opened.getHistoricalCleanupOffset();
+        }
+
         checkState(historicalPartition, "%s is not a historical KV tablet", tableBucket);
         return historicalCleanupOffset.get();
     }
@@ -1198,6 +1375,20 @@ public final class KvTablet {
      *     tablet.
      */
     public Executor getGuardedExecutor() {
+        if (lifecycle != null) {
+            KvTablet opened = openedTablet;
+            return runnable -> {
+                Guard guard = lifecycle.tryAcquireExistingGuard();
+                if (guard != null) {
+                    try (Guard ignored = guard) {
+                        if (opened != null && openedTablet == opened) {
+                            opened.getGuardedExecutor().execute(runnable);
+                        }
+                    }
+                }
+            };
+        }
+
         return runnable -> inWriteLock(kvLock, runnable::run);
     }
 
@@ -1371,6 +1562,10 @@ public final class KvTablet {
     }
 
     public void close(KvCloseMode closeMode) throws Exception {
+        if (lifecycle != null) {
+            lifecycle.close(closeMode, false);
+            return;
+        }
         LOG.info(
                 "Close kv tablet {} for table {} with mode {}.",
                 tableBucket,
@@ -1401,6 +1596,11 @@ public final class KvTablet {
 
     /** Completely delete the kv directory and all contents form the file system with no delay. */
     public void drop() throws Exception {
+        if (lifecycle != null) {
+            lifecycle.close(KvCloseMode.DISCARD_UNPERSISTED_STATE, true);
+            return;
+        }
+
         inWriteLock(
                 kvLock,
                 () -> {
@@ -1417,6 +1617,15 @@ public final class KvTablet {
             KvSnapshotDataUploader kvSnapshotDataUploader,
             long lastCompletedSnapshotId,
             Counter remoteKvCopyBytes) {
+        if (lifecycle != null) {
+            return requireOpenedTablet()
+                    .createIncrementalSnapshot(
+                            uploadedSstFiles,
+                            kvSnapshotDataUploader,
+                            lastCompletedSnapshotId,
+                            remoteKvCopyBytes);
+        }
+
         return new RocksIncrementalSnapshot(
                 uploadedSstFiles,
                 rocksDBKv.getDb(),
@@ -1430,17 +1639,32 @@ public final class KvTablet {
     // only for testing.
     @VisibleForTesting
     KvPreWriteBuffer getKvPreWriteBuffer() {
+        if (lifecycle != null) {
+            KvTablet opened = openedTablet;
+            return opened == null ? null : opened.getKvPreWriteBuffer();
+        }
+
         return kvPreWriteBuffer;
     }
 
     // only for testing.
     @VisibleForTesting
     public RocksDBKv getRocksDBKv() {
+        if (lifecycle != null) {
+            KvTablet opened = openedTablet;
+            return opened == null ? null : opened.getRocksDBKv();
+        }
+
         return rocksDBKv;
     }
 
     /** Returns the recent normalized backpressure pressure in {@code [0, 1)}. */
     public float currentPressure() {
+        if (lifecycle != null) {
+            KvTablet opened = openedTablet;
+            return opened == null ? 0F : opened.currentPressure();
+        }
+
         return rocksDBKv.currentPressure();
     }
 
@@ -1519,5 +1743,31 @@ public final class KvTablet {
         QUEUED,
         RUNNING,
         STORAGE_BLOCKED
+    }
+
+    /** Returns true if this tablet is in lazy mode (as opposed to eager/traditional mode). */
+    public boolean isLazyMode() {
+        return lifecycle != null;
+    }
+
+    /** Returns true if this tablet is in lazy mode and currently OPEN (RocksDB loaded). */
+    public boolean isLazyOpen() {
+        return lifecycle != null && lifecycle.isOpen();
+    }
+
+    /**
+     * Opens and pins this tablet. Call outside replica locks to avoid blocking leadership changes.
+     */
+    public Guard acquireGuard() {
+        return lifecycle != null ? lifecycle.acquireGuard() : eagerGuard;
+    }
+
+    /** Pre-check for idle release eligibility. */
+    public boolean canRelease(long closeIdleIntervalMs, long nowMs) {
+        return lifecycle != null && lifecycle.canRelease(closeIdleIntervalMs, nowMs);
+    }
+
+    public boolean releaseKv() {
+        return lifecycle != null && lifecycle.releaseKv();
     }
 }

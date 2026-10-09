@@ -83,6 +83,7 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Semaphore;
 import java.util.function.Predicate;
 
 import static org.apache.fluss.utils.Preconditions.checkState;
@@ -129,6 +130,10 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
         return DEFAULT_RATE_LIMITER;
     }
 
+    private static final int LAZY_OPEN_MAX_CONCURRENT_OPENS = 10;
+
+    static final long RELEASE_DRAIN_TIMEOUT_MS = 5_000;
+
     private final LogManager logManager;
     private final LocalDiskManager localDiskManager;
 
@@ -174,6 +179,9 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
 
     private final KvFlushScheduler kvFlushScheduler;
 
+    private final boolean lazyOpenEnabled;
+    private final @Nullable Semaphore openSemaphore;
+
     private volatile boolean isShutdown = false;
 
     private KvManager(
@@ -194,6 +202,8 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
         this.zkClient = zkClient;
         this.clock = clock;
         this.remoteKvDir = FlussPaths.remoteKvDir(conf);
+        this.lazyOpenEnabled = conf.get(ConfigOptions.KV_LAZY_OPEN_ENABLED);
+        this.openSemaphore = lazyOpenEnabled ? new Semaphore(LAZY_OPEN_MAX_CONCURRENT_OPENS) : null;
         this.remoteFileSystem = remoteKvDir.getFileSystem();
         this.serverMetricGroup = tabletServerMetricGroup;
         this.sharedRocksDBRateLimiter = createSharedRateLimiter(conf);
@@ -345,6 +355,37 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
                 tabletServerMetricGroup,
                 kvFlushScheduler,
                 clock);
+    }
+
+    /** Returns whether KV tablets open their RocksDB resources on first access. */
+    public boolean isLazyOpenEnabled() {
+        return lazyOpenEnabled;
+    }
+
+    /** Releases idle tablets without changing their registry ownership or deleting local SSTs. */
+    public void releaseIdleTablets(long idleTimeoutMs, long nowMs) {
+        for (KvTablet tablet : currentKvs.values()) {
+            try {
+                if (tablet.canRelease(idleTimeoutMs, nowMs)) {
+                    tablet.releaseKv();
+                }
+            } catch (Exception e) {
+                LOG.warn("Failed to release idle KV tablet {}", tablet.getTableBucket(), e);
+            }
+        }
+    }
+
+    /** Creates an unregistered tablet that opens RocksDB on first access. */
+    public KvTablet createLazyTablet(PhysicalTablePath path, TableBucket bucket, LogTablet log) {
+        KvTablet tablet =
+                new KvTablet(
+                        path,
+                        bucket,
+                        log,
+                        getTabletDir(log.getDataDir(), path, bucket),
+                        serverMetricGroup);
+        tablet.getLifecycle().configureTiming(clock, openSemaphore, RELEASE_DRAIN_TIMEOUT_MS);
+        return tablet;
     }
 
     /**
@@ -514,11 +555,8 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
         try {
             kvTablet.close(closeMode);
         } catch (Exception e) {
-            LOG.warn(
-                    "Exception while closing kv tablet {} with mode {}.",
-                    kvTablet.getTableBucket(),
-                    closeMode,
-                    e);
+            throw new KvStorageException(
+                    "Failed to close KV tablet " + kvTablet.getTableBucket(), e);
         }
     }
 
@@ -546,10 +584,56 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
             ArrowCompressionInfo arrowCompressionInfo,
             @Nullable Runnable flushCompleteListener)
             throws Exception {
+        return createKv(
+                tablePath,
+                tableBucket,
+                logTablet,
+                kvFormat,
+                schemaGetter,
+                tableConfig,
+                arrowCompressionInfo,
+                flushCompleteListener,
+                true);
+    }
+
+    /** Creates a tablet without replacing the registered lazy tablet. */
+    public KvTablet createKvTabletUnregistered(
+            PhysicalTablePath tablePath,
+            TableBucket tableBucket,
+            LogTablet logTablet,
+            KvFormat kvFormat,
+            SchemaGetter schemaGetter,
+            TableConfig tableConfig,
+            ArrowCompressionInfo arrowCompressionInfo,
+            @Nullable Runnable flushCompleteListener)
+            throws Exception {
+        return createKv(
+                tablePath,
+                tableBucket,
+                logTablet,
+                kvFormat,
+                schemaGetter,
+                tableConfig,
+                arrowCompressionInfo,
+                flushCompleteListener,
+                false);
+    }
+
+    private KvTablet createKv(
+            PhysicalTablePath tablePath,
+            TableBucket tableBucket,
+            LogTablet logTablet,
+            KvFormat kvFormat,
+            SchemaGetter schemaGetter,
+            TableConfig tableConfig,
+            ArrowCompressionInfo arrowCompressionInfo,
+            @Nullable Runnable flushCompleteListener,
+            boolean register)
+            throws Exception {
         return inKvLock(
                 tableBucket,
                 () -> {
-                    if (currentKvs.containsKey(tableBucket)) {
+                    if (register && currentKvs.containsKey(tableBucket)) {
                         return currentKvs.get(tableBucket);
                     }
 
@@ -586,7 +670,9 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
                                     autoIncrementManager,
                                     clock,
                                     tableConfig);
-                    currentKvs.put(tableBucket, tablet);
+                    if (register) {
+                        currentKvs.put(tableBucket, tablet);
+                    }
 
                     LOG.info(
                             "Created kv tablet for bucket {} in dir {}.",
@@ -621,20 +707,28 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
     }
 
     public void dropKv(TableBucket tableBucket) {
-        inKvLock(
-                tableBucket,
-                () -> {
-                    doDropKv(tableBucket);
-                    return null;
-                });
+        KvTablet lazyTablet =
+                inKvLock(
+                        tableBucket,
+                        () -> {
+                            KvTablet current = currentKvs.get(tableBucket);
+                            if (current != null && !current.isLazyMode()) {
+                                doDropKv(tableBucket, current);
+                                return null;
+                            }
+                            return current;
+                        });
+        // Lazy open callbacks also need the bucket lock. Retain registry ownership while
+        // waiting, but do not hold that lock across lazy lifecycle cleanup.
+        doDropKv(tableBucket, lazyTablet);
     }
 
-    private void doDropKv(TableBucket tableBucket) {
-        KvTablet dropKvTablet = currentKvs.remove(tableBucket);
+    private void doDropKv(TableBucket tableBucket, @Nullable KvTablet dropKvTablet) {
         if (dropKvTablet != null) {
             TablePath tablePath = dropKvTablet.getTablePath();
             try {
                 dropKvTablet.drop();
+                inKvLock(tableBucket, () -> currentKvs.remove(tableBucket, dropKvTablet));
                 if (dropKvTablet.getPartitionName() == null) {
                     LOG.info(
                             "Deleted kv bucket {} for table {} in file path {}.",
@@ -675,7 +769,27 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
                                 physicalTablePath,
                                 tableBucket,
                                 schemaGetter,
-                                flushCompleteListener));
+                                flushCompleteListener,
+                                true));
+    }
+
+    /** Loads local state without replacing the registered lazy tablet. */
+    public KvTablet loadKvUnregistered(
+            File tabletDir, SchemaGetter schemaGetter, @Nullable Runnable flushCompleteListener)
+            throws Exception {
+        Tuple2<PhysicalTablePath, TableBucket> pathAndBucket = FlussPaths.parseTabletDir(tabletDir);
+        PhysicalTablePath physicalTablePath = pathAndBucket.f0;
+        TableBucket tableBucket = pathAndBucket.f1;
+        return inKvLock(
+                tableBucket,
+                () ->
+                        doLoadKv(
+                                tabletDir,
+                                physicalTablePath,
+                                tableBucket,
+                                schemaGetter,
+                                flushCompleteListener,
+                                false));
     }
 
     private KvTablet doLoadKv(
@@ -683,10 +797,11 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
             PhysicalTablePath physicalTablePath,
             TableBucket tableBucket,
             SchemaGetter schemaGetter,
-            @Nullable Runnable flushCompleteListener)
+            @Nullable Runnable flushCompleteListener,
+            boolean register)
             throws Exception {
         KvTablet currentKv = currentKvs.get(tableBucket);
-        if (currentKv != null) {
+        if (register && currentKv != null) {
             throw new IllegalStateException(
                     String.format(
                             "Duplicate kv tablet directories for bucket %s are found in both %s and %s. "
@@ -748,9 +863,25 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
                         autoIncrementManager,
                         clock,
                         tableConfig);
-        currentKvs.put(tableBucket, kvTablet);
+        if (register) {
+            currentKvs.put(tableBucket, kvTablet);
+        }
 
         return kvTablet;
+    }
+
+    /** Register a KvTablet (e.g. a lazy sentinel) into the {@code currentKvs} registry. */
+    public void registerKv(TableBucket tableBucket, KvTablet kvTablet) {
+        inKvLock(
+                tableBucket,
+                () -> {
+                    if (currentKvs.containsKey(tableBucket)) {
+                        throw new IllegalStateException(
+                                "KvTablet already registered for " + tableBucket);
+                    }
+                    currentKvs.put(tableBucket, kvTablet);
+                    return null;
+                });
     }
 
     public void deleteRemoteKvSnapshot(

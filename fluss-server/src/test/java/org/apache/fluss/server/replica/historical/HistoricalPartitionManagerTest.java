@@ -62,6 +62,7 @@ import org.apache.fluss.server.entity.NotifyLakeTableOffsetData;
 import org.apache.fluss.server.entity.NotifyLeaderAndIsrData;
 import org.apache.fluss.server.entity.NotifyLeaderAndIsrResultForBucket;
 import org.apache.fluss.server.entity.PutKvDataForBucket;
+import org.apache.fluss.server.kv.KvManager;
 import org.apache.fluss.server.kv.KvStateLookupResult;
 import org.apache.fluss.server.kv.KvTablet;
 import org.apache.fluss.server.kv.historical.HistoricalKvKeyEncoder;
@@ -75,12 +76,14 @@ import org.apache.fluss.server.metadata.ClusterMetadata;
 import org.apache.fluss.server.metadata.PartitionMetadata;
 import org.apache.fluss.server.metadata.ServerInfo;
 import org.apache.fluss.server.metadata.TableMetadata;
+import org.apache.fluss.server.metrics.group.TestingMetricGroups;
 import org.apache.fluss.server.replica.Replica;
 import org.apache.fluss.server.replica.ReplicaTestBase;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
 import org.apache.fluss.server.zk.data.TableRegistration;
 import org.apache.fluss.server.zk.data.lake.LakeTableHelper;
 import org.apache.fluss.server.zk.data.lake.LakeTableSnapshot;
+import org.apache.fluss.testutils.common.CommonTestUtils;
 import org.apache.fluss.testutils.common.ManuallyTriggeredScheduledExecutorService;
 import org.apache.fluss.types.DataField;
 import org.apache.fluss.types.DataTypes;
@@ -141,6 +144,73 @@ class HistoricalPartitionManagerTest extends ReplicaTestBase {
             DataTypes.ROW(
                     new DataField("id", DataTypes.INT()),
                     new DataField("region", DataTypes.STRING()));
+
+    @Test
+    void testHistoricalLazyOpenReleaseAndRecover() throws Exception {
+        replicaManager.shutdown();
+        kvManager.shutdown();
+        conf.set(ConfigOptions.KV_LAZY_OPEN_ENABLED, true);
+        kvManager =
+                KvManager.create(
+                        conf,
+                        zkClient,
+                        logManager,
+                        TestingMetricGroups.TABLET_SERVER_METRICS,
+                        localDiskManager,
+                        manualClock);
+        kvManager.startup();
+        replicaManager = buildReplicaManager(testCoordinatorGateway);
+        replicaManager.startup();
+
+        TableInfo tableInfo = registerHistoricalTableAndBecomeLeader();
+        Replica replica = replicaManager.getReplicaOrException(TABLE_BUCKET);
+        KvTablet tablet = replica.getKvTablet();
+        assertThat(tablet).isNotNull();
+        assertThat(tablet.isLazyOpen()).isFalse();
+        TestingHistoricalLakeLookupManager lakeLookupManager =
+                new TestingHistoricalLakeLookupManager(lookupConfiguration());
+        try (HistoricalPartitionManager manager =
+                createHistoricalPartitionManager(lakeLookupManager)) {
+            writeBatch(
+                    manager,
+                    replica,
+                    ORIGINAL_PARTITION,
+                    batch(tableInfo.getRowType(), upsert(1, "us", ORIGINAL_PARTITION, "v1")));
+            flushAndWait(tablet, replica.getLocalLogEndOffset());
+            assertThat(tablet.isLazyOpen()).isTrue();
+            assertThat(replica.getKvSnapshotManager()).isNull();
+            CommonTestUtils.waitUntil(
+                    tablet::releaseKv, Duration.ofSeconds(10), "KV release did not finish");
+            assertThat(tablet.getRocksDBKv()).isNull();
+            replica.tryUpdateHistoricalCleanupOffset(replica.getLocalLogEndOffset(), () -> {});
+
+            assertThat(
+                            replica.lookupHistoricalLocal(
+                                    ORIGINAL_PARTITION, Collections.singletonList(key(1, "us"))))
+                    .hasSize(1);
+            assertHistoricalValue(
+                    tablet,
+                    ORIGINAL_PARTITION,
+                    key(1, "us"),
+                    tableInfo,
+                    row(1, "us", ORIGINAL_PARTITION, "v1"));
+            assertThat(replica.getKvSnapshotManager()).isNull();
+            assertThat(tablet.getHistoricalCleanupOffset())
+                    .isEqualTo(replica.getLocalLogEndOffset());
+            writeBatch(
+                    manager,
+                    replica,
+                    ORIGINAL_PARTITION,
+                    batch(tableInfo.getRowType(), upsert(1, "us", ORIGINAL_PARTITION, "v2")));
+            flushAndWait(tablet, replica.getLocalLogEndOffset());
+            assertHistoricalValue(
+                    tablet,
+                    ORIGINAL_PARTITION,
+                    key(1, "us"),
+                    tableInfo,
+                    row(1, "us", ORIGINAL_PARTITION, "v2"));
+        }
+    }
 
     @Test
     void testResolvesMultipleLakeMissesWithoutPrewriteRollback() throws Exception {
@@ -1161,7 +1231,7 @@ class HistoricalPartitionManagerTest extends ReplicaTestBase {
                 null,
                 future::complete);
         FetchLogResultForBucket result = future.get(10, TimeUnit.SECONDS).get(TABLE_BUCKET);
-        assertThat(result.failed()).isFalse();
+        assertThat(result.failed()).as("Historical lookup failed: %s", result.getError()).isFalse();
         return result.records();
     }
 
@@ -1341,7 +1411,7 @@ class HistoricalPartitionManagerTest extends ReplicaTestBase {
                                         originalPartition),
                                 (lookupTimeNanos, lookupFileDownloaded) -> {})
                         .get(10, TimeUnit.SECONDS);
-        assertThat(result.failed()).isFalse();
+        assertThat(result.failed()).as("Historical lookup failed: %s", result.getError()).isFalse();
         assertThat(result.lookupValues()).hasSize(1);
         if (expectedRow == null) {
             assertThat(result.lookupValues().get(0)).isNull();
@@ -1363,7 +1433,10 @@ class HistoricalPartitionManagerTest extends ReplicaTestBase {
             TableInfo tableInfo,
             InternalRow expectedRow)
             throws Exception {
-        KvStateLookupResult result = kvTablet.lookupHistoricalLocal(originalPartition, primaryKey);
+        KvStateLookupResult result;
+        try (KvTablet.Guard guard = kvTablet.acquireGuard()) {
+            result = guard.getTablet().lookupHistoricalLocal(originalPartition, primaryKey);
+        }
         assertThat(result.isPresent()).isTrue();
         BinaryValue value =
                 new ValueDecoder(

@@ -2681,9 +2681,22 @@ public class ConfigOptions {
                                     + "so that clients begin throttling before the storage engine is forced to throttle itself. "
                                     + "The gap between this value and the storage trigger forms the throttle ramp-up window.");
 
-    // ------------------------------------------------------------------------
+    //  ConfigOptions for KV lazy open
+
+    public static final ConfigOption<Boolean> KV_LAZY_OPEN_ENABLED =
+            key("kv.lazy-open.enabled")
+                    .booleanType()
+                    .defaultValue(false)
+                    .withDescription("Whether to enable KvTablet lazy open.");
+
+    public static final ConfigOption<Duration> KV_LAZY_OPEN_IDLE_TIMEOUT =
+            key("kv.lazy-open.idle-timeout")
+                    .durationType()
+                    .defaultValue(Duration.ofHours(24))
+                    .withDescription(
+                            "Idle time before an open KvTablet is eligible for release back to lazy state.");
+
     //  ConfigOptions for metrics
-    // ------------------------------------------------------------------------
     public static final ConfigOption<List<String>> METRICS_REPORTERS =
             key("metrics.reporters")
                     .stringType()
@@ -2704,9 +2717,7 @@ public class ConfigOptions {
                                     + "the CoordinatorServer) it is advisable to use a port range "
                                     + "like 9250-9260.");
 
-    // ------------------------------------------------------------------------
     //  ConfigOptions for prometheus push gateway reporter
-    // ------------------------------------------------------------------------
     public static final ConfigOption<String> METRICS_REPORTER_PROMETHEUS_PUSHGATEWAY_HOST_URL =
             key("metrics.reporter.prometheus-push.host-url")
                     .stringType()
@@ -2771,9 +2782,7 @@ public class ConfigOptions {
                                     + "The value is automatically redacted when the configuration "
                                     + "is logged or displayed.");
 
-    // ------------------------------------------------------------------------
     //  ConfigOptions for jmx reporter
-    // ------------------------------------------------------------------------
     public static final ConfigOption<String> METRICS_REPORTER_JMX_HOST =
             key("metrics.reporter.jmx.port")
                     .stringType()
@@ -2786,9 +2795,7 @@ public class ConfigOptions {
                                     + "the CoordinatorServer) it is advisable to use a port range "
                                     + "like 9990-9999.");
 
-    // ------------------------------------------------------------------------
     //  ConfigOptions for influxdb reporter
-    // ------------------------------------------------------------------------
     public static final ConfigOption<String> METRICS_REPORTER_INFLUXDB_VERSION =
             key("metrics.reporter.influxdb.version")
                     .stringType()
@@ -2830,9 +2837,7 @@ public class ConfigOptions {
                     .defaultValue(Duration.ofSeconds(10))
                     .withDescription("The interval of reporting metrics to InfluxDB.");
 
-    // ------------------------------------------------------------------------
     //  ConfigOptions for lakehouse storage
-    // ------------------------------------------------------------------------
     public static final ConfigOption<Boolean> DATALAKE_ENABLED =
             key("datalake.enabled")
                     .booleanType()
@@ -2853,9 +2858,7 @@ public class ConfigOptions {
                             "The datalake format used by Fluss as lakehouse storage. Currently, supported formats are Paimon, Iceberg, Hudi, and Lance. "
                                     + "In the future, more kinds of data lake format will be supported, such as DeltaLake.");
 
-    // ------------------------------------------------------------------------
     //  ConfigOptions for tiering service
-    // ------------------------------------------------------------------------
 
     public static final ConfigOption<Boolean> LAKE_TIERING_AUTO_EXPIRE_SNAPSHOT =
             key("lake.tiering.auto-expire-snapshot")
@@ -2877,9 +2880,7 @@ public class ConfigOptions {
                                     + "If not configured and the tiering service runs in a Flink job, Fluss uses "
                                     + "Flink's IO temporary directories with a 'fluss' child directory.");
 
-    // ------------------------------------------------------------------------
     //  ConfigOptions for fluss kafka
-    // ------------------------------------------------------------------------
     public static final ConfigOption<Boolean> KAFKA_ENABLED =
             key("kafka.enabled")
                     .booleanType()

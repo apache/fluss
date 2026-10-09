@@ -47,11 +47,13 @@ import org.apache.fluss.server.kv.TestingHoldableKvFlushScheduler;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshot;
 import org.apache.fluss.server.kv.snapshot.KvSnapshotDataDownloader;
 import org.apache.fluss.server.kv.snapshot.KvSnapshotDownloadSpec;
+import org.apache.fluss.server.kv.snapshot.KvSnapshotHandle;
 import org.apache.fluss.server.kv.snapshot.TestingCompletedKvSnapshotCommitter;
 import org.apache.fluss.server.log.FetchParams;
 import org.apache.fluss.server.log.ListOffsetsParam;
 import org.apache.fluss.server.log.LogAppendInfo;
 import org.apache.fluss.server.log.LogReadInfo;
+import org.apache.fluss.server.log.LogTablet;
 import org.apache.fluss.server.testutils.KvTestUtils;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
 import org.apache.fluss.testutils.DataTestUtils;
@@ -1274,6 +1276,66 @@ final class ReplicaTest extends ReplicaTestBase {
                                 .map(ByteArraySlice::toByteArray)
                                 .collect(Collectors.toList()))
                 .containsExactlyElementsOf(expectValues);
+    }
+
+    @Test
+    void testGetRowCountPkTableWithNullKvTablet() throws Exception {
+
+        TableBucket tableBucket = new TableBucket(DATA1_TABLE_ID_PK, 1);
+        Replica kvReplica = makeKvReplica(DATA1_PHYSICAL_TABLE_PATH_PK, tableBucket);
+
+        assertThat(kvReplica.isKvTable()).isTrue();
+        assertThat(kvReplica.getKvTablet()).isNull();
+
+        LogTablet logTablet = kvReplica.getLogTablet();
+        MemoryLogRecords records = genMemoryLogRecordsByObject(DATA1);
+        logTablet.appendAsLeader(records);
+        logTablet.updateHighWatermark(logTablet.localLogEndOffset());
+        assertThat(logTablet.getRowCount()).isGreaterThan(0);
+
+        assertThat(kvReplica.getRowCount()).isEqualTo(0L);
+    }
+
+    @Test
+    void testCreateKvRollbackOnAllRetriesFailed() throws Exception {
+
+        TableBucket tableBucket = new TableBucket(DATA1_TABLE_ID_PK, 1);
+        TestSnapshotContext failingSnapshotContext =
+                new TestSnapshotContext(conf.getString(ConfigOptions.REMOTE_DATA_DIR)) {
+                    @Override
+                    public FunctionWithException<TableBucket, CompletedSnapshot, Exception>
+                            getLatestCompletedSnapshotProvider() {
+
+                        return tb ->
+                                new CompletedSnapshot(
+                                        tb,
+                                        1L,
+                                        new FsPath("file:///non-existent-path/snapshot-1"),
+                                        KvSnapshotHandle.create(
+                                                Collections.emptyList(),
+                                                Collections.emptyList(),
+                                                0),
+                                        0L,
+                                        null,
+                                        null);
+                    }
+
+                    @Override
+                    public KvSnapshotDataDownloader getSnapshotDataDownloader() {
+
+                        throw new IllegalStateException("Snapshot download unavailable");
+                    }
+                };
+
+        Replica kvReplica =
+                makeKvReplica(DATA1_PHYSICAL_TABLE_PATH_PK, tableBucket, failingSnapshotContext);
+
+        assertThatThrownBy(() -> makeKvReplicaAsLeader(kvReplica))
+                .isInstanceOf(org.apache.fluss.exception.KvStorageException.class);
+
+        assertThat(kvReplica.getKvTablet()).isNull();
+
+        assertThat(kvManager.getKv(tableBucket)).isEmpty();
     }
 
     /** A scheduledExecutorService that will execute the scheduled task immediately. */

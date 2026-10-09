@@ -125,9 +125,11 @@ import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
 import org.apache.fluss.server.zk.data.lake.LakeTableSnapshot;
 import org.apache.fluss.utils.ByteArraySlice;
+import org.apache.fluss.utils.ExecutorUtils;
 import org.apache.fluss.utils.FileUtils;
 import org.apache.fluss.utils.FlussPaths;
 import org.apache.fluss.utils.clock.Clock;
+import org.apache.fluss.utils.concurrent.ExecutorThreadFactory;
 import org.apache.fluss.utils.concurrent.FutureUtils;
 import org.apache.fluss.utils.concurrent.Scheduler;
 
@@ -155,6 +157,9 @@ import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.Lock;
@@ -183,6 +188,8 @@ public class ReplicaManager implements ServerReconfigurable {
      * safe.
      */
     private static final short PUT_KV_VERSION_WITH_STORAGE_BACKPRESSURE = 2;
+    // ---- Idle release internal constants ----
+    private static final long IDLE_RELEASE_CHECK_INTERVAL_MS = 60_000;
 
     private final Configuration conf;
     private final Scheduler scheduler;
@@ -244,6 +251,8 @@ public class ReplicaManager implements ServerReconfigurable {
     private final ScannerManager scannerManager;
 
     private final HistoricalPartitionManager historicalPartitionManager;
+    private final long kvIdleTimeoutMs;
+    private @Nullable ScheduledExecutorService kvIdleReleaseScheduler;
 
     public ReplicaManager(
             Configuration conf,
@@ -378,6 +387,13 @@ public class ReplicaManager implements ServerReconfigurable {
                         dataDirVolumeBytes,
                         scheduler);
 
+        this.kvIdleTimeoutMs = conf.get(ConfigOptions.KV_LAZY_OPEN_IDLE_TIMEOUT).toMillis();
+        if (kvManager != null && kvManager.isLazyOpenEnabled()) {
+            checkArgument(kvIdleTimeoutMs > 0, "kv.lazy-open.idle-timeout must be positive");
+            kvIdleReleaseScheduler =
+                    Executors.newSingleThreadScheduledExecutor(
+                            new ExecutorThreadFactory("kv-idle-release"));
+        }
         registerMetrics();
     }
 
@@ -395,6 +411,13 @@ public class ReplicaManager implements ServerReconfigurable {
 
         // Start periodic disk usage monitoring (initial + periodic sampling)
         localDiskManager.startDiskUsageMonitor(scheduler);
+        if (kvIdleReleaseScheduler != null) {
+            kvIdleReleaseScheduler.scheduleWithFixedDelay(
+                    () -> kvManager.releaseIdleTablets(kvIdleTimeoutMs, clock.milliseconds()),
+                    IDLE_RELEASE_CHECK_INTERVAL_MS,
+                    IDLE_RELEASE_CHECK_INTERVAL_MS,
+                    TimeUnit.MILLISECONDS);
+        }
     }
 
     public RemoteLogManager getRemoteLogManager() {
@@ -2677,6 +2700,10 @@ public class ReplicaManager implements ServerReconfigurable {
     public static final class OfflineReplica implements HostedReplica {}
 
     public void shutdown() throws InterruptedException {
+        if (kvIdleReleaseScheduler != null) {
+            ExecutorUtils.gracefulShutdown(5, TimeUnit.SECONDS, kvIdleReleaseScheduler);
+        }
+
         // Close the resources for snapshot kv
         kvSnapshotResource.close();
         historicalPartitionManager.close();
