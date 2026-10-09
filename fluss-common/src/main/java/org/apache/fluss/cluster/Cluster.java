@@ -49,6 +49,7 @@ import java.util.concurrent.ThreadLocalRandom;
 @Internal
 public final class Cluster {
     @Nullable private final ServerNode coordinatorServer;
+    @Nullable private final List<CoordinatorServerInfo> coordinatorServerInfos;
     private final Map<PhysicalTablePath, List<BucketLocation>> availableLocationsByPath;
     private final Map<TableBucket, BucketLocation> availableLocationByBucket;
     private final Map<Integer, ServerNode> aliveTabletServersById;
@@ -66,7 +67,29 @@ public final class Cluster {
             Map<TablePath, Long> tableIdByPath,
             Map<PhysicalTablePath, Long> partitionsIdByPath,
             Map<TableOrPartition, Integer> bucketCountByTableOrPartition) {
+        this(
+                aliveTabletServersById,
+                coordinatorServer,
+                null,
+                bucketLocationsByPath,
+                tableIdByPath,
+                partitionsIdByPath,
+                bucketCountByTableOrPartition);
+    }
+
+    public Cluster(
+            Map<Integer, ServerNode> aliveTabletServersById,
+            @Nullable ServerNode coordinatorServer,
+            @Nullable List<CoordinatorServerInfo> coordinatorServerInfos,
+            Map<PhysicalTablePath, List<BucketLocation>> bucketLocationsByPath,
+            Map<TablePath, Long> tableIdByPath,
+            Map<PhysicalTablePath, Long> partitionsIdByPath,
+            Map<TableOrPartition, Integer> bucketCountByTableOrPartition) {
         this.coordinatorServer = coordinatorServer;
+        this.coordinatorServerInfos =
+                coordinatorServerInfos != null
+                        ? Collections.unmodifiableList(new ArrayList<>(coordinatorServerInfos))
+                        : null;
         this.aliveTabletServersById = Collections.unmodifiableMap(aliveTabletServersById);
         this.aliveTabletServers =
                 Collections.unmodifiableList(new ArrayList<>(aliveTabletServersById.values()));
@@ -161,6 +184,7 @@ public final class Cluster {
         return new Cluster(
                 new HashMap<>(aliveTabletServersById),
                 coordinatorServer,
+                coordinatorServerInfos,
                 newBucketLocationsByPath,
                 new HashMap<>(tableIdByPath),
                 new HashMap<>(partitionsIdByPath),
@@ -178,6 +202,7 @@ public final class Cluster {
         return new Cluster(
                 new HashMap<>(aliveTabletServersById),
                 coordinatorServer,
+                coordinatorServerInfos,
                 new HashMap<>(cluster.availableLocationsByPath),
                 new HashMap<>(tableIdByPath),
                 newPartitionsIdByPath,
@@ -187,6 +212,11 @@ public final class Cluster {
     @Nullable
     public ServerNode getCoordinatorServer() {
         return coordinatorServer;
+    }
+
+    @Nullable
+    public List<CoordinatorServerInfo> getCoordinatorServerInfos() {
+        return coordinatorServerInfos;
     }
 
     /**

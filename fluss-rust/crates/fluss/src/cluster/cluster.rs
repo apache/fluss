@@ -34,6 +34,7 @@ static EMPTY: Vec<BucketLocation> = Vec::new();
 #[derive(Default)]
 pub struct Cluster {
     coordinator_server: Option<ServerNode>,
+    coordinator_servers: Vec<ServerNode>,
     alive_tablet_servers_by_id: HashMap<i32, ServerNode>,
     alive_tablet_servers: Vec<ServerNode>,
     available_locations_by_path: HashMap<Arc<PhysicalTablePath>, Vec<BucketLocation>>,
@@ -50,6 +51,7 @@ impl Cluster {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         coordinator_server: Option<ServerNode>,
+        coordinator_servers: Vec<ServerNode>,
         alive_tablet_servers_by_id: HashMap<i32, ServerNode>,
         available_locations_by_path: HashMap<Arc<PhysicalTablePath>, Vec<BucketLocation>>,
         available_locations_by_bucket: HashMap<TableBucket, BucketLocation>,
@@ -69,6 +71,7 @@ impl Cluster {
             .collect();
         Cluster {
             coordinator_server,
+            coordinator_servers,
             alive_tablet_servers_by_id,
             alive_tablet_servers,
             available_locations_by_path,
@@ -100,6 +103,7 @@ impl Cluster {
 
         Cluster::new(
             self.coordinator_server.clone(),
+            self.coordinator_servers.clone(),
             alive_tablet_servers_by_id,
             available_locations_by_path,
             available_locations_by_bucket,
@@ -120,6 +124,7 @@ impl Cluster {
         // A table or partition id keeps one bucket count for life, so the counts stay cached.
         Cluster::new(
             self.coordinator_server.clone(),
+            self.coordinator_servers.clone(),
             self.alive_tablet_servers_by_id.clone(),
             available_locations_by_path,
             available_locations_by_bucket,
@@ -176,6 +181,7 @@ impl Cluster {
 
         Cluster::new(
             self.coordinator_server.clone(),
+            self.coordinator_servers.clone(),
             self.alive_tablet_servers_by_id.clone(),
             available_locations_by_path,
             available_locations_by_bucket,
@@ -189,6 +195,7 @@ impl Cluster {
     pub fn update(&mut self, cluster: Cluster) {
         let Cluster {
             coordinator_server,
+            coordinator_servers,
             alive_tablet_servers_by_id,
             alive_tablet_servers,
             available_locations_by_path,
@@ -201,6 +208,7 @@ impl Cluster {
             bucket_count_by_table_or_partition,
         } = cluster;
         self.coordinator_server = coordinator_server;
+        self.coordinator_servers = coordinator_servers;
         self.alive_tablet_servers_by_id = alive_tablet_servers_by_id;
         self.alive_tablet_servers = alive_tablet_servers;
         self.available_locations_by_path = available_locations_by_path;
@@ -276,9 +284,15 @@ impl Cluster {
             servers.insert(server_id, server_node);
         }
 
+        let coordinator_servers: Vec<ServerNode> = metadata_response
+            .coordinator_servers
+            .into_iter()
+            .map(|info| from_pb_server_node(info.coordinator_server, ServerType::CoordinatorServer))
+            .collect();
         let coordinator_server = metadata_response
             .coordinator_server
-            .map(|node| from_pb_server_node(node, ServerType::CoordinatorServer));
+            .map(|node| from_pb_server_node(node, ServerType::CoordinatorServer))
+            .or_else(|| coordinator_servers.first().cloned());
 
         let mut table_id_by_path = HashMap::new();
         let mut table_info_by_path = HashMap::new();
@@ -428,6 +442,7 @@ impl Cluster {
 
         Ok(Cluster::new(
             coordinator_server,
+            coordinator_servers,
             servers,
             tmp_available_locations_by_path,
             tmp_available_location_by_bucket,
@@ -440,6 +455,10 @@ impl Cluster {
 
     pub fn get_coordinator_server(&self) -> Option<&ServerNode> {
         self.coordinator_server.as_ref()
+    }
+
+    pub fn get_coordinator_servers(&self) -> &[ServerNode] {
+        &self.coordinator_servers
     }
 
     pub fn leader_for(&self, table_bucket: &TableBucket) -> Option<&ServerNode> {
@@ -518,8 +537,11 @@ impl Cluster {
 
     pub fn get_server_nodes(&self) -> Vec<ServerNode> {
         let mut nodes = Vec::new();
-        if let Some(coordinator) = &self.coordinator_server {
-            nodes.push(coordinator.clone());
+        nodes.extend(self.coordinator_servers.iter().cloned());
+        if nodes.is_empty() {
+            if let Some(coordinator) = &self.coordinator_server {
+                nodes.push(coordinator.clone());
+            }
         }
         nodes.extend(self.alive_tablet_servers.iter().cloned());
         nodes
@@ -673,6 +695,15 @@ mod tests {
     fn test_get_server_nodes_with_coordinator_and_tablets() {
         let cluster = Cluster::new(
             Some(make_coordinator()),
+            vec![
+                make_coordinator(),
+                ServerNode::new(
+                    1,
+                    "coord-standby-host".to_string(),
+                    9126,
+                    ServerType::CoordinatorServer,
+                ),
+            ],
             make_tablet_servers(),
             HashMap::new(),
             HashMap::new(),
@@ -683,13 +714,13 @@ mod tests {
         );
 
         let nodes = cluster.get_server_nodes();
-        assert_eq!(nodes.len(), 3);
+        assert_eq!(nodes.len(), 4);
 
         let coordinator_count = nodes
             .iter()
             .filter(|n| *n.server_type() == ServerType::CoordinatorServer)
             .count();
-        assert_eq!(coordinator_count, 1);
+        assert_eq!(coordinator_count, 2);
 
         let tablet_count = nodes
             .iter()
@@ -702,6 +733,7 @@ mod tests {
     fn test_get_server_nodes_no_coordinator() {
         let cluster = Cluster::new(
             None,
+            Vec::new(),
             make_tablet_servers(),
             HashMap::new(),
             HashMap::new(),
@@ -746,6 +778,7 @@ mod tests {
         );
         let cluster = Cluster::new(
             None,
+            Vec::new(),
             HashMap::from([(leader.id(), leader)]),
             HashMap::from([
                 (Arc::clone(&partition_1), vec![location_1.clone()]),
@@ -811,6 +844,7 @@ mod tests {
         );
         let cluster = Cluster::new(
             None,
+            Vec::new(),
             HashMap::from([(leader.id(), leader)]),
             HashMap::from([
                 (Arc::clone(&partition_a), vec![location_a.clone()]),
