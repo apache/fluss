@@ -34,8 +34,8 @@ services:
       - ../devkit/.deps/gateway/debug/fluss-gateway:/opt/fluss/bin/fluss-gateway:ro
       - ../fluss-gateway/conf/gateway.yaml:/opt/fluss/conf/gateway.yaml:ro
     ports:
-      - "${GATEWAY_REST_PORT:-8080}:8080"
-      - "${GATEWAY_METRICS_PORT:-9095}:9095"
+      - "127.0.0.1:${GATEWAY_REST_PORT:-8080}:8080"
+      - "127.0.0.1:${GATEWAY_METRICS_PORT:-9095}:9095"
     logging:
       driver: json-file
       options:

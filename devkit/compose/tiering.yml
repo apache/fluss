@@ -44,7 +44,7 @@ services:
         parallelism.default: 1
         rest.address: jobmanager
     ports:
-      - "${FLINK_REST_PORT:-8083}:8081"
+      - "127.0.0.1:${FLINK_REST_PORT:-8083}:8081"
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://localhost:8081/overview >/dev/null"]
       interval: 5s
