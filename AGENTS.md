@@ -196,8 +196,6 @@ Apache Fluss follows a layered Maven module architecture: `fluss-common` (founda
 
 **`fluss-dist`** - Binary distribution with `bin/` scripts and `conf/` templates
 
-**`devkit/`** - Local development toolkit for running and testing Fluss across core and lakehouse scenarios
-
 **`fluss-protogen`** - Protocol Buffer code generation
 
 **`fluss-test-coverage`** - Aggregated JaCoCo test coverage
@@ -205,6 +203,10 @@ Apache Fluss follows a layered Maven module architecture: `fluss-common` (founda
 **`fluss-jmh`** - Performance microbenchmarks
 
 **`fluss-docgen`** - Configuration documentation generation
+
+#### Development Tooling
+
+**`devkit/`** - Local development toolkit for running and testing Fluss across core and lakehouse scenarios
 
 #### Key Directories
 
@@ -490,6 +492,11 @@ The `--web` flag opens browser for final review before submission.
 - Database schema or migration changes
 - Changes to build system or CI pipeline
 - Destructive operations (delete branches, force-push, reset --hard)
+
+### DevKit
+
+Use DevKit to start the affected profile locally and run the corresponding README/example workflow against the current checkout.
+Verify the user-visible result, then run `just clean`.
 
 ### Never Do (Without Explicit Permission)
 

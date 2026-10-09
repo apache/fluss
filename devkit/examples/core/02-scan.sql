@@ -30,14 +30,8 @@ SELECT * FROM events
 /*+ OPTIONS('scan.startup.mode' = 'earliest') */;
 
 SELECT * FROM profiles
-/*+ OPTIONS('scan.startup.mode' = 'earliest') */;
+/*+ OPTIONS('scan.startup.mode' = 'full') */;
 
 -- Point lookup: a complete primary-key predicate returns one current row.
 SELECT * FROM profiles
 WHERE tenant_id = 10 AND user_id = 100;
-
--- Streaming scan: run this statement separately. It remains running and
--- continues to receive records appended after the job starts.
--- SET 'execution.runtime-mode' = 'streaming';
--- SELECT * FROM events
--- /*+ OPTIONS('scan.startup.mode' = 'earliest') */;
