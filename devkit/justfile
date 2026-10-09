@@ -187,7 +187,8 @@ compose profile topology *ARGS:
     PROFILE_DIR="{{ PROFILES_DIR }}/$PROFILE"
     COMPOSE_ARGS=(-f "{{ DEVKIT_DIR }}/docker-compose.yml")
     PROFILES=(--profile "$TOPOLOGY")
-    for TARGET in $(just profile-runtime-targets "$PROFILE"); do
+    TARGETS=$(just profile-runtime-targets "$PROFILE")
+    for TARGET in $TARGETS; do
       case "$TARGET" in
         core) ;;
         flink)
@@ -387,7 +388,8 @@ up profile="core" nodes="1":
     fi
     just compose "$PROFILE" "$TOPOLOGY" config --quiet
     ENABLE_TIERING=false
-    for TARGET in $(just profile-runtime-targets "$PROFILE"); do
+    TARGETS=$(just profile-runtime-targets "$PROFILE")
+    for TARGET in $TARGETS; do
       case "$TARGET" in
         core) just ensure-dist ;;
         flink)
@@ -458,7 +460,8 @@ check profile:
     set -e
     PROFILE={{ quote(profile) }}
     FORMAT=$(just profile-format "$PROFILE")
-    for TARGET in $(just profile-runtime-targets "$PROFILE"); do
+    TARGETS=$(just profile-runtime-targets "$PROFILE")
+    for TARGET in $TARGETS; do
       case "$TARGET" in
         core) just check-cluster ;;
         tiering) just check-tiering "$FORMAT" ;;
