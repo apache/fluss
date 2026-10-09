@@ -14,7 +14,7 @@ You need:
 - JDK 11 or later
 - Bash, `curl`, and a Unix-like environment
 - Docker with Docker Compose v2
-- [just](https://github.com/casey/just)
+- [just 1.58.0](https://github.com/casey/just)
 - Network access to Maven Central and container registries on first use
 
 Start by choosing the scenario closest to the code path you changed:
@@ -62,13 +62,36 @@ Then choose the example that covers your change:
 
 | Example | Covers |
 |---|---|
-| `examples/core/02-scan.sql` | Batch and streaming scans of Log and Primary Key Tables |
+| `examples/core/02-scan.sql` | Bounded batch scans of Log and Primary Key Tables |
+| `examples/core/02-streaming-scan.sql` | Long-running streaming scan of a Log Table |
 | `examples/core/03-lookup-join.sql` | Point and prefix lookup joins |
 | `examples/core/04-changelog-binlog.sql` | Changelog and binlog virtual tables |
 
 ```bash
 just run-sql examples/core/02-scan.sql
+# Run separately; this command intentionally remains running.
+just run-sql examples/core/02-streaming-scan.sql
 ```
+
+The scan example runs in Flink batch mode. It reads the current bounded contents
+of both tables: the Log Table starts from `earliest`, while the Primary Key Table
+uses `full` to read its current materialized state.
+
+The streaming scan keeps a Flink Job running and receives records appended after startup. Press
+Ctrl-C when you are done, then use the [Flink UI](http://localhost:8083) to confirm that the Job has
+stopped and cancel it if it is still running. Canceling a Job keeps the DevKit services and data;
+`just down` stops the whole profile, while `just clean` also removes its test data.
+
+The Lookup Join example prints the joined rows to the TaskManager logs:
+
+```bash
+just run-sql examples/core/03-lookup-join.sql
+just logs taskmanager 100
+```
+
+Look for `POINT_LOOKUP` rows mapping orders `1000`, `1001`, and `1002` to Alice, Bob, and Carol.
+The submitted lookup query is also a streaming Job; cancel it in the Flink UI after inspecting the
+results. To try the prefix lookup, follow the comments in the SQL file and run that section alone.
 
 You can also run your own SQL file:
 
@@ -133,14 +156,28 @@ just build paimon
 just up paimon
 just run-sql examples/lake/paimon/setup.sql
 just run-sql examples/lake/paimon/union-read.sql
-just tiering-status
 just run-sql examples/lake/paimon/lake-only-read.sql
 ```
 
-Tiering is asynchronous, so wait for `just tiering-status` before running the Lake-only query.
+If the lake-only query is empty, wait a few seconds and run it again until it returns Alice and Bob.
+Tiering is asynchronous. `just tiering-status` is only a diagnostic check that the
+job is running; the lake-only query itself must return the sample data before the
+workflow is considered successful.
 Iceberg examples are under `examples/lake/iceberg/`. Lance examples are under
-`examples/lake/lance/`; Lance has no Flink SQL Lake-only reader, so inspect its objects in RustFS
-instead.
+`examples/lake/lance/`; Lance has no Flink SQL Lake-only reader. The smoke check verifies the
+Lance dataset manifest and data area in RustFS; object existence alone is not a guarantee that a
+Lance client can read the dataset. The Lance example uses an append-only `embedding_events` Log Table:
+
+```bash
+just build lance
+just up lance
+just run-sql examples/lake/lance/create-table.sql
+just run-sql examples/lake/lance/write-data.sql
+```
+
+Wait for the tiering job and inspect the resulting Lance objects in RustFS.
+The CI smoke additionally opens the dataset with the Python `lance` client and checks the
+three event rows and embedding type; RustFS inspection alone is only a troubleshooting aid.
 
 The examples use fixed table names. Run `just clean` before repeating a workflow if existing tables
 or lake data would conflict.
@@ -158,6 +195,7 @@ As you continue working, use the command that matches the next step:
 | Read logs | `just logs [service] [lines]` |
 | Run a command in a container | `just exec <service> <command>` |
 | Check the active Lake Tiering Job | `just tiering-status` |
+| Re-submit Tiering after a JobManager restart | `just tiering-restart` |
 | Stop containers but keep data | `just down` |
 | Remove containers and test data | `just clean` |
 
@@ -169,9 +207,11 @@ just exec tablet-server-0 java -version
 ```
 
 After changing source code, run `just build <profile>` and `just up <profile>` again. Running
-containers are not hot-reloaded. `just up` replaces containers from the previous profile and
-preserves named volumes. `just down` keeps the data and active-profile selection, so the inspection
-and cleanup commands continue to use the same Compose configuration.
+containers are not hot-reloaded. If the JobManager is restarted, run `just tiering-restart` to
+submit the active profile's Tiering Job again. Restarting the same profile preserves named volumes; switching
+to another profile requires `just clean` first so lake metadata and objects from different formats
+cannot be mixed. `just down` keeps the data and active-profile selection, so the inspection and
+cleanup commands continue to use the same Compose configuration.
 
 `just clean` removes containers, volumes, staged Server JARs, and the active-profile selection.
 Downloaded dependencies remain in the ignored `devkit/.deps` cache.

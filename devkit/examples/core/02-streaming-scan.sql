@@ -16,14 +16,14 @@
 
 CREATE CATALOG fluss_catalog WITH (
     'type' = 'fluss',
-    'bootstrap.servers' = 'coordinator-server:19123',
-    'paimon.s3.access-key' = 'rustfsadmin',
-    'paimon.s3.secret-key' = 'rustfsadmin'
+    'bootstrap.servers' = 'coordinator-server:19123'
 );
 
 USE CATALOG fluss_catalog;
 
-INSERT INTO lake_table VALUES
-    (1, 'alpha'),
-    (2, 'beta'),
-    (3, 'gamma');
+-- Streaming scan remains running and receives records appended after startup.
+SET 'execution.runtime-mode' = 'streaming';
+SET 'sql-client.execution.result-mode' = 'tableau';
+
+SELECT * FROM events
+/*+ OPTIONS('scan.startup.mode' = 'earliest') */;

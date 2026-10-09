@@ -21,12 +21,15 @@ CREATE CATALOG fluss_catalog WITH (
 
 USE CATALOG fluss_catalog;
 
-CREATE TABLE lake_table (
-    id BIGINT,
-    payload STRING,
-    PRIMARY KEY (id) NOT ENFORCED
+CREATE TABLE embedding_events (
+    event_id BIGINT,
+    item_id BIGINT,
+    embedding ARRAY<FLOAT>,
+    model_version STRING,
+    event_time TIMESTAMP(3)
 ) WITH (
     'bucket.num' = '1',
     'table.datalake.enabled' = 'true',
-    'table.datalake.freshness' = '5s'
+    'table.datalake.freshness' = '5s',
+    'lance.max_row_per_file' = '512'
 );
