@@ -40,6 +40,7 @@ import org.apache.fluss.rpc.messages.DeleteConsumerGroupsResponse;
 import org.apache.fluss.rpc.messages.DeleteConsumerOffsetsRequest;
 import org.apache.fluss.rpc.messages.DeleteConsumerOffsetsResponse;
 import org.apache.fluss.rpc.messages.DropAclsResponse;
+import org.apache.fluss.rpc.messages.FetchLogRequest;
 import org.apache.fluss.rpc.messages.FetchLogResponse;
 import org.apache.fluss.rpc.messages.GetConsumerOffsetsRequest;
 import org.apache.fluss.rpc.messages.GetConsumerOffsetsResponse;
@@ -55,6 +56,8 @@ import org.apache.fluss.rpc.messages.PbCommitConsumerOffsetsResponseTable;
 import org.apache.fluss.rpc.messages.PbDeleteConsumerOffsetsRequestBucket;
 import org.apache.fluss.rpc.messages.PbDeleteConsumerOffsetsRequestTable;
 import org.apache.fluss.rpc.messages.PbDeletedGroup;
+import org.apache.fluss.rpc.messages.PbFetchLogReqForBucket;
+import org.apache.fluss.rpc.messages.PbFetchLogReqForTable;
 import org.apache.fluss.rpc.messages.PbFetchLogRespForBucket;
 import org.apache.fluss.rpc.messages.PbGetConsumerOffsetsRequestBucket;
 import org.apache.fluss.rpc.messages.PbGetConsumerOffsetsRequestTable;
@@ -450,6 +453,32 @@ class ServerRpcMessageUtilsTest {
             assertThat(decoded.remoteLogTabletDir()).isEqualTo(tabletDir.toString());
             assertThat(decoded.remoteLogSegmentList()).containsExactly(segment);
         }
+    }
+
+    @Test
+    void testFetchLogRequestPreservesInterleavedBucketOrder() {
+        FetchLogRequest request = new FetchLogRequest();
+        request.addAllTablesReqs(
+                Arrays.asList(
+                        fetchTableRequest(1L, 1),
+                        fetchTableRequest(2L, 0),
+                        fetchTableRequest(1L, 0)));
+
+        assertThat(ServerRpcMessageUtils.getFetchLogData(request).keySet())
+                .containsExactly(
+                        new TableBucket(1L, 1), new TableBucket(2L, 0), new TableBucket(1L, 0));
+    }
+
+    private static PbFetchLogReqForTable fetchTableRequest(long tableId, int bucketId) {
+        PbFetchLogReqForTable request =
+                new PbFetchLogReqForTable().setTableId(tableId).setProjectionPushdownEnabled(false);
+        request.addAllBucketsReqs(
+                Collections.singletonList(
+                        new PbFetchLogReqForBucket()
+                                .setBucketId(bucketId)
+                                .setFetchOffset(0L)
+                                .setMaxFetchBytes(1024)));
+        return request;
     }
 
     @Test
