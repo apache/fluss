@@ -19,27 +19,16 @@ package org.apache.fluss.flink.action.orphan.rule;
 
 import org.apache.fluss.annotation.Internal;
 
-/** Decision returned by a {@link FileRule} for a given file. */
+/** Shared fail-closed policy for file modification times. */
 @Internal
-public enum Decision {
+public final class MtimePolicy {
 
-    /** File is orphan and should be deleted. */
-    DELETE,
+    private MtimePolicy() {}
 
-    /** File is referenced by an active object (manifest, snapshot, etc.). */
-    KEEP_ACTIVE,
-
-    /**
-     * File is not in the active set but its age is under the {@code --older-than} threshold; the
-     * deletion verdict is deferred to a future cleanup round, by which time the file will either
-     * have entered the active set (KEEP_ACTIVE) or aged past the threshold (DELETE). The grace
-     * window prevents racing in-flight writes whose manifest entry has not yet been committed.
-     */
-    DEFER,
-
-    /** File modification time is unavailable; retain the file conservatively. */
-    MTIME_UNAVAILABLE,
-
-    /** File path or extension is not recognized; skip without deletion. */
-    SKIP_UNKNOWN
+    public static Decision evaluateInactiveFile(long modificationTime, long cutoffMillis) {
+        if (modificationTime <= 0 || modificationTime == Long.MAX_VALUE) {
+            return Decision.MTIME_UNAVAILABLE;
+        }
+        return modificationTime < cutoffMillis ? Decision.DELETE : Decision.DEFER;
+    }
 }
