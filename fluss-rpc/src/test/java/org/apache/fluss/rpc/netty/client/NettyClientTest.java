@@ -364,13 +364,11 @@ final class NettyClientTest {
 
                 try {
                     CompletableFuture<ApiMessage> firstRequest =
-                            nettyClient.sendRequest(
-                                    firstNode, ApiKeys.LOOKUP, newLookupRequest());
+                            nettyClient.sendRequest(firstNode, ApiKeys.LOOKUP, newLookupRequest());
                     assertThat(firstService.awaitFirstLookup()).isTrue();
 
                     CompletableFuture<ApiMessage> secondRequest =
-                            nettyClient.sendRequest(
-                                    secondNode, ApiKeys.LOOKUP, newLookupRequest());
+                            nettyClient.sendRequest(secondNode, ApiKeys.LOOKUP, newLookupRequest());
                     assertThat(secondService.awaitFirstLookup()).isTrue();
                     assertThat(firstRequest).isNotDone();
                     assertThat(secondRequest).isNotDone();
@@ -456,9 +454,7 @@ final class NettyClientTest {
                 nettyClient.disconnect(secondNode).get(5, TimeUnit.SECONDS);
                 retry(
                         Duration.ofSeconds(10),
-                        () ->
-                                assertThat(((Number) totalRequests.getValue()).longValue())
-                                        .isZero());
+                        () -> assertThat(((Number) totalRequests.getValue()).longValue()).isZero());
 
                 // Registering a replacement at the same endpoint must start a new metric series.
                 nettyClient
