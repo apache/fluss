@@ -15,3 +15,4 @@ The following merge engines are supported:
 2. [FirstRow Merge Engine](first-row.md)
 3. [Versioned Merge Engine](versioned.md)
 4. [Aggregation Merge Engine](aggregation.md)
+5. [UpdateIfChanged Merge Engine](update-if-changed.md)
