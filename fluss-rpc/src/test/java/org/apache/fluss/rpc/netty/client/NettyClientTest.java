@@ -22,6 +22,8 @@ import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.metrics.Gauge;
+import org.apache.fluss.metrics.MetricNames;
 import org.apache.fluss.metrics.groups.MetricGroup;
 import org.apache.fluss.metrics.util.NOPMetricsGroup;
 import org.apache.fluss.rpc.TestingGatewayService;
@@ -30,6 +32,7 @@ import org.apache.fluss.rpc.messages.ApiMessage;
 import org.apache.fluss.rpc.messages.ApiVersionsRequest;
 import org.apache.fluss.rpc.messages.GetTableInfoRequest;
 import org.apache.fluss.rpc.messages.LookupRequest;
+import org.apache.fluss.rpc.messages.LookupResponse;
 import org.apache.fluss.rpc.messages.PbLookupReqForBucket;
 import org.apache.fluss.rpc.metrics.TestingClientMetricGroup;
 import org.apache.fluss.rpc.netty.NettyUtils;
@@ -52,7 +55,10 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.apache.fluss.utils.NetUtils.getAvailablePort;
@@ -63,6 +69,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 final class NettyClientTest {
 
     private Configuration conf;
+    private TestingClientMetricGroup clientMetrics;
     private NettyClient nettyClient;
     private ServerNode serverNode;
     private NettyServer nettyServer;
@@ -73,7 +80,8 @@ final class NettyClientTest {
         conf = new Configuration();
         // 3 worker threads is enough for this test
         conf.setInt(ConfigOptions.NETTY_SERVER_NUM_WORKER_THREADS, 3);
-        nettyClient = new NettyClient(conf, TestingClientMetricGroup.newInstance());
+        clientMetrics = TestingClientMetricGroup.newInstance();
+        nettyClient = new NettyClient(conf, clientMetrics);
         buildNettyServer(1);
     }
 
@@ -339,6 +347,129 @@ final class NettyClientTest {
     }
 
     @Test
+    void testDisconnectOneEndpointPreservesInflightRequestsOnAnother() throws Exception {
+        try (NetUtils.Port firstPort = getAvailablePort();
+                NetUtils.Port secondPort = getAvailablePort()) {
+            ServerNode firstNode =
+                    new ServerNode(1, "localhost", firstPort.getPort(), ServerType.TABLET_SERVER);
+            ServerNode secondNode =
+                    new ServerNode(1, "localhost", secondPort.getPort(), ServerType.TABLET_SERVER);
+            DelayedLookupGatewayService firstService = new DelayedLookupGatewayService();
+            DelayedLookupGatewayService secondService = new DelayedLookupGatewayService();
+
+            try (NettyServer firstServer = createTabletServer(firstNode, firstService);
+                    NettyServer secondServer = createTabletServer(secondNode, secondService)) {
+                firstServer.start();
+                secondServer.start();
+
+                try {
+                    CompletableFuture<ApiMessage> firstRequest =
+                            nettyClient.sendRequest(
+                                    firstNode, ApiKeys.LOOKUP, newLookupRequest());
+                    assertThat(firstService.awaitFirstLookup()).isTrue();
+
+                    CompletableFuture<ApiMessage> secondRequest =
+                            nettyClient.sendRequest(
+                                    secondNode, ApiKeys.LOOKUP, newLookupRequest());
+                    assertThat(secondService.awaitFirstLookup()).isTrue();
+                    assertThat(firstRequest).isNotDone();
+                    assertThat(secondRequest).isNotDone();
+                    assertThat(nettyClient.connections()).hasSize(2);
+
+                    // Closing the old endpoint must fail only its own in-flight request.
+                    nettyClient.disconnect(firstNode).get(5, TimeUnit.SECONDS);
+
+                    assertThat(firstRequest).isCompletedExceptionally();
+                    assertThat(secondRequest).isNotDone();
+                    assertThat(nettyClient.isReady(firstNode)).isFalse();
+                    assertThat(nettyClient.isReady(secondNode)).isTrue();
+
+                    secondService.completeFirstLookup();
+                    assertThat(secondRequest.get(5, TimeUnit.SECONDS))
+                            .isInstanceOf(LookupResponse.class);
+
+                    // The second endpoint must remain usable without reconnecting.
+                    assertThat(
+                                    nettyClient
+                                            .sendRequest(
+                                                    secondNode, ApiKeys.LOOKUP, newLookupRequest())
+                                            .get(5, TimeUnit.SECONDS))
+                            .isInstanceOf(LookupResponse.class);
+                    assertThat(secondService.getInvocationCount()).isEqualTo(2);
+                    assertThat(nettyClient.connections())
+                            .extracting(ServerConnection::getServerNode)
+                            .containsExactly(secondNode);
+                } finally {
+                    firstService.completeFirstLookup();
+                    secondService.completeFirstLookup();
+                }
+            }
+        }
+    }
+
+    @Test
+    void testConnectionMetricsRemainIndependentAcrossEndpoints() throws Exception {
+        try (NetUtils.Port firstPort = getAvailablePort();
+                NetUtils.Port secondPort = getAvailablePort()) {
+            ServerNode firstNode =
+                    new ServerNode(1, "localhost", firstPort.getPort(), ServerType.TABLET_SERVER);
+            ServerNode secondNode =
+                    new ServerNode(1, "localhost", secondPort.getPort(), ServerType.TABLET_SERVER);
+
+            try (NettyServer firstServer =
+                            createTabletServer(firstNode, new TestingTabletGatewayService());
+                    NettyServer secondServer =
+                            createTabletServer(secondNode, new TestingTabletGatewayService())) {
+                firstServer.start();
+                secondServer.start();
+
+                Gauge<?> totalRequests =
+                        (Gauge<?>)
+                                clientMetrics
+                                        .getMetrics()
+                                        .get(MetricNames.CLIENT_REQUESTS_RATE_TOTAL);
+                assertThat(totalRequests).isNotNull();
+
+                nettyClient
+                        .sendRequest(firstNode, ApiKeys.LOOKUP, newLookupRequest())
+                        .get(5, TimeUnit.SECONDS);
+                nettyClient
+                        .sendRequest(secondNode, ApiKeys.LOOKUP, newLookupRequest())
+                        .get(5, TimeUnit.SECONDS);
+
+                // Each physical endpoint contributes to the aggregate metric.
+                assertThat(((Number) totalRequests.getValue()).longValue()).isEqualTo(2L);
+
+                nettyClient.disconnect(firstNode).get(5, TimeUnit.SECONDS);
+                retry(
+                        Duration.ofSeconds(10),
+                        () ->
+                                assertThat(((Number) totalRequests.getValue()).longValue())
+                                        .isEqualTo(1L));
+
+                // Closing one endpoint must not discard the surviving endpoint's metrics.
+                nettyClient
+                        .sendRequest(secondNode, ApiKeys.LOOKUP, newLookupRequest())
+                        .get(5, TimeUnit.SECONDS);
+                assertThat(((Number) totalRequests.getValue()).longValue()).isEqualTo(2L);
+
+                nettyClient.disconnect(secondNode).get(5, TimeUnit.SECONDS);
+                retry(
+                        Duration.ofSeconds(10),
+                        () ->
+                                assertThat(((Number) totalRequests.getValue()).longValue())
+                                        .isZero());
+
+                // Registering a replacement at the same endpoint must start a new metric series.
+                nettyClient
+                        .sendRequest(secondNode, ApiKeys.LOOKUP, newLookupRequest())
+                        .get(5, TimeUnit.SECONDS);
+                assertThat(((Number) totalRequests.getValue()).longValue()).isEqualTo(1L);
+            }
+        }
+    }
+
+    @Test
     void testDisconnectClosesAllConnectionsForSameServerUid() throws Exception {
         try (NetUtils.Port firstPort = getAvailablePort();
                 NetUtils.Port secondPort = getAvailablePort()) {
@@ -496,6 +627,51 @@ final class NettyClientTest {
                 .hasMessageContaining("Disconnected from node");
 
         assertThat(nettyClient.connections()).isEmpty();
+    }
+
+    private NettyServer createTabletServer(
+            ServerNode node, TestingTabletGatewayService gatewayService) throws Exception {
+        MetricGroup metricGroup = NOPMetricsGroup.newInstance();
+        return new NettyServer(
+                conf,
+                Collections.singleton(new Endpoint(node.host(), node.port(), "INTERNAL")),
+                gatewayService,
+                metricGroup,
+                RequestsMetrics.createTabletServerRequestMetrics(metricGroup));
+    }
+
+    private static LookupRequest newLookupRequest() {
+        LookupRequest request = new LookupRequest().setTableId(1);
+        request.addBucketsReq().setBucketId(1);
+        return request;
+    }
+
+    private static final class DelayedLookupGatewayService extends TestingTabletGatewayService {
+        private final CountDownLatch firstLookupStarted = new CountDownLatch(1);
+        private final CompletableFuture<LookupResponse> firstLookupResponse =
+                new CompletableFuture<>();
+        private final AtomicInteger invocationCount = new AtomicInteger();
+
+        @Override
+        public CompletableFuture<LookupResponse> lookup(LookupRequest request) {
+            if (invocationCount.incrementAndGet() == 1) {
+                firstLookupStarted.countDown();
+                return firstLookupResponse;
+            }
+            return CompletableFuture.completedFuture(new LookupResponse());
+        }
+
+        private boolean awaitFirstLookup() throws InterruptedException {
+            return firstLookupStarted.await(5, TimeUnit.SECONDS);
+        }
+
+        private void completeFirstLookup() {
+            firstLookupResponse.complete(new LookupResponse());
+        }
+
+        private int getInvocationCount() {
+            return invocationCount.get();
+        }
     }
 
     private void buildNettyServer(int serverId) throws Exception {

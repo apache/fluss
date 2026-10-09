@@ -125,7 +125,8 @@ public final class NettyClient implements RpcClient {
      * inflight/pending requests for this connection will receive disconnections.
      *
      * @param node The server node to disconnect
-     * @return A future that completes when the connection is fully closed
+     * @return A future completed after logical disconnection and request notification; physical
+     *     channel closure and resource cleanup may finish later
      */
     @Override
     public CompletableFuture<Void> disconnect(ServerNode node) {
@@ -146,7 +147,8 @@ public final class NettyClient implements RpcClient {
      * inflight/pending requests for these connections will receive disconnections.
      *
      * @param serverUid The uid of the server node
-     * @return A future that completes when all associated connections are fully closed
+     * @return A future completed after logical disconnection and request notification for the
+     *     matching connections; physical channel closure and resource cleanup may finish later
      */
     @Override
     public CompletableFuture<Void> disconnect(String serverUid) {

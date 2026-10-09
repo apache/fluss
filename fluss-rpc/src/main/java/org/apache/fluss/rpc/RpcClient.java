@@ -57,7 +57,9 @@ public interface RpcClient extends AutoCloseable {
      * pending requests for this connection will receive disconnections.
      *
      * @param node The server node to disconnect
-     * @return A future that is completed when the disconnection is complete
+     * @return A future completed after the connection is logically disconnected and its pending
+     *     and in-flight requests have been notified; physical channel closure and resource cleanup
+     *     may finish later
      */
     CompletableFuture<Void> disconnect(ServerNode node);
 
@@ -66,7 +68,9 @@ public interface RpcClient extends AutoCloseable {
      * pending requests for these connections will receive disconnections.
      *
      * @param serverUid The uid of the server node
-     * @return A future that is completed when the disconnection is complete
+     * @return A future completed after the matching connections are logically disconnected and
+     *     their pending and in-flight requests have been notified; physical channel closure and
+     *     resource cleanup may finish later
      */
     CompletableFuture<Void> disconnect(String serverUid);
 
