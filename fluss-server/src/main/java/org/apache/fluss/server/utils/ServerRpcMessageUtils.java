@@ -223,6 +223,7 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -1038,7 +1039,8 @@ public class ServerRpcMessageUtils {
     }
 
     public static Map<TableBucket, FetchReqInfo> getFetchLogData(FetchLogRequest request) {
-        Map<TableBucket, FetchReqInfo> fetchDataMap = new HashMap<>();
+        // The server consumes the shared fetch budget in request order.
+        Map<TableBucket, FetchReqInfo> fetchDataMap = new LinkedHashMap<>();
         for (PbFetchLogReqForTable fetchLogReqForTable : request.getTablesReqsList()) {
             long tableId = fetchLogReqForTable.getTableId();
             final int[] projectionFields;

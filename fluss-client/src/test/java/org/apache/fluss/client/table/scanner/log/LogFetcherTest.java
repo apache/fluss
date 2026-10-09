@@ -32,6 +32,7 @@ import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.SchemaInfo;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.record.LogRecordReadContext;
 import org.apache.fluss.remote.RemoteLogFetchInfo;
@@ -39,6 +40,8 @@ import org.apache.fluss.remote.RemoteLogSegment;
 import org.apache.fluss.rpc.entity.FetchLogResultForBucket;
 import org.apache.fluss.rpc.messages.FetchLogRequest;
 import org.apache.fluss.rpc.messages.FetchLogResponse;
+import org.apache.fluss.rpc.messages.PbFetchLogReqForBucket;
+import org.apache.fluss.rpc.messages.PbFetchLogReqForTable;
 import org.apache.fluss.rpc.protocol.ApiError;
 import org.apache.fluss.rpc.protocol.FetchLogReadPreference;
 import org.apache.fluss.server.entity.FetchReqInfo;
@@ -68,6 +71,7 @@ import static org.apache.fluss.client.metadata.TestingMetadataUpdater.NODE1;
 import static org.apache.fluss.client.metadata.TestingMetadataUpdater.NODE2;
 import static org.apache.fluss.client.metadata.TestingMetadataUpdater.NODE3;
 import static org.apache.fluss.record.TestData.DATA1_SCHEMA;
+import static org.apache.fluss.record.TestData.DATA1_TABLE_DESCRIPTOR;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_ID;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_INFO;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_PATH;
@@ -124,6 +128,69 @@ public class LogFetcherTest {
     private ClientSchemaGetter createSchemaGetter(Configuration conf) {
         return new TestingClientSchemaGetter(
                 DATA1_TABLE_PATH, new SchemaInfo(DATA1_SCHEMA, 0), metadataUpdater, conf);
+    }
+
+    @Test
+    void testFetchRequestPreservesBucketOrderAcrossTables() {
+        TablePath otherPath = TablePath.of("test_db", "other_table");
+        long otherTableId = DATA1_TABLE_ID + 1;
+        TableInfo otherTable =
+                TableInfo.of(
+                        otherPath,
+                        otherTableId,
+                        0,
+                        DATA1_TABLE_DESCRIPTOR,
+                        DATA1_TABLE_INFO.getRemoteDataDir(),
+                        0,
+                        0);
+        Map<TablePath, TableInfo> tables = new HashMap<>();
+        tables.put(DATA1_TABLE_PATH, DATA1_TABLE_INFO);
+        tables.put(otherPath, otherTable);
+        IOUtils.closeQuietly(logFetcher);
+        metadataUpdater =
+                new TestingMetadataUpdater(
+                        TestingMetadataUpdater.COORDINATOR,
+                        Arrays.asList(NODE1, NODE1, NODE2),
+                        tables,
+                        null,
+                        new Configuration());
+        logFetcher = createLogFetcher(new Configuration());
+        logFetcher.registerTable(
+                new TableScanSpec(otherTable, null, null),
+                new TestingClientSchemaGetter(
+                        otherPath,
+                        new SchemaInfo(DATA1_SCHEMA, 0),
+                        metadataUpdater,
+                        new Configuration()));
+        TableBucket a0 = new TableBucket(DATA1_TABLE_ID, 0);
+        TableBucket a1 = new TableBucket(DATA1_TABLE_ID, 1);
+        TableBucket a2 = new TableBucket(DATA1_TABLE_ID, 2);
+        TableBucket b0 = new TableBucket(otherTableId, 0);
+        TableBucket b1 = new TableBucket(otherTableId, 1);
+        List<TableBucket> buckets = Arrays.asList(a0, a2, b0, b1, a1);
+        Map<TableBucket, Long> offsets = new HashMap<>();
+        buckets.forEach(bucket -> offsets.put(bucket, 0L));
+        logFetcher.getLogScannerStatus().assignScanBuckets(offsets);
+
+        Map<Integer, FetchLogRequest> requests = logFetcher.prepareFetchLogRequests(buckets);
+
+        List<PbFetchLogReqForTable> tablesForLeader = requests.get(1).getTablesReqsList();
+        assertThat(tablesForLeader)
+                .extracting(PbFetchLogReqForTable::getTableId)
+                .containsExactly(DATA1_TABLE_ID, otherTableId, DATA1_TABLE_ID);
+        assertThat(tablesForLeader.get(0).getBucketsReqsList())
+                .extracting(PbFetchLogReqForBucket::getBucketId)
+                .containsExactly(0);
+        assertThat(tablesForLeader.get(1).getBucketsReqsList())
+                .extracting(PbFetchLogReqForBucket::getBucketId)
+                .containsExactly(0, 1);
+        assertThat(tablesForLeader.get(2).getBucketsReqsList())
+                .extracting(PbFetchLogReqForBucket::getBucketId)
+                .containsExactly(1);
+        assertThat(requests.get(2).getTablesReqsList()).hasSize(1);
+        assertThat(requests.get(2).getTablesReqsList().get(0).getBucketsReqsList())
+                .extracting(PbFetchLogReqForBucket::getBucketId)
+                .containsExactly(2);
     }
 
     @Test
