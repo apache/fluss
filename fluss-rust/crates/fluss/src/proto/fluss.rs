@@ -1341,6 +1341,12 @@ pub struct PbFetchLogRespForBucket {
     /// returned for KV follower fetches and is distinct from the physical log_start_offset.
     #[prost(int64, optional, tag = "10")]
     pub min_retain_offset: ::core::option::Option<i64>,
+    /// The actual offset used for this fetch after resolving an EARLIEST request.
+    /// This field is present only when the request used EARLIEST_OFFSET.
+    /// Its presence also allows a new client to distinguish a server that supports
+    /// EARLIEST resolution from an older server that does not expose the resolved offset.
+    #[prost(int64, optional, tag = "11")]
+    pub resolved_earliest_offset: ::core::option::Option<i64>,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct PbPutKvReqForBucket {

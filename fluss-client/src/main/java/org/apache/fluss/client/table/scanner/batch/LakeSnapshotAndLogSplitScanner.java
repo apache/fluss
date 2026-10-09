@@ -65,7 +65,7 @@ public class LakeSnapshotAndLogSplitScanner implements BatchScanner {
     private Map<InternalRow, KeyValueRow> logRows;
 
     private final LogScanner logScanner;
-    private final long stoppingOffset;
+    private final TableBucket tableBucket;
     private boolean logScanFinished;
 
     private SortMergeReader currentSortMergeReader;
@@ -81,7 +81,7 @@ public class LakeSnapshotAndLogSplitScanner implements BatchScanner {
         this.pkIndexes = table.getTableInfo().getSchema().getPrimaryKeyIndexes();
         this.lakeSplits = lakeSplits;
         this.lakeSource = lakeSource;
-        this.stoppingOffset = stoppingOffset;
+        this.tableBucket = tableBucket;
         ProjectionPlan projectionPlan =
                 ProjectionPlan.create(
                         table.getTableInfo().getRowType().getFieldCount(),
@@ -97,14 +97,19 @@ public class LakeSnapshotAndLogSplitScanner implements BatchScanner {
                         .mapToObj(field -> new int[] {field})
                         .toArray(int[][]::new));
 
-        if (tableBucket.getPartitionId() != null) {
-            this.logScanner.subscribe(
-                    tableBucket.getPartitionId(), tableBucket.getBucket(), startingOffset);
-        } else {
-            this.logScanner.subscribe(tableBucket.getBucket(), startingOffset);
-        }
-
         this.logScanFinished = startingOffset >= stoppingOffset || stoppingOffset <= 0;
+        if (!logScanFinished) {
+            if (tableBucket.getPartitionId() != null) {
+                this.logScanner.subscribeBounded(
+                        tableBucket.getPartitionId(),
+                        tableBucket.getBucket(),
+                        startingOffset,
+                        stoppingOffset);
+            } else {
+                this.logScanner.subscribeBounded(
+                        tableBucket.getBucket(), startingOffset, stoppingOffset);
+            }
+        }
     }
 
     @Nullable
@@ -187,11 +192,10 @@ public class LakeSnapshotAndLogSplitScanner implements BatchScanner {
             InternalRow keyRow = keyValueRow.keyRow();
             // upsert the key value row
             logRows.put(keyRow, keyValueRow);
-            if (scanRecord.logOffset() >= stoppingOffset - 1) {
-                // has reached to the end
-                logScanFinished = true;
-                break;
-            }
+        }
+        // Completion may accompany the final records or arrive without any records.
+        if (scanRecords.finishedBuckets().contains(tableBucket)) {
+            logScanFinished = true;
         }
     }
 
