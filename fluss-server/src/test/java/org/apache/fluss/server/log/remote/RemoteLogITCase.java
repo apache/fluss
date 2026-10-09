@@ -35,6 +35,7 @@ import org.apache.fluss.remote.RemoteLogSegment;
 import org.apache.fluss.rpc.entity.FetchLogResultForBucket;
 import org.apache.fluss.rpc.gateway.CoordinatorGateway;
 import org.apache.fluss.rpc.gateway.TabletServerGateway;
+import org.apache.fluss.rpc.messages.PutKvResponse;
 import org.apache.fluss.rpc.protocol.ApiError;
 import org.apache.fluss.server.entity.FetchReqInfo;
 import org.apache.fluss.server.log.FetchParams;
@@ -79,6 +80,8 @@ import static org.apache.fluss.server.testutils.RpcMessageTestUtils.createTable;
 import static org.apache.fluss.server.testutils.RpcMessageTestUtils.newAlterTableRequest;
 import static org.apache.fluss.server.testutils.RpcMessageTestUtils.newDropTableRequest;
 import static org.apache.fluss.server.testutils.RpcMessageTestUtils.newProduceLogRequest;
+import static org.apache.fluss.server.testutils.RpcMessageTestUtils.newPutKvRequest;
+import static org.apache.fluss.testutils.DataTestUtils.genKvRecordBatch;
 import static org.apache.fluss.testutils.DataTestUtils.genMemoryLogRecordsByObject;
 import static org.apache.fluss.testutils.DataTestUtils.genMemoryLogRecordsWithWriterId;
 import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
@@ -289,17 +292,35 @@ public class RemoteLogITCase {
             // Write enough data to create multiple segments (segment size is 1kb)
             int batchCount = 10;
             for (int i = 0; i < batchCount; i++) {
-                assertProduceLogResponse(
-                        leaderGateway
-                                .produceLog(
-                                        newProduceLogRequest(
-                                                tableIds.get(t),
-                                                0,
-                                                1,
-                                                genMemoryLogRecordsByObject(DATA1)))
-                                .get(),
-                        0,
-                        (long) i * DATA1.size());
+                if (isPrimaryTable) {
+                    PutKvResponse response =
+                            leaderGateway
+                                    .putKv(
+                                            newPutKvRequest(
+                                                    tableIds.get(t),
+                                                    null,
+                                                    0,
+                                                    1,
+                                                    genKvRecordBatch(
+                                                            (short) 1,
+                                                            schema.getRowType(),
+                                                            DATA1.toArray(new Object[0][]))))
+                                    .get();
+                    assertThat(response.getBucketsRespsList()).hasSize(1);
+                    assertThat(response.getBucketsRespsList().get(0).hasErrorCode()).isFalse();
+                } else {
+                    assertProduceLogResponse(
+                            leaderGateway
+                                    .produceLog(
+                                            newProduceLogRequest(
+                                                    tableIds.get(t),
+                                                    0,
+                                                    1,
+                                                    genMemoryLogRecordsByObject(DATA1)))
+                                    .get(),
+                            0,
+                            (long) i * DATA1.size());
+                }
             }
         }
 
@@ -395,18 +416,44 @@ public class RemoteLogITCase {
             // Write enough data to create multiple segments (segment size is 1kb)
             int batchCount = 10;
             for (int i = 0; i < batchCount; i++) {
-                assertProduceLogResponse(
-                        leaderGateway
-                                .produceLog(
-                                        newProduceLogRequest(
-                                                tableId,
-                                                partitionId,
-                                                0,
-                                                1,
-                                                genMemoryLogRecordsByObject(DATA1)))
-                                .get(),
-                        0,
-                        (long) i * DATA1.size());
+                if (isPrimaryTable) {
+                    PutKvResponse response =
+                            leaderGateway
+                                    .putKv(
+                                            newPutKvRequest(
+                                                    tableId,
+                                                    partitionId,
+                                                    0,
+                                                    1,
+                                                    genKvRecordBatch(
+                                                            (short) 1,
+                                                            schema.getRowType(),
+                                                            DATA1.stream()
+                                                                    .map(
+                                                                            row ->
+                                                                                    new Object[] {
+                                                                                        row[0],
+                                                                                        row[1],
+                                                                                        partitionName
+                                                                                    })
+                                                                    .toArray(Object[][]::new))))
+                                    .get();
+                    assertThat(response.getBucketsRespsList()).hasSize(1);
+                    assertThat(response.getBucketsRespsList().get(0).hasErrorCode()).isFalse();
+                } else {
+                    assertProduceLogResponse(
+                            leaderGateway
+                                    .produceLog(
+                                            newProduceLogRequest(
+                                                    tableId,
+                                                    partitionId,
+                                                    0,
+                                                    1,
+                                                    genMemoryLogRecordsByObject(DATA1)))
+                                    .get(),
+                            0,
+                            (long) i * DATA1.size());
+                }
             }
         }
 

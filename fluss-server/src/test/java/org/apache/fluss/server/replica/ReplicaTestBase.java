@@ -120,7 +120,6 @@ import static org.apache.fluss.record.TestData.DATA3_SCHEMA_PK_AUTO_INC;
 import static org.apache.fluss.record.TestData.DATA3_TABLE_DESCRIPTOR_PK_AUTO_INC;
 import static org.apache.fluss.record.TestData.DATA3_TABLE_ID_PK_AUTO_INC;
 import static org.apache.fluss.record.TestData.DATA3_TABLE_PATH_PK_AUTO_INC;
-import static org.apache.fluss.record.TestData.DEFAULT_REMOTE_DATA_DIR;
 import static org.apache.fluss.server.coordinator.CoordinatorContext.INITIAL_COORDINATOR_EPOCH;
 import static org.apache.fluss.server.replica.ReplicaManager.HIGH_WATERMARK_CHECKPOINT_FILE_NAME;
 import static org.apache.fluss.server.zk.data.LeaderAndIsr.INITIAL_BUCKET_EPOCH;
@@ -355,7 +354,8 @@ public class ReplicaTestBase {
         }
         zkClient.registerTable(
                 tablePath,
-                TableRegistration.newTable(tableId, DEFAULT_REMOTE_DATA_DIR, tableDescriptor));
+                TableRegistration.newTable(
+                        tableId, conf.get(ConfigOptions.REMOTE_DATA_DIR), tableDescriptor));
         zkClient.registerFirstSchema(tablePath, schema);
         return tableId;
     }
