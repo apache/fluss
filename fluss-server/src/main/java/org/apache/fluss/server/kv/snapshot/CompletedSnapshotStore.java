@@ -42,6 +42,7 @@ import java.util.Set;
 import java.util.concurrent.Executor;
 import java.util.concurrent.locks.ReentrantLock;
 
+import static org.apache.fluss.utils.Preconditions.checkArgument;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 import static org.apache.fluss.utils.concurrent.LockUtils.inLock;
 
@@ -116,6 +117,53 @@ public class CompletedSnapshotStore {
                                 completedSnapshot, snapshotsCleaner, () -> {}));
     }
 
+    /**
+     * Registers an immutable external snapshot and includes it in ordinary snapshot retention.
+     *
+     * <p>Identity and ordering checks, persistent handle confirmation and retention updates are
+     * serialized with ordinary snapshot additions. Even an already retained snapshot must have its
+     * handle confirmed under the supplied coordinator epoch before a retry succeeds. Obsolete
+     * snapshot cleanup follows ordinary retention semantics and may be deferred on failure.
+     */
+    public void registerExternalSnapshot(final CompletedSnapshot snapshot, int coordinatorZkVersion)
+            throws Exception {
+        checkNotNull(snapshot, "Snapshot");
+        inLock(
+                lock,
+                () -> {
+                    CompletedSnapshot existing = stillInUseSnapshots.get(snapshot.getSnapshotID());
+                    for (CompletedSnapshot retained : completedSnapshots) {
+                        if (retained.getSnapshotID() == snapshot.getSnapshotID()) {
+                            existing = retained;
+                            break;
+                        }
+                    }
+                    if (existing != null) {
+                        checkArgument(
+                                existing.equals(snapshot),
+                                "Conflicting snapshot identity for %s snapshot %s.",
+                                snapshot.getTableBucket(),
+                                snapshot.getSnapshotID());
+                    } else {
+                        checkArgument(
+                                completedSnapshots.isEmpty()
+                                        || completedSnapshots.peekLast().getSnapshotID()
+                                                < snapshot.getSnapshotID(),
+                                "Cannot register an older snapshot that has already been subsumed.");
+                    }
+                    completedSnapshotHandleStore.registerExternal(
+                            snapshot.getTableBucket(),
+                            new CompletedSnapshotHandle(
+                                    snapshot.getSnapshotID(),
+                                    snapshot.getMetadataFilePath(),
+                                    snapshot.getLogOffset()),
+                            coordinatorZkVersion);
+                    if (existing == null) {
+                        adoptConfirmedSnapshot(snapshot, snapshotsCleaner, () -> {});
+                    }
+                });
+    }
+
     public long getPhysicalStorageRemoteKvSize() {
         return sharedKvFileRegistry.getFileSize();
     }
@@ -159,60 +207,60 @@ public class CompletedSnapshotStore {
             throws Exception {
         checkNotNull(snapshot, "Snapshot");
 
-        // register the completed snapshot to the shared registry
-        snapshot.registerSharedKvFilesAfterRestored(sharedKvFileRegistry);
-
         CompletedSnapshotHandle completedSnapshotHandle = store(snapshot);
         completedSnapshotHandleStore.add(
                 snapshot.getTableBucket(), snapshot.getSnapshotID(), completedSnapshotHandle);
 
-        // Now add the new one. If it fails, we don't want to lose existing data.
-        inLock(
-                lock,
-                () -> {
-                    completedSnapshots.addLast(snapshot);
+        adoptConfirmedSnapshot(snapshot, snapshotsCleaner, postCleanup);
+    }
 
-                    // Remove completed snapshot from queue and snapshotStateHandleStore, not
-                    // discard.
-                    subsume(
-                            completedSnapshots,
-                            maxNumberOfSnapshotsToRetain,
-                            completedSnapshot -> {
-                                if (snapshotInUseChecker.isInUse(completedSnapshot)) {
-                                    LOG.debug(
-                                            "Snapshot {} is still in use, move it to stillInUseSnapshots",
-                                            completedSnapshot.getSnapshotID());
-                                    stillInUseSnapshots.put(
-                                            completedSnapshot.getSnapshotID(), completedSnapshot);
-                                } else {
-                                    remove(
-                                            completedSnapshot.getTableBucket(),
-                                            completedSnapshot.getSnapshotID());
-                                    snapshotsCleaner.addSubsumedSnapshot(completedSnapshot);
-                                }
-                            });
+    /**
+     * Makes a snapshot whose persistent node is already confirmed visible: shared handles are
+     * exposed only now, never before the node exists, and retention is applied.
+     */
+    private void adoptConfirmedSnapshot(
+            CompletedSnapshot snapshot, SnapshotsCleaner snapshotsCleaner, Runnable postCleanup)
+            throws Exception {
+        snapshot.registerSharedKvFilesAfterRestored(sharedKvFileRegistry);
+        completedSnapshots.addLast(snapshot);
 
-                    // Check if any previously still-in-use snapshots can now be released
-                    // (lease expired).
-                    removeUnusedSnapshots(snapshotsCleaner);
-
-                    // SST file cleanup: compute effective lowest from retained (non-leased)
-                    // snapshots only, and protect files referenced by still-in-use snapshots.
-                    Set<Long> stillInUseIds = new HashSet<>(stillInUseSnapshots.keySet());
-                    findLowest(completedSnapshots)
-                            .ifPresent(
-                                    id ->
-                                            sharedKvFileRegistry.unregisterUnusedKvFile(
-                                                    id, stillInUseIds));
-
-                    // Snapshot metadata/private files cleanup: use the latest snapshot
-                    // ID + 1 so subsumed snapshots can be cleaned even when a lower
-                    // snapshot has a lease. This is safe because
-                    // KvSnapshotHandle.discard() only deletes private files and
-                    // metadata, not shared SST files registered in SharedKvFileRegistry.
-                    snapshotsCleaner.cleanSubsumedSnapshots(
-                            snapshot.getSnapshotID() + 1, stillInUseIds, postCleanup, ioExecutor);
+        // Remove completed snapshot from queue and snapshotStateHandleStore, not
+        // discard.
+        subsume(
+                completedSnapshots,
+                maxNumberOfSnapshotsToRetain,
+                completedSnapshot -> {
+                    if (snapshotInUseChecker.isInUse(completedSnapshot)) {
+                        LOG.debug(
+                                "Snapshot {} is still in use, move it to stillInUseSnapshots",
+                                completedSnapshot.getSnapshotID());
+                        stillInUseSnapshots.put(
+                                completedSnapshot.getSnapshotID(), completedSnapshot);
+                    } else {
+                        remove(
+                                completedSnapshot.getTableBucket(),
+                                completedSnapshot.getSnapshotID());
+                        snapshotsCleaner.addSubsumedSnapshot(completedSnapshot);
+                    }
                 });
+
+        // Check if any previously still-in-use snapshots can now be released
+        // (lease expired).
+        removeUnusedSnapshots(snapshotsCleaner);
+
+        // SST file cleanup: compute effective lowest from retained (non-leased)
+        // snapshots only, and protect files referenced by still-in-use snapshots.
+        Set<Long> stillInUseIds = new HashSet<>(stillInUseSnapshots.keySet());
+        findLowest(completedSnapshots)
+                .ifPresent(id -> sharedKvFileRegistry.unregisterUnusedKvFile(id, stillInUseIds));
+
+        // Snapshot metadata/private files cleanup: use the latest snapshot
+        // ID + 1 so subsumed snapshots can be cleaned even when a lower
+        // snapshot has a lease. This is safe because
+        // KvSnapshotHandle.discard() only deletes private files and
+        // metadata, not shared SST files registered in SharedKvFileRegistry.
+        snapshotsCleaner.cleanSubsumedSnapshots(
+                snapshot.getSnapshotID() + 1, stillInUseIds, postCleanup, ioExecutor);
     }
 
     private void removeUnusedSnapshots(SnapshotsCleaner snapshotsCleaner) throws Exception {
