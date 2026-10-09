@@ -31,18 +31,20 @@ import org.apache.flink.types.Row;
 import javax.annotation.Nullable;
 
 import java.nio.charset.StandardCharsets;
+import java.time.Instant;
 import java.util.Optional;
 
 /**
  * Procedure to list rebalance progress.
  *
  * <p>This procedure allows querying rebalance progress. See {@link
- * Admin#listRebalanceProgress(String)} for more details.
+ * Admin#listRebalanceProgress(String)} for more details. To list all known rebalances as summaries,
+ * see {@link ListRebalancesProcedure}.
  *
  * <p>Usage examples:
  *
  * <pre>
- * -- List the rebalance progress without rebalance id
+ * -- List the current rebalance progress
  * CALL sys.list_rebalance();
  *
  * -- List the rebalance progress with rebalance id
@@ -60,23 +62,26 @@ public class ListRebalanceProcessProcedure extends ProcedureBase {
             },
             output =
                     @DataTypeHint(
-                            "ROW<rebalance_id STRING, rebalance_status STRING, rebalance_progress STRING, rebalance_plan STRING>"))
+                            "ROW<rebalance_id STRING, rebalance_status STRING, rebalance_progress STRING, rebalance_plan STRING, started_at TIMESTAMP_LTZ(3), completed_at TIMESTAMP_LTZ(3)>"))
     public Row[] call(ProcedureContext context, @Nullable String rebalanceId) throws Exception {
         Optional<RebalanceProgress> progressOpt = admin.listRebalanceProgress(rebalanceId).get();
+        return progressOpt.map(progress -> new Row[] {toRow(progress)}).orElse(new Row[0]);
+    }
 
-        if (!progressOpt.isPresent()) {
-            return new Row[0];
-        }
-        RebalanceProgress progress = progressOpt.get();
-        return new Row[] {
-            Row.of(
-                    progress.rebalanceId(),
-                    progress.status().toString(),
-                    progress.formatAsPercentage(),
-                    new String(
-                            JsonSerdeUtils.writeValueAsBytes(
-                                    progress, RebalanceProgressJsonSerializer.INSTANCE),
-                            StandardCharsets.UTF_8))
-        };
+    private static Row toRow(RebalanceProgress progress) {
+        return Row.of(
+                progress.rebalanceId(),
+                progress.status().toString(),
+                progress.formatAsPercentage(),
+                new String(
+                        JsonSerdeUtils.writeValueAsBytes(
+                                progress, RebalanceProgressJsonSerializer.INSTANCE),
+                        StandardCharsets.UTF_8),
+                toInstant(progress.startedAtMs()),
+                toInstant(progress.completedAtMs()));
+    }
+
+    private static @Nullable Instant toInstant(long epochMs) {
+        return epochMs < 0 ? null : Instant.ofEpochMilli(epochMs);
     }
 }
