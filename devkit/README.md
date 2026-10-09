@@ -164,20 +164,23 @@ Tiering is asynchronous. `just tiering-status` is only a diagnostic check that t
 job is running; the lake-only query itself must return the sample data before the
 workflow is considered successful.
 Iceberg examples are under `examples/lake/iceberg/`. Lance examples are under
-`examples/lake/lance/`; Lance has no Flink SQL Lake-only reader. The smoke check verifies the
-Lance dataset manifest and data area in RustFS; object existence alone is not a guarantee that a
-Lance client can read the dataset. The Lance example uses an append-only `embedding_events` Log Table:
+`examples/lake/lance/`; Lance has no Flink SQL Lake-only reader. The CI smoke opens the dataset
+through RustFS's S3 API with the same Python example shown below. The Lance example uses an
+append-only `embedding_events` Log Table:
 
 ```bash
 just build lance
 just up lance
 just run-sql examples/lake/lance/create-table.sql
 just run-sql examples/lake/lance/write-data.sql
+python -m pip install 'pylance==0.33.0'
+python examples/lake/lance/read-data.py
 ```
 
-Wait for the tiering job and inspect the resulting Lance objects in RustFS.
-The CI smoke additionally opens the dataset with the Python `lance` client and checks the
-three event rows and embedding type; RustFS inspection alone is only a troubleshooting aid.
+The Python example waits for asynchronous Tiering, opens the resulting dataset with the Lance
+client, prints the three embedding events, and verifies their IDs and embedding type. Run the two
+Python commands in a virtual environment if you do not want to install `pylance` globally. The
+RustFS console is only a troubleshooting aid.
 
 The examples use fixed table names. Run `just clean` before repeating a workflow if existing tables
 or lake data would conflict.
