@@ -89,7 +89,7 @@ Make sure to use Lance-specific configurations as parameters when starting the F
     --datalake.lance.access_key_id <access_key_id>
 ```
 
-> **NOTE**: Fluss v0.8 only supports tiering log tables to Lance.
+> **NOTE**: Fluss v1.0 currently supports tiering Log Tables to Lance only.
 
 > **NOTE**: The Lance connector leverages Arrow Java library, which operates on off-heap memory. To prevent `java.lang.OutOfMemoryError: Direct buffer memory` error in Flink Task Manager, please increase the value of `taskmanager.memory.task.off-heap.size` in `<FLINK_HOME>/conf/config.yaml` to at least `'512m'` (e.g., `taskmanager.memory.task.off-heap.size: 512m`). You may need to adjust this value higher (such as `'1g'`) depending on your workload and data size.
 
@@ -169,8 +169,7 @@ CREATE TABLE product_embeddings (
     product_id BIGINT,
     product_name STRING,
     embedding ARRAY<FLOAT>,
-    tags ARRAY<STRING>,
-    PRIMARY KEY (product_id) NOT ENFORCED
+    tags ARRAY<STRING>
 ) WITH (
     'table.datalake.enabled' = 'true',
     'table.datalake.freshness' = '30s'
