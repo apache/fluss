@@ -80,3 +80,10 @@ SELECT * FROM T;
 | 3  | 3.0 | t3 |
 +----+-----+----+
 ```
+
+## Sequence Group
+
+Sequence groups give each column group its own order, so a stale partial update is rejected independently for the
+affected group: its fields keep the stored values while other groups still move forward. See
+[Handling out-of-order updates with sequence groups](../table-types/pk-table.md#handling-out-of-order-updates-with-sequence-groups)
+for the declaration syntax, NULL behavior, and validation rules.

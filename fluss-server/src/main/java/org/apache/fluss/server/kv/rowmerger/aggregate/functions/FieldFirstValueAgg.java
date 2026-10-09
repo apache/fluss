@@ -24,7 +24,14 @@ package org.apache.fluss.server.kv.rowmerger.aggregate.functions;
 
 import org.apache.fluss.types.DataType;
 
-/** First value aggregator - keeps the first seen value. */
+/**
+ * First value aggregator - keeps the first seen value.
+ *
+ * <p>Under a sequence group this aggregator follows the arrival order once a second stale record
+ * lands: each stale record replaces the previous stale result, so the winner is the stale record
+ * that arrived last rather than the one with the smallest sequence. With a single stale record the
+ * result is correct.
+ */
 public class FieldFirstValueAgg extends FieldAggregator {
 
     private static final long serialVersionUID = 1L;

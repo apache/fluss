@@ -1090,6 +1090,49 @@ TableDescriptor.builder()
 </TabItem>
 </Tabs>
 
+## Sequence Group
+
+Sequence groups give each aggregate field its own order. Order-dependent functions such as `first_value`, `last_value`
+and `listagg` follow the arrival order by default, so an out-of-order record changes the result; under a sequence group
+the stored sequence decides which record counts as first or last. Order-independent functions (`sum`, `product`,
+`max`, `min`, `bool_and`, `bool_or`, `rbm32`, `rbm64`) give the same result either way.
+
+The example tracks the earliest price a product was offered at, where the price stream may arrive out of order:
+
+```sql title="Flink SQL"
+CREATE TABLE products (
+    k           INT,
+    first_price BIGINT,
+    ts          INT,
+    PRIMARY KEY (k) NOT ENFORCED
+) WITH (
+    'table.merge-engine'             = 'aggregation',
+    'fields.first_price.agg'         = 'first_value',
+    'fields.ts.sequence-group'       = 'first_price'
+);
+
+-- a later repricing arrives first
+INSERT INTO products VALUES (1, 100, 200);
+-- the original launch price arrives late: its ts is older, so the record is stale and
+-- aggregates in its earlier position, making 80 the first value
+INSERT INTO products VALUES (1, 80, 50);
+SELECT * FROM products;
+-- Output:
++---+-------------+-----+
+| k | first_price | ts  |
++---+-------------+-----+
+| 1 | 80          | 200 |
++---+-------------+-----+
+```
+
+Without the sequence group `first_value` only sees the arrival order, so it would keep `100` and
+miss the actual launch price. Note the stored sequence stays at `200`: the stale record takes its
+earlier position without moving the sequence backwards.
+
+A record whose sequence columns are all NULL carries no order information and contributes nothing at all. See
+[Handling out-of-order updates with sequence groups](../table-types/pk-table.md#handling-out-of-order-updates-with-sequence-groups)
+for the declaration syntax, NULL behavior, and validation rules.
+
 ## Delete Behavior
 
 The aggregation merge engine provides limited support for delete operations. You can configure the behavior using the `'table.delete.behavior'` option:
