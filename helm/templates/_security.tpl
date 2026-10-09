@@ -59,7 +59,8 @@ Usage:
 {{- define "fluss.security.sasl.enabled" -}}
 {{- $internal := include "fluss.security.listener.mechanism" (dict "context" .Values "listener" "internal") -}}
 {{- $client := include "fluss.security.listener.mechanism" (dict "context" .Values "listener" "client") -}}
-{{- if or (ne $internal "") (ne $client "") -}}true{{- end -}}
+{{- $external := include "fluss.security.external.mechanism" . -}}
+{{- if or (ne $internal "") (ne $client "") (ne $external "") -}}true{{- end -}}
 {{- end -}}
 
 {{/*
@@ -70,7 +71,41 @@ Usage:
 {{- define "fluss.security.sasl.plain.enabled" -}}
 {{- $internal := include "fluss.security.listener.mechanism" (dict "context" .Values "listener" "internal") -}}
 {{- $client := include "fluss.security.listener.mechanism" (dict "context" .Values "listener" "client") -}}
-{{- if or (eq $internal "plain") (eq $client "plain") -}}true{{- end -}}
+{{- $external := include "fluss.security.external.mechanism" . -}}
+{{- if or (eq $internal "plain") (eq $client "plain") (eq $external "plain") -}}true{{- end -}}
+{{- end -}}
+
+{{/*
+Raw security.external.sasl.mechanism: "" | plain.
+Usage:
+  include "fluss.security.external.mechanismSetting" .
+*/}}
+{{- define "fluss.security.external.mechanismSetting" -}}
+{{- $listener := .Values.security.external | default dict -}}
+{{- $sasl := $listener.sasl | default dict -}}
+{{- lower (default "" $sasl.mechanism) -}}
+{{- end -}}
+
+{{/*
+EXTERNAL SASL mechanism in effect: security.external.sasl.mechanism, or empty
+when the EXTERNAL listener is disabled.
+Usage:
+  include "fluss.security.external.mechanism" .
+*/}}
+{{- define "fluss.security.external.mechanism" -}}
+{{- if (include "fluss.listeners.external.enabled" .) -}}
+{{- include "fluss.security.external.mechanismSetting" . -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+Protocol for the EXTERNAL listener: PLAINTEXT or SASL.
+Usage:
+  include "fluss.security.external.protocol" .
+*/}}
+{{- define "fluss.security.external.protocol" -}}
+{{- $mechanism := include "fluss.security.external.mechanism" . | trim -}}
+{{- if eq $mechanism "" -}}PLAINTEXT{{- else -}}SASL{{- end -}}
 {{- end -}}
 
 {{/*
@@ -96,6 +131,10 @@ Usage:
     {{- $mechanisms = append $mechanisms (upper $current) -}}
   {{- end -}}
 {{- end -}}
+{{- $external := include "fluss.security.external.mechanism" . | trim -}}
+{{- if and (ne $external "") (not (has (upper $external) $mechanisms)) -}}
+  {{- $mechanisms = append $mechanisms (upper $external) -}}
+{{- end -}}
 {{- join "," $mechanisms -}}
 {{- end -}}
 
@@ -106,49 +145,75 @@ Usage:
   include "fluss.security.sasl.validateMechanisms" .
 */}}
 {{- define "fluss.security.sasl.validateMechanisms" -}}
+{{- $root := . -}}
+{{- $msgs := list -}}
 {{- $allowedMechanisms := list "" "plain" -}}
-{{- range $listener := list "internal" "client" -}}
-  {{- $listenerValues := index $.Values.security $listener | default (dict) -}}
+{{- range $listener := list "internal" "client" "external" -}}
+  {{- $listenerValues := index $root.Values.security $listener | default (dict) -}}
   {{- $sasl := $listenerValues.sasl | default (dict) -}}
   {{- $mechanism := lower (default "" $sasl.mechanism) -}}
   {{- if not (has $mechanism $allowedMechanisms) -}}
-    {{- printf "security.%s.sasl.mechanism must be empty or: plain" $listener -}}
+    {{- $msgs = append $msgs (printf "security.%s.sasl.mechanism must be empty or: plain" $listener) -}}
   {{- end -}}
+{{- end -}}
+{{- join "\n" $msgs -}}
+{{- end -}}
+
+{{/*
+Validates a SASL PLAIN users list. Each entry is either a literal
+{username, password} pair OR {existingSecret: {name, usernameKey?, passwordKey?}}.
+Mixing the two shapes within one entry is not allowed.
+Usage:
+  include "fluss.security.sasl.validatePlainUsersList" (dict "users" $users "path" "security.client.sasl.plain.users")
+*/}}
+{{- define "fluss.security.sasl.validatePlainUsersList" -}}
+{{- $users := .users | default (list) -}}
+{{- $path := .path -}}
+{{- if eq (len $users) 0 -}}
+  {{- printf "%s must contain at least one user when the matching mechanism is plain" $path -}}
+{{- else -}}
+  {{- $errs := list -}}
+  {{- range $idx, $user := $users -}}
+    {{- $ref := $user.existingSecret | default (dict) -}}
+    {{- $hasLiteral := or (not (empty $user.username)) (not (empty $user.password)) -}}
+    {{- $hasRef := not (empty $ref.name) -}}
+    {{- if and $hasLiteral $hasRef -}}
+      {{- $errs = append $errs (printf "%s[%d] cannot set username/password and existingSecret" $path $idx) -}}
+    {{- else if $hasRef -}}
+      {{/* existingSecret path: name is the only required field */}}
+    {{- else -}}
+      {{- if or (empty $user.username) (empty $user.password) -}}
+        {{- $errs = append $errs (printf "%s[%d] must set both username and password (or existingSecret)" $path $idx) -}}
+      {{- end -}}
+    {{- end -}}
+  {{- end -}}
+  {{- join "\n" $errs -}}
 {{- end -}}
 {{- end -}}
 
 {{/*
-Validates security.client.sasl.plain.users. Each entry is either a literal
-{username, password} pair OR {existingSecret: {name, usernameKey?, passwordKey?}}.
-Mixing the two shapes within one entry is not allowed.
-Returns an error message if invalid, empty string otherwise.
+Validates security.client.sasl.plain.users when client SASL PLAIN is enabled.
 Usage:
   include "fluss.security.sasl.validateClientPlainUsers" .
 */}}
 {{- define "fluss.security.sasl.validateClientPlainUsers" -}}
 {{- $clientMechanism := include "fluss.security.listener.mechanism" (dict "context" .Values "listener" "client") -}}
 {{- if eq $clientMechanism "plain" -}}
-  {{- $users := .Values.security.client.sasl.plain.users | default (list) -}}
-  {{- if eq (len $users) 0 -}}
-    {{- print "security.client.sasl.plain.users must contain at least one user when security.client.sasl.mechanism is plain" -}}
-  {{- else -}}
-    {{- $errs := list -}}
-    {{- range $idx, $user := $users -}}
-      {{- $ref := $user.existingSecret | default (dict) -}}
-      {{- $hasLiteral := or (not (empty $user.username)) (not (empty $user.password)) -}}
-      {{- $hasRef := not (empty $ref.name) -}}
-      {{- if and $hasLiteral $hasRef -}}
-        {{- $errs = append $errs (printf "security.client.sasl.plain.users[%d] cannot set username/password and existingSecret" $idx) -}}
-      {{- else if $hasRef -}}
-        {{/* existingSecret path — name is the only required field */}}
-      {{- else -}}
-        {{- if or (empty $user.username) (empty $user.password) -}}
-          {{- $errs = append $errs (printf "security.client.sasl.plain.users[%d] must set both username and password (or existingSecret)" $idx) -}}
-        {{- end -}}
-      {{- end -}}
-    {{- end -}}
-    {{- join "\n" $errs -}}
-  {{- end -}}
+  {{- include "fluss.security.sasl.validatePlainUsersList" (dict "users" (.Values.security.client.sasl.plain.users | default list) "path" "security.client.sasl.plain.users") -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+Validates security.external.sasl.plain.users when EXTERNAL SASL PLAIN is in effect.
+Usage:
+  include "fluss.security.sasl.validateExternal" .
+*/}}
+{{- define "fluss.security.sasl.validateExternal" -}}
+{{- if eq (include "fluss.security.external.mechanism" . | trim) "plain" -}}
+{{- $ext := .Values.security.external | default dict -}}
+{{- $sasl := $ext.sasl | default dict -}}
+{{- $plain := $sasl.plain | default dict -}}
+{{- include "fluss.security.sasl.validatePlainUsersList" (dict "users" ($plain.users | default list) "path" "security.external.sasl.plain.users") -}}
 {{- end -}}
 {{- end -}}
 
@@ -278,12 +343,35 @@ Usage:
 {{- end -}}
 
 {{/*
+Warning when security.external.sasl is configured while the EXTERNAL listener
+is disabled: the settings have no effect until listeners.external.enabled is true.
+Usage:
+  include "fluss.security.sasl.warnExternalIgnored" .
+*/}}
+{{- define "fluss.security.sasl.warnExternalIgnored" -}}
+{{- if not (include "fluss.listeners.external.enabled" .) -}}
+{{- $setting := include "fluss.security.external.mechanismSetting" . -}}
+{{- $ext := .Values.security.external | default dict -}}
+{{- $sasl := $ext.sasl | default dict -}}
+{{- $plain := $sasl.plain | default dict -}}
+{{- $users := $plain.users | default list -}}
+{{- if or (ne $setting "") (gt (len $users) 0) -}}
+security.external.sasl is set but listeners.external.enabled is false; it has no effect until the EXTERNAL listener is enabled
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
 Collects security warning messages.
 Usage:
   include "fluss.security.validateWarning" .
 */}}
 {{- define "fluss.security.validateWarning" -}}
-{{- include "fluss.security.sasl.warnInternalUser" . -}}
+{{- $msgs := list -}}
+{{- $msgs = append $msgs (include "fluss.security.sasl.warnInternalUser" .) -}}
+{{- $msgs = append $msgs (include "fluss.security.sasl.warnExternalIgnored" .) -}}
+{{- $msgs = without $msgs "" -}}
+{{- join "\n" $msgs -}}
 {{- end -}}
 
 {{/*
@@ -295,6 +383,7 @@ Usage:
 {{- $errMessages := list -}}
 {{- $errMessages = append $errMessages (include "fluss.security.sasl.validateMechanisms" .) -}}
 {{- $errMessages = append $errMessages (include "fluss.security.sasl.validateClientPlainUsers" .) -}}
+{{- $errMessages = append $errMessages (include "fluss.security.sasl.validateExternal" .) -}}
 {{- $errMessages = append $errMessages (include "fluss.security.zookeeper.sasl.validateMechanism" .) -}}
 {{- $errMessages = append $errMessages (include "fluss.security.zookeeper.sasl.validateLoginModuleClass" .) -}}
 {{- $errMessages = append $errMessages (include "fluss.security.zookeeper.sasl.validateUsername" .) -}}
@@ -360,5 +449,15 @@ Usage:
 */}}
 {{- define "fluss.security.sasl.plain.client.envVarName" -}}
 {{- printf "FLUSS_JAAS_CLIENT_%s_%d" (upper .field) (int .idx) -}}
+{{- end -}}
+
+{{/*
+Returns the env-var name for an EXTERNAL user credential field at a given index.
+Usage:
+  include "fluss.security.sasl.plain.external.envVarName" (dict "field" "username" "idx" 2)
+  =>  FLUSS_JAAS_EXTERNAL_USERNAME_2
+*/}}
+{{- define "fluss.security.sasl.plain.external.envVarName" -}}
+{{- printf "FLUSS_JAAS_EXTERNAL_%s_%d" (upper .field) (int .idx) -}}
 {{- end -}}
 
