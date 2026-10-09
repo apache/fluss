@@ -30,3 +30,4 @@ org.apache.fluss.server.kv.rowmerger.aggregate.factory.FieldListaggAggFactory
 org.apache.fluss.server.kv.rowmerger.aggregate.factory.FieldStringAggFactory
 org.apache.fluss.server.kv.rowmerger.aggregate.factory.FieldRoaringBitmap32AggFactory
 org.apache.fluss.server.kv.rowmerger.aggregate.factory.FieldRoaringBitmap64AggFactory
+org.apache.fluss.server.kv.rowmerger.aggregate.factory.FieldHllSketchAggFactory
