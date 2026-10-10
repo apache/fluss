@@ -39,6 +39,8 @@ public class GoalUtils {
                 return new LeaderReplicaDistributionGoal();
             case RACK_AWARE:
                 return new RackAwareGoal();
+            case PREFERRED_LEADER_ELECTION:
+                return new PreferredLeaderElectionGoal();
             default:
                 throw new IllegalArgumentException("Unsupported goal type " + goalType);
         }
