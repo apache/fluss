@@ -50,6 +50,7 @@ import org.apache.iceberg.catalog.SupportsNamespaces;
 import org.apache.iceberg.catalog.TableIdentifier;
 import org.apache.iceberg.data.IcebergGenerics;
 import org.apache.iceberg.data.Record;
+import org.apache.iceberg.exceptions.NoSuchTableException;
 import org.apache.iceberg.io.CloseableIterator;
 import org.apache.iceberg.types.Type;
 import org.apache.iceberg.types.Types;
@@ -366,6 +367,60 @@ class IcebergTieringTest {
     }
 
     @Test
+    void testTieringWritesToMappedLakeTablePath() throws Exception {
+        TablePath flussTablePath = TablePath.of("iceberg", "fluss_logical_tiering_table");
+        TablePath lakeTablePath = TablePath.of("iceberg_lake_db", "iceberg_physical_tiering_table");
+
+        // only the mapped physical Iceberg table exists
+        createTable(lakeTablePath, false, false);
+
+        TableInfo tableInfo = createTableInfoWithLakePath(flussTablePath, lakeTablePath);
+
+        // the validator must resolve and load the mapped physical table
+        icebergLakeTieringFactory.validateTable(tableInfo);
+
+        Table lakeTable = icebergCatalog.loadTable(toIceberg(lakeTablePath));
+        SimpleVersionedSerializer<IcebergWriteResult> writeResultSerializer =
+                icebergLakeTieringFactory.getWriteResultSerializer();
+
+        List<IcebergWriteResult> writeResults = new ArrayList<>();
+        Map<Integer, List<LogRecord>> recordsByBucket = new HashMap<>();
+        for (int bucket = 0; bucket < BUCKET_NUM; bucket++) {
+            try (LakeWriter<IcebergWriteResult> writer =
+                    createLakeWriter(flussTablePath, bucket, null, null, tableInfo)) {
+                Tuple2<List<LogRecord>, List<LogRecord>> writeAndExpect =
+                        genLogTableRecords(null, bucket, 10);
+                recordsByBucket.put(bucket, writeAndExpect.f1);
+                for (LogRecord record : writeAndExpect.f0) {
+                    writer.write(record);
+                }
+                IcebergWriteResult result = writer.complete();
+                byte[] serialized = writeResultSerializer.serialize(result);
+                writeResults.add(
+                        writeResultSerializer.deserialize(
+                                writeResultSerializer.getVersion(), serialized));
+            }
+        }
+
+        try (LakeCommitter<IcebergWriteResult, IcebergCommittable> lakeCommitter =
+                createLakeCommitter(flussTablePath, tableInfo)) {
+            IcebergCommittable committable = lakeCommitter.toCommittable(writeResults);
+            lakeCommitter.commit(committable, Collections.singletonMap("k1", "v1"));
+        }
+
+        lakeTable.refresh();
+        assertThat(lakeTable.currentSnapshot()).isNotNull();
+        for (int bucket = 0; bucket < BUCKET_NUM; bucket++) {
+            CloseableIterator<Record> actualRecords = getIcebergRows(lakeTable, null, bucket);
+            verifyTableRecords(actualRecords, recordsByBucket.get(bucket), bucket, null);
+        }
+
+        // the Fluss logical path must never be materialized as a physical Iceberg table
+        assertThatThrownBy(() -> icebergCatalog.loadTable(toIceberg(flussTablePath)))
+                .isInstanceOf(NoSuchTableException.class);
+    }
+
+    @Test
     void testRejectIncompatiblePartitionSpec() {
         TablePath tablePath = TablePath.of("iceberg", "test_incompatible_partition_spec");
         createTable(tablePath, true, false);
@@ -467,6 +522,29 @@ class IcebergTieringTest {
         row.setField(1, temporalIdentifier);
         row.setField(2, BinaryString.fromString(payload));
         return row;
+    }
+
+    private TableInfo createTableInfoWithLakePath(
+            TablePath flussTablePath, TablePath lakeTablePath) {
+        Schema schema =
+                Schema.newBuilder()
+                        .column("c1", DataTypes.INT())
+                        .column("c2", DataTypes.STRING())
+                        .column("c3", DataTypes.STRING())
+                        .build();
+        TableDescriptor descriptor =
+                TableDescriptor.builder()
+                        .schema(schema)
+                        .distributedBy(BUCKET_NUM)
+                        .property(ConfigOptions.TABLE_DATALAKE_ENABLED, true)
+                        .property(
+                                ConfigOptions.TABLE_DATALAKE_DATABASE_NAME.key(),
+                                lakeTablePath.getDatabaseName())
+                        .property(
+                                ConfigOptions.TABLE_DATALAKE_TABLE_NAME.key(),
+                                lakeTablePath.getTableName())
+                        .build();
+        return TableInfo.of(flussTablePath, 0, 1, descriptor, DEFAULT_REMOTE_DATA_DIR, 1L, 1L);
     }
 
     private LakeWriter<IcebergWriteResult> createLakeWriter(
