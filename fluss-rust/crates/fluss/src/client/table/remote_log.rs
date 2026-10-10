@@ -16,13 +16,14 @@
 
 use crate::client::credentials::CredentialsReceiver;
 use crate::error::{Error, Result};
-use crate::io::{FileIO, Storage};
+use crate::io::{FileIO, FileIOBuilder, Storage};
 use crate::metadata::TableBucket;
 use crate::metrics::ScannerMetrics;
 use crate::proto::{PbRemoteLogFetchInfo, PbRemoteLogSegment};
 use futures::TryStreamExt;
 use parking_lot::Mutex;
 use std::{
+    borrow::Cow,
     cmp::{Ordering, Reverse},
     collections::{BinaryHeap, HashMap},
     future::Future,
@@ -62,6 +63,49 @@ const RETRY_BACKOFF_MAX_MS: u64 = 5_000;
 /// Maximum number of retries before giving up
 /// After this many retries, the download will fail permanently
 const MAX_RETRY_COUNT: u32 = 10;
+
+/// Normalize OSS-compatible remote log schemes to schemes supported by the storage layer.
+///
+/// Some Fluss deployments expose OSS-backed remote log locations with the `ossj` scheme. These
+/// locations can be accessed through the existing OSS backend after normalizing the scheme alias.
+/// This is remote-log compatibility handling, not a general Jindo filesystem implementation.
+fn normalize_remote_log_storage_url(url: &str) -> Cow<'_, str> {
+    match url.strip_prefix("ossj://") {
+        Some(path) => Cow::Owned(format!("oss://{path}")),
+        None => Cow::Borrowed(url),
+    }
+}
+
+fn build_remote_file_io_builder(
+    remote_log_tablet_dir: &str,
+    remote_fs_props: &HashMap<String, String>,
+) -> Result<FileIOBuilder> {
+    let normalized_remote_log_tablet_dir = normalize_remote_log_storage_url(remote_log_tablet_dir);
+
+    // Handle both URL (e.g., "s3://bucket/path") and local file paths.
+    // If the path doesn't contain "://", treat it as a local file path.
+    let remote_log_tablet_dir_url = if normalized_remote_log_tablet_dir.contains("://") {
+        normalized_remote_log_tablet_dir
+    } else {
+        Cow::Owned(format!("file://{normalized_remote_log_tablet_dir}"))
+    };
+
+    let file_io_builder = FileIO::from_url(&remote_log_tablet_dir_url)?;
+
+    // Inject credentials for remote object storage.
+    if remote_log_tablet_dir_url.starts_with("s3://")
+        || remote_log_tablet_dir_url.starts_with("s3a://")
+        || remote_log_tablet_dir_url.starts_with("oss://")
+    {
+        Ok(file_io_builder.with_props(
+            remote_fs_props
+                .iter()
+                .map(|(k, v)| (k.as_str(), v.as_str())),
+        ))
+    } else {
+        Ok(file_io_builder)
+    }
+}
 
 /// Calculate exponential backoff delay with jitter for retries
 fn calculate_backoff_delay(retry_count: u32) -> tokio::time::Duration {
@@ -885,34 +929,14 @@ impl RemoteLogDownloader {
         remote_fs_props: &HashMap<String, String>,
         remote_log_read_concurrency: usize,
     ) -> Result<PathBuf> {
-        // Handle both URL (e.g., "s3://bucket/path") and local file paths
-        // If the path doesn't contain "://", treat it as a local file path
-        let remote_log_tablet_dir_url = if remote_log_tablet_dir.contains("://") {
-            remote_log_tablet_dir.to_string()
-        } else {
-            format!("file://{remote_log_tablet_dir}")
-        };
-
-        // Create FileIO from the remote log tablet dir URL to get the storage
-        let file_io_builder = FileIO::from_url(&remote_log_tablet_dir_url)?;
-
-        // For S3/S3A URLs, inject S3 credentials from props
-        let file_io_builder = if remote_log_tablet_dir.starts_with("s3://")
-            || remote_log_tablet_dir.starts_with("s3a://")
-            || remote_log_tablet_dir.starts_with("oss://")
-        {
-            file_io_builder.with_props(
-                remote_fs_props
-                    .iter()
-                    .map(|(k, v)| (k.as_str(), v.as_str())),
-            )
-        } else {
-            file_io_builder
-        };
+        let file_io_builder = build_remote_file_io_builder(remote_log_tablet_dir, remote_fs_props)?;
+        // Normalize the full segment path as well as the tablet directory. The directory selects
+        // the storage backend, while the full path is parsed into the bucket and object key.
+        let normalized_remote_path = normalize_remote_log_storage_url(remote_path);
 
         // Build storage and create operator directly
         let storage = Storage::build(file_io_builder)?;
-        let (op, relative_path) = storage.create(remote_path)?;
+        let (op, relative_path) = storage.create(&normalized_remote_path)?;
 
         // Timeout for remote storage operations (30 seconds)
         const REMOTE_OP_TIMEOUT: Duration = Duration::from_secs(30);
@@ -1001,6 +1025,80 @@ mod tests {
     /// surface.
     fn metrics() -> Arc<ScannerMetrics> {
         test_scanner_metrics(&TablePath::new("db", "tbl"))
+    }
+
+    #[test]
+    fn test_normalize_ossj_remote_log_storage_url() {
+        assert_eq!(
+            normalize_remote_log_storage_url("ossj://bucket/path/to/segment"),
+            "oss://bucket/path/to/segment"
+        );
+
+        for url in [
+            "oss://bucket/path",
+            "s3://bucket/path",
+            "s3a://bucket/path",
+            "file:///tmp/path",
+            "/tmp/path",
+        ] {
+            assert_eq!(normalize_remote_log_storage_url(url), url);
+        }
+    }
+
+    #[test]
+    fn test_build_remote_file_io_builder_for_ossj() {
+        let remote_fs_props = HashMap::from([
+            (
+                "endpoint".to_string(),
+                "https://oss.example.com".to_string(),
+            ),
+            ("access_key_id".to_string(), "test-access-key".to_string()),
+            (
+                "access_key_secret".to_string(),
+                "test-access-key-secret".to_string(),
+            ),
+            (
+                "security_token".to_string(),
+                "test-security-token".to_string(),
+            ),
+        ]);
+
+        let file_io_builder =
+            build_remote_file_io_builder("ossj://bucket/path", &remote_fs_props).unwrap();
+        let (scheme, props) = file_io_builder.into_parts();
+
+        assert_eq!(scheme, "oss");
+        assert_eq!(props, remote_fs_props);
+    }
+
+    #[cfg(feature = "storage-oss")]
+    #[test]
+    fn test_build_oss_storage_and_path_for_ossj() {
+        let remote_fs_props = HashMap::from([
+            (
+                "endpoint".to_string(),
+                "https://oss.example.com".to_string(),
+            ),
+            ("access_key_id".to_string(), "test-access-key".to_string()),
+            (
+                "access_key_secret".to_string(),
+                "test-access-key-secret".to_string(),
+            ),
+        ]);
+
+        let file_io_builder =
+            build_remote_file_io_builder("ossj://bucket/path", &remote_fs_props).unwrap();
+        let storage = Storage::build(file_io_builder).unwrap();
+        let normalized_remote_path =
+            normalize_remote_log_storage_url("ossj://bucket/path/to/segment");
+        let (_, relative_path) = storage.create(&normalized_remote_path).unwrap();
+
+        assert_eq!(relative_path, "path/to/segment");
+
+        match storage {
+            Storage::Oss { props } => assert_eq!(props, remote_fs_props),
+            storage => panic!("Expected OSS storage, got {storage:?}"),
+        }
     }
 
     /// Simplified fake fetcher for testing
