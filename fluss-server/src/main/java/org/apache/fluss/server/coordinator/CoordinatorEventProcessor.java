@@ -1373,6 +1373,8 @@ public class CoordinatorEventProcessor implements EventProcessor {
                 null,
                 coordinatorContext.bucketLeaderAndIsr().keySet());
 
+        tableManager.resumeReplicaDeletion(tabletServerId);
+
         // when a new tablet server comes up, we need to get all replicas of the server
         // and transmit them to online
         Set<TableBucketReplica> replicas =
@@ -1408,6 +1410,8 @@ public class CoordinatorEventProcessor implements EventProcessor {
         coordinatorContext.removeLiveTabletServer(tabletServerId);
         coordinatorContext.shuttingDownTabletServers().remove(tabletServerId);
         coordinatorChannelManager.removeTabletServer(tabletServerId);
+
+        tableManager.failReplicaDeletion(tabletServerId);
 
         // Here, we will first update alive tabletServer info for all tabletServers and
         // coordinatorServer metadata. The purpose of this approach is to prevent the scenario where
