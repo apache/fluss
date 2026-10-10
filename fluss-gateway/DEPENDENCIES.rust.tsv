@@ -31,16 +31,19 @@ axum-core@0.5.6										X
 backon@1.6.0	X
 base64@0.22.1	X									X
 base64@0.23.1	X									X
+bcrypt@0.19.3										X
 bigdecimal@0.4.10	X									X
 bitflags@2.13.1	X									X
 bitvec@1.1.1										X
 block-buffer@0.10.4	X									X
+blowfish@0.10.0	X									X
 bumpalo@3.20.3	X									X
 byteorder@1.5.0										X		X
 bytes@1.12.1										X
 cc@1.4.3	X									X
 cfg-if@1.0.4	X									X
 chrono@0.4.45	X									X
+cipher@0.5.2	X									X
 clap@4.6.6	X									X
 clap_builder@4.6.6	X									X
 clap_derive@4.6.4	X									X
@@ -54,6 +57,7 @@ crossbeam-epoch@0.9.20	X									X
 crossbeam-utils@0.8.22	X									X
 crunchy@0.2.4										X
 crypto-common@0.1.7	X									X
+crypto-common@0.2.2	X									X
 csv@1.4.0										X		X
 csv-core@0.1.13										X		X
 dashmap@6.2.1										X
@@ -95,6 +99,7 @@ http-body@1.1.0										X
 http-body-util@0.1.5										X
 httparse@1.10.1	X									X
 httpdate@1.0.3	X									X
+hybrid-array@0.4.15	X									X
 hyper@1.11.0										X
 hyper-rustls@0.27.9	X							X		X
 hyper-util@0.1.20										X
@@ -110,6 +115,7 @@ icu_provider@2.1.1											X
 idna@1.1.0	X									X
 idna_adapter@1.2.1	X									X
 indexmap@2.14.0	X									X
+inout@0.2.2	X									X
 ipnet@2.12.1	X									X
 is_terminal_polyfill@1.70.2	X									X
 itertools@0.14.0	X									X
