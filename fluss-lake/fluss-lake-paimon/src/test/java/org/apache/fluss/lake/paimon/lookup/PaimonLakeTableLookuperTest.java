@@ -195,6 +195,67 @@ class PaimonLakeTableLookuperTest {
         }
     }
 
+    @Test
+    void testScanLookupUsesRequestedSnapshot() throws Exception {
+        TablePath tablePath = TablePath.of(DB, "scan_snapshot");
+        Schema schema = pkSchema();
+        FileStoreTable table = createPaimonTable(tablePath, partitionedPkDescriptor(schema));
+        long firstSnapshotId =
+                writeAndCommitData(
+                        table,
+                        Collections.singletonMap(
+                                0, Collections.singletonList(paimonRow(1, "20240101", "Alice"))));
+        ResolvedPartitionSpec partitionSpec =
+                ResolvedPartitionSpec.fromPartitionName(
+                        Collections.singletonList("dt"), "20240101");
+        LakeTableLookuper.LookupContext firstContext =
+                new LakeTableLookuper.LookupContext(
+                        partitionSpec,
+                        0,
+                        SCHEMA_ID,
+                        schema.getRowType(),
+                        NO_OP_LOOKUP_METRIC_RECORDER,
+                        firstSnapshotId);
+        byte[] key = paimonKey(schema, 1, "20240101");
+
+        try (LakeTableLookuper lookuper =
+                createLookuper(LakeLookupMode.SCAN, tablePath, KvFormat.COMPACTED)) {
+            assertRow(
+                    decodeValue(lookuper.lookup(key, firstContext), SCHEMA_ID, schema).row,
+                    1,
+                    "20240101",
+                    "Alice");
+
+            long secondSnapshotId =
+                    writeAndCommitData(
+                            table,
+                            Collections.singletonMap(
+                                    0,
+                                    Collections.singletonList(
+                                            paimonRow(1, "20240101", "Updated Alice"))));
+            // A committed newer snapshot does not change the snapshot pinned by this context.
+            assertRow(
+                    decodeValue(lookuper.lookup(key, firstContext), SCHEMA_ID, schema).row,
+                    1,
+                    "20240101",
+                    "Alice");
+
+            LakeTableLookuper.LookupContext secondContext =
+                    new LakeTableLookuper.LookupContext(
+                            partitionSpec,
+                            0,
+                            SCHEMA_ID,
+                            schema.getRowType(),
+                            NO_OP_LOOKUP_METRIC_RECORDER,
+                            secondSnapshotId);
+            assertRow(
+                    decodeValue(lookuper.lookup(key, secondContext), SCHEMA_ID, schema).row,
+                    1,
+                    "20240101",
+                    "Updated Alice");
+        }
+    }
+
     @ParameterizedTest(name = "lookupMode={0}")
     @EnumSource(LakeLookupMode.class)
     void testLookupKeysInComputedBuckets(LakeLookupMode lookupMode) throws Exception {
@@ -931,9 +992,11 @@ class PaimonLakeTableLookuperTest {
                         .distributedBy(2, "id")
                         .build();
         FileStoreTable table = createPaimonTable(tablePath, tableDescriptor);
-        writeAndCommitData(
-                table,
-                Collections.singletonMap(0, Collections.singletonList(paimonRow(1, 7, "Alice"))));
+        long snapshotId =
+                writeAndCommitData(
+                        table,
+                        Collections.singletonMap(
+                                0, Collections.singletonList(paimonRow(1, 7, "Alice"))));
 
         try (LakeTableLookuper lookuper =
                 createLookuper(lookupMode, tablePath, KvFormat.COMPACTED)) {
@@ -944,7 +1007,8 @@ class PaimonLakeTableLookuperTest {
                             0,
                             SCHEMA_ID,
                             schema.getRowType(),
-                            NO_OP_LOOKUP_METRIC_RECORDER);
+                            NO_OP_LOOKUP_METRIC_RECORDER,
+                            snapshotId);
 
             BinaryValue decodedValue =
                     decodeValue(
@@ -977,7 +1041,8 @@ class PaimonLakeTableLookuperTest {
                             0,
                             SCHEMA_ID,
                             schema.getRowType(),
-                            NO_OP_LOOKUP_METRIC_RECORDER);
+                            NO_OP_LOOKUP_METRIC_RECORDER,
+                            null);
 
             assertThatThrownBy(() -> lookuper.lookup(new byte[0], context))
                     .isInstanceOf(UnsupportedOperationException.class)
