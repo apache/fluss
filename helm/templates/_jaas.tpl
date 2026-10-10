@@ -120,6 +120,10 @@ Usage:
       cp /tmpl/zookeeper-client.properties /jaas/zookeeper-client.properties
       chmod 0400 /jaas/zookeeper-client.properties
       {{- end }}
+  {{- with .Values.resources.jaasInitContainer }}
+  resources:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
   volumeMounts:
     - name: sasl-template
       mountPath: /tmpl
