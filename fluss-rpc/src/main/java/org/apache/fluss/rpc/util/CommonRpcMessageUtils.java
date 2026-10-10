@@ -17,6 +17,7 @@
 
 package org.apache.fluss.rpc.util;
 
+import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.ResolvedPartitionSpec;
 import org.apache.fluss.metadata.TableBucket;
@@ -48,6 +49,7 @@ import org.apache.fluss.security.acl.Resource;
 import org.apache.fluss.security.acl.ResourceFilter;
 import org.apache.fluss.security.acl.ResourceType;
 import org.apache.fluss.shaded.netty4.io.netty.buffer.ByteBuf;
+import org.apache.fluss.utils.FlussPaths;
 
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
@@ -202,6 +204,9 @@ public class CommonRpcMessageUtils {
                 String partitionName =
                         pbRlfInfo.hasPartitionName() ? pbRlfInfo.getPartitionName() : null;
                 PhysicalTablePath physicalTablePath = PhysicalTablePath.of(tp, partitionName);
+                FsPath remoteLogDir =
+                        FlussPaths.remoteLogDirFromTabletDir(
+                                new FsPath(pbRlfInfo.getRemoteLogTabletDir()), tb);
                 List<RemoteLogSegment> remoteLogSegmentList = new ArrayList<>();
                 for (PbRemoteLogSegment pbRemoteLogSegment : pbRlfInfo.getRemoteLogSegmentsList()) {
                     long maxTimestamp =
@@ -220,6 +225,7 @@ public class CommonRpcMessageUtils {
                                             pbRemoteLogSegment.getRemoteLogStartOffset())
                                     .segmentSizeInBytes(pbRemoteLogSegment.getSegmentSizeInBytes())
                                     .maxTimestamp(maxTimestamp)
+                                    .remoteLogDir(remoteLogDir)
                                     .build();
                     remoteLogSegmentList.add(remoteLogSegment);
                 }

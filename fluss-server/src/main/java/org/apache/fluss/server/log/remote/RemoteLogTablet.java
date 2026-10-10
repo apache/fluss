@@ -18,6 +18,7 @@
 package org.apache.fluss.server.log.remote;
 
 import org.apache.fluss.annotation.VisibleForTesting;
+import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metrics.MetricNames;
@@ -92,9 +93,11 @@ public class RemoteLogTablet {
 
     private volatile boolean closed = false;
 
-    public RemoteLogTablet(PhysicalTablePath physicalTablePath, TableBucket tableBucket) {
+    public RemoteLogTablet(
+            PhysicalTablePath physicalTablePath, TableBucket tableBucket, FsPath remoteLogDir) {
         this.currentManifest =
-                new RemoteLogManifest(physicalTablePath, tableBucket, new ArrayList<>());
+                new RemoteLogManifest(
+                        physicalTablePath, tableBucket, new ArrayList<>(), remoteLogDir);
         reset();
     }
 
@@ -288,6 +291,10 @@ public class RemoteLogTablet {
         return remoteLogEndOffset == -1L
                 ? OptionalLong.empty()
                 : OptionalLong.of(remoteLogEndOffset);
+    }
+
+    public FsPath getRemoteLogDir() {
+        return currentManifest.getRemoteLogDir();
     }
 
     /** Returns the highest exclusive offset successfully copied to remote storage. */

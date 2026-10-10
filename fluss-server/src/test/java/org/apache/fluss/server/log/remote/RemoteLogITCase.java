@@ -20,10 +20,13 @@ package org.apache.fluss.server.log.remote;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.MemorySize;
+import org.apache.fluss.fs.FileStatus;
 import org.apache.fluss.fs.FileSystem;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.DataLakeFormat;
+import org.apache.fluss.metadata.PartitionSpec;
 import org.apache.fluss.metadata.PhysicalTablePath;
+import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePath;
@@ -32,38 +35,54 @@ import org.apache.fluss.remote.RemoteLogSegment;
 import org.apache.fluss.rpc.entity.FetchLogResultForBucket;
 import org.apache.fluss.rpc.gateway.CoordinatorGateway;
 import org.apache.fluss.rpc.gateway.TabletServerGateway;
+import org.apache.fluss.rpc.messages.PutKvResponse;
 import org.apache.fluss.rpc.protocol.ApiError;
 import org.apache.fluss.server.entity.FetchReqInfo;
 import org.apache.fluss.server.log.FetchParams;
 import org.apache.fluss.server.log.LogTablet;
+import org.apache.fluss.server.log.WriterStateEntry;
 import org.apache.fluss.server.replica.Replica;
 import org.apache.fluss.server.tablet.TabletServer;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
+import org.apache.fluss.server.testutils.RpcMessageTestUtils;
+import org.apache.fluss.server.zk.ZooKeeperClient;
+import org.apache.fluss.server.zk.data.PartitionRegistration;
+import org.apache.fluss.server.zk.data.TableRegistration;
 import org.apache.fluss.utils.FlussPaths;
 import org.apache.fluss.utils.clock.ManualClock;
 
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.Comparator;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.stream.Collectors;
 
 import static org.apache.fluss.record.TestData.DATA1;
 import static org.apache.fluss.record.TestData.DATA1_SCHEMA;
+import static org.apache.fluss.record.TestData.DATA1_SCHEMA_PK;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_DESCRIPTOR;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_PATH;
 import static org.apache.fluss.server.testutils.RpcMessageTestUtils.assertProduceLogResponse;
+import static org.apache.fluss.server.testutils.RpcMessageTestUtils.createPartition;
 import static org.apache.fluss.server.testutils.RpcMessageTestUtils.createTable;
 import static org.apache.fluss.server.testutils.RpcMessageTestUtils.newAlterTableRequest;
 import static org.apache.fluss.server.testutils.RpcMessageTestUtils.newDropTableRequest;
 import static org.apache.fluss.server.testutils.RpcMessageTestUtils.newProduceLogRequest;
+import static org.apache.fluss.server.testutils.RpcMessageTestUtils.newPutKvRequest;
+import static org.apache.fluss.testutils.DataTestUtils.genKvRecordBatch;
 import static org.apache.fluss.testutils.DataTestUtils.genMemoryLogRecordsByObject;
 import static org.apache.fluss.testutils.DataTestUtils.genMemoryLogRecordsWithWriterId;
 import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
@@ -74,13 +93,23 @@ public class RemoteLogITCase {
 
     private static final ManualClock MANUAL_CLOCK = new ManualClock(System.currentTimeMillis());
 
+    private static final List<String> REMOTE_DIR_NAMES = Arrays.asList("dir1", "dir2", "dir3");
+
     @RegisterExtension
     public static final FlussClusterExtension FLUSS_CLUSTER_EXTENSION =
             FlussClusterExtension.builder()
                     .setNumOfTabletServers(3)
                     .setClusterConf(initConfig())
                     .setClock(MANUAL_CLOCK)
+                    .setRemoteDirNames(REMOTE_DIR_NAMES)
                     .build();
+
+    private ZooKeeperClient zkClient;
+
+    @BeforeEach
+    void setup() {
+        zkClient = FLUSS_CLUSTER_EXTENSION.getZooKeeperClient();
+    }
 
     private TableBucket setupTableBucket() throws Exception {
         long tableId =
@@ -139,9 +168,7 @@ public class RemoteLogITCase {
         // test create: verify remote log created
         FsPath fsPath =
                 FlussPaths.remoteLogTabletDir(
-                        tabletServer.getReplicaManager().getRemoteLogManager().remoteLogDir(),
-                        PhysicalTablePath.of(DATA1_TABLE_PATH),
-                        tb);
+                        manifest.getRemoteLogDir(), PhysicalTablePath.of(DATA1_TABLE_PATH), tb);
         FileSystem fileSystem = fsPath.getFileSystem();
         assertThat(fileSystem.exists(fsPath)).isTrue();
         assertThat(fileSystem.listStatus(fsPath).length).isGreaterThan(0);
@@ -199,6 +226,8 @@ public class RemoteLogITCase {
         TabletServerGateway leaderGateWay =
                 FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(leader);
         // produce many records to trigger remote log copy.
+        // Use a different writer for each batch so replaying the local tail cannot restore
+        // writers whose batches are only in remote storage.
         for (int i = 0; i < 10; i++) {
             assertProduceLogResponse(
                     leaderGateWay
@@ -209,7 +238,7 @@ public class RemoteLogITCase {
                                             1,
                                             withWriterId
                                                     ? genMemoryLogRecordsWithWriterId(
-                                                            DATA1, 100, i, 0L)
+                                                            DATA1, 100L + i, 0, 0L)
                                                     : genMemoryLogRecordsByObject(DATA1)))
                             .get(),
                     0,
@@ -219,9 +248,289 @@ public class RemoteLogITCase {
         FLUSS_CLUSTER_EXTENSION.waitUntilReplicaShrinkFromIsr(tb, follower);
         FLUSS_CLUSTER_EXTENSION.waitUntilSomeLogSegmentsCopyToRemote(tb);
 
+        LogTablet leaderLog =
+                FLUSS_CLUSTER_EXTENSION
+                        .getTabletServerById(leader)
+                        .getReplicaManager()
+                        .getReplicaOrException(tb)
+                        .getLogTablet();
+        // Copying alone does not ensure a remote fetch: wait until the first writer's batch
+        // has been removed locally before restarting the follower at offset zero.
+        retry(
+                Duration.ofMinutes(1),
+                () ->
+                        assertThat(leaderLog.localLogStartOffset())
+                                .isGreaterThanOrEqualTo(DATA1.size()));
+
         // restart follower
         FLUSS_CLUSTER_EXTENSION.startTabletServer(follower);
         FLUSS_CLUSTER_EXTENSION.waitUntilReplicaExpandToIsr(tb, follower);
+
+        if (withWriterId) {
+            LogTablet followerLog =
+                    FLUSS_CLUSTER_EXTENSION
+                            .getTabletServerById(follower)
+                            .getReplicaManager()
+                            .getReplicaOrException(tb)
+                            .getLogTablet();
+            retry(
+                    Duration.ofMinutes(1),
+                    () ->
+                            assertThat(followerLog.localLogEndOffset())
+                                    .isEqualTo(10L * DATA1.size()));
+            // ISR reentry alone does not prove that the writer snapshot was restored.
+            Map<Long, WriterStateEntry> writers = followerLog.writerStateManager().activeWriters();
+            for (int i = 0; i < 10; i++) {
+                long writerId = 100L + i;
+                assertThat(writers).containsKey(writerId);
+                assertThat(writers.get(writerId).lastBatchSequence()).isZero();
+                assertThat(writers.get(writerId).lastDataOffset())
+                        .isEqualTo((i + 1L) * DATA1.size() - 1);
+            }
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void testRemoteLogTieredToMultipleDirsForNonPartitionedTable(boolean isPrimaryTable)
+            throws Exception {
+        // Create multiple tables (more than number of remote dirs) to ensure round-robin
+        // distribution. Each table's remote log should be uploaded to different remote dirs.
+        int tableCount = 6;
+        List<TablePath> tablePaths = new ArrayList<>();
+        List<Long> tableIds = new ArrayList<>();
+
+        // Create tables
+        Schema schema = isPrimaryTable ? DATA1_SCHEMA_PK : DATA1_SCHEMA;
+        TableDescriptor tableDescriptor =
+                TableDescriptor.builder()
+                        .schema(schema)
+                        .distributedBy(1) // Single bucket for simpler verification
+                        .build();
+
+        for (int i = 0; i < tableCount; i++) {
+            TablePath tablePath =
+                    TablePath.of(
+                            "test_db",
+                            String.format("remote_%s_table_%d", isPrimaryTable ? "kv" : "log", i));
+            tablePaths.add(tablePath);
+            long tableId =
+                    RpcMessageTestUtils.createTable(
+                            FLUSS_CLUSTER_EXTENSION, tablePath, tableDescriptor);
+            tableIds.add(tableId);
+        }
+
+        // Write data to each table to trigger segment rollover and remote log copy
+        for (int t = 0; t < tableCount; t++) {
+            TableBucket tb = new TableBucket(tableIds.get(t), 0);
+            FLUSS_CLUSTER_EXTENSION.waitUntilAllReplicaReady(tb);
+
+            int leaderId = FLUSS_CLUSTER_EXTENSION.waitAndGetLeader(tb);
+            TabletServerGateway leaderGateway =
+                    FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(leaderId);
+
+            // Write enough data to create multiple segments (segment size is 1kb)
+            int batchCount = 10;
+            for (int i = 0; i < batchCount; i++) {
+                if (isPrimaryTable) {
+                    PutKvResponse response =
+                            leaderGateway
+                                    .putKv(
+                                            newPutKvRequest(
+                                                    tableIds.get(t),
+                                                    null,
+                                                    0,
+                                                    1,
+                                                    genKvRecordBatch(
+                                                            (short) 1,
+                                                            schema.getRowType(),
+                                                            DATA1.toArray(new Object[0][]))))
+                                    .get();
+                    assertThat(response.getBucketsRespsList()).hasSize(1);
+                    assertThat(response.getBucketsRespsList().get(0).hasErrorCode()).isFalse();
+                } else {
+                    assertProduceLogResponse(
+                            leaderGateway
+                                    .produceLog(
+                                            newProduceLogRequest(
+                                                    tableIds.get(t),
+                                                    0,
+                                                    1,
+                                                    genMemoryLogRecordsByObject(DATA1)))
+                                    .get(),
+                            0,
+                            (long) i * DATA1.size());
+                }
+            }
+        }
+
+        // Wait for all tables' log segments to be copied to remote
+        for (int t = 0; t < tableCount; t++) {
+            TableBucket tb = new TableBucket(tableIds.get(t), 0);
+            FLUSS_CLUSTER_EXTENSION.waitUntilSomeLogSegmentsCopyToRemote(tb);
+        }
+
+        // Collect the remote data directories used by each table
+        // The remote log dir is derived from table's remoteDataDir: {remoteDataDir}/log
+        Set<String> usedRemoteDataDirs = new HashSet<>();
+        for (int t = 0; t < tableCount; t++) {
+            Optional<TableRegistration> tableOpt = zkClient.getTable(tablePaths.get(t));
+            assertThat(tableOpt).isPresent();
+            TableRegistration table = tableOpt.get();
+
+            assertThat(table.remoteDataDir).isNotNull();
+            usedRemoteDataDirs.add(table.remoteDataDir.toString());
+
+            // Verify the remote log files actually exist
+            FsPath remoteLogDir = FlussPaths.remoteLogDir(table.remoteDataDir);
+            TableBucket tb = new TableBucket(tableIds.get(t), 0);
+            FsPath remoteLogTabletDir =
+                    FlussPaths.remoteLogTabletDir(
+                            remoteLogDir, PhysicalTablePath.of(tablePaths.get(t)), tb);
+            assertThat(remoteLogTabletDir.getFileSystem().exists(remoteLogTabletDir)).isTrue();
+            FileStatus[] fileStatuses =
+                    remoteLogTabletDir.getFileSystem().listStatus(remoteLogTabletDir);
+            assertThat(fileStatuses).isNotEmpty();
+        }
+
+        assertThat(usedRemoteDataDirs).hasSameSizeAs(REMOTE_DIR_NAMES);
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void testRemoteLogTieredToMultipleDirsForPartitionedTable(boolean isPrimaryTable)
+            throws Exception {
+        // Create a partitioned table and add multiple partitions (more than number of remote dirs)
+        // to ensure round-robin distribution. Each partition's remote log should be uploaded to
+        // different remote dirs.
+        int partitionCount = 6;
+        String tablePrefix = isPrimaryTable ? "partitioned_pk_" : "partitioned_log_";
+        TablePath tablePath = TablePath.of("test_db", tablePrefix + "remote_table");
+
+        // Create partitioned table
+        Schema.Builder schemaBuilder =
+                Schema.newBuilder()
+                        .column("a", org.apache.fluss.types.DataTypes.INT())
+                        .column("b", org.apache.fluss.types.DataTypes.STRING())
+                        .column("c", org.apache.fluss.types.DataTypes.STRING());
+        if (isPrimaryTable) {
+            schemaBuilder.primaryKey("a", "c");
+        }
+        Schema schema = schemaBuilder.build();
+
+        TableDescriptor tableDescriptor =
+                TableDescriptor.builder()
+                        .schema(schema)
+                        .distributedBy(1) // Single bucket for simpler verification
+                        .partitionedBy("c")
+                        .build();
+
+        long tableId = createTable(FLUSS_CLUSTER_EXTENSION, tablePath, tableDescriptor);
+
+        // Create partitions
+        List<String> partitionNames = new ArrayList<>();
+        for (int i = 0; i < partitionCount; i++) {
+            String partitionName = "p" + i;
+            partitionNames.add(partitionName);
+            PartitionSpec partitionSpec =
+                    new PartitionSpec(Collections.singletonMap("c", partitionName));
+            createPartition(FLUSS_CLUSTER_EXTENSION, tablePath, partitionSpec, false);
+        }
+
+        // Get partition IDs from ZK
+        Map<String, PartitionRegistration> partitionRegistrations =
+                zkClient.getPartitionRegistrations(tablePath);
+        assertThat(partitionRegistrations).hasSize(partitionCount);
+
+        // Wait for all partitions to be ready and write data to trigger segment rollover
+        for (int p = 0; p < partitionCount; p++) {
+            String partitionName = partitionNames.get(p);
+            Long partitionId = partitionRegistrations.get(partitionName).getPartitionId();
+            TableBucket tb = new TableBucket(tableId, partitionId, 0);
+            FLUSS_CLUSTER_EXTENSION.waitUntilAllReplicaReady(tb);
+
+            int leaderId = FLUSS_CLUSTER_EXTENSION.waitAndGetLeader(tb);
+            TabletServerGateway leaderGateway =
+                    FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(leaderId);
+
+            // Write enough data to create multiple segments (segment size is 1kb)
+            int batchCount = 10;
+            for (int i = 0; i < batchCount; i++) {
+                if (isPrimaryTable) {
+                    PutKvResponse response =
+                            leaderGateway
+                                    .putKv(
+                                            newPutKvRequest(
+                                                    tableId,
+                                                    partitionId,
+                                                    0,
+                                                    1,
+                                                    genKvRecordBatch(
+                                                            (short) 1,
+                                                            schema.getRowType(),
+                                                            DATA1.stream()
+                                                                    .map(
+                                                                            row ->
+                                                                                    new Object[] {
+                                                                                        row[0],
+                                                                                        row[1],
+                                                                                        partitionName
+                                                                                    })
+                                                                    .toArray(Object[][]::new))))
+                                    .get();
+                    assertThat(response.getBucketsRespsList()).hasSize(1);
+                    assertThat(response.getBucketsRespsList().get(0).hasErrorCode()).isFalse();
+                } else {
+                    assertProduceLogResponse(
+                            leaderGateway
+                                    .produceLog(
+                                            newProduceLogRequest(
+                                                    tableId,
+                                                    partitionId,
+                                                    0,
+                                                    1,
+                                                    genMemoryLogRecordsByObject(DATA1)))
+                                    .get(),
+                            0,
+                            (long) i * DATA1.size());
+                }
+            }
+        }
+
+        // Wait for all partitions' log segments to be copied to remote
+        for (int p = 0; p < partitionCount; p++) {
+            Long partitionId = partitionRegistrations.get(partitionNames.get(p)).getPartitionId();
+            TableBucket tb = new TableBucket(tableId, partitionId, 0);
+            FLUSS_CLUSTER_EXTENSION.waitUntilSomeLogSegmentsCopyToRemote(tb);
+        }
+
+        // Collect the remote data directories used by each partition
+        Set<String> usedRemoteDataDirs = new HashSet<>();
+        for (int p = 0; p < partitionCount; p++) {
+            String partitionName = partitionNames.get(p);
+            Long partitionId = partitionRegistrations.get(partitionName).getPartitionId();
+            Optional<PartitionRegistration> partitionOpt =
+                    zkClient.getPartition(tablePath, partitionName);
+            assertThat(partitionOpt).isPresent();
+            PartitionRegistration partition = partitionOpt.get();
+
+            assertThat(partition.getRemoteDataDir()).isNotNull();
+            usedRemoteDataDirs.add(partition.getRemoteDataDir());
+
+            // Verify the remote log files actually exist
+            FsPath remoteLogDir = FlussPaths.remoteLogDir(partition.getRemoteDataDir());
+            TableBucket tb = new TableBucket(tableId, partitionId, 0);
+            FsPath remoteLogTabletDir =
+                    FlussPaths.remoteLogTabletDir(
+                            remoteLogDir, PhysicalTablePath.of(tablePath, partitionName), tb);
+            assertThat(remoteLogTabletDir.getFileSystem().exists(remoteLogTabletDir)).isTrue();
+            FileStatus[] fileStatuses =
+                    remoteLogTabletDir.getFileSystem().listStatus(remoteLogTabletDir);
+            assertThat(fileStatuses).isNotEmpty();
+        }
+
+        // All configured remote dirs should be used due to round-robin distribution
+        assertThat(usedRemoteDataDirs).hasSameSizeAs(REMOTE_DIR_NAMES);
     }
 
     @Test

@@ -66,22 +66,12 @@ public class DefaultRemoteLogStorage implements RemoteLogStorage {
 
     private static final int READ_BUFFER_SIZE = 16 * 1024;
 
-    private final FsPath remoteLogDir;
-    private final FileSystem fileSystem;
     private final ExecutorService ioExecutor;
     private final int writeBufferSize;
 
-    public DefaultRemoteLogStorage(Configuration conf, ExecutorService ioExecutor)
-            throws IOException {
-        this.remoteLogDir = FlussPaths.remoteLogDir(conf);
-        this.fileSystem = remoteLogDir.getFileSystem();
+    public DefaultRemoteLogStorage(Configuration conf, ExecutorService ioExecutor) {
         this.writeBufferSize = (int) conf.get(ConfigOptions.REMOTE_FS_WRITE_BUFFER_SIZE).getBytes();
         this.ioExecutor = ioExecutor;
-    }
-
-    @Override
-    public FsPath getRemoteLogDir() {
-        return remoteLogDir;
     }
 
     /**
@@ -142,6 +132,7 @@ public class DefaultRemoteLogStorage implements RemoteLogStorage {
             throws RemoteStorageException {
         LOG.debug("Deleting log segment and indexes for : {}", remoteLogSegment);
         try {
+            FsPath remoteLogDir = remoteLogSegment.remoteLogDir();
             FsPath segmentDir = remoteLogSegmentDir(remoteLogDir, remoteLogSegment);
             long baseOffset = remoteLogSegment.remoteLogStartOffset();
             FsPath logFile = remoteLogSegmentFile(segmentDir, baseOffset);
@@ -155,7 +146,7 @@ public class DefaultRemoteLogStorage implements RemoteLogStorage {
             // delete dir at last
             for (FsPath path :
                     Arrays.asList(logFile, offsetIndex, timeIndex, writerSnapshot, segmentDir)) {
-                fileSystem.delete(path, false);
+                remoteLogDir.getFileSystem().delete(path, false);
             }
             LOG.debug("Successful delete log segment and indexes for : {}", remoteLogSegment);
         } catch (IOException e) {
@@ -167,6 +158,8 @@ public class DefaultRemoteLogStorage implements RemoteLogStorage {
     @Override
     public InputStream fetchIndex(RemoteLogSegment remoteLogSegment, IndexType indexType)
             throws RemoteStorageException {
+        FsPath remoteLogDir = remoteLogSegment.remoteLogDir();
+
         FsPath remoteLogSegmentIndexFile;
         if (indexType == IndexType.WRITER_ID_SNAPSHOT) {
             remoteLogSegmentIndexFile =
@@ -179,7 +172,7 @@ public class DefaultRemoteLogStorage implements RemoteLogStorage {
         }
 
         try {
-            return fileSystem.open(remoteLogSegmentIndexFile);
+            return remoteLogDir.getFileSystem().open(remoteLogSegmentIndexFile);
         } catch (IOException e) {
             throw new RemoteStorageException(
                     "Failed to fetch index file type: "
@@ -193,10 +186,11 @@ public class DefaultRemoteLogStorage implements RemoteLogStorage {
     @Override
     public InputStream fetchLogData(RemoteLogSegment remoteLogSegment)
             throws RemoteStorageException {
+        FsPath remoteLogDir = remoteLogSegment.remoteLogDir();
         FsPath segmentDir = remoteLogSegmentDir(remoteLogDir, remoteLogSegment);
         FsPath logFile = remoteLogSegmentFile(segmentDir, remoteLogSegment.remoteLogStartOffset());
         try {
-            return fileSystem.open(logFile);
+            return remoteLogDir.getFileSystem().open(logFile);
         } catch (IOException e) {
             throw new RemoteStorageException("Failed to fetch log data from path: " + logFile, e);
         }
@@ -208,7 +202,7 @@ public class DefaultRemoteLogStorage implements RemoteLogStorage {
         FSDataInputStream inputStream = null;
         ByteArrayOutputStream outputStream = null;
         try {
-            inputStream = fileSystem.open(remoteLogManifestPath);
+            inputStream = remoteLogManifestPath.getFileSystem().open(remoteLogManifestPath);
             outputStream = new ByteArrayOutputStream();
             IOUtils.copyBytes(inputStream, outputStream, false);
             return RemoteLogManifest.fromJsonBytes(outputStream.toByteArray());
@@ -228,7 +222,7 @@ public class DefaultRemoteLogStorage implements RemoteLogStorage {
             throws RemoteStorageException {
         LOG.debug("Deleting remote log segment manifest: {}", remoteLogManifestPath);
         try {
-            fileSystem.delete(remoteLogManifestPath, false);
+            remoteLogManifestPath.getFileSystem().delete(remoteLogManifestPath, false);
             LOG.debug("Successful delete log segment manifest: {}", remoteLogManifestPath);
         } catch (IOException e) {
             throw new RemoteStorageException(
@@ -240,6 +234,7 @@ public class DefaultRemoteLogStorage implements RemoteLogStorage {
     @Override
     public FsPath writeRemoteLogManifestSnapshot(RemoteLogManifest manifest)
             throws RemoteStorageException {
+        FsPath remoteLogDir = manifest.getRemoteLogDir();
         FsPath manifestFile =
                 FlussPaths.remoteLogManifestFile(
                         FlussPaths.remoteLogTabletDir(
@@ -262,11 +257,13 @@ public class DefaultRemoteLogStorage implements RemoteLogStorage {
     }
 
     @Override
-    public void deleteTableBucket(PhysicalTablePath physicalTablePath, TableBucket tableBucket)
+    public void deleteTableBucket(
+            FsPath remoteLogDir, PhysicalTablePath physicalTablePath, TableBucket tableBucket)
             throws RemoteStorageException {
         FsPath remoteLogTabletDir =
                 FlussPaths.remoteLogTabletDir(remoteLogDir, physicalTablePath, tableBucket);
         try {
+            FileSystem fileSystem = remoteLogDir.getFileSystem();
             if (fileSystem.exists(remoteLogTabletDir)) {
                 fileSystem.delete(remoteLogTabletDir, true);
             }
@@ -335,8 +332,9 @@ public class DefaultRemoteLogStorage implements RemoteLogStorage {
     }
 
     private FsPath createRemoteLogSegmentDir(RemoteLogSegment remoteLogSegment) throws IOException {
+        FsPath remoteLogDir = remoteLogSegment.remoteLogDir();
         FsPath remoteLogSegmentDir = remoteLogSegmentDir(remoteLogDir, remoteLogSegment);
-        fileSystem.mkdirs(remoteLogSegmentDir);
+        remoteLogDir.getFileSystem().mkdirs(remoteLogSegmentDir);
         return remoteLogSegmentDir;
     }
 
