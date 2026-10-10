@@ -48,6 +48,7 @@ import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import java.io.File;
+import java.io.IOException;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -78,6 +79,73 @@ class RemoteLogManagerTest extends RemoteLogTestBase {
     @BeforeEach
     public void setup() throws Exception {
         super.setup();
+    }
+
+    @ParameterizedTest
+    @ValueSource(longs = {0, 20})
+    void testEmptyKvLogCannotRecoverFromExpiredRemoteTail(long snapshotOffset) {
+        TableBucket bucket = new TableBucket(DATA1_TABLE_ID, 0);
+        makeKvTableAsLeader(DATA1_TABLE_ID, DATA1_TABLE_PATH_PK, 0);
+        Replica replica = replicaManager.getReplicaOrException(bucket);
+        LogTablet log = replica.getLogTablet();
+        remoteLogManager
+                .remoteLogTablet(bucket)
+                .loadRemoteLogManifest(
+                        new RemoteLogManifest(
+                                log.getPhysicalTablePath(), bucket, Collections.emptyList(), 30));
+
+        assertThatThrownBy(() -> remoteLogManager.recoverEmptyKvLog(replica, snapshotOffset))
+                .isInstanceOf(IOException.class)
+                .hasMessageContaining(
+                        "copied offset 30 is beyond snapshot offset " + snapshotOffset);
+        assertThat(log.localLogStartOffset()).isZero();
+        assertThat(log.localLogEndOffset()).isZero();
+        assertThat(log.getHighWatermark()).isZero();
+    }
+
+    @Test
+    void testSnapshotCoversExpiredRemoteLogs() throws Exception {
+        TableBucket bucket = new TableBucket(DATA1_TABLE_ID, 0);
+        makeKvTableAsLeader(DATA1_TABLE_ID, DATA1_TABLE_PATH_PK, 0);
+        Replica replica = replicaManager.getReplicaOrException(bucket);
+        LogTablet log = replica.getLogTablet();
+        remoteLogManager
+                .remoteLogTablet(bucket)
+                .loadRemoteLogManifest(
+                        new RemoteLogManifest(
+                                log.getPhysicalTablePath(), bucket, Collections.emptyList(), 30));
+
+        remoteLogManager.recoverEmptyKvLog(replica, 40);
+        assertThat(log.localLogStartOffset()).isEqualTo(40);
+        assertThat(log.localLogEndOffset()).isEqualTo(40);
+        assertThat(log.getHighWatermark()).isEqualTo(40);
+    }
+
+    @Test
+    void testEmptyKvLogRecoveryCanBeRepeated() throws Exception {
+        TableBucket bucket = new TableBucket(DATA1_TABLE_ID, 0);
+        makeKvTableAsLeader(DATA1_TABLE_ID, DATA1_TABLE_PATH_PK, 0);
+        Replica replica = replicaManager.getReplicaOrException(bucket);
+        LogTablet log = replica.getLogTablet();
+        addMultiSegmentsToLogTablet(log, 4);
+        remoteLogTaskScheduler.triggerPeriodicScheduledTasks();
+
+        // A surviving local tail must not be discarded in favor of the remote prefix.
+        remoteLogManager.recoverEmptyKvLog(replica, 0);
+        assertThat(log.localLogEndOffset()).isEqualTo(40);
+        logManager.truncateFullyAndStartAt(bucket, 0);
+
+        remoteLogManager.recoverEmptyKvLog(replica, 0);
+        assertThat(log.localLogStartOffset()).isEqualTo(30);
+        assertThat(log.localLogEndOffset()).isEqualTo(30);
+        assertThat(log.getHighWatermark()).isEqualTo(30);
+
+        // Model an interrupted recovery with the boundary already advanced but writer state lost.
+        log.writerStateManager().truncateFullyAndStartAt(0);
+        log.updateHighWatermark(0);
+        remoteLogManager.recoverEmptyKvLog(replica, 0);
+        assertThat(log.getHighWatermark()).isEqualTo(30);
+        assertThat(log.writerStateManager().latestSnapshotOffset()).contains(30L);
     }
 
     @ParameterizedTest

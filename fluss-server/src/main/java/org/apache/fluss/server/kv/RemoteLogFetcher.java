@@ -170,6 +170,27 @@ public class RemoteLogFetcher implements Closeable {
                             tableBucket, startOffset));
         }
 
+        // KV replay needs every offset in [startOffset, localLogStartOffset). For example,
+        // segments [100, 120) and [130, 150) cannot satisfy replay [100, 150), even though their
+        // outer boundaries match. Validate the manifest before scheduling downloads; iteration
+        // below also checks the actual files, which may be shorter than their declared ranges.
+        long coveredOffset = startOffset;
+        for (RemoteLogSegment segment : segments) {
+            if (segment.logicalStartOffset() > coveredOffset) {
+                break;
+            }
+            coveredOffset = segment.logicalEndOffset();
+            if (coveredOffset >= localLogStartOffset) {
+                break;
+            }
+        }
+        if (coveredOffset < localLogStartOffset) {
+            throw new RemoteStorageException(
+                    String.format(
+                            "Remote log for %s is missing offsets [%s, %s) required for KV recovery",
+                            tableBucket, coveredOffset, localLogStartOffset));
+        }
+
         LOG.info(
                 "Found {} remote log segments for table bucket {} from offset {} to localLogStartOffset {} "
                         + "(prefetchNum={}, downloadThreads={})",
@@ -468,6 +489,13 @@ public class RemoteLogFetcher implements Closeable {
                 finished = true;
                 return;
             }
+            // The manifest may contain newer segments beyond the requested replay range.
+            // Stop at the replay boundary; gaps after this point do not affect this recovery.
+            if (currentOffset >= localLogStartOffset) {
+                finished = true;
+                closeCurrentFileLogRecords();
+                return;
+            }
 
             nextBatch = null;
             while (!finished) {
@@ -481,6 +509,14 @@ public class RemoteLogFetcher implements Closeable {
                     if (batch.baseLogOffset() >= currentSegmentLogicalEndOffset) {
                         closeCurrentFileLogRecords();
                         continue;
+                    }
+                    // Replay may start inside a batch, so its base may precede currentOffset.
+                    // A later base would skip records required to reconstruct the KV state.
+                    if (batch.baseLogOffset() > currentOffset) {
+                        throw new IllegalStateException(
+                                String.format(
+                                        "Remote log for %s is missing records at offset %s before batch %s",
+                                        tableBucket, currentOffset, batch.baseLogOffset()));
                     }
                     if (batch.nextLogOffset() > currentSegmentLogicalEndOffset) {
                         throw new IllegalStateException(
@@ -507,6 +543,14 @@ public class RemoteLogFetcher implements Closeable {
 
                 // move to next segment
                 if (currentSegmentIndex >= segments.size()) {
+                    // Exhausting the files is not enough: a truncated final file may end before
+                    // the replay boundary even when the manifest advertises complete coverage.
+                    if (currentOffset < localLogStartOffset) {
+                        throw new IllegalStateException(
+                                String.format(
+                                        "Remote log for %s ended at offset %s before required offset %s",
+                                        tableBucket, currentOffset, localLogStartOffset));
+                    }
                     finished = true;
                     return;
                 }
@@ -515,12 +559,15 @@ public class RemoteLogFetcher implements Closeable {
                 if (segment.logicalEndOffset() <= currentOffset) {
                     continue;
                 }
-                // skip segments that start at or after localLogStartOffset
-                if (segment.logicalStartOffset() >= localLogStartOffset) {
-                    finished = true;
-                    return;
+                // Keep currentOffset tied to records actually read. If a file advertised as
+                // [100, 120) ends at 115, jumping to the next segment at 120 would silently lose
+                // [115, 120), despite the manifest ranges being contiguous.
+                if (segment.logicalStartOffset() > currentOffset) {
+                    throw new IllegalStateException(
+                            String.format(
+                                    "Remote log for %s is missing records at offset %s before segment %s",
+                                    tableBucket, currentOffset, segment.logicalStartOffset()));
                 }
-                currentOffset = Math.max(currentOffset, segment.logicalStartOffset());
                 currentSegmentLogicalEndOffset = segment.logicalEndOffset();
 
                 try {

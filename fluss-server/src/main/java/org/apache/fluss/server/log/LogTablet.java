@@ -42,6 +42,7 @@ import org.apache.fluss.record.MemoryLogRecords;
 import org.apache.fluss.server.log.LocalLog.SegmentDeletionReason;
 import org.apache.fluss.server.metrics.group.BucketMetricGroup;
 import org.apache.fluss.server.metrics.group.TabletServerMetricGroup;
+import org.apache.fluss.utils.FileUtils;
 import org.apache.fluss.utils.FlussPaths;
 import org.apache.fluss.utils.clock.Clock;
 import org.apache.fluss.utils.concurrent.Scheduler;
@@ -57,6 +58,7 @@ import javax.annotation.concurrent.ThreadSafe;
 import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
@@ -810,6 +812,34 @@ public final class LogTablet {
         synchronized (lock) {
             rebuildWriterState(lastOffset, writerStateManager);
             updateHighWatermark(localLog.getLocalLogEndOffsetMetadata().getMessageOffset());
+        }
+    }
+
+    /**
+     * Installs a downloaded writer snapshot for an empty log recovered at the snapshot offset.
+     *
+     * <p>The snapshot restores writer IDs and sequence numbers used to detect retried writes;
+     * restoring KV values alone does not rebuild this state. Clearing, installing and loading the
+     * snapshot share the log lock so other writer state operations cannot observe a partial
+     * restore.
+     */
+    public void restoreWriterSnapshot(Path snapshot, long snapshotOffset) throws IOException {
+        synchronized (lock) {
+            checkArgument(
+                    localLogStartOffset() == snapshotOffset
+                            && localLogEndOffset() == snapshotOffset,
+                    "Writer snapshot recovery requires an empty log at offset %s",
+                    snapshotOffset);
+            // Advancing the empty log may already have set the writer map end to snapshotOffset.
+            // Reset it to 0 so truncateAndReload does not treat that empty map as up to date and
+            // skip loading the downloaded snapshot. Clear old snapshots before installing it.
+            writerStateManager.truncateFullyAndStartAt(0L);
+            FileUtils.atomicMoveWithFallback(
+                    snapshot,
+                    FlussPaths.writerSnapshotFile(getLogDir(), snapshotOffset).toPath(),
+                    false);
+            writerStateManager.reloadSnapshots();
+            loadWriterSnapshot(snapshotOffset);
         }
     }
 

@@ -644,8 +644,6 @@ public final class Replica {
         // Clear standby flag — a leader is never a standby replica.
         isStandbyReplica = false;
 
-        updateLeaderEndOffsetSnapshot();
-
         if (isDataLakeEnabled()) {
             registerLakeTieringMetrics();
         }
@@ -658,6 +656,10 @@ public final class Replica {
             // now, we can create a new kv tablet
             createKv();
         }
+        // Empty-disk KV recovery can advance the log end to the remote durable boundary.
+        // For example, createKv() may move it from 0 to 150. Capture the end after recovery so
+        // follower requests see 150 as the end at leader promotion, rather than the initial 0.
+        updateLeaderEndOffsetSnapshot();
     }
 
     private void registerLakeTieringMetrics() {
@@ -787,6 +789,22 @@ public final class Replica {
                         i,
                         INIT_KV_TABLET_MAX_RETRY_TIMES,
                         e);
+                // A failed replay may already have registered a KV tablet. Rebuild from the
+                // snapshot on the next attempt instead of reusing partially recovered state.
+                // Deleting only its files would leave the registration behind and make the next
+                // load fail with "Duplicate kv tablet directories". Drop both through KvManager;
+                // the WAL remains available for replay on the next attempt.
+                if (kvTablet != null) {
+                    try {
+                        kvManager.dropKv(tableBucket);
+                        kvTablet = null;
+                    } catch (Exception cleanupError) {
+                        // Another attempt cannot safely reuse an incompletely cleaned tablet.
+                        // Preserve the recovery failure and attach the cleanup failure to it.
+                        lastError.addSuppressed(cleanupError);
+                        break;
+                    }
+                }
             }
         }
         if (lastError != null) {
@@ -913,11 +931,10 @@ public final class Replica {
                         tableBucket,
                         physicalPath);
 
-                // Rebuild state in a fresh directory, as with snapshot recovery.
-                // Recovery retries can reuse the tablet opened by the first attempt.
-                if (kvTablet == null) {
-                    kvManager.createTabletDir(logTablet.getDataDir(), physicalPath, tableBucket);
-                }
+                // Rebuild state in a fresh directory on every attempt, as with snapshot recovery.
+                // For ordinary KV tables without a snapshot, replay starts at 0; retaining
+                // partially applied KV state would no longer match that starting point.
+                kvManager.createTabletDir(logTablet.getDataDir(), physicalPath, tableBucket);
                 kvTablet =
                         kvManager.getOrCreateKv(
                                 physicalPath,
@@ -943,6 +960,13 @@ public final class Replica {
                 autoIncIDRange = null;
             }
 
+            if (!isHistoricalPartition()) {
+                // Establish the local/remote replay boundary before recoverKvTablet chooses
+                // where to read. For snapshot 100 and remote end 150, an empty log left at 0
+                // would route offset 100 to missing local WAL instead of remote WAL [100, 150).
+                // Historical partitions use their separate lake-based recovery boundary.
+                remoteLogManager.recoverEmptyKvLog(this, restoreStartOffset);
+            }
             logTablet.updateMinRetainOffset(restoreStartOffset);
             if (isHistoricalPartition()) {
                 checkNotNull(kvTablet, "kv tablet should not be null.")

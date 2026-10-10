@@ -40,6 +40,7 @@ import org.slf4j.LoggerFactory;
 import java.io.File;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Objects;
@@ -48,6 +49,7 @@ import java.util.UUID;
 import java.util.stream.Collectors;
 
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeCommitRemoteLogManifestRequest;
+import static org.apache.fluss.utils.PartitionUtils.HISTORICAL_PARTITION_VALUE;
 
 /**
  * A task to copy log segments to remote storage and delete expired remote log segments from remote.
@@ -162,7 +164,8 @@ public class LogTieringTask implements Runnable {
                 RemoteLogManifest newManifest;
                 try {
                     newManifest =
-                            currentManifest.trimAndMerge(expiredRemoteLogSegments, copiedSegments);
+                            mergeCopiedSegments(
+                                    currentManifest, expiredRemoteLogSegments, copiedSegments);
                 } catch (IllegalArgumentException mergeError) {
                     deleteRemoteLogSegmentFiles(copiedSegments, metricGroup);
                     throw mergeError;
@@ -467,6 +470,56 @@ public class LogTieringTask implements Runnable {
 
     private Path toPathIfExists(File file) {
         return file.exists() ? file.toPath() : null;
+    }
+
+    private RemoteLogManifest mergeCopiedSegments(
+            RemoteLogManifest currentManifest,
+            List<RemoteLogSegment> expiredSegments,
+            List<RemoteLogSegment> copiedSegments) {
+        RemoteLogManifest retained =
+                currentManifest.trimAndMerge(expiredSegments, Collections.emptyList());
+        if (!copiedSegments.isEmpty() && !retained.getRemoteLogSegmentList().isEmpty()) {
+            RemoteLogSegment first = copiedSegments.get(0);
+            long startOffset = first.remoteLogStartOffset();
+            LogTablet log = replica.getLogTablet();
+            if (startOffset > retained.getRemoteLogEndOffset()
+                    && replica.isKvTable()
+                    && !HISTORICAL_PARTITION_VALUE.equals(physicalTablePath.getPartitionName())
+                    && startOffset == log.localLogStartOffset()
+                    && startOffset <= log.getMinRetainOffset()) {
+                // After total disk loss, a KV snapshot may be ahead of the last uploaded WAL.
+                // For example, remote WAL covers [0, 100), but a committed snapshot is at 150.
+                // Recovery restores KV state at 150 and starts the empty local log there. New
+                // writes can then produce a segment [150, 160). A normal trimAndMerge rejects
+                // the gap [100, 150), preventing subsequent WAL uploads from being committed.
+                //
+                // The snapshot covers the KV state needed to resume at 150, but cannot recreate
+                // the missing historical WAL. Retain the actual ranges [0, 100) and [150, 160)
+                // so tiering can continue while the gap remains unavailable to log readers.
+                // Only a committed snapshot covering the new local start permits this gap.
+                LOG.warn(
+                        "Resuming remote log for {} at snapshot-covered offset {} after missing "
+                                + "WAL range [{}, {}).",
+                        tableBucket,
+                        startOffset,
+                        retained.getRemoteLogEndOffset(),
+                        startOffset);
+                List<RemoteLogSegment> segments =
+                        new ArrayList<>(retained.getRemoteLogSegmentList());
+                segments.add(first);
+                retained =
+                        new RemoteLogManifest(
+                                physicalTablePath,
+                                tableBucket,
+                                segments,
+                                Math.max(
+                                        retained.getHighestCopiedEndOffset(),
+                                        first.remoteLogEndOffset()));
+                return retained.trimAndMerge(
+                        Collections.emptyList(), copiedSegments.subList(1, copiedSegments.size()));
+            }
+        }
+        return retained.trimAndMerge(Collections.emptyList(), copiedSegments);
     }
 
     private void maybeUpdateCopiedOffset(LogTablet logTablet) {
