@@ -53,7 +53,8 @@ public class KafkaProtocolPlugin implements NetworkProtocolPlugin {
             RequestChannel[] requestChannels, String listenerName) {
         return new KafkaChannelInitializer(
                 requestChannels,
-                conf.get(ConfigOptions.KAFKA_CONNECTION_MAX_IDLE_TIME).getSeconds(),
+                listenerName,
+                conf.get(ConfigOptions.NETTY_CONNECTION_MAX_IDLE_TIME).getSeconds(),
                 (int) conf.get(ConfigOptions.NETTY_SERVER_MAX_REQUEST_SIZE).getBytes(),
                 conf.getBoolean(ConfigOptions.NETTY_CLIENT_ALLOCATOR_HEAP_BUFFER_FIRST));
     }
@@ -66,6 +67,6 @@ public class KafkaProtocolPlugin implements NetworkProtocolPlugin {
                             + service.getClass().getSimpleName());
         }
         TabletServerGateway gateway = (TabletServerGateway) service;
-        return new KafkaRequestHandler(gateway);
+        return new KafkaRequestHandler(service, gateway);
     }
 }
