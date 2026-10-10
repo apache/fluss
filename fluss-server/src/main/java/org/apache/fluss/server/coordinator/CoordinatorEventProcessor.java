@@ -162,7 +162,6 @@ import static org.apache.fluss.server.coordinator.statemachine.ReplicaState.NewR
 import static org.apache.fluss.server.coordinator.statemachine.ReplicaState.NonExistentReplica;
 import static org.apache.fluss.server.coordinator.statemachine.ReplicaState.OfflineReplica;
 import static org.apache.fluss.server.coordinator.statemachine.ReplicaState.OnlineReplica;
-import static org.apache.fluss.server.coordinator.statemachine.ReplicaState.ReplicaDeletionStarted;
 import static org.apache.fluss.server.coordinator.statemachine.ReplicaState.ReplicaDeletionSuccessful;
 import static org.apache.fluss.server.coordinator.statemachine.ReplicaState.ReplicaMigrationStarted;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeAdjustIsrResponse;
@@ -1200,21 +1199,14 @@ public class CoordinatorEventProcessor implements EventProcessor {
                 failDeletedReplicas.add(tableBucketReplica);
             }
         }
-        // clear the fail deleted number for the success deleted replicas
-        coordinatorContext.clearFailDeleteNumbers(successDeletedReplicas);
+        if (!failDeletedReplicas.isEmpty()) {
+            LOG.warn(
+                    "Failed to delete replicas {}. Keep them in ReplicaDeletionStarted state.",
+                    failDeletedReplicas);
+        }
 
-        // pick up the replicas to retry delete and replicas that considered as success delete
-        Tuple2<Set<TableBucketReplica>, Set<TableBucketReplica>>
-                retryDeleteAndSuccessDeleteReplicas =
-                        coordinatorContext.retryDeleteAndSuccessDeleteReplicas(failDeletedReplicas);
-
-        // transmit to deletion started for retry delete replicas
-        replicaStateMachine.handleStateChanges(
-                retryDeleteAndSuccessDeleteReplicas.f0, ReplicaDeletionStarted);
-
-        // add all the replicas that considered as success delete to success deleted replicas
-        successDeletedReplicas.addAll(retryDeleteAndSuccessDeleteReplicas.f1);
-        // transmit to deletion successful for success deleted replicas
+        // Only replicas with a successful per-bucket response may complete deletion. Failed
+        // replicas remain in ReplicaDeletionStarted and block the table or partition deletion.
         replicaStateMachine.handleStateChanges(successDeletedReplicas, ReplicaDeletionSuccessful);
 
         // if any success deletion, we can resume
