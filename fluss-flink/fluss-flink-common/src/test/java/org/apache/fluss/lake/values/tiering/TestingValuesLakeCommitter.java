@@ -31,7 +31,6 @@ import java.io.IOException;
 import java.io.Serializable;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
 import java.util.stream.Collectors;
 
 /** Implementation of {@link LakeCommitter} for values lake. */
@@ -56,11 +55,11 @@ public class TestingValuesLakeCommitter
     }
 
     @Override
-    public LakeCommitResult commit(
-            TestingValuesCommittable committable, Map<String, String> snapshotProperties)
+    public LakeCommitResult commit(TestingValuesCommittable committable, CommitContext context)
             throws IOException {
         return LakeCommitResult.committedIsReadable(
-                TestingValuesLake.commit(tableId, committable.getStageIds(), snapshotProperties));
+                TestingValuesLake.commit(
+                        tableId, committable.getStageIds(), context.snapshotProperties()));
     }
 
     @Override

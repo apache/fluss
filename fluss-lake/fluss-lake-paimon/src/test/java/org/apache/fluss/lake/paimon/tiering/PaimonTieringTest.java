@@ -23,6 +23,7 @@ import org.apache.fluss.lake.batch.ArrowRecordBatch;
 import org.apache.fluss.lake.committer.CommittedLakeSnapshot;
 import org.apache.fluss.lake.committer.CommitterInitContext;
 import org.apache.fluss.lake.committer.LakeCommitter;
+import org.apache.fluss.lake.committer.LakeCommitter.CommitContext;
 import org.apache.fluss.lake.serializer.SimpleVersionedSerializer;
 import org.apache.fluss.lake.writer.LakeWriter;
 import org.apache.fluss.lake.writer.SupportsRecordBatchWrite;
@@ -258,7 +259,7 @@ class PaimonTieringTest {
                 createLakeCommitter(tablePath, tableInfo, new Configuration())) {
             committer.commit(
                     committer.toCommittable(Collections.singletonList(writeResult)),
-                    Collections.emptyMap());
+                    new CommitContext(Collections.emptyMap(), Collections.emptyMap()));
         }
         assertThat(paimonCatalog.listPartitions(toPaimon(tablePath)))
                 .extracting(partition -> partition.spec().get("c3"))
@@ -321,7 +322,10 @@ class PaimonTieringTest {
                     lakeCommitter
                             .commit(
                                     committable,
-                                    Collections.singletonMap("fluss-offsets", "offsets-path"))
+                                    new CommitContext(
+                                            Collections.singletonMap(
+                                                    "fluss-offsets", "offsets-path"),
+                                            Collections.emptyMap()))
                             .getCommittedSnapshotId();
             assertThat(snapshotId).isEqualTo(1);
 
@@ -435,7 +439,10 @@ class PaimonTieringTest {
             PaimonCommittable committable = lakeCommitter.toCommittable(paimonWriteResults);
             long snapshot =
                     lakeCommitter
-                            .commit(committable, Collections.emptyMap())
+                            .commit(
+                                    committable,
+                                    new CommitContext(
+                                            Collections.emptyMap(), Collections.emptyMap()))
                             .getCommittedSnapshotId();
             assertThat(snapshot).isEqualTo(1);
         }
@@ -510,7 +517,11 @@ class PaimonTieringTest {
                 createLakeCommitter(tablePath, tableInfo, new Configuration())) {
             PaimonCommittable committable = lakeCommitter.toCommittable(paimonWriteResults);
             snapshot =
-                    lakeCommitter.commit(committable, snapshotProperties).getCommittedSnapshotId();
+                    lakeCommitter
+                            .commit(
+                                    committable,
+                                    new CommitContext(snapshotProperties, Collections.emptyMap()))
+                            .getCommittedSnapshotId();
             assertThat(snapshot).isEqualTo(1);
         }
 
@@ -588,7 +599,9 @@ class PaimonTieringTest {
             try (LakeCommitter<PaimonWriteResult, PaimonCommittable> lakeCommitter =
                     createLakeCommitter(tablePath, tableInfo, new Configuration())) {
                 PaimonCommittable committable = lakeCommitter.toCommittable(paimonWriteResults);
-                lakeCommitter.commit(committable, Collections.emptyMap());
+                lakeCommitter.commit(
+                        committable,
+                        new CommitContext(Collections.emptyMap(), Collections.emptyMap()));
             }
         }
 
@@ -1175,8 +1188,10 @@ class PaimonTieringTest {
             return lakeCommitter
                     .commit(
                             lakeCommitter.toCommittable(Collections.emptyList()),
-                            Collections.singletonMap(
-                                    FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY, offsets))
+                            new CommitContext(
+                                    Collections.singletonMap(
+                                            FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY, offsets),
+                                    Collections.emptyMap()))
                     .getCommittedSnapshotId();
         }
     }
@@ -1361,7 +1376,9 @@ class PaimonTieringTest {
 
             Map<String, String> snapshotProperties =
                     Collections.singletonMap(FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY, "offsets");
-            lakeCommitter.commit(paimonCommittable, snapshotProperties);
+            lakeCommitter.commit(
+                    paimonCommittable,
+                    new CommitContext(snapshotProperties, Collections.emptyMap()));
         }
     }
 }

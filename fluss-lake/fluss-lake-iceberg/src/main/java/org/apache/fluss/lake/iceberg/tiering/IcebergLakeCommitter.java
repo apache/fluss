@@ -100,9 +100,9 @@ public class IcebergLakeCommitter implements LakeCommitter<IcebergWriteResult, I
     }
 
     @Override
-    public LakeCommitResult commit(
-            IcebergCommittable committable, Map<String, String> snapshotProperties)
+    public LakeCommitResult commit(IcebergCommittable committable, CommitContext context)
             throws IOException {
+        Map<String, String> snapshotProperties = context.snapshotProperties();
         try {
             // Refresh table to get latest metadata
             icebergTable.refresh();

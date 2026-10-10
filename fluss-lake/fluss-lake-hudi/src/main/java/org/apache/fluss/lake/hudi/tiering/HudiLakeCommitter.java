@@ -98,9 +98,9 @@ public class HudiLakeCommitter implements LakeCommitter<HudiWriteResult, HudiCom
     }
 
     @Override
-    public LakeCommitResult commit(
-            HudiCommittable committable, Map<String, String> snapshotProperties)
+    public LakeCommitResult commit(HudiCommittable committable, CommitContext context)
             throws IOException {
+        Map<String, String> snapshotProperties = context.snapshotProperties();
         Map<String, HudiWriteStats> writeStatsByInstant = committable.getWriteStats();
         if (writeStatsByInstant.isEmpty() && committable.getCompactionWriteStats().isEmpty()) {
             // no data or compaction result in this round, commit an empty instant to persist
