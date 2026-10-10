@@ -209,7 +209,10 @@ class RemoteLogFetcherTest extends RemoteLogTestBase {
                             : Arrays.asList(oldLeaderSegment, newLeaderSegment);
             manifest =
                     new RemoteLogManifest(
-                            oldLeaderLog.getPhysicalTablePath(), targetBucket, segments);
+                            oldLeaderLog.getPhysicalTablePath(),
+                            targetBucket,
+                            segments,
+                            FlussPaths.remoteLogDir(conf));
             assertThat(new String(manifest.toJsonBytes(), StandardCharsets.UTF_8))
                     .contains("\"version\":1")
                     .doesNotContain("logical_start_offset", "logical_end_offset");
@@ -218,7 +221,8 @@ class RemoteLogFetcherTest extends RemoteLogTestBase {
                     new RemoteLogManifest(
                                     oldLeaderLog.getPhysicalTablePath(),
                                     targetBucket,
-                                    Collections.singletonList(oldLeaderSegment))
+                                    Collections.singletonList(oldLeaderSegment),
+                                    FlussPaths.remoteLogDir(conf))
                             .trimAndMerge(
                                     Collections.emptyList(),
                                     Collections.singletonList(newLeaderSegment));
@@ -1177,6 +1181,7 @@ class RemoteLogFetcherTest extends RemoteLogTestBase {
                         .segmentSizeInBytes(sourceSegment.getFileLogRecords().sizeInBytes())
                         .tableBucket(targetBucket)
                         .physicalTablePath(sourceLog.getPhysicalTablePath())
+                        .remoteLogDir(FlussPaths.remoteLogDir(conf))
                         .build();
         remoteLogStorage.copyLogSegmentFiles(remoteSegment, files);
         return remoteSegment;

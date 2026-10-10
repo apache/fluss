@@ -30,6 +30,7 @@ import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.metrics.registry.NOPMetricRegistry;
 import org.apache.fluss.record.MemoryLogRecords;
 import org.apache.fluss.rpc.RpcClient;
 import org.apache.fluss.rpc.gateway.CoordinatorGateway;
@@ -57,6 +58,7 @@ import org.apache.fluss.server.metadata.ClusterMetadata;
 import org.apache.fluss.server.metadata.ServerInfo;
 import org.apache.fluss.server.metadata.TabletServerMetadataCache;
 import org.apache.fluss.server.metrics.group.BucketMetricGroup;
+import org.apache.fluss.server.metrics.group.TabletServerMetricGroup;
 import org.apache.fluss.server.metrics.group.TestingMetricGroups;
 import org.apache.fluss.server.storage.LocalDiskManager;
 import org.apache.fluss.server.testutils.ServerTestTags;
@@ -158,6 +160,7 @@ public class ReplicaTestBase {
     protected TabletServerMetadataCache serverMetadataCache;
     protected TestingCompletedKvSnapshotCommitter snapshotReporter;
     protected TestCoordinatorGateway testCoordinatorGateway;
+    private TabletServerMetricGroup tabletServerMetricGroup;
     private FlussScheduler scheduler;
     private ExecutorService ioExecutor;
 
@@ -194,6 +197,13 @@ public class ReplicaTestBase {
     @BeforeEach
     public void setup(TestInfo testInfo) throws Exception {
         conf = getServerConf();
+        tabletServerMetricGroup =
+                new TabletServerMetricGroup(
+                        NOPMetricRegistry.INSTANCE,
+                        "fluss",
+                        "host",
+                        TABLET_SERVER_RACK,
+                        TABLET_SERVER_ID);
         conf.set(ConfigOptions.TABLET_SERVER_ID, TABLET_SERVER_ID);
         // Keep unrelated tests independent of the host machine's actual disk usage.
         conf.set(ConfigOptions.SERVER_DATA_DISK_WRITE_LIMIT_RATIO, 1.0);
@@ -230,7 +240,7 @@ public class ReplicaTestBase {
                         zkClient,
                         scheduler,
                         manualClock,
-                        TestingMetricGroups.TABLET_SERVER_METRICS,
+                        tabletServerMetricGroup,
                         localDiskManager);
         logManager.startup();
 
@@ -239,7 +249,7 @@ public class ReplicaTestBase {
                         conf,
                         zkClient,
                         logManager,
-                        TestingMetricGroups.TABLET_SERVER_METRICS,
+                        tabletServerMetricGroup,
                         localDiskManager,
                         createTestKvFlushScheduler(conf),
                         manualClock);
@@ -377,7 +387,7 @@ public class ReplicaTestBase {
                 coordinatorGateway,
                 snapshotReporter,
                 NOPErrorHandler.INSTANCE,
-                TestingMetricGroups.TABLET_SERVER_METRICS,
+                tabletServerMetricGroup,
                 TestingMetricGroups.USER_METRICS,
                 remoteLogManager,
                 scannerManager,
@@ -429,6 +439,10 @@ public class ReplicaTestBase {
 
         if (ioExecutor != null) {
             ioExecutor.shutdown();
+        }
+
+        if (tabletServerMetricGroup != null) {
+            tabletServerMetricGroup.close();
         }
 
         // clear zk environment.
