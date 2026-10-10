@@ -36,6 +36,7 @@ The homepage and story headers use separate white-on-transparent assets, downloa
 | `jd-english.jpg` | Source: [JD corporate website](https://corporate.jd.com/). [Original English JINGDONG header JPG](https://storage.360buyimg.com/jdw-asserts/galaxy/jdei/fin-inv-joygen-app-1778478020444/f445411d-aa20-4616-bcd4-7ee010bdb506/dist/assets/main-logo-new-ad105c5c.jpg), 8000 × 4500; downloaded unchanged, 2026-09-22. The viewport excludes surrounding white space. | [Submission](https://github.com/apache/fluss/discussions/4033#discussioncomment-18149379) |
 | `cisco.png` | [Image](https://github.com/user-attachments/assets/c74d321d-53fb-4f7b-b5cc-0e80966ad56e) | [Submission](https://github.com/apache/fluss/discussions/4033#discussioncomment-18173301) |
 | `doris.png` | [Image](https://github.com/user-attachments/assets/f5ba6dd1-cb83-4675-8e1c-b98aa630753f) | [Submission](https://github.com/apache/fluss/discussions/4033#discussioncomment-18269669) |
+| `starrocks.png` | Original 714 × 192 color wordmark from the maintained PowerPoint brand-logo catalog, asset `color-wordmark-7dcfcf594a`; copied unchanged, 2026-10-11. | [Submission](https://github.com/apache/fluss/discussions/4033#discussioncomment-18851523) |
 
 ## White assets
 
@@ -50,5 +51,6 @@ Retrieved 2026-09-22. Downloaded files retain the bytes from their source (or th
 | `white/ant-group.png` | [Ant Group website](https://www.antgroup.com/en) | [White header PNG](https://gw.alipayobjects.com/mdn/rms_27e257/afts/img/A*70AsSL23VKYAAAAAAAAAAAAAARQnAQ). |
 | `white/jd.png` | [JD corporate blog](https://jdcorporateblog.com/media-resources/) | [White footer PNG](https://jdcorporateblog.com/wp-content/uploads/2024/01/42741705567864_%E7%99%BD.png). |
 | `white/cisco.svg` | [Simple Icons](https://simpleicons.org/) | [White Cisco SVG](https://cdn.simpleicons.org/cisco/FFFFFF). |
+| `white/starrocks.png` | Maintained PowerPoint brand-logo catalog | Original 340 × 88 transparent white wordmark, asset `white-wordmark-5355ed64fe`; copied unchanged, 2026-10-11. |
 
 Simple Icons assets use CC0; company names and trademarks remain the property of their respective owners. The asset sources above do not imply endorsement by the organizations.
