@@ -95,6 +95,13 @@
         </dependency>
 
         <dependency>
+            <groupId>com.ververica</groupId>
+            <artifactId>frocksdbjni</artifactId>
+            <version>${frocksdb.version}</version>
+            <scope>test</scope>
+        </dependency>
+
+        <dependency>
             <groupId>org.apache.fluss</groupId>
             <artifactId>fluss-test-utils</artifactId>
         </dependency>

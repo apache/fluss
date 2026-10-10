@@ -24,9 +24,9 @@ import org.apache.fluss.server.exception.KvBuildingException;
 import org.apache.fluss.server.kv.RowTtlCompactionFilterFactory;
 import org.apache.fluss.utils.clock.ManualClock;
 
+import io.github.fluss_contrib.rocksdb.FlussTtlCompactionFilter;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
-import org.rocksdb.FlinkCompactionFilter;
 
 import java.io.File;
 import java.io.IOException;
@@ -38,15 +38,6 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Test for {@link org.apache.fluss.server.kv.rocksdb.RocksDBKvBuilder} . */
 class RocksDBKvBuilderTest {
-
-    /**
-     * This test checks that the RocksDB native code loader still responds to resetting the init
-     * flag.
-     */
-    @Test
-    void testResetInitFlag() throws Exception {
-        RocksDBKvBuilder.resetRocksDBLoadedFlag();
-    }
 
     @Test
     void testTempLibFolderDeletedOnFail(@TempDir Path tempDir) {
@@ -66,7 +57,7 @@ class RocksDBKvBuilderTest {
 
     @Test
     void testCompactionFilterFactoryClosedWithKv(@TempDir Path tempDir) throws Exception {
-        FlinkCompactionFilter.FlinkCompactionFilterFactory filterFactory =
+        FlussTtlCompactionFilter.FlussTtlCompactionFilterFactory filterFactory =
                 RowTtlCompactionFilterFactory.create(
                         KvValueLayout.TAGGED, Duration.ofHours(1L), new ManualClock(0L));
         RocksDBResourceContainer rocksDBResourceContainer =
@@ -90,7 +81,7 @@ class RocksDBKvBuilderTest {
 
     @Test
     void testCompactionFilterFactoryClosedWhenBuildFails() {
-        FlinkCompactionFilter.FlinkCompactionFilterFactory filterFactory =
+        FlussTtlCompactionFilter.FlussTtlCompactionFilterFactory filterFactory =
                 RowTtlCompactionFilterFactory.create(
                         KvValueLayout.TAGGED, Duration.ofHours(1L), new ManualClock(0L));
         RocksDBResourceContainer rocksDBResourceContainer = new RocksDBResourceContainer();

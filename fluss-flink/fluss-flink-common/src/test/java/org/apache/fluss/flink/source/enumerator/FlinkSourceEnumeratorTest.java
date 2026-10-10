@@ -214,7 +214,8 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
 
     @Test
     void testBoundedPkTableEmitsSnapshotSplitsByDefault() throws Throwable {
-        long tableId = createTable(DEFAULT_TABLE_PATH, DEFAULT_PK_TABLE_DESCRIPTOR);
+        TablePath tablePath = TablePath.of(DEFAULT_DB, "bounded-pk-snapshot-default");
+        long tableId = createTable(tablePath, DEFAULT_PK_TABLE_DESCRIPTOR);
         // Bounded snapshot splits require the latest offset from every bucket leader. Creating
         // table metadata does not wait for TabletServers to create replicas and become leaders.
         for (int bucket = 0; bucket < DEFAULT_BUCKET_NUM; bucket++) {
@@ -225,7 +226,7 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
                 new MockSplitEnumeratorContext<>(numSubtasks)) {
             FlinkSourceEnumerator enumerator =
                     new FlinkSourceEnumerator(
-                            DEFAULT_TABLE_PATH,
+                            tablePath,
                             flussConf,
                             true,
                             false,
