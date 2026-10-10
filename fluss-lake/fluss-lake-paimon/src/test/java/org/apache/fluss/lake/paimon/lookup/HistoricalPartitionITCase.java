@@ -22,6 +22,7 @@ import org.apache.fluss.client.ConnectionFactory;
 import org.apache.fluss.client.lookup.LookupResult;
 import org.apache.fluss.client.lookup.Lookuper;
 import org.apache.fluss.client.table.Table;
+import org.apache.fluss.client.table.writer.UpsertWriter;
 import org.apache.fluss.config.AutoPartitionTimeUnit;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.lake.paimon.testutils.FlinkPaimonTieringTestBase;
@@ -38,6 +39,9 @@ import org.apache.fluss.server.zk.data.PartitionRegistration;
 import org.apache.fluss.types.DataTypes;
 
 import org.apache.flink.core.execution.JobClient;
+import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
+import org.apache.flink.table.api.bridge.java.StreamTableEnvironment;
+import org.apache.flink.types.Row;
 import org.apache.paimon.utils.CloseableIterator;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
@@ -53,6 +57,7 @@ import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 
+import static org.apache.fluss.flink.source.testutils.FlinkRowAssertionsUtils.collectRowsWithTimeout;
 import static org.apache.fluss.testutils.DataTestUtils.row;
 import static org.apache.fluss.testutils.InternalRowAssert.assertThatRow;
 import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
@@ -159,6 +164,102 @@ class HistoricalPartitionITCase extends FlinkPaimonTieringTestBase {
                     2L,
                     "1|" + EXPIRED_PARTITION_NAME + "|Alice",
                     "2|" + EXPIRED_PARTITION_NAME + "|Bob");
+        } finally {
+            dropTable(tablePath);
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"full", "earliest"})
+    void testFlinkConsumesHistoricalChangelog(String startupMode) throws Exception {
+        TablePath tablePath = TablePath.of(DEFAULT_DB, "historical_flink_" + startupMode);
+        long tableId =
+                createTable(
+                        tablePath,
+                        partitionedDescriptor(
+                                partitionedPkSchema(true), true, EXPIRED_PARTITION_RETENTION));
+        try {
+            long historicalPartitionId = waitUntilHistoricalPartitionReady(tablePath, tableId);
+            writeRows(
+                    tablePath,
+                    Arrays.asList(
+                            row(1, EXPIRED_PARTITION_NAME, "Alice"),
+                            row(1, SECOND_EXPIRED_PARTITION_NAME, "Filtered")),
+                    false);
+            tierAndVerifyPaimonRows(
+                    tablePath,
+                    new TableBucket(tableId, historicalPartitionId, 0),
+                    2L,
+                    "1|" + EXPIRED_PARTITION_NAME + "|Alice",
+                    "1|" + SECOND_EXPIRED_PARTITION_NAME + "|Filtered");
+
+            List<PartitionInfo> activePartitions = admin.listPartitionInfos(tablePath).get();
+            assertThat(activePartitions)
+                    .noneMatch(p -> HISTORICAL_PARTITION_VALUE.equals(p.getPartitionName()));
+            String activePartition = activePartitions.get(0).getPartitionName();
+            // Leave changes after the lake snapshot to exercise the full-mode handoff.
+            writeRows(
+                    tablePath,
+                    Arrays.asList(
+                            row(1, EXPIRED_PARTITION_NAME, "Alice-updated"),
+                            row(1, activePartition, "Active")),
+                    false);
+
+            StreamExecutionEnvironment readEnv =
+                    StreamExecutionEnvironment.getExecutionEnvironment();
+            readEnv.setParallelism(2);
+            StreamTableEnvironment tableEnv = StreamTableEnvironment.create(readEnv);
+            tableEnv.executeSql(
+                    String.format(
+                            "CREATE CATALOG %s WITH ('type' = 'fluss', 'bootstrap.servers' = '%s')",
+                            CATALOG_NAME,
+                            String.join(",", clientConf.get(ConfigOptions.BOOTSTRAP_SERVERS))));
+            tableEnv.useCatalog(CATALOG_NAME);
+            tableEnv.useDatabase(DEFAULT_DB);
+            // Both business dates share the historical bucket. Filter on dt while projecting it
+            // out, and retain active-partition changes in the same query.
+            try (org.apache.flink.util.CloseableIterator<Row> results =
+                    tableEnv.executeSql(
+                                    String.format(
+                                            "SELECT id, name FROM %s /*+ OPTIONS('scan.startup.mode' = '%s') */ "
+                                                    + "WHERE dt <> '%s' AND id = 1",
+                                            tablePath.getTableName(),
+                                            startupMode,
+                                            SECOND_EXPIRED_PARTITION_NAME))
+                            .collect()) {
+                List<String> initial = collectRowsWithTimeout(results, 4, false);
+                assertThat(initial)
+                        .containsExactlyInAnyOrder(
+                                "+I[1, Alice]",
+                                "-U[1, Alice]",
+                                "+U[1, Alice-updated]",
+                                "+I[1, Active]");
+                assertThat(initial)
+                        .filteredOn(value -> !value.contains("Active"))
+                        .containsExactly("+I[1, Alice]", "-U[1, Alice]", "+U[1, Alice-updated]");
+
+                try (Table table = conn.getTable(tablePath)) {
+                    UpsertWriter writer = table.newUpsert().createWriter();
+                    writer.upsert(row(1, EXPIRED_PARTITION_NAME, "Alice-latest")).get();
+                    writer.delete(row(1, EXPIRED_PARTITION_NAME, "Alice-latest")).get();
+                    writer.upsert(row(1, SECOND_EXPIRED_PARTITION_NAME, "Still-filtered")).get();
+                    writer.upsert(row(1, activePartition, "Active-updated")).get();
+                }
+                List<String> changes = collectRowsWithTimeout(results, 5, false);
+                assertThat(changes)
+                        .containsExactlyInAnyOrder(
+                                "-U[1, Alice-updated]",
+                                "+U[1, Alice-latest]",
+                                "-D[1, Alice-latest]",
+                                "-U[1, Active]",
+                                "+U[1, Active-updated]");
+                assertThat(changes)
+                        .filteredOn(value -> !value.contains("Active"))
+                        .containsExactly(
+                                "-U[1, Alice-updated]",
+                                "+U[1, Alice-latest]",
+                                "-D[1, Alice-latest]");
+            }
         } finally {
             dropTable(tablePath);
         }
