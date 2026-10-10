@@ -21,8 +21,15 @@ import org.apache.fluss.cluster.Endpoint;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.metadata.DatabaseDescriptor;
+import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.rpc.gateway.TabletServerGateway;
+import org.apache.fluss.rpc.messages.AdjustIsrResponse;
+import org.apache.fluss.server.coordinator.TestingControlledNotifyGateway.PendingNotify;
+import org.apache.fluss.server.coordinator.event.AccessContextEvent;
+import org.apache.fluss.server.coordinator.event.AdjustIsrReceivedEvent;
 import org.apache.fluss.server.coordinator.lease.KvSnapshotLeaseManager;
 import org.apache.fluss.server.coordinator.remote.RemoteDirDynamicLoader;
+import org.apache.fluss.server.entity.AdjustIsrResultForBucket;
 import org.apache.fluss.server.metadata.CoordinatorMetadataCache;
 import org.apache.fluss.server.metrics.group.TestingMetricGroups;
 import org.apache.fluss.server.zk.NOPErrorHandler;
@@ -30,10 +37,13 @@ import org.apache.fluss.server.zk.ZkEpoch;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.ZooKeeperExtension;
 import org.apache.fluss.server.zk.data.CoordinatorAddress;
+import org.apache.fluss.server.zk.data.LeaderAndIsr;
 import org.apache.fluss.server.zk.data.TabletServerRegistration;
 import org.apache.fluss.server.zk.data.ZkData.PartitionIdsZNode;
 import org.apache.fluss.server.zk.data.ZkData.TableIdsZNode;
 import org.apache.fluss.testutils.common.AllCallbackWrapper;
+import org.apache.fluss.utils.ExceptionUtils;
+import org.apache.fluss.utils.clock.Clock;
 import org.apache.fluss.utils.clock.SystemClock;
 import org.apache.fluss.utils.concurrent.ExecutorThreadFactory;
 import org.apache.fluss.utils.concurrent.FlussScheduler;
@@ -45,10 +55,25 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.extension.RegisterExtension;
 
 import java.time.Duration;
+import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentLinkedDeque;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.function.Consumer;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 
 import static org.apache.fluss.config.ConfigOptions.DEFAULT_LISTENER_NAME;
+import static org.apache.fluss.server.coordinator.CoordinatorTestUtils.makeSendLeaderAndStopRequestAlwaysSuccess;
+import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getAdjustIsrResponseData;
+import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
+import static org.apache.fluss.testutils.common.CommonTestUtils.waitValue;
+import static org.assertj.core.api.Assertions.assertThat;
 
 /**
  * The shared lifecycle harness for {@link CoordinatorEventProcessor} unit tests: a ZooKeeper test
@@ -161,6 +186,10 @@ class CoordinatorEventProcessorTestBase {
     }
 
     protected CoordinatorEventProcessor buildCoordinatorEventProcessor() {
+        return buildCoordinatorEventProcessor(SystemClock.getInstance());
+    }
+
+    protected CoordinatorEventProcessor buildCoordinatorEventProcessor(Clock clock) {
         Configuration conf = new Configuration();
         conf.set(ConfigOptions.REMOTE_DATA_DIR, remoteDataDir);
         conf.set(ConfigOptions.COORDINATOR_OFFLINE_LEADER_RETRY_DELAY, Duration.ofDays(1));
@@ -178,6 +207,129 @@ class CoordinatorEventProcessorTestBase {
                 metadataManager,
                 kvSnapshotLeaseManager,
                 scheduler,
-                SystemClock.getInstance());
+                clock);
+    }
+
+    /** Verifies the elected leader and ISR in memory and ZooKeeper. */
+    protected void verifyIsr(TableBucket tb, int expectedLeader, List<Integer> expectedIsr)
+            throws Exception {
+        LeaderAndIsr leaderAndIsr =
+                waitValue(
+                        () -> fromCtx((ctx) -> ctx.getBucketLeaderAndIsr(tb)),
+                        Duration.ofMinutes(1),
+                        "leader not elected");
+        LeaderAndIsr newLeaderAndIsrOfZk = zookeeperClient.getLeaderAndIsr(tb).get();
+        assertThat(leaderAndIsr.leader())
+                .isEqualTo(newLeaderAndIsrOfZk.leader())
+                .isEqualTo(expectedLeader);
+        assertThat(leaderAndIsr.isr())
+                .isEqualTo(newLeaderAndIsrOfZk.isr())
+                .hasSameElementsAs(expectedIsr);
+    }
+
+    /** Installs successful tablet server gateways for registered servers. */
+    protected void initCoordinatorChannel() throws Exception {
+        makeSendLeaderAndStopRequestAlwaysSuccess(
+                testCoordinatorChannelManager,
+                Arrays.stream(zookeeperClient.getSortedTabletServerList())
+                        .boxed()
+                        .collect(Collectors.toSet()),
+                Collections.emptySet());
+    }
+
+    /** Registers an additional tablet server in ZooKeeper. */
+    protected void registerTabletServer(int serverId) throws Exception {
+        zookeeperClient.registerTabletServer(
+                serverId,
+                new TabletServerRegistration(
+                        "rack" + serverId,
+                        Collections.singletonList(
+                                new Endpoint("host" + serverId, 1001, DEFAULT_LISTENER_NAME)),
+                        System.currentTimeMillis()));
+    }
+
+    /** Retries assertions against state read on the coordinator event thread. */
+    protected void retryVerifyContext(Consumer<CoordinatorContext> verifyFunction) {
+        retry(
+                Duration.ofMinutes(1),
+                () -> {
+                    AccessContextEvent<Void> event =
+                            new AccessContextEvent<>(
+                                    ctx -> {
+                                        verifyFunction.accept(ctx);
+                                        return null;
+                                    });
+                    eventProcessor.getCoordinatorEventManager().put(event);
+                    try {
+                        event.getResultFuture().get(30, TimeUnit.SECONDS);
+                    } catch (Throwable t) {
+                        throw ExceptionUtils.stripExecutionException(t);
+                    }
+                });
+    }
+
+    /** Reads or updates state on the coordinator event thread. */
+    protected <T> T fromCtx(Function<CoordinatorContext, T> retrieveFunction) throws Exception {
+        AccessContextEvent<T> event = new AccessContextEvent<>(retrieveFunction);
+        eventProcessor.getCoordinatorEventManager().put(event);
+        return event.getResultFuture().get(30, TimeUnit.SECONDS);
+    }
+
+    /** Submits an ISR update through the coordinator event loop. */
+    protected AdjustIsrResultForBucket submitAdjustIsr(
+            TableBucket tableBucket, LeaderAndIsr newLeaderAndIsr) throws Exception {
+        CompletableFuture<AdjustIsrResponse> response = new CompletableFuture<>();
+        eventProcessor
+                .getCoordinatorEventManager()
+                .put(
+                        new AdjustIsrReceivedEvent(
+                                Collections.singletonMap(tableBucket, newLeaderAndIsr), response));
+        return getAdjustIsrResponseData(response.get()).get(tableBucket);
+    }
+
+    /** Installs gateways that hold leader notifications until explicitly released. */
+    protected void installBlockingNotifyGateways(
+            ConcurrentLinkedDeque<PendingNotify> pendingTriggers) throws Exception {
+        Map<Integer, TabletServerGateway> gateways = new HashMap<>();
+        for (int server : zookeeperClient.getSortedTabletServerList()) {
+            TestingControlledNotifyGateway gateway =
+                    new TestingControlledNotifyGateway(server, pendingTriggers);
+            gateways.put(server, gateway);
+        }
+        testCoordinatorChannelManager.setGateways(gateways);
+    }
+
+    /** Releases queued notification responses. */
+    protected static void drainPendingNotifyTriggers(
+            ConcurrentLinkedDeque<PendingNotify> pendingTriggers) {
+        PendingNotify trigger;
+        while ((trigger = pendingTriggers.poll()) != null) {
+            trigger.complete();
+        }
+    }
+
+    /** Returns whether a server has a held notification response. */
+    protected static boolean hasPendingNotifyTrigger(
+            ConcurrentLinkedDeque<PendingNotify> pendingTriggers, int responseServerId) {
+        for (PendingNotify trigger : pendingTriggers) {
+            if (trigger.getResponseServerId() == responseServerId) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** Releases one held notification response from a server. */
+    protected static void completePendingNotifyTrigger(
+            ConcurrentLinkedDeque<PendingNotify> pendingTriggers, int responseServerId) {
+        for (PendingNotify trigger : pendingTriggers) {
+            if (trigger.getResponseServerId() == responseServerId) {
+                assertThat(pendingTriggers.remove(trigger)).isTrue();
+                trigger.complete();
+                return;
+            }
+        }
+        throw new AssertionError(
+                "No pending NotifyLeaderAndIsr response for server " + responseServerId);
     }
 }
