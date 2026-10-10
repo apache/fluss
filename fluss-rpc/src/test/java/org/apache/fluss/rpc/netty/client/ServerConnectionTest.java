@@ -20,6 +20,7 @@ package org.apache.fluss.rpc.netty.client;
 import org.apache.fluss.cluster.Endpoint;
 import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.cluster.ServerType;
+import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.DisconnectException;
 import org.apache.fluss.exception.InvalidServerTypeException;
@@ -96,6 +97,9 @@ import static org.mockito.Mockito.when;
 /** Test for {@link ServerConnection}. */
 public class ServerConnectionTest {
 
+    private static final long REQUEST_TIMEOUT_MS =
+            ConfigOptions.CLIENT_REQUEST_TIMEOUT.defaultValue().toMillis();
+
     private EventLoopGroup eventLoopGroup;
     private Bootstrap bootstrap;
     private ClientAuthenticator clientAuthenticator;
@@ -139,6 +143,7 @@ public class ServerConnectionTest {
                         serverNode,
                         TestingClientMetricGroup.newInstance(),
                         clientAuthenticator,
+                        REQUEST_TIMEOUT_MS,
                         (con, ignore) -> {});
         ConnectionState connectionState = connection.getConnectionState();
         assertThat(connectionState).isEqualTo(ConnectionState.CONNECTING);
@@ -169,10 +174,20 @@ public class ServerConnectionTest {
         ClientMetricGroup client = new ClientMetricGroup(metricRegistry, "client");
         ServerConnection connection =
                 new ServerConnection(
-                        bootstrap, serverNode, client, clientAuthenticator, (con, ignore) -> {});
+                        bootstrap,
+                        serverNode,
+                        client,
+                        clientAuthenticator,
+                        REQUEST_TIMEOUT_MS,
+                        (con, ignore) -> {});
         ServerConnection connection2 =
                 new ServerConnection(
-                        bootstrap, serverNode2, client, clientAuthenticator, (con, ignore) -> {});
+                        bootstrap,
+                        serverNode2,
+                        client,
+                        clientAuthenticator,
+                        REQUEST_TIMEOUT_MS,
+                        (con, ignore) -> {});
         LookupRequest request = new LookupRequest().setTableId(1);
         PbLookupReqForBucket pbLookupReqForBucket = request.addBucketsReq();
         pbLookupReqForBucket.setBucketId(1);
@@ -222,6 +237,7 @@ public class ServerConnectionTest {
                         serverNode,
                         TestingClientMetricGroup.newInstance(),
                         clientAuthenticator,
+                        REQUEST_TIMEOUT_MS,
                         (con, ignore) -> {});
         try {
             OutOfMemoryError error = new OutOfMemoryError("Direct buffer memory");
@@ -272,6 +288,7 @@ public class ServerConnectionTest {
                         wrongServerTypeNode,
                         TestingClientMetricGroup.newInstance(),
                         clientAuthenticator,
+                        REQUEST_TIMEOUT_MS,
                         (con, ignore) -> {});
 
         // Pending request will be rejected with InvalidServerTypeException which is
@@ -304,6 +321,7 @@ public class ServerConnectionTest {
                         serverNode,
                         TestingClientMetricGroup.newInstance(),
                         clientAuthenticator,
+                        REQUEST_TIMEOUT_MS,
                         (con, ignore) -> {});
         try {
             connection.validateVersionCompatibility(
@@ -334,6 +352,7 @@ public class ServerConnectionTest {
                         serverNode,
                         TestingClientMetricGroup.newInstance(),
                         clientAuthenticator,
+                        REQUEST_TIMEOUT_MS,
                         (con, ignore) -> {});
         try {
             assertThat(connection.send(ApiKeys.PUT_KV, putKvRequest(null)).get())
