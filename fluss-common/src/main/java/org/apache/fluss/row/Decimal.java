@@ -149,7 +149,9 @@ public final class Decimal implements Comparable<Decimal>, Serializable {
 
     @Override
     public int hashCode() {
-        return toBigDecimal().hashCode();
+        // equals() compares numerically (1.0 equals 1.00), but BigDecimal#hashCode depends on the
+        // scale, so strip trailing zeros to give numerically equal values the same hash code.
+        return toBigDecimal().stripTrailingZeros().hashCode();
     }
 
     @Override
