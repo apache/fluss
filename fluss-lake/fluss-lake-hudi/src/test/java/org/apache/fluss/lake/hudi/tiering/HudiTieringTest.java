@@ -59,6 +59,7 @@ import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.InOrder;
 
 import javax.annotation.Nullable;
@@ -113,6 +114,32 @@ class HudiTieringTest {
     void afterEach() {
         if (hudiLakeCatalog != null) {
             hudiLakeCatalog.close();
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void testWriteClientHadoopConfiguration(boolean isPrimaryKeyTable) throws Exception {
+        hudiConfig.setString("hadoop.fs.s3a.endpoint", "http://localhost:9000");
+        hudiConfig.setString("hadoop.fs.s3a.access.key", "test-access-key");
+        hudiConfig.setString("hadoop.fs.s3a.secret.key", "test-secret-key");
+        TablePath tablePath = TablePath.of("hudi", "test_hadoop_configuration");
+        TableDescriptor tableDescriptor =
+                isPrimaryKeyTable ? createPkTableDescriptor() : createLogTableDescriptor();
+        hudiLakeCatalog.createTable(
+                tablePath, tableDescriptor, new TestingLakeCatalogContext(tableDescriptor));
+
+        try (HudiWriteTableInfo tableInfo =
+                HudiWriteTableInfo.create(new HudiCatalogProvider(hudiConfig), tablePath)) {
+            org.apache.hadoop.conf.Configuration writeClientConf =
+                    tableInfo
+                            .getWriteClient()
+                            .getEngineContext()
+                            .getStorageConf()
+                            .unwrapAs(org.apache.hadoop.conf.Configuration.class);
+            assertThat(writeClientConf.get("fs.s3a.endpoint")).isEqualTo("http://localhost:9000");
+            assertThat(writeClientConf.get("fs.s3a.access.key")).isEqualTo("test-access-key");
+            assertThat(writeClientConf.get("fs.s3a.secret.key")).isEqualTo("test-secret-key");
         }
     }
 
