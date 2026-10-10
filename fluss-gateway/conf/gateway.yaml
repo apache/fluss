@@ -48,8 +48,19 @@
 # variable FLUSS_GATEWAY__REST__LISTEN.
 gateway.rest.listen: 127.0.0.1:8080
 
+# To serve HTTPS, declare a TLS profile below and reference it here. A profile
+# may also be reused by a future protocol listener with its own ALPN policy.
+# gateway.rest.tls.profile: public
+
 # Maximum time allowed for receiving the complete HTTP request headers.
 gateway.rest.header-read-timeout: 10s
+
+# Named TLS identities. Certificate chains and private keys are PEM files;
+# provision their paths through a mounted file or environment override.
+# gateway.tls.profiles: public
+# gateway.tls.profile.public.certificate-file: /etc/fluss/tls/server.pem
+# gateway.tls.profile.public.private-key-file: /etc/fluss/tls/server.key
+# gateway.tls.profile.public.handshake-timeout: 5s
 
 # Server-side deadline for one REST request.
 gateway.rest.request-timeout: 30s
