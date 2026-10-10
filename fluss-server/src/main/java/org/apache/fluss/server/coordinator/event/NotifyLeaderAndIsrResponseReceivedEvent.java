@@ -17,15 +17,22 @@
 
 package org.apache.fluss.server.coordinator.event;
 
+import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.rpc.messages.NotifyLeaderAndIsrRequest;
+import org.apache.fluss.server.entity.NotifyLeaderAndIsrData;
 import org.apache.fluss.server.entity.NotifyLeaderAndIsrResultForBucket;
 
+import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.Optional;
 
 /** An event for receive the response of {@link NotifyLeaderAndIsrRequest} from tablet server. */
 public class NotifyLeaderAndIsrResponseReceivedEvent implements CoordinatorEvent {
 
     private final List<NotifyLeaderAndIsrResultForBucket> notifyLeaderAndIsrResultForBuckets;
+    private final Map<TableBucket, NotifyLeaderAndIsrData> requestDataByBucket;
 
     // the server id that return the response
     private final int responseServerId;
@@ -33,8 +40,19 @@ public class NotifyLeaderAndIsrResponseReceivedEvent implements CoordinatorEvent
     public NotifyLeaderAndIsrResponseReceivedEvent(
             List<NotifyLeaderAndIsrResultForBucket> notifyLeaderAndIsrResultForBuckets,
             int responseServerId) {
+        this(notifyLeaderAndIsrResultForBuckets, responseServerId, Collections.emptyList());
+    }
+
+    public NotifyLeaderAndIsrResponseReceivedEvent(
+            List<NotifyLeaderAndIsrResultForBucket> notifyLeaderAndIsrResultForBuckets,
+            int responseServerId,
+            List<NotifyLeaderAndIsrData> requestData) {
         this.notifyLeaderAndIsrResultForBuckets = notifyLeaderAndIsrResultForBuckets;
         this.responseServerId = responseServerId;
+        this.requestDataByBucket = new HashMap<>();
+        for (NotifyLeaderAndIsrData data : requestData) {
+            requestDataByBucket.put(data.getTableBucket(), data);
+        }
     }
 
     public int getResponseServerId() {
@@ -43,5 +61,10 @@ public class NotifyLeaderAndIsrResponseReceivedEvent implements CoordinatorEvent
 
     public List<NotifyLeaderAndIsrResultForBucket> getNotifyLeaderAndIsrResultForBuckets() {
         return notifyLeaderAndIsrResultForBuckets;
+    }
+
+    /** Returns the state sent in the request for the given bucket, when available. */
+    public Optional<NotifyLeaderAndIsrData> getRequestData(TableBucket tableBucket) {
+        return Optional.ofNullable(requestDataByBucket.get(tableBucket));
     }
 }
