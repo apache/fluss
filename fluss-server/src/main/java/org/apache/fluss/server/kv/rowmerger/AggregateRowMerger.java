@@ -88,7 +88,7 @@ public class AggregateRowMerger implements RowMerger {
     public BinaryValue merge(@Nullable BinaryValue oldValue, BinaryValue newValue) {
         // First write: no existing row
         if (oldValue == null || oldValue.row == null) {
-            return newValue;
+            return aggregateFirstRow(contextCache, newValue);
         }
 
         // Get contexts for schema evolution support
@@ -106,6 +106,18 @@ public class AggregateRowMerger implements RowMerger {
         BinaryRow mergedRow = encoder.finishRow();
 
         return new BinaryValue(targetSchemaId, mergedRow);
+    }
+
+    private static BinaryValue aggregateFirstRow(
+            AggregationContextCache contextCache, BinaryValue value) {
+        AggregationContext context = contextCache.getContext(value.schemaId);
+        if (!context.requiresAggOnFirstWrite()) {
+            return value;
+        }
+        RowEncoder encoder = context.getRowEncoder();
+        encoder.startNewRow();
+        AggregateFieldsProcessor.aggregateFirstRow(value.row, context, encoder);
+        return new BinaryValue(value.schemaId, encoder.finishRow());
     }
 
     @Override
@@ -271,7 +283,7 @@ public class AggregateRowMerger implements RowMerger {
         public BinaryValue merge(@Nullable BinaryValue oldValue, BinaryValue newValue) {
             // First write: no existing row
             if (oldValue == null || oldValue.row == null) {
-                return newValue;
+                return aggregateFirstRow(contextCache, newValue);
             }
 
             // Get contexts for schema evolution support

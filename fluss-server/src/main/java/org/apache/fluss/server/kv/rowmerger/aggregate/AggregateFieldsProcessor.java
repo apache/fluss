@@ -167,6 +167,23 @@ public final class AggregateFieldsProcessor {
      * @param targetColumnIdBitSet BitSet marking target columns by column ID
      * @param encoder the row encoder to encode results (should match targetContext)
      */
+    /**
+     * Encodes the first row written for a key, passing the fields whose aggregator requires it
+     * through {@code agg(null, value)}.
+     */
+    public static void aggregateFirstRow(
+            BinaryRow row, AggregationContext context, RowEncoder encoder) {
+        InternalRow.FieldGetter[] fieldGetters = context.getFieldGetters();
+        FieldAggregator[] aggregators = context.getAggregators();
+        for (int idx = 0; idx < context.getFieldCount(); idx++) {
+            Object field = fieldGetters[idx].getFieldOrNull(row);
+            FieldAggregator aggregator = aggregators[idx];
+            encoder.encodeField(
+                    idx,
+                    aggregator.requiresAggOnFirstWrite() ? aggregator.agg(null, field) : field);
+        }
+    }
+
     public static void aggregateTargetFieldsWithTargetSchema(
             BinaryRow oldRow,
             BinaryRow newRow,
