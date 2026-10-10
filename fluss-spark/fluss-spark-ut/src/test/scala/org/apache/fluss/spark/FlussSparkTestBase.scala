@@ -25,6 +25,8 @@ import org.apache.fluss.config.{ConfigOptions, Configuration}
 import org.apache.fluss.metadata.{TableDescriptor, TablePath}
 import org.apache.fluss.row.InternalRow
 import org.apache.fluss.server.testutils.FlussClusterExtension
+import org.apache.fluss.spark.utils.FlussConnectionCache
+import org.apache.fluss.utils.IOUtils
 
 import org.apache.spark.SparkConf
 import org.apache.spark.sql.QueryTest
@@ -66,16 +68,20 @@ class FlussSparkTestBase extends QueryTest with SharedSparkSession {
   }
 
   override protected def afterAll(): Unit = {
-    super.afterAll()
-    if (admin != null) {
-      admin.close()
-      admin = null
+    try {
+      super.afterAll()
+    } finally {
+      try {
+        IOUtils.closeAll(
+          admin,
+          conn,
+          () => FlussConnectionCache.clearIdleConnections(),
+          () => flussServer.close())
+      } finally {
+        admin = null
+        conn = null
+      }
     }
-    if (conn != null) {
-      conn.close()
-      conn = null
-    }
-    flussServer.close()
   }
 
   def createTablePath(tableName: String): TablePath = {
