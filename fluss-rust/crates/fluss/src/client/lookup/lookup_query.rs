@@ -71,8 +71,9 @@ impl<T> LookupQuery<T> {
         self.retries += 1;
     }
 
+    /// Whether the lookup needs no result: it already has one, or its caller stopped waiting.
     pub fn is_done(&self) -> bool {
-        self.result_tx.is_none()
+        self.result_tx.as_ref().is_none_or(|tx| tx.is_closed())
     }
 
     pub fn complete(&mut self, result: Result<T>) {
@@ -113,6 +114,13 @@ impl QueuedLookup {
         match self {
             Self::Primary(q) => q.key(),
             Self::Prefix(q) => q.key(),
+        }
+    }
+
+    pub fn is_done(&self) -> bool {
+        match self {
+            Self::Primary(q) => q.is_done(),
+            Self::Prefix(q) => q.is_done(),
         }
     }
 

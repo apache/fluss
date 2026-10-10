@@ -27,7 +27,6 @@ use crate::rpc::message::{
 use crate::rpc::{ApiError, ServerConnection};
 use crate::{BucketId, PartitionId, TableId};
 use bytes::Bytes;
-use futures::stream::{FuturesUnordered, StreamExt};
 use log::{debug, error, warn};
 use std::collections::{HashMap, HashSet};
 use std::io::Cursor;
@@ -35,6 +34,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc, watch};
+use tokio::task::JoinSet;
 
 type ServerId = i32;
 
@@ -53,7 +53,7 @@ struct BucketResponse<V> {
 trait LookupProtocol {
     type Request: RequestBody<ResponseBody = Self::Response> + Send + WriteType<Vec<u8>>;
     type Response: ReadType<Cursor<Vec<u8>>> + Send;
-    type Value: Send;
+    type Value: Send + 'static;
 
     const OP_NAME: &'static str;
 
@@ -144,14 +144,21 @@ struct GroupingResult {
 }
 
 pub struct LookupSender {
-    metadata: Arc<Metadata>,
     queue: LookupQueue,
-    re_enqueue_tx: mpsc::UnboundedSender<QueuedLookup>,
-    inflight_semaphore: Arc<Semaphore>,
-    max_retries: i32,
+    dispatcher: Arc<LookupDispatcher>,
+    requests: JoinSet<()>,
     running: AtomicBool,
     force_close: AtomicBool,
     shutdown_rx: watch::Receiver<bool>,
+}
+
+/// Sends lookups to their leaders and completes, retries or fails them. Shared by the sender and
+/// the tasks that wait for responses.
+struct LookupDispatcher {
+    metadata: Arc<Metadata>,
+    re_enqueue_tx: mpsc::UnboundedSender<QueuedLookup>,
+    inflight_semaphore: Arc<Semaphore>,
+    max_retries: i32,
 }
 
 struct LookupBatch<T> {
@@ -230,11 +237,14 @@ impl LookupSender {
         shutdown_rx: watch::Receiver<bool>,
     ) -> Self {
         Self {
-            metadata,
             queue,
-            re_enqueue_tx,
-            inflight_semaphore: Arc::new(Semaphore::new(max_inflight_requests)),
-            max_retries,
+            dispatcher: Arc::new(LookupDispatcher {
+                metadata,
+                re_enqueue_tx,
+                inflight_semaphore: Arc::new(Semaphore::new(max_inflight_requests)),
+                max_retries,
+            }),
+            requests: JoinSet::new(),
             running: AtomicBool::new(true),
             force_close: AtomicBool::new(false),
             shutdown_rx,
@@ -271,11 +281,14 @@ impl LookupSender {
 
         debug!("Beginning shutdown of lookup sender, sending remaining lookups");
 
-        // TODO: Check the in-flight request count in the accumulator.
-        if !self.force_close.load(Ordering::Acquire) && self.queue.has_undrained() {
-            if let Err(e) = self.run_once(true).await {
-                error!("Error during lookup sender shutdown: {}", e);
+        if !self.force_close.load(Ordering::Acquire) {
+            if self.queue.has_undrained() {
+                if let Err(e) = self.run_once(true).await {
+                    error!("Error during lookup sender shutdown: {}", e);
+                }
             }
+            // Wait for the requests in flight.
+            while self.requests.join_next().await.is_some() {}
         }
 
         // TODO: If force close failed, add logic to abort incomplete lookup requests.
@@ -289,10 +302,31 @@ impl LookupSender {
             self.queue.drain().await
         };
 
-        self.send_lookups(lookups).await
+        // Remove the requests that have finished from the set.
+        while self.requests.try_join_next().is_some() {}
+        self.dispatcher
+            .send_lookups(lookups, &mut self.requests)
+            .await
     }
 
-    async fn send_lookups(&self, lookups: Vec<QueuedLookup>) -> Result<()> {
+    pub fn initiate_close(&mut self) {
+        self.running.store(false, Ordering::Release);
+    }
+
+    #[allow(dead_code)]
+    pub fn force_close(&mut self) {
+        self.force_close.store(true, Ordering::Release);
+        self.initiate_close();
+    }
+}
+
+impl LookupDispatcher {
+    async fn send_lookups(
+        self: &Arc<Self>,
+        mut lookups: Vec<QueuedLookup>,
+        requests: &mut JoinSet<()>,
+    ) -> Result<()> {
+        lookups.retain(|lookup| !lookup.is_done());
         if lookups.is_empty() {
             return Ok(());
         }
@@ -341,21 +375,14 @@ impl LookupSender {
             }
         }
 
-        let primary_fut = async {
-            let mut pending = FuturesUnordered::new();
-            for (server, batches) in groups.primary {
-                pending.push(self.send_request::<Primary>(server, batches));
-            }
-            while pending.next().await.is_some() {}
-        };
-        let prefix_fut = async {
-            let mut pending = FuturesUnordered::new();
-            for (server, batches) in groups.prefix {
-                pending.push(self.send_request::<Prefix>(server, batches));
-            }
-            while pending.next().await.is_some() {}
-        };
-        tokio::join!(primary_fut, prefix_fut);
+        for (server, batches) in groups.primary {
+            self.send_requests::<Primary>(server, batches, requests)
+                .await;
+        }
+        for (server, batches) in groups.prefix {
+            self.send_requests::<Prefix>(server, batches, requests)
+                .await;
+        }
 
         Ok(())
     }
@@ -418,41 +445,36 @@ impl LookupSender {
         }
     }
 
-    async fn send_request<P: LookupProtocol>(
-        &self,
+    /// Sends `destination` one request per table, each on a task of its own in `requests`, so a
+    /// server that is slow to answer holds up only the lookups sent to it. Returns once every
+    /// request has started; while all in-flight permits are taken, it waits for one.
+    async fn send_requests<P: LookupProtocol>(
+        self: &Arc<Self>,
         destination: ServerId,
         batches_by_bucket: HashMap<TableBucket, LookupBatch<P::Value>>,
+        requests: &mut JoinSet<()>,
     ) where
         LookupQuery<P::Value>: Into<QueuedLookup>,
     {
-        let mut batches_by_table = group_by_table(batches_by_bucket);
-        let connection = match self
-            .connect_or_fail(destination, &mut batches_by_table)
-            .await
-        {
-            Some(conn) => conn,
-            None => return,
-        };
-
-        let mut pending = FuturesUnordered::new();
-        for (table_id, mut batches) in batches_by_table {
-            let keys_by_bucket: Vec<_> = batches.iter_mut().map(|b| b.keys_tuple()).collect();
-            let request = P::build_request(table_id, keys_by_bucket);
-            pending.push(self.send_single_table_lookup::<P>(
-                table_id,
-                destination,
-                connection.clone(),
-                request,
-                batches,
-            ));
+        for (table_id, mut batches) in group_by_table(batches_by_bucket) {
+            let permit = match self.acquire_inflight_permit(&mut batches).await {
+                Some(p) => p,
+                None => continue,
+            };
+            let dispatcher = Arc::clone(self);
+            requests.spawn(async move {
+                dispatcher
+                    .send_table_lookup::<P>(table_id, destination, batches)
+                    .await;
+                drop(permit);
+            });
         }
-        while pending.next().await.is_some() {}
     }
 
     async fn connect_or_fail<T>(
         &self,
         destination: ServerId,
-        batches_by_table: &mut HashMap<TableId, Vec<LookupBatch<T>>>,
+        batches: &mut [LookupBatch<T>],
     ) -> Option<ServerConnection>
     where
         LookupQuery<T>: Into<QueuedLookup>,
@@ -465,7 +487,7 @@ impl LookupSender {
                     message: format!("Server {destination} is not found in metadata cache"),
                     source: None,
                 };
-                self.fail_all_batches(&error, true, batches_by_table);
+                self.fail_all_batches(&error, true, batches);
                 return None;
             }
         };
@@ -477,41 +499,35 @@ impl LookupSender {
                     e,
                     format!("Failed to get connection to server {destination}"),
                 );
-                self.fail_all_batches(&error, true, batches_by_table);
+                self.fail_all_batches(&error, true, batches);
                 None
             }
         }
     }
 
-    fn fail_all_batches<T>(
-        &self,
-        error: &Error,
-        is_retriable: bool,
-        batches_by_table: &mut HashMap<TableId, Vec<LookupBatch<T>>>,
-    ) where
+    fn fail_all_batches<T>(&self, error: &Error, is_retriable: bool, batches: &mut [LookupBatch<T>])
+    where
         LookupQuery<T>: Into<QueuedLookup>,
     {
-        for batches in batches_by_table.values_mut() {
-            for batch in batches.iter_mut() {
-                self.handle_batch_error(error, is_retriable, batch);
-            }
+        for batch in batches {
+            self.handle_batch_error(error, is_retriable, batch);
         }
     }
 
-    async fn send_single_table_lookup<P: LookupProtocol>(
+    async fn send_table_lookup<P: LookupProtocol>(
         &self,
         table_id: TableId,
         destination: ServerId,
-        connection: ServerConnection,
-        request: P::Request,
         mut batches: Vec<LookupBatch<P::Value>>,
     ) where
         LookupQuery<P::Value>: Into<QueuedLookup>,
     {
-        let _permit = match self.acquire_inflight_permit(&mut batches).await {
-            Some(p) => p,
+        let connection = match self.connect_or_fail(destination, &mut batches).await {
+            Some(conn) => conn,
             None => return,
         };
+        let keys_by_bucket: Vec<_> = batches.iter_mut().map(|b| b.keys_tuple()).collect();
+        let request = P::build_request(table_id, keys_by_bucket);
 
         match connection.request(request).await {
             Ok(response) => {
@@ -679,16 +695,6 @@ impl LookupSender {
             });
         }
     }
-
-    pub fn initiate_close(&mut self) {
-        self.running.store(false, Ordering::Release);
-    }
-
-    #[allow(dead_code)]
-    pub fn force_close(&mut self) {
-        self.force_close.store(true, Ordering::Release);
-        self.initiate_close();
-    }
 }
 
 fn group_by_table<T>(
@@ -749,24 +755,54 @@ fn copy_error(error: &Error) -> Error {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::client::lookup::LookupQueue;
+    use crate::client::lookup::{LookupQueue, PrimaryLookupQuery};
     use crate::proto::PbLookupRespForBucket;
-    use crate::test_utils::build_cluster_arc;
+    use crate::test_utils::build_cluster_arc_with_port;
+    use tokio::io::AsyncReadExt;
+    use tokio::net::TcpListener;
     use tokio::sync::oneshot;
 
     const TABLE_ID: TableId = 1;
+
+    type PrimaryResult = Result<Option<Vec<u8>>>;
 
     fn table_path() -> TablePath {
         TablePath::new("db", "tbl")
     }
 
-    fn sender(max_retries: i32) -> LookupSender {
-        let cluster = build_cluster_arc(&table_path(), TABLE_ID, 1);
+    /// A sender whose only tablet server listens on `port`, with the channels that feed and
+    /// stop it.
+    fn sender_on_port(
+        port: u16,
+        max_retries: i32,
+    ) -> (
+        LookupSender,
+        mpsc::Sender<QueuedLookup>,
+        watch::Sender<bool>,
+    ) {
+        let cluster = build_cluster_arc_with_port(&table_path(), TABLE_ID, 1, u32::from(port));
         let metadata = Arc::new(Metadata::new_for_test(cluster));
-        let (queue, _lookup_tx, re_enqueue_tx) =
+        let (queue, lookup_tx, re_enqueue_tx) =
             LookupQueue::new(8, 8, 100, metadata.subscribe_cluster_changes());
-        let (_shutdown_tx, shutdown_rx) = watch::channel(false);
-        LookupSender::new(metadata, queue, re_enqueue_tx, 1, max_retries, shutdown_rx)
+        let (shutdown_tx, shutdown_rx) = watch::channel(false);
+        let sender = LookupSender::new(metadata, queue, re_enqueue_tx, 1, max_retries, shutdown_rx);
+        (sender, lookup_tx, shutdown_tx)
+    }
+
+    fn sender(max_retries: i32) -> LookupSender {
+        sender_on_port(9092, max_retries).0
+    }
+
+    fn lookup(bucket_id: BucketId) -> (PrimaryLookupQuery, oneshot::Receiver<PrimaryResult>) {
+        let (result_tx, result_rx) = oneshot::channel();
+        let query = LookupQuery::new(
+            table_path(),
+            TableBucket::new(TABLE_ID, bucket_id),
+            1,
+            Bytes::from_static(b"key"),
+            result_tx,
+        );
+        (query, result_rx)
     }
 
     fn fail_with_bucket_error(sender: &LookupSender, error_code: i32) -> Error {
@@ -788,7 +824,12 @@ mod tests {
                 ..Default::default()
             }],
         };
-        sender.handle_response::<Primary>(TABLE_ID, 1, response, std::slice::from_mut(&mut batch));
+        sender.dispatcher.handle_response::<Primary>(
+            TABLE_ID,
+            1,
+            response,
+            std::slice::from_mut(&mut batch),
+        );
         result_rx
             .try_recv()
             .expect("lookup completed")
@@ -814,6 +855,7 @@ mod tests {
         let table_bucket = TableBucket::new(TABLE_ID, 0);
         assert!(
             sender
+                .dispatcher
                 .metadata
                 .get_cluster()
                 .leader_for(&table_bucket)
@@ -824,10 +866,125 @@ mod tests {
 
         assert!(
             sender
+                .dispatcher
                 .metadata
                 .get_cluster()
                 .leader_for(&table_bucket)
                 .is_none()
         );
+    }
+
+    #[test]
+    fn a_lookup_whose_caller_stopped_waiting_is_not_retried() {
+        let mut sender = sender(3);
+        let (query, result_rx) = lookup(0);
+        drop(result_rx);
+        let mut batch = LookupBatch::new(query.table_bucket().clone());
+        batch.add_lookup(query);
+        let error = Error::UnexpectedError {
+            message: "connection reset".to_string(),
+            source: None,
+        };
+
+        sender
+            .dispatcher
+            .handle_batch_error(&error, true, &mut batch);
+
+        assert!(sender.queue.drain_all().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_lookup_whose_caller_stopped_waiting_is_not_sent() {
+        let mut sender = sender(3);
+        // The test cluster has no bucket 1, so this lookup would wait for a leader.
+        let (query, result_rx) = lookup(1);
+        drop(result_rx);
+
+        sender
+            .dispatcher
+            .send_lookups(vec![query.into()], &mut sender.requests)
+            .await
+            .unwrap();
+
+        assert!(sender.queue.drain_all().is_empty());
+    }
+
+    #[tokio::test]
+    async fn sending_does_not_wait_for_the_server_to_answer() {
+        // Accepts connections and never answers.
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let (mut sender, _lookup_tx, _shutdown_tx) =
+            sender_on_port(listener.local_addr().unwrap().port(), 3);
+        let (query, mut result_rx) = lookup(0);
+
+        tokio::time::timeout(
+            Duration::from_secs(10),
+            sender
+                .dispatcher
+                .send_lookups(vec![query.into()], &mut sender.requests),
+        )
+        .await
+        .expect("sent without waiting for the server")
+        .unwrap();
+
+        let _connection = listener.accept().await.unwrap();
+        assert!(matches!(
+            result_rx.try_recv(),
+            Err(oneshot::error::TryRecvError::Empty)
+        ));
+        assert_eq!(sender.dispatcher.inflight_semaphore.available_permits(), 0);
+    }
+
+    #[tokio::test]
+    async fn closing_waits_for_the_requests_in_flight() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let (mut sender, lookup_tx, shutdown_tx) =
+            sender_on_port(listener.local_addr().unwrap().port(), 0);
+        let (query, result_rx) = lookup(0);
+        lookup_tx.send(query.into()).await.unwrap();
+        let run = tokio::spawn(async move { sender.run().await });
+        let (connection, _) = listener.accept().await.unwrap();
+
+        shutdown_tx.send(true).unwrap();
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        assert!(!run.is_finished());
+
+        // The server goes away, so the request fails and returns its permit.
+        drop(connection);
+        tokio::time::timeout(Duration::from_secs(10), run)
+            .await
+            .expect("closed once the request failed")
+            .unwrap();
+        assert!(result_rx.await.unwrap().is_err());
+    }
+
+    #[tokio::test]
+    async fn dropping_the_sender_aborts_its_requests_in_flight() {
+        // Accepts connections and never answers.
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let (mut sender, _lookup_tx, _shutdown_tx) =
+            sender_on_port(listener.local_addr().unwrap().port(), 3);
+        let (query, _result_rx) = lookup(0);
+        tokio::time::timeout(
+            Duration::from_secs(10),
+            sender
+                .dispatcher
+                .send_lookups(vec![query.into()], &mut sender.requests),
+        )
+        .await
+        .expect("sent without waiting for the server")
+        .unwrap();
+        let (mut connection, _) = listener.accept().await.unwrap();
+
+        drop(sender);
+
+        let mut received = Vec::new();
+        tokio::time::timeout(
+            Duration::from_secs(10),
+            connection.read_to_end(&mut received),
+        )
+        .await
+        .expect("the client closed its connection")
+        .unwrap();
     }
 }
