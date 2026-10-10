@@ -30,6 +30,7 @@ import org.apache.fluss.exception.DeletionDisabledException;
 import org.apache.fluss.exception.DiskWriteLockedException;
 import org.apache.fluss.exception.DuplicateSequenceException;
 import org.apache.fluss.exception.FencedLeaderEpochException;
+import org.apache.fluss.exception.FencedTabletServerEpochException;
 import org.apache.fluss.exception.FencedTieringEpochException;
 import org.apache.fluss.exception.HistoricalPartitionThrottledException;
 import org.apache.fluss.exception.IneligibleReplicaException;
@@ -291,7 +292,9 @@ public enum Errors {
             74,
             "The request's bucket routing information is missing or invalid. The client should "
                     + "refresh partition metadata and rebuild the request.",
-            InvalidBucketRoutingException::new);
+            InvalidBucketRoutingException::new),
+    FENCED_TABLET_SERVER_EPOCH_EXCEPTION(
+            75, "The tablet server epoch is invalid.", FencedTabletServerEpochException::new);
 
     private static final Logger LOG = LoggerFactory.getLogger(Errors.class);
 

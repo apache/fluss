@@ -281,6 +281,8 @@ pub struct UpdateMetadataRequest {
     pub partition_metadata: ::prost::alloc::vec::Vec<PbPartitionMetadata>,
     #[prost(int32, optional, tag = "5")]
     pub coordinator_epoch: ::core::option::Option<i32>,
+    #[prost(int64, optional, tag = "6")]
+    pub tablet_server_epoch: ::core::option::Option<i64>,
 }
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct UpdateMetadataResponse {}
@@ -488,6 +490,8 @@ pub struct NotifyLeaderAndIsrRequest {
     pub notify_buckets_leader_req: ::prost::alloc::vec::Vec<
         PbNotifyLeaderAndIsrReqForBucket,
     >,
+    #[prost(int64, optional, tag = "3")]
+    pub tablet_server_epoch: ::core::option::Option<i64>,
 }
 /// response for notify bucket leader and isr request
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -504,6 +508,8 @@ pub struct StopReplicaRequest {
     pub coordinator_epoch: i32,
     #[prost(message, repeated, tag = "2")]
     pub stop_replicas_req: ::prost::alloc::vec::Vec<PbStopReplicaReqForBucket>,
+    #[prost(int64, optional, tag = "3")]
+    pub tablet_server_epoch: ::core::option::Option<i64>,
 }
 /// response for stop bucket replica request
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -976,8 +982,8 @@ pub struct LakeTieringHeartbeatResponse {
 pub struct ControlledShutdownRequest {
     #[prost(int32, required, tag = "1")]
     pub tablet_server_id: i32,
-    #[prost(int32, required, tag = "2")]
-    pub tablet_server_epoch: i32,
+    #[prost(int64, required, tag = "2")]
+    pub tablet_server_epoch: i64,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ControlledShutdownResponse {

@@ -76,18 +76,31 @@ public class TabletServerChangeWatcher extends ServerBaseChangeWatcher {
                 case NODE_CREATED:
                     {
                         if (newData != null && newData.getData().length > 0) {
-                            int serverId = getServerIdFromEvent(newData);
-                            TabletServerRegistration registration =
+                            enqueueNewTabletServer(newData);
+                        }
+                        break;
+                    }
+                case NODE_CHANGED:
+                    {
+                        if (oldData != null
+                                && oldData.getData().length > 0
+                                && newData != null
+                                && newData.getData().length > 0) {
+                            TabletServerRegistration oldRegistration =
+                                    ServerIdZNode.decode(oldData.getData());
+                            TabletServerRegistration newRegistration =
                                     ServerIdZNode.decode(newData.getData());
-                            LOG.info("Received CHILD_ADDED event for server {}.", serverId);
-                            eventManager.put(
-                                    new NewTabletServerEvent(
-                                            new ServerInfo(
-                                                    serverId,
-                                                    registration.getRack(),
-                                                    registration.getEndpoints(),
-                                                    ServerType.TABLET_SERVER,
-                                                    registration.getResource())));
+                            if (oldRegistration.getRegisterTimestamp()
+                                    != newRegistration.getRegisterTimestamp()) {
+                                int serverId = getServerIdFromEvent(newData);
+                                LOG.info(
+                                        "Received incarnation change event for tablet server {}.",
+                                        serverId);
+                                eventManager.put(
+                                        new DeadTabletServerEvent(
+                                                serverId, oldRegistration.getRegisterTimestamp()));
+                                enqueueNewTabletServer(newData);
+                            }
                         }
                         break;
                     }
@@ -95,14 +108,33 @@ public class TabletServerChangeWatcher extends ServerBaseChangeWatcher {
                     {
                         if (oldData != null && oldData.getData().length > 0) {
                             int serverId = getServerIdFromEvent(oldData);
+                            TabletServerRegistration registration =
+                                    ServerIdZNode.decode(oldData.getData());
                             LOG.info("Received CHILD_REMOVED event for server {}.", serverId);
-                            eventManager.put(new DeadTabletServerEvent(serverId));
+                            eventManager.put(
+                                    new DeadTabletServerEvent(
+                                            serverId, registration.getRegisterTimestamp()));
                         }
                         break;
                     }
                 default:
                     break;
             }
+        }
+
+        private void enqueueNewTabletServer(ChildData data) {
+            int serverId = getServerIdFromEvent(data);
+            TabletServerRegistration registration = ServerIdZNode.decode(data.getData());
+            LOG.info("Received CHILD_ADDED event for server {}.", serverId);
+            eventManager.put(
+                    new NewTabletServerEvent(
+                            new ServerInfo(
+                                    serverId,
+                                    registration.getRack(),
+                                    registration.getEndpoints(),
+                                    ServerType.TABLET_SERVER,
+                                    registration.getResource(),
+                                    registration.getRegisterTimestamp())));
         }
     }
 }

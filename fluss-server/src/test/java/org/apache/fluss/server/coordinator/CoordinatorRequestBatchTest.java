@@ -25,6 +25,8 @@ import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.rpc.messages.NotifyLeaderAndIsrRequest;
 import org.apache.fluss.rpc.messages.NotifyLeaderAndIsrResponse;
 import org.apache.fluss.rpc.messages.PbNotifyLeaderAndIsrReqForBucket;
+import org.apache.fluss.rpc.messages.UpdateMetadataRequest;
+import org.apache.fluss.rpc.messages.UpdateMetadataResponse;
 import org.apache.fluss.server.coordinator.event.AccessContextEvent;
 import org.apache.fluss.server.coordinator.event.EventManager;
 import org.apache.fluss.server.zk.ZkEpoch;
@@ -35,6 +37,9 @@ import org.junit.jupiter.api.Test;
 
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BiConsumer;
 
@@ -188,6 +193,37 @@ class CoordinatorRequestBatchTest {
         assertThat(bucketRequest.hasBucketCount()).isFalse();
         assertThat(bucketRequest.hasBucketCountEpoch()).isFalse();
         assertThat(coordinatorContext.getPendingLeaderActivationBuckets()).isEmpty();
+    }
+
+    @Test
+    void testUpdateMetadataUsesIndependentRequestForEachTabletServer() {
+        Map<Integer, UpdateMetadataRequest> sentRequests = new HashMap<>();
+        TestCoordinatorChannelManager channelManager =
+                new TestCoordinatorChannelManager() {
+                    @Override
+                    public void sendUpdateMetadataRequest(
+                            int receiveServerId,
+                            UpdateMetadataRequest request,
+                            BiConsumer<UpdateMetadataResponse, ? super Throwable>
+                                    responseConsumer) {
+                        request.setTabletServerEpoch(100L + receiveServerId);
+                        sentRequests.put(receiveServerId, request);
+                    }
+                };
+        CoordinatorRequestBatch batch =
+                new CoordinatorRequestBatch(
+                        channelManager,
+                        newSynchronousAccessContextEventManager(),
+                        coordinatorContext);
+
+        batch.addUpdateMetadataRequestForTabletServers(
+                new HashSet<>(Arrays.asList(0, 1)), null, null, Collections.emptySet());
+        batch.sendUpdateMetadataRequest();
+
+        assertThat(sentRequests).containsOnlyKeys(0, 1);
+        assertThat(sentRequests.get(0)).isNotSameAs(sentRequests.get(1));
+        assertThat(sentRequests.get(0).getTabletServerEpoch()).isEqualTo(100L);
+        assertThat(sentRequests.get(1).getTabletServerEpoch()).isEqualTo(101L);
     }
 
     /** Registers table metadata so normal notifications carry the bucket layout epoch. */

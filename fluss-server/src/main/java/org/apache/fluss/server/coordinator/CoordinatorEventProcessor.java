@@ -28,6 +28,7 @@ import org.apache.fluss.cluster.rebalance.ServerTag;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.FencedLeaderEpochException;
+import org.apache.fluss.exception.FencedTabletServerEpochException;
 import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.exception.IneligibleReplicaException;
 import org.apache.fluss.exception.InvalidCoordinatorException;
@@ -165,6 +166,7 @@ import static org.apache.fluss.server.coordinator.statemachine.ReplicaState.Onli
 import static org.apache.fluss.server.coordinator.statemachine.ReplicaState.ReplicaDeletionStarted;
 import static org.apache.fluss.server.coordinator.statemachine.ReplicaState.ReplicaDeletionSuccessful;
 import static org.apache.fluss.server.coordinator.statemachine.ReplicaState.ReplicaMigrationStarted;
+import static org.apache.fluss.server.metadata.ServerInfo.UNKNOWN_TABLET_SERVER_EPOCH;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeAdjustIsrResponse;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeListRebalanceProgressResponse;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeRebalanceResponse;
@@ -393,6 +395,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
         int[] currentServers = zooKeeperClient.getSortedTabletServerList();
         List<ServerInfo> tabletServerInfos = new ArrayList<>();
         List<ServerNode> internalServerNodes = new ArrayList<>();
+        Map<Integer, Long> tabletServerEpochs = new HashMap<>();
 
         long start4loadTabletServer = System.currentTimeMillis();
         Map<Integer, TabletServerRegistration> tabletServerRegistrations =
@@ -405,7 +408,8 @@ public class CoordinatorEventProcessor implements EventProcessor {
                             registration.getRack(),
                             registration.getEndpoints(),
                             ServerType.TABLET_SERVER,
-                            registration.getResource());
+                            registration.getResource(),
+                            registration.getRegisterTimestamp());
             // Get internal listener endpoint to send request to tablet server.
             Endpoint internalEndpoint = serverInfo.endpoint(internalListenerName);
             if (internalEndpoint == null) {
@@ -416,6 +420,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
                 continue;
             }
             tabletServerInfos.add(serverInfo);
+            tabletServerEpochs.put(server, registration.getRegisterTimestamp());
             internalServerNodes.add(
                     new ServerNode(
                             server,
@@ -430,7 +435,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
                 System.currentTimeMillis() - start4loadTabletServer);
 
         // init tablet server channels
-        coordinatorChannelManager.startup(internalServerNodes);
+        coordinatorChannelManager.startup(internalServerNodes, tabletServerEpochs);
 
         // load server tags.
         zooKeeperClient
@@ -1320,30 +1325,33 @@ public class CoordinatorEventProcessor implements EventProcessor {
     }
 
     private void processNewTabletServer(NewTabletServerEvent newTabletServerEvent) {
-        // NOTE: we won't need to detect bounced tablet servers like Kafka as we won't
-        // miss the event of tablet server un-register and register again since we can
-        // listen the children created and deleted in zk node.
-
-        // Also, Kafka use broker epoch to make it can reject the LeaderAndIsrRequest,
-        // UpdateMetadataRequest and StopReplicaRequest
-        // whose epoch < current broker epoch.
-        // See more in KIP-380 & https://github.com/apache/kafka/pull/5821
-        // but for the case of StopReplicaRequest in Fluss, although we will send
-        // stop replica after tablet server is controlled shutdown, but we will detect
-        // it start when it bounce and send start replica request again. It seems not a
-        // problem in Fluss;
-        // TODO: revisit here to see whether we really need epoch for tablet server like kafka
-        // when we finish the logic of tablet server
         ServerInfo serverInfo = newTabletServerEvent.getServerInfo();
         int tabletServerId = serverInfo.id();
-        if (coordinatorContext.getLiveTabletServers().containsKey(serverInfo.id())) {
-            // if the dead server is already in live servers, return directly
-            // it may happen during coordinator server initiation, the watcher watch a new tablet
-            // server register event and put it to event manager, but after that, the coordinator
-            // server read
-            // all tablet server nodes registered which contain the tablet server; in this case,
-            // we can ignore it.
-            return;
+        ServerInfo currentServerInfo =
+                coordinatorContext.getLiveTabletServers().get(tabletServerId);
+        if (currentServerInfo != null) {
+            long currentEpoch = currentServerInfo.tabletServerEpoch();
+            long newEpoch = serverInfo.tabletServerEpoch();
+            if (currentEpoch != UNKNOWN_TABLET_SERVER_EPOCH
+                    && newEpoch != UNKNOWN_TABLET_SERVER_EPOCH
+                    && currentEpoch != newEpoch) {
+                LOG.info(
+                        "Tablet server {} re-registered with a new epoch (old={}, new={}).",
+                        tabletServerId,
+                        currentEpoch,
+                        newEpoch);
+                processDeadTabletServer(new DeadTabletServerEvent(tabletServerId, currentEpoch));
+            } else {
+                // if the dead server is already in live servers, return directly
+                // it may happen during coordinator server initiation, the watcher watch a new
+                // tablet
+                // server register event and put it to event manager, but after that, the
+                // coordinator
+                // server read
+                // all tablet server nodes registered which contain the tablet server; in this case,
+                // we can ignore it.
+                return;
+            }
         }
 
         // process new tablet server
@@ -1353,7 +1361,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
         coordinatorContext.addLiveTabletServer(serverInfo);
 
         ServerNode serverNode = serverInfo.nodeOrThrow(internalListenerName);
-        coordinatorChannelManager.addTabletServer(serverNode);
+        coordinatorChannelManager.addTabletServer(serverNode, serverInfo.tabletServerEpoch());
 
         // update coordinatorServer metadata cache for the new added table server.
         serverMetadataCache.updateMetadata(
@@ -1394,11 +1402,25 @@ public class CoordinatorEventProcessor implements EventProcessor {
 
     private void processDeadTabletServer(DeadTabletServerEvent deadTabletServerEvent) {
         int tabletServerId = deadTabletServerEvent.getServerId();
-        if (!coordinatorContext.getLiveTabletServers().containsKey(tabletServerId)) {
+        ServerInfo currentServerInfo =
+                coordinatorContext.getLiveTabletServers().get(tabletServerId);
+        if (currentServerInfo == null) {
             // if the dead server is already not in live servers, return directly
             // it may happen during coordinator server initiation, the watcher watch a new tablet
             // server unregister event, but the coordinator server also don't read it from zk and
             // haven't init to coordinator context
+            return;
+        }
+        long eventEpoch = deadTabletServerEvent.getTabletServerEpoch();
+        long currentEpoch = currentServerInfo.tabletServerEpoch();
+        if (eventEpoch != UNKNOWN_TABLET_SERVER_EPOCH
+                && currentEpoch != UNKNOWN_TABLET_SERVER_EPOCH
+                && eventEpoch != currentEpoch) {
+            LOG.info(
+                    "Ignoring stale deletion event for tablet server {} at epoch {}; current epoch is {}.",
+                    tabletServerId,
+                    eventEpoch,
+                    currentEpoch);
             return;
         }
         // process dead tablet server
@@ -2435,9 +2457,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
         long startTimeMs = System.currentTimeMillis();
         ControlledShutdownResponse response = new ControlledShutdownResponse();
 
-        // TODO here we need to check tabletServerEpoch, avoid to receive controlled shutdown
-        // request from an old tabletServer. Trace by https://github.com/alibaba/fluss/issues/1153
-        int tabletServerEpoch = controlledShutdownEvent.getTabletServerEpoch();
+        long tabletServerEpoch = controlledShutdownEvent.getTabletServerEpoch();
 
         int tabletServerId = controlledShutdownEvent.getTabletServerId();
         LOG.info(
@@ -2448,6 +2468,17 @@ public class CoordinatorEventProcessor implements EventProcessor {
         if (!coordinatorContext.liveOrShuttingDownTabletServers().contains(tabletServerId)) {
             throw new TabletServerNotAvailableException(
                     "TabletServer" + tabletServerId + " is not available.");
+        }
+
+        long currentTabletServerEpoch =
+                coordinatorContext.getLiveTabletServers().get(tabletServerId).tabletServerEpoch();
+        if (currentTabletServerEpoch != UNKNOWN_TABLET_SERVER_EPOCH
+                && tabletServerEpoch != currentTabletServerEpoch) {
+            throw new FencedTabletServerEpochException(
+                    String.format(
+                            "Invalid tablet server epoch %s in controlled shutdown request for "
+                                    + "tablet server %s; current epoch is %s.",
+                            tabletServerEpoch, tabletServerId, currentTabletServerEpoch));
         }
 
         coordinatorContext.shuttingDownTabletServers().add(tabletServerId);

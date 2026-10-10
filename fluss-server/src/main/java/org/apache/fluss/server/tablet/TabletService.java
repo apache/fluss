@@ -20,6 +20,7 @@ package org.apache.fluss.server.tablet;
 import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.exception.ApiException;
 import org.apache.fluss.exception.AuthorizationException;
+import org.apache.fluss.exception.FencedTabletServerEpochException;
 import org.apache.fluss.exception.InvalidScanRequestException;
 import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.exception.NotLeaderOrFollowerException;
@@ -130,6 +131,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.function.BiFunction;
 import java.util.function.Consumer;
 import java.util.function.Function;
+import java.util.function.LongSupplier;
 import java.util.function.ToIntFunction;
 import java.util.stream.Collectors;
 
@@ -178,6 +180,7 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
     private final TabletServerMetadataProvider metadataFunctionProvider;
     private final ScannerManager scannerManager;
     private final CoordinatorGateway coordinatorGateway;
+    private final LongSupplier tabletServerEpochSupplier;
     private final String interListenerName;
     private final ExecutorService replicaStateChangeExecutor;
 
@@ -194,6 +197,7 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
             ExecutorService replicaStateChangeExecutor,
             ScannerManager scannerManager,
             CoordinatorGateway coordinatorGateway,
+            LongSupplier tabletServerEpochSupplier,
             String interListenerName) {
         super(
                 remoteFileSystem,
@@ -210,6 +214,7 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
                 new TabletServerMetadataProvider(zkClient, metadataManager, metadataCache);
         this.scannerManager = scannerManager;
         this.coordinatorGateway = coordinatorGateway;
+        this.tabletServerEpochSupplier = tabletServerEpochSupplier;
         this.interListenerName = interListenerName;
         this.replicaStateChangeExecutor = replicaStateChangeExecutor;
     }
@@ -597,12 +602,18 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
     @Override
     public CompletableFuture<NotifyLeaderAndIsrResponse> notifyLeaderAndIsr(
             NotifyLeaderAndIsrRequest notifyLeaderAndIsrRequest) {
+        Long requestTabletServerEpoch =
+                notifyLeaderAndIsrRequest.hasTabletServerEpoch()
+                        ? notifyLeaderAndIsrRequest.getTabletServerEpoch()
+                        : null;
         CompletableFuture<NotifyLeaderAndIsrResponse> response = new CompletableFuture<>();
         int coordinatorEpoch = notifyLeaderAndIsrRequest.getCoordinatorEpoch();
         List<NotifyLeaderAndIsrData> notifyLeaderAndIsrRequestData =
                 getNotifyLeaderAndIsrRequestData(notifyLeaderAndIsrRequest);
         return submitReplicaStateChange(
                 response,
+                requestTabletServerEpoch,
+                "NotifyLeaderAndIsr",
                 result ->
                         replicaManager.becomeLeaderOrFollower(
                                 coordinatorEpoch,
@@ -625,6 +636,8 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
 
     @Override
     public CompletableFuture<UpdateMetadataResponse> updateMetadata(UpdateMetadataRequest request) {
+        Long requestTabletServerEpoch =
+                request.hasTabletServerEpoch() ? request.getTabletServerEpoch() : null;
         int coordinatorEpoch =
                 request.hasCoordinatorEpoch()
                         ? request.getCoordinatorEpoch()
@@ -633,6 +646,8 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
         CompletableFuture<UpdateMetadataResponse> response = new CompletableFuture<>();
         return submitReplicaStateChange(
                 response,
+                requestTabletServerEpoch,
+                "UpdateMetadata",
                 result -> {
                     replicaManager.maybeUpdateMetadataCache(coordinatorEpoch, clusterMetadata);
                     result.complete(new UpdateMetadataResponse());
@@ -642,11 +657,17 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
     @Override
     public CompletableFuture<StopReplicaResponse> stopReplica(
             StopReplicaRequest stopReplicaRequest) {
+        Long requestTabletServerEpoch =
+                stopReplicaRequest.hasTabletServerEpoch()
+                        ? stopReplicaRequest.getTabletServerEpoch()
+                        : null;
         CompletableFuture<StopReplicaResponse> response = new CompletableFuture<>();
         int coordinatorEpoch = stopReplicaRequest.getCoordinatorEpoch();
         List<StopReplicaData> stopReplicaData = getStopReplicaData(stopReplicaRequest);
         return submitReplicaStateChange(
                 response,
+                requestTabletServerEpoch,
+                "StopReplica",
                 result ->
                         replicaManager.stopReplicas(
                                 coordinatorEpoch,
@@ -680,6 +701,16 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
                 tableBuckets,
                 (responseList) -> response.complete(makeListOffsetsResponse(responseList)));
         return response;
+    }
+
+    private void validateTabletServerEpoch(long requestEpoch, String requestName) {
+        long currentEpoch = tabletServerEpochSupplier.getAsLong();
+        if (requestEpoch != currentEpoch) {
+            throw new FencedTabletServerEpochException(
+                    String.format(
+                            "Invalid tablet server epoch %s in %s request; current epoch is %s.",
+                            requestEpoch, requestName, currentEpoch));
+        }
     }
 
     @Override
@@ -981,6 +1012,24 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
             response.completeExceptionally(t);
         }
         return response;
+    }
+
+    private <T> CompletableFuture<T> submitReplicaStateChange(
+            CompletableFuture<T> response,
+            @Nullable Long requestTabletServerEpoch,
+            String requestName,
+            Consumer<CompletableFuture<T>> action) {
+        if (requestTabletServerEpoch != null) {
+            validateTabletServerEpoch(requestTabletServerEpoch, requestName);
+        }
+        return submitReplicaStateChange(
+                response,
+                result -> {
+                    if (requestTabletServerEpoch != null) {
+                        validateTabletServerEpoch(requestTabletServerEpoch, requestName);
+                    }
+                    action.accept(result);
+                });
     }
 
     @Override
