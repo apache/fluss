@@ -17,11 +17,15 @@
 
 package org.apache.fluss.server.utils;
 
+import org.apache.fluss.fs.FsPath;
+import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableChange;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.record.KvRecordBatch;
 import org.apache.fluss.record.MemoryLogRecords;
+import org.apache.fluss.remote.RemoteLogFetchInfo;
+import org.apache.fluss.remote.RemoteLogSegment;
 import org.apache.fluss.row.encode.KvValueLayout;
 import org.apache.fluss.rpc.entity.FetchLogResultForBucket;
 import org.apache.fluss.rpc.entity.LookupResultForBucket;
@@ -50,12 +54,16 @@ import org.apache.fluss.server.metadata.BucketMetadata;
 import org.apache.fluss.server.metadata.ClusterMetadata;
 import org.apache.fluss.server.metadata.PartitionMetadata;
 import org.apache.fluss.server.metadata.TableMetadata;
+import org.apache.fluss.utils.FlussPaths;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
+import java.util.UUID;
 
 import static org.apache.fluss.record.TestData.DATA1_TABLE_INFO;
 import static org.apache.fluss.record.TestData.DATA_1_WITH_KEY_AND_VALUE;
@@ -69,6 +77,57 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Tests for {@link ServerRpcMessageUtils}. */
 class ServerRpcMessageUtilsTest {
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void testFetchLogResponsePreservesRemoteLogDir(boolean partitioned) {
+        TablePath tablePath = TablePath.of("db", "table");
+        PhysicalTablePath physicalPath =
+                PhysicalTablePath.of(tablePath, partitioned ? "dt=2026-10-10" : null);
+        TableBucket bucket = new TableBucket(1L, partitioned ? 2L : null, 0);
+        for (String root :
+                Arrays.asList(
+                        "file:/tmp/remote/log", "s3://bucket/log", "s3://bucket/nested/log")) {
+            FsPath remoteLogDir = new FsPath(root);
+            FsPath tabletDir = FlussPaths.remoteLogTabletDir(remoteLogDir, physicalPath, bucket);
+            assertThat(FlussPaths.remoteLogDirFromTabletDir(tabletDir, bucket))
+                    .isEqualTo(remoteLogDir);
+            RemoteLogSegment segment =
+                    RemoteLogSegment.Builder.builder()
+                            .physicalTablePath(physicalPath)
+                            .tableBucket(bucket)
+                            .remoteLogSegmentId(UUID.randomUUID())
+                            .remoteLogStartOffset(0L)
+                            .remoteLogEndOffset(10L)
+                            .maxTimestamp(100L)
+                            .segmentSizeInBytes(1024)
+                            .remoteLogDir(remoteLogDir)
+                            .build();
+            FetchLogResponse response =
+                    ServerRpcMessageUtils.makeFetchLogResponse(
+                            Collections.singletonMap(
+                                    bucket,
+                                    FetchLogResultForBucket.remote(
+                                            bucket,
+                                            new RemoteLogFetchInfo(
+                                                    tabletDir.toString(),
+                                                    physicalPath.getPartitionName(),
+                                                    Collections.singletonList(segment),
+                                                    0),
+                                            10L)));
+            RemoteLogFetchInfo decoded =
+                    CommonRpcMessageUtils.getFetchLogResultForBucket(
+                                    bucket,
+                                    tablePath,
+                                    response.getTablesRespsList()
+                                            .get(0)
+                                            .getBucketsRespsList()
+                                            .get(0))
+                            .remoteLogFetchInfo();
+            assertThat(decoded.remoteLogTabletDir()).isEqualTo(tabletDir.toString());
+            assertThat(decoded.remoteLogSegmentList()).containsExactly(segment);
+        }
+    }
 
     @Test
     void testAlterTableDistributionChanges() {

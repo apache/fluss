@@ -496,6 +496,19 @@ public class FlussPaths {
     }
 
     /**
+     * Returns the remote log root from a tablet directory created by {@link
+     * #remoteLogTabletDir(FsPath, PhysicalTablePath, TableBucket)}.
+     *
+     * @param remoteLogTabletDir the remote log tablet directory
+     * @param tableBucket the bucket identifying whether the directory includes a partition
+     */
+    public static FsPath remoteLogDirFromTabletDir(
+            FsPath remoteLogTabletDir, TableBucket tableBucket) {
+        FsPath remoteLogDir = remoteLogTabletDir.getParent().getParent().getParent();
+        return tableBucket.getPartitionId() == null ? remoteLogDir : remoteLogDir.getParent();
+    }
+
+    /**
      * Returns the remote file path of manifest file.
      *
      * <p>The path contract:

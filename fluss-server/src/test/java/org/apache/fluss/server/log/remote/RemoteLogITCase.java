@@ -40,6 +40,7 @@ import org.apache.fluss.rpc.protocol.ApiError;
 import org.apache.fluss.server.entity.FetchReqInfo;
 import org.apache.fluss.server.log.FetchParams;
 import org.apache.fluss.server.log.LogTablet;
+import org.apache.fluss.server.log.WriterStateEntry;
 import org.apache.fluss.server.replica.Replica;
 import org.apache.fluss.server.tablet.TabletServer;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
@@ -225,6 +226,8 @@ public class RemoteLogITCase {
         TabletServerGateway leaderGateWay =
                 FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(leader);
         // produce many records to trigger remote log copy.
+        // Use a different writer for each batch so replaying the local tail cannot restore
+        // writers whose batches are only in remote storage.
         for (int i = 0; i < 10; i++) {
             assertProduceLogResponse(
                     leaderGateWay
@@ -235,7 +238,7 @@ public class RemoteLogITCase {
                                             1,
                                             withWriterId
                                                     ? genMemoryLogRecordsWithWriterId(
-                                                            DATA1, 100, i, 0L)
+                                                            DATA1, 100L + i, 0, 0L)
                                                     : genMemoryLogRecordsByObject(DATA1)))
                             .get(),
                     0,
@@ -245,9 +248,46 @@ public class RemoteLogITCase {
         FLUSS_CLUSTER_EXTENSION.waitUntilReplicaShrinkFromIsr(tb, follower);
         FLUSS_CLUSTER_EXTENSION.waitUntilSomeLogSegmentsCopyToRemote(tb);
 
+        LogTablet leaderLog =
+                FLUSS_CLUSTER_EXTENSION
+                        .getTabletServerById(leader)
+                        .getReplicaManager()
+                        .getReplicaOrException(tb)
+                        .getLogTablet();
+        // Copying alone does not ensure a remote fetch: wait until the first writer's batch
+        // has been removed locally before restarting the follower at offset zero.
+        retry(
+                Duration.ofMinutes(1),
+                () ->
+                        assertThat(leaderLog.localLogStartOffset())
+                                .isGreaterThanOrEqualTo(DATA1.size()));
+
         // restart follower
         FLUSS_CLUSTER_EXTENSION.startTabletServer(follower);
         FLUSS_CLUSTER_EXTENSION.waitUntilReplicaExpandToIsr(tb, follower);
+
+        if (withWriterId) {
+            LogTablet followerLog =
+                    FLUSS_CLUSTER_EXTENSION
+                            .getTabletServerById(follower)
+                            .getReplicaManager()
+                            .getReplicaOrException(tb)
+                            .getLogTablet();
+            retry(
+                    Duration.ofMinutes(1),
+                    () ->
+                            assertThat(followerLog.localLogEndOffset())
+                                    .isEqualTo(10L * DATA1.size()));
+            // ISR reentry alone does not prove that the writer snapshot was restored.
+            Map<Long, WriterStateEntry> writers = followerLog.writerStateManager().activeWriters();
+            for (int i = 0; i < 10; i++) {
+                long writerId = 100L + i;
+                assertThat(writers).containsKey(writerId);
+                assertThat(writers.get(writerId).lastBatchSequence()).isZero();
+                assertThat(writers.get(writerId).lastDataOffset())
+                        .isEqualTo((i + 1L) * DATA1.size() - 1);
+            }
+        }
     }
 
     @ParameterizedTest
