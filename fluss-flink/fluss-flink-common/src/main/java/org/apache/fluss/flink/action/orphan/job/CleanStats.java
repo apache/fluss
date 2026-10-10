@@ -30,11 +30,15 @@ public final class CleanStats implements Serializable {
 
     private static final long serialVersionUID = 1L;
 
-    private final long scanned;
-    private final long deleted;
-    private final long emptyDirsRemoved;
-    private final long deleteFailures;
-    private final long bytesReclaimed;
+    private final CleanupCounters counters;
+    private final RuleSummary rules = new RuleSummary();
+
+    public RuleSummary rules() {
+        return rules;
+    }
+
+    private final ScopeCoverageStats scopeCoverage;
+    private final boolean scopeSummary;
 
     public CleanStats(long scanned, long deleted, long deleteFailures, long bytesReclaimed) {
         this(scanned, deleted, 0L, deleteFailures, bytesReclaimed);
@@ -46,11 +50,35 @@ public final class CleanStats implements Serializable {
             long emptyDirsRemoved,
             long deleteFailures,
             long bytesReclaimed) {
-        this.scanned = scanned;
-        this.deleted = deleted;
-        this.emptyDirsRemoved = emptyDirsRemoved;
-        this.deleteFailures = deleteFailures;
-        this.bytesReclaimed = bytesReclaimed;
+        this(
+                new CleanupCounters(
+                        scanned,
+                        deleted,
+                        emptyDirsRemoved,
+                        bytesReclaimed,
+                        deleted,
+                        emptyDirsRemoved,
+                        deleteFailures,
+                        bytesReclaimed));
+    }
+
+    public CleanStats(CleanupCounters counters) {
+        this(counters, ScopeCoverageStats.empty(), false);
+    }
+
+    public CleanStats(CleanupCounters counters, ScopeCoverageStats scopeCoverage) {
+        this(counters, scopeCoverage, false);
+    }
+
+    private CleanStats(
+            CleanupCounters counters, ScopeCoverageStats scopeCoverage, boolean scopeSummary) {
+        this.counters = counters;
+        this.scopeCoverage = scopeCoverage;
+        this.scopeSummary = scopeSummary;
+    }
+
+    public static CleanStats scopeSummary(ScopeCoverageStats scopeCoverage) {
+        return new CleanStats(CleanupCounters.empty(), scopeCoverage, true);
     }
 
     public static CleanStats empty() {
@@ -58,22 +86,34 @@ public final class CleanStats implements Serializable {
     }
 
     public long scanned() {
-        return scanned;
+        return counters.scannedFiles();
     }
 
     public long deleted() {
-        return deleted;
+        return counters.deletedFiles() + counters.emptyDirsRemoved();
     }
 
     public long emptyDirsRemoved() {
-        return emptyDirsRemoved;
+        return counters.emptyDirsRemoved();
     }
 
     public long deleteFailures() {
-        return deleteFailures;
+        return counters.deleteFailures();
     }
 
     public long bytesReclaimed() {
-        return bytesReclaimed;
+        return counters.bytesReclaimed();
+    }
+
+    public CleanupCounters counters() {
+        return counters;
+    }
+
+    public ScopeCoverageStats scopeCoverage() {
+        return scopeCoverage;
+    }
+
+    public boolean isScopeSummary() {
+        return scopeSummary;
     }
 }
