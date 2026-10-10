@@ -21,19 +21,27 @@ import org.apache.fluss.fs.FSDataInputStream;
 import org.apache.fluss.fs.FSDataOutputStream;
 import org.apache.fluss.fs.FileSystem;
 import org.apache.fluss.fs.FileSystemBehaviorTestSuite;
+import org.apache.fluss.fs.FileSystemFailure;
+import org.apache.fluss.fs.FileSystemOperationException;
+import org.apache.fluss.fs.FileSystemPathNotFoundException;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.utils.OperatingSystem;
 
 import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.fs.permission.FsPermission;
 import org.apache.hadoop.hdfs.MiniDFSCluster;
+import org.apache.hadoop.security.UserGroupInformation;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.io.File;
+import java.security.PrivilegedExceptionAction;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assumptions.assumeThat;
 
 /** Behavior tests for HDFS. */
@@ -92,6 +100,68 @@ class HdfsBehaviorTest extends FileSystemBehaviorTestSuite {
             }
             assertThat(readBytes).isEqualTo(writtenBytes);
         }
+    }
+
+    @Test
+    void missingDirectoryIsReportedAsAConfirmedMissingPath() {
+        FsPath missing = new FsPath(basePath, randomName());
+
+        assertThatThrownBy(() -> fs.listStatus(missing))
+                .isInstanceOf(FileSystemPathNotFoundException.class)
+                .satisfies(
+                        failure -> {
+                            FileSystemFailure normalized = (FileSystemFailure) failure;
+                            assertThat(normalized.kind())
+                                    .isEqualTo(FileSystemFailure.Kind.NOT_FOUND);
+                            assertThat(normalized.resource())
+                                    .isEqualTo(FileSystemFailure.Resource.PATH);
+                            assertThat(normalized.operation()).isEqualTo("list_status");
+                            assertThat(normalized.isTemporary()).isFalse();
+                            assertThat(normalized.serviceCode()).isNull();
+                            assertThat(normalized.requestId()).isNull();
+                            assertThat(failure.getCause()).isNotNull();
+                        });
+    }
+
+    @Test
+    void restrictedUserGetsPermissionFailureInsteadOfMissingPath() throws Exception {
+        Path privateDirectory = new Path(basePath.toUri().toString(), randomName());
+        org.apache.hadoop.fs.FileSystem owner = hdfsCluster.getFileSystem();
+        owner.mkdirs(privateDirectory);
+        owner.setPermission(privateDirectory, new FsPermission((short) 0700));
+
+        UserGroupInformation restricted =
+                UserGroupInformation.createUserForTesting(
+                        "restricted-user", new String[] {"users"});
+        restricted.doAs(
+                (PrivilegedExceptionAction<Void>)
+                        () -> {
+                            try (org.apache.hadoop.fs.FileSystem hdfs =
+                                    org.apache.hadoop.fs.FileSystem.newInstance(
+                                            owner.getUri(), hdfsCluster.getConfiguration(0))) {
+                                HdfsFileSystem restrictedFs = new HdfsFileSystem(hdfs);
+                                assertThatThrownBy(
+                                                () ->
+                                                        restrictedFs.listStatus(
+                                                                new FsPath(
+                                                                        privateDirectory.toUri())))
+                                        .isInstanceOf(FileSystemOperationException.class)
+                                        .satisfies(
+                                                failure -> {
+                                                    FileSystemFailure normalized =
+                                                            (FileSystemFailure) failure;
+                                                    assertThat(normalized.kind())
+                                                            .isEqualTo(
+                                                                    FileSystemFailure.Kind
+                                                                            .PERMISSION_DENIED);
+                                                    assertThat(normalized.resource())
+                                                            .isEqualTo(
+                                                                    FileSystemFailure.Resource
+                                                                            .UNKNOWN);
+                                                });
+                            }
+                            return null;
+                        });
     }
 
     // ------------------------------------------------------------------------
