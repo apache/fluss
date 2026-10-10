@@ -77,7 +77,10 @@ public class KafkaRequestHandlerTest {
             ApiVersionsResponse unsupportedResponse = parseWireResponse(channel, (short) 0, 41);
             assertThat(unsupportedResponse.data().errorCode())
                     .isEqualTo(Errors.UNSUPPORTED_VERSION.code());
-            assertBrokerCapabilities(unsupportedResponse);
+            // The version error only advertises the range needed to retry ApiVersions.
+            assertThat(unsupportedResponse.data().apiKeys())
+                    .extracting(ApiVersion::apiKey, ApiVersion::minVersion, ApiVersion::maxVersion)
+                    .containsExactly(tuple(ApiKeys.API_VERSIONS.id, (short) 0, (short) 4));
 
             ApiVersionsRequestData data =
                     new ApiVersionsRequestData()

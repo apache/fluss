@@ -480,6 +480,62 @@ public class KafkaMetadataHandlerTest {
                 .isEqualTo(Errors.NONE.code());
     }
 
+    @Test
+    public void testUnauthorizedTopicsRemainHiddenForEveryVersion() {
+        TestingMetadataGatewayService service = new TestingMetadataGatewayService();
+        service.hiddenTopics.add("kafka.topic");
+        for (short version = 0; version <= 11; version++) {
+            MetadataResponse all = handle(service, allTopicsRequest(version), version);
+            assertThat(all.brokers()).hasSize(2);
+            assertThat(all.data().topics())
+                    .extracting(MetadataResponseTopic::name)
+                    .containsExactly("kafka.other");
+            for (List<String> names :
+                    Arrays.asList(
+                            Arrays.asList("kafka.topic", "kafka.other"),
+                            Arrays.asList("kafka.topic", "kafka.other", "missing_db.topic"))) {
+                MetadataResponse named =
+                        handle(
+                                service,
+                                new MetadataRequest(
+                                        new MetadataRequestData()
+                                                .setTopics(
+                                                        MetadataRequest
+                                                                .convertToMetadataRequestTopic(
+                                                                        names)),
+                                        version),
+                                version);
+                assertThat(named.brokers()).hasSize(2);
+                MetadataResponseTopic hidden = named.data().topics().find("kafka.topic");
+                assertThat(hidden.errorCode()).isEqualTo(Errors.UNKNOWN_TOPIC_OR_PARTITION.code());
+                assertThat(hidden.topicId()).isEqualTo(Uuid.ZERO_UUID);
+                assertThat(hidden.partitions()).isEmpty();
+                MetadataResponseTopic visible = named.data().topics().find("kafka.other");
+                assertThat(visible.errorCode()).isEqualTo(Errors.NONE.code());
+                assertThat(visible.partitions()).hasSize(2);
+                assertThat(named.data().topics()).hasSize(names.size());
+                if (names.contains("missing_db.topic")) {
+                    assertThat(named.data().topics().find("missing_db.topic").errorCode())
+                            .isEqualTo(Errors.UNKNOWN_TOPIC_OR_PARTITION.code());
+                }
+            }
+        }
+    }
+
+    @Test
+    public void testMetadataV12IsRejectedBeforeCallingGateway() {
+        TestingMetadataGatewayService service = new TestingMetadataGatewayService();
+        MetadataRequest request =
+                new MetadataRequest.Builder(Collections.singletonList("kafka.topic"), false)
+                        .build((short) 12);
+
+        MetadataResponse response = handle(service, request, (short) 12);
+
+        assertThat(response.data().topics().find("kafka.topic").errorCode())
+                .isEqualTo(Errors.UNSUPPORTED_VERSION.code());
+        assertThat(service.gatewayCalls).isZero();
+    }
+
     @ParameterizedTest
     @ValueSource(booleans = {false, true})
     public void testMissingDatabaseRetainsBrokersAndValidTopics(boolean failedFuture) {
@@ -607,8 +663,10 @@ public class KafkaMetadataHandlerTest {
     private static final class TestingMetadataGatewayService extends TestingTabletGatewayService {
 
         private final Set<String> databases = new LinkedHashSet<>();
+        private final Set<String> hiddenTopics = new LinkedHashSet<>();
         private final Map<String, Long> tables = new LinkedHashMap<>();
         private final Map<String, TableDescriptor> descriptors = new LinkedHashMap<>();
+        private int gatewayCalls;
         private String lastListenerName;
         private boolean topicLeaderAvailable = true;
         private int[] topicIsr = new int[] {1, 2};
@@ -627,6 +685,7 @@ public class KafkaMetadataHandlerTest {
         @Override
         public CompletableFuture<ListDatabasesResponse> listDatabases(
                 ListDatabasesRequest request) {
+            gatewayCalls++;
             assertThat(currentListenerName()).isEqualTo("KAFKA");
             return CompletableFuture.completedFuture(
                     new ListDatabasesResponse().addAllDatabaseNames(databases));
@@ -634,6 +693,7 @@ public class KafkaMetadataHandlerTest {
 
         @Override
         public CompletableFuture<ListTablesResponse> listTables(ListTablesRequest request) {
+            gatewayCalls++;
             assertThat(currentListenerName()).isEqualTo("KAFKA");
             String database = request.getDatabaseName();
             if (database.equals(deleteDatabaseBeforeListing)) {
@@ -653,6 +713,7 @@ public class KafkaMetadataHandlerTest {
             String prefix = request.getDatabaseName() + ".";
             List<String> names =
                     tables.keySet().stream()
+                            .filter(name -> !hiddenTopics.contains(name))
                             .filter(name -> name.startsWith(prefix))
                             .map(name -> name.substring(prefix.length()))
                             .collect(Collectors.toList());
@@ -663,6 +724,7 @@ public class KafkaMetadataHandlerTest {
         @Override
         public CompletableFuture<org.apache.fluss.rpc.messages.MetadataResponse> metadata(
                 org.apache.fluss.rpc.messages.MetadataRequest request) {
+            gatewayCalls++;
             lastListenerName = currentListenerName();
             if (failMetadata) {
                 CompletableFuture<org.apache.fluss.rpc.messages.MetadataResponse> failure =
@@ -677,6 +739,10 @@ public class KafkaMetadataHandlerTest {
             List<PbTableMetadata> topics = new ArrayList<>();
             for (PbTablePath tablePath : request.getTablePathsList()) {
                 String topicName = tablePath.getDatabaseName() + "." + tablePath.getTableName();
+                // Native Metadata and listTables omit tables without DESCRIBE permission.
+                if (hiddenTopics.contains(topicName)) {
+                    continue;
+                }
                 Long tableId = tables.get(topicName);
                 if (tableId == null) {
                     throw new TableNotExistException("Table does not exist: " + topicName);
