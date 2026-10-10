@@ -30,6 +30,7 @@
          then remove these FileLength suppressions. Track: https://github.com/apache/fluss/issues/4312 -->
     <suppress files="[\\/]CoordinatorEventProcessor\.java$" checks="FileLength"/>
     <suppress files="[\\/]CoordinatorEventProcessorTest\.java$" checks="FileLength"/>
+    <suppress files="[\\/]ConfigOptions\.java$" checks="FileLength"/>
 
     <!-- target directory is not relevant for checkstyle -->
     <suppress
