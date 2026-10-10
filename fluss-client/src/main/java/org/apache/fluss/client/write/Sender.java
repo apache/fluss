@@ -22,6 +22,7 @@ import org.apache.fluss.client.metadata.MetadataUpdater;
 import org.apache.fluss.client.metrics.WriterMetricGroup;
 import org.apache.fluss.client.write.RecordAccumulator.ReadyCheckResult;
 import org.apache.fluss.cluster.Cluster;
+import org.apache.fluss.exception.HistoricalPartitionThrottledException;
 import org.apache.fluss.exception.InvalidMetadataException;
 import org.apache.fluss.exception.LeaderNotAvailableException;
 import org.apache.fluss.exception.OutOfOrderSequenceException;
@@ -49,6 +50,7 @@ import javax.annotation.Nullable;
 import javax.annotation.concurrent.GuardedBy;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -708,8 +710,9 @@ public class Sender implements Runnable {
         // Historical queues use the original path as their accumulator key, so capture the actual
         // RPC target before any retry handling.
         PhysicalTablePath writeTargetPath = writeBatch.writeTargetPath();
-        if (error.exception() instanceof StorageBackpressureException) {
-            // Hard rejection: the storage engine reached its slowdown trigger and rejected the
+        if (error.exception() instanceof StorageBackpressureException
+                || error.exception() instanceof HistoricalPartitionThrottledException) {
+            // Hard rejection: the storage engine or historical request queue rejected the
             // write. Map it to full pressure (internal hard-rejection value 1.0f) so the bucket is
             // stalled for the configured max throttle window before the standard retry path
             // re-enqueues the batch.
@@ -812,6 +815,8 @@ public class Sender implements Runnable {
             if (!accumulator.isHistoricalPartitionEnabled(targetPath.getTablePath())) {
                 continue;
             }
+            metadataUpdater.invalidPhysicalTableBucketAndPartitionMeta(
+                    Collections.singleton(targetPath));
             try {
                 metadataUpdater.checkAndUpdatePartitionMetadata(targetPath);
             } catch (Exception e) {
