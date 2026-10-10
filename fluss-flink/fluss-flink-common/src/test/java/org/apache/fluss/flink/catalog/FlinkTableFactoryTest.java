@@ -345,16 +345,15 @@ abstract class FlinkTableFactoryTest {
                 assertThatThrownBy(() -> createTableSink(schema, properties))
                         .isInstanceOf(IllegalArgumentException.class)
                         .hasMessageContaining(
-                                "'sink.distribution-mode' must be 'bucket', 'bucket_load_balance' or 'auto'");
+                                "'sink.distribution-mode' must be 'bucket', 'bucket_balance' or 'auto'");
             }
         }
 
-        // bucket_load_balance is accepted for merge engines without Undo Recovery ...
+        // bucket_balance is accepted for merge engines without Undo Recovery ...
         for (String mergeEngine : new String[] {"first_row", "versioned"}) {
             Map<String, String> properties = getBasicOptionsWithBucketKey();
             properties.put(ConfigOptions.TABLE_MERGE_ENGINE.key(), mergeEngine);
-            properties.put(
-                    FlinkConnectorOptions.SINK_DISTRIBUTION_MODE.key(), "bucket_load_balance");
+            properties.put(FlinkConnectorOptions.SINK_DISTRIBUTION_MODE.key(), "bucket_balance");
             createTableSink(schema, properties);
         }
 
@@ -362,11 +361,11 @@ abstract class FlinkTableFactoryTest {
         Map<String, String> aggregationProperties = getBasicOptionsWithBucketKey();
         aggregationProperties.put(ConfigOptions.TABLE_MERGE_ENGINE.key(), "aggregation");
         aggregationProperties.put(
-                FlinkConnectorOptions.SINK_DISTRIBUTION_MODE.key(), "bucket_load_balance");
+                FlinkConnectorOptions.SINK_DISTRIBUTION_MODE.key(), "bucket_balance");
         assertThatThrownBy(() -> createTableSink(schema, aggregationProperties))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("is not supported when Undo Recovery is enabled")
-                .hasMessageContaining("BUCKET_LOAD_BALANCE")
+                .hasMessageContaining("BUCKET_BALANCE")
                 .hasMessageContaining("Please use 'bucket' or 'auto'");
 
         // without a merge engine, all modes stay accepted (no Undo Recovery is involved)

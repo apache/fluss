@@ -21,7 +21,7 @@ import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.bucketing.BucketingFunction;
 import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.flink.row.RowWithOp;
-import org.apache.fluss.flink.shuffle.BucketLoadBalanceRouter;
+import org.apache.fluss.flink.shuffle.BucketBalanceRouter;
 import org.apache.fluss.flink.sink.serializer.FlussSerializationSchema;
 import org.apache.fluss.flink.sink.serializer.SerializerInitContextImpl;
 import org.apache.fluss.metadata.DataLakeFormat;
@@ -35,22 +35,25 @@ import java.util.List;
 
 /**
  * {@link ChannelComputer} for {@link
- * org.apache.fluss.flink.sink.shuffle.DistributionMode#BUCKET_LOAD_BALANCE}.
+ * org.apache.fluss.flink.sink.shuffle.DistributionMode#BUCKET_BALANCE}.
  *
- * <p>Distributes records by bucket key with even load across all downstream channels. Unlike {@link
- * FlinkRowDataChannelComputer} (BUCKET mode) which maps each bucket to a single channel, this
- * computer uses an LCM-based logical slot assignment so that every channel receives traffic from
- * every bucket.
+ * <p>Distributes records by bucket key using an LCM-based logical-slot assignment to improve
+ * channel utilization and expected load distribution. Different bucket keys in the same physical
+ * bucket may route to different channels assigned to that bucket. This does not guarantee that
+ * every channel receives traffic from every bucket, or that every channel receives data; actual
+ * load depends on the bucket-key distribution. When the bucket count is an exact multiple of the
+ * channel count, this behaves like {@link FlinkRowDataChannelComputer} (BUCKET mode).
  *
  * <p>The routing algorithm is shared with the source-side lookup-join partitioner ({@code
- * FlussLookupInputPartitioner}); see {@link BucketLoadBalanceRouter}.
+ * FlussLookupInputPartitioner}); see {@link BucketBalanceRouter}.
  *
- * <p>Records with the same bucket key always route to the same channel.
+ * <p>For a fixed bucket count and channel count, records with the same bucket key always route to
+ * the same channel.
  *
  * @param <InputT> the type of records
  */
 @Internal
-public class BucketLoadBalanceChannelComputer<InputT> implements ChannelComputer<InputT> {
+public class BucketBalanceChannelComputer<InputT> implements ChannelComputer<InputT> {
 
     private static final long serialVersionUID = 1L;
 
@@ -61,9 +64,9 @@ public class BucketLoadBalanceChannelComputer<InputT> implements ChannelComputer
     private final FlussSerializationSchema<InputT> serializationSchema;
 
     private transient int numChannels;
-    private transient BucketLoadBalanceRouter bucketLoadBalanceRouter;
+    private transient BucketBalanceRouter bucketBalanceRouter;
 
-    public BucketLoadBalanceChannelComputer(
+    public BucketBalanceChannelComputer(
             RowType flussRowType,
             List<String> bucketKeys,
             @Nullable DataLakeFormat lakeFormat,
@@ -79,8 +82,8 @@ public class BucketLoadBalanceChannelComputer<InputT> implements ChannelComputer
     @Override
     public void setup(int numChannels) {
         this.numChannels = numChannels;
-        this.bucketLoadBalanceRouter =
-                new BucketLoadBalanceRouter(
+        this.bucketBalanceRouter =
+                new BucketBalanceRouter(
                         KeyEncoder.ofBucketKeyEncoder(flussRowType, bucketKeys, lakeFormat),
                         null,
                         BucketingFunction.of(lakeFormat),
@@ -98,12 +101,12 @@ public class BucketLoadBalanceChannelComputer<InputT> implements ChannelComputer
         try {
             RowWithOp rowWithOp = serializationSchema.serialize(record);
             InternalRow row = rowWithOp.getRow();
-            return bucketLoadBalanceRouter.route(row, numChannels);
+            return bucketBalanceRouter.route(row, numChannels);
         } catch (Exception e) {
             throw new FlussRuntimeException(
                     String.format(
                             "Failed to serialize record of type '%s'"
-                                    + " in BucketLoadBalanceChannelComputer: %s",
+                                    + " in BucketBalanceChannelComputer: %s",
                             record != null ? record.getClass().getName() : "null", e.getMessage()),
                     e);
         }
@@ -111,6 +114,6 @@ public class BucketLoadBalanceChannelComputer<InputT> implements ChannelComputer
 
     @Override
     public String toString() {
-        return "BUCKET_LOAD_BALANCE";
+        return "BUCKET_BALANCE";
     }
 }

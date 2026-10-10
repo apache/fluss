@@ -174,12 +174,12 @@ class FlinkSink<InputT> extends SinkAdapter<InputT> {
                     }
                     throw new UnsupportedOperationException(
                             "BUCKET mode is only supported for log tables with bucket keys");
-                case BUCKET_LOAD_BALANCE:
+                case BUCKET_BALANCE:
                     if (!bucketKeys.isEmpty()) {
-                        return bucketLoadBalanceShuffle(input);
+                        return bucketBalanceShuffle(input);
                     }
                     throw new UnsupportedOperationException(
-                            "BUCKET_LOAD_BALANCE mode is only supported for log tables with bucket keys");
+                            "BUCKET_BALANCE mode is only supported for log tables with bucket keys");
                 case PARTITION_DYNAMIC:
                     if (partitionKeys.isEmpty()) {
                         throw new UnsupportedOperationException(
@@ -242,10 +242,10 @@ class FlinkSink<InputT> extends SinkAdapter<InputT> {
                     input.getParallelism());
         }
 
-        private DataStream<InputT> bucketLoadBalanceShuffle(DataStream<InputT> input) {
+        private DataStream<InputT> bucketBalanceShuffle(DataStream<InputT> input) {
             return partition(
                     input,
-                    new BucketLoadBalanceChannelComputer<>(
+                    new BucketBalanceChannelComputer<>(
                             toFlussRowType(tableRowType),
                             bucketKeys,
                             lakeFormat,
@@ -360,11 +360,11 @@ class FlinkSink<InputT> extends SinkAdapter<InputT> {
                                             flussSerializationSchema),
                                     input.getParallelism());
                     break;
-                case BUCKET_LOAD_BALANCE:
+                case BUCKET_BALANCE:
                     stream =
                             partition(
                                     input,
-                                    new BucketLoadBalanceChannelComputer<>(
+                                    new BucketBalanceChannelComputer<>(
                                             toFlussRowType(tableRowType),
                                             bucketKeys,
                                             lakeFormat,

@@ -20,7 +20,7 @@ package org.apache.fluss.flink.source.lookup;
 import org.apache.fluss.bucketing.BucketingFunction;
 import org.apache.fluss.flink.adapter.SupportsLookupCustomShuffleAdapter.InputDataPartitionerAdapter;
 import org.apache.fluss.flink.row.FlinkAsFlussRow;
-import org.apache.fluss.flink.shuffle.BucketLoadBalanceRouter;
+import org.apache.fluss.flink.shuffle.BucketBalanceRouter;
 import org.apache.fluss.flink.utils.FlinkConversions;
 import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.row.InternalRow;
@@ -43,9 +43,10 @@ import static org.apache.fluss.utils.Preconditions.checkNotNull;
  * bucketing used by {@code PrimaryKeyLookuper}/{@code PrefixKeyLookuper} (bucket-key encoding +
  * {@link BucketingFunction}).
  *
- * <p>The routing delegates to {@link BucketLoadBalanceRouter} which uses LCM-based logical slot
- * assignment to balance load evenly across all subtasks while keeping every lookup key on a stable
- * subtask.
+ * <p>The routing delegates to {@link BucketBalanceRouter}, which uses LCM-based logical-slot
+ * assignment to improve subtask utilization and expected load distribution. For a fixed bucket
+ * count and parallelism, each lookup key routes to a stable subtask; actual load depends on the key
+ * distribution.
  */
 public class FlussLookupInputPartitioner implements InputDataPartitionerAdapter {
 
@@ -60,7 +61,7 @@ public class FlussLookupInputPartitioner implements InputDataPartitionerAdapter 
     @Nullable private final DataLakeFormat lakeFormat;
     private final int numBuckets;
 
-    private transient BucketLoadBalanceRouter bucketLoadBalanceRouter;
+    private transient BucketBalanceRouter bucketBalanceRouter;
     private transient FlinkAsFlussRow reuseRow;
 
     /**
@@ -94,12 +95,12 @@ public class FlussLookupInputPartitioner implements InputDataPartitionerAdapter 
     }
 
     private void ensureInitialized() {
-        if (bucketLoadBalanceRouter == null) {
+        if (bucketBalanceRouter == null) {
             org.apache.fluss.types.RowType flussKeyType =
                     FlinkConversions.toFlussRowType(keyFlinkRowType);
             // bucketing uses the bucket-key encoder consistent with the client's bucket routing
-            bucketLoadBalanceRouter =
-                    new BucketLoadBalanceRouter(
+            bucketBalanceRouter =
+                    new BucketBalanceRouter(
                             KeyEncoder.ofBucketKeyEncoder(flussKeyType, bucketKeyNames, lakeFormat),
                             CompactedKeyEncoder.createKeyEncoder(
                                     flussKeyType, keyFlinkRowType.getFieldNames()),
@@ -123,6 +124,6 @@ public class FlussLookupInputPartitioner implements InputDataPartitionerAdapter 
         // normalize the projected join keys into the Fluss key order
         RowData normalizedKey = normalizer.normalizeLookupKey(joinKeys);
         InternalRow flussKeyRow = reuseRow.replace(normalizedKey);
-        return bucketLoadBalanceRouter.route(flussKeyRow, numPartitions);
+        return bucketBalanceRouter.route(flussKeyRow, numPartitions);
     }
 }

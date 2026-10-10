@@ -68,24 +68,22 @@ public enum DistributionMode {
     PARTITION_DYNAMIC,
 
     /**
-     * Shuffle data by bucket key with even load distribution across all downstream subtasks.
+     * Shuffles records by bucket key using an LCM-based logical-slot assignment.
      *
-     * <p>Unlike {@link #BUCKET} which maps each bucket to exactly one subtask (potentially leaving
-     * some subtasks idle), this mode uses an LCM-based logical slot assignment to ensure every
-     * subtask receives data.
+     * <p>This improves sink-subtask utilization and expected load distribution, particularly when
+     * the bucket count and sink parallelism do not evenly divide each other. It does not guarantee
+     * that every physical bucket is distributed across all subtasks, or that every subtask receives
+     * data; actual load depends on the bucket-key distribution.
      *
-     * <p>Routing algorithm: first compute bucket ID via {@code BucketingFunction}, then select the
-     * concrete subtask within the bucket's assigned slot range using the bucket key's murmur hash.
-     * Records with the same bucket key always route to the same subtask, so merge semantics are
-     * preserved at runtime. However, one bucket may be written by several subtasks when the bucket
-     * count and the sink parallelism do not evenly divide each other, which breaks the
-     * one-writer-per-bucket assumption of Undo Recovery; this mode is therefore rejected for tables
-     * using the aggregation merge engine.
+     * <p>For a fixed bucket count and sink parallelism, records with the same bucket key always
+     * route to the same subtask, while different bucket keys in the same physical bucket may be
+     * processed by different subtasks assigned to that bucket. In the general LCM assignment, these
+     * are the subtasks whose logical-slot ranges overlap the bucket's range. When the bucket count
+     * is an exact multiple of the sink parallelism, this mode behaves like {@link #BUCKET}.
      *
-     * <p>Characteristics:
-     *
-     * <p>Requires 'bucket.key' to be defined. Suitable for tables where intra-bucket ordering is
-     * not required but even load distribution matters.
+     * <p>Requires 'bucket.key' to be defined and does not guarantee intra-bucket ordering. Not
+     * supported for tables using the aggregation merge engine because Undo Recovery requires each
+     * physical bucket to be written by exactly one subtask.
      */
-    BUCKET_LOAD_BALANCE
+    BUCKET_BALANCE
 }

@@ -161,9 +161,9 @@ class FlussSinkBuilderTest {
         shuffleMode = getFieldValue(builder, "distributionMode");
         assertThat(shuffleMode).isEqualTo(DistributionMode.PARTITION_DYNAMIC);
 
-        builder.setDistributionMode(DistributionMode.BUCKET_LOAD_BALANCE);
+        builder.setDistributionMode(DistributionMode.BUCKET_BALANCE);
         shuffleMode = getFieldValue(builder, "distributionMode");
-        assertThat(shuffleMode).isEqualTo(DistributionMode.BUCKET_LOAD_BALANCE);
+        assertThat(shuffleMode).isEqualTo(DistributionMode.BUCKET_BALANCE);
     }
 
     @Test
@@ -231,9 +231,7 @@ class FlussSinkBuilderTest {
         // one bucket out to several subtasks must be rejected even when the builder is
         // constructed directly, bypassing the entry-point validation.
         for (DistributionMode mode :
-                new DistributionMode[] {
-                    DistributionMode.NONE, DistributionMode.BUCKET_LOAD_BALANCE
-                }) {
+                new DistributionMode[] {DistributionMode.NONE, DistributionMode.BUCKET_BALANCE}) {
             FlinkSink.UpsertSinkWriterBuilder<Order> writerBuilder =
                     new FlinkSink.UpsertSinkWriterBuilder<>(
                             TablePath.of(databaseName, tableName),

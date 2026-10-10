@@ -28,14 +28,15 @@ import javax.annotation.Nullable;
 import java.util.Arrays;
 
 /**
- * Shuffle data by bucket key with even load distribution across all downstream subtasks.
+ * Shuffles data using an LCM-based logical-slot assignment to improve subtask utilization and
+ * expected load distribution. Actual load depends on the distribution of the bucket and hash keys.
  *
  * <p>Two callers share this router and must stay consistent:
  *
  * <ul>
- *   <li>The sink shuffle ({@code BucketLoadBalanceChannelComputer}) routes records to sink
- *       subtasks. It passes the encoded bucket key as both the bucket key and the hash key, so
- *       records with the same bucket key always land on the same subtask.
+ *   <li>The sink shuffle ({@code BucketBalanceChannelComputer}) routes records to sink subtasks. It
+ *       passes the encoded bucket key as both the bucket key and the hash key, so records with the
+ *       same bucket key always land on the same subtask.
  *   <li>The lookup-join partitioner ({@code FlussLookupInputPartitioner}) routes probe rows to
  *       lookup subtasks. It passes the encoded bucket key for bucketing and the encoded lookup key
  *       for the intra-bucket slot hash, spreading different lookup keys of the same bucket across
@@ -49,7 +50,7 @@ import java.util.Arrays;
  * distribution mode.
  */
 @Internal
-public final class BucketLoadBalanceRouter {
+public final class BucketBalanceRouter {
 
     private final KeyEncoder bucketKeyEncoder;
     private final @Nullable KeyEncoder hashKeyEncoder;
@@ -57,7 +58,7 @@ public final class BucketLoadBalanceRouter {
     private final int numBuckets;
 
     /**
-     * Creates a router for the BUCKET_LOAD_BALANCE distribution strategy.
+     * Creates a router using bucket-based logical-slot assignment.
      *
      * @param bucketKeyEncoder encoder for the bucket key (determines bucket ID)
      * @param hashKeyEncoder encoder for the intra-bucket slot hash; may be {@code null} when the
@@ -65,7 +66,7 @@ public final class BucketLoadBalanceRouter {
      * @param bucketingFunction the bucketing function for computing the bucket ID
      * @param numBuckets total number of buckets
      */
-    public BucketLoadBalanceRouter(
+    public BucketBalanceRouter(
             KeyEncoder bucketKeyEncoder,
             @Nullable KeyEncoder hashKeyEncoder,
             BucketingFunction bucketingFunction,

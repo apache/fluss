@@ -84,7 +84,7 @@ public class FlinkConnectorOptionsUtils {
      * </ul>
      *
      * <p>Additionally, the AGGREGATION merge engine enables Undo Recovery on the sink, whose
-     * one-writer-per-bucket assumption further excludes BUCKET_LOAD_BALANCE; see {@link
+     * one-writer-per-bucket assumption further excludes BUCKET_BALANCE; see {@link
      * #validateDistributionModeForUndoRecovery}.
      *
      * @param mergeEngineType the merge engine type (can be null for non-merge-engine tables)
@@ -95,18 +95,18 @@ public class FlinkConnectorOptionsUtils {
             @Nullable MergeEngineType mergeEngineType, DistributionMode distributionMode) {
         if (mergeEngineType != null
                 && distributionMode != DistributionMode.BUCKET
-                && distributionMode != DistributionMode.BUCKET_LOAD_BALANCE
+                && distributionMode != DistributionMode.BUCKET_BALANCE
                 && distributionMode != DistributionMode.AUTO) {
             throw new IllegalArgumentException(
                     String.format(
                             "For primary key tables with merge engine ('%s'), "
-                                    + "'sink.distribution-mode' must be 'bucket', 'bucket_load_balance' or 'auto' (default). "
+                                    + "'sink.distribution-mode' must be 'bucket', 'bucket_balance' or 'auto' (default). "
                                     + "Disabling keyed shuffle breaks merge semantics because records with the same key "
                                     + "must be processed by the same task. Current mode: %s",
                             mergeEngineType, distributionMode));
         }
         // The AGGREGATION merge engine enables Undo Recovery on the sink; the
-        // one-writer-per-bucket constraint of Undo Recovery further excludes BUCKET_LOAD_BALANCE.
+        // one-writer-per-bucket constraint of Undo Recovery further excludes BUCKET_BALANCE.
         validateDistributionModeForUndoRecovery(
                 mergeEngineType == MergeEngineType.AGGREGATION, distributionMode);
     }
@@ -116,8 +116,8 @@ public class FlinkConnectorOptionsUtils {
      *
      * <p>Undo Recovery, which is enabled automatically for aggregation tables, assumes each bucket
      * is written by exactly one sink subtask: the writer state tracks the last written offset per
-     * bucket and fails on conflicting offsets during recovery. BUCKET_LOAD_BALANCE and NONE may fan
-     * one bucket out to several subtasks and break that assumption.
+     * bucket and fails on conflicting offsets during recovery. BUCKET_BALANCE and NONE may fan one
+     * bucket out to several subtasks and break that assumption.
      *
      * <p>This is the single guard shared by the entry-point validation ({@link
      * #validateDistributionModeForMergeEngine}) and the sink builder's defense-in-depth check, so

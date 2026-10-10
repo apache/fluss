@@ -36,8 +36,8 @@ import java.util.Set;
 import static org.apache.fluss.record.TestData.DATA1_ROW_TYPE;
 import static org.assertj.core.api.Assertions.assertThat;
 
-/** Test for {@link BucketLoadBalanceChannelComputer}. */
-class BucketLoadBalanceChannelComputerTest {
+/** Test for {@link BucketBalanceChannelComputer}. */
+class BucketBalanceChannelComputerTest {
 
     private static final FlussSerializationSchema<RowData> serializationSchema =
             new RowDataSerializationSchema(false, false);
@@ -50,8 +50,8 @@ class BucketLoadBalanceChannelComputerTest {
     @Test
     void testDeterministicRouting() {
         int numBucket = 10;
-        BucketLoadBalanceChannelComputer<RowData> channelComputer =
-                new BucketLoadBalanceChannelComputer<>(
+        BucketBalanceChannelComputer<RowData> channelComputer =
+                new BucketBalanceChannelComputer<>(
                         DATA1_ROW_TYPE,
                         Collections.singletonList("a"),
                         null,
@@ -85,8 +85,8 @@ class BucketLoadBalanceChannelComputerTest {
     void testAllChannelsReceiveData() {
         int numBucket = 3;
         int numChannels = 7;
-        BucketLoadBalanceChannelComputer<RowData> channelComputer =
-                new BucketLoadBalanceChannelComputer<>(
+        BucketBalanceChannelComputer<RowData> channelComputer =
+                new BucketBalanceChannelComputer<>(
                         DATA1_ROW_TYPE,
                         Collections.singletonList("a"),
                         null,
@@ -103,7 +103,7 @@ class BucketLoadBalanceChannelComputerTest {
         }
 
         // Unlike BUCKET mode where some channels may be idle when numBucket < numChannels,
-        // BUCKET_LOAD_BALANCE should use all channels
+        // BUCKET_BALANCE should use all channels
         assertThat(usedChannels).hasSize(numChannels);
     }
 
@@ -111,8 +111,8 @@ class BucketLoadBalanceChannelComputerTest {
     void testEvenDistribution() {
         int numBucket = 5;
         int numChannels = 8;
-        BucketLoadBalanceChannelComputer<RowData> channelComputer =
-                new BucketLoadBalanceChannelComputer<>(
+        BucketBalanceChannelComputer<RowData> channelComputer =
+                new BucketBalanceChannelComputer<>(
                         DATA1_ROW_TYPE,
                         Collections.singletonList("a"),
                         null,
@@ -143,8 +143,8 @@ class BucketLoadBalanceChannelComputerTest {
     void testExactDivisibleCase() {
         int numBucket = 6;
         int numChannels = 3;
-        BucketLoadBalanceChannelComputer<RowData> channelComputer =
-                new BucketLoadBalanceChannelComputer<>(
+        BucketBalanceChannelComputer<RowData> channelComputer =
+                new BucketBalanceChannelComputer<>(
                         DATA1_ROW_TYPE,
                         Collections.singletonList("a"),
                         null,
@@ -165,8 +165,8 @@ class BucketLoadBalanceChannelComputerTest {
     void testMoreChannelsThanBuckets() {
         int numBucket = 3;
         int numChannels = 6;
-        BucketLoadBalanceChannelComputer<RowData> channelComputer =
-                new BucketLoadBalanceChannelComputer<>(
+        BucketBalanceChannelComputer<RowData> channelComputer =
+                new BucketBalanceChannelComputer<>(
                         DATA1_ROW_TYPE,
                         Collections.singletonList("a"),
                         null,
