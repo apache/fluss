@@ -23,6 +23,12 @@ import org.apache.fluss.cluster.rebalance.RebalanceStatus;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metrics.Counter;
+import org.apache.fluss.metrics.Gauge;
+import org.apache.fluss.metrics.Metric;
+import org.apache.fluss.metrics.MetricNames;
+import org.apache.fluss.metrics.registry.MetricRegistry;
+import org.apache.fluss.metrics.registry.NOPMetricRegistry;
 import org.apache.fluss.server.coordinator.AutoPartitionManager;
 import org.apache.fluss.server.coordinator.CoordinatorContext;
 import org.apache.fluss.server.coordinator.CoordinatorEventProcessor;
@@ -38,6 +44,7 @@ import org.apache.fluss.server.coordinator.event.RecoverRebalanceEvent;
 import org.apache.fluss.server.coordinator.lease.KvSnapshotLeaseManager;
 import org.apache.fluss.server.coordinator.remote.RemoteDirDynamicLoader;
 import org.apache.fluss.server.metadata.CoordinatorMetadataCache;
+import org.apache.fluss.server.metrics.group.CoordinatorMetricGroup;
 import org.apache.fluss.server.metrics.group.TestingMetricGroups;
 import org.apache.fluss.server.zk.NOPErrorHandler;
 import org.apache.fluss.server.zk.ZkEpoch;
@@ -56,10 +63,13 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -67,9 +77,18 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledThreadPoolExecutor;
 
 import static org.apache.fluss.cluster.rebalance.RebalanceStatus.COMPLETED;
+import static org.apache.fluss.cluster.rebalance.RebalanceStatus.FAILED;
 import static org.apache.fluss.cluster.rebalance.RebalanceStatus.NOT_STARTED;
 import static org.apache.fluss.cluster.rebalance.RebalanceStatus.TIMEOUT;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 
 /** Test for {@link RebalanceManager}. */
 public class RebalanceManagerTest {
@@ -88,6 +107,9 @@ public class RebalanceManagerTest {
     private ReplicaCapacityController replicaCapacityController;
     private LakeTableTieringManager lakeTableTieringManager;
     private RebalanceManager rebalanceManager;
+    private CoordinatorMetricGroup coordinatorMetricGroup;
+    private MetricRegistry metricRegistry;
+    private ManualClock metricClock;
     private KvSnapshotLeaseManager kvSnapshotLeaseManager;
     private Scheduler scheduler;
 
@@ -134,18 +156,24 @@ public class RebalanceManagerTest {
                 new LakeTableTieringManager(TestingMetricGroups.LAKE_TIERING_METRICS);
         CoordinatorEventProcessor eventProcessor = buildCoordinatorEventProcessor(conf);
         RecordingEventManager recordingEventManager = new RecordingEventManager();
+        metricRegistry = mock(MetricRegistry.class);
+        coordinatorMetricGroup =
+                new CoordinatorMetricGroup(metricRegistry, "cluster", "host", "coordinator");
+        metricClock = new ManualClock(0L);
         rebalanceManager =
                 new RebalanceManager(
                         eventProcessor,
                         zookeeperClient,
                         recordingEventManager,
-                        SystemClock.getInstance());
+                        metricClock,
+                        coordinatorMetricGroup.getRebalanceMetrics());
         rebalanceManager.startup();
     }
 
     @AfterEach
     void afterEach() throws Exception {
         rebalanceManager.close();
+        coordinatorMetricGroup.close();
         if (scheduler != null) {
             scheduler.shutdown();
         }
@@ -192,7 +220,12 @@ public class RebalanceManagerTest {
 
         RebalanceManager manager =
                 new RebalanceManager(
-                        eventProcessor, zookeeperClient, eventManager, clock, executor);
+                        eventProcessor,
+                        zookeeperClient,
+                        eventManager,
+                        clock,
+                        createCoordinatorMetricGroup().getRebalanceMetrics(),
+                        executor);
         // If startup() finds a pending rebalance task in ZooKeeper, it should enqueue a
         // RecoverRebalanceEvent to be processed by the coordinator event thread, instead of
         // calling registerRebalance() directly on the startup thread.
@@ -229,7 +262,12 @@ public class RebalanceManagerTest {
 
         RebalanceManager manager =
                 new RebalanceManager(
-                        eventProcessor, zookeeperClient, eventManager, clock, executor);
+                        eventProcessor,
+                        zookeeperClient,
+                        eventManager,
+                        clock,
+                        createCoordinatorMetricGroup().getRebalanceMetrics(),
+                        executor);
         manager.startup();
 
         TableBucket tb1 = new TableBucket(1L, 0);
@@ -281,7 +319,12 @@ public class RebalanceManagerTest {
 
         RebalanceManager manager =
                 new RebalanceManager(
-                        eventProcessor, zookeeperClient, eventManager, clock, executor);
+                        eventProcessor,
+                        zookeeperClient,
+                        eventManager,
+                        clock,
+                        createCoordinatorMetricGroup().getRebalanceMetrics(),
+                        executor);
         manager.startup();
 
         TableBucket tb1 = new TableBucket(1L, 0);
@@ -318,7 +361,12 @@ public class RebalanceManagerTest {
 
         RebalanceManager manager =
                 new RebalanceManager(
-                        eventProcessor, zookeeperClient, eventManager, clock, executor);
+                        eventProcessor,
+                        zookeeperClient,
+                        eventManager,
+                        clock,
+                        createCoordinatorMetricGroup().getRebalanceMetrics(),
+                        executor);
         manager.startup();
 
         TableBucket tb1 = new TableBucket(1L, 0);
@@ -356,7 +404,379 @@ public class RebalanceManagerTest {
         manager.close();
     }
 
+    @Test
+    void testRebalanceMetricsLifecycle() {
+        assertThat(coordinatorMetricGroup.getLogicalScope(value -> value, '_'))
+                .isEqualTo("coordinator");
+        assertThat(coordinatorMetricGroup.getScopeComponents())
+                .containsExactly("cluster", "host", "coordinator");
+        assertThat(coordinatorMetricGroup.getAllVariables())
+                .containsOnlyKeys("cluster_id", "host", "server_id")
+                .containsEntry("cluster_id", "cluster")
+                .containsEntry("host", "host")
+                .containsEntry("server_id", "coordinator");
+        assertThat(coordinatorMetricGroup.getMetrics()).hasSize(10);
+        coordinatorMetricGroup
+                .getMetrics()
+                .values()
+                .forEach(
+                        metric -> {
+                            if (metric instanceof Gauge) {
+                                assertThat(((Number) ((Gauge<?>) metric).getValue()).longValue())
+                                        .isZero();
+                            } else {
+                                assertThat(((Counter) metric).getCount()).isZero();
+                            }
+                        });
+
+        Map<TableBucket, RebalancePlanForBucket> plan = createRebalancePlan(2);
+        List<TableBucket> buckets = new ArrayList<>(plan.keySet());
+        rebalanceManager.registerRebalance("success", plan, NOT_STARTED);
+        assertThat(gaugeValue(MetricNames.REBALANCE_IN_PROGRESS)).isEqualTo(1);
+        assertThat(gaugeValue(MetricNames.REBALANCE_BUCKETS_PENDING)).isEqualTo(2);
+
+        metricClock.advanceTime(Duration.ofMillis(500));
+        assertThat(gaugeValue(MetricNames.REBALANCE_DURATION_MS)).isEqualTo(500);
+        assertThat(gaugeValue(MetricNames.INFLIGHT_BUCKET_DURATION_MS)).isEqualTo(500);
+
+        rebalanceManager.finishRebalanceTask(buckets.get(0), COMPLETED);
+        metricClock.advanceTime(Duration.ofMillis(200));
+        assertThat(gaugeValue(MetricNames.REBALANCE_BUCKETS_PENDING)).isEqualTo(1);
+        assertThat(gaugeValue(MetricNames.REBALANCE_BUCKETS_COMPLETED)).isEqualTo(1);
+        assertThat(gaugeValue(MetricNames.REBALANCE_DURATION_MS)).isEqualTo(700);
+        assertThat(gaugeValue(MetricNames.INFLIGHT_BUCKET_DURATION_MS)).isEqualTo(200);
+        assertThat(counterValue(MetricNames.REBALANCES_COMPLETED_TOTAL)).isZero();
+
+        rebalanceManager.finishRebalanceTask(buckets.get(1), COMPLETED);
+        rebalanceManager.finishRebalanceTask(buckets.get(1), COMPLETED);
+        assertThat(gaugeValue(MetricNames.REBALANCE_IN_PROGRESS)).isZero();
+        assertThat(gaugeValue(MetricNames.REBALANCE_BUCKETS_PENDING)).isZero();
+        assertThat(gaugeValue(MetricNames.REBALANCE_BUCKETS_COMPLETED)).isEqualTo(2);
+        assertThat(gaugeValue(MetricNames.REBALANCE_DURATION_MS)).isZero();
+        assertThat(gaugeValue(MetricNames.INFLIGHT_BUCKET_DURATION_MS)).isZero();
+        assertThat(counterValue(MetricNames.REBALANCES_COMPLETED_TOTAL)).isEqualTo(1);
+
+        rebalanceManager.registerRebalance("empty", Collections.emptyMap(), NOT_STARTED);
+        assertThat(gaugeValue(MetricNames.REBALANCE_BUCKETS_COMPLETED)).isZero();
+        assertThat(counterValue(MetricNames.REBALANCES_COMPLETED_TOTAL)).isEqualTo(2);
+        assertThat(counterValue(MetricNames.REBALANCES_FAILED_TOTAL)).isZero();
+        assertThat(counterValue(MetricNames.REBALANCES_CANCELED_TOTAL)).isZero();
+    }
+
+    @Test
+    void testRebalanceFailureMetrics() {
+        Map<TableBucket, RebalancePlanForBucket> plan = createRebalancePlan(3);
+        List<TableBucket> buckets = new ArrayList<>(plan.keySet());
+        rebalanceManager.registerRebalance("mixed-results", plan, NOT_STARTED);
+        rebalanceManager.finishRebalanceTask(buckets.get(0), FAILED);
+        rebalanceManager.finishRebalanceTask(buckets.get(1), TIMEOUT);
+
+        assertThat(gaugeValue(MetricNames.REBALANCE_BUCKETS_PENDING)).isEqualTo(1);
+        assertThat(gaugeValue(MetricNames.REBALANCE_BUCKETS_FAILED)).isEqualTo(1);
+        assertThat(gaugeValue(MetricNames.REBALANCE_BUCKETS_TIMED_OUT)).isEqualTo(1);
+        assertThat(counterValue(MetricNames.REBALANCES_FAILED_TOTAL)).isZero();
+
+        rebalanceManager.finishRebalanceTask(buckets.get(2), COMPLETED);
+        rebalanceManager.finishRebalanceTask(buckets.get(0), FAILED);
+        assertThat(gaugeValue(MetricNames.REBALANCE_BUCKETS_COMPLETED)).isEqualTo(1);
+        assertThat(gaugeValue(MetricNames.REBALANCE_BUCKETS_FAILED)).isEqualTo(1);
+        assertThat(gaugeValue(MetricNames.REBALANCE_BUCKETS_TIMED_OUT)).isEqualTo(1);
+        assertThat(gaugeValue(MetricNames.REBALANCE_IN_PROGRESS)).isZero();
+        assertThat(counterValue(MetricNames.REBALANCES_COMPLETED_TOTAL)).isZero();
+        assertThat(counterValue(MetricNames.REBALANCES_FAILED_TOTAL)).isEqualTo(1);
+        assertThat(rebalanceManager.getRebalanceStatus()).isEqualTo(COMPLETED);
+
+        rebalanceManager.registerRebalance("next", createRebalancePlan(1), NOT_STARTED);
+        assertThat(gaugeValue(MetricNames.REBALANCE_BUCKETS_COMPLETED)).isZero();
+        assertThat(gaugeValue(MetricNames.REBALANCE_BUCKETS_FAILED)).isZero();
+        assertThat(gaugeValue(MetricNames.REBALANCE_BUCKETS_TIMED_OUT)).isZero();
+        assertThat(counterValue(MetricNames.REBALANCES_FAILED_TOTAL)).isEqualTo(1);
+    }
+
+    @Test
+    void testRebalanceTimeoutMetrics() {
+        Map<TableBucket, RebalancePlanForBucket> plan = createRebalancePlan(1);
+        TableBucket bucket = plan.keySet().iterator().next();
+        rebalanceManager.registerRebalance("timeout", plan, NOT_STARTED);
+        metricClock.advanceTime(Duration.ofMinutes(3));
+        rebalanceManager.checkTimeout();
+
+        assertThat(gaugeValue(MetricNames.INFLIGHT_BUCKET_DURATION_MS)).isZero();
+        assertThat(gaugeValue(MetricNames.REBALANCE_BUCKETS_PENDING)).isEqualTo(1);
+        assertThat(gaugeValue(MetricNames.REBALANCE_DURATION_MS)).isEqualTo(180_000);
+        rebalanceManager.finishRebalanceTask(bucket, TIMEOUT);
+
+        assertThat(gaugeValue(MetricNames.REBALANCE_BUCKETS_TIMED_OUT)).isEqualTo(1);
+        assertThat(gaugeValue(MetricNames.REBALANCE_DURATION_MS)).isZero();
+        assertThat(counterValue(MetricNames.REBALANCES_FAILED_TOTAL)).isEqualTo(1);
+        assertThat(counterValue(MetricNames.REBALANCES_COMPLETED_TOTAL)).isZero();
+    }
+
+    @Test
+    void testRebalanceCancellationMetrics() {
+        rebalanceManager.cancelRebalance(null);
+        assertThat(counterValue(MetricNames.REBALANCES_CANCELED_TOTAL)).isZero();
+
+        Map<TableBucket, RebalancePlanForBucket> plan = createRebalancePlan(2);
+        rebalanceManager.registerRebalance("cancel", plan, NOT_STARTED);
+        rebalanceManager.finishRebalanceTask(plan.keySet().iterator().next(), COMPLETED);
+        rebalanceManager.cancelRebalance("cancel");
+        rebalanceManager.cancelRebalance("cancel");
+        assertThat(counterValue(MetricNames.REBALANCES_CANCELED_TOTAL)).isEqualTo(1);
+        assertThat(counterValue(MetricNames.REBALANCES_COMPLETED_TOTAL)).isZero();
+        assertThat(counterValue(MetricNames.REBALANCES_FAILED_TOTAL)).isZero();
+        assertThat(gaugeValue(MetricNames.REBALANCE_IN_PROGRESS)).isZero();
+        assertThat(gaugeValue(MetricNames.REBALANCE_BUCKETS_PENDING)).isZero();
+        assertThat(gaugeValue(MetricNames.REBALANCE_BUCKETS_COMPLETED)).isEqualTo(1);
+        assertThat(gaugeValue(MetricNames.REBALANCE_DURATION_MS)).isZero();
+        assertThat(gaugeValue(MetricNames.INFLIGHT_BUCKET_DURATION_MS)).isZero();
+    }
+
+    @ParameterizedTest
+    @EnumSource(
+            value = RebalanceStatus.class,
+            names = {"COMPLETED", "CANCELED", "FAILED", "TIMEOUT"})
+    void testRecoveringFinishedRebalanceDoesNotRestoreOutcomeMetrics(RebalanceStatus status) {
+        rebalanceManager.registerRebalance("recovered", createRebalancePlan(1), status);
+        assertThat(gaugeValue(MetricNames.REBALANCE_IN_PROGRESS)).isZero();
+        assertThat(gaugeValue(MetricNames.REBALANCE_BUCKETS_PENDING)).isZero();
+        assertThat(gaugeValue(MetricNames.REBALANCE_BUCKETS_COMPLETED)).isZero();
+        assertThat(gaugeValue(MetricNames.REBALANCE_BUCKETS_FAILED)).isZero();
+        assertThat(gaugeValue(MetricNames.REBALANCE_BUCKETS_TIMED_OUT)).isZero();
+        assertThat(gaugeValue(MetricNames.REBALANCE_DURATION_MS)).isZero();
+        assertThat(gaugeValue(MetricNames.INFLIGHT_BUCKET_DURATION_MS)).isZero();
+        assertThat(counterValue(MetricNames.REBALANCES_COMPLETED_TOTAL)).isZero();
+        assertThat(counterValue(MetricNames.REBALANCES_FAILED_TOTAL)).isZero();
+        assertThat(counterValue(MetricNames.REBALANCES_CANCELED_TOTAL)).isZero();
+
+        rebalanceManager.registerRebalance("recovered-empty", Collections.emptyMap(), status);
+        assertThat(gaugeValue(MetricNames.REBALANCE_BUCKETS_COMPLETED)).isZero();
+        assertThat(gaugeValue(MetricNames.REBALANCE_BUCKETS_FAILED)).isZero();
+        assertThat(gaugeValue(MetricNames.REBALANCE_BUCKETS_TIMED_OUT)).isZero();
+        assertThat(counterValue(MetricNames.REBALANCES_COMPLETED_TOTAL)).isZero();
+        assertThat(counterValue(MetricNames.REBALANCES_FAILED_TOTAL)).isZero();
+        assertThat(counterValue(MetricNames.REBALANCES_CANCELED_TOTAL)).isZero();
+    }
+
+    @ParameterizedTest
+    @EnumSource(
+            value = RebalanceStatus.class,
+            names = {"FAILED", "TIMEOUT"})
+    void testRecoveringMixedResultsDoesNotReportSuccessfulBuckets(RebalanceStatus failedStatus)
+            throws Exception {
+        Map<TableBucket, RebalancePlanForBucket> plan = createRebalancePlan(2);
+        List<TableBucket> buckets = new ArrayList<>(plan.keySet());
+        String failureMetric =
+                failedStatus == FAILED
+                        ? MetricNames.REBALANCE_BUCKETS_FAILED
+                        : MetricNames.REBALANCE_BUCKETS_TIMED_OUT;
+        zookeeperClient.registerRebalanceTask(
+                new RebalanceTask("mixed-results", NOT_STARTED, plan));
+        rebalanceManager.registerRebalance("mixed-results", plan, NOT_STARTED);
+        rebalanceManager.finishRebalanceTask(buckets.get(0), failedStatus);
+        rebalanceManager.finishRebalanceTask(buckets.get(1), COMPLETED);
+        assertThat(gaugeValue(MetricNames.REBALANCE_BUCKETS_COMPLETED)).isEqualTo(1);
+        assertThat(gaugeValue(failureMetric)).isEqualTo(1);
+        assertThat(counterValue(MetricNames.REBALANCES_FAILED_TOTAL)).isEqualTo(1);
+
+        rebalanceManager.close();
+        RecordingEventManager eventManager = new RecordingEventManager();
+        rebalanceManager =
+                new RebalanceManager(
+                        mock(CoordinatorEventProcessor.class),
+                        zookeeperClient,
+                        eventManager,
+                        metricClock,
+                        coordinatorMetricGroup.getRebalanceMetrics(),
+                        new NoOpScheduledExecutor());
+        rebalanceManager.startup();
+        assertThat(eventManager.events).hasSize(1);
+        assertThat(eventManager.events.get(0)).isInstanceOf(RecoverRebalanceEvent.class);
+        RebalanceTask recoveredTask =
+                ((RecoverRebalanceEvent) eventManager.events.get(0)).getRebalanceTask();
+        assertThat(recoveredTask).isEqualTo(new RebalanceTask("mixed-results", COMPLETED, plan));
+        rebalanceManager.registerRebalance(
+                recoveredTask.getRebalanceId(),
+                recoveredTask.getExecutePlan(),
+                recoveredTask.getRebalanceStatus());
+
+        assertThat(gaugeValue(MetricNames.REBALANCE_BUCKETS_COMPLETED)).isZero();
+        assertThat(gaugeValue(MetricNames.REBALANCE_BUCKETS_FAILED)).isZero();
+        assertThat(gaugeValue(MetricNames.REBALANCE_BUCKETS_TIMED_OUT)).isZero();
+        assertThat(counterValue(MetricNames.REBALANCES_COMPLETED_TOTAL)).isZero();
+        assertThat(counterValue(MetricNames.REBALANCES_FAILED_TOTAL)).isEqualTo(1);
+        assertThat(counterValue(MetricNames.REBALANCES_CANCELED_TOTAL)).isZero();
+        assertThat(rebalanceManager.listRebalanceProgress(null).progressForBucketMap().values())
+                .hasSize(2)
+                .extracting(RebalanceResultForBucket::status)
+                .containsOnly(COMPLETED);
+
+        zookeeperClient.registerRebalanceTask(new RebalanceTask("next", NOT_STARTED, plan));
+        rebalanceManager.registerRebalance("next", plan, NOT_STARTED);
+        rebalanceManager.finishRebalanceTask(buckets.get(0), failedStatus);
+        rebalanceManager.finishRebalanceTask(buckets.get(1), COMPLETED);
+        assertThat(gaugeValue(MetricNames.REBALANCE_BUCKETS_COMPLETED)).isEqualTo(1);
+        assertThat(gaugeValue(failureMetric)).isEqualTo(1);
+        assertThat(counterValue(MetricNames.REBALANCES_COMPLETED_TOTAL)).isZero();
+        assertThat(counterValue(MetricNames.REBALANCES_FAILED_TOTAL)).isEqualTo(2);
+    }
+
+    @Test
+    void testRebalanceMetricsSurviveLeadershipChange() throws Exception {
+        Map<String, Metric> registeredMetrics = new HashMap<>(coordinatorMetricGroup.getMetrics());
+        rebalanceManager.registerRebalance("first-term", Collections.emptyMap(), NOT_STARTED);
+        assertThat(counterValue(MetricNames.REBALANCES_COMPLETED_TOTAL)).isEqualTo(1);
+
+        Map<TableBucket, RebalancePlanForBucket> plan = createRebalancePlan(1);
+        rebalanceManager.registerRebalance("failed", plan, NOT_STARTED);
+        rebalanceManager.finishRebalanceTask(plan.keySet().iterator().next(), FAILED);
+        rebalanceManager.registerRebalance("canceled", plan, NOT_STARTED);
+        rebalanceManager.cancelRebalance("canceled");
+        rebalanceManager.registerRebalance("unfinished", plan, NOT_STARTED);
+        zookeeperClient.registerRebalanceTask(new RebalanceTask("unfinished", NOT_STARTED, plan));
+        metricClock.advanceTime(Duration.ofMillis(100));
+
+        RebalanceManager previousManager = rebalanceManager;
+        rebalanceManager.close();
+        assertThat(coordinatorMetricGroup.isClosed()).isFalse();
+        assertGaugesAreZero();
+        assertThat(counterValue(MetricNames.REBALANCES_COMPLETED_TOTAL)).isEqualTo(1);
+        assertThat(counterValue(MetricNames.REBALANCES_FAILED_TOTAL)).isEqualTo(1);
+        assertThat(counterValue(MetricNames.REBALANCES_CANCELED_TOTAL)).isEqualTo(1);
+
+        RecordingEventManager eventManager = new RecordingEventManager();
+        rebalanceManager =
+                new RebalanceManager(
+                        mock(CoordinatorEventProcessor.class),
+                        zookeeperClient,
+                        eventManager,
+                        metricClock,
+                        coordinatorMetricGroup.getRebalanceMetrics(),
+                        new NoOpScheduledExecutor());
+        rebalanceManager.startup();
+
+        assertThat(eventManager.events).hasSize(1);
+        RebalanceTask recoveredTask =
+                ((RecoverRebalanceEvent) eventManager.events.get(0)).getRebalanceTask();
+        rebalanceManager.registerRebalance(
+                recoveredTask.getRebalanceId(),
+                recoveredTask.getExecutePlan(),
+                recoveredTask.getRebalanceStatus());
+        previousManager.close();
+        assertThat(gaugeValue(MetricNames.REBALANCE_BUCKETS_PENDING)).isEqualTo(1);
+        rebalanceManager.finishRebalanceTask(plan.keySet().iterator().next(), COMPLETED);
+        assertThat(counterValue(MetricNames.REBALANCES_COMPLETED_TOTAL)).isEqualTo(2);
+        assertThat(counterValue(MetricNames.REBALANCES_FAILED_TOTAL)).isEqualTo(1);
+        assertThat(counterValue(MetricNames.REBALANCES_CANCELED_TOTAL)).isEqualTo(1);
+        assertThat(coordinatorMetricGroup.getMetrics()).hasSize(10);
+        registeredMetrics.forEach(
+                (name, metric) ->
+                        assertThat(coordinatorMetricGroup.getMetrics().get(name)).isSameAs(metric));
+        verify(metricRegistry, times(10)).register(any(), anyString(), eq(coordinatorMetricGroup));
+        verify(metricRegistry, never()).unregister(any(), anyString(), eq(coordinatorMetricGroup));
+
+        coordinatorMetricGroup.close();
+        assertThat(coordinatorMetricGroup.getMetrics()).isEmpty();
+        verify(metricRegistry, times(10))
+                .unregister(any(), anyString(), eq(coordinatorMetricGroup));
+
+        rebalanceManager.close();
+        coordinatorMetricGroup = createCoordinatorMetricGroup();
+        assertGaugesAreZero();
+        assertThat(counterValue(MetricNames.REBALANCES_COMPLETED_TOTAL)).isZero();
+        assertThat(counterValue(MetricNames.REBALANCES_FAILED_TOTAL)).isZero();
+        assertThat(counterValue(MetricNames.REBALANCES_CANCELED_TOTAL)).isZero();
+    }
+
+    @Test
+    void testRebalanceMetricsRegisteredOnStandby() {
+        CoordinatorMetricGroup standbyGroup =
+                new CoordinatorMetricGroup(metricRegistry, "cluster", "standby", "standby");
+        try {
+            assertThat(standbyGroup.getMetrics().values())
+                    .hasSize(10)
+                    .allSatisfy(
+                            metric -> {
+                                if (metric instanceof Gauge) {
+                                    assertThat(
+                                                    ((Number) ((Gauge<?>) metric).getValue())
+                                                            .longValue())
+                                            .isZero();
+                                } else {
+                                    assertThat(((Counter) metric).getCount()).isZero();
+                                }
+                            });
+            verify(metricRegistry, times(10)).register(any(), anyString(), eq(standbyGroup));
+        } finally {
+            standbyGroup.close();
+        }
+    }
+
+    @Test
+    void testUnstartedManagerDoesNotReplaceCurrentManager() {
+        rebalanceManager.registerRebalance("current", createRebalancePlan(1), NOT_STARTED);
+        RebalanceManager unstartedManager =
+                new RebalanceManager(
+                        mock(CoordinatorEventProcessor.class),
+                        zookeeperClient,
+                        new RecordingEventManager(),
+                        metricClock,
+                        coordinatorMetricGroup.getRebalanceMetrics(),
+                        new NoOpScheduledExecutor());
+        try {
+            assertThat(gaugeValue(MetricNames.REBALANCE_BUCKETS_PENDING)).isEqualTo(1);
+        } finally {
+            unstartedManager.close();
+        }
+        assertThat(gaugeValue(MetricNames.REBALANCE_BUCKETS_PENDING)).isEqualTo(1);
+    }
+
+    @Test
+    void testFailedProcessorConstructionDoesNotReplaceCurrentManager() {
+        rebalanceManager.registerRebalance("current", createRebalancePlan(1), NOT_STARTED);
+        Configuration conf = new Configuration();
+        conf.set(ConfigOptions.COORDINATOR_OFFLINE_LEADER_RETRY_DELAY, Duration.ZERO);
+
+        assertThatThrownBy(() -> buildCoordinatorEventProcessor(conf, coordinatorMetricGroup))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining(ConfigOptions.COORDINATOR_OFFLINE_LEADER_RETRY_DELAY.key());
+
+        assertThat(gaugeValue(MetricNames.REBALANCE_BUCKETS_PENDING)).isEqualTo(1);
+    }
+
+    private void assertGaugesAreZero() {
+        coordinatorMetricGroup
+                .getMetrics()
+                .values()
+                .forEach(
+                        metric -> {
+                            if (metric instanceof Gauge) {
+                                assertThat(((Number) ((Gauge<?>) metric).getValue()).longValue())
+                                        .isZero();
+                            }
+                        });
+    }
+
+    private long gaugeValue(String metricName) {
+        return ((Number)
+                        ((Gauge<?>) coordinatorMetricGroup.getMetrics().get(metricName)).getValue())
+                .longValue();
+    }
+
+    private long counterValue(String metricName) {
+        return ((Counter) coordinatorMetricGroup.getMetrics().get(metricName)).getCount();
+    }
+
+    private static CoordinatorMetricGroup createCoordinatorMetricGroup() {
+        return new CoordinatorMetricGroup(NOPMetricRegistry.INSTANCE, "cluster", "host", "0");
+    }
+
     private CoordinatorEventProcessor buildCoordinatorEventProcessor(Configuration conf) {
+        return buildCoordinatorEventProcessor(conf, createCoordinatorMetricGroup());
+    }
+
+    private CoordinatorEventProcessor buildCoordinatorEventProcessor(
+            Configuration conf, CoordinatorMetricGroup metricGroup) {
         return new CoordinatorEventProcessor(
                 zookeeperClient,
                 serverMetadataCache,
@@ -365,7 +785,7 @@ public class RebalanceManagerTest {
                 replicaCapacityController,
                 autoPartitionManager,
                 lakeTableTieringManager,
-                TestingMetricGroups.COORDINATOR_METRICS,
+                metricGroup,
                 conf,
                 Executors.newFixedThreadPool(1, new ExecutorThreadFactory("test-coordinator-io")),
                 metadataManager,
