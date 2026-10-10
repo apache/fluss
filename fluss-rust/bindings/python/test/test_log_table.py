@@ -402,6 +402,28 @@ async def test_poll_batches(connection, admin, wait_for_table_ready):
     assert len(batches) > 0
     assert batches[0].batch.num_columns == 1
 
+    # The record and batch paths read the same commit timestamp off the same log
+    # batch header, so they must agree for every offset a batch covers. This is
+    # exact and clock-independent, unlike a "looks like a recent timestamp" bound.
+    record_scanner = await table.new_scan().create_log_scanner()
+    record_scanner.subscribe(bucket_id=0, start_offset=0)
+    records = await _poll_records(record_scanner, expected_count=8)
+    timestamp_by_offset = {record.offset: record.timestamp for record in records}
+
+    checked = 0
+    for batch in batches:
+        for offset in range(batch.base_offset, batch.last_offset + 1):
+            assert offset in timestamp_by_offset, (
+                f"the record path never reported offset {offset}"
+            )
+            assert batch.commit_timestamp == timestamp_by_offset[offset], (
+                f"batch at offset {batch.base_offset} reports "
+                f"{batch.commit_timestamp}, record at offset {offset} reports "
+                f"{timestamp_by_offset[offset]}"
+            )
+            checked += 1
+    assert checked > 0, "no batch offsets were checked"
+
     await admin.drop_table(table_path, ignore_if_not_exists=False)
 
 
