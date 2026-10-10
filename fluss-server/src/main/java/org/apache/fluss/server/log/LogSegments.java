@@ -19,6 +19,7 @@ package org.apache.fluss.server.log;
 
 import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.utils.IOUtils;
 
 import javax.annotation.concurrent.ThreadSafe;
 
@@ -70,7 +71,7 @@ public final class LogSegments {
 
     public void close() {
         for (LogSegment logSegment : segments.values()) {
-            logSegment.close();
+            IOUtils.closeQuietly(logSegment::close);
         }
     }
 
