@@ -24,6 +24,10 @@ import org.apache.fluss.row.compacted.CompactedRowDeserializer;
 import org.apache.fluss.row.compacted.CompactedRowWriter;
 import org.apache.fluss.types.DataType;
 
+import java.util.BitSet;
+import java.util.Collections;
+import java.util.Map;
+
 import static org.apache.fluss.row.BinaryRow.BinaryRowFormat.COMPACTED;
 
 /**
@@ -32,7 +36,7 @@ import static org.apache.fluss.row.BinaryRow.BinaryRowFormat.COMPACTED;
  * @since 0.2
  */
 @PublicEvolving
-public class CompactedRowEncoder implements RowEncoder {
+public class CompactedRowEncoder extends AbstractRowEncoder {
 
     private final DataType[] fieldDataTypes;
     private final CompactedRowWriter writer;
@@ -40,6 +44,12 @@ public class CompactedRowEncoder implements RowEncoder {
     private final CompactedRowDeserializer compactedRowDeserializer;
 
     public CompactedRowEncoder(DataType[] fieldDataTypes) {
+        this(fieldDataTypes, new BitSet(), Collections.emptyMap());
+    }
+
+    CompactedRowEncoder(
+            DataType[] fieldDataTypes, BitSet encodedColumns, Map<Integer, String> tableConfigs) {
+        super(encodedColumns, tableConfigs);
         this.fieldDataTypes = fieldDataTypes;
         // writer for row's fields
         writer = new CompactedRowWriter(fieldDataTypes.length);
@@ -56,7 +66,7 @@ public class CompactedRowEncoder implements RowEncoder {
     }
 
     @Override
-    public void encodeField(int pos, Object value) {
+    protected void encode(int pos, Object value) {
         fieldWriters[pos].writeValue(writer, pos, value);
     }
 
