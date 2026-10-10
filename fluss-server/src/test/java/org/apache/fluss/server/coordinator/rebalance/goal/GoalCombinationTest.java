@@ -100,6 +100,54 @@ public class GoalCombinationTest {
         assertThat(optimizer.doOptimizeOnce(cluster, recommendedGoals())).isEmpty();
     }
 
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("rackWindowGoalChains")
+    void testPerServerWindowAllowsUnevenLeadersAcrossRacks(String name, List<Goal> goals) {
+        SortedSet<ServerModel> servers = new TreeSet<>();
+        for (int id = 0; id < 8; id++) {
+            servers.add(new ServerModel(id, "rack" + id / 4, false));
+        }
+        ClusterModel cluster = new ClusterModel(servers);
+        // RF=2: each bucket has one replica per rack, with all leaders in rack0.
+        for (int bucket = 0; bucket < 8; bucket++) {
+            addBucket(
+                    cluster, new TableBucket(1, bucket), Arrays.asList(bucket % 4, bucket % 4 + 4));
+        }
+        Map<TableBucket, List<Integer>> original = captureReplicaDistribution(cluster);
+
+        List<RebalancePlanForBucket> plans = new GoalOptimizer().doOptimizeOnce(cluster, goals);
+
+        // Eight leaders over eight servers give a [0, 2] window, not an exact count of one.
+        assertThat(plans).isEmpty();
+        assertThat(cluster.servers())
+                .extracting(server -> server.numLeaderReplicas(1))
+                .containsExactly(2, 2, 2, 2, 0, 0, 0, 0);
+        assertThat(cluster.servers()).extracting(server -> server.numReplicas(1)).containsOnly(2);
+        assertThat(cluster.getReplicaDistribution()).isEqualTo(original);
+        for (TableBucket bucket : original.keySet()) {
+            assertThat(cluster.bucket(bucket).bucketServers())
+                    .extracting(ServerModel::rack)
+                    .containsExactlyInAnyOrder("rack0", "rack1");
+        }
+    }
+
+    private static Stream<Arguments> rackWindowGoalChains() {
+        return Stream.of(
+                Arguments.of(
+                        "rack and table goals",
+                        Arrays.<Goal>asList(
+                                new RackAwareGoal(),
+                                new TableReplicaDistributionGoal(),
+                                new TableLeaderReplicaDistributionGoal())),
+                Arguments.of("recommended goals", recommendedGoals()),
+                Arguments.of(
+                        "existing cluster goals",
+                        Arrays.<Goal>asList(
+                                new RackAwareGoal(),
+                                new ReplicaDistributionGoal(),
+                                new LeaderReplicaDistributionGoal())));
+    }
+
     private static Stream<Arguments> goalChains() {
         return Stream.of(
                 Arguments.of("recommended", recommendedGoals(), false),

@@ -450,6 +450,12 @@ CALL [catalog_name.]sys.rebalance(
     - `'TABLE_LEADER_DISTRIBUTION'`: Ensures leaders of each table are near balanced across TabletServers.
     - `'LEADER_DISTRIBUTION'`: Generates leadership movement and leader replica movement tasks to ensure the number of leader replicas on each TabletServer is near balanced.
 
+Distribution goals target a per-server tolerance window, not equal counts. Table-level goals apply
+that window independently to each table, and rack awareness only constrains replica placement per
+bucket; it does not guarantee equal leader counts across racks. See
+[Balance Guarantees](../maintenance/operations/rebalance.md#balance-guarantees) for the window and a
+two-rack example.
+
 **Returns:** An array with a single element containing the rebalance ID (e.g., `'rebalance-12345'`), which can be used to track or cancel the rebalance operation.
 
 **Important Notes:**

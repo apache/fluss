@@ -81,6 +81,27 @@ Available rebalance goals:
 Goals are processed in the order specified. When using `RACK_AWARE`, always place it first to ensure subsequent goals respect rack constraints. For table-aware balancing, use `RACK_AWARE`, `TABLE_REPLICA_DISTRIBUTION`, `REPLICA_DISTRIBUTION`, `TABLE_LEADER_DISTRIBUTION`, then `LEADER_DISTRIBUTION`. If `RACK_AWARE` is not first, replica movements may violate rack awareness requirements.
 :::
 
+### Balance Guarantees
+
+The distribution goals aim for a per-server tolerance window rather than equal counts. Currently,
+the margin is calculated as `m = (1.10 - 1) * 0.9` (approximately 9%). For an average count `a` over
+alive TabletServers, the window is `[floor(a * (1 - m)), ceil(a * (1 + m))]`, using floating-point
+arithmetic. Table-level goals calculate this average separately for each
+table; cluster-level goals use the total count across all tables. Replica distribution counts both
+leaders and followers, while leader distribution counts only leaders. These are best-effort targets:
+replica placement, rack awareness, or higher-priority goals can prevent reaching the window.
+
+For example, a table with eight buckets has eight leaders. Across eight alive TabletServers, its
+leader window is `[0, 2]`. With two racks of four servers and a replication factor of two, each bucket
+can have one replica in each rack while the leader counts are `[2, 2, 2, 2]` in one rack and
+`[0, 0, 0, 0]` in the other. If each server holds two replicas, both table-level goals are already
+within their windows, and the combination produces no balancing actions. The existing cluster-level
+goals behave the same way when this is the only table.
+
+`RACK_AWARE` constrains replica placement for each bucket; it does not impose leader counts per rack.
+Combining it with table-level distribution goals therefore does not guarantee one leader per server
+or four leaders per rack in this example.
+
 ### 3. Monitor Progress
 
 Track the rebalance operation using the returned rebalance ID:

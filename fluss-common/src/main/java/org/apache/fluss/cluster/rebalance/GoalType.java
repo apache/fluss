@@ -41,15 +41,22 @@ public enum GoalType {
     LEADER_DISTRIBUTION(1),
 
     /**
-     * Goal to generate replica movement tasks to ensure that the number of replicas on each
-     * tabletServer is near balanced and the replicas are distributed across racks.
+     * Goal to distribute replicas of each bucket across distinct racks. This does not balance
+     * leader counts across racks.
      */
     RACK_AWARE(2),
 
-    /** Goal to balance replica counts independently for each table. */
+    /**
+     * Goal to bring replica counts independently for each table within a per-server tolerance
+     * window, subject to higher-priority goals. This does not guarantee equal counts.
+     */
     TABLE_REPLICA_DISTRIBUTION(3),
 
-    /** Goal to balance leader replica counts independently for each table. */
+    /**
+     * Goal to bring leader counts independently for each table within a per-server tolerance
+     * window, subject to replica placement and higher-priority goals. This does not guarantee equal
+     * counts per server or per rack.
+     */
     TABLE_LEADER_DISTRIBUTION(4);
 
     public final int value;
