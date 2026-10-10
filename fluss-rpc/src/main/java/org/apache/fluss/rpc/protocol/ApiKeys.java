@@ -58,7 +58,8 @@ public enum ApiKeys {
     // Version 0: Uses lake's encoder for primary key encoding (legacy behavior).
     // Version 1: Uses CompactedKeyEncoder for primary key encoding when bucket key differs from
     //            primary key, enabling prefix lookup support.
-    LOOKUP(1017, 0, 1, PUBLIC),
+    // Version 2: Supports original_partition_name in requests and responses for historical lookups.
+    LOOKUP(1017, 0, 2, PUBLIC),
 
     NOTIFY_LEADER_AND_ISR(1018, 0, 0, PRIVATE),
     STOP_REPLICA(1019, 0, 0, PRIVATE),
