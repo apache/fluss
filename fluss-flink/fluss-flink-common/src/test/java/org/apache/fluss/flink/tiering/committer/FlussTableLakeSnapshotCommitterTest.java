@@ -171,6 +171,69 @@ class FlussTableLakeSnapshotCommitterTest extends FlinkTestBase {
         assertThat(readLakeSnapshot.getTableBucketsOffset()).isEqualTo(bucketLogOffsets);
     }
 
+    @Test
+    void testCommitCurrentCompactWithSeparateReadableOffsets() throws Exception {
+        TablePath tablePath = TablePath.of("fluss", "test_current_compact_readable");
+        long tableId = createTable(tablePath, DATA1_TABLE_DESCRIPTOR);
+        TableBucket bucket = new TableBucket(tableId, 0);
+        long previousSnapshotId = 1L;
+        long compactSnapshotId = 2L;
+        Map<TableBucket, Long> tieredOffsets = Collections.singletonMap(bucket, 5L);
+        Map<TableBucket, Long> readableOffsets = Collections.singletonMap(bucket, 3L);
+
+        // Snapshot 1 has tiered data, but no readable DV snapshot yet.
+        String previousOffsetsPath =
+                flussTableLakeSnapshotCommitter.prepareLakeSnapshot(
+                        tableId, tablePath, Collections.singletonMap(bucket, 3L));
+        flussTableLakeSnapshotCommitter.commit(
+                tableId,
+                tablePath,
+                LakeCommitResult.unknownReadableSnapshot(previousSnapshotId),
+                previousOffsetsPath,
+                Collections.emptyMap(),
+                Collections.emptyMap());
+
+        // Simulate a Paimon DV COMPACT as snapshot 2: data through offset 5 is tiered, but only
+        // data through offset 3 is readable. The committed and readable IDs are both 2.
+        String compactOffsetsPath =
+                flussTableLakeSnapshotCommitter.prepareLakeSnapshot(
+                        tableId, tablePath, tieredOffsets);
+        flussTableLakeSnapshotCommitter.commit(
+                tableId,
+                tablePath,
+                LakeCommitResult.withReadableSnapshot(
+                        compactSnapshotId,
+                        compactSnapshotId,
+                        tieredOffsets,
+                        readableOffsets,
+                        LakeCommitResult.KEEP_LATEST),
+                compactOffsetsPath,
+                tieredOffsets,
+                Collections.emptyMap());
+
+        // Fluss must register snapshot 2 once with both offset views. Registering it again as
+        // tiered-only would overwrite its readable offsets.
+        LakeSnapshot latest = admin.getLatestLakeSnapshot(tablePath).get();
+        LakeSnapshot readable = admin.getReadableLakeSnapshot(tablePath).get();
+        assertThat(latest.getSnapshotId()).isEqualTo(compactSnapshotId);
+        assertThat(latest.getTableBucketsOffset()).isEqualTo(tieredOffsets);
+        assertThat(readable.getSnapshotId()).isEqualTo(compactSnapshotId);
+        assertThat(readable.getTableBucketsOffset()).isEqualTo(readableOffsets);
+
+        // KEEP_LATEST removes snapshot 1 from the ZK metadata list.
+        assertThat(
+                        FLUSS_CLUSTER_EXTENSION
+                                .getZooKeeperClient()
+                                .getLakeTable(tableId)
+                                .get()
+                                .getLakeSnapshotMetadatas())
+                .extracting(metadata -> metadata.getSnapshotId())
+                .containsExactly(compactSnapshotId);
+        assertThatThrownBy(() -> admin.getLakeSnapshot(tablePath, previousSnapshotId).get())
+                .rootCause()
+                .isInstanceOf(LakeTableSnapshotNotExistException.class);
+    }
+
     @ParameterizedTest
     @ValueSource(booleans = {true, false})
     void testCompatibilityWithOldCommitter(boolean isPartitioned) throws Exception {

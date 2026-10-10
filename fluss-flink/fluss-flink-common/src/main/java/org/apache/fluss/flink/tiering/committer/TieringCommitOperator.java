@@ -69,7 +69,7 @@ import static org.apache.fluss.utils.Preconditions.checkState;
  * <p>When it collects all {@link TableBucketWriteResult}s of a round of tiering for a table, it
  * will combine all the {@link WriteResult}s to {@link Committable} via method {@link
  * LakeCommitter#toCommittable(List)}, and then call method {@link LakeCommitter#commit(Object,
- * Map)} to commit to lake.
+ * LakeCommitter.CommitContext)} to commit to lake.
  *
  * <p>Finally, it will also commit the committed lake snapshot to Fluss cluster to make Fluss aware
  * of the tiering progress.
@@ -268,6 +268,14 @@ public class TieringCommitOperator<WriteResult, Committable>
                             ? null
                             : flussCurrentLakeSnapshot.getSnapshotId());
 
+            // The coordinator prepares the same merge when writing the offsets file. Pass the
+            // complete map to the lake committer so it does not need access to that file.
+            Map<TableBucket, Long> tieredLogEndOffsets = new HashMap<>();
+            if (flussCurrentLakeSnapshot != null) {
+                tieredLogEndOffsets.putAll(flussCurrentLakeSnapshot.getTableBucketsOffset());
+            }
+            tieredLogEndOffsets.putAll(logEndOffsets);
+
             // get the lake bucket offsets file storing the log end offsets
             String lakeBucketTieredOffsetsFile =
                     flussTableLakeSnapshotCommitter.prepareLakeSnapshot(
@@ -278,7 +286,10 @@ public class TieringCommitOperator<WriteResult, Committable>
                     Collections.singletonMap(
                             FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY, lakeBucketTieredOffsetsFile);
             LakeCommitResult lakeCommitResult =
-                    lakeCommitter.commit(committable, snapshotProperties);
+                    lakeCommitter.commit(
+                            committable,
+                            new LakeCommitter.CommitContext(
+                                    snapshotProperties, tieredLogEndOffsets));
             // commit to fluss
             flussTableLakeSnapshotCommitter.commit(
                     tableId,

@@ -71,10 +71,9 @@ public class LanceLakeCommitter implements LakeCommitter<LanceWriteResult, Lance
     }
 
     @Override
-    public LakeCommitResult commit(
-            LanceCommittable committable, Map<String, String> snapshotProperties)
+    public LakeCommitResult commit(LanceCommittable committable, CommitContext context)
             throws IOException {
-        Map<String, String> properties = new HashMap<>(snapshotProperties);
+        Map<String, String> properties = new HashMap<>(context.snapshotProperties());
         properties.put(committerName, FLUSS_LAKE_TIERING_COMMIT_USER);
         long snapshotId =
                 LanceDatasetAdapter.commitAppend(config, committable.committable(), properties);

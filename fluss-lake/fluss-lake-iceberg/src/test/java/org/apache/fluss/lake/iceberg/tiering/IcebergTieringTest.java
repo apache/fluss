@@ -22,6 +22,7 @@ import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.lake.committer.CommitterInitContext;
 import org.apache.fluss.lake.committer.LakeCommitter;
+import org.apache.fluss.lake.committer.LakeCommitter.CommitContext;
 import org.apache.fluss.lake.serializer.SimpleVersionedSerializer;
 import org.apache.fluss.lake.writer.LakeWriter;
 import org.apache.fluss.lake.writer.WriterInitContext;
@@ -257,7 +258,11 @@ class IcebergTieringTest {
                             committableSerializer.getVersion(), serialized);
             long snapshot =
                     lakeCommitter
-                            .commit(icebergCommittable, Collections.singletonMap("k1", "v1"))
+                            .commit(
+                                    icebergCommittable,
+                                    new CommitContext(
+                                            Collections.singletonMap("k1", "v1"),
+                                            Collections.emptyMap()))
                             .getCommittedSnapshotId();
             icebergTable.refresh();
             Snapshot icebergSnapshot = icebergTable.currentSnapshot();
@@ -322,7 +327,7 @@ class IcebergTieringTest {
                 createLakeCommitter(tablePath, tableInfo)) {
             committer.commit(
                     committer.toCommittable(Collections.singletonList(writeResult)),
-                    Collections.emptyMap());
+                    new CommitContext(Collections.emptyMap(), Collections.emptyMap()));
         }
 
         Table table = icebergCatalog.loadTable(toIceberg(tablePath));
@@ -355,7 +360,10 @@ class IcebergTieringTest {
                     lakeCommitter
                             .commit(
                                     committable,
-                                    Collections.singletonMap("fluss-offsets", "offsets-path"))
+                                    new CommitContext(
+                                            Collections.singletonMap(
+                                                    "fluss-offsets", "offsets-path"),
+                                            Collections.emptyMap()))
                             .getCommittedSnapshotId();
             Table icebergTable = icebergCatalog.loadTable(toIceberg(tablePath));
             Snapshot icebergSnapshot = icebergTable.currentSnapshot();
