@@ -21,6 +21,7 @@ import org.apache.fluss.client.Connection;
 import org.apache.fluss.client.ConnectionFactory;
 import org.apache.fluss.client.admin.Admin;
 import org.apache.fluss.client.metadata.LakeSnapshot;
+import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.LakeTableSnapshotNotExistException;
 import org.apache.fluss.flink.tiering.event.FailedTieringEvent;
@@ -30,6 +31,7 @@ import org.apache.fluss.flink.tiering.source.TieringSource;
 import org.apache.fluss.lake.committer.CommittedLakeSnapshot;
 import org.apache.fluss.lake.committer.LakeCommitResult;
 import org.apache.fluss.lake.committer.LakeCommitter;
+import org.apache.fluss.lake.committer.PartitionMarkDoneCommitter;
 import org.apache.fluss.lake.committer.TieringStats;
 import org.apache.fluss.lake.writer.LakeTieringFactory;
 import org.apache.fluss.lake.writer.LakeWriter;
@@ -187,6 +189,7 @@ public class TieringCommitOperator<WriteResult, Committable>
      * advanced their tiered offsets without writing any data (e.g. splits only covering empty WAL
      * batches), an empty lake snapshot is committed to persist the tiering progress.
      */
+    @SuppressWarnings("unchecked")
     private CommitResult commitWriteResults(
             long tableId,
             TablePath tablePath,
@@ -214,16 +217,19 @@ public class TieringCommitOperator<WriteResult, Committable>
             }
         }
 
-        // nothing was written and no tiered offset advanced — nothing to commit
-        if (nonEmptyResults.isEmpty() && logEndOffsets.isEmpty()) {
+        boolean hasTieringProgress = !nonEmptyResults.isEmpty() || !logEndOffsets.isEmpty();
+        boolean markDoneSupported =
+                lakeTieringConfig.get(ConfigOptions.LAKE_TIERING_PARTITION_MARK_DONE_ENABLED)
+                        && lakeTieringFactory.supportsPartitionMarkDone();
+        if (!hasTieringProgress) {
             LOG.info(
                     "Commit tiering write results is empty for table {}, table path {}",
                     tableId,
                     tablePath);
-            return new CommitResult(null, null);
-        }
-
-        if (nonEmptyResults.isEmpty()) {
+            if (!markDoneSupported) {
+                return new CommitResult(null, null);
+            }
+        } else if (nonEmptyResults.isEmpty()) {
             LOG.info(
                     "No data was written for table {} (table path {}) but buckets {} advanced "
                             + "their tiered offsets, committing an empty lake snapshot to "
@@ -245,34 +251,70 @@ public class TieringCommitOperator<WriteResult, Committable>
                                     + "Aborting commit to prevent dirty commit.",
                             currentTableInfo.getTableId(), tablePath, tableId));
         }
+        if (!hasTieringProgress && !currentTableInfo.isPartitioned()) {
+            return new CommitResult(null, null);
+        }
 
         try (LakeCommitter<WriteResult, Committable> lakeCommitter =
                 lakeTieringFactory.createLakeCommitter(
                         new TieringCommitterInitContext(
                                 tablePath, currentTableInfo, lakeTieringConfig, flussConfig))) {
+            PartitionMarkDoneCommitter<WriteResult, Committable> markDoneCommitter = null;
+            if (markDoneSupported) {
+                checkState(
+                        lakeCommitter instanceof PartitionMarkDoneCommitter,
+                        "Lake tiering factory %s declares partition mark-done support but its committer does not.",
+                        lakeTieringFactory.getClass().getName());
+                markDoneCommitter =
+                        (PartitionMarkDoneCommitter<WriteResult, Committable>) lakeCommitter;
+            }
             List<WriteResult> writeResults =
                     nonEmptyResults.stream()
                             .map(TableBucketWriteResult::writeResult)
                             .collect(Collectors.toList());
-
             // to committable
             Committable committable = lakeCommitter.toCommittable(writeResults);
             // before commit to lake, check fluss not missing any lake snapshot committed by fluss
             LakeSnapshot flussCurrentLakeSnapshot = getLatestLakeSnapshot(tablePath);
-            checkFlussNotMissingLakeSnapshot(
-                    tablePath,
-                    tableId,
-                    lakeCommitter,
-                    committable,
+            Long knownSnapshotId =
                     flussCurrentLakeSnapshot == null
                             ? null
-                            : flussCurrentLakeSnapshot.getSnapshotId());
+                            : flussCurrentLakeSnapshot.getSnapshotId();
+            CommittedLakeSnapshot recoveredSnapshot =
+                    recoverMissingLakeSnapshot(tablePath, tableId, lakeCommitter, knownSnapshotId);
+            if (hasTieringProgress && recoveredSnapshot != null) {
+                // fluss's known snapshot is less than lake snapshot committed by fluss
+                // fail this commit since the data is read from the log end-offset of a invalid
+                // fluss
+                // known lake snapshot, which means the data already has been committed to lake,
+                // not to commit to lake to avoid data duplicated
+                // abort this committable to delete the written files
+                lakeCommitter.abort(committable);
+                throw new IllegalStateException(
+                        String.format(
+                                "The current Fluss's lake snapshot %d is less than"
+                                        + " lake actual snapshot %d committed by Fluss for table: {tablePath=%s, tableId=%d},"
+                                        + " missing snapshot: %s.",
+                                knownSnapshotId,
+                                recoveredSnapshot.getLakeSnapshotId(),
+                                tablePath,
+                                tableId,
+                                recoveredSnapshot));
+            }
+            if (!hasTieringProgress && knownSnapshotId == null && recoveredSnapshot == null) {
+                return new CommitResult(null, null);
+            }
+            boolean stateChanged =
+                    markDoneCommitter != null
+                            && markDoneCommitter.preparePartitionMarkDone(committable);
+            if (!hasTieringProgress && !stateChanged) {
+                return new CommitResult(null, null);
+            }
 
             // get the lake bucket offsets file storing the log end offsets
             String lakeBucketTieredOffsetsFile =
                     flussTableLakeSnapshotCommitter.prepareLakeSnapshot(
                             tableId, tablePath, logEndOffsets);
-
             // record the lake snapshot bucket offsets file to snapshot property
             Map<String, String> snapshotProperties =
                     Collections.singletonMap(
@@ -287,7 +329,9 @@ public class TieringCommitOperator<WriteResult, Committable>
                     lakeBucketTieredOffsetsFile,
                     logEndOffsets,
                     logMaxTieredTimestamps);
-            return new CommitResult(committable, lakeCommitResult.getTieringStats());
+            return new CommitResult(
+                    hasTieringProgress ? committable : null,
+                    hasTieringProgress ? lakeCommitResult.getTieringStats() : null);
         }
     }
 
@@ -308,77 +352,62 @@ public class TieringCommitOperator<WriteResult, Committable>
         return flussCurrentLakeSnapshot;
     }
 
-    private void checkFlussNotMissingLakeSnapshot(
+    @Nullable
+    private CommittedLakeSnapshot recoverMissingLakeSnapshot(
             TablePath tablePath,
             long tableId,
             LakeCommitter<WriteResult, Committable> lakeCommitter,
-            Committable committable,
-            Long flussCurrentLakeSnapshot)
+            @Nullable Long knownSnapshotId)
             throws Exception {
         // get Fluss missing lake snapshot in Lake
         CommittedLakeSnapshot missingCommittedSnapshot =
-                lakeCommitter.getMissingLakeSnapshot(flussCurrentLakeSnapshot);
+                lakeCommitter.getMissingLakeSnapshot(knownSnapshotId);
+        if (missingCommittedSnapshot == null) {
+            return null;
+        }
+        String lakeSnapshotOffsetPath =
+                missingCommittedSnapshot
+                        .getSnapshotProperties()
+                        .get(FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY);
 
-        // fluss's known snapshot is less than lake snapshot committed by fluss
-        // fail this commit since the data is read from the log end-offset of a invalid fluss
-        // known lake snapshot, which means the data already has been committed to lake,
-        // not to commit to lake to avoid data duplicated
-        if (missingCommittedSnapshot != null) {
-            String lakeSnapshotOffsetPath =
-                    missingCommittedSnapshot
-                            .getSnapshotProperties()
-                            .get(FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY);
-
-            // should only will happen in v0.7 which won't put offsets info
-            // to properties
-            if (lakeSnapshotOffsetPath == null) {
-                throw new IllegalStateException(
-                        String.format(
-                                "Can't find %s field from snapshot property.",
-                                FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY));
-            }
-
-            // the fluss-offsets will be a json string if it's tiered by v0.8,
-            // since this code path should be rare, we do not consider backward compatibility
-            // and throw IllegalStateException directly
-            String trimmedPath = lakeSnapshotOffsetPath.trim();
-            if (trimmedPath.contains("{")) {
-                throw new IllegalStateException(
-                        String.format(
-                                "The %s field in snapshot property is a JSON string (tiered by v0.8), "
-                                        + "which is not supported to restore. Snapshot ID: %d, Table: {tablePath=%s, tableId=%d}.",
-                                FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY,
-                                missingCommittedSnapshot.getLakeSnapshotId(),
-                                tablePath,
-                                tableId));
-            }
-
-            // commit this missing snapshot to fluss
-            flussTableLakeSnapshotCommitter.commit(
-                    tableId,
-                    missingCommittedSnapshot.getLakeSnapshotId(),
-                    lakeSnapshotOffsetPath,
-                    // don't care readable snapshot and offsets,
-                    null,
-                    // use empty log offsets, log max timestamp, since we can't know that
-                    // in last tiering, it doesn't matter for they are just used to
-                    // report metrics
-                    Collections.emptyMap(),
-                    Collections.emptyMap(),
-                    LakeCommitResult.KEEP_ALL_PREVIOUS);
-            // abort this committable to delete the written files
-            lakeCommitter.abort(committable);
+        // should only will happen in v0.7 which won't put offsets info
+        // to properties
+        if (lakeSnapshotOffsetPath == null) {
             throw new IllegalStateException(
                     String.format(
-                            "The current Fluss's lake snapshot %d is less than"
-                                    + " lake actual snapshot %d committed by Fluss for table: {tablePath=%s, tableId=%d},"
-                                    + " missing snapshot: %s.",
-                            flussCurrentLakeSnapshot,
+                            "Can't find %s field from snapshot property.",
+                            FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY));
+        }
+
+        // the fluss-offsets will be a json string if it's tiered by v0.8,
+        // since this code path should be rare, we do not consider backward compatibility
+        // and throw IllegalStateException directly
+        String trimmedPath = lakeSnapshotOffsetPath.trim();
+        if (trimmedPath.contains("{")) {
+            throw new IllegalStateException(
+                    String.format(
+                            "The %s field in snapshot property is a JSON string (tiered by v0.8), "
+                                    + "which is not supported to restore. Snapshot ID: %d, Table: {tablePath=%s, tableId=%d}.",
+                            FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY,
                             missingCommittedSnapshot.getLakeSnapshotId(),
                             tablePath,
-                            tableId,
-                            missingCommittedSnapshot));
+                            tableId));
         }
+
+        // commit this missing snapshot to fluss
+        flussTableLakeSnapshotCommitter.commit(
+                tableId,
+                missingCommittedSnapshot.getLakeSnapshotId(),
+                lakeSnapshotOffsetPath,
+                // don't care readable snapshot and offsets,
+                null,
+                // use empty log offsets, log max timestamp, since we can't know that
+                // in last tiering, it doesn't matter for they are just used to
+                // report metrics
+                Collections.emptyMap(),
+                Collections.emptyMap(),
+                LakeCommitResult.KEEP_ALL_PREVIOUS);
+        return missingCommittedSnapshot;
     }
 
     @Override

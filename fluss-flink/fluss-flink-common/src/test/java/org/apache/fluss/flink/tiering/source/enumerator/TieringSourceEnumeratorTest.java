@@ -42,10 +42,13 @@ import org.apache.fluss.rpc.messages.PbLakeTableSnapshotInfo;
 import org.apache.flink.api.connector.source.SourceEvent;
 import org.apache.flink.api.connector.source.SplitsAssignment;
 import org.apache.flink.api.connector.source.mocks.MockSplitEnumeratorContext;
+import org.apache.flink.api.java.tuple.Tuple3;
 import org.apache.flink.util.FlinkRuntimeException;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import javax.annotation.Nullable;
 
@@ -65,6 +68,10 @@ import static org.apache.fluss.config.ConfigOptions.TABLE_AUTO_PARTITION_NUM_PRE
 import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoMoreInteractions;
+import static org.mockito.Mockito.when;
 
 /** Unit tests for {@link TieringSourceEnumerator} and {@link TieringSplitGenerator}. */
 class TieringSourceEnumeratorTest extends TieringTestBase {
@@ -82,16 +89,25 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
         super.beforeEach();
     }
 
-    @Test
-    void testPrimaryKeyTableWithNoSnapshotSplits() throws Throwable {
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void testPrimaryKeyTableWithNoSnapshotSplits(boolean markDoneEnabled) throws Throwable {
         TablePath tablePath = DEFAULT_TABLE_PATH;
         long tableId = createTable(tablePath, DEFAULT_PK_TABLE_DESCRIPTOR);
         int numSubtasks = 4;
         int expectNumberOfSplits = 3;
+        Configuration tieringConfig = new Configuration();
+        tieringConfig.set(ConfigOptions.LAKE_TIERING_PARTITION_MARK_DONE_ENABLED, markDoneEnabled);
         // test get snapshot split & log split and the assignment
         try (FlussMockSplitEnumeratorContext<TieringSplit> context =
                 new FlussMockSplitEnumeratorContext<>(numSubtasks)) {
-            TieringSourceEnumerator enumerator = createTieringSourceEnumerator(flussConf, context);
+            TieringSourceEnumerator enumerator =
+                    new TieringSourceEnumerator(
+                            flussConf,
+                            tieringConfig,
+                            context,
+                            new TestingLakeTieringFactory(),
+                            500);
 
             enumerator.start();
             assertThat(context.getSplitsAssignmentSequence()).isEmpty();
@@ -335,11 +351,15 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
 
         int numSubtasks = 6;
         int expectNumberOfSplits = 6;
+        Configuration tieringConfig = new Configuration();
+        LakeTieringFactory<?, ?> factory = mock(LakeTieringFactory.class);
+        when(factory.supportsPartitionMarkDone()).thenReturn(true);
         // test get snapshot split assignment
         try (FlussMockSplitEnumeratorContext<TieringSplit> context =
-                new FlussMockSplitEnumeratorContext<>(numSubtasks)) {
-            TieringSourceEnumerator enumerator = createTieringSourceEnumerator(flussConf, context);
-
+                        new FlussMockSplitEnumeratorContext<>(numSubtasks);
+                TieringSourceEnumerator enumerator =
+                        new TieringSourceEnumerator(
+                                flussConf, tieringConfig, context, factory, 500)) {
             enumerator.start();
             assertThat(context.getSplitsAssignmentSequence()).isEmpty();
 
@@ -357,6 +377,23 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
 
             // no snapshot split should be assigned for empty buckets
             assertThat(actualSnapshotAssignment).isEmpty();
+
+            tieringConfig.set(ConfigOptions.LAKE_TIERING_PARTITION_MARK_DONE_ENABLED, true);
+            enumerator.generateAndAssignSplits(Tuple3.of(tableId, 1L, tablePath), null);
+            List<TieringSplit> maintenanceSplits = new ArrayList<>();
+            context.getSplitsAssignmentSequence()
+                    .forEach(a -> a.assignment().values().forEach(maintenanceSplits::addAll));
+            assertThat(maintenanceSplits)
+                    .singleElement()
+                    .satisfies(
+                            split -> {
+                                assertThat(split.getTableBucket().getTableId()).isEqualTo(tableId);
+                                assertThat(split.shouldSkipCurrentRound()).isTrue();
+                            });
+            assertValidTieringRound(maintenanceSplits);
+            verify(factory).supportsPartitionMarkDone();
+            verifyNoMoreInteractions(factory);
+            tieringConfig.set(ConfigOptions.LAKE_TIERING_PARTITION_MARK_DONE_ENABLED, false);
 
             // mock finished tiered this round, check second round
             context.getSplitsAssignmentSequence().clear();

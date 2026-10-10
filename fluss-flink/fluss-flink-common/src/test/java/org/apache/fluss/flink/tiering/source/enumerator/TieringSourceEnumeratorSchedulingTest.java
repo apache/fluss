@@ -251,6 +251,7 @@ class TieringSourceEnumeratorSchedulingTest {
             enumerator =
                     new TieringSourceEnumerator(
                             new Configuration(),
+                            new Configuration(),
                             context,
                             new TestingLakeTieringFactory(),
                             30_000L,
