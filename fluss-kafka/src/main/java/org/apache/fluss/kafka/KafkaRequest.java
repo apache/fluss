@@ -35,6 +35,7 @@ import org.apache.kafka.common.requests.ResponseHeader;
 
 import java.nio.ByteBuffer;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 
 /** Represents a request received from Kafka protocol channel. */
@@ -46,10 +47,12 @@ public class KafkaRequest implements RpcRequest {
     private final long requestId = ID_GENERATOR.getAndIncrement();
     private final RequestHeader header;
     private final AbstractRequest request;
+    private final String listenerName;
     private final ByteBuf buffer;
     private final ChannelHandlerContext ctx;
     private final long startTimeMs;
     private final CompletableFuture<AbstractResponse> future;
+    private final AtomicBoolean bufferReleased = new AtomicBoolean();
     private volatile boolean cancelled = false;
 
     protected KafkaRequest(
@@ -60,10 +63,23 @@ public class KafkaRequest implements RpcRequest {
             ByteBuf buffer,
             ChannelHandlerContext ctx,
             CompletableFuture<AbstractResponse> future) {
+        this(apiKey, apiVersion, header, request, "UNKNOWN", buffer, ctx, future);
+    }
+
+    protected KafkaRequest(
+            ApiKeys apiKey,
+            short apiVersion,
+            RequestHeader header,
+            AbstractRequest request,
+            String listenerName,
+            ByteBuf buffer,
+            ChannelHandlerContext ctx,
+            CompletableFuture<AbstractResponse> future) {
         this.apiKey = apiKey;
         this.apiVersion = apiVersion;
         this.header = header;
         this.request = request;
+        this.listenerName = listenerName;
         this.buffer = buffer.retain();
         this.ctx = ctx;
         this.startTimeMs = System.currentTimeMillis();
@@ -77,7 +93,9 @@ public class KafkaRequest implements RpcRequest {
 
     @Override
     public void releaseBuffer() {
-        ReferenceCountUtil.safeRelease(buffer);
+        if (bufferReleased.compareAndSet(false, true)) {
+            ReferenceCountUtil.safeRelease(buffer);
+        }
     }
 
     public ApiKeys apiKey() {
@@ -98,6 +116,10 @@ public class KafkaRequest implements RpcRequest {
 
     public <T> T request() {
         return (T) request;
+    }
+
+    public String listenerName() {
+        return listenerName;
     }
 
     public ChannelHandlerContext ctx() {
@@ -149,12 +171,17 @@ public class KafkaRequest implements RpcRequest {
         int headerSize = headerData.size(cache, headerVersion);
         ApiMessage apiMessage = response.data();
         int messageSize = apiMessage.size(cache, apiVersion);
-        final ByteBuf buffer = ctx.alloc().buffer(headerSize + messageSize);
-        buffer.writerIndex(headerSize + messageSize);
-        final ByteBuffer nioBuffer = buffer.nioBuffer();
-        final ByteBufferAccessor writable = new ByteBufferAccessor(nioBuffer);
-        headerData.write(writable, cache, headerVersion);
-        apiMessage.write(writable, cache, apiVersion);
-        return buffer;
+        final ByteBuf responseBuffer = ctx.alloc().buffer(headerSize + messageSize);
+        try {
+            responseBuffer.writerIndex(headerSize + messageSize);
+            final ByteBuffer nioBuffer = responseBuffer.nioBuffer();
+            final ByteBufferAccessor writable = new ByteBufferAccessor(nioBuffer);
+            headerData.write(writable, cache, headerVersion);
+            apiMessage.write(writable, cache, apiVersion);
+            return responseBuffer;
+        } catch (Throwable t) {
+            ReferenceCountUtil.safeRelease(responseBuffer);
+            throw t;
+        }
     }
 }
