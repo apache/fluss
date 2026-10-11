@@ -37,6 +37,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 import org.junit.jupiter.api.io.TempDir;
 
+import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.util.Collection;
@@ -162,6 +163,43 @@ class RocksIncrementalSnapshotTest {
     @Test
     void testSnapshotCanBeReadByFrocksDB(
             @TempDir Path snapshotBaseDir, @TempDir Path snapshotDownDir) throws Exception {
+        RocksDB rocksDB = rocksDBExtension.getRocksDb();
+        rocksDB.put(
+                "key1".getBytes(StandardCharsets.UTF_8), "val1".getBytes(StandardCharsets.UTF_8));
+        rocksDB.put(
+                "key2".getBytes(StandardCharsets.UTF_8), "val2".getBytes(StandardCharsets.UTF_8));
+
+        assertSnapshotReadableByFrocksDB(
+                snapshotBaseDir, snapshotDownDir, "key1", "val1", "key2", "val2");
+    }
+
+    /**
+     * Sequential big-endian long keys, like encoded integer primary keys, make the index blocks
+     * hold evenly spaced keys. RocksDB 11 then marks those blocks "uniform" in the block footer
+     * unless uniform_cv_threshold is -1, and FRocksDB fails the scan with "bad block contents".
+     */
+    @Test
+    void testSnapshotWithUniformKeysCanBeReadByFrocksDB(
+            @TempDir Path snapshotBaseDir, @TempDir Path snapshotDownDir) throws Exception {
+        int numRows = 10_000;
+        RocksDB rocksDB = rocksDBExtension.getRocksDb();
+        for (int i = 0; i < numRows; i++) {
+            rocksDB.put(longKey(i), longKey(i));
+        }
+
+        assertSnapshotReadableByFrocksDB(
+                snapshotBaseDir,
+                snapshotDownDir,
+                FrocksDBSnapshotReader.COUNT_ARG,
+                String.valueOf(numRows));
+    }
+
+    private static byte[] longKey(long value) {
+        return ByteBuffer.allocate(Long.BYTES).putLong(value).array();
+    }
+
+    private void assertSnapshotReadableByFrocksDB(
+            Path snapshotBaseDir, Path snapshotDownDir, String... readerArgs) throws Exception {
         FsPath testingTabletDir = FsPath.fromLocalFile(snapshotBaseDir.toFile());
         SnapshotLocation snapshotLocation =
                 new SnapshotLocation(
@@ -172,14 +210,6 @@ class RocksIncrementalSnapshotTest {
 
         try (CloseableRegistry closeableRegistry = new CloseableRegistry();
                 RocksIncrementalSnapshot incrementalSnapshot = createIncrementalSnapshot()) {
-            RocksDB rocksDB = rocksDBExtension.getRocksDb();
-            rocksDB.put(
-                    "key1".getBytes(StandardCharsets.UTF_8),
-                    "val1".getBytes(StandardCharsets.UTF_8));
-            rocksDB.put(
-                    "key2".getBytes(StandardCharsets.UTF_8),
-                    "val2".getBytes(StandardCharsets.UTF_8));
-
             KvSnapshotHandle snapshotHandle =
                     snapshot(1L, incrementalSnapshot, snapshotLocation, closeableRegistry);
             incrementalSnapshot.notifySnapshotComplete(1L);
@@ -190,16 +220,16 @@ class RocksIncrementalSnapshotTest {
             snapshotDataDownloader.transferAllDataToDirectory(
                     new KvSnapshotDownloadSpec(snapshotHandle, restoredDbPath), closeableRegistry);
 
+            TestProcessBuilder frocksDBReaderBuilder =
+                    new TestProcessBuilder(FrocksDBSnapshotReader.class.getName())
+                            .addMainClassArg(restoredDbPath.toString());
+            for (String readerArg : readerArgs) {
+                frocksDBReaderBuilder.addMainClassArg(readerArg);
+            }
+
             TestProcessBuilder.TestProcess frocksDBReader = null;
             try {
-                frocksDBReader =
-                        new TestProcessBuilder(FrocksDBSnapshotReader.class.getName())
-                                .addMainClassArg(restoredDbPath.toString())
-                                .addMainClassArg("key1")
-                                .addMainClassArg("val1")
-                                .addMainClassArg("key2")
-                                .addMainClassArg("val2")
-                                .start();
+                frocksDBReader = frocksDBReaderBuilder.start();
 
                 boolean exited = frocksDBReader.getProcess().waitFor(1, TimeUnit.MINUTES);
                 assertThat(exited)

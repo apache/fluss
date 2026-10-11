@@ -358,7 +358,8 @@ public class RocksDBResourceContainer implements AutoCloseable {
         // Keep snapshots readable by FRocksDB 6.20.3.
         blockBasedTableConfig
                 .setFormatVersion(FROCKSDB_COMPATIBLE_FORMAT_VERSION)
-                .setChecksumType(ChecksumType.kCRC32c);
+                .setChecksumType(ChecksumType.kCRC32c)
+                .setUniformCvThreshold(-1);
 
         blockBasedTableConfig.setBlockSize(
                 internalGetOption(ConfigOptions.KV_BLOCK_SIZE).getBytes());

@@ -19,12 +19,16 @@ package org.apache.fluss.server.kv.snapshot;
 
 import org.rocksdb.Options;
 import org.rocksdb.RocksDB;
+import org.rocksdb.RocksIterator;
 
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 
 /** Reads a RocksDB snapshot in an isolated process using the legacy FRocksDB JNI dependency. */
 public final class FrocksDBSnapshotReader {
+
+    /** Switches the reader to a full scan that expects the given number of rows. */
+    static final String COUNT_ARG = "--count";
 
     private FrocksDBSnapshotReader() {}
 
@@ -38,6 +42,10 @@ public final class FrocksDBSnapshotReader {
         RocksDB.loadLibrary();
         try (Options options = new Options();
                 RocksDB rocksDB = RocksDB.openReadOnly(options, args[0])) {
+            if (COUNT_ARG.equals(args[1])) {
+                assertRowCount(rocksDB, Long.parseLong(args[2]));
+                return;
+            }
             for (int i = 1; i < args.length; i += 2) {
                 byte[] actualValue = rocksDB.get(args[i].getBytes(StandardCharsets.UTF_8));
                 byte[] expectedValue = args[i + 1].getBytes(StandardCharsets.UTF_8);
@@ -48,6 +56,20 @@ public final class FrocksDBSnapshotReader {
                                     args[i], args[i + 1], Arrays.toString(actualValue)));
                 }
             }
+        }
+    }
+
+    private static void assertRowCount(RocksDB rocksDB, long expectedRows) throws Exception {
+        long rows = 0;
+        try (RocksIterator iterator = rocksDB.newIterator()) {
+            for (iterator.seekToFirst(); iterator.isValid(); iterator.next()) {
+                rows++;
+            }
+            iterator.status();
+        }
+        if (rows != expectedRows) {
+            throw new AssertionError(
+                    String.format("Expected %d rows but scanned %d", expectedRows, rows));
         }
     }
 }
