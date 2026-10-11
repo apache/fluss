@@ -91,13 +91,15 @@ public class RemoteLogTablet {
      */
     private volatile long remoteLogEndOffset;
 
+    private final FsPath remoteLogDir;
+
     private volatile boolean closed = false;
 
     public RemoteLogTablet(
             PhysicalTablePath physicalTablePath, TableBucket tableBucket, FsPath remoteLogDir) {
+        this.remoteLogDir = remoteLogDir;
         this.currentManifest =
-                new RemoteLogManifest(
-                        physicalTablePath, tableBucket, new ArrayList<>(), remoteLogDir);
+                new RemoteLogManifest(physicalTablePath, tableBucket, new ArrayList<>());
         reset();
     }
 
@@ -294,7 +296,7 @@ public class RemoteLogTablet {
     }
 
     public FsPath getRemoteLogDir() {
-        return currentManifest.getRemoteLogDir();
+        return remoteLogDir;
     }
 
     /** Returns the highest exclusive offset successfully copied to remote storage. */

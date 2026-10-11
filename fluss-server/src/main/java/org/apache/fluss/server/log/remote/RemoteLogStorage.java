@@ -80,11 +80,13 @@ public interface RemoteLogStorage extends Closeable {
      * existing content already written, it should be overwritten, and do not throw {@link
      * RemoteStorageException}
      *
+     * @param remoteLogDir the assigned remote log directory.
      * @param remoteLogSegment the remote log segment.
      * @param logSegmentFiles files to be copied to remote storage.
      * @throws RemoteStorageException if there are any errors in storing the data of the segment.
      */
-    void copyLogSegmentFiles(RemoteLogSegment remoteLogSegment, LogSegmentFiles logSegmentFiles)
+    void copyLogSegmentFiles(
+            FsPath remoteLogDir, RemoteLogSegment remoteLogSegment, LogSegmentFiles logSegmentFiles)
             throws RemoteStorageException;
 
     /**
@@ -96,31 +98,37 @@ public interface RemoteLogStorage extends Closeable {
      * expected to throw {@link RemoteResourceNotFoundException} as it may be already removed from a
      * previous attempt.
      *
+     * @param remoteLogDir the assigned remote log directory.
      * @param remoteLogSegment the remote log segment.
      * @throws RemoteStorageException if there are any storage related errors occurred.
      */
-    void deleteLogSegmentFiles(RemoteLogSegment remoteLogSegment) throws RemoteStorageException;
+    void deleteLogSegmentFiles(FsPath remoteLogDir, RemoteLogSegment remoteLogSegment)
+            throws RemoteStorageException;
 
     /**
      * Returns the index for the respective log segment of {@link RemoteLogSegment}.
      *
+     * @param remoteLogDir the assigned remote log directory.
      * @param remoteLogSegment the remote log segment.
      * @param indexType type of the index to be fetched for the segment.
      * @return input stream of the requested index.
      * @throws RemoteStorageException if there are any errors while fetching the index.
      */
-    InputStream fetchIndex(RemoteLogSegment remoteLogSegment, IndexType indexType)
+    InputStream fetchIndex(
+            FsPath remoteLogDir, RemoteLogSegment remoteLogSegment, IndexType indexType)
             throws RemoteStorageException;
 
     /**
      * Returns an input stream of the log data for the respective log segment of {@link
      * RemoteLogSegment}.
      *
+     * @param remoteLogDir the assigned remote log directory.
      * @param remoteLogSegment the remote log segment.
      * @return input stream of the requested log data.
      * @throws RemoteStorageException if there are any errors while fetching the log data.
      */
-    InputStream fetchLogData(RemoteLogSegment remoteLogSegment) throws RemoteStorageException;
+    InputStream fetchLogData(FsPath remoteLogDir, RemoteLogSegment remoteLogSegment)
+            throws RemoteStorageException;
 
     /**
      * Read the remote log manifest from remote manifest file path.
@@ -147,12 +155,14 @@ public interface RemoteLogStorage extends Closeable {
     /**
      * Writes the remote log manifest to remote manifest file path.
      *
+     * @param remoteLogDir the assigned remote log directory.
      * @param manifest the remote log manifest to be written.
      * @return the path of the written remote log manifest file.
      * @throws RemoteStorageException if there are any errors while upload remote log manifest
      *     snapshot.
      */
-    FsPath writeRemoteLogManifestSnapshot(RemoteLogManifest manifest) throws RemoteStorageException;
+    FsPath writeRemoteLogManifestSnapshot(FsPath remoteLogDir, RemoteLogManifest manifest)
+            throws RemoteStorageException;
 
     /**
      * Deletes the remote log data and metadata from remote storage for the input table bucket as

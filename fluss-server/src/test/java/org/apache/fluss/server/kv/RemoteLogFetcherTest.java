@@ -192,8 +192,9 @@ class RemoteLogFetcherTest extends RemoteLogTestBase {
         oldLeaderLog.updateHighWatermark(oldLeaderLog.localLogEndOffset());
         newLeaderLog.updateHighWatermark(newLeaderLog.localLogEndOffset());
 
+        // Both replicas upload into the directory assigned to the same target bucket.
         RemoteLogSegment oldLeaderSegment =
-                copyLogSegmentToRemote(oldLeaderLog, remoteLogStorage, 0);
+                copySegmentToRemoteForBucket(oldLeaderLog, 0, targetBucket);
         RemoteLogSegment newLeaderSegment =
                 copySegmentToRemoteForBucket(newLeaderLog, sameStart ? 0 : 1, targetBucket);
         assertThat(oldLeaderSegment.remoteLogStartOffset()).isZero();
@@ -209,10 +210,7 @@ class RemoteLogFetcherTest extends RemoteLogTestBase {
                             : Arrays.asList(oldLeaderSegment, newLeaderSegment);
             manifest =
                     new RemoteLogManifest(
-                            oldLeaderLog.getPhysicalTablePath(),
-                            targetBucket,
-                            segments,
-                            FlussPaths.remoteLogDir(conf));
+                            oldLeaderLog.getPhysicalTablePath(), targetBucket, segments);
             assertThat(new String(manifest.toJsonBytes(), StandardCharsets.UTF_8))
                     .contains("\"version\":1")
                     .doesNotContain("logical_start_offset", "logical_end_offset");
@@ -221,13 +219,14 @@ class RemoteLogFetcherTest extends RemoteLogTestBase {
                     new RemoteLogManifest(
                                     oldLeaderLog.getPhysicalTablePath(),
                                     targetBucket,
-                                    Collections.singletonList(oldLeaderSegment),
-                                    FlussPaths.remoteLogDir(conf))
+                                    Collections.singletonList(oldLeaderSegment))
                             .trimAndMerge(
                                     Collections.emptyList(),
                                     Collections.singletonList(newLeaderSegment));
         }
-        FsPath originalManifestPath = remoteLogStorage.writeRemoteLogManifestSnapshot(manifest);
+        FsPath originalManifestPath =
+                remoteLogStorage.writeRemoteLogManifestSnapshot(
+                        FlussPaths.remoteLogDir(conf), manifest);
         RemoteLogTablet tablet = remoteLogManager.remoteLogTablet(targetBucket);
         tablet.loadRemoteLogManifest(
                 remoteLogStorage.readRemoteLogManifestSnapshot(originalManifestPath));
@@ -257,14 +256,17 @@ class RemoteLogFetcherTest extends RemoteLogTestBase {
                 .containsExactlyElementsOf(
                         sameStart ? Collections.singletonList(30L) : Arrays.asList(10L, 30L));
 
-        FsPath normalizedManifestPath = remoteLogStorage.writeRemoteLogManifestSnapshot(normalized);
+        FsPath normalizedManifestPath =
+                remoteLogStorage.writeRemoteLogManifestSnapshot(
+                        FlussPaths.remoteLogDir(conf), normalized);
         tablet.loadRemoteLogManifest(
                 remoteLogStorage.readRemoteLogManifestSnapshot(normalizedManifestPath));
         // Loading and writing the logical view leaves the old snapshot and its physical files
         // intact.
         assertThat(remoteLogStorage.readRemoteLogManifestSnapshot(originalManifestPath))
                 .isEqualTo(manifest);
-        try (InputStream oldSegmentData = remoteLogStorage.fetchLogData(oldLeaderSegment)) {
+        try (InputStream oldSegmentData =
+                remoteLogStorage.fetchLogData(FlussPaths.remoteLogDir(conf), oldLeaderSegment)) {
             assertThat(oldSegmentData.read()).isNotEqualTo(-1);
         }
 
@@ -1181,9 +1183,8 @@ class RemoteLogFetcherTest extends RemoteLogTestBase {
                         .segmentSizeInBytes(sourceSegment.getFileLogRecords().sizeInBytes())
                         .tableBucket(targetBucket)
                         .physicalTablePath(sourceLog.getPhysicalTablePath())
-                        .remoteLogDir(FlussPaths.remoteLogDir(conf))
                         .build();
-        remoteLogStorage.copyLogSegmentFiles(remoteSegment, files);
+        remoteLogStorage.copyLogSegmentFiles(FlussPaths.remoteLogDir(conf), remoteSegment, files);
         return remoteSegment;
     }
 }

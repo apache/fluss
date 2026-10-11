@@ -307,10 +307,10 @@ public class LogTieringTask implements Runnable {
                             .remoteLogEndOffset(segmentEndOffset)
                             .maxTimestamp(segment.maxTimestampSoFar())
                             .segmentSizeInBytes(sizeInBytes)
-                            .remoteLogDir(remoteLog.getRemoteLogDir())
                             .build();
             try {
-                remoteLogStorage.copyLogSegmentFiles(copyRemoteLogSegment, logSegmentFiles);
+                remoteLogStorage.copyLogSegmentFiles(
+                        remoteLog.getRemoteLogDir(), copyRemoteLogSegment, logSegmentFiles);
             } catch (RemoteStorageException e) {
                 metricGroup.remoteLogCopyErrors().inc();
                 LOG.warn(
@@ -355,7 +355,8 @@ public class LogTieringTask implements Runnable {
         try {
             // 1. upload the remote log manifest file to remote storage.
             remoteLogManifestPath =
-                    remoteLogStorage.writeRemoteLogManifestSnapshot(newRemoteLogManifest);
+                    remoteLogStorage.writeRemoteLogManifestSnapshot(
+                            remoteLog.getRemoteLogDir(), newRemoteLogManifest);
         } catch (Exception e) {
             LOG.error(
                     "Write remote log manifest file to remote storage failed for bucket {}.",
@@ -538,7 +539,8 @@ public class LogTieringTask implements Runnable {
             List<RemoteLogSegment> remoteLogSegmentList, TableMetricGroup metricGroup) {
         for (RemoteLogSegment remoteLogSegment : remoteLogSegmentList) {
             try {
-                remoteLogStorage.deleteLogSegmentFiles(remoteLogSegment);
+                remoteLogStorage.deleteLogSegmentFiles(
+                        remoteLog.getRemoteLogDir(), remoteLogSegment);
                 metricGroup.remoteLogDeleteRequests().inc();
             } catch (Exception e) {
                 LOG.error(

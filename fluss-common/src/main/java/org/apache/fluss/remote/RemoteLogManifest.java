@@ -18,7 +18,6 @@
 package org.apache.fluss.remote;
 
 import org.apache.fluss.annotation.VisibleForTesting;
-import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
 
@@ -41,8 +40,6 @@ public class RemoteLogManifest {
     private final List<RemoteLogSegment> remoteLogSegmentList;
     private final long highestCopiedEndOffset;
 
-    private final FsPath remoteLogDir;
-
     public RemoteLogManifest(
             PhysicalTablePath physicalTablePath,
             TableBucket tableBucket,
@@ -59,29 +56,6 @@ public class RemoteLogManifest {
             TableBucket tableBucket,
             List<RemoteLogSegment> remoteLogSegmentList,
             long highestCopiedEndOffset) {
-        this(physicalTablePath, tableBucket, remoteLogSegmentList, highestCopiedEndOffset, null);
-    }
-
-    public RemoteLogManifest(
-            PhysicalTablePath physicalTablePath,
-            TableBucket tableBucket,
-            List<RemoteLogSegment> remoteLogSegmentList,
-            FsPath remoteLogDir) {
-        this(
-                physicalTablePath,
-                tableBucket,
-                remoteLogSegmentList,
-                maxPhysicalEndOffset(remoteLogSegmentList),
-                remoteLogDir);
-    }
-
-    public RemoteLogManifest(
-            PhysicalTablePath physicalTablePath,
-            TableBucket tableBucket,
-            List<RemoteLogSegment> remoteLogSegmentList,
-            long highestCopiedEndOffset,
-            FsPath remoteLogDir) {
-        this.remoteLogDir = remoteLogDir;
         this.physicalTablePath = physicalTablePath;
         this.tableBucket = tableBucket;
         this.remoteLogSegmentList = Collections.unmodifiableList(remoteLogSegmentList);
@@ -155,11 +129,7 @@ public class RemoteLogManifest {
         }
 
         return new RemoteLogManifest(
-                physicalTablePath,
-                tableBucket,
-                normalizedSegments,
-                highestCopiedEndOffset,
-                remoteLogDir);
+                physicalTablePath, tableBucket, normalizedSegments, highestCopiedEndOffset);
     }
 
     public RemoteLogManifest trimAndMerge(
@@ -219,11 +189,7 @@ public class RemoteLogManifest {
         }
 
         return new RemoteLogManifest(
-                physicalTablePath,
-                tableBucket,
-                newSegments,
-                newHighestCopiedEndOffset,
-                remoteLogDir);
+                physicalTablePath, tableBucket, newSegments, newHighestCopiedEndOffset);
     }
 
     /**
@@ -289,40 +255,9 @@ public class RemoteLogManifest {
         return tableBucket;
     }
 
-    public FsPath getRemoteLogDir() {
-        return remoteLogDir;
-    }
-
     @VisibleForTesting
     public List<RemoteLogSegment> getRemoteLogSegmentList() {
         return remoteLogSegmentList;
-    }
-
-    public RemoteLogManifest newManifest(FsPath remoteLogDir) {
-        List<RemoteLogSegment> newRemoteLogSegments = new ArrayList<>(remoteLogSegmentList.size());
-        for (RemoteLogSegment remoteLogSegment : remoteLogSegmentList) {
-            newRemoteLogSegments.add(
-                    RemoteLogSegment.Builder.builder()
-                            .physicalTablePath(remoteLogSegment.physicalTablePath())
-                            .tableBucket(remoteLogSegment.tableBucket())
-                            .remoteLogSegmentId(remoteLogSegment.remoteLogSegmentId())
-                            .remoteLogStartOffset(remoteLogSegment.remoteLogStartOffset())
-                            .remoteLogEndOffset(remoteLogSegment.remoteLogEndOffset())
-                            .logicalStartOffset(remoteLogSegment.logicalStartOffset())
-                            .logicalEndOffset(remoteLogSegment.logicalEndOffset())
-                            .maxTimestamp(remoteLogSegment.maxTimestamp())
-                            .segmentSizeInBytes(remoteLogSegment.segmentSizeInBytes())
-                            // We set remoteLogDir manually here, so subsequent usage will be safe
-                            // to directly use it.
-                            .remoteLogDir(remoteLogDir)
-                            .build());
-        }
-        return new RemoteLogManifest(
-                physicalTablePath,
-                tableBucket,
-                newRemoteLogSegments,
-                highestCopiedEndOffset,
-                remoteLogDir);
     }
 
     @Override

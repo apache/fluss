@@ -48,6 +48,7 @@ import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
@@ -343,8 +344,7 @@ class RemoteLogManagerTest extends RemoteLogTestBase {
                         logTablet.getPhysicalTablePath(),
                         tableBucket,
                         remoteSegments.subList(0, 2),
-                        40L,
-                        FlussPaths.remoteLogDir(conf)));
+                        40L));
 
         // An older manifest is readable only up to 20 even though copying has advanced to 40.
         // Cleanup must remain bounded by the readable end, leaving offset 25 available locally.
@@ -357,11 +357,7 @@ class RemoteLogManagerTest extends RemoteLogTestBase {
 
         remoteLogTablet.loadRemoteLogManifest(
                 new RemoteLogManifest(
-                        logTablet.getPhysicalTablePath(),
-                        tableBucket,
-                        remoteSegments,
-                        40L,
-                        FlussPaths.remoteLogDir(conf)));
+                        logTablet.getPhysicalTablePath(), tableBucket, remoteSegments, 40L));
         logTablet.updateRemoteLogOffsets(0L, 40L, 40L);
         assertThat(logTablet.localLogStartOffset()).isEqualTo(30L);
         assertThat(logTablet.canFetchFromRemoteLog(25L)).isTrue();
@@ -907,9 +903,9 @@ class RemoteLogManagerTest extends RemoteLogTestBase {
     }
 
     @ParameterizedTest
-    @ValueSource(booleans = {true, false})
-    void testRegisterReplicaWithOldManifestWithoutRemoteLogDir(boolean partitionTable)
-            throws Exception {
+    @CsvSource({"false,false", "true,false", "false,true", "true,true"})
+    void testRegisterReplicaUsesAssignedDirectory(
+            boolean partitionTable, boolean withStaleDirectories) throws Exception {
         TableBucket tb = makeTableBucket(partitionTable);
         makeLogTableAsLeader(tb, partitionTable);
         LogTablet logTablet = replicaManager.getReplicaOrException(tb).getLogTablet();
@@ -920,8 +916,8 @@ class RemoteLogManagerTest extends RemoteLogTestBase {
                 remoteLogManager.relevantRemoteLogSegments(tb, 0L);
         assertThat(remoteLogSegmentList).hasSize(4);
 
-        // Read the current manifest from remote storage and strip remote_log_dir fields
-        // to simulate an old-version manifest.
+        // Manifests omit directory assignments. Also accept earlier manifests with stale or
+        // incomplete directory fields, using the replica's assignment for every segment.
         Optional<RemoteLogManifestHandle> handleOpt = zkClient.getRemoteLogManifestHandle(tb);
         assertThat(handleOpt).isPresent();
         FsPath manifestPath = handleOpt.get().getRemoteLogManifestPath();
@@ -930,52 +926,50 @@ class RemoteLogManagerTest extends RemoteLogTestBase {
         RemoteLogManifest currentManifest =
                 remoteLogStorage.readRemoteLogManifestSnapshot(manifestPath);
         byte[] currentJson = currentManifest.toJsonBytes();
-        byte[] oldFormatJson = stripRemoteLogDirFromJson(currentJson);
+        assertThat(new String(currentJson, StandardCharsets.UTF_8))
+                .doesNotContain("remote_log_dir");
+        byte[] persistedJson = currentJson;
+        if (withStaleDirectories) {
+            String json = new String(currentJson, StandardCharsets.UTF_8);
+            json = json.replaceFirst("\\{", "{\"remote_log_dir\":\"file:/stale/manifest/log\",");
+            // The first segment has a different directory; the remaining segments omit it.
+            json =
+                    json.replaceFirst(
+                            "\"segment_id\":",
+                            "\"remote_log_dir\":\"file:/stale/segment/log\",\"segment_id\":");
+            persistedJson = json.getBytes(StandardCharsets.UTF_8);
+        }
 
-        // Overwrite the manifest file with the old-format JSON (without remote_log_dir)
+        // Overwrite with the selected persisted format.
         fs.delete(manifestPath, false);
         try (FSDataOutputStream out = fs.create(manifestPath, FileSystem.WriteMode.NO_OVERWRITE)) {
-            out.write(oldFormatJson);
+            out.write(persistedJson);
         }
 
-        // Verify the written file indeed has no remote_log_dir
-        RemoteLogManifest oldManifest =
-                remoteLogStorage.readRemoteLogManifestSnapshot(manifestPath);
-        assertThat(oldManifest.getRemoteLogDir()).isNull();
-        for (RemoteLogSegment seg : oldManifest.getRemoteLogSegmentList()) {
-            assertThat(seg.remoteLogDir()).isNull();
-        }
+        // Persisted directory fields must never supply the runtime directory.
+        assertThat(remoteLogStorage.readRemoteLogManifestSnapshot(manifestPath))
+                .isEqualTo(currentManifest);
 
-        // Rebuild replicaManager to trigger registerReplica with the old manifest
+        // Rebuild replicaManager to load the manifest with the tablet's assigned directory.
         replicaManager.shutdown();
         replicaManager = buildReplicaManager(new TestCoordinatorGateway());
         makeLogTableAsLeader(tb, partitionTable);
 
-        // Verify the manifest was fixed with the correct remoteLogDir
+        // The tablet owns the assigned directory independently of manifest metadata.
         RemoteLogTablet remoteLogTablet = remoteLogManager.remoteLogTablet(tb);
         assertThat(remoteLogTablet).isNotNull();
         FsPath expectedRemoteLogDir = FlussPaths.remoteLogDir(conf);
         assertThat(remoteLogTablet.getRemoteLogDir()).isEqualTo(expectedRemoteLogDir);
-        assertThat(remoteLogTablet.currentManifest().getRemoteLogDir())
-                .isEqualTo(expectedRemoteLogDir);
 
-        // Verify all segments in the manifest also have remoteLogDir set
+        // Loading preserves every segment without attaching directory state.
         List<RemoteLogSegment> fixedSegments = remoteLogTablet.allRemoteLogSegments();
         assertThat(fixedSegments).hasSize(4);
-        for (RemoteLogSegment seg : fixedSegments) {
-            assertThat(seg.remoteLogDir()).isEqualTo(expectedRemoteLogDir);
-        }
+        assertThat(fixedSegments).containsExactlyElementsOf(remoteLogSegmentList);
 
         // Verify subsequent tiering still works after the fix
         addMultiSegmentsToLogTablet(replicaManager.getReplicaOrException(tb).getLogTablet(), 3);
         remoteLogTaskScheduler.triggerPeriodicScheduledTasks();
         assertThat(remoteLogTablet.allRemoteLogSegments().size()).isGreaterThan(4);
-    }
-
-    private static byte[] stripRemoteLogDirFromJson(byte[] json) {
-        String jsonStr = new String(json, StandardCharsets.UTF_8);
-        return jsonStr.replaceAll(",\"remote_log_dir\":\"[^\"]*\"", "")
-                .getBytes(StandardCharsets.UTF_8);
     }
 
     private FetchLogResultForBucket fetch(TableBucket tableBucket, long fetchOffset)

@@ -17,7 +17,6 @@
 
 package org.apache.fluss.remote;
 
-import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.core.JsonGenerator;
@@ -53,7 +52,6 @@ public class RemoteLogManifestJsonSerde
     private static final String MAX_TIMESTAMP_FIELD = "max_timestamp";
     private static final String SEGMENT_SIZE_IN_BYTES_FIELD = "size_in_bytes";
     private static final String HIGHEST_COPIED_END_OFFSET_FIELD = "highest_copied_end_offset";
-    private static final String REMOTE_LOG_DIR_FIELD = "remote_log_dir";
     private static final int SNAPSHOT_VERSION = 1;
 
     @Override
@@ -101,17 +99,9 @@ public class RemoteLogManifestJsonSerde
             generator.writeNumberField(MAX_TIMESTAMP_FIELD, remoteLogSegment.maxTimestamp());
             generator.writeNumberField(
                     SEGMENT_SIZE_IN_BYTES_FIELD, remoteLogSegment.segmentSizeInBytes());
-            if (remoteLogSegment.remoteLogDir() != null) {
-                generator.writeStringField(
-                        REMOTE_LOG_DIR_FIELD, remoteLogSegment.remoteLogDir().toString());
-            }
             generator.writeEndObject();
         }
         generator.writeEndArray();
-
-        if (manifest.getRemoteLogDir() != null) {
-            generator.writeStringField(REMOTE_LOG_DIR_FIELD, manifest.getRemoteLogDir().toString());
-        }
 
         generator.writeEndObject();
     }
@@ -146,10 +136,6 @@ public class RemoteLogManifestJsonSerde
             JsonNode logicalEndOffsetNode = entryJson.get(LOGICAL_END_OFFSET_FIELD);
             long maxTimestamp = entryJson.get(MAX_TIMESTAMP_FIELD).asLong();
             int segmentSizeInBytes = entryJson.get(SEGMENT_SIZE_IN_BYTES_FIELD).asInt();
-            FsPath remoteLogDir =
-                    entryJson.hasNonNull(REMOTE_LOG_DIR_FIELD)
-                            ? new FsPath(entryJson.get(REMOTE_LOG_DIR_FIELD).asText())
-                            : null;
             RemoteLogSegment.Builder segmentBuilder =
                     RemoteLogSegment.Builder.builder()
                             .physicalTablePath(physicalTablePath)
@@ -158,8 +144,7 @@ public class RemoteLogManifestJsonSerde
                             .remoteLogStartOffset(startOffset)
                             .remoteLogEndOffset(endOffset)
                             .maxTimestamp(maxTimestamp)
-                            .segmentSizeInBytes(segmentSizeInBytes)
-                            .remoteLogDir(remoteLogDir);
+                            .segmentSizeInBytes(segmentSizeInBytes);
             if (logicalStartOffsetNode != null) {
                 segmentBuilder.logicalStartOffset(logicalStartOffsetNode.asLong());
             }
@@ -169,21 +154,15 @@ public class RemoteLogManifestJsonSerde
             snapshotEntries.add(segmentBuilder.build());
         }
 
-        FsPath remoteLogDir =
-                node.hasNonNull(REMOTE_LOG_DIR_FIELD)
-                        ? new FsPath(node.get(REMOTE_LOG_DIR_FIELD).asText())
-                        : null;
         JsonNode highestCopiedEndOffsetNode = node.get(HIGHEST_COPIED_END_OFFSET_FIELD);
         if (highestCopiedEndOffsetNode == null) {
-            return new RemoteLogManifest(
-                    physicalTablePath, tableBucket, snapshotEntries, remoteLogDir);
+            return new RemoteLogManifest(physicalTablePath, tableBucket, snapshotEntries);
         }
         return new RemoteLogManifest(
                 physicalTablePath,
                 tableBucket,
                 snapshotEntries,
-                highestCopiedEndOffsetNode.asLong(),
-                remoteLogDir);
+                highestCopiedEndOffsetNode.asLong());
     }
 
     public static RemoteLogManifest fromJson(byte[] json) {

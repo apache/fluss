@@ -80,7 +80,7 @@ class ServerRpcMessageUtilsTest {
 
     @ParameterizedTest
     @ValueSource(booleans = {false, true})
-    void testFetchLogResponsePreservesRemoteLogDir(boolean partitioned) {
+    void testFetchLogResponsePreservesRemoteLogTabletDir(boolean partitioned) {
         TablePath tablePath = TablePath.of("db", "table");
         PhysicalTablePath physicalPath =
                 PhysicalTablePath.of(tablePath, partitioned ? "dt=2026-10-10" : null);
@@ -101,7 +101,6 @@ class ServerRpcMessageUtilsTest {
                             .remoteLogEndOffset(10L)
                             .maxTimestamp(100L)
                             .segmentSizeInBytes(1024)
-                            .remoteLogDir(remoteLogDir)
                             .build();
             FetchLogResponse response =
                     ServerRpcMessageUtils.makeFetchLogResponse(

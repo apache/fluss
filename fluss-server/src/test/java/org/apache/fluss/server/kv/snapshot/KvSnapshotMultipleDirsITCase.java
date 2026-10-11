@@ -30,7 +30,10 @@ import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.record.KvRecordBatch;
 import org.apache.fluss.rpc.gateway.TabletServerGateway;
 import org.apache.fluss.rpc.messages.PutKvRequest;
+import org.apache.fluss.rpc.messages.PutKvResponse;
+import org.apache.fluss.server.replica.Replica;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
+import org.apache.fluss.server.testutils.KvTestUtils;
 import org.apache.fluss.server.testutils.RpcMessageTestUtils;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.PartitionRegistration;
@@ -58,6 +61,9 @@ import static org.apache.fluss.server.testutils.RpcMessageTestUtils.createPartit
 import static org.apache.fluss.server.testutils.RpcMessageTestUtils.createTable;
 import static org.apache.fluss.server.testutils.RpcMessageTestUtils.newPutKvRequest;
 import static org.apache.fluss.testutils.DataTestUtils.genKvRecordBatch;
+import static org.apache.fluss.testutils.DataTestUtils.genKvRecords;
+import static org.apache.fluss.testutils.DataTestUtils.getKeyValuePairs;
+import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
@@ -123,18 +129,15 @@ public class KvSnapshotMultipleDirsITCase {
                             Tuple2.of("k2", new Object[] {2, "v2"}));
 
             PutKvRequest putKvRequest = newPutKvRequest(tableIds.get(t), 0, 1, kvRecordBatch);
-            leaderGateway.putKv(putKvRequest).get();
-        }
-
-        // Wait for all tables' snapshots to be completed
-        for (int t = 0; t < tableCount; t++) {
-            TableBucket tb = new TableBucket(tableIds.get(t), 0);
-            // Wait for snapshot 0 to be finished
-            FLUSS_CLUSTER_EXTENSION.waitUntilSnapshotFinished(tb, 0);
+            PutKvResponse response = leaderGateway.putKv(putKvRequest).get();
+            assertThat(response.getBucketsRespsList()).hasSize(1);
+            assertThat(response.getBucketsRespsList().get(0).hasErrorCode()).isFalse();
+            verifySnapshot(tb);
         }
 
         // Collect the remote data directories used by each table
         Set<String> usedRemoteDataDirs = new HashSet<>();
+        boolean recoveredFromNonDefaultDir = false;
         for (int t = 0; t < tableCount; t++) {
             Optional<TableRegistration> tableOpt = zkClient.getTable(tablePaths.get(t));
             assertThat(tableOpt).isPresent();
@@ -153,10 +156,15 @@ public class KvSnapshotMultipleDirsITCase {
             FileStatus[] fileStatuses =
                     remoteKvTabletDir.getFileSystem().listStatus(remoteKvTabletDir);
             assertThat(fileStatuses).isNotEmpty();
+            if (!recoveredFromNonDefaultDir && remoteKvDir.getParent().getName().equals("dir2")) {
+                verifyReplicaRecovery(tb);
+                recoveredFromNonDefaultDir = true;
+            }
         }
 
         // All configured remote dirs should be used due to round-robin distribution
         assertThat(usedRemoteDataDirs).hasSameSizeAs(REMOTE_DIR_NAMES);
+        assertThat(recoveredFromNonDefaultDir).isTrue();
     }
 
     @Test
@@ -217,19 +225,15 @@ public class KvSnapshotMultipleDirsITCase {
                             Tuple2.of("k2", new Object[] {2, "v2"}));
 
             PutKvRequest putKvRequest = newPutKvRequest(tableId, partitionId, 0, 1, kvRecordBatch);
-            leaderGateway.putKv(putKvRequest).get();
-        }
-
-        // Wait for all partitions' snapshots to be completed
-        for (int p = 0; p < partitionCount; p++) {
-            Long partitionId = partitionRegistrations.get(partitionNames.get(p)).getPartitionId();
-            TableBucket tb = new TableBucket(tableId, partitionId, 0);
-            // Wait for snapshot 0 to be finished
-            FLUSS_CLUSTER_EXTENSION.waitUntilSnapshotFinished(tb, 0);
+            PutKvResponse response = leaderGateway.putKv(putKvRequest).get();
+            assertThat(response.getBucketsRespsList()).hasSize(1);
+            assertThat(response.getBucketsRespsList().get(0).hasErrorCode()).isFalse();
+            verifySnapshot(tb);
         }
 
         // Collect the remote data directories used by each partition
         Set<String> usedRemoteDataDirs = new HashSet<>();
+        boolean recoveredFromNonDefaultDir = false;
         for (int p = 0; p < partitionCount; p++) {
             String partitionName = partitionNames.get(p);
             Long partitionId = partitionRegistrations.get(partitionName).getPartitionId();
@@ -251,18 +255,77 @@ public class KvSnapshotMultipleDirsITCase {
             FileStatus[] fileStatuses =
                     remoteKvTabletDir.getFileSystem().listStatus(remoteKvTabletDir);
             assertThat(fileStatuses).isNotEmpty();
+            if (!recoveredFromNonDefaultDir && remoteKvDir.getParent().getName().equals("dir2")) {
+                verifyReplicaRecovery(tb);
+                recoveredFromNonDefaultDir = true;
+            }
         }
 
         // All configured remote dirs should be used due to round-robin distribution
         assertThat(usedRemoteDataDirs).hasSameSizeAs(REMOTE_DIR_NAMES);
+        assertThat(recoveredFromNonDefaultDir).isTrue();
+    }
+
+    private static List<Tuple2<byte[], byte[]>> expectedKeyValues() {
+        return getKeyValuePairs(
+                genKvRecords(
+                        Tuple2.of("k1", new Object[] {1, "v1"}),
+                        Tuple2.of("k2", new Object[] {2, "v2"})));
+    }
+
+    private static void verifySnapshot(TableBucket bucket) throws Exception {
+        Replica leader = FLUSS_CLUSTER_EXTENSION.waitAndGetLeaderReplica(bucket);
+        retry(
+                Duration.ofSeconds(30),
+                () -> assertThat(leader.getKvTablet().getFlushedLogOffset()).isEqualTo(2));
+        CompletedSnapshot snapshot = FLUSS_CLUSTER_EXTENSION.triggerAndWaitSnapshot(bucket);
+        // Rebuild into a fresh RocksDB directory and check both keys and values, not just files.
+        KvTestUtils.checkSnapshot(snapshot, expectedKeyValues(), 2);
+    }
+
+    private static void verifyReplicaRecovery(TableBucket bucket) throws Exception {
+        int oldLeader = FLUSS_CLUSTER_EXTENSION.waitAndGetLeader(bucket);
+        Replica original = FLUSS_CLUSTER_EXTENSION.waitAndGetLeaderReplica(bucket);
+        retry(
+                Duration.ofSeconds(30),
+                () ->
+                        assertThat(original.getKvSnapshotManager().getSnapshotSize())
+                                .isGreaterThan(0));
+        long snapshotSize = original.getKvSnapshotManager().getSnapshotSize();
+        FLUSS_CLUSTER_EXTENSION.stopTabletServer(oldLeader);
+        try {
+            Replica recovered = FLUSS_CLUSTER_EXTENSION.waitAndGetLeaderReplica(bucket);
+            assertThat(FLUSS_CLUSTER_EXTENSION.waitAndGetLeader(bucket)).isNotEqualTo(oldLeader);
+            // Followers have no KV tablet; the new leader must restore the committed snapshot.
+            retry(
+                    Duration.ofSeconds(30),
+                    () -> {
+                        assertThat(recovered.getKvTablet()).isNotNull();
+                        // A log-only rebuild starts with snapshot size zero.
+                        assertThat(recovered.getKvSnapshotManager().getSnapshotSize())
+                                .isEqualTo(snapshotSize);
+                        for (Tuple2<byte[], byte[]> entry : expectedKeyValues()) {
+                            assertThat(
+                                            recovered
+                                                    .getKvTablet()
+                                                    .multiGet(Collections.singletonList(entry.f0))
+                                                    .get(0)
+                                                    .toByteArray())
+                                    .isEqualTo(entry.f1);
+                        }
+                    });
+        } finally {
+            FLUSS_CLUSTER_EXTENSION.startTabletServer(oldLeader);
+            FLUSS_CLUSTER_EXTENSION.waitUntilAllReplicaReady(bucket);
+        }
     }
 
     private static Configuration initConfig() {
         Configuration conf = new Configuration();
         conf.setInt(ConfigOptions.DEFAULT_BUCKET_NUMBER, 1);
         conf.setInt(ConfigOptions.DEFAULT_REPLICATION_FACTOR, 3);
-        // Set a shorter interval for testing purpose
-        conf.set(ConfigOptions.KV_SNAPSHOT_INTERVAL, Duration.ofSeconds(1));
+        // Trigger snapshots explicitly after successful writes.
+        conf.set(ConfigOptions.KV_SNAPSHOT_INTERVAL, Duration.ofHours(1));
         return conf;
     }
 }

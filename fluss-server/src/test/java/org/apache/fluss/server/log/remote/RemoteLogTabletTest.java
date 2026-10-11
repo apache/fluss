@@ -147,8 +147,7 @@ class RemoteLogTabletTest extends RemoteLogTestBase {
                 new RemoteLogManifest(
                         logTablet.getPhysicalTablePath(),
                         logTablet.getTableBucket(),
-                        remoteLogSegments,
-                        remoteLogTablet.getRemoteLogDir()));
+                        remoteLogSegments));
     }
 
     @ParameterizedTest

@@ -30,6 +30,8 @@ import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.record.MemoryLogRecords;
+import org.apache.fluss.remote.RemoteLogFetchInfo;
 import org.apache.fluss.remote.RemoteLogManifest;
 import org.apache.fluss.remote.RemoteLogSegment;
 import org.apache.fluss.rpc.entity.FetchLogResultForBucket;
@@ -49,6 +51,7 @@ import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.PartitionRegistration;
 import org.apache.fluss.server.zk.data.TableRegistration;
 import org.apache.fluss.utils.FlussPaths;
+import org.apache.fluss.utils.IOUtils;
 import org.apache.fluss.utils.clock.ManualClock;
 
 import org.junit.jupiter.api.BeforeEach;
@@ -57,6 +60,7 @@ import org.junit.jupiter.api.extension.RegisterExtension;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
+import java.io.InputStream;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -71,6 +75,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.stream.Collectors;
 
 import static org.apache.fluss.record.TestData.DATA1;
+import static org.apache.fluss.record.TestData.DATA1_ROW_TYPE;
 import static org.apache.fluss.record.TestData.DATA1_SCHEMA;
 import static org.apache.fluss.record.TestData.DATA1_SCHEMA_PK;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_DESCRIPTOR;
@@ -82,6 +87,7 @@ import static org.apache.fluss.server.testutils.RpcMessageTestUtils.newAlterTabl
 import static org.apache.fluss.server.testutils.RpcMessageTestUtils.newDropTableRequest;
 import static org.apache.fluss.server.testutils.RpcMessageTestUtils.newProduceLogRequest;
 import static org.apache.fluss.server.testutils.RpcMessageTestUtils.newPutKvRequest;
+import static org.apache.fluss.testutils.DataTestUtils.assertLogRecordsEquals;
 import static org.apache.fluss.testutils.DataTestUtils.genKvRecordBatch;
 import static org.apache.fluss.testutils.DataTestUtils.genMemoryLogRecordsByObject;
 import static org.apache.fluss.testutils.DataTestUtils.genMemoryLogRecordsWithWriterId;
@@ -168,7 +174,9 @@ public class RemoteLogITCase {
         // test create: verify remote log created
         FsPath fsPath =
                 FlussPaths.remoteLogTabletDir(
-                        manifest.getRemoteLogDir(), PhysicalTablePath.of(DATA1_TABLE_PATH), tb);
+                        remoteLogTablet.getRemoteLogDir(),
+                        PhysicalTablePath.of(DATA1_TABLE_PATH),
+                        tb);
         FileSystem fileSystem = fsPath.getFileSystem();
         assertThat(fileSystem.exists(fsPath)).isTrue();
         assertThat(fileSystem.listStatus(fsPath).length).isGreaterThan(0);
@@ -290,6 +298,49 @@ public class RemoteLogITCase {
         }
     }
 
+    private void verifyRemoteLogReadback(TableBucket bucket, FsPath expectedTabletDir)
+            throws Exception {
+        Replica leader = FLUSS_CLUSTER_EXTENSION.waitAndGetLeaderReplica(bucket);
+        retry(
+                Duration.ofSeconds(30),
+                () -> assertThat(leader.getLogTablet().localLogStartOffset()).isGreaterThan(0));
+        int leaderId = FLUSS_CLUSTER_EXTENSION.waitAndGetLeader(bucket);
+        CompletableFuture<Map<TableBucket, FetchLogResultForBucket>> future =
+                new CompletableFuture<>();
+        FLUSS_CLUSTER_EXTENSION
+                .getTabletServerById(leaderId)
+                .getReplicaManager()
+                .fetchLogRecords(
+                        new FetchParams(-1, Integer.MAX_VALUE),
+                        Collections.singletonMap(
+                                bucket, new FetchReqInfo(bucket.getTableId(), 0, 10240)),
+                        null,
+                        future::complete);
+        FetchLogResultForBucket result = future.get().get(bucket);
+        assertThat(result.getError()).isEqualTo(ApiError.NONE);
+        assertThat(result.fetchFromRemote()).isTrue();
+        RemoteLogFetchInfo info = result.remoteLogFetchInfo();
+        assertThat(new FsPath(info.remoteLogTabletDir())).isEqualTo(expectedTabletDir);
+        RemoteLogSegment segment = info.remoteLogSegmentList().get(0);
+        FsPath logFile =
+                FlussPaths.remoteLogSegmentFile(
+                        new FsPath(
+                                info.remoteLogTabletDir(), segment.remoteLogSegmentId().toString()),
+                        segment.remoteLogStartOffset());
+        byte[] data = new byte[segment.segmentSizeInBytes()];
+        try (InputStream input = logFile.getFileSystem().open(logFile)) {
+            IOUtils.readFully(input, data);
+        }
+        MemoryLogRecords records =
+                MemoryLogRecords.pointToBytes(
+                        data, info.firstStartPos(), data.length - info.firstStartPos());
+        int firstBatchSize = records.batches().iterator().next().sizeInBytes();
+        assertLogRecordsEquals(
+                DATA1_ROW_TYPE,
+                MemoryLogRecords.pointToBytes(data, info.firstStartPos(), firstBatchSize),
+                DATA1);
+    }
+
     @ParameterizedTest
     @ValueSource(booleans = {true, false})
     void testRemoteLogTieredToMultipleDirsForNonPartitionedTable(boolean isPrimaryTable)
@@ -373,6 +424,7 @@ public class RemoteLogITCase {
         // Collect the remote data directories used by each table
         // The remote log dir is derived from table's remoteDataDir: {remoteDataDir}/log
         Set<String> usedRemoteDataDirs = new HashSet<>();
+        boolean fetchedFromNonDefaultDir = false;
         for (int t = 0; t < tableCount; t++) {
             Optional<TableRegistration> tableOpt = zkClient.getTable(tablePaths.get(t));
             assertThat(tableOpt).isPresent();
@@ -391,9 +443,16 @@ public class RemoteLogITCase {
             FileStatus[] fileStatuses =
                     remoteLogTabletDir.getFileSystem().listStatus(remoteLogTabletDir);
             assertThat(fileStatuses).isNotEmpty();
+            if (!isPrimaryTable && remoteLogDir.getParent().getName().equals("dir2")) {
+                verifyRemoteLogReadback(tb, remoteLogTabletDir);
+                fetchedFromNonDefaultDir = true;
+            }
         }
 
         assertThat(usedRemoteDataDirs).hasSameSizeAs(REMOTE_DIR_NAMES);
+        if (!isPrimaryTable) {
+            assertThat(fetchedFromNonDefaultDir).isTrue();
+        }
     }
 
     @ParameterizedTest
@@ -506,6 +565,7 @@ public class RemoteLogITCase {
 
         // Collect the remote data directories used by each partition
         Set<String> usedRemoteDataDirs = new HashSet<>();
+        boolean fetchedFromNonDefaultDir = false;
         for (int p = 0; p < partitionCount; p++) {
             String partitionName = partitionNames.get(p);
             Long partitionId = partitionRegistrations.get(partitionName).getPartitionId();
@@ -527,10 +587,17 @@ public class RemoteLogITCase {
             FileStatus[] fileStatuses =
                     remoteLogTabletDir.getFileSystem().listStatus(remoteLogTabletDir);
             assertThat(fileStatuses).isNotEmpty();
+            if (!isPrimaryTable && remoteLogDir.getParent().getName().equals("dir2")) {
+                verifyRemoteLogReadback(tb, remoteLogTabletDir);
+                fetchedFromNonDefaultDir = true;
+            }
         }
 
         // All configured remote dirs should be used due to round-robin distribution
         assertThat(usedRemoteDataDirs).hasSameSizeAs(REMOTE_DIR_NAMES);
+        if (!isPrimaryTable) {
+            assertThat(fetchedFromNonDefaultDir).isTrue();
+        }
     }
 
     @Test
