@@ -23,7 +23,11 @@ import org.apache.fluss.exception.InvalidAlterTableException;
 import org.apache.fluss.exception.InvalidConfigException;
 import org.apache.fluss.exception.InvalidDatabaseException;
 import org.apache.fluss.exception.InvalidTableException;
+import org.apache.fluss.metadata.AggFunction;
+import org.apache.fluss.metadata.AggFunctionType;
+import org.apache.fluss.metadata.AggFunctions;
 import org.apache.fluss.metadata.DataLakeFormat;
+import org.apache.fluss.metadata.MergeEngineType;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
@@ -299,6 +303,32 @@ class TableDescriptorValidationTest {
                                         DataLakeFormat.ICEBERG))
                 .isInstanceOf(InvalidConfigException.class)
                 .hasMessageContaining("Custom lake table path is only supported for Paimon");
+    }
+
+    @Test
+    void testCreateTableWithLastNWithoutSizeFails() {
+        assertThatCode(() -> validate(lastNTable(AggFunctions.LAST_N(3)), null))
+                .doesNotThrowAnyException();
+
+        assertThatThrownBy(
+                        () -> validate(lastNTable(AggFunctions.of(AggFunctionType.LAST_N)), null))
+                .isInstanceOf(InvalidConfigException.class)
+                .hasMessageContaining("events")
+                .hasMessageContaining("'size' is required");
+    }
+
+    private static TableDescriptor lastNTable(AggFunction lastN) {
+        return TableDescriptor.builder()
+                .schema(
+                        Schema.newBuilder()
+                                .column("id", DataTypes.INT())
+                                .column("events", DataTypes.ARRAY(DataTypes.STRING()), lastN)
+                                .primaryKey("id")
+                                .build())
+                .distributedBy(1)
+                .property(ConfigOptions.TABLE_REPLICATION_FACTOR, 1)
+                .property(ConfigOptions.TABLE_MERGE_ENGINE, MergeEngineType.AGGREGATION)
+                .build();
     }
 
     private static Stream<Arguments> supportedKvTTLTimeColumnTypes() {

@@ -27,6 +27,7 @@ import java.util.Locale;
 import java.util.Set;
 
 import static org.apache.fluss.metadata.AggFunctions.PARAM_DELIMITER;
+import static org.apache.fluss.metadata.AggFunctions.PARAM_SIZE;
 import static org.apache.fluss.utils.Preconditions.checkArgument;
 
 /**
@@ -106,9 +107,24 @@ public enum AggFunctionType {
                 // LISTAGG and STRING_AGG support optional "delimiter" parameter
                 return Collections.singleton(PARAM_DELIMITER);
             case LAST_N:
-                return Collections.singleton(AggFunctions.PARAM_SIZE);
+                return Collections.singleton(PARAM_SIZE);
             default:
                 // All other functions do not accept parameters
+                return Collections.emptySet();
+        }
+    }
+
+    /**
+     * Returns the set of parameter names that must be provided for this aggregation function.
+     *
+     * @return an immutable set of required parameter names
+     */
+    public Set<String> getRequiredParameters() {
+        switch (this) {
+            case LAST_N:
+                // LAST_N has no default for "size"
+                return Collections.singleton(PARAM_SIZE);
+            default:
                 return Collections.emptySet();
         }
     }

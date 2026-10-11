@@ -32,6 +32,12 @@ public class FieldLastNAgg extends FieldAggregator {
     private final int size;
     private final InternalArray.ElementGetter elementGetter;
 
+    /**
+     * Creates a LAST_N aggregator.
+     *
+     * @param dataType the array type of the aggregated column
+     * @param size the number of elements to keep, must be positive
+     */
     public FieldLastNAgg(ArrayType dataType, int size) {
         super(dataType);
         checkArgument(size > 0, "size must be positive, but was %s", size);

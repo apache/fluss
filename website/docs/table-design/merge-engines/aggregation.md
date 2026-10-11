@@ -1094,12 +1094,15 @@ TableDescriptor.builder()
 
 Appends input arrays to the stored array and keeps the last `size` elements.
 
-- **Supported Data Types**: `ARRAY`
-- **Behavior**: Appends the input elements, then drops the oldest elements beyond `size`
+- **Supported Data Types**: `ARRAY` of any element type
+- **Behavior**: Appends the input elements, then drops the oldest elements beyond `size`. The first write for a key is trimmed as well
+- **Ordering**: Elements are kept in the order writes reach the server. With the default `'sink.distribution-mode'`, Flink writes for the same key go through a single sink task, so the order follows the input. Independent clients writing to the same key may interleave
 - **Null Handling**: A null input leaves the column unchanged
-- **Size**: Required, a positive integer
+- **Size**: Required, a positive integer. Creating a table without it fails
 
-Every update rewrites the stored array, so it is best suited to small `size` values.
+:::note
+Every update rewrites the whole stored array. With the default `'table.changelog.image' = 'full'`, both the old and the new array are also written to the changelog on every update. Keep `size` small.
+:::
 
 **Example:**
 <Tabs>
