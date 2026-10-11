@@ -64,9 +64,15 @@ case class LogChangesIterator(
       }
   }
 
-  private var recordsIterator = SingleElementHeadIterator.addElementToHead(
-    sortedLogRecords.head,
-    CloseableIterator.wrap(sortedLogRecords.tail.toIterator.asJava))
+  private var recordsIterator: CloseableIterator[ScanRecord] = {
+    if (sortedLogRecords.isEmpty) {
+      CloseableIterator.emptyIterator[ScanRecord]()
+    } else {
+      SingleElementHeadIterator.addElementToHead(
+        sortedLogRecords.head,
+        CloseableIterator.wrap(sortedLogRecords.tail.toIterator.asJava))
+    }
+  }
 
   private var currentScanRecord: ScanRecord = _
 

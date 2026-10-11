@@ -44,6 +44,11 @@ class FlussAppendPartitionReader(
   // Iterator for current batch of records
   private var currentRecords: java.util.Iterator[ScanRecord] = java.util.Collections.emptyIterator()
 
+  // The scanner may advance a bucket without returning materialized records, for example when
+  // records are filtered out. Apply this offset only after all records in the current batch have
+  // been consumed so that records returned in the same batch are not skipped.
+  private var currentBatchConsumedUpToOffset: Option[Long] = None
+
   // The latest offset of fluss is -2
   private var currentOffset: Long = flussPartition.startOffset.max(0L)
 
@@ -58,33 +63,48 @@ class FlussAppendPartitionReader(
 
   private def pollMoreRecords(): Unit = {
     val scanRecords = logScanner.poll(POLL_TIMEOUT)
-    if ((scanRecords == null || scanRecords.isEmpty) && currentOffset < flussPartition.stopOffset) {
-      throw new IllegalStateException(s"No more data from fluss server," +
-        s" but current offset $currentOffset not reach the stop offset ${flussPartition.stopOffset}")
+    if (scanRecords == null) {
+      currentBatchConsumedUpToOffset = None
+      currentRecords = java.util.Collections.emptyIterator()
+    } else {
+      currentBatchConsumedUpToOffset =
+        Option(scanRecords.consumedUpToOffset(tableBucket)).map(_.longValue())
+      currentRecords = scanRecords.records(tableBucket).iterator()
     }
-    currentRecords = scanRecords.records(tableBucket).iterator()
+  }
+
+  private def advanceCurrentBatch(): Unit = {
+    currentBatchConsumedUpToOffset.foreach {
+      consumedUpToOffset => currentOffset = math.max(currentOffset, consumedUpToOffset)
+    }
+    currentBatchConsumedUpToOffset = None
   }
 
   override def next0(): Boolean = {
     while (!closed && !reachedWindowEnd && currentOffset < flussPartition.stopOffset) {
       if (!currentRecords.hasNext) {
+        advanceCurrentBatch()
+        if (currentOffset >= flussPartition.stopOffset) {
+          return false
+        }
         pollMoreRecords()
       }
       if (!currentRecords.hasNext) {
-        throw new IllegalStateException(s"No more data from fluss server," +
-          s" but current offset $currentOffset not reach the stop offset ${flussPartition.stopOffset}")
-      }
-
-      val scanRecord = currentRecords.next()
-      currentOffset = scanRecord.logOffset() + 1
-      timeRange match {
-        case Some(range) if range.isAfter(scanRecord.timestamp()) => reachedWindowEnd = true
-        // The record precedes the requested window: the start offset resolved from the start
-        // timestamp is only time-index accurate on tiered segments, so it can undershoot.
-        case Some(range) if !range.contains(scanRecord.timestamp()) => // skip
-        case _ =>
-          currentRow = convertToSparkRow(scanRecord)
-          return true
+        // An empty poll can be a timeout or a progress-only batch. Keep polling; a progress-only
+        // batch is committed above on the next loop iteration.
+        advanceCurrentBatch()
+      } else {
+        val scanRecord = currentRecords.next()
+        currentOffset = scanRecord.logOffset() + 1
+        timeRange match {
+          case Some(range) if range.isAfter(scanRecord.timestamp()) => reachedWindowEnd = true
+          // The record precedes the requested window: the start offset resolved from the start
+          // timestamp is only time-index accurate on tiered segments, so it can undershoot.
+          case Some(range) if !range.contains(scanRecord.timestamp()) => // skip
+          case _ =>
+            currentRow = convertToSparkRow(scanRecord)
+            return true
+        }
       }
     }
     false
