@@ -26,6 +26,7 @@ import org.apache.fluss.predicate.Predicate;
 import org.apache.fluss.predicate.PredicateBuilder;
 import org.apache.fluss.record.LogRecord;
 import org.apache.fluss.row.BinaryString;
+import org.apache.fluss.row.TimestampNtz;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.types.IntType;
 import org.apache.fluss.types.RowType;
@@ -41,6 +42,8 @@ import org.apache.iceberg.types.Types;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
+import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
@@ -71,6 +74,19 @@ class IcebergLakeSourceTest extends IcebergSourceTestBase {
 
     private static final PredicateBuilder FLUSS_BUILDER_TINYINT =
             new PredicateBuilder(RowType.of(DataTypes.TINYINT(), DataTypes.STRING()));
+
+    private static final Schema TEMPORAL_SCHEMA =
+            new Schema(
+                    required(1, "id", Types.IntegerType.get()),
+                    optional(2, "d", Types.DateType.get()),
+                    optional(3, "ts", Types.TimestampType.withoutZone()),
+                    required(4, "__bucket", Types.IntegerType.get()),
+                    required(5, "__offset", Types.LongType.get()),
+                    required(6, "__timestamp", Types.TimestampType.withZone()));
+
+    private static final PredicateBuilder FLUSS_TEMPORAL_BUILDER =
+            new PredicateBuilder(
+                    RowType.of(DataTypes.INT(), DataTypes.DATE(), DataTypes.TIMESTAMP(6)));
 
     @BeforeAll
     protected static void beforeAll() {
@@ -184,6 +200,51 @@ class IcebergLakeSourceTest extends IcebergSourceTestBase {
     }
 
     @Test
+    void testWithTemporalFilters() throws Exception {
+        TablePath tablePath = TablePath.of("fluss", "test_filters_temporal");
+        createTable(
+                tablePath,
+                TEMPORAL_SCHEMA,
+                PartitionSpec.builderFor(TEMPORAL_SCHEMA).bucket("id", DEFAULT_BUCKET_NUM).build());
+
+        Table table = getTable(tablePath);
+        writeRecord(table, temporalRows(1, LocalDate.of(2024, 1, 1), 4), null, 0);
+        table.refresh();
+        writeRecord(table, temporalRows(14, LocalDate.of(2024, 2, 1), 3), null, 0);
+        table.refresh();
+
+        LakeSource<IcebergSplit> lakeSource = lakeStorage.createLakeSource(tablePath);
+
+        assertTemporalFilter(
+                lakeSource,
+                table,
+                FLUSS_TEMPORAL_BUILDER.lessThan(1, (int) LocalDate.of(2024, 2, 2).toEpochDay()),
+                2,
+                Arrays.asList(1, 2, 3, 4, 14));
+        assertTemporalFilter(
+                lakeSource,
+                table,
+                FLUSS_TEMPORAL_BUILDER.lessThan(1, (int) LocalDate.of(2024, 2, 1).toEpochDay()),
+                1,
+                Arrays.asList(1, 2, 3, 4));
+
+        LocalDateTime februaryMin = LocalDateTime.of(2024, 2, 1, 10, 0, 0, 123_456_000);
+        assertTemporalFilter(
+                lakeSource,
+                table,
+                FLUSS_TEMPORAL_BUILDER.lessThan(
+                        2, TimestampNtz.fromLocalDateTime(februaryMin.plusNanos(1000))),
+                2,
+                Arrays.asList(1, 2, 3, 4, 14));
+        assertTemporalFilter(
+                lakeSource,
+                table,
+                FLUSS_TEMPORAL_BUILDER.lessThan(2, TimestampNtz.fromLocalDateTime(februaryMin)),
+                1,
+                Arrays.asList(1, 2, 3, 4));
+    }
+
+    @Test
     void testWithTinyIntFilter() throws Exception {
         TablePath tablePath = TablePath.of("fluss", "test_filters_tinyint");
         createTable(tablePath, SCHEMA, PARTITION_SPEC);
@@ -230,5 +291,54 @@ class IcebergLakeSourceTest extends IcebergSourceTestBase {
                             TransformingCloseableIterator.transform(iterator, LogRecord::getRow)));
         }
         assertThat(actual.toString()).isEqualTo("[+I[2, name2], +I[3, name3]]");
+    }
+
+    private static void assertTemporalFilter(
+            LakeSource<IcebergSplit> lakeSource,
+            Table table,
+            Predicate filter,
+            int expectedFileCount,
+            List<Integer> expectedIds)
+            throws Exception {
+        List<Predicate> filters = Collections.singletonList(filter);
+        LakeSource.FilterPushDownResult filterPushDownResult = lakeSource.withFilters(filters);
+        assertThat(filterPushDownResult.acceptedPredicates()).isEqualTo(filters);
+        assertThat(filterPushDownResult.remainingPredicates()).isEmpty();
+
+        List<IcebergSplit> icebergSplits =
+                lakeSource.createPlanner(() -> table.currentSnapshot().snapshotId()).plan();
+        assertThat(icebergSplits)
+                .as("planned data files for %s", filter)
+                .hasSize(expectedFileCount);
+
+        List<Integer> ids = new ArrayList<>();
+        for (IcebergSplit icebergSplit : icebergSplits) {
+            RecordReader recordReader = lakeSource.createRecordReader(() -> icebergSplit);
+            try (CloseableIterator<LogRecord> iterator = recordReader.read()) {
+                while (iterator.hasNext()) {
+                    ids.add(iterator.next().getRow().getInt(0));
+                }
+            }
+        }
+        Collections.sort(ids);
+        assertThat(ids).as("rows read for %s", filter).isEqualTo(expectedIds);
+    }
+
+    private List<Record> temporalRows(int fromId, LocalDate fromDate, int count) {
+        List<Record> rows = new ArrayList<>();
+        for (int i = 0; i < count; i++) {
+            int id = fromId + i;
+            LocalDateTime timestamp = fromDate.plusDays(i).atTime(10, 0, 0, 123_456_000);
+            rows.add(
+                    createIcebergRecord(
+                            TEMPORAL_SCHEMA,
+                            id,
+                            timestamp.toLocalDate(),
+                            timestamp,
+                            0,
+                            (long) id,
+                            OffsetDateTime.now(ZoneOffset.UTC)));
+        }
+        return rows;
     }
 }

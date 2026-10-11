@@ -21,10 +21,13 @@ package org.apache.fluss.lake.iceberg.utils;
 import org.apache.fluss.predicate.Predicate;
 import org.apache.fluss.predicate.PredicateBuilder;
 import org.apache.fluss.row.BinaryString;
+import org.apache.fluss.row.TimestampLtz;
+import org.apache.fluss.row.TimestampNtz;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.types.RowType;
 
 import org.apache.iceberg.Schema;
+import org.apache.iceberg.expressions.Binder;
 import org.apache.iceberg.expressions.Expression;
 import org.apache.iceberg.expressions.Expressions;
 import org.apache.iceberg.types.Types;
@@ -32,6 +35,11 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 
+import java.time.Instant;
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.LocalTime;
+import java.time.temporal.ChronoUnit;
 import java.util.Arrays;
 import java.util.Optional;
 import java.util.stream.Collectors;
@@ -40,6 +48,7 @@ import java.util.stream.Stream;
 import static org.apache.fluss.row.BinaryString.fromString;
 import static org.apache.iceberg.types.Types.NestedField.optional;
 import static org.apache.iceberg.types.Types.NestedField.required;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.AssertionsForClassTypes.assertThat;
 
 /** Test for {@link FlussToIcebergPredicateConverter}. */
@@ -51,13 +60,27 @@ class FlussToIcebergPredicateConverterTest {
                             .field("f1", DataTypes.BIGINT())
                             .field("f2", DataTypes.DOUBLE())
                             .field("f3", DataTypes.STRING())
+                            .field("f4", DataTypes.DATE())
+                            .field("f5", DataTypes.TIME())
+                            .field("f6", DataTypes.TIMESTAMP(6))
+                            .field("f7", DataTypes.TIMESTAMP_LTZ(6))
                             .build());
 
     private static final Schema ICEBERG_SCHEMA =
             new Schema(
                     required(1, "f1", Types.LongType.get()),
                     optional(2, "f2", Types.DoubleType.get()),
-                    required(3, "f3", Types.StringType.get()));
+                    required(3, "f3", Types.StringType.get()),
+                    optional(4, "f4", Types.DateType.get()),
+                    optional(5, "f5", Types.TimeType.get()),
+                    optional(6, "f6", Types.TimestampType.withoutZone()),
+                    optional(7, "f7", Types.TimestampType.withZone()));
+
+    private static final int DAYS = (int) LocalDate.parse("2024-01-15").toEpochDay();
+    private static final int MILLIS_OF_DAY =
+            (int) (LocalTime.parse("12:34:56.789").toNanoOfDay() / 1_000_000);
+    private static final long MICROS =
+            ChronoUnit.MICROS.between(Instant.EPOCH, Instant.parse("2024-01-15T12:34:56.789123Z"));
 
     public static Stream<Arguments> parameters() {
         // A comprehensive set of test cases for different predicate types.
@@ -120,6 +143,17 @@ class FlussToIcebergPredicateConverterTest {
                 Arguments.of(
                         FLUSS_BUILDER.startsWith(2, fromString("start")),
                         Expressions.startsWith("f3", "start")),
+                Arguments.of(
+                        FLUSS_BUILDER.greaterThan(3, DAYS), Expressions.greaterThan("f4", DAYS)),
+                Arguments.of(
+                        FLUSS_BUILDER.lessThan(4, MILLIS_OF_DAY),
+                        Expressions.lessThan("f5", MILLIS_OF_DAY * 1000L)),
+                Arguments.of(
+                        FLUSS_BUILDER.greaterOrEqual(5, TimestampNtz.fromMicros(MICROS)),
+                        Expressions.greaterThanOrEqual("f6", MICROS)),
+                Arguments.of(
+                        FLUSS_BUILDER.notEqual(6, TimestampLtz.fromEpochMicros(MICROS)),
+                        Expressions.notEqual("f7", MICROS)),
 
                 // Compound Predicates
                 Arguments.of(
@@ -154,12 +188,30 @@ class FlussToIcebergPredicateConverterTest {
         Expression convertedIcebergExpression =
                 FlussToIcebergPredicateConverter.convert(ICEBERG_SCHEMA, flussPredicate).get();
         assertThat(convertedIcebergExpression.toString()).isEqualTo(expectedPredicate.toString());
+        assertThatCode(
+                        () ->
+                                Binder.bind(
+                                        ICEBERG_SCHEMA.asStruct(),
+                                        convertedIcebergExpression,
+                                        true))
+                .doesNotThrowAnyException();
     }
 
     public static Stream<Arguments> parametersNotSupported() {
         return Stream.of(
                 Arguments.of(FLUSS_BUILDER.endsWith(2, fromString("end"))),
-                Arguments.of(FLUSS_BUILDER.contains(2, fromString("mid"))));
+                Arguments.of(FLUSS_BUILDER.contains(2, fromString("mid"))),
+                Arguments.of(
+                        FLUSS_BUILDER.lessThan(
+                                5,
+                                TimestampNtz.fromLocalDateTime(
+                                        LocalDateTime.parse("2024-01-15T12:34:56.789123500")))),
+                Arguments.of(
+                        FLUSS_BUILDER.notEqual(
+                                6,
+                                TimestampLtz.fromInstant(
+                                        Instant.parse("2024-01-15T12:34:56.789123500Z")))),
+                Arguments.of(FLUSS_BUILDER.equal(0, null)));
     }
 
     @ParameterizedTest

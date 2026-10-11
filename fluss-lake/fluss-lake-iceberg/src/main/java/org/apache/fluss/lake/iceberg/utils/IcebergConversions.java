@@ -21,6 +21,8 @@ import org.apache.fluss.lake.iceberg.source.FlussRowAsIcebergRecord;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.row.InternalRow;
+import org.apache.fluss.row.TimestampLtz;
+import org.apache.fluss.row.TimestampNtz;
 import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.RowType;
 
@@ -109,11 +111,43 @@ public class IcebergConversions {
     }
 
     public static Object toIcebergLiteral(
-            Types.NestedField icebergField, DataType flussFieldType, Object flussLiteral) {
-        InternalRow flussRow = GenericRow.of(flussLiteral);
-        FlussRowAsIcebergRecord flussRowAsIcebergRecord =
-                new FlussRowAsIcebergRecord(
-                        Types.StructType.of(icebergField), RowType.of(flussFieldType), flussRow);
-        return flussRowAsIcebergRecord.get(0, icebergField.type().typeId().javaClass());
+            Types.NestedField icebergField,
+            DataType flussFieldType,
+            @Nullable Object flussLiteral) {
+        if (flussLiteral == null) {
+            throw new UnsupportedOperationException(
+                    "Iceberg expressions do not support null literals.");
+        }
+        // Iceberg literals use Iceberg's internal representation for temporal types.
+        switch (flussFieldType.getTypeRoot()) {
+            case DATE:
+                return (Integer) flussLiteral;
+            case TIME_WITHOUT_TIME_ZONE:
+                return (Integer) flussLiteral * 1000L;
+            case TIMESTAMP_WITHOUT_TIME_ZONE:
+                TimestampNtz timestampNtz = (TimestampNtz) flussLiteral;
+                checkMicrosecondPrecision(timestampNtz.getNanoOfMillisecond(), flussLiteral);
+                return timestampNtz.toEpochMicros();
+            case TIMESTAMP_WITH_LOCAL_TIME_ZONE:
+                TimestampLtz timestampLtz = (TimestampLtz) flussLiteral;
+                checkMicrosecondPrecision(timestampLtz.getNanoOfMillisecond(), flussLiteral);
+                return timestampLtz.toEpochMicros();
+            default:
+                InternalRow flussRow = GenericRow.of(flussLiteral);
+                FlussRowAsIcebergRecord flussRowAsIcebergRecord =
+                        new FlussRowAsIcebergRecord(
+                                Types.StructType.of(icebergField),
+                                RowType.of(flussFieldType),
+                                flussRow);
+                return flussRowAsIcebergRecord.get(0, icebergField.type().typeId().javaClass());
+        }
+    }
+
+    private static void checkMicrosecondPrecision(int nanoOfMillisecond, Object flussLiteral) {
+        // Iceberg timestamps are in microseconds, so a finer literal would have to be truncated.
+        if (nanoOfMillisecond % 1000 != 0) {
+            throw new UnsupportedOperationException(
+                    "Iceberg timestamps do not support sub-microsecond literal " + flussLiteral);
+        }
     }
 }
