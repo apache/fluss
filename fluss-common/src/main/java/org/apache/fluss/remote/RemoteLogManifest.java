@@ -17,7 +17,6 @@
 
 package org.apache.fluss.remote;
 
-import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
 
@@ -255,7 +254,6 @@ public class RemoteLogManifest {
         return tableBucket;
     }
 
-    @VisibleForTesting
     public List<RemoteLogSegment> getRemoteLogSegmentList() {
         return remoteLogSegmentList;
     }

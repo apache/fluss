@@ -102,7 +102,6 @@ public class RemoteLogManifestJsonSerde
             generator.writeEndObject();
         }
         generator.writeEndArray();
-
         generator.writeEndObject();
     }
 

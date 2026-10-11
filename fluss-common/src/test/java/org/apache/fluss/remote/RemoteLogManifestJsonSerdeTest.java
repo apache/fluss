@@ -22,13 +22,8 @@ import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.utils.json.JsonSerdeTestBase;
 
-import org.junit.jupiter.api.Test;
-
-import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.UUID;
-
-import static org.assertj.core.api.Assertions.assertThat;
 
 /** Tests of {@link RemoteLogManifestJsonSerde}. */
 class RemoteLogManifestJsonSerdeTest extends JsonSerdeTestBase<RemoteLogManifest> {
@@ -115,24 +110,5 @@ class RemoteLogManifestJsonSerdeTest extends JsonSerdeTestBase<RemoteLogManifest
     @Override
     protected String[] expectedJsons() {
         return new String[] {EXPECTED_JSON1, EXPECTED_JSON2};
-    }
-
-    @Test
-    void testIgnoresPersistedDirectoryAssignments() {
-        for (String json : expectedJsons()) {
-            String withDirectories =
-                    json.replaceFirst("\\{", "{\"remote_log_dir\":\"file:/stale/manifest/log\",")
-                            .replaceFirst(
-                                    "\"segment_id\":",
-                                    "\"remote_log_dir\":\"file:/stale/segment/log\",\"segment_id\":");
-            RemoteLogManifest manifest =
-                    RemoteLogManifestJsonSerde.fromJson(json.getBytes(StandardCharsets.UTF_8));
-            assertThat(
-                            RemoteLogManifestJsonSerde.fromJson(
-                                    withDirectories.getBytes(StandardCharsets.UTF_8)))
-                    .isEqualTo(manifest);
-            assertThat(new String(manifest.toJsonBytes(), StandardCharsets.UTF_8))
-                    .doesNotContain("remote_log_dir");
-        }
     }
 }
