@@ -110,6 +110,17 @@ public class IcebergConversions {
         return expression;
     }
 
+    /**
+     * Converts a Fluss predicate literal into a literal usable in an Iceberg {@link Expression}.
+     *
+     * <p>Temporal literals are converted to Iceberg's internal representation: DATE as int days
+     * since epoch, TIME as long microseconds of day, and TIMESTAMP / TIMESTAMP_LTZ as long
+     * microseconds since epoch.
+     *
+     * @throws UnsupportedOperationException if the literal cannot be represented exactly in an
+     *     Iceberg expression (null literals or sub-microsecond timestamps), meaning the predicate
+     *     must not be pushed down.
+     */
     public static Object toIcebergLiteral(
             Types.NestedField icebergField,
             DataType flussFieldType,
