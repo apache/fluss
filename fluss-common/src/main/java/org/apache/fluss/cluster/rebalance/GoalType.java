@@ -44,7 +44,13 @@ public enum GoalType {
      * Goal to generate replica movement tasks to ensure that the number of replicas on each
      * tabletServer is near balanced and the replicas are distributed across racks.
      */
-    RACK_AWARE(2);
+    RACK_AWARE(2),
+
+    /**
+     * Goal to move leadership to the first replica in each persisted bucket assignment without
+     * changing replica assignments.
+     */
+    PREFERRED_LEADER_ELECTION(3);
 
     public final int value;
 
@@ -59,6 +65,8 @@ public enum GoalType {
             return LEADER_DISTRIBUTION;
         } else if (value == RACK_AWARE.value) {
             return RACK_AWARE;
+        } else if (value == PREFERRED_LEADER_ELECTION.value) {
+            return PREFERRED_LEADER_ELECTION;
         } else {
             throw new IllegalArgumentException(
                     String.format(
