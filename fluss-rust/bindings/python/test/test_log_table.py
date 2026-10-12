@@ -412,6 +412,7 @@ async def test_poll_batches(connection, admin, wait_for_table_ready):
 
     checked = 0
     for batch in batches:
+        assert batch.schema_id == table.get_table_info().schema_id
         for offset in range(batch.base_offset, batch.last_offset + 1):
             assert offset in timestamp_by_offset, (
                 f"the record path never reported offset {offset}"

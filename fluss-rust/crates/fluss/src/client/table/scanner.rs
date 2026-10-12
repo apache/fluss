@@ -2351,6 +2351,7 @@ impl LogFetcher {
                                     fetched.base_offset,
                                 )
                                 .with_commit_timestamp(fetched.commit_timestamp)
+                                .with_schema_id(fetched.schema_id)
                             })
                             .collect(),
                     ))

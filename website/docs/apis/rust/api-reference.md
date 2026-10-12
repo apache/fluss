@@ -288,6 +288,7 @@ for record in records {
 | `fn base_offset(&self) -> i64`      | First record offset               |
 | `fn last_offset(&self) -> i64`      | Last record offset                |
 | `fn commit_timestamp(&self) -> i64` | Commit time in epoch milliseconds |
+| `fn schema_id(&self) -> i32`      | Schema ID from the source log batch |
 | `fn num_records(&self) -> usize`    | Number of records in the batch    |
 
 `commit_timestamp` is `fluss::record::NO_COMMIT_TIMESTAMP` (`-1`) when the batch

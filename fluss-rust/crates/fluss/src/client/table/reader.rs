@@ -981,10 +981,12 @@ fn filter_batches(
         let kept_batch = if last_offset >= stop_at {
             let num_to_keep = (stop_at - base_offset) as usize;
             let commit_timestamp = scan_batch.commit_timestamp();
+            let schema_id = scan_batch.schema_id();
             let b = scan_batch.into_batch();
             let limit = num_to_keep.min(b.num_rows());
             ScanBatch::new(bucket.clone(), b.slice(0, limit), base_offset)
                 .with_commit_timestamp(commit_timestamp)
+                .with_schema_id(schema_id)
         } else {
             scan_batch
         };
@@ -1361,12 +1363,16 @@ mod tests {
     }
 
     #[test]
-    fn filter_preserves_commit_timestamps_across_buckets_and_slicing() {
+    fn filter_preserves_batch_metadata_across_buckets_and_slicing() {
         let mut offsets = HashMap::from([(bucket(0), 12), (bucket(1), 10)]);
         let mut buffer = VecDeque::new();
         let batches = vec![
-            ScanBatch::new(bucket(0), make_batch(&[1, 2, 3]), 10).with_commit_timestamp(1234),
-            ScanBatch::new(bucket(1), make_batch(&[4, 5]), 0).with_commit_timestamp(5678),
+            ScanBatch::new(bucket(0), make_batch(&[1, 2, 3]), 10)
+                .with_commit_timestamp(1234)
+                .with_schema_id(1),
+            ScanBatch::new(bucket(1), make_batch(&[4, 5]), 0)
+                .with_commit_timestamp(5678)
+                .with_schema_id(2),
         ];
 
         filter_batches(batches, &mut offsets, &mut buffer);
@@ -1375,6 +1381,8 @@ mod tests {
         assert_eq!(buffer[0].commit_timestamp(), 1234);
         assert_eq!(buffer[1].batch().num_rows(), 2);
         assert_eq!(buffer[1].commit_timestamp(), 5678);
+        assert_eq!(buffer[0].schema_id(), 1);
+        assert_eq!(buffer[1].schema_id(), 2);
     }
 
     #[test]

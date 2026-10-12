@@ -559,6 +559,7 @@ TEST_F(LogTableTest, LimitScan) {
         // A limit scan merges every log batch it read into one Arrow batch, so
         // there is no single commit timestamp to report.
         EXPECT_EQ(b->GetCommitTimestamp(), fluss::ArrowRecordBatch::NO_COMMIT_TIMESTAMP);
+        EXPECT_EQ(b->GetSchemaId(), fluss::ArrowRecordBatch::NO_SCHEMA_ID);
         rows += b->NumRows();
     }
     // The server may return fewer rows than the limit, but never more.
@@ -1078,6 +1079,7 @@ TEST_F(LogTableTest, TestPollBatches) {
 
         int checked = 0;
         for (const auto& batch : parity_batches) {
+            EXPECT_EQ(batch->GetSchemaId(), batch_table.GetTableInfo().schema_id);
             for (int64_t offset = batch->GetBaseOffset(); offset <= batch->GetLastOffset();
                  ++offset) {
                 auto found = timestamp_by_offset.find(offset);

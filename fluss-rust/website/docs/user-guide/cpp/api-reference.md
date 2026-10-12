@@ -889,6 +889,7 @@ Read-only result of a prefix lookup — zero or more matched rows. Each row is a
 | `GetBaseOffset() -> int64_t`                                   | First record offset                  |
 | `GetLastOffset() -> int64_t`                                   | Last record offset                   |
 | `GetCommitTimestamp() -> int64_t`                              | Commit time in epoch milliseconds    |
+| `GetSchemaId() -> int32_t`                                     | Schema ID from the source log batch |
 
 `GetCommitTimestamp()` returns `ArrowRecordBatch::NO_COMMIT_TIMESTAMP` (`-1`)
 when the batch carries no single timestamp, which is the case for a limit scan
