@@ -32,11 +32,11 @@ import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.cluster.AlterConfig;
 import org.apache.fluss.config.cluster.AlterConfigOpType;
-import org.apache.fluss.kafka.format.KafkaDataFormat;
 import org.apache.fluss.metadata.DatabaseDescriptor;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.TableChange;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.server.coordinator.event.RecoverRebalanceEvent;
@@ -93,7 +93,7 @@ import static org.assertj.core.api.Assertions.tuple;
 
 /** Regression coverage for native DDL lifecycle, metadata refresh, and Produce minimum ISR. */
 class KafkaProduceRegressionITCase {
-    private static final String DATABASE = "kafka";
+    private static final String DATABASE = "fluss";
     private static final short METADATA_VERSION = 11;
 
     @RegisterExtension
@@ -321,6 +321,292 @@ class KafkaProduceRegressionITCase {
         }
     }
 
+    @Test
+    void testSameProducerAliasesFollowEnablementPropertiesAndRecreation() throws Exception {
+        TablePath path = TablePath.of(DATABASE, "cached_lifecycle");
+        String full = path.toString();
+        String alias = path.getTableName();
+        try (Connection connection = ConnectionFactory.createConnection(CLUSTER.getClientConfig());
+                Admin admin = connection.getAdmin()) {
+            try {
+                createTable(admin, path, 3);
+                Uuid fullId = topicId(full);
+                Uuid aliasId = topicId(alias);
+                assertThat(aliasId).isNotEqualTo(Uuid.ZERO_UUID).isNotEqualTo(fullId);
+                try (KafkaProducer<byte[], byte[]> producer = producer("all", true)) {
+                    assertThat(send(producer, full, "full").offset()).isZero();
+                    assertThat(send(producer, alias, "alias").offset()).isEqualTo(1L);
+                    setTableEnabled(admin, path, false);
+                    assertRejectedNames(path, Errors.UNKNOWN_TOPIC_OR_PARTITION);
+                    setTableEnabled(admin, path, true);
+                    assertThat(topicId(full)).isEqualTo(fullId);
+                    assertThat(topicId(alias)).isEqualTo(aliasId);
+                    assertThat(send(producer, alias, "enabled").offset()).isEqualTo(2L);
+                    Map<String, String> properties =
+                            admin.getTableInfo(path).get().getProperties().toMap();
+                    assertThatThrownBy(
+                                    () ->
+                                            admin.alterTable(
+                                                            path,
+                                                            Collections.singletonList(
+                                                                    TableChange.set(
+                                                                            ConfigOptions
+                                                                                    .TABLE_KAFKA_CONVERT_VALUE_TYPE
+                                                                                    .key(),
+                                                                            "string")),
+                                                            false)
+                                                    .get())
+                            .isInstanceOf(ExecutionException.class);
+                    assertThat(admin.getTableInfo(path).get().getProperties().toMap())
+                            .isEqualTo(properties);
+                    admin.alterTable(
+                                    path,
+                                    Collections.singletonList(
+                                            TableChange.set(
+                                                    ConfigOptions.TABLE_KAFKA_CONVERT_VALUE_TYPE
+                                                            .key(),
+                                                    "BINARY")),
+                                    false)
+                            .get();
+                    assertThat(admin.getTableInfo(path).get().getProperties().toMap())
+                            .containsEntry(
+                                    ConfigOptions.TABLE_KAFKA_CONVERT_VALUE_TYPE.key(), "BINARY");
+                    assertThat(send(producer, full, "property").offset()).isEqualTo(3L);
+                    assertValues(connection, path, "full", "alias", "enabled", "property");
+                    admin.dropTable(path, false).get();
+                    assertRejectedNames(path, Errors.UNKNOWN_TOPIC_OR_PARTITION);
+                    createTable(admin, path, 3);
+                    assertThat(topicId(full)).isNotEqualTo(fullId).isNotEqualTo(Uuid.ZERO_UUID);
+                    assertThat(topicId(alias)).isNotEqualTo(aliasId).isNotEqualTo(Uuid.ZERO_UUID);
+                    assertThat(topicId(full)).isNotEqualTo(topicId(alias));
+                    assertThat(send(producer, full, "recreated_full").offset()).isZero();
+                    assertThat(send(producer, alias, "recreated_alias").offset()).isEqualTo(1L);
+                    assertValues(connection, path, "recreated_full", "recreated_alias");
+                }
+            } finally {
+                admin.dropTable(path, true).get();
+            }
+        }
+    }
+
+    @Test
+    void testNeverEnabledTableRejectsBothNamesWithoutAppending() throws Exception {
+        TablePath path = TablePath.of(DATABASE, "never_enabled");
+        try (Connection connection = ConnectionFactory.createConnection(CLUSTER.getClientConfig());
+                Admin admin = connection.getAdmin()) {
+            try {
+                admin.createDatabase(DATABASE, DatabaseDescriptor.EMPTY, true).get();
+                admin.createTable(
+                                path,
+                                TableDescriptor.builder()
+                                        .schema(
+                                                Schema.newBuilder()
+                                                        .column("_kafka_value", DataTypes.BYTES())
+                                                        .build())
+                                        .distributedBy(1)
+                                        .logFormat(LogFormat.ARROW)
+                                        .property(
+                                                ConfigOptions.TABLE_KAFKA_CONVERT_VALUE_TYPE,
+                                                "binary")
+                                        .build(),
+                                false)
+                        .get();
+                CLUSTER.waitUntilTableReady(admin.getTableInfo(path).get().getTableId());
+                assertRejectedNames(path, Errors.UNKNOWN_TOPIC_OR_PARTITION);
+                setTableEnabled(admin, path, true);
+                try (KafkaProducer<byte[], byte[]> producer = producer("all", true)) {
+                    assertThat(send(producer, path.getTableName(), "accepted").offset()).isZero();
+                    assertValues(connection, path, "accepted");
+                }
+            } finally {
+                admin.dropTable(path, true).get();
+            }
+        }
+    }
+
+    @Test
+    void testInvalidRecordRejectsWholePartitionBeforeNativeAppend() throws Exception {
+        TablePath path = TablePath.of(DATABASE, "atomic_conversion");
+        byte[] key = new byte[] {1};
+        try (Connection connection = ConnectionFactory.createConnection(CLUSTER.getClientConfig());
+                Admin admin = connection.getAdmin()) {
+            try {
+                admin.createDatabase(DATABASE, DatabaseDescriptor.EMPTY, true).get();
+                admin.createTable(
+                                path,
+                                TableDescriptor.builder()
+                                        .schema(
+                                                Schema.newBuilder()
+                                                        .column("_kafka_value", DataTypes.BYTES())
+                                                        .column(
+                                                                "_kafka_key",
+                                                                DataTypes.BYTES().copy(false))
+                                                        .build())
+                                        .distributedBy(1)
+                                        .logFormat(LogFormat.ARROW)
+                                        .property(ConfigOptions.TABLE_KAFKA_ENABLED, true)
+                                        .property(
+                                                ConfigOptions.TABLE_KAFKA_CONVERT_VALUE_TYPE,
+                                                "binary")
+                                        .build(),
+                                false)
+                        .get();
+                CLUSTER.waitUntilTableReady(admin.getTableInfo(path).get().getTableId());
+                try (KafkaProducer<byte[], byte[]> producer = producer("all", true)) {
+                    int leader = producer.partitionsFor(path.toString()).get(0).leader().id();
+                    ServerNode node =
+                            CLUSTER.getTabletServerNodes("KAFKA").stream()
+                                    .filter(n -> n.id() == leader)
+                                    .findFirst()
+                                    .get();
+                    try (Socket socket = connect(node)) {
+                        ProduceResponse rejected =
+                                (ProduceResponse)
+                                        sendRequest(
+                                                socket,
+                                                produceRequest(
+                                                        path.toString(),
+                                                        new SimpleRecord(
+                                                                key,
+                                                                "valid_prefix"
+                                                                        .getBytes(
+                                                                                StandardCharsets
+                                                                                        .UTF_8)),
+                                                        new SimpleRecord(
+                                                                null,
+                                                                "invalid_key"
+                                                                        .getBytes(
+                                                                                StandardCharsets
+                                                                                        .UTF_8))));
+                        assertThat(rejected.errorCounts()).containsEntry(Errors.INVALID_RECORD, 1);
+                        assertThat(
+                                        rejected.data()
+                                                .responses()
+                                                .find(path.toString())
+                                                .partitionResponses()
+                                                .get(0)
+                                                .baseOffset())
+                                .isEqualTo(-1L);
+                    }
+                    assertThat(
+                                    producer.send(
+                                                    new ProducerRecord<>(
+                                                            path.toString(),
+                                                            0,
+                                                            key,
+                                                            "accepted"
+                                                                    .getBytes(
+                                                                            StandardCharsets
+                                                                                    .UTF_8)))
+                                            .get(30, TimeUnit.SECONDS)
+                                            .offset())
+                            .isZero();
+                    assertValues(connection, path, "accepted");
+                }
+            } finally {
+                admin.dropTable(path, true).get();
+            }
+        }
+    }
+
+    @Test
+    void testReplicatedOffsetsSurviveLeaderLossAndRestart() throws Exception {
+        TablePath path = TablePath.of(DATABASE, "durable_restart");
+        int stopped = -1;
+        try (Connection connection = ConnectionFactory.createConnection(CLUSTER.getClientConfig());
+                Admin admin = connection.getAdmin()) {
+            try {
+                createTable(admin, path, 3);
+                TableBucket bucket =
+                        new TableBucket(admin.getTableInfo(path).get().getTableId(), 0);
+                MetadataResponsePartition initial =
+                        waitForTopic(path.toString())
+                                .data()
+                                .topics()
+                                .find(path.toString())
+                                .partitions()
+                                .get(0);
+                for (int replica : initial.replicaNodes()) {
+                    CLUSTER.waitUntilReplicaExpandToIsr(bucket, replica);
+                }
+                try (KafkaProducer<byte[], byte[]> producer = producer("all", true)) {
+                    assertThat(send(producer, path.toString(), "before").offset()).isZero();
+                    stopped = initial.leaderId();
+                    CLUSTER.stopTabletServer(stopped);
+                    retry(
+                            Duration.ofMinutes(1),
+                            () ->
+                                    assertThat(
+                                                    waitForTopic(path.toString())
+                                                            .data()
+                                                            .topics()
+                                                            .find(path.toString())
+                                                            .partitions()
+                                                            .get(0)
+                                                            .leaderId())
+                                            .isNotEqualTo(initial.leaderId()));
+                    assertThat(send(producer, path.toString(), "after_loss").offset())
+                            .isEqualTo(1L);
+                    CLUSTER.startTabletServer(stopped);
+                    CLUSTER.assertHasTabletServerNumber(3);
+                    CLUSTER.waitUntilReplicaExpandToIsr(bucket, stopped);
+                    assertThat(send(producer, path.getTableName(), "after_restart").offset())
+                            .isEqualTo(2L);
+                    assertValues(connection, path, "before", "after_loss", "after_restart");
+                }
+            } finally {
+                if (stopped >= 0 && CLUSTER.getTabletServerById(stopped) == null) {
+                    CLUSTER.startTabletServer(stopped);
+                    CLUSTER.assertHasTabletServerNumber(3);
+                }
+                admin.dropTable(path, true).get();
+            }
+        }
+    }
+
+    private static void setTableEnabled(Admin admin, TablePath path, boolean enabled)
+            throws Exception {
+        admin.alterTable(
+                        path,
+                        Collections.singletonList(
+                                TableChange.set(
+                                        ConfigOptions.TABLE_KAFKA_ENABLED.key(),
+                                        Boolean.toString(enabled))),
+                        false)
+                .get();
+    }
+
+    private static Uuid topicId(String topic) {
+        return waitForTopic(topic).data().topics().find(topic).topicId();
+    }
+
+    private static void assertRejectedNames(TablePath path, Errors error) throws Exception {
+        retry(
+                Duration.ofMinutes(1),
+                () -> {
+                    for (String topic : new String[] {path.toString(), path.getTableName()}) {
+                        for (ServerNode node : CLUSTER.getTabletServerNodes("KAFKA")) {
+                            try (Socket socket = connect(node)) {
+                                MetadataResponse response =
+                                        (MetadataResponse)
+                                                sendRequest(socket, metadataRequest(topic));
+                                assertThat(response.errors()).containsEntry(topic, error);
+                            }
+                        }
+                    }
+                });
+        for (String topic : new String[] {path.toString(), path.getTableName()}) {
+            for (ServerNode node : CLUSTER.getTabletServerNodes("KAFKA")) {
+                try (Socket socket = connect(node)) {
+                    ProduceResponse response =
+                            (ProduceResponse)
+                                    sendRequest(socket, produceRequest(topic, "rejected"));
+                    assertThat(response.errorCounts()).containsEntry(error, 1);
+                }
+            }
+        }
+    }
+
     private static void createTable(Admin admin, TablePath path, int replicas) throws Exception {
         admin.createDatabase(path.getDatabaseName(), DatabaseDescriptor.EMPTY, true).get();
         admin.createTable(
@@ -328,12 +614,13 @@ class KafkaProduceRegressionITCase {
                         TableDescriptor.builder()
                                 .schema(
                                         Schema.newBuilder()
-                                                .column("value", DataTypes.BYTES())
+                                                .column("_kafka_value", DataTypes.BYTES())
                                                 .build())
                                 .distributedBy(1)
                                 .logFormat(LogFormat.ARROW)
                                 .property(ConfigOptions.TABLE_REPLICATION_FACTOR, replicas)
-                                .customProperty(KafkaDataFormat.VALUE_FORMAT_CONFIG, "raw")
+                                .property(ConfigOptions.TABLE_KAFKA_ENABLED, true)
+                                .property(ConfigOptions.TABLE_KAFKA_CONVERT_VALUE_TYPE, "binary")
                                 .build(),
                         false)
                 .get();
@@ -371,6 +658,7 @@ class KafkaProduceRegressionITCase {
                     () -> {
                         ScanRecords records = scanner.poll(Duration.ofSeconds(1));
                         for (ScanRecord record : records) {
+                            assertThat(record.logOffset()).isEqualTo(values.size());
                             values.add(
                                     new String(
                                             record.getRow().getBytes(0), StandardCharsets.UTF_8));
@@ -426,9 +714,11 @@ class KafkaProduceRegressionITCase {
     }
 
     private static ProduceRequest produceRequest(String topic, String value) {
-        MemoryRecords records =
-                MemoryRecords.withRecords(
-                        Compression.NONE, new SimpleRecord(value.getBytes(StandardCharsets.UTF_8)));
+        return produceRequest(topic, new SimpleRecord(value.getBytes(StandardCharsets.UTF_8)));
+    }
+
+    private static ProduceRequest produceRequest(String topic, SimpleRecord... values) {
+        MemoryRecords records = MemoryRecords.withRecords(Compression.NONE, values);
         ProduceRequestData.TopicProduceData topicData =
                 new ProduceRequestData.TopicProduceData()
                         .setName(topic)

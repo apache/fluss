@@ -78,6 +78,7 @@ import java.util.Map;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 
+import static org.apache.fluss.server.testutils.RpcMessageTestUtils.createTable;
 import static org.apache.fluss.server.testutils.RpcMessageTestUtils.newAlterTableRequest;
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -173,7 +174,7 @@ class KafkaProduceAppendITCase {
         try (Connection connection = ConnectionFactory.createConnection(CLUSTER.getClientConfig());
                 org.apache.fluss.client.admin.Admin admin = connection.getAdmin()) {
             admin.createDatabase(DATABASE, DatabaseDescriptor.EMPTY, true).get();
-            for (String format : new String[] {"raw", "string"}) {
+            for (String format : new String[] {"binary", "string"}) {
                 TablePath path = TablePath.of(DATABASE, "null_values_" + format);
                 admin.createTable(path, descriptor(format), false).get();
                 CLUSTER.waitUntilAllGatewayHasSameMetadata();
@@ -213,7 +214,7 @@ class KafkaProduceAppendITCase {
                             for (ScanRecord record : scanner.poll(Duration.ofSeconds(1))) {
                                 InternalRow row = record.getRow();
                                 byte[] expected = count == 0 ? new byte[0] : VALUE;
-                                if (format.equals("raw")) {
+                                if (format.equals("binary")) {
                                     assertThat(row.getBytes(0)).isEqualTo(expected);
                                 } else {
                                     assertThat(row.getString(0).toString())
@@ -221,8 +222,9 @@ class KafkaProduceAppendITCase {
                                                     new String(expected, StandardCharsets.UTF_8));
                                 }
                                 assertThat(row.isNullAt(3)).isTrue();
-                                assertThat(row.getTimestampNtz(1, 3).getMillisecond())
-                                        .isEqualTo(123L);
+                                assertThat(row.getMap(1).size()).isZero();
+                                assertThat(row.isNullAt(2)).isTrue();
+                                assertThat(record.logOffset()).isEqualTo(count);
                                 count++;
                             }
                         }
@@ -316,6 +318,69 @@ class KafkaProduceAppendITCase {
             } finally {
                 admin.dropTable(path, true).get();
             }
+        }
+    }
+
+    @Test
+    void testDeletedDefaultDatabaseDoesNotFallbackOrRecreateDatabase() throws Exception {
+        Configuration config = clusterConfig();
+        config.set(ConfigOptions.KAFKA_DEFAULT_DATABASE, "produce_missing_db");
+        config.set(ConfigOptions.DEFAULT_REPLICATION_FACTOR, 1);
+        config.set(ConfigOptions.LOG_REPLICA_MIN_IN_SYNC_REPLICAS_NUMBER, 1);
+        FlussClusterExtension cluster =
+                FlussClusterExtension.builder()
+                        .setNumOfTabletServers(1)
+                        .setClusterConf(config)
+                        .setTabletServerListeners("FLUSS://localhost:0,KAFKA://localhost:0")
+                        .build();
+        cluster.start();
+        try (Connection connection = ConnectionFactory.createConnection(cluster.getClientConfig());
+                org.apache.fluss.client.admin.Admin admin = connection.getAdmin()) {
+            // Startup creates the configured default; Produce must not recreate a deleted one.
+            assertThat(admin.databaseExists("produce_missing_db").get()).isTrue();
+            admin.dropDatabase("produce_missing_db", false, false).get();
+            assertThat(admin.databaseExists("produce_missing_db").get()).isFalse();
+            TablePath existing = TablePath.of("fluss", "events");
+            long tableId = createTable(cluster, existing, descriptor("binary"));
+            cluster.waitUntilTableReady(tableId);
+            ServerNode node = cluster.getTabletServerNodes("KAFKA").get(0);
+            try (Socket socket = new Socket(node.host(), node.port())) {
+                String[] missing = {
+                    "events",
+                    "produce_missing_db.events",
+                    "another_missing_db.events",
+                    "fluss.missing"
+                };
+                assertProduceErrors(
+                        query(socket, missing), missing, Errors.UNKNOWN_TOPIC_OR_PARTITION);
+                assertProduceOffsets(
+                        query(socket, existing.toString()), new String[] {existing.toString()}, 0L);
+                assertProduceOffsets(
+                        query(socket, existing.toString()), new String[] {existing.toString()}, 1L);
+                try (KafkaProducer<byte[], byte[]> producer = producer(node, "all", 0)) {
+                    assertThat(
+                                    producer.send(
+                                                    new ProducerRecord<>(
+                                                            existing.toString(),
+                                                            0,
+                                                            123L,
+                                                            KEY,
+                                                            VALUE,
+                                                            Arrays.asList(
+                                                                    new RecordHeader(
+                                                                            "source", VALUE),
+                                                                    new RecordHeader(
+                                                                            "source", null))))
+                                            .get(30, TimeUnit.SECONDS)
+                                            .offset())
+                            .isEqualTo(2L);
+                }
+                assertReadback(connection, existing, "binary", Collections.nCopies(3, VALUE));
+                assertThat(admin.databaseExists("produce_missing_db").get()).isFalse();
+                assertThat(admin.databaseExists("another_missing_db").get()).isFalse();
+            }
+        } finally {
+            cluster.close();
         }
     }
 
@@ -497,7 +562,11 @@ class KafkaProduceAppendITCase {
     }
 
     private static KafkaProducer<byte[], byte[]> producer(String acks, int batchSize) {
-        ServerNode node = CLUSTER.getTabletServerNodes("KAFKA").get(0);
+        return producer(CLUSTER.getTabletServerNodes("KAFKA").get(0), acks, batchSize);
+    }
+
+    private static KafkaProducer<byte[], byte[]> producer(
+            ServerNode node, String acks, int batchSize) {
         Map<String, Object> config = new HashMap<>();
         config.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, node.host() + ":" + node.port());
         config.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, ByteArraySerializer.class);
