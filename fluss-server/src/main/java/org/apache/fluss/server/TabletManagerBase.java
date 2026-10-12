@@ -249,6 +249,12 @@ public abstract class TabletManagerBase {
         return tableRegistration.toTableInfo(tablePath, schemaInfo);
     }
 
+    /**
+     * Returns the table registration stored in ZooKeeper, including its remote data directory.
+     *
+     * @throws LogStorageException if the table registration does not exist
+     * @throws Exception if reading ZooKeeper metadata fails
+     */
     public static TableRegistration getTableRegistration(
             ZooKeeperClient zkClient, TablePath tablePath) throws Exception {
         return zkClient.getTable(tablePath)
@@ -260,6 +266,12 @@ public abstract class TabletManagerBase {
                                                 tablePath)));
     }
 
+    /**
+     * Returns the latest schema of the table from ZooKeeper.
+     *
+     * @throws SchemaNotExistException if the latest schema does not exist
+     * @throws Exception if reading ZooKeeper metadata fails
+     */
     public static SchemaInfo getSchemaInfo(ZooKeeperClient zkClient, TablePath tablePath)
             throws Exception {
         int schemaId = zkClient.getCurrentSchemaId(tablePath);
@@ -276,6 +288,12 @@ public abstract class TabletManagerBase {
         return schemaInfo;
     }
 
+    /**
+     * Returns the partition registration stored in ZooKeeper for the given physical table path.
+     *
+     * @throws PartitionNotExistException if the partition registration does not exist
+     * @throws Exception if reading ZooKeeper metadata fails
+     */
     public static PartitionRegistration getPartitionRegistration(
             ZooKeeperClient zkClient, PhysicalTablePath physicalTablePath) throws Exception {
         return zkClient.getPartition(

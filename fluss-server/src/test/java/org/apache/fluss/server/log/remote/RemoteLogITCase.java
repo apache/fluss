@@ -58,6 +58,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import java.io.InputStream;
@@ -213,13 +214,31 @@ public class RemoteLogITCase {
     }
 
     @ParameterizedTest
-    @ValueSource(booleans = {true, false})
-    void testFollowerFetchAlreadyMoveToRemoteLog(boolean withWriterId) throws Exception {
-        long tableId =
-                createTable(FLUSS_CLUSTER_EXTENSION, DATA1_TABLE_PATH, DATA1_TABLE_DESCRIPTOR);
+    @CsvSource({"true, dir1", "true, dir2", "false, dir1", "false, dir2"})
+    void testFollowerFetchAlreadyMoveToRemoteLog(boolean withWriterId, String remoteDirName)
+            throws Exception {
+        String remoteDataDir = FLUSS_CLUSTER_EXTENSION.getRemoteDataDir(remoteDirName);
+        Long selectedTableId = null;
+        // Select by persisted assignment rather than relying on the selector's current position.
+        for (int i = 0; i < REMOTE_DIR_NAMES.size(); i++) {
+            TablePath tablePath = TablePath.of("test_db", "follower_recovery_" + i);
+            long candidateTableId =
+                    createTable(FLUSS_CLUSTER_EXTENSION, tablePath, DATA1_TABLE_DESCRIPTOR);
+            TableRegistration registration = zkClient.getTable(tablePath).get();
+            if (remoteDataDir.equals(registration.remoteDataDir)) {
+                selectedTableId = candidateTableId;
+                break;
+            }
+        }
+        assertThat(selectedTableId).isNotNull();
+        long tableId = selectedTableId;
         TableBucket tb = new TableBucket(tableId, 0);
 
         FLUSS_CLUSTER_EXTENSION.waitUntilAllReplicaReady(tb);
+        for (TabletServer server : FLUSS_CLUSTER_EXTENSION.getTabletServers()) {
+            assertThat(server.getReplicaManager().getReplicaOrException(tb).getRemoteDataDir())
+                    .isEqualTo(remoteDataDir);
+        }
         int leader = FLUSS_CLUSTER_EXTENSION.waitAndGetLeader(tb);
         int follower;
         for (int i = 0; true; i++) {
