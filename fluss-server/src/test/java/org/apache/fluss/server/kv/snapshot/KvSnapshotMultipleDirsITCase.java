@@ -80,6 +80,7 @@ public class KvSnapshotMultipleDirsITCase {
                     .setNumOfTabletServers(3)
                     .setClusterConf(initConfig())
                     .setRemoteDirNames(REMOTE_DIR_NAMES)
+                    .setUseRemoteDataDir(false)
                     .build();
 
     private ZooKeeperClient zkClient;

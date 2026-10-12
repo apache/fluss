@@ -17,8 +17,8 @@
 
 package org.apache.fluss.utils;
 
-import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.config.FlussConfigUtils;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
@@ -458,7 +458,8 @@ public class FlussPaths {
      * </pre>
      */
     public static FsPath remoteLogDir(Configuration conf) {
-        return new FsPath(conf.get(ConfigOptions.REMOTE_DATA_DIR) + "/" + REMOTE_LOG_DIR_NAME);
+        return new FsPath(
+                FlussConfigUtils.getDefaultRemoteDataDir(conf) + "/" + REMOTE_LOG_DIR_NAME);
     }
 
     /**
@@ -650,7 +651,8 @@ public class FlussPaths {
      * </pre>
      */
     public static FsPath remoteKvDir(Configuration conf) {
-        return new FsPath(conf.get(ConfigOptions.REMOTE_DATA_DIR) + "/" + REMOTE_KV_DIR_NAME);
+        return new FsPath(
+                FlussConfigUtils.getDefaultRemoteDataDir(conf) + "/" + REMOTE_KV_DIR_NAME);
     }
 
     /**
