@@ -299,13 +299,18 @@ for record in records {
 
 ## `ScanBatch`
 
-| Method                             | Description                    |
-|------------------------------------|--------------------------------|
-| `fn bucket(&self) -> &TableBucket` | Bucket this batch belongs to   |
-| `fn batch(&self) -> &RecordBatch`  | Arrow RecordBatch data         |
-| `fn base_offset(&self) -> i64`     | First record offset            |
-| `fn last_offset(&self) -> i64`     | Last record offset             |
-| `fn num_records(&self) -> usize`   | Number of records in the batch |
+| Method                              | Description                       |
+|-------------------------------------|-----------------------------------|
+| `fn bucket(&self) -> &TableBucket`  | Bucket this batch belongs to      |
+| `fn batch(&self) -> &RecordBatch`   | Arrow RecordBatch data            |
+| `fn base_offset(&self) -> i64`      | First record offset               |
+| `fn last_offset(&self) -> i64`      | Last record offset                |
+| `fn commit_timestamp(&self) -> i64` | Commit time in epoch milliseconds |
+| `fn num_records(&self) -> usize`    | Number of records in the batch    |
+
+`commit_timestamp` is `fluss::record::NO_COMMIT_TIMESTAMP` (`-1`) when the batch
+carries no single timestamp, which is the case for a limit scan because it
+merges several log batches into one Arrow batch.
 
 ## `TableUpsert`
 

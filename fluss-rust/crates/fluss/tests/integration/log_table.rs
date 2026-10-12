@@ -31,14 +31,16 @@ mod table_test {
     };
     use arrow::buffer::{NullBuffer, OffsetBuffer};
     use arrow::datatypes::{DataType as ArrowDataType, Field, Schema as ArrowSchema};
-    use fluss::client::{EARLIEST_OFFSET, FlussAdmin, FlussTable, TableScan};
+    use fluss::client::{
+        EARLIEST_OFFSET, FlussAdmin, FlussTable, RecordBatchLogScanner, TableScan,
+    };
     use fluss::error::FlussError;
     use fluss::metadata::{
         AddColumn, AlterTableChanges, ColumnPositionType, DataField, DataTypes, JsonSerde,
         PartitionSpec, Schema, TableDescriptor, TablePath,
     };
     use fluss::predicate::{Literal, Predicate, col};
-    use fluss::record::ScanRecord;
+    use fluss::record::{ScanBatch, ScanRecord};
     use fluss::row::binary_array::FlussArrayWriter;
     use fluss::row::binary_map::FlussMapWriter;
     use fluss::row::{
@@ -1668,6 +1670,167 @@ mod table_test {
 
         // Projected batch should have 1 column (id), not 2 (id, name)
         assert_eq!(proj_batches[0].batch().num_columns(), 1);
+    }
+
+    /// Asserts each batch reports exactly the commit timestamp the record path
+    /// reported for every offset that batch covers, and that timestamps never
+    /// move backwards within a bucket.
+    fn assert_batch_timestamps_match_records(
+        batches: &[ScanBatch],
+        timestamps_by_offset: &HashMap<i64, i64>,
+    ) {
+        assert!(!batches.is_empty(), "expected at least one batch to check");
+        let mut previous = i64::MIN;
+        for batch in batches {
+            let timestamp = batch.commit_timestamp();
+            for offset in batch.base_offset()..=batch.last_offset() {
+                let expected = *timestamps_by_offset
+                    .get(&offset)
+                    .unwrap_or_else(|| panic!("the record path never reported offset {offset}"));
+                assert_eq!(
+                    timestamp,
+                    expected,
+                    "batch starting at offset {} reports commit timestamp {timestamp}, but the \
+                     record at offset {offset} reports {expected}",
+                    batch.base_offset()
+                );
+            }
+            // Log batches are appended to a bucket in order, so the leader
+            // never stamps a later batch with an earlier timestamp.
+            assert!(
+                timestamp >= previous,
+                "commit timestamp {timestamp} moved backwards from {previous}"
+            );
+            previous = timestamp;
+        }
+    }
+
+    /// The record and Arrow-batch scan paths read the same `commit_timestamp`
+    /// header field from the same log batch, so the batch API must report
+    /// exactly what the record API reports for the offsets it covers. Comparing
+    /// the two paths pins that invariant without depending on the wall clock,
+    /// and unlike a "looks like a recent timestamp" bound it also catches a
+    /// batch that was handed some other log batch's timestamp.
+    #[tokio::test]
+    async fn record_batch_scanner_agrees_with_record_scanner_on_commit_timestamp() {
+        let cluster = get_shared_cluster();
+        let connection = cluster.get_fluss_connection().await;
+        let admin = connection.get_admin().expect("Failed to get admin");
+
+        let table_path = TablePath::new("fluss", "test_batch_commit_timestamp_parity");
+        let schema = Schema::builder()
+            .column("id", DataTypes::int())
+            .column("name", DataTypes::string())
+            .build()
+            .unwrap();
+        create_table(
+            &admin,
+            &table_path,
+            &TableDescriptor::builder()
+                .schema(schema)
+                // A single bucket keeps every append in one log, so batch
+                // offsets and record offsets line up without interleaving.
+                .distributed_by(Some(1), vec!["id".to_string()])
+                .build()
+                .unwrap(),
+        )
+        .await;
+        wait_for_table_ready(&admin, &table_path).await;
+
+        let table = connection.get_table(&table_path).await.unwrap();
+        let writer = table.new_append().unwrap().create_writer().unwrap();
+        // Flush between appends so the leader stores three separate log
+        // batches, each stamped with its own commit timestamp.
+        writer
+            .append_arrow_batch(
+                record_batch!(("id", Int32, [1, 2]), ("name", Utf8, ["a", "b"])).unwrap(),
+            )
+            .unwrap();
+        writer.flush().await.unwrap();
+        writer
+            .append_arrow_batch(
+                record_batch!(("id", Int32, [3, 4]), ("name", Utf8, ["c", "d"])).unwrap(),
+            )
+            .unwrap();
+        writer.flush().await.unwrap();
+        writer
+            .append_arrow_batch(
+                record_batch!(("id", Int32, [5, 6]), ("name", Utf8, ["e", "f"])).unwrap(),
+            )
+            .unwrap();
+        writer.flush().await.unwrap();
+
+        // Reference: the timestamp the record path reports for each offset.
+        let record_scanner = table.new_scan().create_log_scanner().unwrap();
+        record_scanner.subscribe(0, EARLIEST_OFFSET).await.unwrap();
+        let timestamps_by_offset: HashMap<i64, i64> =
+            poll_until_count(6, DEFAULT_POLL_TIMEOUT, Duration::from_secs(5), async |d| {
+                record_scanner
+                    .poll(d)
+                    .await
+                    .unwrap()
+                    .into_iter()
+                    .map(|record| (record.offset(), record.timestamp()))
+                    .collect()
+            })
+            .await
+            .into_iter()
+            .collect();
+        assert_eq!(
+            timestamps_by_offset.len(),
+            6,
+            "record path should cover offsets 0..=5, got {timestamps_by_offset:?}"
+        );
+
+        // Reading whole batches must agree with the record path.
+        let scanner = table.new_scan().create_record_batch_log_scanner().unwrap();
+        scanner.subscribe(0, 0).await.unwrap();
+        let batches = collect_batches(&scanner, 6).await;
+        assert_batch_timestamps_match_records(&batches, &timestamps_by_offset);
+
+        // Subscribing mid-batch slices leading rows off the first batch; the
+        // slice must keep the timestamp of the log batch it came from.
+        let sliced_scanner = table.new_scan().create_record_batch_log_scanner().unwrap();
+        sliced_scanner.subscribe(0, 1).await.unwrap();
+        let sliced = collect_batches(&sliced_scanner, 5).await;
+        assert_eq!(
+            sliced[0].base_offset(),
+            1,
+            "first batch should start at the subscribed offset"
+        );
+        assert_batch_timestamps_match_records(&sliced, &timestamps_by_offset);
+
+        // Projection prunes columns but must not disturb the metadata.
+        let projected_scanner = table
+            .new_scan()
+            .project_by_name(&["id"])
+            .unwrap()
+            .create_record_batch_log_scanner()
+            .unwrap();
+        projected_scanner.subscribe(0, 0).await.unwrap();
+        let projected = collect_batches(&projected_scanner, 6).await;
+        assert_eq!(projected[0].batch().num_columns(), 1);
+        assert_batch_timestamps_match_records(&projected, &timestamps_by_offset);
+    }
+
+    /// Polls a record-batch scanner until it has yielded `expected_rows` rows.
+    async fn collect_batches(
+        scanner: &RecordBatchLogScanner,
+        expected_rows: usize,
+    ) -> Vec<ScanBatch> {
+        let mut collected: Vec<ScanBatch> = Vec::new();
+        let deadline = tokio::time::Instant::now() + DEFAULT_POLL_TIMEOUT;
+        while collected.iter().map(ScanBatch::num_records).sum::<usize>() < expected_rows
+            && tokio::time::Instant::now() < deadline
+        {
+            collected.extend(scanner.poll(Duration::from_secs(5)).await.unwrap());
+        }
+        assert_eq!(
+            collected.iter().map(ScanBatch::num_records).sum::<usize>(),
+            expected_rows,
+            "scanner did not yield {expected_rows} rows in time"
+        );
+        collected
     }
 
     async fn create_region_partitioned_log_table(admin: &FlussAdmin, table_path: &TablePath) {

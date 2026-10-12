@@ -449,6 +449,11 @@ Read-only result of a prefix lookup — zero or more matched rows. Each row is a
 | `GetBucketId() -> int32_t`                                     | Bucket ID                            |
 | `GetBaseOffset() -> int64_t`                                   | First record offset                  |
 | `GetLastOffset() -> int64_t`                                   | Last record offset                   |
+| `GetCommitTimestamp() -> int64_t`                              | Commit time in epoch milliseconds    |
+
+`GetCommitTimestamp()` returns `ArrowRecordBatch::NO_COMMIT_TIMESTAMP` (`-1`)
+when the batch carries no single timestamp, which is the case for a limit scan
+because it merges several log batches into one Arrow batch.
 
 ## `ArrowRecordBatches`
 

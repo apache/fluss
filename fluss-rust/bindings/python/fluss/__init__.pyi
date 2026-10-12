@@ -102,6 +102,14 @@ class RecordBatch:
     def last_offset(self) -> int:
         """The offset of the last record in this batch."""
         ...
+    @property
+    def commit_timestamp(self) -> int:
+        """Server-side commit timestamp in epoch milliseconds.
+
+        `NO_COMMIT_TIMESTAMP` when the batch carries no single timestamp, which
+        is the case for a limit scan that merges several log batches.
+        """
+        ...
     def __str__(self) -> str: ...
     def __repr__(self) -> str: ...
 
@@ -1494,5 +1502,9 @@ class OffsetSpec:
 
 # Constant for earliest offset (-2)
 EARLIEST_OFFSET: int
+
+# Reported by `RecordBatch.commit_timestamp` when the batch carries no single
+# commit timestamp, for example a limit scan that merges several log batches (-1)
+NO_COMMIT_TIMESTAMP: int
 
 __version__: str

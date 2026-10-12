@@ -2189,12 +2189,13 @@ Result LogScanner::Poll(int64_t timeout_ms, ScanRecords& out) {
 
 ArrowRecordBatch::ArrowRecordBatch(std::shared_ptr<arrow::RecordBatch> batch, int64_t table_id,
                                    int64_t partition_id, int32_t bucket_id,
-                                   int64_t base_offset) noexcept
+                                   int64_t base_offset, int64_t commit_timestamp) noexcept
     : batch_(std::move(batch)),
       table_id_(table_id),
       partition_id_(partition_id),
       bucket_id_(bucket_id),
-      base_offset_(base_offset) {}
+      base_offset_(base_offset),
+      commit_timestamp_(commit_timestamp) {}
 
 bool ArrowRecordBatch::Available() const { return batch_ != nullptr; }
 
@@ -2228,6 +2229,11 @@ int64_t ArrowRecordBatch::GetLastOffset() const {
     return this->base_offset_ + this->NumRows() - 1;
 }
 
+int64_t ArrowRecordBatch::GetCommitTimestamp() const {
+    if (!Available()) return NO_COMMIT_TIMESTAMP;
+    return this->commit_timestamp_;
+}
+
 namespace detail {
 // Imports FFI Arrow batches (C Data Interface) into C++ ArrowRecordBatch
 // wrappers. A friend of ArrowRecordBatch so it can build the wrapper's private
@@ -2253,7 +2259,7 @@ struct ArrowBatchImporter {
             }
             out.batches.push_back(std::unique_ptr<ArrowRecordBatch>(new ArrowRecordBatch(
                 import_result.ValueOrDie(), ffi_batch.table_id, ffi_batch.partition_id,
-                ffi_batch.bucket_id, ffi_batch.base_offset)));
+                ffi_batch.bucket_id, ffi_batch.base_offset, ffi_batch.commit_timestamp)));
         }
         return utils::make_ok();
     }
