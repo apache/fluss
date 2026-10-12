@@ -75,7 +75,7 @@ pub(crate) struct FetchedBatch {
 }
 
 /// Represents a completed fetch that can be consumed
-pub trait CompletedFetch: Send + Sync {
+pub(crate) trait CompletedFetch: Send + Sync {
     fn table_bucket(&self) -> &TableBucket;
     fn api_error(&self) -> Option<&ApiError>;
     fn fetch_error_context(&self) -> Option<&FetchErrorContext>;
