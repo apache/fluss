@@ -17,8 +17,10 @@
 
 package org.apache.fluss.kafka.format.json;
 
+import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.kafka.schema.KafkaTopicSchemaException;
 import org.apache.fluss.kafka.transcode.KafkaRecordEncodingException;
+import org.apache.fluss.metadata.KafkaTableSchema;
 import org.apache.fluss.row.BinaryString;
 import org.apache.fluss.row.Decimal;
 import org.apache.fluss.row.TimestampLtz;
@@ -292,9 +294,72 @@ class JsonToFlussConvertersTest {
 
     @Test
     void testComplexTypesRemainUnsupportedAtThisStage() {
-        assertThatThrownBy(() -> JsonToFlussConverters.create(DataTypes.ARRAY(DataTypes.INT())))
+        for (DataType type :
+                new DataType[] {
+                    DataTypes.ARRAY(DataTypes.INT()),
+                    DataTypes.MAP(DataTypes.STRING(), DataTypes.INT()),
+                    DataTypes.ROW(DataTypes.INT())
+                }) {
+            KafkaTableSchema.validateJsonType(type);
+            assertThatThrownBy(() -> JsonToFlussConverters.create(type))
+                    .isInstanceOf(KafkaTopicSchemaException.class)
+                    .hasMessageContaining("does not support");
+        }
+    }
+
+    @ParameterizedTest
+    @MethodSource("invalidMapKeyTypes")
+    void testInvalidMapKeysUseThePublicSchemaError(DataType type) {
+        assertThatThrownBy(() -> KafkaTableSchema.validateJsonType(type))
+                .isInstanceOf(InvalidTableException.class)
+                .hasMessageContaining("only supports STRING map keys");
+        assertThatThrownBy(() -> JsonToFlussConverters.create(type))
+                .isInstanceOf(KafkaTopicSchemaException.class)
+                .hasMessageContaining("only supports STRING map keys");
+    }
+
+    private static Stream<DataType> invalidMapKeyTypes() {
+        return Stream.of(
+                DataTypes.MAP(DataTypes.INT(), DataTypes.STRING()),
+                DataTypes.MAP(DataTypes.CHAR(8), DataTypes.STRING()),
+                DataTypes.ROW(DataTypes.ARRAY(DataTypes.MAP(DataTypes.BYTES(), DataTypes.INT()))),
+                DataTypes.MAP(
+                        DataTypes.STRING(), DataTypes.MAP(DataTypes.BOOLEAN(), DataTypes.INT())));
+    }
+
+    @Test
+    void testSchemaDepthUsesTheSharedBusinessFieldLimit() {
+        DataType type = DataTypes.INT();
+        for (int depth = 0; depth < KafkaTableSchema.MAX_JSON_SCHEMA_NESTING_DEPTH; depth++) {
+            switch (depth % 3) {
+                case 0:
+                    type = DataTypes.ROW(type);
+                    break;
+                case 1:
+                    type = DataTypes.ARRAY(type);
+                    break;
+                default:
+                    type = DataTypes.MAP(DataTypes.STRING(), type);
+            }
+        }
+        // The top-level business field starts at zero; each child consumes one level.
+        DataType atLimit = type;
+        KafkaTableSchema.validateJsonType(atLimit);
+        assertThatThrownBy(() -> JsonToFlussConverters.create(atLimit))
                 .isInstanceOf(KafkaTopicSchemaException.class)
                 .hasMessageContaining("does not support");
+
+        DataType tooDeep = DataTypes.ROW(atLimit);
+        String message =
+                "Kafka JSON schema exceeds the maximum nesting depth of "
+                        + KafkaTableSchema.MAX_JSON_SCHEMA_NESTING_DEPTH
+                        + ".";
+        assertThatThrownBy(() -> KafkaTableSchema.validateJsonType(tooDeep))
+                .isInstanceOf(InvalidTableException.class)
+                .hasMessage(message);
+        assertThatThrownBy(() -> JsonToFlussConverters.create(tooDeep))
+                .isInstanceOf(KafkaTopicSchemaException.class)
+                .hasMessage(message);
     }
 
     private static Object convert(DataType type, String json) throws Exception {

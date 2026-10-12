@@ -17,8 +17,10 @@
 
 package org.apache.fluss.kafka.format.json;
 
+import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.kafka.schema.KafkaTopicSchemaException;
 import org.apache.fluss.kafka.transcode.KafkaRecordEncodingException;
+import org.apache.fluss.metadata.KafkaTableSchema;
 import org.apache.fluss.row.BinaryString;
 import org.apache.fluss.row.Decimal;
 import org.apache.fluss.row.TimestampLtz;
@@ -54,7 +56,17 @@ final class JsonToFlussConverters {
 
     private JsonToFlussConverters() {}
 
+    /**
+     * Creates a converter for one top-level JSON business field, excluding the JSON root container.
+     * The shared schema contract is validated before checking decoder support; complex types still
+     * require their own converter implementations.
+     */
     static JsonToFlussConverter create(DataType dataType) {
+        try {
+            KafkaTableSchema.validateJsonType(dataType);
+        } catch (InvalidTableException e) {
+            throw new KafkaTopicSchemaException(e.getMessage());
+        }
         final JsonToFlussConverter notNullConverter = createNotNull(dataType);
         return (node, path) -> {
             if (node == null || node.isNull()) {
