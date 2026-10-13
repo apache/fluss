@@ -24,7 +24,6 @@ import org.apache.fluss.rpc.entity.ProduceLogResultForBucket;
 import org.apache.fluss.server.entity.FetchReqInfo;
 import org.apache.fluss.server.log.FetchParams;
 import org.apache.fluss.server.log.LogOffsetMetadata;
-import org.apache.fluss.server.metrics.group.TestingMetricGroups;
 import org.apache.fluss.server.replica.ReplicaTestBase;
 import org.apache.fluss.server.replica.delay.DelayedFetchLog.FetchBucketStatus;
 
@@ -162,7 +161,7 @@ public class DelayedFetchLogTest extends ReplicaTestBase {
                 replicaManager,
                 Collections.singletonMap(tb, prevFetchBucketStatus),
                 responseCallback,
-                TestingMetricGroups.TABLET_SERVER_METRICS,
+                tabletServerMetricGroup,
                 null);
     }
 }
