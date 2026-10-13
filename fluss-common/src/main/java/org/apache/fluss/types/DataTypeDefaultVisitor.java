@@ -122,5 +122,15 @@ public abstract class DataTypeDefaultVisitor<R> implements DataTypeVisitor<R> {
         return defaultMethod(rowType);
     }
 
+    @Override
+    public R visit(TimestampNanoType timestampNanoType) {
+        return defaultMethod(timestampNanoType);
+    }
+
+    @Override
+    public R visit(LocalZonedTimestampNanoType localZonedTimestampNanoType) {
+        return defaultMethod(localZonedTimestampNanoType);
+    }
+
     protected abstract R defaultMethod(DataType dataType);
 }
