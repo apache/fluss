@@ -612,37 +612,37 @@
                     <config>.rat-config.xml</config>
                     <inputExcludes>
                         <!-- Additional files like .gitignore etc.-->
-                        <inputExclude>**/.*/**</inputExclude>
-                        <inputExclude>**/*.prefs</inputExclude>
-                        <inputExclude>**/*.log</inputExclude>
+                        <exclude>**/.*/**</exclude>
+                        <exclude>**/*.prefs</exclude>
+                        <exclude>**/*.log</exclude>
                         <!-- Documentation files in the main trunk. -->
-                        <inputExclude>**/*.md</inputExclude>
-                        <inputExclude>**/*.mdx</inputExclude>
+                        <exclude>**/*.md</exclude>
+                        <exclude>**/*.mdx</exclude>
                         <!-- Generated content -->
-                        <inputExclude>**/target/**</inputExclude>
-                        <inputExclude>build-target/**</inputExclude>
-                        <inputExclude>**/scalastyle-output.xml</inputExclude>
-                        <inputExclude>**/*.svg</inputExclude>
-                        <inputExclude>**/dependency-reduced-pom.xml</inputExclude>
+                        <exclude>**/target/**</exclude>
+                        <exclude>build-target/**</exclude>
+                        <exclude>**/scalastyle-output.xml</exclude>
+                        <exclude>**/*.svg</exclude>
+                        <exclude>**/dependency-reduced-pom.xml</exclude>
                         <!-- Bundled license files -->
-                        <inputExclude>**/LICENSE*</inputExclude>
-                        <inputExclude>**/NOTICE*</inputExclude>
+                        <exclude>**/LICENSE*</exclude>
+                        <exclude>**/NOTICE*</exclude>
                         <!-- artifacts created during release process -->
-                        <inputExclude>tools/releasing/release/**</inputExclude>
+                        <exclude>tools/releasing/release/**</exclude>
                         <!-- Configuration Files. -->
-                        <inputExclude>**/fluss-bin/conf/servers</inputExclude>
+                        <exclude>**/fluss-bin/conf/servers</exclude>
                         <!-- Cross-language encoding fixtures. -->
-                        <inputExclude>**/src/test/resources/encoding/*.hex</inputExclude>
+                        <exclude>**/*.hex</exclude>
                         <!-- Website Files. -->
-                        <inputExclude>website/**/_category_.json</inputExclude>
-                        <inputExclude>website/package.json</inputExclude>
-                        <inputExclude>website/package-lock.json</inputExclude>
-                        <inputExclude>website/static/**</inputExclude>
-                        <inputExclude>website/build/**</inputExclude>
-                        <inputExclude>website/node_modules/**</inputExclude>
+                        <exclude>website/**/_category_.json</exclude>
+                        <exclude>website/package.json</exclude>
+                        <exclude>website/package-lock.json</exclude>
+                        <exclude>website/static/**</exclude>
+                        <exclude>website/build/**</exclude>
+                        <exclude>website/node_modules/**</exclude>
                         <!-- Rust client and gateway: own license enforcement (skywalking-eyes + cargo-deny) -->
-                        <inputExclude>fluss-rust/**</inputExclude>
-                        <inputExclude>fluss-gateway/**</inputExclude>
+                        <exclude>fluss-rust/**</exclude>
+                        <exclude>fluss-gateway/**</exclude>
                     </inputExcludes>
                 </configuration>
             </plugin>
