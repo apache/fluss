@@ -19,6 +19,9 @@ package org.apache.fluss.server.log;
 
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.config.TableConfig;
+import org.apache.fluss.exception.FlussRuntimeException;
+import org.apache.fluss.exception.LogStorageException;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
@@ -62,7 +65,11 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Delayed;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 
@@ -81,6 +88,7 @@ import static org.apache.fluss.testutils.DataTestUtils.assertLogRecordsEquals;
 import static org.apache.fluss.testutils.DataTestUtils.genMemoryLogRecordsByObject;
 import static org.apache.fluss.testutils.common.CommonTestUtils.waitUntil;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Test for {@link LogManager}. */
 final class LogManagerTest extends LogTestBase {
@@ -373,6 +381,57 @@ final class LogManagerTest extends LogTestBase {
     }
 
     @Test
+    void testLogRunConcurrentlyForDifferentBuckets() throws Exception {
+        initTableBuckets(null);
+        BlockingTableConfig blockingTableConfig = new BlockingTableConfig();
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+        try {
+            Future<LogTablet> blockedCreation =
+                    executor.submit(() -> getOrCreateLog(tableBucket1, blockingTableConfig));
+            blockingTableConfig.awaitBlocked();
+
+            Future<LogTablet> otherBucketCreation =
+                    executor.submit(() -> getOrCreateLog(tablePath2, null, tableBucket2));
+            assertThat(otherBucketCreation.get(10, TimeUnit.SECONDS)).isNotNull();
+
+            blockingTableConfig.unblock();
+            assertThat(blockedCreation.get(10, TimeUnit.SECONDS)).isNotNull();
+        } finally {
+            blockingTableConfig.unblock();
+            executor.shutdownNow();
+            assertThat(executor.awaitTermination(10, TimeUnit.SECONDS)).isTrue();
+        }
+    }
+
+    @Test
+    void testLogLockRemovedWhenBucketHasNoLog() throws Exception {
+        initTableBuckets(null);
+        getOrCreateLog(tablePath1, null, tableBucket1);
+        assertThat(logManager.hasLogLock(tableBucket1)).isTrue();
+
+        logManager.dropLog(tableBucket1);
+        assertThat(logManager.hasLogLock(tableBucket1)).isFalse();
+
+        assertThatThrownBy(() -> logManager.dropLog(tableBucket2))
+                .isInstanceOf(LogStorageException.class)
+                .hasMessageContaining("does not exist");
+        assertThat(logManager.hasLogLock(tableBucket2)).isFalse();
+
+        TableConfig failingTableConfig =
+                new TableConfig(new Configuration()) {
+                    @Override
+                    public LogFormat getLogFormat() {
+                        throw new FlussRuntimeException("Failed log format lookup.");
+                    }
+                };
+        assertThatThrownBy(() -> getOrCreateLog(tableBucket1, failingTableConfig))
+                .hasMessageContaining("Failed log format lookup.");
+        assertThat(logManager.getLog(tableBucket1)).isNotPresent();
+        assertThat(logManager.hasLogLock(tableBucket1)).isFalse();
+        assertThat(getOrCreateLog(tablePath1, null, tableBucket1)).isNotNull();
+    }
+
+    @Test
     @Tag(ServerTestTags.JBOD_MULTI_DIR_TAG)
     void testCheckpointRecoveryPointsAreWrittenPerDirectory() throws Exception {
         File dataDir1 = new File(tempDir, "data-1");
@@ -608,6 +667,12 @@ final class LogManagerTest extends LogTestBase {
                 dataDir, PhysicalTablePath.of(tablePath), tableBucket, LogFormat.ARROW, 1, false);
     }
 
+    private LogTablet getOrCreateLog(TableBucket tableBucket, TableConfig tableConfig)
+            throws Exception {
+        return logManager.getOrCreateLog(
+                tempDir, PhysicalTablePath.of(tablePath1), tableBucket, tableConfig, false);
+    }
+
     private void initTableBuckets(@Nullable String partitionName) {
         if (partitionName == null) {
             tableBucket1 = new TableBucket(DATA1_TABLE_ID, 1);
@@ -625,6 +690,38 @@ final class LogManagerTest extends LogTestBase {
     private static void appendInvalidBytes(File file) throws IOException {
         try (FileOutputStream outputStream = new FileOutputStream(file, true)) {
             outputStream.write(new byte[] {0, 1, 2, 3});
+        }
+    }
+
+    private static final class BlockingTableConfig extends TableConfig {
+        private final CountDownLatch blocked = new CountDownLatch(1);
+        private final CountDownLatch unblock = new CountDownLatch(1);
+
+        private BlockingTableConfig() {
+            super(new Configuration());
+        }
+
+        @Override
+        public LogFormat getLogFormat() {
+            blocked.countDown();
+            try {
+                if (!unblock.await(30, TimeUnit.SECONDS)) {
+                    throw new FlussRuntimeException(
+                            "Timed out waiting to unblock log format lookup.");
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new FlussRuntimeException("Interrupted while blocking log format lookup.", e);
+            }
+            return super.getLogFormat();
+        }
+
+        private void awaitBlocked() throws InterruptedException {
+            assertThat(blocked.await(10, TimeUnit.SECONDS)).isTrue();
+        }
+
+        private void unblock() {
+            unblock.countDown();
         }
     }
 
