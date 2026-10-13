@@ -103,6 +103,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
 
@@ -389,6 +390,44 @@ public class FlinkCatalog extends AbstractCatalog {
     @Override
     public List<String> listViews(String s) throws DatabaseNotExistException, CatalogException {
         return Collections.emptyList();
+    }
+
+    /**
+     * Lists the names of all materialized tables in the given database.
+     *
+     * <p>Flink 2.2 added this method to {@code Catalog} for {@code SHOW MATERIALIZED TABLES}. It is
+     * declared without {@code @Override} so that the class still compiles against older Flink
+     * versions, which never call it.
+     *
+     * @throws DatabaseNotExistException if the database does not exist
+     */
+    public List<String> listMaterializedTables(String databaseName)
+            throws DatabaseNotExistException, CatalogException {
+        List<String> tableNames = listTables(databaseName);
+        List<CompletableFuture<TableInfo>> tableInfoFutures = new ArrayList<>(tableNames.size());
+        for (String tableName : tableNames) {
+            tableInfoFutures.add(admin.getTableInfo(TablePath.of(databaseName, tableName)));
+        }
+
+        List<String> materializedTables = new ArrayList<>();
+        for (int i = 0; i < tableNames.size(); i++) {
+            try {
+                if (FlinkConversions.isMaterializedTable(tableInfoFutures.get(i).get())) {
+                    materializedTables.add(tableNames.get(i));
+                }
+            } catch (Exception e) {
+                Throwable t = ExceptionUtils.stripExecutionException(e);
+                // the table may have been dropped after it was listed
+                if (!isTableNotExist(t)) {
+                    throw new CatalogException(
+                            String.format(
+                                    "Failed to list materialized tables in database %s in %s",
+                                    databaseName, getName()),
+                            t);
+                }
+            }
+        }
+        return materializedTables;
     }
 
     @Override

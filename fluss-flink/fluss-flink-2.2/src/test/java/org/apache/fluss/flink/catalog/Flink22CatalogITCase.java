@@ -28,6 +28,8 @@ import org.apache.flink.table.api.DataTypes;
 import org.apache.flink.table.api.Schema;
 import org.apache.flink.table.catalog.CatalogTable;
 import org.apache.flink.table.catalog.ObjectPath;
+import org.apache.flink.types.Row;
+import org.apache.flink.util.CollectionUtil;
 import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -171,6 +173,24 @@ public class Flink22CatalogITCase extends FlinkCatalogITCase {
                         .index("a", "dt")
                         .build();
         assertThat(table.getUnresolvedSchema()).isEqualTo(expectedSchema);
+    }
+
+    @Test
+    @MultiVersionTest
+    void testShowMaterializedTables() throws Exception {
+        tEnv.executeSql("create table show_mt_source (a int, b string)").await();
+        tEnv.executeSql(
+                        "create materialized table show_mt freshness = interval '30' second"
+                                + " as select a, b from show_mt_source")
+                .await();
+
+        assertThat(
+                        CollectionUtil.iteratorToList(
+                                tEnv.executeSql("show materialized tables").collect()))
+                .containsExactly(Row.of("show_mt"));
+
+        catalog.dropTable(new ObjectPath(DEFAULT_DB, "show_mt"), false);
+        catalog.dropTable(new ObjectPath(DEFAULT_DB, "show_mt_source"), false);
     }
 
     @Override
