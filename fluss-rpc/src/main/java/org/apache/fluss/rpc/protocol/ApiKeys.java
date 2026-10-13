@@ -115,7 +115,8 @@ public enum ApiKeys {
     LIST_KV_SNAPSHOTS(1064, 0, 0, PUBLIC),
     ADD_SERVER_TAG_BY_RACK(1065, 0, 0, PUBLIC),
     REMOVE_SERVER_TAG_BY_RACK(1066, 0, 0, PUBLIC),
-    DESCRIBE_BUCKETS(1067, 0, 0, PUBLIC);
+    DESCRIBE_BUCKETS(1067, 0, 0, PUBLIC),
+    LIST_REBALANCES(1068, 0, 0, PUBLIC);
 
     private static final Map<Integer, ApiKeys> ID_TO_TYPE =
             Arrays.stream(ApiKeys.values())

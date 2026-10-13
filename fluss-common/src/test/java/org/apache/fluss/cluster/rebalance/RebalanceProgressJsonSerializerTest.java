@@ -42,6 +42,27 @@ public class RebalanceProgressJsonSerializerTest {
         assertThat(serialize).isEqualTo(createProgressJson());
     }
 
+    @Test
+    public void testSerializerOmitsUnsetTimestamps() {
+        RebalanceProgress progress =
+                new RebalanceProgress(
+                        "rebalance-task-21jd",
+                        RebalanceStatus.REBALANCING,
+                        -1d,
+                        new HashMap<>(),
+                        -1,
+                        -1);
+        String serialize =
+                new String(
+                        JsonSerdeUtils.writeValueAsBytes(
+                                progress, RebalanceProgressJsonSerializer.INSTANCE),
+                        StandardCharsets.UTF_8);
+        assertThat(serialize)
+                .isEqualTo(
+                        "{\"rebalance_id\":\"rebalance-task-21jd\",\"rebalance_status\":1,"
+                                + "\"progress\":\"NONE\",\"progress_for_buckets\":[]}");
+    }
+
     private RebalanceProgress createProgressObj() {
         Map<TableBucket, RebalanceResultForBucket> progressForBucketMap = new HashMap<>();
         progressForBucketMap.put(
@@ -65,11 +86,16 @@ public class RebalanceProgressJsonSerializerTest {
                                 Arrays.asList(3, 4, 5)),
                         RebalanceStatus.COMPLETED));
         return new RebalanceProgress(
-                "rebalance-task-21jd", RebalanceStatus.COMPLETED, 1d, progressForBucketMap);
+                "rebalance-task-21jd",
+                RebalanceStatus.COMPLETED,
+                1d,
+                progressForBucketMap,
+                1735689600000L,
+                1735689660000L);
     }
 
     private String createProgressJson() {
-        return "{\"rebalance_id\":\"rebalance-task-21jd\",\"rebalance_status\":3,\"progress\":\"100%\",\"progress_for_buckets\":"
+        return "{\"rebalance_id\":\"rebalance-task-21jd\",\"rebalance_status\":3,\"started_at_ms\":1735689600000,\"completed_at_ms\":1735689660000,\"progress\":\"100%\",\"progress_for_buckets\":"
                 + "[{\"table_id\":1,\"bucket_id\":0,\"partition_id\":0,\"original_leader\":0,\"new_leader\":3,\"origin_replicas\":[0,1,2],\"new_replicas\":[3,4,5],\"rebalance_status\":3},"
                 + "{\"table_id\":0,\"bucket_id\":0,\"original_leader\":0,\"new_leader\":3,\"origin_replicas\":[0,1,2],\"new_replicas\":[3,4,5],\"rebalance_status\":3}]}";
     }

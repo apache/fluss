@@ -45,6 +45,7 @@ import org.apache.fluss.rpc.messages.AdjustIsrResponse;
 import org.apache.fluss.rpc.messages.ApiMessage;
 import org.apache.fluss.rpc.messages.CommitKvSnapshotResponse;
 import org.apache.fluss.rpc.messages.CommitRemoteLogManifestResponse;
+import org.apache.fluss.rpc.messages.ListRebalancesResponse;
 import org.apache.fluss.rpc.messages.NotifyKvSnapshotOffsetRequest;
 import org.apache.fluss.rpc.messages.NotifyLeaderAndIsrRequest;
 import org.apache.fluss.rpc.messages.NotifyLeaderAndIsrResponse;
@@ -59,6 +60,7 @@ import org.apache.fluss.server.coordinator.event.AdjustIsrReceivedEvent;
 import org.apache.fluss.server.coordinator.event.CommitKvSnapshotEvent;
 import org.apache.fluss.server.coordinator.event.CommitRemoteLogManifestEvent;
 import org.apache.fluss.server.coordinator.event.CoordinatorEventManager;
+import org.apache.fluss.server.coordinator.event.ListRebalancesEvent;
 import org.apache.fluss.server.coordinator.event.NotifyLeaderAndIsrResponseReceivedEvent;
 import org.apache.fluss.server.coordinator.event.RetryOfflineLeaderEvent;
 import org.apache.fluss.server.coordinator.remote.RemoteDirDynamicLoader;
@@ -109,6 +111,7 @@ import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentLinkedDeque;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BiConsumer;
@@ -2288,6 +2291,20 @@ class CoordinatorEventProcessorTest extends CoordinatorEventProcessorTestBase {
                         assertThat(eventProcessor.getRebalanceManager().hasInProgressRebalance())
                                 .isFalse());
         verifyIsr(tb0, 1, Arrays.asList(0, 1, 2));
+    }
+
+    @Test
+    void testListRebalancesCompletesCallbackWhenRebalanceManagerClosed() {
+        // Once the manager is closed, the snapshot taken on the event thread throws; the handler
+        // must still complete the callback rather than leave the client to hit the RPC timeout.
+        eventProcessor.getRebalanceManager().close();
+
+        CompletableFuture<ListRebalancesResponse> callback = new CompletableFuture<>();
+        eventProcessor.getCoordinatorEventManager().put(new ListRebalancesEvent(callback));
+
+        assertThatThrownBy(() -> callback.get(10, TimeUnit.SECONDS))
+                .isInstanceOf(ExecutionException.class)
+                .hasMessageContaining("RebalanceManager is already closed");
     }
 
     private void verifyIsr(TableBucket tb, int expectedLeader, List<Integer> expectedIsr)
