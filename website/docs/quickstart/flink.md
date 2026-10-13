@@ -414,7 +414,7 @@ quit;
 
 ### Remote Storage
 
-You can visit http://localhost:9001/ and sign in with `rustfsadmin` / `rustfsadmin` to view the files stored on remote storage.
+You can visit http://localhost:9001/, select Key Login and enter `rustfsadmin` in both the Access Key and Secret Key fields to view the files stored on remote storage.
 
 ## Clean up
 After finishing the tutorial, run `exit` to exit Flink SQL CLI Container and then run 
