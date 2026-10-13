@@ -80,6 +80,7 @@ public class FlinkLanceTieringTestBase {
         Configuration conf = new Configuration();
         // not to clean snapshots for test purpose
         conf.set(ConfigOptions.KV_MAX_RETAINED_SNAPSHOTS, Integer.MAX_VALUE);
+        conf.setDouble("server.data-disk.write-limit-ratio", 1.0);
         conf.setString("datalake.format", "lance");
         try {
             warehousePath =

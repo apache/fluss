@@ -54,5 +54,8 @@ public enum DataTypeFamily {
 
     COLLECTION,
 
+    /** Types that represent a fixed-size sequence of numeric values. */
+    VECTOR,
+
     EXTENSION
 }

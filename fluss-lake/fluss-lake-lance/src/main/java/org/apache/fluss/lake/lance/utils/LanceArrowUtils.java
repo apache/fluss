@@ -37,6 +37,7 @@ import org.apache.fluss.types.StringType;
 import org.apache.fluss.types.TimeType;
 import org.apache.fluss.types.TimestampType;
 import org.apache.fluss.types.TinyIntType;
+import org.apache.fluss.types.VectorType;
 
 import org.apache.arrow.vector.types.DateUnit;
 import org.apache.arrow.vector.types.FloatingPointPrecision;
@@ -118,6 +119,23 @@ public class LanceArrowUtils {
         } else {
             arrowType = toArrowType(logicalType);
         }
+        // VECTOR type: return early with explicit FixedSizeList(dimension) field and
+        // a non-nullable Float32 child field named "element".
+        if (logicalType instanceof VectorType) {
+            VectorType vectorType = (VectorType) logicalType;
+            ArrowType.FixedSizeList fslArrowType =
+                    new ArrowType.FixedSizeList(vectorType.getDimension());
+            FieldType fslFieldType = new FieldType(logicalType.isNullable(), fslArrowType, null);
+            Field childField =
+                    new Field(
+                            "element",
+                            new FieldType(
+                                    false,
+                                    new ArrowType.FloatingPoint(FloatingPointPrecision.SINGLE),
+                                    null),
+                            null);
+            return new Field(fieldName, fslFieldType, Collections.singletonList(childField));
+        }
         FieldType fieldType = new FieldType(logicalType.isNullable(), arrowType, null);
         List<Field> children = null;
         if (logicalType instanceof ArrayType) {
@@ -198,6 +216,9 @@ public class LanceArrowUtils {
             } else {
                 return new ArrowType.Timestamp(TimeUnit.NANOSECOND, null);
             }
+        } else if (dataType instanceof VectorType) {
+            VectorType vectorType = (VectorType) dataType;
+            return new ArrowType.FixedSizeList(vectorType.getDimension());
         } else if (dataType instanceof ArrayType) {
             return ArrowType.List.INSTANCE;
         } else if (dataType instanceof RowType) {
