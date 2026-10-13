@@ -26,6 +26,7 @@ import org.apache.fluss.metrics.groups.AbstractMetricGroup;
 import org.apache.fluss.metrics.groups.MetricGroup;
 import org.apache.fluss.metrics.registry.MetricRegistry;
 import org.apache.fluss.server.coordinator.event.CoordinatorEvent;
+import org.apache.fluss.server.coordinator.rebalance.RebalanceMetrics;
 
 import javax.annotation.Nullable;
 
@@ -54,12 +55,15 @@ public class CoordinatorMetricGroup extends AbstractMetricGroup {
     private final Map<Class<? extends CoordinatorEvent>, CoordinatorEventMetricGroup>
             eventMetricGroups = new ConcurrentHashMap<>();
 
+    private final RebalanceMetrics rebalanceMetrics;
+
     public CoordinatorMetricGroup(
             MetricRegistry registry, String clusterId, String hostname, String serverId) {
         super(registry, new String[] {clusterId, hostname, NAME}, null);
         this.clusterId = clusterId;
         this.hostname = hostname;
         this.serverId = serverId;
+        this.rebalanceMetrics = new RebalanceMetrics(this);
     }
 
     @Override
@@ -78,6 +82,11 @@ public class CoordinatorMetricGroup extends AbstractMetricGroup {
             Class<? extends CoordinatorEvent> eventClass) {
         return eventMetricGroups.computeIfAbsent(
                 eventClass, e -> new CoordinatorEventMetricGroup(registry, eventClass, this));
+    }
+
+    /** Returns the rebalance metrics for this coordinator server. */
+    public RebalanceMetrics getRebalanceMetrics() {
+        return rebalanceMetrics;
     }
 
     // ------------------------------------------------------------------------
