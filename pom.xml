@@ -454,6 +454,9 @@
             <properties>
                 <target.java.version>1.8</target.java.version>
                 <skip.on.java8>true</skip.on.java8>
+                <!-- Iceberg is not built on Java 8 (see fluss-lake-iceberg), so skip the Spark
+                suites that need it. Overridden when CI passes -DtagsToExclude explicitly. -->
+                <tagsToExclude>org.apache.fluss.spark.lake.SparkLakeIcebergTest</tagsToExclude>
             </properties>
             <build>
                 <plugins>
