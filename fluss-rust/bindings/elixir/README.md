@@ -2,7 +2,9 @@
 
 Elixir client for [Apache Fluss](https://fluss.apache.org/), built on the official Rust client via [Rustler](https://github.com/rusterlium/rustler) NIFs.
 
-Currently supports **log tables** (append + scan). Primary key (KV) table support is planned.
+Supports **log tables** (append + scan) and **primary key (KV) tables** (upsert, delete and
+partial update, with the changelog readable through the log scanner). Primary key lookup is
+not bound yet.
 
 ## Requirements
 
@@ -17,10 +19,9 @@ conn = Fluss.Connection.new!(config)
 admin = Fluss.Admin.new!(conn)
 
 schema =
-  Fluss.Schema.build()
+  Fluss.Schema.new()
   |> Fluss.Schema.column("ts", :bigint)
   |> Fluss.Schema.column("message", :string)
-  |> Fluss.Schema.build!()
 
 :ok = Fluss.Admin.create_table(admin, "my_db", "events", Fluss.TableDescriptor.new!(schema))
 
@@ -38,6 +39,43 @@ receive do
     for record <- records, do: IO.inspect(record[:row])
 end
 ```
+
+### Primary key tables
+
+Give the schema a primary key, then write through `Fluss.TableUpsert`. Values are a map
+keyed by column name, or a positional list.
+
+```elixir
+schema =
+  Fluss.Schema.new()
+  |> Fluss.Schema.column("id", :int)
+  |> Fluss.Schema.column("name", :string)
+  |> Fluss.Schema.column("email", :string)
+  |> Fluss.Schema.primary_key(["id"])
+
+:ok = Fluss.Admin.create_table(admin, "my_db", "users", Fluss.TableDescriptor.new!(schema))
+
+table = Fluss.Table.get!(conn, "my_db", "users")
+writer = table |> Fluss.TableUpsert.new!() |> Fluss.TableUpsert.create_writer!()
+
+Fluss.UpsertWriter.upsert(writer, %{id: 1, name: "alice"})
+Fluss.UpsertWriter.delete(writer, %{id: 1})
+:ok = Fluss.UpsertWriter.flush(writer)
+```
+
+Naming target columns restricts the writer to those columns, leaving the rest untouched:
+
+```elixir
+writer =
+  table
+  |> Fluss.TableUpsert.new!()
+  |> Fluss.TableUpsert.partial_update_by_name!([:id, :email])
+  |> Fluss.TableUpsert.create_writer!()
+```
+
+A primary key table's changelog is read with `Fluss.LogScanner`, exactly as above; each
+record carries a `:change_type` of `:insert`, `:update_before`, `:update_after` or
+`:delete`.
 
 ## Data Types
 
