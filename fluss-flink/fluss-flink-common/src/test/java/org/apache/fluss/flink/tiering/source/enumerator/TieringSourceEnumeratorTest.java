@@ -665,7 +665,7 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
             assertThat(context.getSplitsAssignmentSequence())
                     .flatExtracting(assignment -> assignment.assignment().values())
                     .flatExtracting(splits -> splits)
-                    .extracting(TieringSplit::getNumberOfSplits)
+                    .extracting(FlinkTieringSplit::getNumberOfSplits)
                     .containsOnly(4);
 
             // clean assignment
