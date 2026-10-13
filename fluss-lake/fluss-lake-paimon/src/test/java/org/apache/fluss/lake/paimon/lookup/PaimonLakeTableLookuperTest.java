@@ -329,11 +329,8 @@ class PaimonLakeTableLookuperTest {
                         () -> {
                             downloadsStarted.countDown();
                             try {
-                                // Without Fluss-level serialization, both downloads reach this
-                                // guard and continue together, exercising Paimon's shared mutable
-                                // lookup-store comparator. With serialization, the short wait
-                                // expires and the downloads proceed one at a time.
-                                downloadsStarted.await(100, TimeUnit.MILLISECONDS);
+                                // Detect serialization by requiring both SST builds to overlap.
+                                assertThat(downloadsStarted.await(30, TimeUnit.SECONDS)).isTrue();
                             } catch (InterruptedException e) {
                                 Thread.currentThread().interrupt();
                                 throw new RuntimeException(e);
