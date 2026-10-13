@@ -55,9 +55,9 @@ public class NotIn extends LeafFunction {
             long rowCount,
             Object min,
             Object max,
-            Long nullCount,
+            long nullCount,
             List<Object> literals) {
-        if (nullCount != null && rowCount == nullCount) {
+        if (nullCount >= 0 && rowCount == nullCount) {
             return false;
         }
         for (Object literal : literals) {

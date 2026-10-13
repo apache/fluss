@@ -17,13 +17,14 @@
 
 package org.apache.fluss.server.kv.snapshot;
 
+import org.apache.fluss.metrics.Counter;
 import org.apache.fluss.server.utils.ResourceGuard;
 import org.apache.fluss.utils.CloseableRegistry;
 import org.apache.fluss.utils.ExceptionUtils;
 import org.apache.fluss.utils.FileUtils;
 
-import org.rocksdb.Checkpoint;
-import org.rocksdb.RocksDB;
+import io.github.fluss_contrib.rocksdb.Checkpoint;
+import io.github.fluss_contrib.rocksdb.RocksDB;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -80,13 +81,18 @@ public class RocksIncrementalSnapshot implements AutoCloseable {
     /** The help class used to upload kv snapshot files. */
     private final KvSnapshotDataUploader kvSnapshotDataUploader;
 
+    private final Counter remoteKvCopyBytes;
+
+    /** Creates an incremental snapshot using the table's thread-safe upload byte counter. */
     public RocksIncrementalSnapshot(
             Map<Long, Collection<KvFileHandleAndLocalPath>> uploadedSstFiles,
             @Nonnull RocksDB db,
             ResourceGuard rocksDBResourceGuard,
             KvSnapshotDataUploader kvSnapshotDataUploader,
             @Nonnull File instanceBasePath,
-            long lastCompletedSnapshotId) {
+            long lastCompletedSnapshotId,
+            Counter remoteKvCopyBytes) {
+        this.remoteKvCopyBytes = remoteKvCopyBytes;
         this.uploadedSstFiles = uploadedSstFiles;
         this.db = db;
         this.rocksDBResourceGuard = rocksDBResourceGuard;
@@ -98,11 +104,11 @@ public class RocksIncrementalSnapshot implements AutoCloseable {
     public SnapshotResultSupplier asyncSnapshot(
             NativeRocksDBSnapshotResources snapshotResources,
             long snapshotId,
-            long logOffset,
+            TabletState tabletState,
             @Nonnull SnapshotLocation snapshotLocation) {
         return new RocksDBIncrementalSnapshotOperation(
                 snapshotId,
-                logOffset,
+                tabletState,
                 snapshotLocation,
                 snapshotResources.previousSnapshot,
                 snapshotResources.snapshotDirectory);
@@ -185,7 +191,7 @@ public class RocksIncrementalSnapshot implements AutoCloseable {
         private final File localSnapshotDirectory;
 
         private final long snapshotId;
-        private final long logOffset;
+        private final TabletState tabletState;
 
         /** The target snapshot location and factory that creates the output streams to DFS. */
         @Nonnull private final SnapshotLocation snapshotLocation;
@@ -194,12 +200,12 @@ public class RocksIncrementalSnapshot implements AutoCloseable {
 
         public RocksDBIncrementalSnapshotOperation(
                 long snapshotId,
-                long logOffset,
+                TabletState tabletState,
                 @Nonnull SnapshotLocation snapshotLocation,
                 PreviousSnapshot previousSnapshot,
                 File localSnapshotDirectory) {
             this.snapshotId = snapshotId;
-            this.logOffset = logOffset;
+            this.tabletState = tabletState;
             this.snapshotLocation = snapshotLocation;
             this.previousSnapshot = previousSnapshot;
             this.localSnapshotDirectory = localSnapshotDirectory;
@@ -221,9 +227,9 @@ public class RocksIncrementalSnapshot implements AutoCloseable {
                 completed = true;
                 // We make the 'sstFiles' as the 'shared' in KvSnapshotHandle,
                 final KvSnapshotHandle kvSnapshotHandle =
-                        new KvSnapshotHandle(sstFiles, miscFiles, snapshotIncrementalSize);
+                        KvSnapshotHandle.create(sstFiles, miscFiles, snapshotIncrementalSize);
                 return new SnapshotResult(
-                        kvSnapshotHandle, snapshotLocation.getSnapshotDirectory(), logOffset);
+                        kvSnapshotHandle, snapshotLocation.getSnapshotDirectory(), tabletState);
             } finally {
                 if (!completed) {
                     cleanupIncompleteSnapshot(tmpResourcesRegistry);
@@ -253,7 +259,8 @@ public class RocksIncrementalSnapshot implements AutoCloseable {
                             snapshotLocation,
                             SnapshotFileScope.SHARED,
                             closeableRegistry,
-                            tmpResourcesRegistry);
+                            tmpResourcesRegistry,
+                            remoteKvCopyBytes);
             size +=
                     sstFilesUploadResult.stream()
                             .mapToLong(e -> e.getKvFileHandle().getSize())
@@ -268,7 +275,8 @@ public class RocksIncrementalSnapshot implements AutoCloseable {
                             snapshotLocation,
                             SnapshotFileScope.EXCLUSIVE,
                             closeableRegistry,
-                            tmpResourcesRegistry);
+                            tmpResourcesRegistry,
+                            remoteKvCopyBytes);
             size +=
                     miscFilesUploadResult.stream()
                             .mapToLong(e -> e.getKvFileHandle().getSize())

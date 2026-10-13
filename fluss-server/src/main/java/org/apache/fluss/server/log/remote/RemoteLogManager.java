@@ -20,18 +20,22 @@ package org.apache.fluss.server.log.remote;
 import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.exception.NotLeaderOrFollowerException;
 import org.apache.fluss.exception.RemoteStorageException;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.remote.RemoteLogManifest;
 import org.apache.fluss.remote.RemoteLogSegment;
 import org.apache.fluss.rpc.gateway.CoordinatorGateway;
+import org.apache.fluss.server.log.LogManager;
 import org.apache.fluss.server.log.LogTablet;
 import org.apache.fluss.server.replica.Replica;
+import org.apache.fluss.server.storage.LocalDiskManager;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.RemoteLogManifestHandle;
+import org.apache.fluss.utils.FlussPaths;
 import org.apache.fluss.utils.IOUtils;
-import org.apache.fluss.utils.MapUtils;
 import org.apache.fluss.utils.clock.Clock;
 import org.apache.fluss.utils.concurrent.ExecutorThreadFactory;
 
@@ -48,6 +52,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
@@ -70,20 +75,24 @@ public class RemoteLogManager implements Closeable {
     public static final String RLM_SCHEDULED_THREAD_PREFIX = "fluss-remote-log-manager-thread-pool";
 
     private final long taskInterval;
-    private final RemoteLogIndexCache remoteLogIndexCache;
+    private final int maxUploadSegmentsPerTask;
+    private final Map<File, RemoteLogIndexCache> remoteLogIndexCachesByDir;
     private final RemoteLogStorage remoteLogStorage;
     private final CoordinatorGateway coordinatorGateway;
     private final ScheduledExecutorService rlManagerScheduledThreadPool;
     private final Clock clock;
     private final ZooKeeperClient zkClient;
+    private final LogManager logManager;
 
-    private final Map<TableBucket, TaskWithFuture> rlmTasks = MapUtils.newConcurrentHashMap();
-    private final Map<TableBucket, RemoteLogTablet> remoteLogs = MapUtils.newConcurrentHashMap();
+    private final Map<TableBucket, TaskWithFuture> rlmTasks = new ConcurrentHashMap<>();
+    private final Map<TableBucket, RemoteLogTablet> remoteLogs = new ConcurrentHashMap<>();
 
     public RemoteLogManager(
             Configuration conf,
             ZooKeeperClient zkClient,
             CoordinatorGateway coordinatorGateway,
+            LocalDiskManager localDiskManager,
+            LogManager logManager,
             Clock clock,
             ExecutorService ioExecutor)
             throws IOException {
@@ -91,6 +100,8 @@ public class RemoteLogManager implements Closeable {
                 conf,
                 zkClient,
                 coordinatorGateway,
+                localDiskManager,
+                logManager,
                 new DefaultRemoteLogStorage(conf, ioExecutor),
                 Executors.newScheduledThreadPool(
                         conf.getInt(ConfigOptions.REMOTE_LOG_MANAGER_THREAD_POOL_SIZE),
@@ -103,6 +114,8 @@ public class RemoteLogManager implements Closeable {
             Configuration conf,
             ZooKeeperClient zkClient,
             CoordinatorGateway coordinatorGateway,
+            LocalDiskManager localDiskManager,
+            LogManager logManager,
             RemoteLogStorage remoteLogStorage,
             ScheduledExecutorService scheduledExecutor,
             Clock clock)
@@ -110,14 +123,16 @@ public class RemoteLogManager implements Closeable {
         this.remoteLogStorage = remoteLogStorage;
         this.zkClient = zkClient;
         this.coordinatorGateway = coordinatorGateway;
-
-        File dataDir = new File(conf.getString(ConfigOptions.DATA_DIR));
-        this.remoteLogIndexCache =
-                new RemoteLogIndexCache(
-                        (int) conf.get(ConfigOptions.REMOTE_LOG_INDEX_FILE_CACHE_SIZE).getBytes(),
-                        remoteLogStorage,
-                        dataDir);
+        this.logManager = logManager;
+        this.remoteLogIndexCachesByDir = new ConcurrentHashMap<>();
+        long cacheSize = conf.get(ConfigOptions.REMOTE_LOG_INDEX_FILE_CACHE_SIZE).getBytes();
+        for (File dataDir : localDiskManager.dataDirs()) {
+            remoteLogIndexCachesByDir.put(
+                    dataDir, new RemoteLogIndexCache(cacheSize, remoteLogStorage, dataDir));
+        }
         this.taskInterval = conf.get(ConfigOptions.REMOTE_LOG_TASK_INTERVAL_DURATION).toMillis();
+        this.maxUploadSegmentsPerTask =
+                conf.getInt(ConfigOptions.REMOTE_LOG_TASK_MAX_UPLOAD_SEGMENTS);
         this.rlManagerScheduledThreadPool = scheduledExecutor;
         this.clock = clock;
     }
@@ -126,20 +141,17 @@ public class RemoteLogManager implements Closeable {
         return remoteLogStorage;
     }
 
-    public FsPath remoteLogDir() {
-        return remoteLogStorage.getRemoteLogDir();
-    }
-
-    /** Restore the remote log manifest and start the log tiering task for the given replica. */
-    public void startLogTiering(Replica replica) throws Exception {
+    /** Register the replica to the remote log manager. */
+    public void registerReplica(Replica replica) throws Exception {
         if (remoteDisabled()) {
             return;
         }
         TableBucket tableBucket = replica.getTableBucket();
         PhysicalTablePath physicalTablePath = replica.getPhysicalTablePath();
         LogTablet log = replica.getLogTablet();
+        FsPath remoteLogDir = FlussPaths.remoteLogDir(replica.getRemoteDataDir());
         RemoteLogTablet remoteLog =
-                new RemoteLogTablet(physicalTablePath, tableBucket, replica.getLogTTLMs());
+                new RemoteLogTablet(physicalTablePath, tableBucket, remoteLogDir);
         Optional<RemoteLogManifestHandle> remoteLogManifestHandleOpt =
                 zkClient.getRemoteLogManifestHandle(tableBucket);
         if (remoteLogManifestHandleOpt.isPresent()) {
@@ -148,14 +160,27 @@ public class RemoteLogManager implements Closeable {
             RemoteLogManifest manifest =
                     remoteLogStorage.readRemoteLogManifestSnapshot(
                             remoteLogManifestHandleOpt.get().getRemoteLogManifestPath());
+
             remoteLog.loadRemoteLogManifest(manifest);
         }
-        remoteLog.getRemoteLogEndOffset().ifPresent(log::updateRemoteLogEndOffset);
-        log.updateRemoteLogStartOffset(remoteLog.getRemoteLogStartOffset());
+
+        log.updateRemoteLogOffsets(
+                remoteLog.getRemoteLogStartOffset(),
+                remoteLog.getRemoteLogEndOffset().orElse(-1L),
+                remoteLog.getHighestCopiedEndOffset());
         log.updateRemoteLogSize(remoteLog.getRemoteSizeInBytes());
         // leader needs to register the remote log metrics
         remoteLog.registerMetrics(replica.bucketMetrics());
         remoteLogs.put(tableBucket, remoteLog);
+    }
+
+    /** Start the log tiering task for the given replica. */
+    public void startLogTiering(Replica replica) {
+        TableBucket tableBucket = replica.getTableBucket();
+        RemoteLogTablet remoteLog = remoteLogs.get(tableBucket);
+        if (remoteLog == null) {
+            return;
+        }
 
         doHandleLeaderReplica(replica, remoteLog, tableBucket);
         LOG.debug("Added the remote log tiering task for replica {}", tableBucket);
@@ -179,7 +204,8 @@ public class RemoteLogManager implements Closeable {
                             .map(RemoteLogSegment::remoteLogSegmentId)
                             .collect(Collectors.toList());
             // remove cache.
-            remoteLogIndexCache.removeAll(remoteLogSegmentIdList);
+            remoteLogIndexCache(replica.getLogTablet().getDataDir())
+                    .removeAll(remoteLogSegmentIdList);
             // unregister the remote log metrics, only leader needs to report
             remoteLog.unregisterMetrics();
         }
@@ -209,14 +235,19 @@ public class RemoteLogManager implements Closeable {
 
         if (deleteRemote) {
             LOG.info("Deleting the remote log segments for table-bucket: {}", tb);
+            FsPath remoteLogDir = FlussPaths.remoteLogDir(replica.getRemoteDataDir());
             // delete the remote log of the table bucket.
-            deleteRemoteLog(physicalTablePath, tb);
+            deleteRemoteLog(remoteLogDir, physicalTablePath, tb);
         }
     }
 
     /** Get the position of the given offset in the remote log segment. */
     public int lookupPositionForOffset(RemoteLogSegment remoteLogSegment, long offset) {
-        return remoteLogIndexCache.lookupPosition(remoteLogSegment, offset);
+        return remoteLogIndexCacheForBucket(remoteLogSegment.tableBucket())
+                .lookupPosition(
+                        remoteLogTablet(remoteLogSegment.tableBucket()).getRemoteLogDir(),
+                        remoteLogSegment,
+                        offset);
     }
 
     /**
@@ -233,12 +264,22 @@ public class RemoteLogManager implements Closeable {
             return -1L;
         }
 
-        RemoteLogSegment segment = remoteLogTablet.findSegmentByTimestamp(timestamp);
-        if (segment == null) {
-            return -1L;
-        } else {
-            return remoteLogIndexCache.lookupOffsetForTimestamp(segment, timestamp);
+        RemoteLogIndexCache indexCache = remoteLogIndexCacheForBucket(tableBucket);
+        for (RemoteLogSegment segment : remoteLogTablet.findSegmentsByTimestamp(timestamp)) {
+            long offset =
+                    indexCache.lookupOffsetForTimestamp(
+                            remoteLogTablet.getRemoteLogDir(), segment, timestamp);
+            // The timestamp index covers the complete physical segment, while overlap handling may
+            // expose only a clipped logical range. Clamp a result in the hidden prefix to the
+            // logical start, and skip a result in the hidden suffix in favor of the next candidate.
+            if (offset < segment.logicalStartOffset()) {
+                return segment.logicalStartOffset();
+            }
+            if (offset < segment.logicalEndOffset()) {
+                return offset;
+            }
         }
+        return -1L;
     }
 
     /**
@@ -248,6 +289,12 @@ public class RemoteLogManager implements Closeable {
      */
     public List<RemoteLogSegment> relevantRemoteLogSegments(TableBucket tableBucket, long offset) {
         return remoteLogTablet(tableBucket).relevantRemoteLogSegments(offset);
+    }
+
+    /** Returns the maximal physically contiguous remote segment prefix for FetchLog v0. */
+    public List<RemoteLogSegment> relevantRemoteLogSegmentsForFetchV0(
+            TableBucket tableBucket, long offset) {
+        return remoteLogTablet(tableBucket).relevantRemoteLogSegmentsForFetchV0(offset);
     }
 
     private boolean remoteDisabled() {
@@ -261,11 +308,12 @@ public class RemoteLogManager implements Closeable {
      * <p>Note: the zk path for {@link RemoteLogManifestHandle} will be deleted by coordinator while
      * table delete.
      */
-    private void deleteRemoteLog(PhysicalTablePath physicalTablePath, TableBucket tableBucket) {
+    private void deleteRemoteLog(
+            FsPath remoteLogDir, PhysicalTablePath physicalTablePath, TableBucket tableBucket) {
         // delete the file in remote storage.
         try {
             // TODO: maybe need to optimize to delete on specific file path
-            remoteLogStorage.deleteTableBucket(physicalTablePath, tableBucket);
+            remoteLogStorage.deleteTableBucket(remoteLogDir, physicalTablePath, tableBucket);
         } catch (RemoteStorageException e) {
             LOG.error(
                     "Error occurred while deleting remote log for table-bucket: {}",
@@ -289,8 +337,10 @@ public class RemoteLogManager implements Closeable {
                                     replica,
                                     remoteLog,
                                     remoteLogStorage,
+                                    remoteLogIndexCache(replica.getLogTablet().getDataDir()),
                                     coordinatorGateway,
-                                    clock);
+                                    clock,
+                                    maxUploadSegmentsPerTask);
                     LOG.info(
                             "Created a new remote log task for table-bucket{}: {} and getting scheduled",
                             tableBucket,
@@ -319,7 +369,9 @@ public class RemoteLogManager implements Closeable {
     public void close() throws IOException {
         rlmTasks.values().forEach(TaskWithFuture::cancel);
         IOUtils.closeQuietly(remoteLogStorage, "RemoteLogStorageManager");
-        IOUtils.closeQuietly(remoteLogIndexCache, "RemoteIndexCache");
+        remoteLogIndexCachesByDir.forEach(
+                (dataDir, cache) ->
+                        IOUtils.closeQuietly(cache, "RemoteIndexCache-" + dataDir.getName()));
 
         shutdownAndAwaitTermination(
                 rlManagerScheduledThreadPool, "RLMScheduledThreadPool", 10, TimeUnit.SECONDS);
@@ -385,13 +437,32 @@ public class RemoteLogManager implements Closeable {
     }
 
     @VisibleForTesting
-    public RemoteLogIndexCache getRemoteLogIndexCache() {
-        return remoteLogIndexCache;
+    public RemoteLogIndexCache getRemoteLogIndexCache(File dataDir) {
+        return remoteLogIndexCache(dataDir);
     }
 
     @VisibleForTesting
     @Nullable
     TaskWithFuture getTaskWithFuture(TableBucket tableBucket) {
         return rlmTasks.get(tableBucket);
+    }
+
+    private RemoteLogIndexCache remoteLogIndexCacheForBucket(TableBucket tableBucket) {
+        Optional<LogTablet> logTabletOpt = logManager.getLog(tableBucket);
+        if (!logTabletOpt.isPresent()) {
+            throw new NotLeaderOrFollowerException(
+                    String.format(
+                            "Can't resolve remote log index cache for bucket %s because no local log exists.",
+                            tableBucket));
+        }
+        return remoteLogIndexCache(logTabletOpt.get().getDataDir());
+    }
+
+    private RemoteLogIndexCache remoteLogIndexCache(File dataDir) {
+        RemoteLogIndexCache remoteLogIndexCache = remoteLogIndexCachesByDir.get(dataDir);
+        if (remoteLogIndexCache == null) {
+            throw new IllegalArgumentException("Unknown local data directory: " + dataDir);
+        }
+        return remoteLogIndexCache;
     }
 }

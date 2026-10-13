@@ -23,6 +23,7 @@ import java.time.Duration;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Properties;
 import java.util.stream.Collectors;
@@ -57,6 +58,11 @@ public class ConfigurationTest {
             ConfigBuilder.key("test-duration-key").durationType().noDefaultValue();
     private static final ConfigOption<Password> SECRET_OPTION =
             ConfigBuilder.key("secret").passwordType().noDefaultValue();
+
+    private static final String GS_SERVICE_ACCOUNT_PRIVATE_KEY =
+            "fs.gs.auth.service.account.private.key";
+    private static final String GS_SERVICE_ACCOUNT_PRIVATE_KEY_HYPHEN =
+            "fs.gs.auth.service.account.private-key";
 
     private static final Map<String, String> PROPERTIES_MAP = new HashMap<>();
 
@@ -454,6 +460,77 @@ public class ConfigurationTest {
         assertThat(cfg.get(SECRET_OPTION)).isEqualTo(new Password(secretValue));
         assertThat(cfg.get(SECRET_OPTION).toString()).isEqualTo("******");
         assertThat(cfg.get(SECRET_OPTION).value()).isEqualTo(secretValue);
+    }
+
+    @Test
+    void testSensitiveKeyParts() {
+        List<String> sensitiveKeys =
+                Arrays.asList(
+                        "client.security.sasl.password",
+                        "fs.s3a.secret.key",
+                        "fs.azure.account.key.account.blob.core.windows.net",
+                        "connector.apikey",
+                        "connector.api-key",
+                        "connector.auth-params",
+                        "connector.service-key",
+                        "session.token",
+                        "security.basic-auth",
+                        "security.sasl.plain.jaas.config",
+                        "client.http-headers",
+                        GS_SERVICE_ACCOUNT_PRIVATE_KEY,
+                        GS_SERVICE_ACCOUNT_PRIVATE_KEY_HYPHEN,
+                        "fs.s3a.access.key",
+                        "s3.access-key",
+                        "fs.oss.accessKeyId",
+                        "datalake.lance.access_key_id");
+
+        for (String key : sensitiveKeys) {
+            assertThat(ConfigurationUtils.isSensitiveKey(key)).as(key).isTrue();
+            assertThat(ConfigurationUtils.isSensitiveKey(key.toUpperCase(Locale.ROOT)))
+                    .as(key)
+                    .isTrue();
+        }
+
+        assertThat(ConfigurationUtils.isSensitiveKey("client.request.timeout")).isFalse();
+        assertThat(ConfigurationUtils.isSensitiveKey("remote.data.dir")).isFalse();
+
+        List<String> nonSensitiveKeys =
+                Arrays.asList(
+                        ConfigOptions.FILESYSTEM_SECURITY_TOKEN_RENEWAL_RETRY_BACKOFF.key(),
+                        ConfigOptions.FILESYSTEM_SECURITY_TOKEN_RENEWAL_TIME_RATIO.key());
+        for (String key : nonSensitiveKeys) {
+            assertThat(ConfigurationUtils.isSensitiveKey(key)).as(key).isFalse();
+            assertThat(ConfigurationUtils.isSensitiveKey(key.toUpperCase(Locale.ROOT)))
+                    .as(key)
+                    .isFalse();
+        }
+    }
+
+    @Test
+    void testHideSensitiveValue() {
+        assertThat(ConfigurationUtils.hideSensitiveValue("fs.s3a.access.key", "ak"))
+                .isEqualTo(Password.HIDDEN_CONTENT);
+        assertThat(ConfigurationUtils.hideSensitiveValue("client.security.sasl.password", "pwd"))
+                .isEqualTo(Password.HIDDEN_CONTENT);
+        assertThat(ConfigurationUtils.hideSensitiveValue("plain.key", new Password("pwd")))
+                .isEqualTo(Password.HIDDEN_CONTENT);
+        assertThat(ConfigurationUtils.hideSensitiveValue("plain.key", "value")).isEqualTo("value");
+    }
+
+    @Test
+    void testHideSensitiveValues() {
+        Map<String, String> values = new HashMap<>();
+        values.put("fs.s3a.access.key", "access-key");
+        values.put(GS_SERVICE_ACCOUNT_PRIVATE_KEY, "private-key");
+        values.put(ConfigOptions.FILESYSTEM_SECURITY_TOKEN_RENEWAL_RETRY_BACKOFF.key(), "10 s");
+        values.put("plain.key", "value");
+
+        assertThat(ConfigurationUtils.hideSensitiveValues(values))
+                .containsEntry("fs.s3a.access.key", Password.HIDDEN_CONTENT)
+                .containsEntry(GS_SERVICE_ACCOUNT_PRIVATE_KEY, Password.HIDDEN_CONTENT)
+                .containsEntry(
+                        ConfigOptions.FILESYSTEM_SECURITY_TOKEN_RENEWAL_RETRY_BACKOFF.key(), "10 s")
+                .containsEntry("plain.key", "value");
     }
 
     @Test

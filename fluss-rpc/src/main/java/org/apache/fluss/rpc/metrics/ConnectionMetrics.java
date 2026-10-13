@@ -20,13 +20,13 @@ package org.apache.fluss.rpc.metrics;
 import org.apache.fluss.metrics.Counter;
 import org.apache.fluss.metrics.ThreadSafeSimpleCounter;
 import org.apache.fluss.rpc.protocol.ApiKeys;
-import org.apache.fluss.utils.MapUtils;
 
 import javax.annotation.Nullable;
 
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /** Metrics for ServerConnection with {@link ClientMetricGroup} as parent group. */
@@ -38,7 +38,7 @@ public class ConnectionMetrics {
     private final ClientMetricGroup clientMetricGroup;
 
     /** Metrics for different request/response metrics with specify {@link ApiKeys}. */
-    final Map<String, Metrics> metricsByRequestName = MapUtils.newConcurrentHashMap();
+    final Map<String, Metrics> metricsByRequestName = new ConcurrentHashMap<>();
 
     public ConnectionMetrics(String serverId, ClientMetricGroup clientMetricGroup) {
         this.serverId = serverId;

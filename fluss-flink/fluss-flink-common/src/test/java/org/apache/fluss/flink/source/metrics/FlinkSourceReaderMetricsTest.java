@@ -17,79 +17,72 @@
 
 package org.apache.fluss.flink.source.metrics;
 
-import org.apache.fluss.metadata.TableBucket;
-
 import org.apache.flink.metrics.Gauge;
 import org.apache.flink.metrics.testutils.MetricListener;
+import org.apache.flink.runtime.metrics.MetricNames;
 import org.apache.flink.runtime.metrics.groups.InternalSourceReaderMetricGroup;
 import org.junit.jupiter.api.Test;
 
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicLong;
 
-import static org.apache.fluss.flink.source.metrics.FlinkSourceReaderMetrics.BUCKET_GROUP;
-import static org.apache.fluss.flink.source.metrics.FlinkSourceReaderMetrics.FLUSS_METRIC_GROUP;
-import static org.apache.fluss.flink.source.metrics.FlinkSourceReaderMetrics.PARTITION_GROUP;
-import static org.apache.fluss.flink.source.metrics.FlinkSourceReaderMetrics.READER_METRIC_GROUP;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** Unit test for {@link org.apache.fluss.flink.source.metrics.FlinkSourceReaderMetrics}. */
 class FlinkSourceReaderMetricsTest {
 
     @Test
-    void testCurrentOffsetTracking() {
+    void testCurrentFetchEventTimeLag() {
         MetricListener metricListener = new MetricListener();
-
-        final TableBucket t0 = new TableBucket(0, 0L, 1);
-        final TableBucket t1 = new TableBucket(0, 0L, 2);
-        final TableBucket t2 = new TableBucket(0, null, 1);
-        final TableBucket t3 = new TableBucket(0, null, 2);
 
         final FlinkSourceReaderMetrics flinkSourceReaderMetrics =
                 new FlinkSourceReaderMetrics(
                         InternalSourceReaderMetricGroup.mock(metricListener.getMetricGroup()));
 
-        flinkSourceReaderMetrics.registerTableBucket(t0);
-        flinkSourceReaderMetrics.registerTableBucket(t1);
-        flinkSourceReaderMetrics.registerTableBucket(t2);
-        flinkSourceReaderMetrics.registerTableBucket(t3);
+        assertThat(metricListener.getGauge(MetricNames.CURRENT_FETCH_EVENT_TIME_LAG)).isEmpty();
 
-        flinkSourceReaderMetrics.recordCurrentOffset(t0, 15213L);
-        flinkSourceReaderMetrics.recordCurrentOffset(t1, 18213L);
-        flinkSourceReaderMetrics.recordCurrentOffset(t2, 18613L);
-        flinkSourceReaderMetrics.recordCurrentOffset(t3, 15513L);
+        flinkSourceReaderMetrics.reportRecordEventTime(15213L);
+        Optional<Gauge<Long>> currentFetchEventTimeLag =
+                metricListener.getGauge(MetricNames.CURRENT_FETCH_EVENT_TIME_LAG);
+        assertThat(currentFetchEventTimeLag).isPresent();
+        assertThat((long) currentFetchEventTimeLag.get().getValue()).isEqualTo(15213L);
 
-        assertCurrentOffset(t0, 15213L, metricListener);
-        assertCurrentOffset(t1, 18213L, metricListener);
-        assertCurrentOffset(t2, 18613L, metricListener);
-        assertCurrentOffset(t3, 15513L, metricListener);
+        flinkSourceReaderMetrics.reportRecordEventTime(18213L);
+        assertThat((long) currentFetchEventTimeLag.get().getValue()).isEqualTo(18213L);
     }
 
-    // ----------- Assertions --------------
+    @Test
+    void testPendingRecordsGaugeTracksActiveScanners() {
+        MetricListener metricListener = new MetricListener();
+        FlinkSourceReaderMetrics flinkSourceReaderMetrics =
+                new FlinkSourceReaderMetrics(
+                        InternalSourceReaderMetricGroup.mock(metricListener.getMetricGroup()));
 
-    private void assertCurrentOffset(
-            TableBucket tb, long expectedOffset, MetricListener metricListener) {
-        final Optional<Gauge<Long>> currentOffsetGauge;
-        if (tb.getPartitionId() == null) {
-            currentOffsetGauge =
-                    metricListener.getGauge(
-                            FLUSS_METRIC_GROUP,
-                            READER_METRIC_GROUP,
-                            BUCKET_GROUP,
-                            String.valueOf(tb.getBucket()),
-                            FlinkSourceReaderMetrics.CURRENT_OFFSET_METRIC_GAUGE);
-        } else {
-            currentOffsetGauge =
-                    metricListener.getGauge(
-                            FLUSS_METRIC_GROUP,
-                            READER_METRIC_GROUP,
-                            PARTITION_GROUP,
-                            String.valueOf(tb.getPartitionId()),
-                            BUCKET_GROUP,
-                            String.valueOf(tb.getBucket()),
-                            FlinkSourceReaderMetrics.CURRENT_OFFSET_METRIC_GAUGE);
-        }
+        // the metric is not registered until a log scanner provides its records lag
+        assertThat(metricListener.getGauge(MetricNames.PENDING_RECORDS)).isEmpty();
 
-        assertThat(currentOffsetGauge).isPresent();
-        assertThat((long) currentOffsetGauge.get().getValue()).isEqualTo(expectedOffset);
+        AtomicLong firstRecordsLag = new AtomicLong(10L);
+        org.apache.fluss.metrics.Gauge<Long> firstRecordsLagMetric = firstRecordsLag::get;
+        flinkSourceReaderMetrics.maybeAddRecordsLagMetric(firstRecordsLagMetric);
+        Optional<Gauge<Long>> pendingRecords = metricListener.getGauge(MetricNames.PENDING_RECORDS);
+        assertThat(pendingRecords).isPresent();
+        assertThat((long) pendingRecords.get().getValue()).isEqualTo(10L);
+
+        AtomicLong secondRecordsLag = new AtomicLong(7L);
+        org.apache.fluss.metrics.Gauge<Long> secondRecordsLagMetric = secondRecordsLag::get;
+        flinkSourceReaderMetrics.maybeAddRecordsLagMetric(secondRecordsLagMetric);
+        assertThat(metricListener.getGauge(MetricNames.PENDING_RECORDS).get())
+                .isSameAs(pendingRecords.get());
+        assertThat((long) pendingRecords.get().getValue()).isEqualTo(17L);
+
+        firstRecordsLag.set(3L);
+        assertThat((long) pendingRecords.get().getValue()).isEqualTo(10L);
+
+        flinkSourceReaderMetrics.removeRecordsLagMetric(firstRecordsLagMetric);
+        secondRecordsLag.set(4L);
+        assertThat((long) pendingRecords.get().getValue()).isEqualTo(4L);
+
+        flinkSourceReaderMetrics.removeRecordsLagMetric(secondRecordsLagMetric);
+        assertThat((long) pendingRecords.get().getValue()).isEqualTo(0L);
     }
 }

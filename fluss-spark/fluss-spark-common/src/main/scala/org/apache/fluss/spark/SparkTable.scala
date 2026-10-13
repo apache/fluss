@@ -41,30 +41,36 @@ class SparkTable(
   with SupportsWrite
   with SQLConfHelper {
 
-  private def populateSparkConf(flussConfig: FlussConfiguration): Unit = {
+  /**
+   * Merges the current `spark.sql.fluss.*` session configuration onto a copy of the catalog
+   * configuration, which is shared by every table of this catalog and must not be mutated.
+   */
+  private def configWithSessionConfs(): FlussConfiguration = {
+    val merged = new FlussConfiguration(flussConfig)
     conf.getAllConfs
       .filter(_._1.startsWith(SparkFlussConf.SPARK_FLUSS_CONF_PREFIX))
       .foreach {
         case (k, v) =>
-          flussConfig.setString(k.substring(SparkFlussConf.SPARK_FLUSS_CONF_PREFIX.length), v)
+          merged.setString(k.substring(SparkFlussConf.SPARK_FLUSS_CONF_PREFIX.length), v)
       }
+    merged
   }
 
   override def newWriteBuilder(logicalWriteInfo: LogicalWriteInfo): WriteBuilder = {
-    populateSparkConf(flussConfig)
+    val config = configWithSessionConfs()
     if (tableInfo.getPrimaryKeys.isEmpty) {
-      new FlussAppendWriteBuilder(tablePath, logicalWriteInfo.schema(), flussConfig)
+      new FlussAppendWriteBuilder(tablePath, logicalWriteInfo.schema(), config)
     } else {
-      new FlussUpsertWriteBuilder(tablePath, logicalWriteInfo.schema(), flussConfig)
+      new FlussUpsertWriteBuilder(tablePath, logicalWriteInfo.schema(), config)
     }
   }
 
   override def newScanBuilder(options: CaseInsensitiveStringMap): ScanBuilder = {
-    populateSparkConf(flussConfig)
+    val config = configWithSessionConfs()
     if (tableInfo.getPrimaryKeys.isEmpty) {
-      new FlussAppendScanBuilder(tablePath, tableInfo, options, flussConfig)
+      new FlussAppendScanBuilder(tablePath, tableInfo, options, config)
     } else {
-      new FlussUpsertScanBuilder(tablePath, tableInfo, options, flussConfig)
+      new FlussUpsertScanBuilder(tablePath, tableInfo, options, config)
     }
   }
 }

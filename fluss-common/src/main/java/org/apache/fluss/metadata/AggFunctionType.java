@@ -18,10 +18,17 @@
 package org.apache.fluss.metadata;
 
 import org.apache.fluss.annotation.PublicEvolving;
+import org.apache.fluss.types.DataType;
+import org.apache.fluss.types.DataTypeRoot;
 
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.Locale;
 import java.util.Set;
+
+import static org.apache.fluss.metadata.AggFunctions.PARAM_DELIMITER;
+import static org.apache.fluss.metadata.AggFunctions.PARAM_SIZE;
+import static org.apache.fluss.utils.Preconditions.checkArgument;
 
 /**
  * Aggregation function type for aggregate merge engine.
@@ -53,10 +60,40 @@ public enum AggFunctionType {
 
     // Roaring bitmap aggregation
     RBM32,
-    RBM64;
+    RBM64,
 
-    /** Parameter name for delimiter used in LISTAGG and STRING_AGG functions. */
-    public static final String PARAM_DELIMITER = "delimiter";
+    // Array aggregation
+    LAST_N;
+
+    // ------------------------------------------------------------------------------------------
+
+    static final DataTypeRoot[] NUMERIC_TYPES =
+            new DataTypeRoot[] {
+                DataTypeRoot.TINYINT,
+                DataTypeRoot.SMALLINT,
+                DataTypeRoot.INTEGER,
+                DataTypeRoot.BIGINT,
+                DataTypeRoot.FLOAT,
+                DataTypeRoot.DOUBLE,
+                DataTypeRoot.DECIMAL
+            };
+
+    static final DataTypeRoot[] MAX_MIN_TYPES =
+            new DataTypeRoot[] {
+                DataTypeRoot.CHAR,
+                DataTypeRoot.STRING,
+                DataTypeRoot.TINYINT,
+                DataTypeRoot.SMALLINT,
+                DataTypeRoot.INTEGER,
+                DataTypeRoot.BIGINT,
+                DataTypeRoot.FLOAT,
+                DataTypeRoot.DOUBLE,
+                DataTypeRoot.DECIMAL,
+                DataTypeRoot.DATE,
+                DataTypeRoot.TIME_WITHOUT_TIME_ZONE,
+                DataTypeRoot.TIMESTAMP_WITHOUT_TIME_ZONE,
+                DataTypeRoot.TIMESTAMP_WITH_LOCAL_TIME_ZONE
+            };
 
     /**
      * Returns the set of supported parameter names for this aggregation function.
@@ -69,9 +106,63 @@ public enum AggFunctionType {
             case STRING_AGG:
                 // LISTAGG and STRING_AGG support optional "delimiter" parameter
                 return Collections.singleton(PARAM_DELIMITER);
+            case LAST_N:
+                return Collections.singleton(PARAM_SIZE);
             default:
                 // All other functions do not accept parameters
                 return Collections.emptySet();
+        }
+    }
+
+    /**
+     * Returns the set of parameter names that must be provided for this aggregation function.
+     *
+     * @return an immutable set of required parameter names
+     */
+    public Set<String> getRequiredParameters() {
+        switch (this) {
+            case LAST_N:
+                // LAST_N has no default for "size"
+                return Collections.singleton(PARAM_SIZE);
+            default:
+                return Collections.emptySet();
+        }
+    }
+
+    /**
+     * Returns the supported data type roots for this aggregation function.
+     *
+     * @return an array of supported DataTypeRoot values
+     */
+    public DataTypeRoot[] getSupportedDataTypeRoots() {
+        switch (this) {
+            case BOOL_AND:
+            case BOOL_OR:
+                return new DataTypeRoot[] {DataTypeRoot.BOOLEAN};
+            case RBM32:
+            case RBM64:
+                return new DataTypeRoot[] {DataTypeRoot.BYTES};
+            case LAST_N:
+                return new DataTypeRoot[] {DataTypeRoot.ARRAY};
+            case LISTAGG:
+            case STRING_AGG:
+                return new DataTypeRoot[] {DataTypeRoot.STRING, DataTypeRoot.CHAR};
+            case SUM:
+            case PRODUCT:
+                return NUMERIC_TYPES;
+
+            case MAX:
+            case MIN:
+                return MAX_MIN_TYPES;
+
+            case LAST_VALUE:
+            case LAST_VALUE_IGNORE_NULLS:
+            case FIRST_VALUE:
+            case FIRST_VALUE_IGNORE_NULLS:
+                // all data types are supported
+                return DataTypeRoot.values();
+            default:
+                throw new IllegalStateException("Unsupported aggregation function type: " + this);
         }
     }
 
@@ -100,7 +191,7 @@ public enum AggFunctionType {
         switch (this) {
             case LISTAGG:
             case STRING_AGG:
-                if (PARAM_DELIMITER.equals(parameterName)) {
+                if (AggFunctions.PARAM_DELIMITER.equals(parameterName)) {
                     if (parameterValue == null || parameterValue.isEmpty()) {
                         throw new IllegalArgumentException(
                                 String.format(
@@ -109,10 +200,39 @@ public enum AggFunctionType {
                     }
                 }
                 break;
+            case LAST_N:
+                int size;
+                try {
+                    size = Integer.parseInt(parameterValue);
+                } catch (NumberFormatException e) {
+                    size = -1;
+                }
+                if (size <= 0) {
+                    throw new IllegalArgumentException(
+                            String.format(
+                                    "Parameter '%s' for aggregation function '%s' must be a positive integer, but was '%s'",
+                                    parameterName, this, parameterValue));
+                }
+                break;
             default:
                 // No validation needed for other functions (they don't have parameters)
                 break;
         }
+    }
+
+    /**
+     * Validates a data type for this aggregation function.
+     *
+     * @param fieldType the field data type
+     * @throws IllegalArgumentException if the data type is invalid
+     */
+    public void validateDataType(DataType fieldType) {
+        checkArgument(
+                fieldType.isAnyOf(getSupportedDataTypeRoots()),
+                "Data type for %s column must be part of %s but was '%s'.",
+                toString(),
+                Arrays.deepToString(getSupportedDataTypeRoots()),
+                fieldType);
     }
 
     /**

@@ -25,6 +25,7 @@ import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
 import org.apache.fluss.server.zk.ZooKeeperClient;
+import org.apache.fluss.testutils.common.MultiVersionTest;
 import org.apache.fluss.utils.types.Tuple2;
 
 import org.apache.flink.configuration.CheckpointingOptions;
@@ -130,6 +131,7 @@ abstract class FlinkTableSourceFailOverITCase {
     }
 
     @Test
+    @MultiVersionTest
     void testRestore() throws Exception {
         TablePath tablePath = TablePath.of("fluss", "test_recreate_table");
         Tuple2<String, CloseableIterator<Row>> savepointPathAndResults =

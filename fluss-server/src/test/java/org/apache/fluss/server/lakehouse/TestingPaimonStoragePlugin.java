@@ -23,10 +23,14 @@ import org.apache.fluss.exception.TableAlreadyExistException;
 import org.apache.fluss.exception.TableNotExistException;
 import org.apache.fluss.lake.committer.CommittedLakeSnapshot;
 import org.apache.fluss.lake.committer.CommitterInitContext;
+import org.apache.fluss.lake.committer.LakeCommitResult;
 import org.apache.fluss.lake.committer.LakeCommitter;
 import org.apache.fluss.lake.lakestorage.LakeCatalog;
 import org.apache.fluss.lake.lakestorage.LakeStorage;
 import org.apache.fluss.lake.lakestorage.LakeStoragePlugin;
+import org.apache.fluss.lake.lakestorage.LakeTableLookuper;
+import org.apache.fluss.lake.lakestorage.LakeTableLookuperManager;
+import org.apache.fluss.lake.lakestorage.LakeTableLookuperManager.LookupCacheOptions;
 import org.apache.fluss.lake.serializer.SimpleVersionedSerializer;
 import org.apache.fluss.lake.source.LakeSource;
 import org.apache.fluss.lake.writer.LakeTieringFactory;
@@ -84,6 +88,24 @@ public class TestingPaimonStoragePlugin implements LakeStoragePlugin {
         @Override
         public LakeSource<?> createLakeSource(TablePath tablePath) {
             throw new UnsupportedOperationException("Not implemented");
+        }
+
+        @Override
+        public LakeTableLookuperManager createLakeTableLookuperManager(
+                String ioTmpDir, LookupCacheOptions options) {
+            return new LakeTableLookuperManager() {
+                @Override
+                public LakeTableLookuper createLakeTableLookuper(
+                        TablePath tablePath, Context context) {
+                    throw new UnsupportedOperationException("Not implemented");
+                }
+
+                @Override
+                public void reconfigure(LookupCacheOptions options) {}
+
+                @Override
+                public void close() {}
+            };
         }
     }
 
@@ -241,11 +263,11 @@ public class TestingPaimonStoragePlugin implements LakeStoragePlugin {
         }
 
         @Override
-        public long commit(
+        public LakeCommitResult commit(
                 TestPaimonCommittable committable, Map<String, String> snapshotProperties)
                 throws IOException {
             // do nothing, and always return 1 as committed snapshot
-            return 1;
+            return LakeCommitResult.committedIsReadable(1);
         }
 
         @Override

@@ -139,8 +139,14 @@ public class ZkNodeChangeNotificationWatcher {
         for (String notification : sortedNotifications) {
             String notificationNode = seqNodeRoot + "/" + notification;
             try {
-                Stat state = zooKeeperClient.getStat(notificationNode).get();
-                if (now - state.getCtime() >= changeExpirationMs) {
+                Optional<Stat> state = zooKeeperClient.getStat(notificationNode);
+                if (!state.isPresent()) {
+                    LOG.debug(
+                            "Notification {} has already been purged by another watcher",
+                            notificationNode);
+                    continue;
+                }
+                if (now - state.get().getCtime() >= changeExpirationMs) {
                     LOG.debug("Purging change notification {}", notificationNode);
                     zooKeeperClient.deletePath(notificationNode);
                 }

@@ -19,6 +19,9 @@ package org.apache.fluss.flink.source.reader;
 
 import org.apache.fluss.client.table.scanner.batch.BatchScanner;
 import org.apache.fluss.row.InternalRow;
+import org.apache.fluss.row.ProjectedRow;
+import org.apache.fluss.row.indexed.IndexedRow;
+import org.apache.fluss.types.RowType;
 import org.apache.fluss.utils.CloseableIterator;
 
 import org.junit.jupiter.api.Test;
@@ -30,6 +33,8 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 
+import static org.apache.fluss.record.TestData.DATA1_ROW_TYPE;
+import static org.apache.fluss.testutils.DataTestUtils.indexedRow;
 import static org.apache.fluss.testutils.DataTestUtils.row;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -75,6 +80,69 @@ class BoundedSplitReaderTest {
                         "Skip more than the number of total records, has skipped 10 record(s), but remain 1 record(s) to skip.");
     }
 
+    @Test
+    void testSizeInBytesWithIndexedRow() throws IOException {
+        // Use IndexedRow which implements MemoryAwareGetters
+        List<InternalRow> rows = mockIndexedRows(DATA1_ROW_TYPE, 5);
+        TestingBatchScanner scanner = new TestingBatchScanner(rows);
+        BoundedSplitReader reader = new BoundedSplitReader(scanner, 0);
+
+        List<RecordAndPos> records = collectRecords(reader);
+        assertThat(records).hasSize(5);
+
+        for (int i = 0; i < records.size(); i++) {
+            RecordAndPos recordAndPos = records.get(i);
+            IndexedRow expectedRow = (IndexedRow) rows.get(i);
+            // sizeInBytes should be extracted from IndexedRow
+            assertThat(recordAndPos.record().getSizeInBytes())
+                    .isEqualTo(expectedRow.getSizeInBytes());
+        }
+    }
+
+    @Test
+    void testSizeInBytesWithProjectedIndexedRow() throws IOException {
+        // Use ProjectedRow wrapping IndexedRow
+        List<IndexedRow> indexedRows = new ArrayList<>();
+        List<InternalRow> projectedRows = new ArrayList<>();
+        int[] projection = new int[] {1, 0}; // project columns in reverse order
+        ProjectedRow projectedRow = ProjectedRow.from(projection);
+
+        for (int i = 0; i < 5; i++) {
+            IndexedRow row = indexedRow(DATA1_ROW_TYPE, new Object[] {i, "test" + i});
+            indexedRows.add(row);
+            projectedRows.add(projectedRow.replaceRow(row));
+        }
+
+        TestingBatchScanner scanner = new TestingBatchScanner(projectedRows);
+        BoundedSplitReader reader = new BoundedSplitReader(scanner, 0);
+
+        List<RecordAndPos> records = collectRecords(reader);
+        assertThat(records).hasSize(5);
+
+        for (int i = 0; i < records.size(); i++) {
+            RecordAndPos recordAndPos = records.get(i);
+            // sizeInBytes should be extracted from the underlying IndexedRow
+            assertThat(recordAndPos.record().getSizeInBytes())
+                    .isEqualTo(indexedRows.get(i).getSizeInBytes());
+        }
+    }
+
+    @Test
+    void testSizeInBytesWithGenericRow() throws IOException {
+        // GenericRow does not implement MemoryAwareGetters
+        List<InternalRow> rows = mockRows(5);
+        TestingBatchScanner scanner = new TestingBatchScanner(rows);
+        BoundedSplitReader reader = new BoundedSplitReader(scanner, 0);
+
+        List<RecordAndPos> records = collectRecords(reader);
+        assertThat(records).hasSize(5);
+
+        for (RecordAndPos recordAndPos : records) {
+            // sizeInBytes should fall back to -1 for GenericRow
+            assertThat(recordAndPos.record().getSizeInBytes()).isEqualTo(-1);
+        }
+    }
+
     /** A testing {@link BatchScanner} with static returned records. */
     private static class TestingBatchScanner implements BatchScanner {
 
@@ -100,6 +168,14 @@ class BoundedSplitReaderTest {
         List<InternalRow> rows = new ArrayList<>(numRows);
         for (int i = 0; i < numRows; i++) {
             rows.add(row(i, "test" + i));
+        }
+        return rows;
+    }
+
+    private List<InternalRow> mockIndexedRows(RowType rowType, int numRows) {
+        List<InternalRow> rows = new ArrayList<>(numRows);
+        for (int i = 0; i < numRows; i++) {
+            rows.add(indexedRow(rowType, new Object[] {i, "test" + i}));
         }
         return rows;
     }

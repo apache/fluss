@@ -18,8 +18,10 @@
 package org.apache.fluss.server;
 
 import org.apache.fluss.annotation.VisibleForTesting;
+import org.apache.fluss.config.ConfigOption;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.config.FlussConfigUtils;
 import org.apache.fluss.exception.FlussException;
 import org.apache.fluss.fs.FileSystem;
 import org.apache.fluss.fs.FsPath;
@@ -35,6 +37,7 @@ import org.apache.fluss.server.utils.ShutdownHookUtil;
 import org.apache.fluss.server.utils.SignalHandler;
 import org.apache.fluss.utils.AutoCloseableAsync;
 import org.apache.fluss.utils.ExceptionUtils;
+import org.apache.fluss.utils.concurrent.ExecutorThreadFactory;
 import org.apache.fluss.utils.concurrent.FutureUtils;
 
 import org.slf4j.Logger;
@@ -48,6 +51,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.apache.fluss.server.utils.LogShutdownUtil.shutdownLogIfPossible;
 
@@ -76,11 +80,13 @@ public abstract class ServerBase implements AutoCloseableAsync, FatalErrorHandle
     protected FileSystem remoteFileSystem;
     protected PluginManager pluginManager;
 
+    private final AtomicBoolean fatalErrorShutdownTriggered = new AtomicBoolean();
+
+    private Thread shutDownHook;
+
     protected ServerBase(Configuration conf) {
         this.conf = conf;
     }
-
-    private Thread shutDownHook;
 
     protected static Configuration loadConfiguration(String[] args, String serverClassName) {
         try {
@@ -89,6 +95,17 @@ public abstract class ServerBase implements AutoCloseableAsync, FatalErrorHandle
             LOG.error("Could not load the configuration.", fpe);
             System.exit(FAILURE_EXIT_CODE);
             return null;
+        }
+    }
+
+    /**
+     * Applies server-side default values for configuration options that are not explicitly set by
+     * the user. This ensures server components use optimal defaults that may differ from the global
+     * defaults defined in {@link ConfigOption}.
+     */
+    protected static void applyServerDefaultConfigurations(Configuration configuration) {
+        if (!configuration.contains(ConfigOptions.NETTY_CLIENT_ALLOCATOR_HEAP_BUFFER_FIRST)) {
+            configuration.set(ConfigOptions.NETTY_CLIENT_ALLOCATOR_HEAP_BUFFER_FIRST, false);
         }
     }
 
@@ -125,7 +142,7 @@ public abstract class ServerBase implements AutoCloseableAsync, FatalErrorHandle
             FileSystem.initialize(conf, pluginManager);
 
             // get uri for remote data dir
-            String remoteDir = conf.get(ConfigOptions.REMOTE_DATA_DIR);
+            String remoteDir = FlussConfigUtils.getDefaultRemoteDataDir(conf);
             remoteFileSystem = new FsPath(remoteDir).getFileSystem();
 
             startServices();
@@ -163,18 +180,42 @@ public abstract class ServerBase implements AutoCloseableAsync, FatalErrorHandle
                 "Fatal error occurred while running the {}. Shutting it down...",
                 getServerName(),
                 exception);
-        if (ExceptionUtils.isJvmFatalError(exception)) {
-            System.exit(-1);
-        } else {
-            closeAsync(Result.FAILURE);
-            FutureUtils.orTimeout(
-                    getTerminationFuture(),
-                    FATAL_ERROR_SHUTDOWN_TIMEOUT_MS,
-                    TimeUnit.MILLISECONDS,
-                    String.format(
-                            "Waiting for %s shutting down timed out after %s ms.",
-                            getServerName(), FATAL_ERROR_SHUTDOWN_TIMEOUT_MS));
+        if (ExceptionUtils.isJvmFatalOrOutOfMemoryError(exception)) {
+            exitJvm();
+        } else if (fatalErrorShutdownTriggered.compareAndSet(false, true)) {
+            try {
+                FutureUtils.orTimeout(
+                        getTerminationFuture(),
+                        FATAL_ERROR_SHUTDOWN_TIMEOUT_MS,
+                        TimeUnit.MILLISECONDS,
+                        String.format(
+                                "Waiting for %s shutting down timed out after %s ms.",
+                                getServerName(), FATAL_ERROR_SHUTDOWN_TIMEOUT_MS));
+                startFatalErrorShutdownThread();
+            } catch (Throwable shutdownFailure) {
+                try {
+                    LOG.error(
+                            "Failed to start fatal-error shutdown for {}. Terminating the process.",
+                            getServerName(),
+                            shutdownFailure);
+                } finally {
+                    exitJvm();
+                }
+            }
         }
+    }
+
+    @VisibleForTesting
+    void startFatalErrorShutdownThread() {
+        Thread shutdownThread =
+                new ExecutorThreadFactory(getServerName() + "-fatal-error-shutdown")
+                        .newThread(() -> closeAsync(Result.FAILURE));
+        shutdownThread.start();
+    }
+
+    @VisibleForTesting
+    void exitJvm() {
+        System.exit(-1);
     }
 
     @Override

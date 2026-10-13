@@ -21,7 +21,6 @@ import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.cluster.TabletServerInfo;
 import org.apache.fluss.exception.InvalidBucketsException;
 import org.apache.fluss.exception.InvalidReplicationFactorException;
-import org.apache.fluss.exception.InvalidServerRackInfoException;
 import org.apache.fluss.server.zk.data.BucketAssignment;
 import org.apache.fluss.server.zk.data.TableAssignment;
 
@@ -62,21 +61,16 @@ public class TableAssignmentUtils {
                             replicationFactor, servers.length));
         }
 
-        if (Arrays.stream(servers).noneMatch(tsInfo -> tsInfo.getRack() != null)) {
-            return generateRackUnawareAssigment(
+        if (Arrays.stream(servers).anyMatch(tsInfo -> tsInfo.getRack() == null)) {
+            return generateRackUnawareAssignment(
                     nBuckets,
                     replicationFactor,
                     Arrays.stream(servers).mapToInt(TabletServerInfo::getId).toArray(),
                     startIndex,
                     nextReplicaShift);
         } else {
-            if (Arrays.stream(servers).anyMatch(tsInfo -> tsInfo.getRack() == null)) {
-                throw new InvalidServerRackInfoException(
-                        "Not all tabletServers have rack information for replica rack aware assignment.");
-            } else {
-                return generateRackAwareAssigment(
-                        nBuckets, replicationFactor, servers, startIndex, nextReplicaShift);
-            }
+            return generateRackAwareAssignment(
+                    nBuckets, replicationFactor, servers, startIndex, nextReplicaShift);
         }
     }
 
@@ -88,7 +82,8 @@ public class TableAssignmentUtils {
      *   <li>For buckets assigned to a particular tabletServer, their other replicas are spread over
      *       the other tabletServers.
      *   <li>If all tabletServers have rack information, assign the replicas for each bucket to
-     *       different racks if possible
+     *       different racks if possible. If any tabletServer has no rack information, fall back to
+     *       rack-unaware assignment to support rolling rack configuration updates.
      * </ol>
      *
      * <p>To achieve this goal for replica assignment, we:
@@ -107,12 +102,12 @@ public class TableAssignmentUtils {
      * <tr><td>bucket5      </td><td>bucket6      </td><td>bucket7      </td><td>bucket8      </td><td>bucket9      </td><td>(1st replica)</td></tr>
      * <tr><td>bucket4      </td><td>bucket0      </td><td>bucket1      </td><td>bucket2      </td><td>bucket3      </td><td>(2nd replica)</td></tr>
      * <tr><td>bucket8      </td><td>bucket9      </td><td>bucket5      </td><td>bucket6      </td><td>bucket7      </td><td>(2nd replica)</td></tr>
-     * <tr><td>bucket3      </td><td>bucket4      </td><td>bucket0      </td><td>bucket1      </td><td>bucket2      </td><td>(3nd replica)</td></tr>
-     * <tr><td>bucket7      </td><td>bucket8      </td><td>bucket9      </td><td>bucket5      </td><td>bucket6      </td><td>(3nd replica)</td></tr>
+     * <tr><td>bucket3      </td><td>bucket4      </td><td>bucket0      </td><td>bucket1      </td><td>bucket2      </td><td>(3rd replica)</td></tr>
+     * <tr><td>bucket7      </td><td>bucket8      </td><td>bucket9      </td><td>bucket5      </td><td>bucket6      </td><td>(3rd replica)</td></tr>
      * </table>
      *
-     * <p>To create rack aware assigment, this API will first create a rack alternated tabletServers
-     * list. For example, from this tabletServerId -> rack mapping:
+     * <p>To create rack aware assignment, this API will first create a rack alternated
+     * tabletServers list. For example, from this tabletServerId -> rack mapping:
      *
      * <pre>
      *     0 -> "rack1"
@@ -172,7 +167,7 @@ public class TableAssignmentUtils {
                 randomInt(servers.length));
     }
 
-    private static TableAssignment generateRackUnawareAssigment(
+    private static TableAssignment generateRackUnawareAssignment(
             int nBuckets,
             int replicationFactor,
             int[] serverIds,
@@ -198,7 +193,7 @@ public class TableAssignmentUtils {
         return new TableAssignment(assignments);
     }
 
-    private static TableAssignment generateRackAwareAssigment(
+    private static TableAssignment generateRackAwareAssignment(
             int nBuckets,
             int replicationFactor,
             TabletServerInfo[] servers,

@@ -19,11 +19,13 @@ package org.apache.fluss.metadata;
 
 import org.apache.fluss.annotation.PublicEvolving;
 
+import javax.annotation.Nullable;
+
 import java.util.Objects;
 
 /**
- * Information of a partition metadata, includes the partition's name and the partition id that
- * represents the unique identifier of the partition.
+ * Information of a partition metadata, includes partition id (unique identifier of the partition),
+ * partition name, remote data dir for partitioned data storage, etc.
  *
  * @since 0.2
  */
@@ -31,10 +33,24 @@ import java.util.Objects;
 public class PartitionInfo {
     private final long partitionId;
     private final ResolvedPartitionSpec partitionSpec;
+    private final @Nullable String remoteDataDir;
 
-    public PartitionInfo(long partitionId, ResolvedPartitionSpec partitionSpec) {
+    /**
+     * The bucket count of this partition. Always resolved: for partitions created by older versions
+     * that did not persist a per-partition bucket count, the table-level bucket count is filled in
+     * at construction time.
+     */
+    private final int bucketCount;
+
+    public PartitionInfo(
+            long partitionId,
+            ResolvedPartitionSpec partitionSpec,
+            @Nullable String remoteDataDir,
+            int bucketCount) {
         this.partitionId = partitionId;
         this.partitionSpec = partitionSpec;
+        this.remoteDataDir = remoteDataDir;
+        this.bucketCount = bucketCount;
     }
 
     /** Get the partition id. The id is globally unique in the Fluss cluster. */
@@ -58,6 +74,30 @@ public class PartitionInfo {
         return partitionSpec.toPartitionSpec();
     }
 
+    @Nullable
+    public String getRemoteDataDir() {
+        return remoteDataDir;
+    }
+
+    /**
+     * Get the bucket count of this partition. For partitions created by older versions without a
+     * persisted per-partition bucket count, this is the table-level bucket count.
+     */
+    public int getBucketCount() {
+        return bucketCount;
+    }
+
+    /**
+     * Resolves the effective bucket count for a (possibly absent) partition: returns the
+     * partition's bucket count when {@code partitionInfo} is non-null, otherwise the table-level
+     * bucket count. The null case represents a non-partitioned table or a partition whose
+     * PartitionInfo is not available.
+     */
+    public static int bucketCountOrDefault(
+            @Nullable PartitionInfo partitionInfo, int tableBucketCount) {
+        return partitionInfo != null ? partitionInfo.getBucketCount() : tableBucketCount;
+    }
+
     @Override
     public boolean equals(Object o) {
         if (this == o) {
@@ -67,16 +107,28 @@ public class PartitionInfo {
             return false;
         }
         PartitionInfo that = (PartitionInfo) o;
-        return partitionId == that.partitionId && Objects.equals(partitionSpec, that.partitionSpec);
+        return partitionId == that.partitionId
+                && Objects.equals(partitionSpec, that.partitionSpec)
+                && Objects.equals(remoteDataDir, that.remoteDataDir)
+                && bucketCount == that.bucketCount;
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(partitionId, partitionSpec);
+        return Objects.hash(partitionId, partitionSpec, remoteDataDir, bucketCount);
     }
 
     @Override
     public String toString() {
-        return "Partition{name='" + getPartitionName() + '\'' + ", id=" + partitionId + '}';
+        return "Partition{name='"
+                + getPartitionName()
+                + '\''
+                + ", id="
+                + partitionId
+                + ", remoteDataDir="
+                + remoteDataDir
+                + ", bucketCount="
+                + bucketCount
+                + '}';
     }
 }

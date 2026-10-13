@@ -77,6 +77,9 @@ public class ArrowWriter implements AutoCloseable {
     /** Container that holds a set of vectors for the rows. */
     final VectorSchemaRoot root;
 
+    /** The schema of the rows. */
+    private final RowType schema;
+
     /**
      * An array of writers which are responsible for the serialization of each column of the rows.
      */
@@ -114,6 +117,7 @@ public class ArrowWriter implements AutoCloseable {
             ArrowCompressionInfo compressionInfo,
             ArrowCompressionRatioEstimator compressionRatioEstimator) {
         this.writerKey = writerKey;
+        this.schema = schema;
         this.root = VectorSchemaRoot.create(ArrowUtils.toArrowSchema(schema), allocator);
         this.provider = checkNotNull(provider);
         this.compressionCodec = compressionInfo.createCompressionCodec();
@@ -141,6 +145,10 @@ public class ArrowWriter implements AutoCloseable {
 
     public int getWriteLimitInBytes() {
         return writeLimitInBytes;
+    }
+
+    public RowType getSchema() {
+        return schema;
     }
 
     public boolean isFull() {
@@ -243,6 +251,16 @@ public class ArrowWriter implements AutoCloseable {
         // Whether there is any record to write, we need to advance the position to make sure the
         // batch header will be written in outputView.
         outputView.setPosition(position);
+        return serializeToOutputView(outputView);
+    }
+
+    /**
+     * Serializes the current row batch to Arrow format at the current position of the output view
+     * and returns the written size in bytes. Unlike {@link #serializeToOutputView(
+     * AbstractPagedOutputView, int)}, this method does not call {@code setPosition} and can be used
+     * when pages have already been advanced (e.g., after writing statistics data).
+     */
+    public int serializeToOutputView(AbstractPagedOutputView outputView) throws IOException {
         if (recordsCount == 0) {
             return 0;
         }

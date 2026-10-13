@@ -17,8 +17,6 @@
 
 package org.apache.fluss.fs.azure;
 
-import org.apache.fluss.utils.MapUtils;
-
 import org.apache.hadoop.fs.FSDataInputStream;
 import org.apache.hadoop.fs.FSDataOutputStream;
 import org.apache.hadoop.fs.FSInputStream;
@@ -37,14 +35,14 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 
 /** Util file system abstraction. */
 public class MemoryFileSystem extends FileSystem {
 
     private final URI uri;
-    private final Map<Path, byte[]> files = MapUtils.newConcurrentHashMap();
-    private final Set<Path> directories =
-            Collections.newSetFromMap(MapUtils.newConcurrentHashMap());
+    private final Map<Path, byte[]> files = new ConcurrentHashMap<>();
+    private final Set<Path> directories = Collections.newSetFromMap(new ConcurrentHashMap<>());
 
     public MemoryFileSystem(URI uri) {
         this.uri = uri;

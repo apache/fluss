@@ -20,19 +20,27 @@ package org.apache.fluss.spark.read
 import org.apache.fluss.client.table.scanner.ScanRecord
 import org.apache.fluss.config.Configuration
 import org.apache.fluss.metadata.{TableBucket, TablePath}
+import org.apache.fluss.predicate.Predicate
+import org.apache.fluss.types.RowType
 
 /** Partition reader that reads log data from a single Fluss table bucket. */
 class FlussAppendPartitionReader(
     tablePath: TablePath,
     projection: Array[Int],
+    pushedPredicate: Option[Predicate],
+    limit: Option[Int],
     flussPartition: FlussAppendInputPartition,
     flussConfig: Configuration)
-  extends FlussPartitionReader(tablePath, flussConfig) {
+  extends FlussPartitionReader(tablePath, flussConfig, limit) {
+
+  override protected lazy val projectedRowType: RowType = rowType.project(projection)
 
   private val tableBucket: TableBucket = flussPartition.tableBucket
   private val partitionId = tableBucket.getPartitionId
   private val bucketId = tableBucket.getBucket
-  private val logScanner = table.newScan().project(projection).createLogScanner()
+  private val logScanner = initializeResources {
+    table.newScan().project(projection).filter(pushedPredicate.orNull).createLogScanner()
+  }
 
   // Iterator for current batch of records
   private var currentRecords: java.util.Iterator[ScanRecord] = java.util.Collections.emptyIterator()
@@ -40,8 +48,14 @@ class FlussAppendPartitionReader(
   // The latest offset of fluss is -2
   private var currentOffset: Long = flussPartition.startOffset.max(0L)
 
+  private val timeRange: Option[FlussTimeRange] = flussPartition.timeRange
+
+  // Set once a record at or after the end of the requested window is seen; commit timestamps are
+  // non-decreasing within a bucket, so no later record can belong to the window either.
+  private var reachedWindowEnd = false
+
   // initialize log scanner
-  initialize()
+  initializeResources(initialize())
 
   private def pollMoreRecords(): Unit = {
     val scanRecords = logScanner.poll(POLL_TIMEOUT)
@@ -52,27 +66,29 @@ class FlussAppendPartitionReader(
     currentRecords = scanRecords.records(tableBucket).iterator()
   }
 
-  override def next(): Boolean = {
-    if (closed || currentOffset >= flussPartition.stopOffset) {
-      return false
-    }
+  override def next0(): Boolean = {
+    while (!closed && !reachedWindowEnd && currentOffset < flussPartition.stopOffset) {
+      if (!currentRecords.hasNext) {
+        pollMoreRecords()
+      }
+      if (!currentRecords.hasNext) {
+        throw new IllegalStateException(s"No more data from fluss server," +
+          s" but current offset $currentOffset not reach the stop offset ${flussPartition.stopOffset}")
+      }
 
-    if (!currentRecords.hasNext) {
-      pollMoreRecords()
-    }
-
-    // If we have records in current batch, return next one
-    if (currentRecords.hasNext) {
       val scanRecord = currentRecords.next()
-      currentRow = convertToSparkRow(scanRecord)
       currentOffset = scanRecord.logOffset() + 1
-      true
-    } else if (currentOffset < flussPartition.stopOffset) {
-      throw new IllegalStateException(s"No more data from fluss server," +
-        s" but current offset $currentOffset not reach the stop offset ${flussPartition.stopOffset}")
-    } else {
-      false
+      timeRange match {
+        case Some(range) if range.isAfter(scanRecord.timestamp()) => reachedWindowEnd = true
+        // The record precedes the requested window: the start offset resolved from the start
+        // timestamp is only time-index accurate on tiered segments, so it can undershoot.
+        case Some(range) if !range.contains(scanRecord.timestamp()) => // skip
+        case _ =>
+          currentRow = convertToSparkRow(scanRecord)
+          return true
+      }
     }
+    false
   }
 
   override def close0(): Unit = {

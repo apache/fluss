@@ -19,7 +19,9 @@ package org.apache.fluss.client.write;
 
 import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.annotation.VisibleForTesting;
+import org.apache.fluss.client.metadata.MetadataUpdater;
 import org.apache.fluss.exception.AuthorizationException;
+import org.apache.fluss.exception.InvalidMetadataException;
 import org.apache.fluss.exception.OutOfOrderSequenceException;
 import org.apache.fluss.exception.UnknownWriterIdException;
 import org.apache.fluss.metadata.PhysicalTablePath;
@@ -63,18 +65,21 @@ public class IdempotenceManager {
     private final IdempotenceBucketMap idempotenceBucketMap;
     private final int maxInflightRequestsPerBucket;
     private final TabletServerGateway tabletServerGateway;
+    private final MetadataUpdater metadataUpdater;
 
     private volatile long writerId;
 
     public IdempotenceManager(
             boolean idempotenceEnabled,
             int maxInflightRequestsPerBucket,
-            TabletServerGateway tabletServerGateway) {
+            TabletServerGateway tabletServerGateway,
+            MetadataUpdater metadataUpdater) {
         this.idempotenceEnabled = idempotenceEnabled;
         this.maxInflightRequestsPerBucket = maxInflightRequestsPerBucket;
         this.idempotenceBucketMap = new IdempotenceBucketMap();
         this.tabletServerGateway = tabletServerGateway;
         this.writerId = NO_WRITER_ID;
+        this.metadataUpdater = metadataUpdater;
     }
 
     boolean idempotenceEnabled() {
@@ -264,7 +269,10 @@ public class IdempotenceManager {
 
         if (error == Errors.OUT_OF_ORDER_SEQUENCE_EXCEPTION
                 && (batch.sequenceHasBeenReset()
-                        || !isNextSequence(tableBucket, batch.batchSequence()))) {
+                        || !isNextSequence(tableBucket, batch.batchSequence())
+                        || lastAckedBatchSequence(tableBucket)
+                                        .orElse(IdempotenceBucketEntry.NO_LAST_ACKED_BATCH_SEQUENCE)
+                                > batch.lastAckedSequenceAtSend())) {
             // We should retry the OutOfOrderSequenceException if the batch is not the next batch,
             // i.e. its batch sequence isn't the lastAckedBatchSequence + 1. However, if the first
             // in flight batch fails fatally, we will adjust the batch sequences of the other
@@ -274,6 +282,13 @@ public class IdempotenceManager {
             // OutOfOrderSequence, we want to retry it. To account for the latter case, we check
             // whether the sequence has been reset since the last drain. If it has, we will retry it
             // anyway.
+            //
+            // We should also retry if the acked sequence has advanced since this batch was sent
+            // (lastAckedBatchSequence > lastAckedSequenceAtSend). That means a predecessor was
+            // acknowledged while this batch was in flight, so this OutOfOrderSequence reflects a
+            // superseded (stale) server state that a response reordering surfaced late; a retry
+            // will observe the advanced state and succeed. A genuine loss shows no such progress
+            // and still resets.
             return true;
         }
 
@@ -287,6 +302,23 @@ public class IdempotenceManager {
         }
 
         return false;
+    }
+
+    /**
+     * Returns true if the batch has already been committed on the server.
+     *
+     * <p>If the batch's sequence is less than or equal to {@code lastAckedBatchSequence}, it means
+     * a higher-sequence batch has already been acknowledged. This implies the previous batch was
+     * also successfully written on the server (otherwise the higher-sequence batch could not have
+     * been committed).
+     *
+     * @param batch the batch to check
+     * @param tableBucket the target table-bucket
+     * @return true if the batch is already committed on the server
+     */
+    synchronized boolean isAlreadyCommitted(WriteBatch batch, TableBucket tableBucket) {
+        Optional<Integer> lastAcked = lastAckedBatchSequence(tableBucket);
+        return lastAcked.isPresent() && batch.batchSequence() <= lastAcked.get();
     }
 
     void maybeWaitForWriterId(Set<PhysicalTablePath> tablePaths) throws Throwable {
@@ -307,6 +339,9 @@ public class IdempotenceManager {
                 if (t instanceof AuthorizationException || retryCount >= RETRY_TIMES) {
                     throw t;
                 } else {
+                    if (t instanceof InvalidMetadataException) {
+                        metadataUpdater.updatePhysicalTableMetadata(tablePaths);
+                    }
                     LOG.warn(
                             "Failed to init writer id, the retry count: {}, error message: {}",
                             retryCount,

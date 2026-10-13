@@ -20,11 +20,14 @@ package org.apache.fluss.security.auth.sasl.authenticator;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.AuthenticationException;
 import org.apache.fluss.security.auth.ClientAuthenticator;
+import org.apache.fluss.security.auth.sasl.jaas.JaasConfig;
 import org.apache.fluss.security.auth.sasl.jaas.JaasContext;
 import org.apache.fluss.security.auth.sasl.jaas.LoginManager;
+import org.apache.fluss.security.auth.sasl.plain.PlainLoginModule;
 import org.apache.fluss.security.auth.sasl.plain.PlainSaslServer;
 
 import javax.annotation.Nullable;
+import javax.security.auth.login.AppConfigurationEntry;
 import javax.security.auth.login.LoginException;
 import javax.security.sasl.SaslClient;
 
@@ -50,7 +53,13 @@ public class SaslClientAuthenticator implements ClientAuthenticator {
     public SaslClientAuthenticator(Configuration configuration) {
         this.mechanism = configuration.get(CLIENT_SASL_MECHANISM).toUpperCase();
         String jaasConfigStr = configuration.getString(CLIENT_SASL_JAAS_CONFIG);
-        if (jaasConfigStr == null && mechanism.equals(PlainSaslServer.PLAIN_MECHANISM)) {
+        if (jaasConfigStr != null) {
+            // Validate that only PlainLoginModule is allowed in the JAAS config.
+            // Fluss uses a plugin-based authentication system and does not support
+            // custom SASL mechanisms. The jaas.config option is retained for backward
+            // compatibility only.
+            validatePlainLoginModule(jaasConfigStr);
+        } else if (mechanism.equals(PlainSaslServer.PLAIN_MECHANISM)) {
             String username = configuration.get(CLIENT_SASL_JAAS_USERNAME);
             String password = configuration.get(CLIENT_SASL_JAAS_PASSWORD);
             if (username != null || password != null) {
@@ -66,6 +75,39 @@ public class SaslClientAuthenticator implements ClientAuthenticator {
         }
         this.jaasConfig = jaasConfigStr;
         this.pros = configuration.toMap();
+    }
+
+    /**
+     * Validates that the provided JAAS configuration string only uses {@link PlainLoginModule}.
+     *
+     * @param jaasConfigStr the JAAS configuration string to validate
+     * @throws AuthenticationException if the JAAS config uses a login module other than
+     *     PlainLoginModule
+     */
+    private static void validatePlainLoginModule(String jaasConfigStr) {
+        JaasConfig jaasConfig = new JaasConfig("FlussClient", jaasConfigStr);
+        AppConfigurationEntry[] entries = jaasConfig.getAppConfigurationEntry("FlussClient");
+        if (entries == null || entries.length == 0) {
+            throw new AuthenticationException(
+                    "JAAS config property does not contain any login modules");
+        }
+        if (entries.length != 1) {
+            throw new AuthenticationException(
+                    "JAAS config property contains "
+                            + entries.length
+                            + " login modules, should be 1 module");
+        }
+        String loginModuleName = entries[0].getLoginModuleName();
+        if (!PlainLoginModule.class.getName().equals(loginModuleName)) {
+            throw new AuthenticationException(
+                    String.format(
+                            "Only '%s' is supported in '%s'. "
+                                    + "Fluss uses a plugin-based authentication system and does not support "
+                                    + "custom SASL mechanisms. Got: '%s'",
+                            PlainLoginModule.class.getName(),
+                            CLIENT_SASL_JAAS_CONFIG.key(),
+                            loginModuleName));
+        }
     }
 
     @Override

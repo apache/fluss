@@ -47,7 +47,7 @@ public class Contains extends NullFalseLeafBinaryFunction {
             long rowCount,
             Object min,
             Object max,
-            Long nullCount,
+            long nullCount,
             Object patternLiteral) {
         return true;
     }

@@ -109,7 +109,7 @@ public abstract class AbstractPrometheusReporter implements MetricReporter {
         List<String> dimensionValues = new LinkedList<>();
         for (final Map.Entry<String, String> dimension : group.getAllVariables().entrySet()) {
             dimensionKeys.add(CHARACTER_FILTER.filterCharacters(dimension.getKey()));
-            dimensionValues.add(CHARACTER_FILTER.filterCharacters(dimension.getValue()));
+            dimensionValues.add(dimension.getValue());
         }
 
         final String scopedMetricName = getScopedName(metricName, group);
@@ -155,7 +155,7 @@ public abstract class AbstractPrometheusReporter implements MetricReporter {
     public void notifyOfRemovedMetric(Metric metric, String metricName, MetricGroup group) {
         List<String> dimensionValues = new LinkedList<>();
         for (final Map.Entry<String, String> dimension : group.getAllVariables().entrySet()) {
-            dimensionValues.add(CHARACTER_FILTER.filterCharacters(dimension.getValue()));
+            dimensionValues.add(dimension.getValue());
         }
 
         final String scopedMetricName = getScopedName(metricName, group);

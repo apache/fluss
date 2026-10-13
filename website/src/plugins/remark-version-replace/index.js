@@ -50,12 +50,19 @@ const plugin = (options) => {
             return;
         }
 
+        // if the version.mavenRepoUrl is not set, use the default one.
+        if (!version.mavenRepoUrl) {
+            version.mavenRepoUrl = "https://repo1.maven.org/maven2";
+        }
+
         const replacements = {
             "$FLUSS_VERSION$": version.fullVersion,
             "$FLUSS_VERSION_SHORT$": version.shortVersion,
             "$FLUSS_DOCKER_VERSION$": version.dockerVersion,
+            "$FLUSS_QUICKSTART_FLINK_DOCKER_VERSION$": `1.20-${version.dockerVersion}`,
             "$PAIMON_VERSION$": version.paimonVersion,
-            "$PAIMON_VERSION_SHORT$": version.paimonVersionShort
+            "$PAIMON_VERSION_SHORT$": version.paimonVersionShort,
+            "$FLUSS_MAVEN_REPO_URL$": version.mavenRepoUrl
         };
 
         // RegExp to find any replacement keys.

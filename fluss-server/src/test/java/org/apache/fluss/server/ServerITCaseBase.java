@@ -126,8 +126,7 @@ public abstract class ServerITCaseBase {
 
     private void testConnectionToServer() throws Exception {
         try (NettyClient client =
-                new NettyClient(
-                        new Configuration(), TestingClientMetricGroup.newInstance(), false)) {
+                new NettyClient(new Configuration(), TestingClientMetricGroup.newInstance())) {
             RpcGateway gateway =
                     GatewayClientProxy.createGatewayProxy(
                             this::getServerNode, client, getRpcGatewayClass());

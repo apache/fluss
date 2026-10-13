@@ -44,7 +44,10 @@ public class FirstRowRowMerger implements RowMerger {
 
     @Nullable
     @Override
-    public BinaryValue merge(BinaryValue oldValue, BinaryValue newValue) {
+    public BinaryValue merge(@Nullable BinaryValue oldValue, BinaryValue newValue) {
+        if (oldValue == null) {
+            return newValue;
+        }
         // always retain the old row (first row)
         return oldValue;
     }

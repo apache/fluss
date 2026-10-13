@@ -1,19 +1,22 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
-# Licensed to the Apache Software Foundation (ASF) under one or more
-# contributor license agreements.  See the NOTICE file distributed with
-# this work for additional information regarding copyright ownership.
-# The ASF licenses this file to You under the Apache License, Version 2.0
-# (the "License"); you may not use this file except in compliance
+#
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
 # with the License.  You may obtain a copy of the License at
 #
-#    http://www.apache.org/licenses/LICENSE-2.0
+#      http://www.apache.org/licenses/LICENSE-2.0
 #
 # Unless required by applicable law or agreed to in writing, software
 # distributed under the License is distributed on an "AS IS" BASIS,
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+#
 
 set -e
 
@@ -42,8 +45,22 @@ copy_jar() {
 
     log_info "Copying $description..."
 
-    # Find matching files
-    local matches=($src_pattern)
+    # Find runtime JARs, excluding artifacts attached by release and test builds.
+    local src_dir="${src_pattern%/*}"
+    local file_pattern="${src_pattern##*/}"
+    local matches=()
+    local jar
+    for jar in "$src_dir"/$file_pattern; do
+        if [ ! -f "$jar" ]; then
+            continue
+        fi
+        case "$jar" in
+            *-sources.jar|*-javadoc.jar|*-tests.jar)
+                continue
+                ;;
+        esac
+        matches+=("$jar")
+    done
     local count=${#matches[@]}
 
     # No files matched
@@ -60,7 +77,7 @@ copy_jar() {
         return 1
     fi
 
-    # Exactly one file matched → copy it with original file name
+    # Exactly one file matched -> copy it with original file name
     mkdir -p "$dest_dir"
     cp "${matches[0]}" "$dest_dir/"
     log_success "Copied: $(basename "${matches[0]}")"
@@ -76,7 +93,7 @@ download_jar() {
     log_info "Downloading $description..."
 
     # Download the file
-    if ! wget -O "$dest_file" "$url"; then
+    if ! curl -fL -o "$dest_file" "$url"; then
         log_error "Failed to download $description from $url"
         return 1
     fi
@@ -89,7 +106,8 @@ download_jar() {
 
     # Verify checksum if provided
     if [ -n "$expected_hash" ]; then
-        local actual_hash=$(shasum "$dest_file" | awk '{print $1}')
+        local actual_hash
+        actual_hash=$(shasum "$dest_file" | awk '{print $1}')
         if [ "$expected_hash" != "$actual_hash" ]; then
             log_error "Checksum mismatch for $description"
             log_error "Expected: $expected_hash"
@@ -108,8 +126,10 @@ check_prerequisites() {
 
     local required_dirs=(
         "$PROJECT_ROOT/fluss-flink/fluss-flink-1.20/target"
+        "$PROJECT_ROOT/fluss-filesystems/fluss-fs-s3/target"
         "$PROJECT_ROOT/fluss-lake/fluss-lake-paimon/target"
         "$PROJECT_ROOT/fluss-lake/fluss-lake-iceberg/target"
+        "$PROJECT_ROOT/fluss-lake/fluss-lake-hudi/target"
         "$PROJECT_ROOT/fluss-flink/fluss-flink-tiering/target"
     )
 
@@ -134,49 +154,71 @@ main() {
 
     # Clean and create directories
     log_info "Setting up directories..."
-    rm -rf lib opt
-    mkdir -p lib opt
+    rm -rf lib paimon iceberg opt
+    mkdir -p lib paimon iceberg opt
 
-    # Copy Fluss connector JARs
-    log_info "Copying Fluss connector JARs..."
+    # Base quickstart dependencies. These are always copied into /opt/flink/lib
+    # so the regular Flink quickstart works without any extra setup.
+    log_info "Preparing base quickstart dependencies..."
     copy_jar "$PROJECT_ROOT/fluss-flink/fluss-flink-1.20/target/fluss-flink-1.20-*.jar" "./lib" "fluss-flink-1.20 connector"
-    copy_jar "$PROJECT_ROOT/fluss-lake/fluss-lake-paimon/target/fluss-lake-paimon-*.jar" "./lib" "fluss-lake-paimon connector"
-    copy_jar "$PROJECT_ROOT/fluss-lake/fluss-lake-iceberg/target/fluss-lake-iceberg-*.jar" "./lib" "fluss-lake-iceberg connector"
+    copy_jar "$PROJECT_ROOT/fluss-filesystems/fluss-fs-s3/target/fluss-fs-s3-*.jar" "./lib" "fluss-fs-s3 filesystem plugin"
 
-    # Download external dependencies
-    log_info "Downloading external dependencies..."
-
-    # Download flink-faker for data generation
+    # Shared helper used by the Flink quickstart SQL demo.
     download_jar \
         "https://github.com/knaufk/flink-faker/releases/download/v0.5.3/flink-faker-0.5.3.jar" \
         "./lib/flink-faker-0.5.3.jar" \
         "" \
         "flink-faker-0.5.3"
 
-    # Download Hadoop for HDFS/local filesystem support
+    # Paimon-specific dependencies. These stay outside /opt/flink/lib by
+    # default and are activated by init_paimon.sh only when needed.
+    log_info "Preparing optional Paimon lakehouse dependencies..."
+    copy_jar "$PROJECT_ROOT/fluss-lake/fluss-lake-paimon/target/fluss-lake-paimon-*.jar" "./paimon" "fluss-lake-paimon connector"
     download_jar \
         "https://repo1.maven.org/maven2/io/trino/hadoop/hadoop-apache/3.3.5-2/hadoop-apache-3.3.5-2.jar" \
-        "./lib/hadoop-apache-3.3.5-2.jar" \
+        "./paimon/hadoop-apache-3.3.5-2.jar" \
         "508255883b984483a45ca48d5af6365d4f013bb8" \
         "hadoop-apache-3.3.5-2"
-
-    # Download paimon-flink connector
     download_jar \
-        "https://repo1.maven.org/maven2/org/apache/paimon/paimon-flink-1.20/1.2.0/paimon-flink-1.20-1.2.0.jar" \
-        "./lib/paimon-flink-1.20-1.2.0.jar" \
-        "b9f8762c6e575f6786f1d156a18d51682ffc975c" \
-        "paimon-flink-1.20-1.2.0"
+        "https://repo1.maven.org/maven2/org/apache/paimon/paimon-flink-1.20/2.1.0/paimon-flink-1.20-2.1.0.jar" \
+        "./paimon/paimon-flink-1.20-2.1.0.jar" \
+        "72f926929b27d380f90d904f08819a4e477e8bd6" \
+        "paimon-flink-1.20-2.1.0"
+    download_jar \
+        "https://repo.maven.apache.org/maven2/org/apache/paimon/paimon-s3/2.1.0/paimon-s3-2.1.0.jar" \
+        "./paimon/paimon-s3-2.1.0.jar" \
+        "766b901efc576772688b91ba8fd74885a6ee8b61" \
+        "paimon-s3-2.1.0"
 
-    # Iceberg Support
-    log_info "Downloading Iceberg connector JARs..."
-
-    # Download iceberg-flink-runtime for Flink 1.20 (version 1.10.1)
+    # Iceberg-specific dependencies. These stay outside /opt/flink/lib by
+    # default and are activated by init_iceberg.sh only when needed.
+    log_info "Preparing optional Iceberg lakehouse dependencies..."
+    copy_jar "$PROJECT_ROOT/fluss-lake/fluss-lake-iceberg/target/fluss-lake-iceberg-*.jar" "./iceberg" "fluss-lake-iceberg connector"
     download_jar \
         "https://repo1.maven.org/maven2/org/apache/iceberg/iceberg-flink-runtime-1.20/1.10.1/iceberg-flink-runtime-1.20-1.10.1.jar" \
-        "./lib/iceberg-flink-runtime-1.20-1.10.1.jar" \
+        "./iceberg/iceberg-flink-runtime-1.20-1.10.1.jar" \
         "" \
         "iceberg-flink-runtime-1.20-1.10.1"
-
+    download_jar \
+        "https://repo1.maven.org/maven2/io/trino/hadoop/hadoop-apache/3.3.5-2/hadoop-apache-3.3.5-2.jar" \
+        "./iceberg/hadoop-apache-3.3.5-2.jar" \
+        "508255883b984483a45ca48d5af6365d4f013bb8" \
+        "hadoop-apache-3.3.5-2"
+    download_jar \
+        "https://repo1.maven.org/maven2/org/apache/iceberg/iceberg-aws/1.10.1/iceberg-aws-1.10.1.jar" \
+        "./iceberg/iceberg-aws-1.10.1.jar" \
+        "" \
+        "iceberg-aws-1.10.1"
+    download_jar \
+        "https://repo1.maven.org/maven2/org/apache/iceberg/iceberg-aws-bundle/1.10.1/iceberg-aws-bundle-1.10.1.jar" \
+        "./iceberg/iceberg-aws-bundle-1.10.1.jar" \
+        "" \
+        "iceberg-aws-bundle-1.10.1"
+    download_jar \
+        "https://repo1.maven.org/maven2/org/postgresql/postgresql/42.7.4/postgresql-42.7.4.jar" \
+        "./iceberg/postgresql-42.7.4.jar" \
+        "" \
+        "postgresql-42.7.4"
 
     # Prepare lake tiering JAR
     log_info "Preparing lake tiering JAR..."
@@ -196,12 +238,24 @@ verify_jars() {
     local missing_jars=()
     local lib_jars=(
         "fluss-flink-1.20-*.jar"
-        "fluss-lake-paimon-*.jar"
-        "fluss-lake-iceberg-*.jar"
+        "fluss-fs-s3-*.jar"
         "flink-faker-0.5.3.jar"
+    )
+
+    local paimon_jars=(
+        "fluss-lake-paimon-*.jar"
         "hadoop-apache-3.3.5-2.jar"
-        "paimon-flink-1.20-1.2.0.jar"
+        "paimon-flink-1.20-2.1.0.jar"
+        "paimon-s3-2.1.0.jar"
+    )
+
+    local iceberg_jars=(
+        "fluss-lake-iceberg-*.jar"
         "iceberg-flink-runtime-1.20-1.10.1.jar"
+        "hadoop-apache-3.3.5-2.jar"
+        "iceberg-aws-1.10.1.jar"
+        "iceberg-aws-bundle-1.10.1.jar"
+        "postgresql-42.7.4.jar"
     )
 
     local opt_jars=(
@@ -212,6 +266,18 @@ verify_jars() {
     for jar_pattern in "${lib_jars[@]}"; do
         if ! ls ./lib/$jar_pattern >/dev/null 2>&1; then
             missing_jars+=("lib/$jar_pattern")
+        fi
+    done
+
+    for jar_pattern in "${paimon_jars[@]}"; do
+        if ! ls ./paimon/$jar_pattern >/dev/null 2>&1; then
+            missing_jars+=("paimon/$jar_pattern")
+        fi
+    done
+
+    for jar_pattern in "${iceberg_jars[@]}"; do
+        if ! ls ./iceberg/$jar_pattern >/dev/null 2>&1; then
+            missing_jars+=("iceberg/$jar_pattern")
         fi
     done
 
@@ -238,23 +304,35 @@ verify_jars() {
 show_summary() {
     log_success "JAR files preparation completed!"
     echo ""
-    log_info "📦 Generated JAR files:"
+    log_info "Generated JAR files:"
     echo ""
-    echo "Lib directory (Flink connectors):"
+    echo "lib/ (base quickstart dependencies copied into /opt/flink/lib):"
     ls -lh ./lib/ | tail -n +2 | awk '{printf "  %-50s %8s\n", $9, $5}'
     echo ""
-    echo "Opt directory (Tiering service):"
+    echo "paimon/ (optional dependencies activated by init_paimon.sh):"
+    ls -lh ./paimon/ | tail -n +2 | awk '{printf "  %-50s %8s\n", $9, $5}'
+    echo ""
+    echo "iceberg/ (optional dependencies activated by init_iceberg.sh):"
+    ls -lh ./iceberg/ | tail -n +2 | awk '{printf "  %-50s %8s\n", $9, $5}'
+    echo ""
+    echo "opt/ (tiering service):"
     ls -lh ./opt/ | tail -n +2 | awk '{printf "  %-50s %8s\n", $9, $5}'
     echo ""
-    log_info "📋 Included Components:"
-    echo "  ✓ Fluss Flink 1.20 connector"
-    echo "  ✓ Fluss Lake Paimon connector"
-    echo "  ✓ Fluss Lake Iceberg connector"
-    echo "  ✓ Iceberg Flink runtime 1.20 (v1.10.1)"
-    echo "  ✓ Paimon Flink 1.20 (v1.2.0)"
-    echo "  ✓ Hadoop Apache (v3.3.5-2)"
-    echo "  ✓ Flink Faker (v0.5.3)"
-    echo "  ✓ Fluss Tiering service"
+    log_info "Included Components:"
+    echo "  - Base: Fluss Flink 1.20 connector"
+    echo "  - Base: Fluss S3 filesystem plugin"
+    echo "  - Base: Flink Faker (v0.5.3)"
+    echo "  - Paimon only: Fluss Lake Paimon connector"
+    echo "  - Paimon only: Paimon Flink 1.20 (v2.1.0)"
+    echo "  - Paimon only: Paimon S3 (v2.1.0)"
+    echo "  - Paimon only: Hadoop Apache (v3.3.5-2)"
+    echo "  - Iceberg only: Fluss Lake Iceberg connector"
+    echo "  - Iceberg only: Iceberg Flink runtime 1.20 (v1.10.1)"
+    echo "  - Iceberg only: Hadoop Apache (v3.3.5-2)"
+    echo "  - Iceberg only: Iceberg AWS (v1.10.1)"
+    echo "  - Iceberg only: Iceberg AWS bundle (v1.10.1)"
+    echo "  - Iceberg only: PostgreSQL JDBC (v42.7.4)"
+    echo "  - Shared opt/: Fluss Tiering service"
 }
 
 # Run main function

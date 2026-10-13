@@ -22,6 +22,8 @@ import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.DisconnectException;
+import org.apache.fluss.exception.InvalidServerTypeException;
+import org.apache.fluss.exception.UnsupportedVersionException;
 import org.apache.fluss.metrics.Gauge;
 import org.apache.fluss.metrics.Metric;
 import org.apache.fluss.metrics.MetricType;
@@ -31,10 +33,20 @@ import org.apache.fluss.metrics.registry.NOPMetricRegistry;
 import org.apache.fluss.metrics.util.NOPMetricsGroup;
 import org.apache.fluss.rpc.TestingGatewayService;
 import org.apache.fluss.rpc.TestingTabletGatewayService;
+import org.apache.fluss.rpc.messages.AlterTableRequest;
+import org.apache.fluss.rpc.messages.ApiMessage;
+import org.apache.fluss.rpc.messages.ApiVersionsRequest;
+import org.apache.fluss.rpc.messages.ApiVersionsResponse;
 import org.apache.fluss.rpc.messages.GetTableSchemaRequest;
+import org.apache.fluss.rpc.messages.ListDatabasesRequest;
 import org.apache.fluss.rpc.messages.LookupRequest;
+import org.apache.fluss.rpc.messages.PbApiVersion;
 import org.apache.fluss.rpc.messages.PbLookupReqForBucket;
 import org.apache.fluss.rpc.messages.PbTablePath;
+import org.apache.fluss.rpc.messages.ProduceLogRequest;
+import org.apache.fluss.rpc.messages.ProduceLogResponse;
+import org.apache.fluss.rpc.messages.PutKvRequest;
+import org.apache.fluss.rpc.messages.PutKvResponse;
 import org.apache.fluss.rpc.metrics.ClientMetricGroup;
 import org.apache.fluss.rpc.metrics.TestingClientMetricGroup;
 import org.apache.fluss.rpc.netty.client.ServerConnection.ConnectionState;
@@ -44,6 +56,8 @@ import org.apache.fluss.rpc.protocol.ApiKeys;
 import org.apache.fluss.security.auth.AuthenticationFactory;
 import org.apache.fluss.security.auth.ClientAuthenticator;
 import org.apache.fluss.shaded.netty4.io.netty.bootstrap.Bootstrap;
+import org.apache.fluss.shaded.netty4.io.netty.buffer.ByteBuf;
+import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelFuture;
 import org.apache.fluss.shaded.netty4.io.netty.channel.EventLoopGroup;
 import org.apache.fluss.utils.NetUtils;
 
@@ -55,7 +69,9 @@ import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
 
 import static org.apache.fluss.metrics.MetricNames.CLIENT_BYTES_IN_RATE_AVG;
 import static org.apache.fluss.metrics.MetricNames.CLIENT_BYTES_IN_RATE_TOTAL;
@@ -73,6 +89,9 @@ import static org.apache.fluss.rpc.netty.NettyUtils.newEventLoopGroup;
 import static org.apache.fluss.utils.NetUtils.getAvailablePort;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 /** Test for {@link ServerConnection}. */
 public class ServerConnectionTest {
@@ -96,7 +115,7 @@ public class ServerConnectionTest {
                 new Bootstrap()
                         .group(eventLoopGroup)
                         .channel(getClientSocketChannelClass(eventLoopGroup))
-                        .handler(new ClientChannelInitializer(5000));
+                        .handler(new ClientChannelInitializer(5000, false));
         clientAuthenticator =
                 AuthenticationFactory.loadClientAuthenticatorSupplier(new Configuration()).get();
     }
@@ -120,8 +139,7 @@ public class ServerConnectionTest {
                         serverNode,
                         TestingClientMetricGroup.newInstance(),
                         clientAuthenticator,
-                        (con, ignore) -> {},
-                        false);
+                        (con, ignore) -> {});
         ConnectionState connectionState = connection.getConnectionState();
         assertThat(connectionState).isEqualTo(ConnectionState.CONNECTING);
 
@@ -151,20 +169,10 @@ public class ServerConnectionTest {
         ClientMetricGroup client = new ClientMetricGroup(metricRegistry, "client");
         ServerConnection connection =
                 new ServerConnection(
-                        bootstrap,
-                        serverNode,
-                        client,
-                        clientAuthenticator,
-                        (con, ignore) -> {},
-                        false);
+                        bootstrap, serverNode, client, clientAuthenticator, (con, ignore) -> {});
         ServerConnection connection2 =
                 new ServerConnection(
-                        bootstrap,
-                        serverNode2,
-                        client,
-                        clientAuthenticator,
-                        (con, ignore) -> {},
-                        false);
+                        bootstrap, serverNode2, client, clientAuthenticator, (con, ignore) -> {});
         LookupRequest request = new LookupRequest().setTableId(1);
         PbLookupReqForBucket pbLookupReqForBucket = request.addBucketsReq();
         pbLookupReqForBucket.setBucketId(1);
@@ -196,7 +204,194 @@ public class ServerConnectionTest {
         connection.close().get();
     }
 
+    @Test
+    void testEncodingErrorDoesNotInterruptPendingRequests() throws Exception {
+        CountDownLatch connectionLatch = new CountDownLatch(1);
+        Bootstrap delayedBootstrap =
+                new Bootstrap() {
+                    @Override
+                    public ChannelFuture connect(String host, int port) {
+                        return bootstrap
+                                .connect(host, port)
+                                .addListener(f -> connectionLatch.await(1, TimeUnit.MINUTES));
+                    }
+                };
+        ServerConnection connection =
+                new ServerConnection(
+                        delayedBootstrap,
+                        serverNode,
+                        TestingClientMetricGroup.newInstance(),
+                        clientAuthenticator,
+                        (con, ignore) -> {});
+        try {
+            OutOfMemoryError error = new OutOfMemoryError("Direct buffer memory");
+            ApiMessage request = mock(ApiMessage.class);
+            when(request.totalSize()).thenReturn(0).thenThrow(error);
+            when(request.writeTo(any(ByteBuf.class))).thenReturn(0);
+
+            CompletableFuture<ApiMessage> failedFuture = connection.send(ApiKeys.LOOKUP, request);
+            LookupRequest validRequest = new LookupRequest().setTableId(1);
+            validRequest.addBucketsReq().setBucketId(1);
+            CompletableFuture<ApiMessage> successfulFuture =
+                    connection.send(ApiKeys.LOOKUP, validRequest);
+            assertThat(failedFuture).isNotDone();
+            assertThat(successfulFuture).isNotDone();
+
+            connectionLatch.countDown();
+
+            assertThatThrownBy(() -> failedFuture.get(20, TimeUnit.SECONDS)).hasCause(error);
+            assertThat(successfulFuture.get(20, TimeUnit.SECONDS)).isNotNull();
+            assertThat(connection.numInflightRequests()).isZero();
+        } finally {
+            connectionLatch.countDown();
+            connection.close().get();
+        }
+    }
+
+    @Test
+    void testWrongServerType() {
+        ServerNode wrongServerTypeNode =
+                new ServerNode(
+                        serverNode.id(),
+                        serverNode.host(),
+                        serverNode.port(),
+                        ServerType.COORDINATOR);
+        CountDownLatch countDownLatch = new CountDownLatch(1);
+        Bootstrap mockBootstrap =
+                new Bootstrap() {
+                    @Override
+                    public ChannelFuture connect(String host, int port) {
+                        return bootstrap
+                                .connect(host, port)
+                                .addListener(f -> countDownLatch.await(1, TimeUnit.MINUTES));
+                    }
+                };
+        ServerConnection connection =
+                new ServerConnection(
+                        mockBootstrap,
+                        wrongServerTypeNode,
+                        TestingClientMetricGroup.newInstance(),
+                        clientAuthenticator,
+                        (con, ignore) -> {});
+
+        // Pending request will be rejected with InvalidServerTypeException which is
+        // InvalidRequestException.
+        CompletableFuture<ApiMessage> future =
+                connection.send(ApiKeys.LIST_DATABASES, new ListDatabasesRequest());
+        assertThat(future).isNotDone();
+        countDownLatch.countDown();
+        assertThatThrownBy(future::get)
+                .rootCause()
+                .isInstanceOf(InvalidServerTypeException.class)
+                .hasMessageContaining("Server type mismatch");
+
+        // Later request will be rejected with DisconnectException which is also
+        // InvalidRequestException.
+        assertThatThrownBy(
+                        () ->
+                                connection
+                                        .send(ApiKeys.LIST_DATABASES, new ListDatabasesRequest())
+                                        .get())
+                .rootCause()
+                .isInstanceOf(DisconnectException.class);
+    }
+
+    @Test
+    void testRejectBucketCountChangeForOldServer() throws Exception {
+        ServerConnection connection =
+                new ServerConnection(
+                        bootstrap,
+                        serverNode,
+                        TestingClientMetricGroup.newInstance(),
+                        clientAuthenticator,
+                        (con, ignore) -> {});
+        try {
+            connection.validateVersionCompatibility(
+                    ApiKeys.ALTER_TABLE, (short) 0, new AlterTableRequest());
+
+            AlterTableRequest bucketCountRequest = new AlterTableRequest();
+            bucketCountRequest.setModifyBucketCount().setNewBucketCount(8);
+            assertThatThrownBy(
+                            () ->
+                                    connection.validateVersionCompatibility(
+                                            ApiKeys.ALTER_TABLE, (short) 0, bucketCountRequest))
+                    .isInstanceOf(UnsupportedVersionException.class)
+                    .hasMessageContaining("requires ALTER_TABLE version 1 or newer")
+                    .hasMessageContaining("negotiated version 0");
+        } finally {
+            connection.close().get();
+        }
+    }
+
+    @Test
+    void testRejectHistoricalWritesForOldServer() throws Exception {
+        nettyServer.close();
+        buildNettyServer(new OldWriteGatewayService());
+
+        ServerConnection connection =
+                new ServerConnection(
+                        bootstrap,
+                        serverNode,
+                        TestingClientMetricGroup.newInstance(),
+                        clientAuthenticator,
+                        (con, ignore) -> {});
+        try {
+            assertThat(connection.send(ApiKeys.PUT_KV, putKvRequest(null)).get())
+                    .isInstanceOf(PutKvResponse.class);
+
+            assertThatThrownBy(
+                            () ->
+                                    connection
+                                            .send(ApiKeys.PUT_KV, putKvRequest("dt=20260823"))
+                                            .get())
+                    .rootCause()
+                    .isInstanceOf(UnsupportedVersionException.class)
+                    .hasMessageContaining("require PUT_KV version 3 or newer")
+                    .hasMessageContaining("negotiated version 2");
+
+            assertThat(connection.send(ApiKeys.PRODUCE_LOG, produceLogRequest(null)).get())
+                    .isInstanceOf(ProduceLogResponse.class);
+
+            assertThatThrownBy(
+                            () ->
+                                    connection
+                                            .send(
+                                                    ApiKeys.PRODUCE_LOG,
+                                                    produceLogRequest("dt=20260823"))
+                                            .get())
+                    .rootCause()
+                    .isInstanceOf(UnsupportedVersionException.class)
+                    .hasMessageContaining("require PRODUCE_LOG version 1 or newer")
+                    .hasMessageContaining("negotiated version 0");
+        } finally {
+            connection.close().get();
+        }
+    }
+
+    private static PutKvRequest putKvRequest(String originalPartitionName) {
+        PutKvRequest request = new PutKvRequest().setTableId(1L).setAcks(1).setTimeoutMs(10_000);
+        request.addBucketsReq().setBucketId(0).setRecords(new byte[0]);
+        if (originalPartitionName != null) {
+            request.getBucketsReqAt(0).setOriginalPartitionName(originalPartitionName);
+        }
+        return request;
+    }
+
+    private static ProduceLogRequest produceLogRequest(String originalPartitionName) {
+        ProduceLogRequest request =
+                new ProduceLogRequest().setTableId(1L).setAcks(1).setTimeoutMs(10_000);
+        request.addBucketsReq().setBucketId(0).setRecords(new byte[0]);
+        if (originalPartitionName != null) {
+            request.getBucketsReqAt(0).setOriginalPartitionName(originalPartitionName);
+        }
+        return request;
+    }
+
     private void buildNettyServer() throws Exception {
+        buildNettyServer(new TestingTabletGatewayService());
+    }
+
+    private void buildNettyServer(TestingGatewayService gatewayService) throws Exception {
         try (NetUtils.Port availablePort = getAvailablePort();
                 NetUtils.Port availablePort2 = getAvailablePort()) {
             serverNode =
@@ -205,7 +400,7 @@ public class ServerConnectionTest {
             serverNode2 =
                     new ServerNode(
                             2, "localhost", availablePort2.getPort(), ServerType.TABLET_SERVER);
-            service = new TestingTabletGatewayService();
+            service = gatewayService;
             MetricGroup metricGroup = NOPMetricsGroup.newInstance();
             nettyServer =
                     new NettyServer(
@@ -217,6 +412,34 @@ public class ServerConnectionTest {
                             metricGroup,
                             RequestsMetrics.createCoordinatorServerRequestMetrics(metricGroup));
             nettyServer.start();
+        }
+    }
+
+    private static class OldWriteGatewayService extends TestingTabletGatewayService {
+        @Override
+        public CompletableFuture<ApiVersionsResponse> apiVersions(ApiVersionsRequest request) {
+            return super.apiVersions(request)
+                    .thenApply(
+                            response -> {
+                                for (PbApiVersion apiVersion : response.getApiVersionsList()) {
+                                    if (apiVersion.getApiKey() == ApiKeys.PUT_KV.id) {
+                                        apiVersion.setMaxVersion(2);
+                                    } else if (apiVersion.getApiKey() == ApiKeys.PRODUCE_LOG.id) {
+                                        apiVersion.setMaxVersion(0);
+                                    }
+                                }
+                                return response;
+                            });
+        }
+
+        @Override
+        public CompletableFuture<PutKvResponse> putKv(PutKvRequest request) {
+            return CompletableFuture.completedFuture(new PutKvResponse());
+        }
+
+        @Override
+        public CompletableFuture<ProduceLogResponse> produceLog(ProduceLogRequest request) {
+            return CompletableFuture.completedFuture(new ProduceLogResponse());
         }
     }
 

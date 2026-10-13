@@ -30,20 +30,49 @@ import java.util.Objects;
 public class ScanRecord implements LogRecord {
     private static final long INVALID = -1L;
 
+    /** Indicates that the size in bytes is unknown for this record. */
+    public static final int UNKNOWN_SIZE_IN_BYTES = -1;
+
+    private final long tableId;
+    private final int schemaId;
     private final long offset;
     private final long timestamp;
     private final ChangeType changeType;
     private final InternalRow row;
+    private final int sizeInBytes;
 
     public ScanRecord(InternalRow row) {
         this(INVALID, INVALID, ChangeType.INSERT, row);
     }
 
+    public ScanRecord(InternalRow row, int sizeInBytes) {
+        this(INVALID, INVALID, ChangeType.INSERT, row, sizeInBytes);
+    }
+
     public ScanRecord(long offset, long timestamp, ChangeType changeType, InternalRow row) {
+        this(offset, timestamp, changeType, row, UNKNOWN_SIZE_IN_BYTES);
+    }
+
+    public ScanRecord(
+            long offset, long timestamp, ChangeType changeType, InternalRow row, int sizeInBytes) {
+        this(INVALID, -1, offset, timestamp, changeType, row, sizeInBytes);
+    }
+
+    public ScanRecord(
+            long tableId,
+            int schemaId,
+            long offset,
+            long timestamp,
+            ChangeType changeType,
+            InternalRow row,
+            int sizeInBytes) {
+        this.tableId = tableId;
+        this.schemaId = schemaId;
         this.offset = offset;
         this.timestamp = timestamp;
         this.changeType = changeType;
         this.row = row;
+        this.sizeInBytes = sizeInBytes;
     }
 
     /** The position of this record in the corresponding fluss table bucket. */
@@ -65,6 +94,20 @@ public class ScanRecord implements LogRecord {
     @Override
     public InternalRow getRow() {
         return row;
+    }
+
+    public int getSizeInBytes() {
+        return sizeInBytes;
+    }
+
+    /** The table id this record belongs to. */
+    public long getTableId() {
+        return tableId;
+    }
+
+    /** The schema id of the batch this record was produced with. */
+    public int getSchemaId() {
+        return schemaId;
     }
 
     @Override

@@ -73,11 +73,18 @@ public class ProcedureManager {
         SET_CLUSTER_CONFIGS("sys.set_cluster_configs", SetClusterConfigsProcedure.class),
         GET_CLUSTER_CONFIGS("sys.get_cluster_configs", GetClusterConfigsProcedure.class),
         RESET_CLUSTER_CONFIGS("sys.reset_cluster_configs", ResetClusterConfigsProcedure.class),
+        APPEND_CLUSTER_CONFIGS("sys.append_cluster_configs", AppendClusterConfigsProcedure.class),
+        SUBTRACT_CLUSTER_CONFIGS(
+                "sys.subtract_cluster_configs", SubtractClusterConfigsProcedure.class),
         ADD_SERVER_TAG("sys.add_server_tag", AddServerTagProcedure.class),
         REMOVE_SERVER_TAG("sys.remove_server_tag", RemoveServerTagProcedure.class),
+        ADD_SERVER_TAG_BY_RACK("sys.add_server_tag_by_rack", AddServerTagByRackProcedure.class),
+        REMOVE_SERVER_TAG_BY_RACK(
+                "sys.remove_server_tag_by_rack", RemoveServerTagByRackProcedure.class),
         REBALANCE("sys.rebalance", RebalanceProcedure.class),
         CANCEL_REBALANCE("sys.cancel_rebalance", CancelRebalanceProcedure.class),
         LIST_REBALANCE_PROGRESS("sys.list_rebalance", ListRebalanceProcessProcedure.class),
+        LIST_PARTITION_INFOS("sys.list_partition_infos", ListPartitionInfosProcedure.class),
         DROP_KV_SNAPSHOT_LEASE("sys.drop_kv_snapshot_lease", DropKvSnapshotLeaseProcedure.class);
 
         private final String path;

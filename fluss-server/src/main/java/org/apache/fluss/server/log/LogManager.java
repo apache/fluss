@@ -20,8 +20,12 @@ package org.apache.fluss.server.log;
 import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.config.TableConfig;
+import org.apache.fluss.config.cluster.ServerReconfigurable;
+import org.apache.fluss.exception.FlussException;
 import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.exception.LogStorageException;
+import org.apache.fluss.exception.PartitionNotExistException;
 import org.apache.fluss.exception.SchemaNotExistException;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.PhysicalTablePath;
@@ -31,10 +35,12 @@ import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.server.TabletManagerBase;
 import org.apache.fluss.server.log.checkpoint.OffsetCheckpointFile;
 import org.apache.fluss.server.metrics.group.TabletServerMetricGroup;
+import org.apache.fluss.server.storage.LocalDiskManager;
 import org.apache.fluss.server.zk.ZooKeeperClient;
+import org.apache.fluss.server.zk.data.PartitionRegistration;
+import org.apache.fluss.utils.ExceptionUtils;
 import org.apache.fluss.utils.FileUtils;
 import org.apache.fluss.utils.FlussPaths;
-import org.apache.fluss.utils.MapUtils;
 import org.apache.fluss.utils.clock.Clock;
 import org.apache.fluss.utils.concurrent.Scheduler;
 import org.apache.fluss.utils.types.Tuple2;
@@ -46,17 +52,25 @@ import javax.annotation.concurrent.ThreadSafe;
 
 import java.io.File;
 import java.io.IOException;
+import java.nio.file.DirectoryNotEmptyException;
 import java.nio.file.Files;
-import java.nio.file.Path;
+import java.nio.file.NoSuchFileException;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Future;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.locks.ReentrantLock;
+import java.util.stream.Collectors;
 
 import static org.apache.fluss.utils.concurrent.LockUtils.inLock;
 
@@ -70,7 +84,7 @@ import static org.apache.fluss.utils.concurrent.LockUtils.inLock;
  * log instances.
  */
 @ThreadSafe
-public final class LogManager extends TabletManagerBase {
+public final class LogManager extends TabletManagerBase implements ServerReconfigurable {
     private static final Logger LOG = LoggerFactory.getLogger(LogManager.class);
 
     @VisibleForTesting
@@ -90,15 +104,19 @@ public final class LogManager extends TabletManagerBase {
     private final Scheduler scheduler;
     private final Clock clock;
     private final TabletServerMetricGroup serverMetricGroup;
+    private final LocalDiskManager localDiskManager;
     private final ReentrantLock logCreationOrDeletionLock = new ReentrantLock();
 
-    private final Map<TableBucket, LogTablet> currentLogs = MapUtils.newConcurrentHashMap();
+    private final Map<TableBucket, LogTablet> currentLogs = new ConcurrentHashMap<>();
 
-    private volatile OffsetCheckpointFile recoveryPointCheckpoint;
+    private volatile Map<File, OffsetCheckpointFile> recoveryPointCheckpoints;
+    private volatile ScheduledFuture<?> recoveryPointCheckpointTask;
+    private volatile ScheduledFuture<?> localLogRetentionTask;
+    private final AtomicBoolean rollExpiredActiveSegmentEnabled;
     private boolean loadLogsCompletedFlag = false;
 
     private LogManager(
-            File dataDir,
+            LocalDiskManager localDiskManager,
             Configuration conf,
             ZooKeeperClient zkClient,
             int recoveryThreadsPerDataDir,
@@ -106,12 +124,15 @@ public final class LogManager extends TabletManagerBase {
             Clock clock,
             TabletServerMetricGroup serverMetricGroup)
             throws Exception {
-        super(TabletType.LOG, dataDir, conf, recoveryThreadsPerDataDir);
+        super(TabletType.LOG, localDiskManager.dataDirs(), conf, recoveryThreadsPerDataDir);
         this.zkClient = zkClient;
         this.scheduler = scheduler;
         this.clock = clock;
         this.serverMetricGroup = serverMetricGroup;
-        createAndValidateDataDir(dataDir);
+        this.localDiskManager = localDiskManager;
+        this.rollExpiredActiveSegmentEnabled =
+                new AtomicBoolean(
+                        conf.get(ConfigOptions.LOG_RETENTION_ROLL_ACTIVE_SEGMENT_ENABLED));
 
         initializeCheckpointMaps();
     }
@@ -121,12 +142,11 @@ public final class LogManager extends TabletManagerBase {
             ZooKeeperClient zkClient,
             Scheduler scheduler,
             Clock clock,
-            TabletServerMetricGroup serverMetricGroup)
+            TabletServerMetricGroup serverMetricGroup,
+            LocalDiskManager localDiskManager)
             throws Exception {
-        String dataDirString = conf.getString(ConfigOptions.DATA_DIR);
-        File dataDir = new File(dataDirString).getAbsoluteFile();
         return new LogManager(
-                dataDir,
+                localDiskManager,
                 conf,
                 zkClient,
                 conf.getInt(ConfigOptions.NETTY_SERVER_NUM_WORKER_THREADS),
@@ -136,76 +156,136 @@ public final class LogManager extends TabletManagerBase {
     }
 
     public void startup() {
-        loadLogs();
+        loadAllLogs();
 
-        // TODO add more scheduler, like log-flusher etc.
-    }
+        long checkpointIntervalMs =
+                conf.get(ConfigOptions.LOG_FLUSH_OFFSET_CHECKPOINT_INTERVAL).toMillis();
+        LOG.info(
+                "Starting log recovery point checkpoint with a period of {} ms.",
+                checkpointIntervalMs);
+        recoveryPointCheckpointTask =
+                scheduler.schedule(
+                        "fluss-recovery-point-checkpoint",
+                        this::checkpointRecoveryOffsets,
+                        checkpointIntervalMs,
+                        checkpointIntervalMs);
 
-    public File getDataDir() {
-        return dataDir;
+        long retentionIntervalMs = conf.get(ConfigOptions.LOG_RETENTION_CHECK_INTERVAL).toMillis();
+        LOG.info(
+                "Starting tiered local log retention with a period of {} ms.", retentionIntervalMs);
+        localLogRetentionTask =
+                scheduler.schedule(
+                        "fluss-tiered-local-log-retention",
+                        this::cleanupExpiredLocalLogSegments,
+                        retentionIntervalMs,
+                        retentionIntervalMs);
     }
 
     private void initializeCheckpointMaps() throws IOException {
-        recoveryPointCheckpoint =
-                new OffsetCheckpointFile(new File(dataDir, RECOVERY_POINT_CHECKPOINT_FILE));
+        recoveryPointCheckpoints = new HashMap<>();
+        for (File dataDir : dataDirs) {
+            recoveryPointCheckpoints.put(
+                    dataDir,
+                    new OffsetCheckpointFile(new File(dataDir, RECOVERY_POINT_CHECKPOINT_FILE)));
+        }
     }
 
     /** Recover and load all logs in the given data directories. */
-    private void loadLogs() {
+    private void loadAllLogs() {
+        try {
+            Map<File, List<File>> tabletsToLoadByDataDir = listTabletsToLoad();
+            LOG.info("Loading logs from {} dirs", tabletsToLoadByDataDir.size());
+            List<LogRecoveryTask> recoveryTasks = new ArrayList<>();
+            for (Map.Entry<File, List<File>> entry : tabletsToLoadByDataDir.entrySet()) {
+                recoveryTasks.add(loadLogsInDir(entry.getKey(), entry.getValue()));
+            }
+            try {
+                for (LogRecoveryTask recoveryTask : recoveryTasks) {
+                    waitForLoadLogsInDir(recoveryTask);
+                }
+                loadLogsCompletedFlag = true;
+                LOG.info("Log loader complete.");
+            } finally {
+                for (LogRecoveryTask recoveryTask : recoveryTasks) {
+                    recoveryTask.pool.shutdown();
+                }
+            }
+        } catch (Throwable e) {
+            throw new FlussRuntimeException("Failed to recover logs", e);
+        }
+    }
+
+    private LogRecoveryTask loadLogsInDir(File dataDir, List<File> tabletsToLoad) throws Exception {
         LOG.info("Loading logs from dir {}", dataDir);
 
         String dataDirAbsolutePath = dataDir.getAbsolutePath();
-        try {
-            boolean isCleanShutdown = false;
-            File cleanShutdownFile = new File(dataDir, CLEAN_SHUTDOWN_FILE);
-            if (cleanShutdownFile.exists()) {
-                // Cache the clean shutdown status marker and use that for rest of log loading
-                // workflow. Delete the CleanShutdownFile so that if tabletServer crashes while
-                // loading the log, it is considered hard shutdown during the next boot up.
-                Files.deleteIfExists(cleanShutdownFile.toPath());
-                isCleanShutdown = true;
-            }
-
-            Map<TableBucket, Long> recoveryPoints = new HashMap<>();
-            try {
-                recoveryPoints = recoveryPointCheckpoint.read();
-            } catch (Exception e) {
-                LOG.warn(
-                        "Error occurred while reading recovery-point-offset-checkpoint file of directory {}, "
-                                + "resetting the recovery checkpoint to 0",
-                        dataDirAbsolutePath,
-                        e);
-            }
-
-            List<File> tabletsToLoad = listTabletsToLoad();
-            if (tabletsToLoad.isEmpty()) {
-                LOG.info("No logs found to be loaded in {}", dataDirAbsolutePath);
-            } else if (isCleanShutdown) {
-                LOG.info("Skipping some recovery log process since clean shutdown file was found");
-            } else {
-                LOG.info("Recovering all local logs since no clean shutdown file was not found");
-            }
-
-            final Map<TableBucket, Long> finalRecoveryPoints = recoveryPoints;
-            final boolean cleanShutdown = isCleanShutdown;
-            // set runnable job.
-            Runnable[] jobsForDir =
-                    createLogLoadingJobs(
-                            tabletsToLoad, cleanShutdown, finalRecoveryPoints, conf, clock);
-
-            long startTime = System.currentTimeMillis();
-
-            int successLoadCount =
-                    runInThreadPool(jobsForDir, "log-recovery-" + dataDirAbsolutePath);
-
-            loadLogsCompletedFlag = true;
-            LOG.info(
-                    "log loader complete. Total success loaded log count is {}, Take {} ms",
-                    successLoadCount,
-                    System.currentTimeMillis() - startTime);
-        } catch (Throwable e) {
-            throw new FlussRuntimeException("Failed to recovery log", e);
+        boolean isCleanShutdown = false;
+        File cleanShutdownFile = new File(dataDir, CLEAN_SHUTDOWN_FILE);
+        if (cleanShutdownFile.exists()) {
+            // Cache the clean shutdown status marker and use that for rest of log loading
+            // workflow. Delete the CleanShutdownFile so that if tabletServer crashes while
+            // loading the log, it is considered hard shutdown during the next boot up.
+            Files.deleteIfExists(cleanShutdownFile.toPath());
+            isCleanShutdown = true;
         }
+
+        Map<TableBucket, Long> recoveryPoints = new HashMap<>();
+        try {
+            recoveryPoints = recoveryPointCheckpoints.get(dataDir).read();
+        } catch (Exception e) {
+            LOG.warn(
+                    "Error occurred while reading recovery-point-offset-checkpoint file of directory {}, "
+                            + "resetting the recovery checkpoint to 0",
+                    dataDirAbsolutePath,
+                    e);
+        }
+
+        if (tabletsToLoad.isEmpty()) {
+            LOG.info("No logs found to be loaded in {}", dataDirAbsolutePath);
+        } else if (isCleanShutdown) {
+            LOG.info("Skipping some recovery log process since clean shutdown file was found");
+        } else {
+            LOG.info("Recovering all local logs since no clean shutdown file was found");
+        }
+
+        final Map<TableBucket, Long> finalRecoveryPoints = recoveryPoints;
+        final boolean cleanShutdown = isCleanShutdown;
+        // set runnable job.
+        Runnable[] jobsForDir =
+                createLogLoadingJobs(
+                        dataDir, tabletsToLoad, cleanShutdown, finalRecoveryPoints, conf, clock);
+
+        long startTimeMillis = System.currentTimeMillis();
+        List<Future<?>> jobsForDataDir = new ArrayList<>();
+        ExecutorService pool = createThreadPool("log-recovery-" + dataDirAbsolutePath);
+        for (Runnable job : jobsForDir) {
+            jobsForDataDir.add(pool.submit(job));
+        }
+        return new LogRecoveryTask(dataDir, pool, jobsForDataDir, startTimeMillis);
+    }
+
+    private void waitForLoadLogsInDir(LogRecoveryTask recoveryTask) throws Throwable {
+        int successCount = 0;
+        for (Future<?> future : recoveryTask.jobs) {
+            try {
+                future.get();
+                successCount++;
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new FlussRuntimeException(
+                        "Interrupted while waiting for log recovery tasks to finish.", e);
+            } catch (ExecutionException e) {
+                throw new FlussException(
+                        "Failed while waiting for log recovery tasks to finish.",
+                        ExceptionUtils.stripExecutionException(e));
+            }
+        }
+
+        LOG.info(
+                "Log loader complete for {}. Total success loaded log count is {}, Take {} ms",
+                recoveryTask.dataDir.getAbsolutePath(),
+                successCount,
+                System.currentTimeMillis() - recoveryTask.startTimeMillis);
     }
 
     /**
@@ -213,17 +293,17 @@ public final class LogManager extends TabletManagerBase {
      * return a copy of the existing log. Otherwise, create a log for the given table and the given
      * bucket.
      *
+     * @param dataDir the local data directory chosen for the bucket
      * @param tablePath the table path of the bucket belongs to
      * @param tableBucket the table bucket
-     * @param logFormat the log format
-     * @param tieredLogLocalSegments the number of segments to retain in local for tiered log
+     * @param tableConfig the table configuration
      * @param isChangelog whether the log is a changelog of primary key table
      */
     public LogTablet getOrCreateLog(
+            File dataDir,
             PhysicalTablePath tablePath,
             TableBucket tableBucket,
-            LogFormat logFormat,
-            int tieredLogLocalSegments,
+            TableConfig tableConfig,
             boolean isChangelog)
             throws Exception {
         return inLock(
@@ -233,18 +313,19 @@ public final class LogManager extends TabletManagerBase {
                         return currentLogs.get(tableBucket);
                     }
 
-                    File tabletDir = getOrCreateTabletDir(tablePath, tableBucket);
+                    File tabletDir = getOrCreateTabletDir(dataDir, tablePath, tableBucket);
 
                     LogTablet logTablet =
                             LogTablet.create(
+                                    dataDir,
                                     tablePath,
                                     tabletDir,
                                     conf,
+                                    rollExpiredActiveSegmentEnabled,
                                     serverMetricGroup,
                                     0L,
                                     scheduler,
-                                    logFormat,
-                                    tieredLogLocalSegments,
+                                    tableConfig,
                                     isChangelog,
                                     clock,
                                     true);
@@ -257,6 +338,22 @@ public final class LogManager extends TabletManagerBase {
 
                     return logTablet;
                 });
+    }
+
+    @VisibleForTesting
+    public LogTablet getOrCreateLog(
+            File dataDir,
+            PhysicalTablePath tablePath,
+            TableBucket tableBucket,
+            LogFormat logFormat,
+            int tieredLogLocalSegments,
+            boolean isChangelog)
+            throws Exception {
+        Configuration tableProperties = new Configuration();
+        tableProperties.set(ConfigOptions.TABLE_LOG_FORMAT, logFormat);
+        tableProperties.set(ConfigOptions.TABLE_TIERED_LOG_LOCAL_SEGMENTS, tieredLogLocalSegments);
+        return getOrCreateLog(
+                dataDir, tablePath, tableBucket, new TableConfig(tableProperties), isChangelog);
     }
 
     public Optional<LogTablet> getLog(TableBucket tableBucket) {
@@ -311,7 +408,7 @@ public final class LogManager extends TabletManagerBase {
         LogTablet logTablet = currentLogs.get(tableBucket);
         // If the log tablet does not exist, skip it.
         if (logTablet != null && logTablet.truncateTo(offset)) {
-            checkpointRecoveryOffsets();
+            checkpointRecoveryOffsets(logTablet.getDataDir());
         }
     }
 
@@ -320,11 +417,12 @@ public final class LogManager extends TabletManagerBase {
         // If the log tablet does not exist, skip it.
         if (logTablet != null) {
             logTablet.truncateFullyAndStartAt(newOffset);
-            checkpointRecoveryOffsets();
+            checkpointRecoveryOffsets(logTablet.getDataDir());
         }
     }
 
     private LogTablet loadLog(
+            File dataDir,
             File tabletDir,
             boolean isCleanShutdown,
             Map<TableBucket, Long> recoveryPoints,
@@ -338,20 +436,39 @@ public final class LogManager extends TabletManagerBase {
         PhysicalTablePath physicalTablePath = pathAndBucket.f0;
         TablePath tablePath = physicalTablePath.getTablePath();
         TableInfo tableInfo = getTableInfo(zkClient, tablePath);
+
+        // Table schema exists, but the partition may have been dropped (or dropped
+        // and recreated with a new ID) while this TS was offline.
+        // Validate both partition name and partition ID against ZK.
+        String partitionName = physicalTablePath.getPartitionName();
+        if (partitionName != null) {
+            Optional<PartitionRegistration> registration =
+                    zkClient.getPartition(tablePath, partitionName);
+            if (!registration.isPresent()
+                    || registration.get().getPartitionId() != tableBucket.getPartitionId()) {
+                throw new PartitionNotExistException(
+                        String.format(
+                                "Failed to load partition '%s' (partitionId=%d) of table '%s': "
+                                        + "partition not found or partitionId mismatch in "
+                                        + "zookeeper metadata.",
+                                partitionName, tableBucket.getPartitionId(), tablePath));
+            }
+        }
+
         LogTablet logTablet =
                 LogTablet.create(
+                        dataDir,
                         physicalTablePath,
                         tabletDir,
                         conf,
+                        rollExpiredActiveSegmentEnabled,
                         serverMetricGroup,
                         logRecoveryPoint,
                         scheduler,
-                        tableInfo.getTableConfig().getLogFormat(),
-                        tableInfo.getTableConfig().getTieredLogLocalSegments(),
+                        tableInfo.getTableConfig(),
                         tableInfo.hasPrimaryKey(),
                         clock,
                         isCleanShutdown);
-        logTablet.updateIsDataLakeEnabled(tableInfo.getTableConfig().isDataLakeEnabled());
 
         if (currentLogs.containsKey(tableBucket)) {
             throw new IllegalStateException(
@@ -367,98 +484,143 @@ public final class LogManager extends TabletManagerBase {
                             currentLogs.get(tableBucket).getLogDir().getAbsolutePath()));
         }
         currentLogs.put(tableBucket, logTablet);
+        localDiskManager.recordReplicaLoad(dataDir, tableInfo.hasPrimaryKey());
 
         return logTablet;
-    }
-
-    private void createAndValidateDataDir(File dataDir) {
-        try {
-            inLock(
-                    logCreationOrDeletionLock,
-                    () -> {
-                        if (!dataDir.exists()) {
-                            LOG.info(
-                                    "Data directory {} not found, creating it.",
-                                    dataDir.getAbsolutePath());
-                            boolean created = dataDir.mkdirs();
-                            if (!created) {
-                                throw new IOException(
-                                        "Failed to create data directory "
-                                                + dataDir.getAbsolutePath());
-                            }
-                            Path parentPath =
-                                    dataDir.toPath().toAbsolutePath().normalize().getParent();
-                            FileUtils.flushDir(parentPath);
-                        }
-                        if (!dataDir.isDirectory() || !dataDir.canRead()) {
-                            throw new IOException(
-                                    dataDir.getAbsolutePath()
-                                            + " is not a readable data directory.");
-                        }
-                    });
-        } catch (IOException e) {
-            throw new FlussRuntimeException(
-                    "Failed to create or validate data directory " + dataDir.getAbsolutePath(), e);
-        }
     }
 
     /** Close all the logs. */
     public void shutdown() {
         LOG.info("Shutting down LogManager.");
-
-        String dataDirAbsolutePath = dataDir.getAbsolutePath();
-        ExecutorService pool = createThreadPool("log-tablet-closing-" + dataDirAbsolutePath);
-
-        List<LogTablet> logs = new ArrayList<>(currentLogs.values());
-        List<Future<?>> jobsForTabletDir = new ArrayList<>();
-        for (LogTablet logTablet : logs) {
-            Runnable runnable =
-                    () -> {
-                        try {
-                            logTablet.flush(true);
-                            logTablet.close();
-                        } catch (IOException e) {
-                            throw new FlussRuntimeException(e);
-                        }
-                    };
-            jobsForTabletDir.add(pool.submit(runnable));
+        if (localLogRetentionTask != null) {
+            localLogRetentionTask.cancel(false);
+            localLogRetentionTask = null;
+        }
+        if (recoveryPointCheckpointTask != null) {
+            recoveryPointCheckpointTask.cancel(false);
+            recoveryPointCheckpointTask = null;
         }
 
-        try {
-            for (Future<?> future : jobsForTabletDir) {
-                try {
-                    future.get();
-                } catch (InterruptedException e) {
-                    LOG.warn("Interrupted while shutting down LogManager.");
-                } catch (ExecutionException e) {
-                    LOG.warn(
-                            "There was an error in one of the threads during LogManager shutdown",
-                            e);
-                }
-            }
+        Map<File, List<LogTablet>> logsByDataDir = new LinkedHashMap<>();
+        for (File dataDir : dataDirs) {
+            logsByDataDir.put(dataDir, new ArrayList<>());
+        }
+        for (LogTablet logTablet : currentLogs.values()) {
+            File dataDir = logTablet.getDataDir();
+            logsByDataDir.computeIfAbsent(dataDir, ignored -> new ArrayList<>()).add(logTablet);
+        }
 
-            // update the last flush point.
-            checkpointRecoveryOffsets();
+        Map<File, CompletableFuture<Void>> closingFuturesByDataDir = new LinkedHashMap<>();
+        for (Map.Entry<File, List<LogTablet>> entry : logsByDataDir.entrySet()) {
+            File dataDir = entry.getKey();
+            List<LogTablet> logs = entry.getValue();
+            String dataDirAbsolutePath = dataDir.getAbsolutePath();
+            LOG.info("Shutting down {} logs in dir {}", logs.size(), dataDirAbsolutePath);
+            closingFuturesByDataDir.put(
+                    dataDir,
+                    closeTabletsConcurrently(
+                            logs,
+                            "log-tablet-closing-" + dataDirAbsolutePath,
+                            this::closeLogTablet));
+        }
 
-            // mark that the shutdown was clean by creating marker file for log dirs that all logs
-            // have been recovered at startup time.
-            if (loadLogsCompletedFlag) {
-                LOG.debug("Writing clean shutdown marker.");
-                try {
-                    Files.createFile(new File(dataDir, CLEAN_SHUTDOWN_FILE).toPath());
-                } catch (IOException e) {
-                    LOG.warn("Failed to write clean shutdown marker.", e);
-                }
-            }
-        } finally {
-            pool.shutdown();
+        for (Map.Entry<File, List<LogTablet>> entry : logsByDataDir.entrySet()) {
+            waitForShutdownLogsInDir(
+                    entry.getKey(), entry.getValue(), closingFuturesByDataDir.get(entry.getKey()));
         }
 
         LOG.info("Shut down LogManager complete.");
     }
 
+    private void closeLogTablet(LogTablet logTablet) {
+        try {
+            logTablet.flush(true);
+            logTablet.close();
+        } catch (IOException e) {
+            LOG.warn("Exception while closing log tablet {}.", logTablet.getTableBucket(), e);
+            throw new FlussRuntimeException(e);
+        } catch (RuntimeException | Error e) {
+            LOG.warn("Exception while closing log tablet {}.", logTablet.getTableBucket(), e);
+            throw e;
+        }
+    }
+
+    /** Runs one TTL retention pass for local log segments of all loaded tablets. */
+    public void cleanupExpiredLocalLogSegments() {
+        for (LogTablet logTablet : currentLogs.values()) {
+            try {
+                logTablet.deleteExpiredSegments();
+            } catch (Exception e) {
+                LOG.error(
+                        "Failed to clean up expired local log segments for table bucket {}.",
+                        logTablet.getTableBucket(),
+                        e);
+            }
+        }
+    }
+
+    // ============ ServerReconfigurable Implementation ============
+
+    @Override
+    public void validate(Configuration newConfig) {
+        // Type validation is handled by DynamicServerConfig.
+    }
+
+    @Override
+    public void reconfigure(Configuration newConfig) {
+        boolean newRollExpiredActiveSegmentEnabled =
+                newConfig.get(ConfigOptions.LOG_RETENTION_ROLL_ACTIVE_SEGMENT_ENABLED);
+        boolean oldRollExpiredActiveSegmentEnabled =
+                rollExpiredActiveSegmentEnabled.getAndSet(newRollExpiredActiveSegmentEnabled);
+        if (newRollExpiredActiveSegmentEnabled == oldRollExpiredActiveSegmentEnabled) {
+            LOG.debug(
+                    "{} unchanged: {}",
+                    ConfigOptions.LOG_RETENTION_ROLL_ACTIVE_SEGMENT_ENABLED.key(),
+                    newRollExpiredActiveSegmentEnabled);
+            return;
+        }
+
+        LOG.info(
+                "{} reconfigured: {} -> {}",
+                ConfigOptions.LOG_RETENTION_ROLL_ACTIVE_SEGMENT_ENABLED.key(),
+                oldRollExpiredActiveSegmentEnabled,
+                newRollExpiredActiveSegmentEnabled);
+    }
+
+    private void waitForShutdownLogsInDir(
+            File dataDir, List<LogTablet> logs, CompletableFuture<Void> closingFuture) {
+        boolean closeSucceeded;
+        try {
+            closingFuture.join();
+            closeSucceeded = true;
+        } catch (CompletionException e) {
+            closeSucceeded = false;
+            LOG.warn(
+                    "One or more log tablets in directory {} failed to close. See preceding warnings for details.",
+                    dataDir);
+        }
+
+        checkpointRecoveryOffsets(dataDir, logs);
+
+        // mark that the shutdown was clean by creating marker file for log dirs that all logs have
+        // been recovered at startup time.
+        if (loadLogsCompletedFlag && closeSucceeded) {
+            try {
+                LOG.debug("Writing clean shutdown marker for directory {}.", dataDir);
+                Files.createFile(new File(dataDir, CLEAN_SHUTDOWN_FILE).toPath());
+            } catch (IOException e) {
+                LOG.warn("Failed to write clean shutdown marker for directory {}.", dataDir, e);
+            }
+        } else if (!closeSucceeded) {
+            LOG.warn(
+                    "Skipping clean shutdown marker for directory {} because not all logs closed successfully.",
+                    dataDir);
+        }
+    }
+
     /** Create runnable jobs for loading logs from tablet directories. */
     private Runnable[] createLogLoadingJobs(
+            File dataDir,
             List<File> tabletsToLoad,
             boolean cleanShutdown,
             Map<TableBucket, Long> recoveryPoints,
@@ -467,13 +629,16 @@ public final class LogManager extends TabletManagerBase {
         Runnable[] jobs = new Runnable[tabletsToLoad.size()];
         for (int i = 0; i < tabletsToLoad.size(); i++) {
             final File tabletDir = tabletsToLoad.get(i);
-            jobs[i] = createLogLoadingJob(tabletDir, cleanShutdown, recoveryPoints, conf, clock);
+            jobs[i] =
+                    createLogLoadingJob(
+                            dataDir, tabletDir, cleanShutdown, recoveryPoints, conf, clock);
         }
         return jobs;
     }
 
     /** Create a runnable job for loading log from a single tablet directory. */
     private Runnable createLogLoadingJob(
+            File dataDir,
             File tabletDir,
             boolean cleanShutdown,
             Map<TableBucket, Long> recoveryPoints,
@@ -484,20 +649,22 @@ public final class LogManager extends TabletManagerBase {
             public void run() {
                 LOG.debug("Loading log {}", tabletDir);
                 try {
-                    loadLog(tabletDir, cleanShutdown, recoveryPoints, conf, clock);
+                    loadLog(dataDir, tabletDir, cleanShutdown, recoveryPoints, conf, clock);
                 } catch (Exception e) {
                     LOG.error("Fail to loadLog from {}", tabletDir, e);
-                    if (e instanceof SchemaNotExistException) {
+                    if (e instanceof SchemaNotExistException
+                            || e instanceof PartitionNotExistException) {
                         LOG.error(
-                                "schema not exist, table for {} has already been dropped, the residual data will be removed.",
+                                "Table or partition for {} has already been dropped, the residual data will be removed.",
                                 tabletDir,
                                 e);
                         FileUtils.deleteDirectoryQuietly(tabletDir);
 
-                        // Also delete corresponding KV tablet directory if it exists
                         try {
                             Tuple2<PhysicalTablePath, TableBucket> pathAndBucket =
                                     FlussPaths.parseTabletDir(tabletDir);
+
+                            // Also delete corresponding KV tablet directory if it exists
                             File kvTabletDir =
                                     FlussPaths.kvTabletDir(
                                             dataDir, pathAndBucket.f0, pathAndBucket.f1);
@@ -507,11 +674,24 @@ public final class LogManager extends TabletManagerBase {
                                         kvTabletDir);
                                 FileUtils.deleteDirectoryQuietly(kvTabletDir);
                             }
-                        } catch (Exception kvDeleteException) {
+
+                            boolean isPartitioned = pathAndBucket.f0.getPartitionName() != null;
+                            File partitionDir = tabletDir.getParentFile();
+                            if (partitionDir != null) {
+                                deleteEmptyDirQuietly(partitionDir);
+
+                                if (isPartitioned) {
+                                    File tableDir = partitionDir.getParentFile();
+                                    if (tableDir != null) {
+                                        deleteEmptyDirQuietly(tableDir);
+                                    }
+                                }
+                            }
+                        } catch (Exception cleanupException) {
                             LOG.warn(
-                                    "Failed to delete corresponding KV tablet directory for log {}: {}",
+                                    "Failed to clean up residual KV/parent directories for {}: {}",
                                     tabletDir,
-                                    kvDeleteException.getMessage());
+                                    cleanupException.getMessage());
                         }
                         return;
                     }
@@ -522,23 +702,58 @@ public final class LogManager extends TabletManagerBase {
     }
 
     @VisibleForTesting
+    void checkpointRecoveryOffsets(File dataDir) {
+        checkpointRecoveryOffsets(
+                dataDir,
+                currentLogs.values().stream()
+                        .filter(log -> log.getDataDir().equals(dataDir))
+                        .collect(Collectors.toList()));
+    }
+
     void checkpointRecoveryOffsets() {
-        // Assuming TableBucket and LogTablet are actual types used in your application
-        if (recoveryPointCheckpoint != null) {
-            try {
-                Map<TableBucket, Long> recoveryOffsets = new HashMap<>();
-                for (Map.Entry<TableBucket, LogTablet> entry : currentLogs.entrySet()) {
-                    recoveryOffsets.put(entry.getKey(), entry.getValue().getRecoveryPoint());
-                }
-                recoveryPointCheckpoint.write(recoveryOffsets);
-            } catch (Exception e) {
-                throw new LogStorageException(
-                        "Disk error while writing recovery offsets checkpoint in directory "
-                                + dataDir
-                                + ": "
-                                + e.getMessage(),
-                        e);
+        for (File dataDir : dataDirs) {
+            checkpointRecoveryOffsets(dataDir);
+        }
+    }
+
+    private void checkpointRecoveryOffsets(File dataDir, List<LogTablet> logs) {
+        try {
+            Map<TableBucket, Long> recoveryOffsets = new HashMap<>();
+            for (LogTablet logTablet : logs) {
+                recoveryOffsets.put(logTablet.getTableBucket(), logTablet.getRecoveryPoint());
             }
+            LOG.debug("Writing recovery offsets checkpoint for directory {}.", dataDir);
+            recoveryPointCheckpoints.get(dataDir).write(recoveryOffsets);
+        } catch (Exception e) {
+            throw new LogStorageException(
+                    "Disk error while writing recovery offsets checkpoint", e);
+        }
+    }
+
+    private static final class LogRecoveryTask {
+        private final File dataDir;
+        private final ExecutorService pool;
+        private final List<Future<?>> jobs;
+        private final long startTimeMillis;
+
+        private LogRecoveryTask(
+                File dataDir, ExecutorService pool, List<Future<?>> jobs, long startTimeMillis) {
+            this.dataDir = dataDir;
+            this.pool = pool;
+            this.jobs = jobs;
+            this.startTimeMillis = startTimeMillis;
+        }
+    }
+
+    private static void deleteEmptyDirQuietly(File dir) {
+        try {
+            Files.delete(dir.toPath());
+        } catch (DirectoryNotEmptyException e) {
+            LOG.warn("Directory {} is not empty, skipping deletion.", dir);
+        } catch (NoSuchFileException ignored) {
+            // Already gone — fine.
+        } catch (IOException e) {
+            LOG.warn("Failed to delete empty directory {}: {}", dir, e.getMessage());
         }
     }
 }

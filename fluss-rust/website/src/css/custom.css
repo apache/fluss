@@ -1,0 +1,209 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
+ *
+ *    http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+/**
+ * Copied from the main fluss.apache.org website (fluss/website/src/css/custom.css)
+ * to ensure visual consistency.
+ */
+
+/* Import Inter font from Google Fonts */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+
+/* You can override the default Infima variables here. */
+:root {
+  --ifm-color-primary: #0071e3;
+  --ifm-color-primary-dark: #0066cc;
+  --ifm-color-primary-darker: #0060c1;
+  --ifm-color-primary-darkest: #004f9f;
+  --ifm-color-primary-light: #007cfa;
+  --ifm-color-primary-lighter: #0682ff;
+  --ifm-color-primary-lightest: #2893ff;
+  --ifm-code-font-size: 90%;
+  --ifm-font-family-base: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+  --docusaurus-highlighted-code-line-bg: #E2E9F3;
+
+  --ifm-menu-color-background-active: #edeefa99;
+  --ifm-menu-color-background-hover: #edeefa99;
+}
+
+
+.navbar__brand {
+  font-family: monaco;
+  color: inherit;
+}
+
+.header-github-link:hover {
+  opacity: 0.6;
+}
+
+.header-github-link::before {
+  content: '';
+  width: 24px;
+  height: 24px;
+  display: flex;
+  background: url("data:image/svg+xml,%3Csvg viewBox='0 0 24 24' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12'/%3E%3C/svg%3E")
+  no-repeat;
+}
+
+
+.menu__list-item {
+  font-size: 0.95rem;
+  font-weight: 500;
+}
+
+.menu__link--sublist-caret:after {
+  background: var(--ifm-menu-link-sublist-icon) 50% / 1.5rem 1.5rem;
+}
+
+
+.markdown {
+    padding-left: 1rem;
+    h1,
+    h2,
+    h3,
+    h4,
+    h5,
+    h6 {
+        color: #1d1d1d;
+        margin-bottom: 0.3125rem;
+        font-weight: 700;
+    }
+
+    b,
+    strong {
+        font-weight: 700;
+        color: #1d1d1d;
+    }
+
+    h1,
+    h1:first-child {
+        font-size: 2.5rem;
+        margin-bottom: 1.5rem;
+        margin-top: 0;
+    }
+
+    h2 {
+        font-size: 2rem;
+        margin-bottom: 1.25rem;
+        margin-top: 2rem;
+        padding-top: 2rem;
+        border-top: 1px solid #e6e7e9;
+    }
+
+    h3 {
+        font-size: 1.5rem;
+        margin-bottom: 1.25rem;
+        margin-top: 1rem;
+    }
+    p {
+        line-height: 1.875;
+
+        code {
+          border-radius: 4px;
+          background-color: #edf2fa;
+          border: none;
+          padding: 3px 4px;
+          font-size: 14px;
+          color: #4c576c;
+      }
+    }
+
+    li > code {
+        border-radius: 4px;
+        background-color: #edf2fa;
+        border: none;
+        padding: 3px 4px;
+        font-size: 14px;
+        color: #4c576c;
+    }
+
+    table thead tr {
+        background-color: #f7f9fe;
+    }
+
+    table thead th {
+        background-color: #f7f9fe;
+        color: #1d1d1d;
+        font-size: 1rem;
+        font-weight: 500;
+    }
+
+    table tr {
+        border-bottom: none;
+        background-color: var(--global-colors-white);
+        font-size: var(--global-font-size-small);
+
+        code {
+            border-radius: 4px;
+            background-color: #edf2fa;
+            border: none;
+            padding: 3px 4px;
+            font-size: 14px;
+            color: #4c576c;
+        }
+    }
+
+    table tr th {
+        padding: 0.53rem 0.8125rem;
+        border-color: #dfe5f0;
+    }
+
+    table tr td {
+        padding: 0.65rem 0.8125rem;
+        border-color: #dfe5f0;
+    }
+    a {
+        color: var(--ifm-color-primary);
+    }
+    ul {
+        padding-left: 20px;
+        li {
+            margin-top: 4px;
+            position: relative;
+            list-style: initial;
+        }
+    }
+    ol {
+        padding-left: 20px;
+        li {
+            list-style: decimal;
+        }
+    }
+}
+
+.theme-doc-markdown {
+    header {
+        margin-top: 1rem;
+
+        & + h1 {
+            display: none;
+        }
+    }
+}
+
+.breadcrumbs__item--active .breadcrumbs__link {
+  background: var(--ifm-menu-color-background-active);
+}
+
+.footer__copyright {
+    color: #dfe5f0;
+    font-size: .75rem;
+    line-height: 1.8;
+    opacity: .6;
+    text-align: center;
+    width: 98%;
+}

@@ -40,6 +40,7 @@ object TestUtils {
       // StructField("date", DateType),
       StructField("c_timestamp", TimestampType),
       StructField("c_array", ArrayType(FloatType, containsNull = false)),
+      StructField("c_map", MapType(StringType, IntegerType, valueContainsNull = false)),
       StructField(
         "c_row",
         StructType(Seq(StructField("id", LongType), StructField("name", StringType))))

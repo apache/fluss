@@ -32,7 +32,9 @@ import org.apache.fluss.utils.concurrent.ShutdownableThread;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.Set;
 import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
 
@@ -62,6 +64,7 @@ public final class CoordinatorEventManager implements EventManager {
     private Histogram eventQueueTime;
 
     // Coordinator metrics moved from CoordinatorEventProcessor
+    private volatile int aliveCoordinatorServerCount;
     private volatile int tabletServerCount;
     private volatile int offlineBucketCount;
     private volatile int tableCount;
@@ -69,6 +72,12 @@ public final class CoordinatorEventManager implements EventManager {
     private volatile int bucketCount;
     private volatile int partitionCount;
     private volatile int replicasToDeleteCount;
+
+    /**
+     * Number of buckets currently waiting for the leader-activation ack from the target tablet
+     * server.
+     */
+    private volatile int pendingLeaderActivationCount;
 
     private static final int WINDOW_SIZE = 100;
     private static final long METRICS_UPDATE_INTERVAL_MS = 5000; // 5 seconds
@@ -89,6 +98,8 @@ public final class CoordinatorEventManager implements EventManager {
         // Register coordinator metrics
         coordinatorMetricGroup.gauge(MetricNames.ACTIVE_COORDINATOR_COUNT, () -> 1);
         coordinatorMetricGroup.gauge(
+                MetricNames.ALIVE_COORDINATOR_COUNT, () -> aliveCoordinatorServerCount);
+        coordinatorMetricGroup.gauge(
                 MetricNames.ACTIVE_TABLET_SERVER_COUNT, () -> tabletServerCount);
         coordinatorMetricGroup.gauge(MetricNames.OFFLINE_BUCKET_COUNT, () -> offlineBucketCount);
         coordinatorMetricGroup.gauge(MetricNames.BUCKET_COUNT, () -> bucketCount);
@@ -97,6 +108,8 @@ public final class CoordinatorEventManager implements EventManager {
         coordinatorMetricGroup.gauge(MetricNames.PARTITION_COUNT, () -> partitionCount);
         coordinatorMetricGroup.gauge(
                 MetricNames.REPLICAS_TO_DELETE_COUNT, () -> replicasToDeleteCount);
+        coordinatorMetricGroup.gauge(
+                MetricNames.PENDING_LEADER_ACTIVATION_COUNT, () -> pendingLeaderActivationCount);
     }
 
     /** Not thread safety! this method can only be executed in the CoordinatorEventThread. */
@@ -105,12 +118,27 @@ public final class CoordinatorEventManager implements EventManager {
         AccessContextEvent<MetricsData> accessContextEvent =
                 new AccessContextEvent<>(
                         context -> {
+                            int coordinatorServerCount = context.getLiveCoordinatorServers().size();
                             int tabletServerCount = context.getLiveTabletServers().size();
-                            int tableCount = context.allTables().size();
+                            // Exclude tables that have been queued for deletion (DropTable RPC
+                            // already acked, but completeDeleteTable has not yet removed them
+                            // from tablePathById). We dedup by tableId rather than subtracting
+                            // sizes so the result is robust even if tablesToBeDeleted ever
+                            // drifts out of sync with tablePathById -- it can never go negative
+                            // and only counts ids that are truly still in tablePathById.
+                            Set<Long> allTables = context.allTables().keySet();
+                            int tableCount = allTables.size();
+                            for (Long toDelete : context.getTablesToBeDeleted()) {
+                                if (allTables.contains(toDelete)) {
+                                    tableCount--;
+                                }
+                            }
                             int lakeTableCount = context.getLakeTableCount();
                             int bucketCount = context.bucketLeaderAndIsr().size();
                             int partitionCount = context.getTotalPartitionCount();
                             int offlineBucketCount = context.getOfflineBucketCount();
+                            int pendingLeaderActivationCount =
+                                    context.getPendingLeaderActivationBuckets().size();
 
                             int replicasToDeletes = 0;
                             // for replica in partitions to be deleted
@@ -138,13 +166,15 @@ public final class CoordinatorEventManager implements EventManager {
                             }
 
                             return new MetricsData(
+                                    coordinatorServerCount,
                                     tabletServerCount,
                                     tableCount,
                                     lakeTableCount,
                                     bucketCount,
                                     partitionCount,
                                     offlineBucketCount,
-                                    replicasToDeletes);
+                                    replicasToDeletes,
+                                    pendingLeaderActivationCount);
                         });
 
         eventProcessor.process(accessContextEvent);
@@ -152,6 +182,7 @@ public final class CoordinatorEventManager implements EventManager {
         // Wait for the result and update local metrics
         try {
             MetricsData metricsData = accessContextEvent.getResultFuture().get();
+            this.aliveCoordinatorServerCount = metricsData.coordinatorServerCount;
             this.tabletServerCount = metricsData.tabletServerCount;
             this.tableCount = metricsData.tableCount;
             this.lakeTableCount = metricsData.lakeTableCount;
@@ -159,6 +190,7 @@ public final class CoordinatorEventManager implements EventManager {
             this.partitionCount = metricsData.partitionCount;
             this.offlineBucketCount = metricsData.offlineBucketCount;
             this.replicasToDeleteCount = metricsData.replicasToDeleteCount;
+            this.pendingLeaderActivationCount = metricsData.pendingLeaderActivationCount;
         } catch (Exception e) {
             LOG.warn("Failed to update metrics via AccessContextEvent", e);
         }
@@ -216,7 +248,7 @@ public final class CoordinatorEventManager implements EventManager {
 
     private class CoordinatorEventThread extends ShutdownableThread {
 
-        private long lastMetricsUpdateTime = System.currentTimeMillis();
+        private long lastMetricsUpdateTime = 0;
 
         public CoordinatorEventThread(String name) {
             super(name, false);
@@ -231,7 +263,15 @@ public final class CoordinatorEventManager implements EventManager {
                 lastMetricsUpdateTime = currentTime;
             }
 
-            QueuedEvent queuedEvent = queue.take();
+            // Use poll with timeout instead of blocking take() so that the thread
+            // wakes up periodically to update metrics even when no events arrive
+            // (e.g., after coordinator restart with no client requests).
+            long elapsed = System.currentTimeMillis() - lastMetricsUpdateTime;
+            long pollTimeout = Math.max(METRICS_UPDATE_INTERVAL_MS - elapsed, 100);
+            QueuedEvent queuedEvent = queue.poll(pollTimeout, TimeUnit.MILLISECONDS);
+            if (queuedEvent == null) {
+                return;
+            }
             CoordinatorEvent coordinatorEvent = queuedEvent.event;
 
             long eventStartTimeMs = System.currentTimeMillis();
@@ -275,6 +315,7 @@ public final class CoordinatorEventManager implements EventManager {
     }
 
     private static class MetricsData {
+        private final int coordinatorServerCount;
         private final int tabletServerCount;
         private final int tableCount;
         private final int lakeTableCount;
@@ -282,15 +323,19 @@ public final class CoordinatorEventManager implements EventManager {
         private final int partitionCount;
         private final int offlineBucketCount;
         private final int replicasToDeleteCount;
+        private final int pendingLeaderActivationCount;
 
         public MetricsData(
+                int coordinatorServerCount,
                 int tabletServerCount,
                 int tableCount,
                 int lakeTableCount,
                 int bucketCount,
                 int partitionCount,
                 int offlineBucketCount,
-                int replicasToDeleteCount) {
+                int replicasToDeleteCount,
+                int pendingLeaderActivationCount) {
+            this.coordinatorServerCount = coordinatorServerCount;
             this.tabletServerCount = tabletServerCount;
             this.tableCount = tableCount;
             this.lakeTableCount = lakeTableCount;
@@ -298,6 +343,7 @@ public final class CoordinatorEventManager implements EventManager {
             this.partitionCount = partitionCount;
             this.offlineBucketCount = offlineBucketCount;
             this.replicasToDeleteCount = replicasToDeleteCount;
+            this.pendingLeaderActivationCount = pendingLeaderActivationCount;
         }
     }
 }

@@ -23,12 +23,14 @@ import org.apache.fluss.memory.AbstractPagedOutputView;
 import org.apache.fluss.memory.MemorySegment;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.record.ChangeType;
+import org.apache.fluss.record.LogRecordBatchStatisticsCollector;
 import org.apache.fluss.record.MemoryLogRecordsArrowBuilder;
 import org.apache.fluss.record.bytesview.BytesView;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.arrow.ArrowWriter;
 import org.apache.fluss.rpc.messages.ProduceLogRequest;
 
+import javax.annotation.Nullable;
 import javax.annotation.concurrent.NotThreadSafe;
 
 import java.io.IOException;
@@ -50,16 +52,29 @@ public class ArrowLogWriteBatch extends WriteBatch {
     private final AbstractPagedOutputView outputView;
 
     public ArrowLogWriteBatch(
+            long tableId,
             int bucketId,
+            int bucketCount,
             PhysicalTablePath physicalTablePath,
             int schemaId,
             ArrowWriter arrowWriter,
             AbstractPagedOutputView outputView,
-            long createdMs) {
-        super(bucketId, physicalTablePath, createdMs);
+            boolean isHistoricalPartition,
+            long createdMs,
+            @Nullable LogRecordBatchStatisticsCollector statisticsCollector) {
+        super(
+                tableId,
+                bucketId,
+                bucketCount,
+                physicalTablePath,
+                schemaId,
+                WriteFormat.ARROW_LOG,
+                isHistoricalPartition,
+                createdMs);
         this.outputView = outputView;
         this.recordsBuilder =
-                MemoryLogRecordsArrowBuilder.builder(schemaId, arrowWriter, outputView, true);
+                MemoryLogRecordsArrowBuilder.builder(
+                        schemaId, arrowWriter, outputView, true, statisticsCollector);
     }
 
     @Override
@@ -68,7 +83,7 @@ public class ArrowLogWriteBatch extends WriteBatch {
     }
 
     @Override
-    public boolean tryAppend(WriteRecord writeRecord, WriteCallback callback) throws Exception {
+    boolean tryAppendRecord(WriteRecord writeRecord, WriteCallback callback) throws Exception {
         InternalRow row = writeRecord.getRow();
         checkArgument(
                 writeRecord.getTargetColumns() == null,

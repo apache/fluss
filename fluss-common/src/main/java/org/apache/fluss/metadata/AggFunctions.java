@@ -171,6 +171,9 @@ public final class AggFunctions {
      */
     public static final String DEFAULT_LISTAGG_DELIMITER = ",";
 
+    /** Parameter name for delimiter used in LISTAGG and STRING_AGG functions. */
+    public static final String PARAM_DELIMITER = "delimiter";
+
     /**
      * Creates a LISTAGG aggregation function with default comma delimiter.
      *
@@ -295,6 +298,28 @@ public final class AggFunctions {
      */
     public static AggFunction RBM64() {
         return new AggFunction(AggFunctionType.RBM64, null);
+    }
+
+    // ===================================================================================
+    // Array Aggregation Functions
+    // ===================================================================================
+
+    /** Parameter name for the number of elements LAST_N keeps. */
+    public static final String PARAM_SIZE = "size";
+
+    /**
+     * Creates a LAST_N aggregation function that appends input arrays and keeps the last {@code
+     * size} elements.
+     *
+     * <p>Supported data types: ARRAY
+     *
+     * @param size the number of elements to keep, must be positive
+     * @return a LAST_N aggregation function
+     */
+    public static AggFunction LAST_N(int size) {
+        Map<String, String> params = new HashMap<>();
+        params.put(PARAM_SIZE, String.valueOf(size));
+        return new AggFunction(AggFunctionType.LAST_N, params);
     }
 
     // ===================================================================================

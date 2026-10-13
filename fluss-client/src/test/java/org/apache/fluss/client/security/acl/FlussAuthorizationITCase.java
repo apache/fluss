@@ -23,6 +23,7 @@ import org.apache.fluss.client.FlussConnection;
 import org.apache.fluss.client.admin.Admin;
 import org.apache.fluss.client.admin.FlussAdmin;
 import org.apache.fluss.client.admin.KvSnapshotLease;
+import org.apache.fluss.client.admin.OffsetSpec;
 import org.apache.fluss.client.table.Table;
 import org.apache.fluss.client.table.scanner.batch.BatchScanner;
 import org.apache.fluss.client.table.writer.AppendWriter;
@@ -145,11 +146,15 @@ public class FlussAuthorizationITCase {
         guestPrincipal = new FlussPrincipal("guest", "User");
 
         // prepare default database and table
+        FLUSS_CLUSTER_EXTENSION.assertHasTabletServerNumber(3);
         rootAdmin
                 .createDatabase(
                         DATA1_TABLE_PATH_PK.getDatabaseName(), DatabaseDescriptor.EMPTY, true)
                 .get();
         rootAdmin.createTable(DATA1_TABLE_PATH_PK, DATA1_TABLE_DESCRIPTOR_PK, true).get();
+        TableInfo tableInfo = rootAdmin.getTableInfo(DATA1_TABLE_PATH_PK).get();
+        FLUSS_CLUSTER_EXTENSION.waitUntilAllReplicaReady(
+                new TableBucket(tableInfo.getTableId(), 0));
     }
 
     @AfterEach
@@ -281,7 +286,7 @@ public class FlussAuthorizationITCase {
                                         PermissionType.ALLOW)));
         assertThatThrownBy(() -> guestAdmin.createAcls(noAuthorizationAclBinding).all().get())
                 .hasMessageContaining(
-                        "Principal %s have no authorization to operate ALTER on resource",
+                        "Principal %s have no authorization to operate ALL on resource",
                         guestPrincipal);
 
         aclBindings =
@@ -291,7 +296,7 @@ public class FlussAuthorizationITCase {
                                 new AccessControlEntry(
                                         WILD_CARD_PRINCIPAL,
                                         WILD_CARD_HOST,
-                                        OperationType.ALTER,
+                                        OperationType.ALL,
                                         PermissionType.ALLOW)));
         rootAdmin.createAcls(aclBindings).all().get();
         guestAdmin.createAcls(noAuthorizationAclBinding).all().get();
@@ -325,7 +330,8 @@ public class FlussAuthorizationITCase {
                                         .get())
                 .hasMessageContaining(
                         String.format(
-                                "Principal %s have no authorization to operate CREATE on resource Resource{type=CLUSTER, name='fluss-cluster'}",
+                                "Principal %s have no authorization to operate CREATE on resource"
+                                        + " Resource{type=CLUSTER, name='fluss-cluster'}",
                                 guestPrincipal));
         List<AclBinding> aclBindings =
                 Collections.singletonList(
@@ -389,7 +395,8 @@ public class FlussAuthorizationITCase {
                                         .get())
                 .hasMessageContaining(
                         String.format(
-                                "Principal %s have no authorization to operate CREATE on resource Resource{type=DATABASE, name='test_db_1'}",
+                                "Principal %s have no authorization to operate CREATE on resource"
+                                        + " Resource{type=DATABASE, name='test_db_1'}",
                                 guestPrincipal));
         assertThat(rootAdmin.tableExists(DATA1_TABLE_PATH).get()).isFalse();
 
@@ -415,7 +422,9 @@ public class FlussAuthorizationITCase {
         // 3. getTableSchema
         // 4. getLatestKvSnapshots
         // 5. listPartitionInfos
-        // 6. getLatestLakeSnapshot
+        // 6. describeBuckets
+        // 7. getLatestLakeSnapshot
+        // 8. listOffsets
 
         // first check call these methods without authorization.
         assertThat(guestAdmin.listTables(DATA1_TABLE_PATH_PK.getDatabaseName()).get())
@@ -424,8 +433,18 @@ public class FlussAuthorizationITCase {
         assertNoTableDescribeAuth(() -> guestAdmin.getTableSchema(DATA1_TABLE_PATH_PK).get());
         assertNoTableDescribeAuth(() -> guestAdmin.getLatestKvSnapshots(DATA1_TABLE_PATH_PK).get());
         assertNoTableDescribeAuth(() -> guestAdmin.listPartitionInfos(DATA1_TABLE_PATH_PK).get());
+        assertNoTableDescribeAuth(() -> guestAdmin.describeBuckets(DATA1_TABLE_PATH_PK).get());
         assertNoTableDescribeAuth(
                 () -> guestAdmin.getLatestLakeSnapshot(DATA1_TABLE_PATH_PK).get());
+        assertNoTableDescribeAuth(
+                () ->
+                        guestAdmin
+                                .listOffsets(
+                                        DATA1_TABLE_PATH_PK,
+                                        Arrays.asList(0),
+                                        new OffsetSpec.LatestSpec())
+                                .all()
+                                .get());
 
         // add acl to allow guest describe table resource
         List<AclBinding> aclBindings =
@@ -450,6 +469,12 @@ public class FlussAuthorizationITCase {
         assertThat(guestAdmin.tableExists(DATA1_TABLE_PATH_PK).get()).isTrue();
         assertThat(guestAdmin.getLatestKvSnapshots(DATA1_TABLE_PATH_PK).get().getBucketIds())
                 .containsExactlyInAnyOrder(0, 1, 2);
+        assertThat(guestAdmin.describeBuckets(DATA1_TABLE_PATH_PK).get())
+                .hasSize(3)
+                .allSatisfy(
+                        bucketInfo ->
+                                assertThat(bucketInfo.getTablePath())
+                                        .isEqualTo(DATA1_TABLE_PATH_PK));
         assertThatThrownBy(() -> guestAdmin.listPartitionInfos(DATA1_TABLE_PATH_PK).get())
                 .rootCause()
                 .isInstanceOf(TableNotPartitionedException.class)
@@ -458,7 +483,16 @@ public class FlussAuthorizationITCase {
         assertThatThrownBy(() -> guestAdmin.getLatestLakeSnapshot(DATA1_TABLE_PATH_PK).get())
                 .rootCause()
                 .isInstanceOf(LakeTableSnapshotNotExistException.class)
-                .hasMessageContaining("Lake table snapshot not exist for table");
+                .hasMessageContaining("Lake table snapshot doesn't exist for table");
+        assertThat(
+                        guestAdmin
+                                .listOffsets(
+                                        DATA1_TABLE_PATH_PK,
+                                        Arrays.asList(0),
+                                        new OffsetSpec.LatestSpec())
+                                .all()
+                                .get())
+                .isNotEmpty();
     }
 
     @ParameterizedTest
@@ -478,8 +512,6 @@ public class FlussAuthorizationITCase {
 
         GetKvSnapshotMetadataRequest request = new GetKvSnapshotMetadataRequest();
         request.setTableId(tableId).setBucketId(0).setSnapshotId(0);
-        // Make sure all tabletServer has ready replica and ready metadata for the table.
-        FLUSS_CLUSTER_EXTENSION.waitUntilAllReplicaReady(new TableBucket(tableId, 0));
 
         // call getKvSnapshotMetadata without authorization.
         assertNoTableDescribeAuth(() -> readOnlyGateway.getKvSnapshotMetadata(request).get());
@@ -512,7 +544,7 @@ public class FlussAuthorizationITCase {
                         Collections.singleton(DATA1_TABLE_PATH_PK), null, null);
 
         try (RpcClient rpcClient =
-                RpcClient.create(guestConf, TestingClientMetricGroup.newInstance(), false)) {
+                RpcClient.create(guestConf, TestingClientMetricGroup.newInstance())) {
             AdminGateway guestGateway =
                     GatewayClientProxy.createGatewayProxy(
                             () -> FLUSS_CLUSTER_EXTENSION.getCoordinatorServerNode("CLIENT"),
@@ -571,7 +603,8 @@ public class FlussAuthorizationITCase {
                 .cause()
                 .isInstanceOf(AuthorizationException.class)
                 .hasMessageContaining(
-                        "The request of InitWriter requires non empty table paths for authorization.");
+                        "The request of InitWriter requires non empty table paths for"
+                                + " authorization.");
 
         // request contains a table path without permission
         InitWriterRequest noAclRequest = new InitWriterRequest();
@@ -648,7 +681,7 @@ public class FlussAuthorizationITCase {
                                     Collections.singletonList(noWriteAclTable)));
         }
 
-        // 2. Try to write data to writeAclTable. It will success and writeId will be set.
+        // 2. Try to write data to writeAclTable. It will succeed and writeId will be set.
         try (Table table = guestConn.getTable(writeAclTable)) {
             AppendWriter appendWriter = table.newAppend().createWriter();
             appendWriter.append(row(1, "a")).get();
@@ -668,8 +701,9 @@ public class FlussAuthorizationITCase {
                     .rootCause()
                     .hasMessageContaining(
                             String.format(
-                                    "Principal FlussPrincipal{name='guest', type='User'} have no authorization to "
-                                            + "operate WRITE on resource Resource{type=TABLE, name='%s'} ",
+                                    "Principal FlussPrincipal{name='guest', type='User'} have no"
+                                            + " authorization to operate WRITE on resource"
+                                            + " Resource{type=TABLE, name='%s'} ",
                                     noWriteAclTable));
         }
     }
@@ -705,8 +739,9 @@ public class FlussAuthorizationITCase {
                 assertThatThrownBy(() -> batchScanner.pollBatch(Duration.ofMinutes(1)))
                         .hasMessageContaining(
                                 String.format(
-                                        "Principal FlussPrincipal{name='guest', type='User'} have no authorization to "
-                                                + "operate %s on resource Resource{type=TABLE, name='%s'}",
+                                        "Principal FlussPrincipal{name='guest', type='User'} have"
+                                                + " no authorization to operate %s on resource"
+                                                + " Resource{type=TABLE, name='%s'}",
                                         READ, DATA1_TABLE_PATH));
             }
             rootAdmin
@@ -761,7 +796,8 @@ public class FlussAuthorizationITCase {
                 .rootCause()
                 .hasMessageContaining(
                         String.format(
-                                "Principal %s have no authorization to operate DESCRIBE on resource Resource{type=CLUSTER, name='fluss-cluster'}",
+                                "Principal %s have no authorization to operate DESCRIBE on resource"
+                                        + " Resource{type=CLUSTER, name='fluss-cluster'}",
                                 guestPrincipal));
         rootAdmin
                 .createAcls(
@@ -796,7 +832,8 @@ public class FlussAuthorizationITCase {
                 .rootCause()
                 .hasMessageContaining(
                         String.format(
-                                "Principal %s have no authorization to operate ALTER on resource Resource{type=CLUSTER, name='fluss-cluster'}",
+                                "Principal %s have no authorization to operate ALTER on resource"
+                                        + " Resource{type=CLUSTER, name='fluss-cluster'}",
                                 guestPrincipal));
 
         rootAdmin
@@ -836,7 +873,7 @@ public class FlussAuthorizationITCase {
                 new ControlledShutdownRequest().setTabletServerId(-1).setTabletServerEpoch(-1);
 
         try (RpcClient rpcClient =
-                RpcClient.create(guestConf, TestingClientMetricGroup.newInstance(), false)) {
+                RpcClient.create(guestConf, TestingClientMetricGroup.newInstance())) {
             CoordinatorGateway guestGateway =
                     GatewayClientProxy.createGatewayProxy(
                             () -> FLUSS_CLUSTER_EXTENSION.getCoordinatorServerNode("CLIENT"),
@@ -849,7 +886,8 @@ public class FlussAuthorizationITCase {
                     .isInstanceOf(AuthorizationException.class)
                     .hasMessageContaining(
                             String.format(
-                                    "Principal %s have no authorization to operate ALTER on resource Resource{type=CLUSTER, name='fluss-cluster'}",
+                                    "Principal %s have no authorization to operate ALTER on"
+                                            + " resource Resource{type=CLUSTER, name='fluss-cluster'}",
                                     guestPrincipal));
         }
 
@@ -883,7 +921,8 @@ public class FlussAuthorizationITCase {
                 .rootCause()
                 .hasMessageContaining(
                         String.format(
-                                "Principal %s have no authorization to operate ALTER on resource Resource{type=CLUSTER, name='fluss-cluster'}",
+                                "Principal %s have no authorization to operate ALTER on resource"
+                                        + " Resource{type=CLUSTER, name='fluss-cluster'}",
                                 guestPrincipal));
 
         // add ALTER permission to guest user on cluster resource
@@ -904,7 +943,7 @@ public class FlussAuthorizationITCase {
         guestAdmin.addServerTag(Collections.singletonList(0), ServerTag.PERMANENT_OFFLINE).get();
 
         // recover server tag
-        guestAdmin.removeServerTag(Collections.singletonList(0), ServerTag.PERMANENT_OFFLINE);
+        guestAdmin.removeServerTag(Collections.singletonList(0), ServerTag.PERMANENT_OFFLINE).get();
     }
 
     @Test
@@ -920,7 +959,8 @@ public class FlussAuthorizationITCase {
                 .rootCause()
                 .hasMessageContaining(
                         String.format(
-                                "Principal %s have no authorization to operate ALTER on resource Resource{type=CLUSTER, name='fluss-cluster'}",
+                                "Principal %s have no authorization to operate ALTER on resource"
+                                        + " Resource{type=CLUSTER, name='fluss-cluster'}",
                                 guestPrincipal));
 
         // add ALTER permission to guest user on cluster resource
@@ -942,13 +982,64 @@ public class FlussAuthorizationITCase {
     }
 
     @Test
+    void testServerTagByRackNoMatchStillRequiresAlterPermission() throws Exception {
+        List<String> missingRack = Collections.singletonList("missing-rack");
+
+        assertThatThrownBy(
+                        () ->
+                                guestAdmin
+                                        .addServerTagByRack(
+                                                missingRack, ServerTag.PERMANENT_OFFLINE)
+                                        .get())
+                .rootCause()
+                .isInstanceOf(AuthorizationException.class)
+                .hasMessageContaining(
+                        String.format(
+                                "Principal %s have no authorization to operate ALTER on resource"
+                                        + " Resource{type=CLUSTER, name='fluss-cluster'}",
+                                guestPrincipal));
+
+        assertThatThrownBy(
+                        () ->
+                                guestAdmin
+                                        .removeServerTagByRack(
+                                                missingRack, ServerTag.PERMANENT_OFFLINE)
+                                        .get())
+                .rootCause()
+                .isInstanceOf(AuthorizationException.class)
+                .hasMessageContaining(
+                        String.format(
+                                "Principal %s have no authorization to operate ALTER on resource"
+                                        + " Resource{type=CLUSTER, name='fluss-cluster'}",
+                                guestPrincipal));
+
+        rootAdmin
+                .createAcls(
+                        Collections.singletonList(
+                                new AclBinding(
+                                        Resource.cluster(),
+                                        new AccessControlEntry(
+                                                guestPrincipal,
+                                                "*",
+                                                OperationType.ALTER,
+                                                PermissionType.ALLOW))))
+                .all()
+                .get();
+
+        // Both operations remain no-ops when authorized and no rack matches.
+        guestAdmin.addServerTagByRack(missingRack, ServerTag.PERMANENT_OFFLINE).get();
+        guestAdmin.removeServerTagByRack(missingRack, ServerTag.PERMANENT_OFFLINE).get();
+    }
+
+    @Test
     void testRebalance() throws Exception {
         // test rebalance without WRITE permission on cluster resource
         assertThatThrownBy(() -> guestAdmin.rebalance(Collections.emptyList()).get())
                 .rootCause()
                 .hasMessageContaining(
                         String.format(
-                                "Principal %s have no authorization to operate WRITE on resource Resource{type=CLUSTER, name='fluss-cluster'}",
+                                "Principal %s have no authorization to operate WRITE on resource"
+                                        + " Resource{type=CLUSTER, name='fluss-cluster'}",
                                 guestPrincipal));
 
         // add WRITE permission to guest user on cluster resource
@@ -976,7 +1067,8 @@ public class FlussAuthorizationITCase {
                 .rootCause()
                 .hasMessageContaining(
                         String.format(
-                                "Principal %s have no authorization to operate DESCRIBE on resource Resource{type=CLUSTER, name='fluss-cluster'}",
+                                "Principal %s have no authorization to operate DESCRIBE on resource"
+                                        + " Resource{type=CLUSTER, name='fluss-cluster'}",
                                 guestPrincipal));
 
         // add DESCRIBE permission to guest user on cluster resource
@@ -1004,7 +1096,8 @@ public class FlussAuthorizationITCase {
                 .rootCause()
                 .hasMessageContaining(
                         String.format(
-                                "Principal %s have no authorization to operate WRITE on resource Resource{type=CLUSTER, name='fluss-cluster'}",
+                                "Principal %s have no authorization to operate WRITE on resource"
+                                        + " Resource{type=CLUSTER, name='fluss-cluster'}",
                                 guestPrincipal));
 
         // add WRITE permission to guest user on cluster resource
@@ -1084,7 +1177,8 @@ public class FlussAuthorizationITCase {
                 .isInstanceOf(AuthorizationException.class)
                 .hasMessageContaining(
                         String.format(
-                                "Principal %s have no authorization to operate READ on resource Resource{type=TABLE, name='%s'}",
+                                "Principal %s have no authorization to operate READ on resource"
+                                        + " Resource{type=TABLE, name='%s'}",
                                 guestPrincipal, DATA1_TABLE_PATH_PK));
 
         // add READ permission to guest user on table resource
@@ -1125,7 +1219,8 @@ public class FlussAuthorizationITCase {
                 .isInstanceOf(AuthorizationException.class)
                 .hasMessageContaining(
                         String.format(
-                                "Principal %s have no authorization to operate READ on resource Resource{type=TABLE, name='%s'}",
+                                "Principal %s have no authorization to operate READ on resource"
+                                        + " Resource{type=TABLE, name='%s'}",
                                 guestPrincipal, DATA1_TABLE_PATH_PK));
 
         // add READ permission to guest user on table resource
@@ -1180,7 +1275,8 @@ public class FlussAuthorizationITCase {
                 .isInstanceOf(AuthorizationException.class)
                 .hasMessageContaining(
                         String.format(
-                                "Principal %s have no authorization to operate READ on resource Resource{type=TABLE, name='%s'}",
+                                "Principal %s have no authorization to operate READ on resource"
+                                        + " Resource{type=TABLE, name='%s'}",
                                 guestPrincipal, DATA1_TABLE_PATH_PK));
 
         // add READ permission to guest user on table resource
@@ -1211,7 +1307,8 @@ public class FlussAuthorizationITCase {
                 .isInstanceOf(AuthorizationException.class)
                 .hasMessageContaining(
                         String.format(
-                                "Principal %s have no authorization to operate WRITE on resource Resource{type=TABLE, name='%s'}",
+                                "Principal %s have no authorization to operate WRITE on resource"
+                                        + " Resource{type=TABLE, name='%s'}",
                                 guestPrincipal, DATA1_TABLE_PATH_PK));
 
         // add WRITE permission to guest user on table resource
@@ -1252,7 +1349,8 @@ public class FlussAuthorizationITCase {
                 .isInstanceOf(AuthorizationException.class)
                 .hasMessageContaining(
                         String.format(
-                                "Principal %s have no authorization to operate WRITE on resource Resource{type=TABLE, name='%s'}",
+                                "Principal %s have no authorization to operate WRITE on resource"
+                                        + " Resource{type=TABLE, name='%s'}",
                                 guestPrincipal, DATA1_TABLE_PATH_PK));
 
         // add WRITE permission to guest user on table resource
@@ -1270,6 +1368,104 @@ public class FlussAuthorizationITCase {
 
         // test deleteProducerOffsets with WRITE permission should succeed
         guestAdmin.deleteProducerOffsets(producerId).get();
+    }
+
+    @Test
+    void testDatabaseExistsAuthorization() throws Exception {
+        String testDbName = "test_db_exists_auth";
+
+        // 1. Create database as root (super user can do everything)
+        rootAdmin.createDatabase(testDbName, DatabaseDescriptor.EMPTY, false).get();
+
+        // 2. Guest user WITHOUT DESCRIBE permission should get false (hiding existence)
+        assertThat(guestAdmin.databaseExists(testDbName).get())
+                .as("Guest without DESCRIBE permission should not see database exists")
+                .isFalse();
+
+        // 3. Non-existent database should also return false
+        assertThat(guestAdmin.databaseExists("non_existent_db").get())
+                .as("Non-existent database should return false")
+                .isFalse();
+
+        // 4. Root user (super user) should see database exists
+        assertThat(rootAdmin.databaseExists(testDbName).get())
+                .as("Root user should always see database exists")
+                .isTrue();
+
+        // 5. Grant DESCRIBE permission to guest on the database
+        List<AclBinding> aclBindings =
+                Collections.singletonList(
+                        new AclBinding(
+                                Resource.database(testDbName),
+                                new AccessControlEntry(
+                                        guestPrincipal,
+                                        "*",
+                                        OperationType.DESCRIBE,
+                                        PermissionType.ALLOW)));
+        rootAdmin.createAcls(aclBindings).all().get();
+        FLUSS_CLUSTER_EXTENSION.waitUntilAuthenticationSync(aclBindings, true);
+
+        // 6. Now guest WITH DESCRIBE permission should see database exists
+        assertThat(guestAdmin.databaseExists(testDbName).get())
+                .as("Guest with DESCRIBE permission should see database exists")
+                .isTrue();
+
+        // 7. Verify non-existent database still returns false (not an authorization issue)
+        assertThat(guestAdmin.databaseExists("non_existent_db").get())
+                .as("Non-existent database should still return false even with permissions")
+                .isFalse();
+
+        // Cleanup
+        rootAdmin.dropDatabase(testDbName, true, true).get();
+    }
+
+    @Test
+    void testTableExistsAuthorization() throws Exception {
+        TablePath testTablePath =
+                TablePath.of(DATA1_TABLE_PATH_PK.getDatabaseName(), "test_table_exists_auth");
+
+        // 1. Create table as root
+        rootAdmin.createTable(testTablePath, DATA1_TABLE_DESCRIPTOR_PK, false).get();
+        FLUSS_CLUSTER_EXTENSION.waitUntilTableReady(
+                rootAdmin.getTableInfo(testTablePath).get().getTableId());
+
+        // 2. Guest WITHOUT permission should get false
+        assertThat(guestAdmin.tableExists(testTablePath).get())
+                .as("Guest without permission should not see table exists")
+                .isFalse();
+
+        // 3. Root user should see table exists
+        assertThat(rootAdmin.tableExists(testTablePath).get())
+                .as("Root user should see table exists")
+                .isTrue();
+
+        // 4. Grant DESCRIBE permission on the table
+        List<AclBinding> aclBindings =
+                Collections.singletonList(
+                        new AclBinding(
+                                Resource.table(testTablePath),
+                                new AccessControlEntry(
+                                        guestPrincipal,
+                                        "*",
+                                        OperationType.DESCRIBE,
+                                        PermissionType.ALLOW)));
+        rootAdmin.createAcls(aclBindings).all().get();
+        FLUSS_CLUSTER_EXTENSION.waitUntilAuthenticationSync(aclBindings, true);
+
+        // 5. Guest WITH permission should now see table exists
+        assertThat(guestAdmin.tableExists(testTablePath).get())
+                .as("Guest with DESCRIBE permission should see table exists")
+                .isTrue();
+
+        // 6. Verify non-existent table returns false
+        TablePath nonExistentTable =
+                TablePath.of(DATA1_TABLE_PATH_PK.getDatabaseName(), "non_existent_table");
+        assertThat(guestAdmin.tableExists(nonExistentTable).get())
+                .as("Non-existent table should return false")
+                .isFalse();
+
+        // Cleanup
+        rootAdmin.dropTable(testTablePath, true).get();
     }
 
     private static Configuration initConfig() {
@@ -1301,7 +1497,8 @@ public class FlussAuthorizationITCase {
                 .cause()
                 .isInstanceOf(AuthorizationException.class)
                 .hasMessageContaining(
-                        "Principal FlussPrincipal{name='guest', type='User'} have no authorization to "
-                                + "operate DESCRIBE on resource Resource{type=TABLE, name='test_db_1.test_pk_table_1'}");
+                        "Principal FlussPrincipal{name='guest', type='User'} have no authorization"
+                                + " to operate DESCRIBE on resource Resource{type=TABLE,"
+                                + " name='test_db_1.test_pk_table_1'}");
     }
 }

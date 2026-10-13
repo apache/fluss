@@ -29,6 +29,7 @@ import org.apache.fluss.types.RowType;
 import org.apache.fluss.types.StringType;
 import org.apache.fluss.utils.CloseableIterator;
 
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
@@ -107,6 +108,72 @@ class SortMergeReaderTest {
         assertThat(actualRows).isEqualTo(materializeRows(expected, fieldGetters));
     }
 
+    @Test
+    void testReadBatchSkipsDeletedSnapshotRows() {
+        int keyIndex = 0;
+        int[] pkIndexes = new int[] {keyIndex};
+
+        List<LogRecord> snapshotRecords = createRecords(0, 10, false);
+        List<KeyValueRow> changeLogRecords = createDeleteRecords(pkIndexes, Arrays.asList(2, 5, 8));
+
+        SortMergeReader sortMergeReader =
+                new SortMergeReader(
+                        null,
+                        pkIndexes,
+                        CloseableIterator.wrap(snapshotRecords.iterator()),
+                        new FlussRowComparator(keyIndex),
+                        CloseableIterator.wrap(changeLogRecords.iterator()));
+
+        InternalRow.FieldGetter[] fieldGetters =
+                InternalRow.createFieldGetters(
+                        RowType.of(new IntType(), new StringType(), new StringType()));
+        List<InternalRow> actualRows;
+        try (CloseableIterator<InternalRow> iterator = sortMergeReader.readBatch()) {
+            actualRows = materializeRows(iterator, fieldGetters);
+        }
+
+        assertThat(actualRows).hasSize(7);
+        assertThat(actualRows.stream().map(row -> row.getInt(0)).collect(Collectors.toList()))
+                .containsExactly(0, 1, 3, 4, 6, 7, 9);
+    }
+
+    @Test
+    void testReadBatchEmitsChangeLogBeyondSnapshotMaxKey() {
+        int keyIndex = 0;
+        int[] pkIndexes = new int[] {keyIndex};
+
+        // snapshot keys: 0, 1, 2
+        List<LogRecord> snapshotRecords = createRecords(0, 3, false);
+        // change log keys: 3, 4, 5, all inserts whose keys are greater than the max
+        // snapshot key (2). This simulates a pk table with datalake tiering where the
+        // newly-written rows (larger seq ids) are still in the Fluss log tail while the
+        // older rows have been tiered into the lake snapshot.
+        List<KeyValueRow> changeLogRecords =
+                createRecords(3, 3, true).stream()
+                        .map(logRecord -> new KeyValueRow(pkIndexes, logRecord.getRow(), false))
+                        .collect(Collectors.toList());
+
+        SortMergeReader sortMergeReader =
+                new SortMergeReader(
+                        null,
+                        pkIndexes,
+                        CloseableIterator.wrap(snapshotRecords.iterator()),
+                        new FlussRowComparator(keyIndex),
+                        CloseableIterator.wrap(changeLogRecords.iterator()));
+
+        InternalRow.FieldGetter[] fieldGetters =
+                InternalRow.createFieldGetters(
+                        RowType.of(new IntType(), new StringType(), new StringType()));
+        List<InternalRow> actualRows;
+        try (CloseableIterator<InternalRow> iterator = sortMergeReader.readBatch()) {
+            actualRows = materializeRows(iterator, fieldGetters);
+        }
+
+        // The change-log rows beyond the max snapshot key must not be dropped.
+        assertThat(actualRows.stream().map(row -> row.getInt(0)).collect(Collectors.toList()))
+                .containsExactly(0, 1, 2, 3, 4, 5);
+    }
+
     private CloseableIterator<InternalRow> projected(
             CloseableIterator<LogRecord> originElementIterator, final ProjectedRow projectedRow) {
         return new CloseableIterator<InternalRow>() {
@@ -156,5 +223,17 @@ class SortMergeReaderTest {
             logRecords.add(new ScanRecord(i, System.currentTimeMillis(), ChangeType.INSERT, row));
         }
         return logRecords;
+    }
+
+    private List<KeyValueRow> createDeleteRecords(int[] pkIndexes, List<Integer> keys) {
+        List<KeyValueRow> deleteRecords = new ArrayList<>();
+        for (Integer key : keys) {
+            deleteRecords.add(
+                    new KeyValueRow(
+                            pkIndexes,
+                            row(key, BinaryString.fromString("a"), BinaryString.fromString("A")),
+                            true));
+        }
+        return deleteRecords;
     }
 }

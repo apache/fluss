@@ -19,7 +19,6 @@ package org.apache.fluss.server.coordinator.lease;
 
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.server.zk.data.lease.KvSnapshotTableLease;
-import org.apache.fluss.utils.MapUtils;
 
 import org.junit.jupiter.api.Test;
 
@@ -238,12 +237,12 @@ public class KvSnapshotLeaseHandlerTest {
 
         // Create two leases with same logical content but different array objects
         Map<Long, KvSnapshotTableLease> map1 = new HashMap<>();
-        ConcurrentHashMap<Long, Long[]> partitionSnapshots1 = MapUtils.newConcurrentHashMap();
+        ConcurrentHashMap<Long, Long[]> partitionSnapshots1 = new ConcurrentHashMap<>();
         partitionSnapshots1.put(2001L, new Long[] {100L, -1L});
         partitionSnapshots1.put(2002L, new Long[] {-1L, 101L});
         map1.put(1L, new KvSnapshotTableLease(1L, new Long[] {100L, -1L}, partitionSnapshots1));
         Map<Long, KvSnapshotTableLease> map2 = new HashMap<>();
-        ConcurrentHashMap<Long, Long[]> partitionSnapshots2 = MapUtils.newConcurrentHashMap();
+        ConcurrentHashMap<Long, Long[]> partitionSnapshots2 = new ConcurrentHashMap<>();
         partitionSnapshots2.put(2001L, new Long[] {100L, -1L});
         partitionSnapshots2.put(2002L, new Long[] {-1L, 101L});
         map2.put(1L, new KvSnapshotTableLease(1L, new Long[] {100L, -1L}, partitionSnapshots2));

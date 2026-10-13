@@ -19,19 +19,24 @@ package org.apache.fluss.server.kv.snapshot;
 
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
-import org.apache.fluss.fs.FsPath;
+import org.apache.fluss.config.cluster.ServerReconfigurable;
+import org.apache.fluss.exception.ConfigException;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.server.kv.KvSnapshotResource;
 import org.apache.fluss.server.zk.ZooKeeperClient;
-import org.apache.fluss.utils.FlussPaths;
 import org.apache.fluss.utils.function.FunctionWithException;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.Optional;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.ScheduledExecutorService;
 
 /** A default implementation for {@link SnapshotContext}. */
-public class DefaultSnapshotContext implements SnapshotContext {
+public class DefaultSnapshotContext implements SnapshotContext, ServerReconfigurable {
+
+    private static final Logger LOG = LoggerFactory.getLogger(DefaultSnapshotContext.class);
 
     private final ZooKeeperClient zooKeeperClient;
     private final CompletedKvSnapshotCommitter completedKvSnapshotCommitter;
@@ -41,7 +46,7 @@ public class DefaultSnapshotContext implements SnapshotContext {
     private final KvSnapshotDataUploader kvSnapshotDataUploader;
     private final KvSnapshotDataDownloader kvSnapshotDataDownloader;
 
-    private final long kvSnapshotIntervalMs;
+    private volatile long kvSnapshotIntervalMs;
 
     /** The write buffer size for writing the kv snapshot file to remote filesystem. */
     private final int writeBufferSizeInBytes;
@@ -50,7 +55,9 @@ public class DefaultSnapshotContext implements SnapshotContext {
 
     private final int maxFetchLogSizeInRecoverKv;
 
-    private final FsPath remoteKvDir;
+    private final int remoteLogPrefetchNumInRecoverKv;
+
+    private final int remoteLogDownloadThreadsInRecoverKv;
 
     private DefaultSnapshotContext(
             ZooKeeperClient zooKeeperClient,
@@ -61,9 +68,10 @@ public class DefaultSnapshotContext implements SnapshotContext {
             KvSnapshotDataDownloader kvSnapshotDataDownloader,
             long kvSnapshotIntervalMs,
             int writeBufferSizeInBytes,
-            FsPath remoteKvDir,
             CompletedSnapshotHandleStore completedSnapshotHandleStore,
-            int maxFetchLogSizeInRecoverKv) {
+            int maxFetchLogSizeInRecoverKv,
+            int remoteLogPrefetchNumInRecoverKv,
+            int remoteLogDownloadThreadsInRecoverKv) {
         this.zooKeeperClient = zooKeeperClient;
         this.completedKvSnapshotCommitter = completedKvSnapshotCommitter;
         this.snapshotScheduler = snapshotScheduler;
@@ -72,10 +80,11 @@ public class DefaultSnapshotContext implements SnapshotContext {
         this.kvSnapshotDataDownloader = kvSnapshotDataDownloader;
         this.kvSnapshotIntervalMs = kvSnapshotIntervalMs;
         this.writeBufferSizeInBytes = writeBufferSizeInBytes;
-        this.remoteKvDir = remoteKvDir;
 
         this.completedSnapshotHandleStore = completedSnapshotHandleStore;
         this.maxFetchLogSizeInRecoverKv = maxFetchLogSizeInRecoverKv;
+        this.remoteLogPrefetchNumInRecoverKv = remoteLogPrefetchNumInRecoverKv;
+        this.remoteLogDownloadThreadsInRecoverKv = remoteLogDownloadThreadsInRecoverKv;
     }
 
     public static DefaultSnapshotContext create(
@@ -92,19 +101,23 @@ public class DefaultSnapshotContext implements SnapshotContext {
                 kvSnapshotResource.getKvSnapshotDataDownloader(),
                 conf.get(ConfigOptions.KV_SNAPSHOT_INTERVAL).toMillis(),
                 (int) conf.get(ConfigOptions.REMOTE_FS_WRITE_BUFFER_SIZE).getBytes(),
-                FlussPaths.remoteKvDir(conf),
                 new ZooKeeperCompletedSnapshotHandleStore(zkClient),
-                (int) conf.get(ConfigOptions.KV_RECOVER_LOG_RECORD_BATCH_MAX_SIZE).getBytes());
+                (int) conf.get(ConfigOptions.KV_RECOVER_LOG_RECORD_BATCH_MAX_SIZE).getBytes(),
+                conf.get(ConfigOptions.KV_RECOVERY_REMOTE_LOG_PREFETCH_NUM),
+                conf.get(ConfigOptions.KV_RECOVERY_REMOTE_LOG_DOWNLOAD_THREADS));
     }
 
+    @Override
     public ZooKeeperClient getZooKeeperClient() {
         return zooKeeperClient;
     }
 
+    @Override
     public ExecutorService getAsyncOperationsThreadPool() {
         return asyncOperationsThreadPool;
     }
 
+    @Override
     public KvSnapshotDataUploader getSnapshotDataUploader() {
         return kvSnapshotDataUploader;
     }
@@ -114,6 +127,7 @@ public class DefaultSnapshotContext implements SnapshotContext {
         return kvSnapshotDataDownloader;
     }
 
+    @Override
     public ScheduledExecutorService getSnapshotScheduler() {
         return snapshotScheduler;
     }
@@ -131,10 +145,6 @@ public class DefaultSnapshotContext implements SnapshotContext {
     @Override
     public int getSnapshotFsWriteBufferSize() {
         return writeBufferSizeInBytes;
-    }
-
-    public FsPath getRemoteKvDir() {
-        return remoteKvDir;
     }
 
     @Override
@@ -157,8 +167,45 @@ public class DefaultSnapshotContext implements SnapshotContext {
     }
 
     @Override
+    public int remoteLogPrefetchNumInRecoverKv() {
+        return remoteLogPrefetchNumInRecoverKv;
+    }
+
+    @Override
+    public int remoteLogDownloadThreadsInRecoverKv() {
+        return remoteLogDownloadThreadsInRecoverKv;
+    }
+
+    @Override
     public void handleSnapshotBroken(CompletedSnapshot snapshot) throws Exception {
         completedSnapshotHandleStore.remove(snapshot.getTableBucket(), snapshot.getSnapshotID());
         snapshot.discardAsync(asyncOperationsThreadPool);
+    }
+
+    // ============ ServerReconfigurable Implementation ============
+
+    @Override
+    public void validate(Configuration newConfig) throws ConfigException {
+        // Type validation is already handled by DynamicServerConfig.
+        // Here we only do basic sanity checks.
+        long newIntervalMs = newConfig.get(ConfigOptions.KV_SNAPSHOT_INTERVAL).toMillis();
+        if (newIntervalMs <= 0) {
+            throw new ConfigException(
+                    String.format(
+                            "Invalid kv.snapshot.interval can not be negative or zero: %d ms",
+                            newIntervalMs));
+        }
+    }
+
+    @Override
+    public void reconfigure(Configuration newConfig) {
+        long newIntervalMs = newConfig.get(ConfigOptions.KV_SNAPSHOT_INTERVAL).toMillis();
+        if (newIntervalMs == kvSnapshotIntervalMs) {
+            LOG.debug("kv.snapshot.interval unchanged: {} ms", newIntervalMs);
+            return;
+        }
+        long oldIntervalMs = kvSnapshotIntervalMs;
+        kvSnapshotIntervalMs = newIntervalMs;
+        LOG.info("kv.snapshot.interval reconfigured: {} ms -> {} ms", oldIntervalMs, newIntervalMs);
     }
 }

@@ -24,11 +24,11 @@
     <parent>
         <groupId>org.apache.fluss</groupId>
         <artifactId>fluss-filesystems</artifactId>
-        <version>0.10-SNAPSHOT</version>
+        <version>1.1-SNAPSHOT</version>
     </parent>
 
     <artifactId>fluss-fs-oss</artifactId>
-    <name>Fluss : FileSystems : OSS FS</name>
+    <name>Apache Fluss : FileSystems : OSS FS</name>
 
     <properties>
         <fs.oss.sdk.version>3.17.4</fs.oss.sdk.version>
@@ -123,6 +123,7 @@
                 <executions>
                     <execution>
                         <goals>
+                            <goal>test-jar</goal>
                             <goal>jar</goal>
                         </goals>
                     </execution>
@@ -234,18 +235,6 @@
                                 </relocation>
                             </relocations>
                         </configuration>
-                    </execution>
-                </executions>
-            </plugin>
-
-            <plugin>
-                <groupId>org.apache.maven.plugins</groupId>
-                <artifactId>maven-jar-plugin</artifactId>
-                <executions>
-                    <execution>
-                        <goals>
-                            <goal>test-jar</goal>
-                        </goals>
                     </execution>
                 </executions>
             </plugin>

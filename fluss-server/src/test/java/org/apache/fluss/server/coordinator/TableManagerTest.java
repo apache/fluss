@@ -25,18 +25,22 @@ import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePartition;
 import org.apache.fluss.server.coordinator.event.CoordinatorEvent;
 import org.apache.fluss.server.coordinator.event.DeleteReplicaResponseReceivedEvent;
+import org.apache.fluss.server.coordinator.event.ResumeDropEvent;
 import org.apache.fluss.server.coordinator.event.TestingEventManager;
 import org.apache.fluss.server.coordinator.statemachine.ReplicaStateMachine;
 import org.apache.fluss.server.coordinator.statemachine.TableBucketStateMachine;
 import org.apache.fluss.server.entity.DeleteReplicaResultForBucket;
+import org.apache.fluss.server.metadata.CoordinatorMetadataCache;
 import org.apache.fluss.server.metadata.ServerInfo;
 import org.apache.fluss.server.zk.NOPErrorHandler;
+import org.apache.fluss.server.zk.ZkEpoch;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.ZooKeeperExtension;
 import org.apache.fluss.server.zk.data.BucketAssignment;
 import org.apache.fluss.server.zk.data.PartitionAssignment;
 import org.apache.fluss.server.zk.data.TableAssignment;
 import org.apache.fluss.testutils.common.AllCallbackWrapper;
+import org.apache.fluss.utils.clock.SystemClock;
 
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
@@ -63,6 +67,7 @@ import static org.apache.fluss.record.TestData.DATA1_TABLE_DESCRIPTOR_PK;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_ID;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_PATH;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_PATH_PK;
+import static org.apache.fluss.record.TestData.DEFAULT_REMOTE_DATA_DIR;
 import static org.apache.fluss.server.coordinator.statemachine.BucketState.OnlineBucket;
 import static org.apache.fluss.server.coordinator.statemachine.ReplicaState.OnlineReplica;
 import static org.apache.fluss.server.coordinator.statemachine.ReplicaState.ReplicaDeletionSuccessful;
@@ -77,19 +82,23 @@ class TableManagerTest {
             new AllCallbackWrapper<>(new ZooKeeperExtension());
 
     private static ZooKeeperClient zookeeperClient;
+    private static ZkEpoch zkEpoch;
     private static ExecutorService ioExecutor;
 
     private CoordinatorContext coordinatorContext;
+    private ReplicaCapacityController replicaCapacityController;
     private TableManager tableManager;
+    private TableLifecycleThrottler lifecycleThrottler;
     private TestingEventManager testingEventManager;
     private TestCoordinatorChannelManager testCoordinatorChannelManager;
 
     @BeforeAll
-    static void baseBeforeAll() {
+    static void baseBeforeAll() throws Exception {
         zookeeperClient =
                 ZOO_KEEPER_EXTENSION_WRAPPER
                         .getCustomExtension()
                         .getZooKeeperClient(NOPErrorHandler.INSTANCE);
+        zkEpoch = zookeeperClient.fenceBecomeCoordinatorLeader("1");
         ioExecutor = Executors.newFixedThreadPool(1);
     }
 
@@ -103,6 +112,9 @@ class TableManagerTest {
         if (tableManager != null) {
             tableManager.shutdown();
         }
+        if (lifecycleThrottler != null) {
+            lifecycleThrottler.close();
+        }
     }
 
     @AfterAll
@@ -112,7 +124,9 @@ class TableManagerTest {
 
     private void initTableManager() {
         testingEventManager = new TestingEventManager();
-        coordinatorContext = new CoordinatorContext();
+        coordinatorContext = new CoordinatorContext(zkEpoch);
+        replicaCapacityController =
+                new ReplicaCapacityController(new Configuration(), new CoordinatorMetadataCache());
         testCoordinatorChannelManager = new TestCoordinatorChannelManager();
         Configuration conf = new Configuration();
         conf.setString(ConfigOptions.REMOTE_DATA_DIR, "/tmp/fluss/remote-data");
@@ -130,14 +144,19 @@ class TableManagerTest {
                         zookeeperClient,
                         new Configuration(),
                         new LakeCatalogDynamicLoader(new Configuration(), null, true));
+        lifecycleThrottler =
+                new TableLifecycleThrottler(
+                        testingEventManager, SystemClock.getInstance(), new Configuration());
         tableManager =
                 new TableManager(
                         metadataManager,
                         coordinatorContext,
+                        replicaCapacityController,
                         replicaStateMachine,
                         tableBucketStateMachine,
                         new RemoteStorageCleaner(conf, ioExecutor),
-                        ioExecutor);
+                        ioExecutor,
+                        lifecycleThrottler);
         tableManager.startup();
 
         coordinatorContext.setLiveTabletServers(
@@ -162,10 +181,13 @@ class TableManagerTest {
                         tableId,
                         0,
                         DATA1_TABLE_DESCRIPTOR,
+                        DEFAULT_REMOTE_DATA_DIR,
                         System.currentTimeMillis(),
                         System.currentTimeMillis()));
         tableManager.onCreateNewTable(DATA1_TABLE_PATH, tableId, assignment);
 
+        assertThat(coordinatorContext.getKvBucketCount()).isZero();
+        assertThat(replicaCapacityController.getKvLeaderReplicaCount()).isZero();
         // all replica should be online
         checkReplicaOnline(tableId, null, assignment);
         // clear the assignment for the table
@@ -185,13 +207,19 @@ class TableManagerTest {
                         tableId,
                         0,
                         DATA1_TABLE_DESCRIPTOR_PK,
+                        DEFAULT_REMOTE_DATA_DIR,
                         System.currentTimeMillis(),
                         System.currentTimeMillis()));
         tableManager.onCreateNewTable(DATA1_TABLE_PATH_PK, tableId, assignment);
+        assertThat(coordinatorContext.getKvBucketCount()).isEqualTo(assignment.getBuckets().size());
+        assertThat(replicaCapacityController.getKvLeaderReplicaCount())
+                .isEqualTo(assignment.getBuckets().size());
 
         // now, delete the created table
         coordinatorContext.queueTableDeletion(Collections.singleton(tableId));
         tableManager.onDeleteTable(tableId);
+        assertThat(coordinatorContext.getKvBucketCount()).isZero();
+        assertThat(replicaCapacityController.getKvLeaderReplicaCount()).isZero();
 
         // make sure the delete replica success events in event manager is equal to the expected
         checkReplicaDelete(tableId, null, assignment);
@@ -224,6 +252,7 @@ class TableManagerTest {
                         tableId,
                         0,
                         DATA1_TABLE_DESCRIPTOR,
+                        DEFAULT_REMOTE_DATA_DIR,
                         System.currentTimeMillis(),
                         System.currentTimeMillis()));
         tableManager.onCreateNewTable(DATA1_TABLE_PATH, tableId, assignment);
@@ -254,6 +283,9 @@ class TableManagerTest {
 
         // start table manager, should resume table deletion
         tableManager.startup();
+        // TableLifecycleThrottler defers resume actions to the coordinator event thread by
+        // enqueuing ResumeDropEvent; the unit test has no real event loop so dispatch them inline.
+        dispatchResumeDropEvents();
 
         checkReplicaDelete(tableId, null, assignment);
     }
@@ -271,6 +303,7 @@ class TableManagerTest {
                         tableId,
                         0,
                         DATA1_TABLE_DESCRIPTOR,
+                        DEFAULT_REMOTE_DATA_DIR,
                         System.currentTimeMillis(),
                         System.currentTimeMillis()));
         tableManager.onCreateNewTable(DATA1_TABLE_PATH, tableId, assignment);
@@ -280,7 +313,13 @@ class TableManagerTest {
         String partitionName = "2024";
         long partitionId = zookeeperClient.getPartitionIdAndIncrement();
         zookeeperClient.registerPartitionAssignmentAndMetadata(
-                partitionId, partitionName, partitionAssignment, DATA1_TABLE_PATH, tableId);
+                partitionId,
+                partitionName,
+                partitionAssignment,
+                DEFAULT_REMOTE_DATA_DIR,
+                DATA1_TABLE_PATH,
+                tableId,
+                partitionAssignment.getBucketAssignments().size());
 
         // create partition
         tableManager.onCreateNewPartition(
@@ -398,5 +437,24 @@ class TableManagerTest {
             }
         }
         return deleteReplicaResponseReceivedEvent;
+    }
+
+    /**
+     * Drives every {@link ResumeDropEvent} currently in the testing event manager. Mirrors the
+     * dispatch logic of {@code CoordinatorEventProcessor#process(CoordinatorEvent)} so unit tests
+     * can trigger the deferred resume reconciliation without spinning up the real event loop.
+     */
+    private void dispatchResumeDropEvents() {
+        for (CoordinatorEvent event : testingEventManager.getEvents()) {
+            if (event instanceof ResumeDropEvent) {
+                ResumeDropEvent resumeEvent = (ResumeDropEvent) event;
+                if (resumeEvent.getPartitionId() == null) {
+                    tableManager.onDeleteTable(resumeEvent.getTableId());
+                } else {
+                    tableManager.onDeletePartition(
+                            resumeEvent.getTableId(), resumeEvent.getPartitionId());
+                }
+            }
+        }
     }
 }

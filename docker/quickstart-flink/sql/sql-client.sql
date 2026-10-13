@@ -7,7 +7,7 @@
  * "License"); you may not use this file except in compliance
  * with the License.  You may obtain a copy of the License at
  *
- *     http://www.apache.org/licenses/LICENSE-2.0
+ *      http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -56,8 +56,8 @@ CREATE TEMPORARY TABLE source_customer (
 
 CREATE TEMPORARY TABLE `source_nation` (
   `nation_key` INT NOT NULL,
-  `name`       STRING,
-   PRIMARY KEY (`nation_key`) NOT ENFORCED
+  `name` STRING,
+  PRIMARY KEY (`nation_key`) NOT ENFORCED
 ) WITH (
   'connector' = 'faker',
   'number-of-rows' = '100',
@@ -65,4 +65,4 @@ CREATE TEMPORARY TABLE `source_nation` (
   'fields.name.expression' = '#{regexify ''(CANADA|JORDAN|CHINA|UNITED|INDIA){1}''}'
 );
 
-SET 'table.exec.sink.not-null-enforcer'='DROP';
+SET 'table.exec.sink.not-null-enforcer' = 'DROP';

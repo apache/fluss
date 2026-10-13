@@ -45,7 +45,10 @@ public class TieringSplitState {
                     split.getPartitionName(),
                     split.getSnapshotId(),
                     split.getLogOffsetOfSnapshot(),
-                    split.getNumberOfSplits());
+                    split.getNumberOfSplits(),
+                    split.shouldSkipCurrentRound(),
+                    split.getSplitIndex(),
+                    split.getTieringRoundTimestamp());
         } else {
             final TieringLogSplit split = (TieringLogSplit) tieringSplit;
             return new TieringLogSplit(
@@ -54,7 +57,10 @@ public class TieringSplitState {
                     split.getPartitionName(),
                     split.getStartingOffset(),
                     split.getStoppingOffset(),
-                    split.getNumberOfSplits());
+                    split.getNumberOfSplits(),
+                    split.shouldSkipCurrentRound(),
+                    split.getSplitIndex(),
+                    split.getTieringRoundTimestamp());
         }
     }
 }

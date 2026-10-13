@@ -79,7 +79,10 @@ class FlussToPaimonPredicateConverterTest {
                                 Stream.of("a", "b", "c")
                                         .map(BinaryString::fromString)
                                         .collect(Collectors.toList())),
-                        PAIMON_BUILDER.in(2, Arrays.asList("a", "b", "c"))),
+                        org.apache.paimon.predicate.PredicateBuilder.or(
+                                org.apache.paimon.predicate.PredicateBuilder.or(
+                                        PAIMON_BUILDER.equal(2, "a"), PAIMON_BUILDER.equal(2, "b")),
+                                PAIMON_BUILDER.equal(2, "c"))),
                 Arguments.of(
                         FLUSS_BUILDER.in(
                                 2,

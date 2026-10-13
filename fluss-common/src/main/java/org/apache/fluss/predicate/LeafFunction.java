@@ -49,7 +49,7 @@ public abstract class LeafFunction implements Serializable {
      * @param rowCount the total number of rows
      * @param min the minimum value of the field in the rows
      * @param max the maximum value of the field in the rows
-     * @param nullCount the number of null values in the field, or null if unknown
+     * @param nullCount the number of null values in the field, or -1 if unknown
      * @param literals the literals to test against the field
      * @return true if there is any row satisfies the condition, false otherwise
      */
@@ -58,7 +58,7 @@ public abstract class LeafFunction implements Serializable {
             long rowCount,
             Object min,
             Object max,
-            Long nullCount,
+            long nullCount,
             List<Object> literals);
 
     public abstract Optional<LeafFunction> negate();

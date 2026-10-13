@@ -18,7 +18,7 @@
 package org.apache.fluss.spark.row
 
 import org.apache.fluss.row.{InternalRow => FlussInternalRow}
-import org.apache.fluss.types.{ArrayType => FlussArrayType, BinaryType => FlussBinaryType, LocalZonedTimestampType, RowType, TimestampType}
+import org.apache.fluss.types.{ArrayType => FlussArrayType, BinaryType => FlussBinaryType, BytesType => FlussBytesType, LocalZonedTimestampType, MapType => FlussMapType, RowType, TimestampType}
 import org.apache.fluss.utils.InternalRowUtils
 
 import org.apache.spark.sql.catalyst.{InternalRow => SparkInteralRow}
@@ -27,6 +27,7 @@ import org.apache.spark.sql.catalyst.util.{ArrayData => SparkArrayData, MapData 
 import org.apache.spark.sql.types.{DataType => SparkDataType, Decimal => SparkDecimal}
 import org.apache.spark.unsafe.types.{CalendarInterval, UTF8String}
 
+/** Wraps a Fluss [[FlussInternalRow]] as a Spark [[SparkInteralRow]]. */
 class FlussAsSparkRow(rowType: RowType) extends SparkInteralRow {
 
   val fieldCount: Int = rowType.getFieldCount
@@ -83,9 +84,9 @@ class FlussAsSparkRow(rowType: RowType) extends SparkInteralRow {
     DataConverter.toSparkUTF8String(row.getString(ordinal))
   }
 
-  override def getBinary(ordinal: Int): Array[Byte] = {
-    val binaryType = rowType.getTypeAt(ordinal).asInstanceOf[FlussBinaryType]
-    row.getBinary(ordinal, binaryType.getLength)
+  override def getBinary(ordinal: Int): Array[Byte] = rowType.getTypeAt(ordinal) match {
+    case b: FlussBinaryType => row.getBinary(ordinal, b.getLength)
+    case _: FlussBytesType => row.getBytes(ordinal)
   }
 
   override def getInterval(ordinal: Int): CalendarInterval =
@@ -104,8 +105,9 @@ class FlussAsSparkRow(rowType: RowType) extends SparkInteralRow {
   }
 
   override def getMap(ordinal: Int): SparkMapData = {
-    // TODO: support map type in fluss-spark
-    throw new UnsupportedOperationException()
+    val mapType = rowType.getTypeAt(ordinal).asInstanceOf[FlussMapType]
+    val flussMap = row.getMap(ordinal)
+    DataConverter.toSparkMap(flussMap, mapType)
   }
 
   override def get(ordinal: Int, dataType: SparkDataType): AnyRef = {

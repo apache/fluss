@@ -20,6 +20,7 @@ package org.apache.fluss.lake.lakestorage;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.TableAlreadyExistException;
 import org.apache.fluss.exception.TableNotExistException;
+import org.apache.fluss.lake.lakestorage.LakeTableLookuperManager.LookupCacheOptions;
 import org.apache.fluss.lake.source.LakeSource;
 import org.apache.fluss.lake.writer.LakeTieringFactory;
 import org.apache.fluss.metadata.TableChange;
@@ -27,6 +28,8 @@ import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.utils.TemporaryClassLoaderContext;
 import org.apache.fluss.utils.WrappingProxy;
+
+import javax.annotation.Nullable;
 
 import java.util.List;
 
@@ -134,6 +137,100 @@ public class PluginLakeStorageWrapper implements LakeStoragePlugin {
         @Override
         public LakeSource<?> createLakeSource(TablePath tablePath) {
             return inner.createLakeSource(tablePath);
+        }
+
+        @Override
+        public LakeTableLookuperManager createLakeTableLookuperManager(
+                String ioTmpDir, LookupCacheOptions options) {
+            try (TemporaryClassLoaderContext ignored = TemporaryClassLoaderContext.of(loader)) {
+                return new ClassLoaderFixingLakeTableLookuperManager(
+                        inner.createLakeTableLookuperManager(ioTmpDir, options), loader);
+            }
+        }
+    }
+
+    static class ClassLoaderFixingLakeTableLookuperManager
+            implements LakeTableLookuperManager, WrappingProxy<LakeTableLookuperManager> {
+
+        private final LakeTableLookuperManager inner;
+        private final ClassLoader loader;
+
+        private ClassLoaderFixingLakeTableLookuperManager(
+                LakeTableLookuperManager inner, ClassLoader loader) {
+            this.inner = inner;
+            this.loader = loader;
+        }
+
+        @Override
+        public LakeTableLookuper createLakeTableLookuper(TablePath tablePath, Context context) {
+            try (TemporaryClassLoaderContext ignored = TemporaryClassLoaderContext.of(loader)) {
+                return new ClassLoaderFixingLakeTableLookuper(
+                        inner.createLakeTableLookuper(tablePath, context), loader);
+            }
+        }
+
+        @Override
+        public void reconfigure(LookupCacheOptions options) {
+            try (TemporaryClassLoaderContext ignored = TemporaryClassLoaderContext.of(loader)) {
+                inner.reconfigure(options);
+            }
+        }
+
+        @Override
+        public long fileCacheCapacityEvictions() {
+            try (TemporaryClassLoaderContext ignored = TemporaryClassLoaderContext.of(loader)) {
+                return inner.fileCacheCapacityEvictions();
+            }
+        }
+
+        @Override
+        public void close() throws Exception {
+            try (TemporaryClassLoaderContext ignored = TemporaryClassLoaderContext.of(loader)) {
+                inner.close();
+            }
+        }
+
+        @Override
+        public LakeTableLookuperManager getWrappedDelegate() {
+            return inner;
+        }
+    }
+
+    static class ClassLoaderFixingLakeTableLookuper
+            implements LakeTableLookuper, WrappingProxy<LakeTableLookuper> {
+
+        private final LakeTableLookuper inner;
+        private final ClassLoader loader;
+
+        private ClassLoaderFixingLakeTableLookuper(LakeTableLookuper inner, ClassLoader loader) {
+            this.inner = inner;
+            this.loader = loader;
+        }
+
+        @Override
+        public @Nullable byte[] lookup(byte[] key, LookupContext context) throws Exception {
+            try (TemporaryClassLoaderContext ignored = TemporaryClassLoaderContext.of(loader)) {
+                return inner.lookup(key, context);
+            }
+        }
+
+        @Override
+        public void requestRefresh() {
+            try (TemporaryClassLoaderContext ignored = TemporaryClassLoaderContext.of(loader)) {
+                inner.requestRefresh();
+            }
+        }
+
+        @Override
+        public void close() throws Exception {
+            try (TemporaryClassLoaderContext ignored = TemporaryClassLoaderContext.of(loader)) {
+                inner.close();
+            }
+        }
+
+        @Override
+        public LakeTableLookuper getWrappedDelegate() {
+            return inner;
         }
     }
 }

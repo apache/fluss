@@ -31,7 +31,11 @@ import org.apache.iceberg.data.GenericRecord;
 import org.apache.iceberg.types.Types;
 import org.junit.jupiter.api.Test;
 
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.io.ObjectInputStream;
+import java.io.ObjectOutputStream;
 import java.util.Arrays;
 import java.util.List;
 
@@ -77,6 +81,53 @@ class IcebergSplitSerializerTest extends IcebergSourceTestBase {
                 .isEqualTo(originalIcebergSplit.fileScanTask().file().location());
         assertThat(deserialized.partition()).isEqualTo(originalIcebergSplit.partition());
         assertThat(deserialized.bucket()).isEqualTo(originalIcebergSplit.bucket());
+    }
+
+    @Test
+    void testJavaSerializationRoundTrip() throws Exception {
+        // prepare iceberg table
+        TablePath tablePath = TablePath.of(DEFAULT_DB, DEFAULT_TABLE);
+        Schema schema =
+                new Schema(
+                        optional(1, "c1", Types.IntegerType.get()),
+                        optional(2, "c2", Types.StringType.get()),
+                        optional(3, "c3", Types.StringType.get()));
+        PartitionSpec partitionSpec =
+                PartitionSpec.builderFor(schema).bucket("c1", DEFAULT_BUCKET_NUM).build();
+        createTable(tablePath, schema, partitionSpec);
+
+        // write data
+        Table table = getTable(tablePath);
+
+        GenericRecord record1 = createIcebergRecord(schema, 12, "a", "A");
+        GenericRecord record2 = createIcebergRecord(schema, 13, "b", "B");
+
+        writeRecord(table, Arrays.asList(record1, record2), null, 0);
+        table.refresh();
+        Snapshot snapshot = table.currentSnapshot();
+
+        LakeSource<IcebergSplit> lakeSource = lakeStorage.createLakeSource(tablePath);
+        List<IcebergSplit> plan = lakeSource.createPlanner(snapshot::snapshotId).plan();
+
+        IcebergSplit original = plan.get(0);
+
+        // Serialize via Java serialization
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        try (ObjectOutputStream oos = new ObjectOutputStream(baos)) {
+            oos.writeObject(original);
+        }
+        byte[] bytes = baos.toByteArray();
+
+        // Deserialize
+        ByteArrayInputStream bais = new ByteArrayInputStream(bytes);
+        try (ObjectInputStream ois = new ObjectInputStream(bais)) {
+            IcebergSplit deserialized = (IcebergSplit) ois.readObject();
+
+            assertThat(deserialized.bucket()).isEqualTo(original.bucket());
+            assertThat(deserialized.partition()).isEqualTo(original.partition());
+            assertThat(deserialized.fileScanTask().file().location())
+                    .isEqualTo(original.fileScanTask().file().location());
+        }
     }
 
     @Test

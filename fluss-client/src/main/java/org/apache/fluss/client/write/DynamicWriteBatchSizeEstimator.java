@@ -19,7 +19,6 @@ package org.apache.fluss.client.write;
 
 import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.metadata.PhysicalTablePath;
-import org.apache.fluss.utils.MapUtils;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -48,7 +47,7 @@ public class DynamicWriteBatchSizeEstimator {
         this.dynamicBatchSizeEnabled = dynamicBatchSizeEnabled;
 
         if (dynamicBatchSizeEnabled) {
-            this.estimatedBatchSizeMap = MapUtils.newConcurrentHashMap();
+            this.estimatedBatchSizeMap = new ConcurrentHashMap<>();
         } else {
             this.estimatedBatchSizeMap = null;
         }

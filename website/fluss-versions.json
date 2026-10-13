@@ -1,21 +1,31 @@
 [
   {
     "versionName": "next",
-    "fullVersion": "0.10-SNAPSHOT",
-    "shortVersion": "0.10",
-    "dockerVersion": "0.10-SNAPSHOT",
-    "paimonVersion": "1.3.1",
-    "paimonVersionShort": "1.3",
+    "fullVersion": "1.1-SNAPSHOT",
+    "shortVersion": "1.1",
+    "dockerVersion": "1.1-SNAPSHOT",
+    "paimonVersion": "2.1.0",
+    "paimonVersionShort": "2.1",
     "released": false
-  },	
+  },
+  {
+    "versionName": "version-1.0",
+    "fullVersion": "1.0.0",
+    "shortVersion": "1.0",
+    "dockerVersion": "1.0.0",
+    "paimonVersion": "2.0.0",
+    "paimonVersionShort": "2.0",
+    "released": true
+  },
   {
     "versionName": "version-0.9",
-    "fullVersion": "0.9.0-incubating",
+    "fullVersion": "0.9.1-incubating",
     "shortVersion": "0.9",
-    "dockerVersion": "0.9.0-incubating-rc0",
+    "dockerVersion": "0.9.1-incubating",
     "paimonVersion": "1.3.1",
     "paimonVersionShort": "1.3",
-    "released": false
+    "mavenRepoUrl": "https://repo1.maven.org/maven2",
+    "released": true
   },
   {
     "versionName": "version-0.8",

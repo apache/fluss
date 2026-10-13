@@ -17,18 +17,16 @@
 
 package org.apache.fluss.fs.azure.token;
 
-import org.apache.fluss.config.Configuration;
+import org.apache.fluss.fs.azure.AzureFileSystemOptions;
 import org.apache.fluss.fs.token.Credentials;
 import org.apache.fluss.fs.token.CredentialsJsonSerde;
 import org.apache.fluss.fs.token.ObtainedSecurityToken;
 
+import org.apache.hadoop.conf.Configuration;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
-import static org.apache.fluss.fs.azure.AzureFileSystemOptions.CLIENT_ID;
-import static org.apache.fluss.fs.azure.AzureFileSystemOptions.CLIENT_SECRET;
-import static org.apache.fluss.fs.azure.AzureFileSystemOptions.ENDPOINT_KEY;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** Tests for {@link AzureDelegationTokenProvider}. */
@@ -37,21 +35,23 @@ public class AzureDelegationTokenProviderTest {
     private static final String TEST_CLIENT_ID = "testClientId";
     private static final String TEST_CLIENT_SECRET = "testClientSecret";
 
-    private static final String TEST_ENDPOINT = "http://localhost:8080";
+    private static final String TEST_ENDPOINT_PREFIX = "http://localhost:";
+    private static String testEndpoint;
 
     private static MockAuthServer mockAuthServer;
 
     @BeforeAll
     static void setup() {
         mockAuthServer = MockAuthServer.create();
+        testEndpoint = TEST_ENDPOINT_PREFIX + mockAuthServer.getPort();
     }
 
     @Test
     void obtainSecurityTokenShouldReturnSecurityToken() {
         Configuration configuration = new Configuration();
-        configuration.set(CLIENT_ID, TEST_CLIENT_ID);
-        configuration.set(CLIENT_SECRET, TEST_CLIENT_SECRET);
-        configuration.set(ENDPOINT_KEY, TEST_ENDPOINT);
+        configuration.set(AzureFileSystemOptions.CLIENT_ID.key(), TEST_CLIENT_ID);
+        configuration.set(AzureFileSystemOptions.CLIENT_SECRET.key(), TEST_CLIENT_SECRET);
+        configuration.set(AzureFileSystemOptions.ENDPOINT_KEY.key(), testEndpoint);
         AzureDelegationTokenProvider azureDelegationTokenProvider =
                 new AzureDelegationTokenProvider("abfs", configuration);
         ObtainedSecurityToken obtainedSecurityToken =

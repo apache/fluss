@@ -51,7 +51,7 @@ public class And extends CompoundPredicate.Function {
             long rowCount,
             InternalRow minValues,
             InternalRow maxValues,
-            Long[] nullCounts,
+            int[] nullCounts,
             List<Predicate> children) {
         for (Predicate child : children) {
             if (!child.test(rowCount, minValues, maxValues, nullCounts)) {

@@ -23,6 +23,7 @@ import org.apache.fluss.flink.source.deserializer.RowDataDeserializationSchema;
 import org.apache.fluss.flink.source.reader.RecordAndPos;
 import org.apache.fluss.flink.source.split.HybridSnapshotLogSplit;
 import org.apache.fluss.flink.source.split.HybridSnapshotLogSplitState;
+import org.apache.fluss.flink.source.split.LogSplit;
 import org.apache.fluss.flink.source.testutils.Order;
 import org.apache.fluss.flink.source.testutils.OrderDeserializationSchema;
 import org.apache.fluss.flink.utils.FlussRowToFlinkRowConverter;
@@ -54,7 +55,8 @@ public class FlinkRecordEmitterTest {
         TableBucket bucket0 = new TableBucket(tableId, 0);
 
         HybridSnapshotLogSplit hybridSnapshotLogSplit =
-                new HybridSnapshotLogSplit(bucket0, null, 0L, 0L);
+                new HybridSnapshotLogSplit(
+                        bucket0, null, 0L, 0, false, 0L, LogSplit.NO_STOPPING_OFFSET, false);
 
         HybridSnapshotLogSplitState splitState =
                 new HybridSnapshotLogSplitState(hybridSnapshotLogSplit);
@@ -106,7 +108,8 @@ public class FlinkRecordEmitterTest {
         TableBucket bucket0 = new TableBucket(tableId, 0);
 
         HybridSnapshotLogSplit hybridSnapshotLogSplit =
-                new HybridSnapshotLogSplit(bucket0, null, 0L, 0L);
+                new HybridSnapshotLogSplit(
+                        bucket0, null, 0L, 0, false, 0L, LogSplit.NO_STOPPING_OFFSET, false);
 
         HybridSnapshotLogSplitState splitState =
                 new HybridSnapshotLogSplitState(hybridSnapshotLogSplit);

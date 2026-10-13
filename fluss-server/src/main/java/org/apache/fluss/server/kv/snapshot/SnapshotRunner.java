@@ -50,7 +50,7 @@ public class SnapshotRunner {
     }
 
     public RunnableFuture<SnapshotResult> snapshot(
-            long snapshotId, long logOffset, @Nonnull SnapshotLocation snapshotLocation)
+            long snapshotId, TabletState tabletState, @Nonnull SnapshotLocation snapshotLocation)
             throws Exception {
         long startTime = System.currentTimeMillis();
         RocksIncrementalSnapshot.NativeRocksDBSnapshotResources snapshotResources =
@@ -59,7 +59,7 @@ public class SnapshotRunner {
 
         SnapshotResultSupplier asyncSnapshot =
                 rocksIncrementalSnapshot.asyncSnapshot(
-                        snapshotResources, snapshotId, logOffset, snapshotLocation);
+                        snapshotResources, snapshotId, tabletState, snapshotLocation);
 
         return new AsyncSnapshotCallable<SnapshotResult>() {
             @Override

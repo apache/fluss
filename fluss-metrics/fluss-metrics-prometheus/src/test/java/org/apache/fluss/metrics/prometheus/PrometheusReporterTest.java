@@ -282,4 +282,21 @@ class PrometheusReporterTest {
                 + String.format("# TYPE %s %s\n", scopedName, type)
                 + String.format("%s%s%s %s\n", scopedName, nameSuffix, DEFAULT_LABELS, value);
     }
+
+    @Test
+    void labelValueWithHyphenIsPreserved() throws UnirestException {
+        String[] labelNames = {"table"};
+        String[] labelValues = {"metrics-test"};
+        MetricGroup groupWithHyphen =
+                TestUtils.createTestMetricGroup(
+                        LOGICAL_SCOPE, TestUtils.toMap(labelNames, labelValues));
+
+        Counter counter = new SimpleCounter();
+        counter.inc(5);
+
+        reporter.notifyOfAddedMetric(counter, "testCounter", groupWithHyphen);
+
+        String response = pollMetrics(reporter.getPort()).getBody();
+        assertThat(response).contains("table=\"metrics-test\"");
+    }
 }

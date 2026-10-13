@@ -26,24 +26,30 @@ import org.apache.fluss.rpc.messages.ApiVersionsRequest;
 import org.apache.fluss.rpc.messages.ApiVersionsResponse;
 import org.apache.fluss.rpc.messages.DatabaseExistsRequest;
 import org.apache.fluss.rpc.messages.DatabaseExistsResponse;
+import org.apache.fluss.rpc.messages.DescribeBucketsRequest;
+import org.apache.fluss.rpc.messages.DescribeBucketsResponse;
 import org.apache.fluss.rpc.messages.DescribeClusterConfigsRequest;
 import org.apache.fluss.rpc.messages.DescribeClusterConfigsResponse;
 import org.apache.fluss.rpc.messages.FetchLogRequest;
 import org.apache.fluss.rpc.messages.FetchLogResponse;
+import org.apache.fluss.rpc.messages.GetClusterHealthRequest;
+import org.apache.fluss.rpc.messages.GetClusterHealthResponse;
 import org.apache.fluss.rpc.messages.GetDatabaseInfoRequest;
 import org.apache.fluss.rpc.messages.GetDatabaseInfoResponse;
 import org.apache.fluss.rpc.messages.GetFileSystemSecurityTokenRequest;
 import org.apache.fluss.rpc.messages.GetFileSystemSecurityTokenResponse;
 import org.apache.fluss.rpc.messages.GetKvSnapshotMetadataRequest;
 import org.apache.fluss.rpc.messages.GetKvSnapshotMetadataResponse;
+import org.apache.fluss.rpc.messages.GetLakeSnapshotRequest;
+import org.apache.fluss.rpc.messages.GetLakeSnapshotResponse;
 import org.apache.fluss.rpc.messages.GetLatestKvSnapshotsRequest;
 import org.apache.fluss.rpc.messages.GetLatestKvSnapshotsResponse;
-import org.apache.fluss.rpc.messages.GetLatestLakeSnapshotRequest;
-import org.apache.fluss.rpc.messages.GetLatestLakeSnapshotResponse;
 import org.apache.fluss.rpc.messages.GetTableInfoRequest;
 import org.apache.fluss.rpc.messages.GetTableInfoResponse;
 import org.apache.fluss.rpc.messages.GetTableSchemaRequest;
 import org.apache.fluss.rpc.messages.GetTableSchemaResponse;
+import org.apache.fluss.rpc.messages.GetTableStatsRequest;
+import org.apache.fluss.rpc.messages.GetTableStatsResponse;
 import org.apache.fluss.rpc.messages.InitWriterRequest;
 import org.apache.fluss.rpc.messages.InitWriterResponse;
 import org.apache.fluss.rpc.messages.LimitScanRequest;
@@ -81,6 +87,8 @@ import org.apache.fluss.rpc.messages.ProduceLogRequest;
 import org.apache.fluss.rpc.messages.ProduceLogResponse;
 import org.apache.fluss.rpc.messages.PutKvRequest;
 import org.apache.fluss.rpc.messages.PutKvResponse;
+import org.apache.fluss.rpc.messages.ScanKvRequest;
+import org.apache.fluss.rpc.messages.ScanKvResponse;
 import org.apache.fluss.rpc.messages.StopReplicaRequest;
 import org.apache.fluss.rpc.messages.StopReplicaResponse;
 import org.apache.fluss.rpc.messages.TableExistsRequest;
@@ -157,9 +165,9 @@ public class TestTabletServerGateway implements TabletServerGateway {
     }
 
     @Override
-    public CompletableFuture<GetLatestLakeSnapshotResponse> getLatestLakeSnapshot(
-            GetLatestLakeSnapshotRequest request) {
-        throw new UnsupportedOperationException();
+    public CompletableFuture<GetLakeSnapshotResponse> getLakeSnapshot(
+            GetLakeSnapshotRequest request) {
+        return null;
     }
 
     @Override
@@ -176,7 +184,8 @@ public class TestTabletServerGateway implements TabletServerGateway {
         fetchLogData.forEach(
                 (tableBucket, fetchData) -> {
                     FetchLogResultForBucket fetchLogResultForBucket =
-                            new FetchLogResultForBucket(tableBucket, MemoryLogRecords.EMPTY, 0L);
+                            FetchLogResultForBucket.records(
+                                    tableBucket, MemoryLogRecords.EMPTY, 0L, -1L, -1L);
                     resultForBucketMap.put(tableBucket, fetchLogResultForBucket);
                 });
         return CompletableFuture.completedFuture(makeFetchLogResponse(resultForBucketMap));
@@ -205,6 +214,11 @@ public class TestTabletServerGateway implements TabletServerGateway {
     }
 
     @Override
+    public CompletableFuture<GetTableStatsResponse> getTableStats(GetTableStatsRequest request) {
+        return null;
+    }
+
+    @Override
     public CompletableFuture<ListOffsetsResponse> listOffsets(ListOffsetsRequest request) {
         return null;
     }
@@ -226,6 +240,12 @@ public class TestTabletServerGateway implements TabletServerGateway {
     }
 
     @Override
+    public CompletableFuture<GetClusterHealthResponse> getClusterHealth(
+            GetClusterHealthRequest request) {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
     public CompletableFuture<DatabaseExistsResponse> databaseExists(DatabaseExistsRequest request) {
         throw new UnsupportedOperationException();
     }
@@ -237,6 +257,12 @@ public class TestTabletServerGateway implements TabletServerGateway {
 
     @Override
     public CompletableFuture<GetTableInfoResponse> getTableInfo(GetTableInfoRequest request) {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public CompletableFuture<DescribeBucketsResponse> describeBuckets(
+            DescribeBucketsRequest request) {
         throw new UnsupportedOperationException();
     }
 
@@ -278,7 +304,29 @@ public class TestTabletServerGateway implements TabletServerGateway {
             notifyLeaderAndIsrResponse.addAllNotifyBucketsLeaderResps(bucketsResps);
             return CompletableFuture.completedFuture(notifyLeaderAndIsrResponse);
         } else {
-            return CompletableFuture.completedFuture(new NotifyLeaderAndIsrResponse());
+            // Build success responses for all buckets in the request so that
+            // the coordinator can identify which buckets have been acknowledged.
+            List<PbNotifyLeaderAndIsrRespForBucket> bucketsResps = new ArrayList<>();
+            for (PbNotifyLeaderAndIsrReqForBucket pbNotifyLeaderForBucket :
+                    notifyLeaderAndIsrRequest.getNotifyBucketsLeaderReqsList()) {
+                PbNotifyLeaderAndIsrRespForBucket pbNotifyLeaderRespForBucket =
+                        new PbNotifyLeaderAndIsrRespForBucket();
+                pbNotifyLeaderRespForBucket
+                        .setTableBucket()
+                        .setTableId(pbNotifyLeaderForBucket.getTableBucket().getTableId())
+                        .setBucketId(pbNotifyLeaderForBucket.getTableBucket().getBucketId());
+                if (pbNotifyLeaderForBucket.getTableBucket().hasPartitionId()) {
+                    pbNotifyLeaderRespForBucket
+                            .getTableBucket()
+                            .setPartitionId(
+                                    pbNotifyLeaderForBucket.getTableBucket().getPartitionId());
+                }
+                bucketsResps.add(pbNotifyLeaderRespForBucket);
+            }
+            NotifyLeaderAndIsrResponse notifyLeaderAndIsrResponse =
+                    new NotifyLeaderAndIsrResponse();
+            notifyLeaderAndIsrResponse.addAllNotifyBucketsLeaderResps(bucketsResps);
+            return CompletableFuture.completedFuture(notifyLeaderAndIsrResponse);
         }
     }
 
@@ -365,35 +413,37 @@ public class TestTabletServerGateway implements TabletServerGateway {
     }
 
     public void response(int index, ApiMessage response) {
+        removeRequestFuture(index).complete(response);
+    }
+
+    /** Completes the request at the given index exceptionally. */
+    public void failRequest(int index, Throwable throwable) {
+        removeRequestFuture(index).completeExceptionally(throwable);
+    }
+
+    @SuppressWarnings("unchecked")
+    private CompletableFuture<ApiMessage> removeRequestFuture(int index) {
         if (requests.isEmpty()) {
             throw new IllegalStateException("No requests pending for inbound response.");
         }
 
-        // Index out of bounds check.
         if (index >= requests.size()) {
             throw new IllegalArgumentException(
                     "Index " + index + " is out of bounds for requests queue.");
         }
 
-        CompletableFuture<ApiMessage> result = null;
         int currentIndex = 0;
         for (Iterator<Tuple2<ApiMessage, CompletableFuture<?>>> it = requests.iterator();
                 it.hasNext(); ) {
             Tuple2<ApiMessage, CompletableFuture<?>> tuple = it.next();
             if (currentIndex == index) {
-                result = (CompletableFuture<ApiMessage>) tuple.f1;
                 it.remove();
-                break;
+                return (CompletableFuture<ApiMessage>) tuple.f1;
             }
             currentIndex++;
         }
 
-        if (result != null) {
-            result.complete(response);
-        } else {
-            throw new IllegalStateException(
-                    "The future to complete was not found at index " + index);
-        }
+        throw new IllegalStateException("The future to complete was not found at index " + index);
     }
 
     private StopReplicaResponse mockStopReplicaResponse(
@@ -423,5 +473,10 @@ public class TestTabletServerGateway implements TabletServerGateway {
         StopReplicaResponse stopReplicaResponse = new StopReplicaResponse();
         stopReplicaResponse.addAllStopReplicasResps(protoStopReplicaRespForBuckets);
         return stopReplicaResponse;
+    }
+
+    @Override
+    public CompletableFuture<ScanKvResponse> scanKv(ScanKvRequest request) {
+        return null;
     }
 }

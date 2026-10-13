@@ -51,7 +51,7 @@ public class StartsWith extends NullFalseLeafBinaryFunction {
             long rowCount,
             Object min,
             Object max,
-            Long nullCount,
+            long nullCount,
             Object patternLiteral) {
         String minStr = min.toString();
         String maxStr = max.toString();

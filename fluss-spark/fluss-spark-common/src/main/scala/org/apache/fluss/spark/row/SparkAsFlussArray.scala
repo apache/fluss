@@ -20,7 +20,7 @@ package org.apache.fluss.spark.row
 import org.apache.fluss.row.{BinaryString, Decimal, InternalArray => FlussInternalArray, InternalMap, InternalRow => FlussInternalRow, TimestampLtz, TimestampNtz}
 
 import org.apache.spark.sql.catalyst.util.{ArrayData => SparkArrayData}
-import org.apache.spark.sql.types.{ArrayType => SparkArrayType, DataType => SparkDataType, StructType}
+import org.apache.spark.sql.types.{ArrayType => SparkArrayType, DataType => SparkDataType, MapType => SparkMapType, StructType}
 
 /** Wraps a Spark [[SparkArrayData]] as a Fluss [[FlussInternalArray]]. */
 class SparkAsFlussArray(arrayData: SparkArrayData, elementType: SparkDataType)
@@ -125,13 +125,14 @@ class SparkAsFlussArray(arrayData: SparkArrayData, elementType: SparkDataType)
     arrayData.getArray(pos),
     elementType.asInstanceOf[SparkArrayType].elementType)
 
+  /** Returns the map value at the given position. */
+  override def getMap(pos: Int): InternalMap = {
+    val mapType = elementType.asInstanceOf[SparkMapType]
+    SparkAsFlussMap(arrayData.getMap(pos), mapType)
+  }
+
   /** Returns the row value at the given position. */
   override def getRow(pos: Int, numFields: Int): FlussInternalRow =
     new SparkAsFlussRow(elementType.asInstanceOf[StructType])
       .replace(arrayData.getStruct(pos, numFields))
-
-  /** Returns the map value at the given position. */
-  override def getMap(pos: Int): InternalMap = {
-    throw new UnsupportedOperationException()
-  }
 }

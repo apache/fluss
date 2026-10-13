@@ -17,8 +17,11 @@
 
 package org.apache.fluss.rpc.netty.server;
 
+import org.apache.fluss.exception.NotCoordinatorLeaderException;
 import org.apache.fluss.rpc.RpcGatewayService;
+import org.apache.fluss.rpc.gateway.CoordinatorGateway;
 import org.apache.fluss.rpc.messages.ApiMessage;
+import org.apache.fluss.rpc.protocol.ApiKeys;
 import org.apache.fluss.rpc.protocol.ApiMethod;
 import org.apache.fluss.rpc.protocol.RequestType;
 
@@ -35,9 +38,11 @@ public class FlussRequestHandler implements RequestHandler<FlussRequest> {
     private static final Logger LOG = LoggerFactory.getLogger(FlussRequestHandler.class);
 
     private final RpcGatewayService service;
+    private final boolean isCoordinator;
 
     public FlussRequestHandler(RpcGatewayService service) {
         this.service = service;
+        this.isCoordinator = service instanceof CoordinatorGateway;
     }
 
     @Override
@@ -58,6 +63,16 @@ public class FlussRequestHandler implements RequestHandler<FlussRequest> {
                             request.isInternal(),
                             request.getAddress(),
                             request.getPrincipal()));
+            // check if the coordinator server is the current leader if the API is a coordinator
+            // TODO: we should only check coordinator APIs instead of all APIs
+            if (isCoordinator && api.getApiKey() != ApiKeys.API_VERSIONS) {
+                if (!((CoordinatorGateway) service).isLeader()) {
+                    request.fail(
+                            new NotCoordinatorLeaderException(
+                                    "This coordinator server is not the current leader."));
+                    return;
+                }
+            }
             // invoke the corresponding method on RpcGateway instance.
             CompletableFuture<?> responseFuture =
                     (CompletableFuture<?>) api.getMethod().invoke(service, message);

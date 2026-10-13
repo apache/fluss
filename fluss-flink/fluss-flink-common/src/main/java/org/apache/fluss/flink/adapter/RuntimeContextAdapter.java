@@ -17,6 +17,7 @@
 
 package org.apache.fluss.flink.adapter;
 
+import org.apache.flink.api.common.JobID;
 import org.apache.flink.api.common.functions.RuntimeContext;
 import org.apache.flink.streaming.api.operators.StreamingRuntimeContext;
 
@@ -35,5 +36,22 @@ public class RuntimeContextAdapter {
 
     public static int getIndexOfThisSubtask(StreamingRuntimeContext runtimeContext) {
         return runtimeContext.getTaskInfo().getIndexOfThisSubtask();
+    }
+
+    public static int getNumberOfParallelSubtasks(StreamingRuntimeContext runtimeContext) {
+        return runtimeContext.getTaskInfo().getNumberOfParallelSubtasks();
+    }
+
+    /**
+     * Gets the JobID from the RuntimeContext.
+     *
+     * <p>In Flink 1.19+, use getJobInfo().getJobId(). In Flink 1.18, the shim overrides this method
+     * to use the direct getJobId() method.
+     *
+     * @param runtimeContext the runtime context
+     * @return the JobID
+     */
+    public static JobID getJobId(RuntimeContext runtimeContext) {
+        return runtimeContext.getJobInfo().getJobId();
     }
 }

@@ -16,34 +16,35 @@
 # limitations under the License.
 #
 
-# Use Flink 1.20.0 as base image
+# Base image for all Fluss quickstart scenarios.
 FROM flink:1.20.0-scala_2.12-java17
 
-# Switch to root user for installation and setup
+# The init scripts copy optional lakehouse jars into /opt/flink/lib at runtime,
+# so keep the quickstart container running as root like the previous image.
 USER root
 
-# Install necessary packages
-RUN apt-get update && \
-    apt-get install -y tree && \
-    rm -rf /var/lib/apt/lists/*
+# Put the SQL helper into a dedicated directory. The helper is used by the
+# "Real-Time Analytics with Flink" quickstart to pre-load demo source tables.
+COPY bin/ /opt/sql-client/
+COPY sql/ /opt/sql-client/sql/
 
-# Copy sql-client script to the container
-COPY bin/* /opt/sql-client/
+# Keep the base Fluss quickstart dependencies in /opt/flink/lib so the standard
+# Flink quickstart works out of the box with no extra container setup.
+COPY lib/ /opt/flink/lib/
 
-# Set working directory and environment
+# Keep optional lakehouse dependencies out of /opt/flink/lib by default.
+# The init_paimon.sh / init_iceberg.sh scripts activate them explicitly when a
+# Paimon or Iceberg quickstart container starts.
+COPY paimon/ /opt/flink/paimon/
+COPY iceberg/ /opt/flink/iceberg/
+COPY opt/ /opt/flink/opt/
+COPY bin/init_paimon.sh /opt/flink/init_paimon.sh
+COPY bin/init_iceberg.sh /opt/flink/init_iceberg.sh
+
 WORKDIR /opt/sql-client
 ENV SQL_CLIENT_HOME=/opt/sql-client
 
-# Copy Fluss connector JARs and SQL files
-# Copy JARs to both sql-client lib and Flink lib directories
-COPY lib/* /opt/sql-client/lib/
-COPY sql/* /opt/sql-client/sql/
-COPY lib/* /opt/flink/lib/
-COPY opt/* /opt/flink/opt/
-
-# Modify docker-entrypoint.sh to allow Flink to run as root user
-# This is needed for the quickstart environment
-RUN sed -i 's/exec $(drop_privs_cmd)/exec/g' /docker-entrypoint.sh
-
-# Make sql-client script executable
-RUN ["chmod", "+x", "/opt/sql-client/sql-client"]
+RUN chmod +x \
+    /opt/sql-client/sql-client \
+    /opt/flink/init_paimon.sh \
+    /opt/flink/init_iceberg.sh

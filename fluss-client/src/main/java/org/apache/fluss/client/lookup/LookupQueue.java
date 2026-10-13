@@ -99,17 +99,32 @@ class LookupQueue {
                 break;
             }
 
-            while (!reEnqueuedLookupQueue.isEmpty() && count < maxBatchSize) {
-                AbstractLookupQuery<?> lookup =
-                        reEnqueuedLookupQueue.poll(waitNanos, TimeUnit.NANOSECONDS);
+            long nextRetryDelayNanos = Long.MAX_VALUE;
+            int reEnqueuedToCheck = reEnqueuedLookupQueue.size();
+            while (reEnqueuedToCheck > 0 && count < maxBatchSize) {
+                AbstractLookupQuery<?> lookup = reEnqueuedLookupQueue.poll();
                 if (lookup == null) {
                     break;
                 }
-                lookupOperations.add(lookup);
-                count++;
+                long retryDelayMs = lookup.nextRetryTimeMs() - System.currentTimeMillis();
+                if (retryDelayMs <= 0) {
+                    lookupOperations.add(lookup);
+                    count++;
+                } else {
+                    nextRetryDelayNanos =
+                            Math.min(
+                                    nextRetryDelayNanos,
+                                    TimeUnit.MILLISECONDS.toNanos(retryDelayMs));
+                    reEnqueuedLookupQueue.add(lookup);
+                }
+                reEnqueuedToCheck--;
             }
 
-            AbstractLookupQuery<?> lookup = lookupQueue.poll(waitNanos, TimeUnit.NANOSECONDS);
+            long lookupWaitNanos = waitNanos;
+            if (count == 0 && nextRetryDelayNanos != Long.MAX_VALUE) {
+                lookupWaitNanos = Math.min(waitNanos, Math.max(1L, nextRetryDelayNanos));
+            }
+            AbstractLookupQuery<?> lookup = lookupQueue.poll(lookupWaitNanos, TimeUnit.NANOSECONDS);
             if (lookup == null) {
                 break;
             }

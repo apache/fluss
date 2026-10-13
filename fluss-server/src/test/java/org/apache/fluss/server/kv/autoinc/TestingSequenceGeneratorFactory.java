@@ -32,6 +32,7 @@ public class TestingSequenceGeneratorFactory implements SequenceGeneratorFactory
             TablePath tablePath, Schema.Column autoIncrementColumn, long idCacheSize) {
         return new BoundedSegmentSequenceGenerator(
                 tablePath,
+                autoIncrementColumn.getColumnId(),
                 autoIncrementColumn.getName(),
                 new TestingSequenceIDCounter(new AtomicLong(0)),
                 idCacheSize,

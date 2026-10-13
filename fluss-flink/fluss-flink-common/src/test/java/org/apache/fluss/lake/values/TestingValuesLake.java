@@ -20,7 +20,6 @@ package org.apache.fluss.lake.values;
 
 import org.apache.fluss.record.LogRecord;
 import org.apache.fluss.row.InternalRow;
-import org.apache.fluss.utils.MapUtils;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -30,6 +29,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
@@ -46,10 +46,9 @@ import static org.apache.fluss.utils.concurrent.LockUtils.inLock;
 public class TestingValuesLake {
     private static final Logger LOG = LoggerFactory.getLogger(TestingValuesLake.class);
 
-    private static final Map<String, TestingValuesTable> globalTables =
-            MapUtils.newConcurrentHashMap();
+    private static final Map<String, TestingValuesTable> globalTables = new ConcurrentHashMap<>();
     private static final Map<String, TableFailureController> FAILURE_CONTROLLERS =
-            MapUtils.newConcurrentHashMap();
+            new ConcurrentHashMap<>();
 
     public static TableFailureController failWhen(String tableId) {
         return FAILURE_CONTROLLERS.computeIfAbsent(tableId, k -> new TableFailureController());

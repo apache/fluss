@@ -22,27 +22,32 @@ import org.apache.fluss.client.ConnectionFactory;
 import org.apache.fluss.client.admin.Admin;
 import org.apache.fluss.client.admin.ListOffsetsResult;
 import org.apache.fluss.client.admin.OffsetSpec;
-import org.apache.fluss.client.admin.OffsetSpec.EarliestSpec;
-import org.apache.fluss.client.admin.OffsetSpec.LatestSpec;
 import org.apache.fluss.client.table.Table;
-import org.apache.fluss.client.table.scanner.Scan;
-import org.apache.fluss.client.table.scanner.batch.BatchScanUtils;
 import org.apache.fluss.client.table.scanner.batch.BatchScanner;
 import org.apache.fluss.client.table.writer.UpsertWriter;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.config.StatisticsColumnsConfig;
+import org.apache.fluss.config.TableConfig;
 import org.apache.fluss.exception.FlussRuntimeException;
+import org.apache.fluss.exception.UnsupportedVersionException;
 import org.apache.fluss.flink.source.lookup.FlinkLookupFunction;
 import org.apache.fluss.flink.source.lookup.LookupNormalizer;
 import org.apache.fluss.metadata.PartitionInfo;
-import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.PartitionSpec;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.metadata.TableStats;
+import org.apache.fluss.predicate.CompoundPredicate;
+import org.apache.fluss.predicate.LeafPredicate;
+import org.apache.fluss.predicate.Predicate;
+import org.apache.fluss.predicate.PredicateVisitor;
 import org.apache.fluss.row.BinaryString;
 import org.apache.fluss.row.Decimal;
 import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.row.TimestampNtz;
+import org.apache.fluss.types.DataTypeChecks;
 
 import org.apache.flink.table.api.TableException;
 import org.apache.flink.table.data.DecimalData;
@@ -59,6 +64,8 @@ import org.apache.flink.table.functions.LookupFunction;
 import org.apache.flink.table.types.logical.DecimalType;
 import org.apache.flink.table.types.logical.LogicalType;
 import org.apache.flink.table.types.logical.RowType;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import javax.annotation.Nullable;
 
@@ -69,16 +76,22 @@ import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
+import static org.apache.fluss.client.table.scanner.batch.BatchScanUtils.collectRows;
 import static org.apache.fluss.flink.source.lookup.LookupNormalizer.createPrimaryKeyLookupNormalizer;
+import static org.apache.fluss.utils.ExceptionUtils.findThrowable;
 
 /** Utilities for pushdown abilities. */
 public class PushdownUtils {
+    private static final Logger LOG = LoggerFactory.getLogger(PushdownUtils.class);
+
     private static final int MAX_LIMIT_PUSHDOWN = 2048;
 
     /** Extract field equality information from expressions. */
@@ -307,42 +320,12 @@ public class PushdownUtils {
         int limit = (int) limitRowNum;
         try (Connection connection = ConnectionFactory.createConnection(flussConfig);
                 Table table = connection.getTable(tablePath);
-                Admin flussAdmin = connection.getAdmin()) {
-            TableInfo tableInfo = flussAdmin.getTableInfo(tablePath).get();
-            int bucketCount = tableInfo.getNumBuckets();
-            List<TableBucket> tableBuckets;
-            if (tableInfo.isPartitioned()) {
-                List<PartitionInfo> partitionInfos = flussAdmin.listPartitionInfos(tablePath).get();
-                tableBuckets =
-                        partitionInfos.stream()
-                                .flatMap(
-                                        partitionInfo ->
-                                                IntStream.range(0, bucketCount)
-                                                        .mapToObj(
-                                                                bucketId ->
-                                                                        new TableBucket(
-                                                                                tableInfo
-                                                                                        .getTableId(),
-                                                                                partitionInfo
-                                                                                        .getPartitionId(),
-                                                                                bucketId)))
-                                .collect(Collectors.toList());
-            } else {
-                tableBuckets =
-                        IntStream.range(0, bucketCount)
-                                .mapToObj(
-                                        bucketId ->
-                                                new TableBucket(tableInfo.getTableId(), bucketId))
-                                .collect(Collectors.toList());
-            }
-
-            Scan scan = table.newScan().limit(limit).project(projectedFields);
-            List<BatchScanner> scanners =
-                    tableBuckets.stream()
-                            .map(scan::createBatchScanner)
-                            .collect(Collectors.toList());
-            List<InternalRow> scannedRows = BatchScanUtils.collectLimitedRows(scanners, limit);
-
+                BatchScanner batchScanner =
+                        table.newScan()
+                                .project(projectedFields)
+                                .limit(limit)
+                                .createBatchScanner()) {
+            List<InternalRow> scannedRows = collectRows(batchScanner);
             // convert fluss row into flink row
             List<RowData> flinkRows = new ArrayList<>();
             FlussRowToFlinkRowConverter flussRowToFlinkRowConverter =
@@ -365,46 +348,90 @@ public class PushdownUtils {
         }
     }
 
-    public static long countLogTable(TablePath tablePath, Configuration flussConfig) {
+    public static boolean partitionExists(
+            TablePath tablePath, Configuration flussConfig, PartitionSpec partitionSpec) {
         try (Connection connection = ConnectionFactory.createConnection(flussConfig);
                 Admin flussAdmin = connection.getAdmin()) {
-            TableInfo tableInfo = flussAdmin.getTableInfo(tablePath).get();
-            int bucketCount = tableInfo.getNumBuckets();
-            Collection<Integer> buckets =
-                    IntStream.range(0, bucketCount).boxed().collect(Collectors.toList());
-            List<PartitionInfo> partitionInfos;
-            if (tableInfo.isPartitioned()) {
-                partitionInfos = flussAdmin.listPartitionInfos(tablePath).get();
-            } else {
-                partitionInfos = Collections.singletonList(null);
-            }
-
-            List<CompletableFuture<Long>> countFutureList =
-                    offsetLengthes(flussAdmin, tablePath, partitionInfos, buckets);
-            // wait for all the response
-            CompletableFuture.allOf(countFutureList.toArray(new CompletableFuture[0])).join();
-            long count = 0;
-            for (CompletableFuture<Long> countFuture : countFutureList) {
-                count += countFuture.get();
-            }
-            return count;
+            return !flussAdmin.listPartitionInfos(tablePath, partitionSpec).get().isEmpty();
         } catch (Exception e) {
             throw new FlussRuntimeException(e);
         }
+    }
+
+    public static long countTable(TablePath tablePath, Configuration flussConfig) {
+        try (Connection connection = ConnectionFactory.createConnection(flussConfig);
+                Admin flussAdmin = connection.getAdmin()) {
+            try {
+                TableStats tableStats = flussAdmin.getTableStats(tablePath).get();
+                return tableStats.getRowCount();
+            } catch (Exception e) {
+                if (findThrowable(e, UnsupportedVersionException.class).isPresent()) {
+                    // if the server doesn't support getTableStats, we fallback to countLogTable,
+                    // which is less efficient.
+                    return countLogTable(flussAdmin, tablePath);
+                } else {
+                    throw e;
+                }
+            }
+        } catch (Exception e) {
+            throw new FlussRuntimeException(e);
+        }
+    }
+
+    /**
+     * We keep this method for back compatibility for old clusters (< 0.9), but it's not efficient.
+     * We should use countTable instead in the future.
+     */
+    private static long countLogTable(Admin flussAdmin, TablePath tablePath) throws Exception {
+        TableInfo tableInfo = flussAdmin.getTableInfo(tablePath).get();
+        if (tableInfo.hasPrimaryKey()) {
+            throw new IllegalArgumentException(
+                    "The Fluss cluster doesn't support count(*) on primary key table yet. Please upgrade to newer version (≥ 0.9).");
+        }
+        int bucketCount = tableInfo.getNumBuckets();
+        List<PartitionInfo> partitionInfos;
+        if (tableInfo.isPartitioned()) {
+            partitionInfos = flussAdmin.listPartitionInfos(tablePath).get();
+        } else {
+            partitionInfos = Collections.singletonList(null);
+        }
+
+        List<CompletableFuture<Long>> countFutureList =
+                offsetLengthes(flussAdmin, tablePath, partitionInfos, bucketCount);
+        // wait for all the response
+        CompletableFuture.allOf(countFutureList.toArray(new CompletableFuture[0])).join();
+        long count = 0;
+        for (CompletableFuture<Long> countFuture : countFutureList) {
+            count += countFuture.get();
+        }
+        return count;
     }
 
     private static List<CompletableFuture<Long>> offsetLengthes(
             Admin flussAdmin,
             TablePath tablePath,
             List<PartitionInfo> partitionInfos,
-            Collection<Integer> buckets) {
+            int tableBucketCount) {
         List<CompletableFuture<Long>> list = new ArrayList<>();
         for (@Nullable PartitionInfo info : partitionInfos) {
             String partitionName = info != null ? info.getPartitionName() : null;
+            int partitionBucketCount = PartitionInfo.bucketCountOrDefault(info, tableBucketCount);
+            Collection<Integer> buckets =
+                    IntStream.range(0, partitionBucketCount).boxed().collect(Collectors.toList());
             ListOffsetsResult earliestOffsets =
-                    listOffsets(flussAdmin, tablePath, buckets, new EarliestSpec(), partitionName);
+                    listOffsets(
+                            flussAdmin,
+                            tablePath,
+                            buckets,
+                            new OffsetSpec.EarliestSpec(),
+                            partitionName);
             ListOffsetsResult latestOffsets =
-                    listOffsets(flussAdmin, tablePath, buckets, new LatestSpec(), partitionName);
+                    listOffsets(
+                            flussAdmin,
+                            tablePath,
+                            buckets,
+                            new OffsetSpec.LatestSpec(),
+                            partitionName);
             CompletableFuture<Long> apply =
                     earliestOffsets
                             .all()
@@ -436,6 +463,86 @@ public class PushdownUtils {
     }
 
     // ------------------------------------------------------------------------------------------
+
+    /**
+     * Computes the set of column names that have statistics available for filter pushdown, based on
+     * the table's statistics configuration. Returns an empty set when statistics collection is
+     * disabled.
+     *
+     * @param flussRowType the row type whose columns are considered
+     * @param tableConfig the table configuration carrying the statistics settings
+     * @return the set of column names that have statistics available
+     */
+    public static Set<String> computeAvailableStatsColumns(
+            org.apache.fluss.types.RowType flussRowType, TableConfig tableConfig) {
+        StatisticsColumnsConfig statsConfig = tableConfig.getStatisticsColumns();
+        if (!statsConfig.isEnabled()) {
+            LOG.debug("Statistics collection is disabled for the table");
+            return Collections.emptySet();
+        }
+
+        Set<String> columns = new HashSet<>();
+        if (statsConfig.getMode() == StatisticsColumnsConfig.Mode.ALL) {
+            for (int i = 0; i < flussRowType.getFieldCount(); i++) {
+                if (DataTypeChecks.isSupportedStatisticsType(flussRowType.getTypeAt(i))) {
+                    columns.add(flussRowType.getFieldNames().get(i));
+                }
+            }
+        } else {
+            for (String columnName : statsConfig.getColumns()) {
+                int columnIndex = flussRowType.getFieldNames().indexOf(columnName);
+                if (columnIndex >= 0) {
+                    if (DataTypeChecks.isSupportedStatisticsType(
+                            flussRowType.getTypeAt(columnIndex))) {
+                        columns.add(columnName);
+                    } else {
+                        LOG.trace(
+                                "Configured statistics column '{}' has unsupported type and will be ignored",
+                                columnName);
+                    }
+                } else {
+                    LOG.trace(
+                            "Configured statistics column '{}' does not exist in table schema",
+                            columnName);
+                }
+            }
+        }
+        return columns;
+    }
+
+    /**
+     * Checks if a predicate can benefit from statistics based on the available statistics columns.
+     * A compound predicate is usable only if all of its children are usable.
+     *
+     * @param predicate the predicate to check
+     * @param rowType the row type the predicate indexes into
+     * @param availableStatsColumns the columns that have statistics available
+     * @return true if the predicate can use statistics
+     */
+    public static boolean canPredicateUseStatistics(
+            Predicate predicate,
+            org.apache.fluss.types.RowType rowType,
+            Set<String> availableStatsColumns) {
+        class StatisticsUsageVisitor implements PredicateVisitor<Boolean> {
+            @Override
+            public Boolean visit(LeafPredicate leaf) {
+                String fieldName = rowType.getFieldNames().get(leaf.index());
+                return availableStatsColumns.contains(fieldName);
+            }
+
+            @Override
+            public Boolean visit(CompoundPredicate compound) {
+                for (Predicate child : compound.children()) {
+                    if (!child.visit(this)) {
+                        return false;
+                    }
+                }
+                return true;
+            }
+        }
+
+        return predicate.visit(new StatisticsUsageVisitor());
+    }
 
     /** A structure represents a source field equal literal expression. */
     public static class FieldEqual implements Serializable {

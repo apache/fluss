@@ -52,8 +52,27 @@ public class TableRegistration {
     public final int bucketCount;
     public final Map<String, String> properties;
     public final Map<String, String> customProperties;
+
+    /**
+     * The remote data directory of the table. It is null if and only if it is deserialized by
+     * {@link TableRegistrationJsonSerde} from an existing node produced by an older version that
+     * does not support multiple remote paths. But immediately after that, we will set it as the
+     * default remote file path configured by {@link ConfigOptions#REMOTE_DATA_DIR} (see {@link
+     * org.apache.fluss.server.zk.ZooKeeperClient#getTable}). This unifies subsequent usage and
+     * eliminates the need to account for differences between versions.
+     */
+    public final @Nullable String remoteDataDir;
+
     public final long createdTime;
     public final long modifiedTime;
+
+    /**
+     * A table-level, monotonically increasing version for bucket.num changes. New tables start at
+     * 0; a legacy JSON without the field is read as 0; every committed bucket.num change increments
+     * it. It is used to decide whether legacy clients without bucket count are still allowed (epoch
+     * 0) and to let TabletServers ignore older UpdateMetadata messages.
+     */
+    public final long bucketCountEpoch;
 
     public TableRegistration(
             long tableId,
@@ -62,8 +81,33 @@ public class TableRegistration {
             TableDistribution tableDistribution,
             Map<String, String> properties,
             Map<String, String> customProperties,
+            @Nullable String remoteDataDir,
             long createdTime,
             long modifiedTime) {
+        this(
+                tableId,
+                comment,
+                partitionKeys,
+                tableDistribution,
+                properties,
+                customProperties,
+                remoteDataDir,
+                createdTime,
+                modifiedTime,
+                0L);
+    }
+
+    public TableRegistration(
+            long tableId,
+            @Nullable String comment,
+            List<String> partitionKeys,
+            TableDistribution tableDistribution,
+            Map<String, String> properties,
+            Map<String, String> customProperties,
+            @Nullable String remoteDataDir,
+            long createdTime,
+            long modifiedTime,
+            long bucketCountEpoch) {
         checkArgument(
                 tableDistribution.getBucketCount().isPresent(),
                 "Bucket count is required for table registration.");
@@ -74,8 +118,10 @@ public class TableRegistration {
         this.bucketKeys = tableDistribution.getBucketKeys();
         this.properties = properties;
         this.customProperties = customProperties;
+        this.remoteDataDir = remoteDataDir;
         this.createdTime = createdTime;
         this.modifiedTime = modifiedTime;
+        this.bucketCountEpoch = bucketCountEpoch;
     }
 
     public boolean isPartitioned() {
@@ -111,12 +157,15 @@ public class TableRegistration {
                 this.bucketCount,
                 properties,
                 Configuration.fromMap(this.customProperties),
+                this.remoteDataDir,
                 this.comment,
                 this.createdTime,
-                this.modifiedTime);
+                this.modifiedTime,
+                this.bucketCountEpoch);
     }
 
-    public static TableRegistration newTable(long tableId, TableDescriptor tableDescriptor) {
+    public static TableRegistration newTable(
+            long tableId, String remoteDataDir, TableDescriptor tableDescriptor) {
         checkArgument(
                 tableDescriptor.getTableDistribution().isPresent(),
                 "Table distribution is required for table registration.");
@@ -128,6 +177,7 @@ public class TableRegistration {
                 tableDescriptor.getTableDistribution().get(),
                 tableDescriptor.getProperties(),
                 tableDescriptor.getCustomProperties(),
+                remoteDataDir,
                 currentMillis,
                 currentMillis);
     }
@@ -142,8 +192,53 @@ public class TableRegistration {
                 new TableDistribution(bucketCount, bucketKeys),
                 newProperties,
                 newCustomProperties,
+                remoteDataDir,
                 createdTime,
-                currentMillis);
+                currentMillis,
+                bucketCountEpoch);
+    }
+
+    /**
+     * Returns a new registration with the given table-level bucket count and an incremented {@code
+     * bucketCountEpoch}. For a partitioned table, the new count applies to partitions created after
+     * this ALTER; existing partitions retain their actual bucket counts in their partition
+     * registrations.
+     */
+    public TableRegistration newBucketCount(int newBucketCount) {
+        final long currentMillis = System.currentTimeMillis();
+        return new TableRegistration(
+                tableId,
+                comment,
+                partitionKeys,
+                new TableDistribution(newBucketCount, bucketKeys),
+                properties,
+                customProperties,
+                remoteDataDir,
+                createdTime,
+                currentMillis,
+                bucketCountEpoch + 1);
+    }
+
+    /**
+     * Returns a new registration with the given remote data directory. Should only be called by
+     * {@link org.apache.fluss.server.zk.ZooKeeperClient#getTable} when deserialize an old
+     * TableRegistration node without remote data dir configured.
+     *
+     * @param remoteDataDir the remote data directory
+     * @return a new registration with the given remote data directory
+     */
+    public TableRegistration newRemoteDataDir(String remoteDataDir) {
+        return new TableRegistration(
+                tableId,
+                comment,
+                partitionKeys,
+                new TableDistribution(bucketCount, bucketKeys),
+                properties,
+                customProperties,
+                remoteDataDir,
+                createdTime,
+                modifiedTime,
+                bucketCountEpoch);
     }
 
     @Override
@@ -159,12 +254,14 @@ public class TableRegistration {
         return tableId == that.tableId
                 && createdTime == that.createdTime
                 && modifiedTime == that.modifiedTime
+                && bucketCountEpoch == that.bucketCountEpoch
                 && Objects.equals(comment, that.comment)
                 && Objects.equals(partitionKeys, that.partitionKeys)
                 && Objects.equals(bucketCount, that.bucketCount)
                 && Objects.equals(bucketKeys, that.bucketKeys)
                 && Objects.equals(properties, that.properties)
-                && Objects.equals(customProperties, that.customProperties);
+                && Objects.equals(customProperties, that.customProperties)
+                && Objects.equals(remoteDataDir, that.remoteDataDir);
     }
 
     @Override
@@ -177,8 +274,10 @@ public class TableRegistration {
                 bucketKeys,
                 properties,
                 customProperties,
+                remoteDataDir,
                 createdTime,
-                modifiedTime);
+                modifiedTime,
+                bucketCountEpoch);
     }
 
     @Override
@@ -199,10 +298,14 @@ public class TableRegistration {
                 + properties
                 + ", customProperties="
                 + customProperties
+                + ", remoteDataDir="
+                + remoteDataDir
                 + ", createdTime="
                 + createdTime
                 + ", modifiedTime="
                 + modifiedTime
+                + ", bucketCountEpoch="
+                + bucketCountEpoch
                 + '}';
     }
 }

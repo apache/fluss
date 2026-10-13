@@ -22,7 +22,7 @@ import com.lancedb.lance.FragmentMetadata;
 import java.io.Serializable;
 import java.util.List;
 
-/** The write result of Lance lake writer to pass to commiter to commit. */
+/** The write result of Lance lake writer to pass to committer to commit. */
 public class LanceWriteResult implements Serializable {
     private static final long serialVersionUID = 1L;
 

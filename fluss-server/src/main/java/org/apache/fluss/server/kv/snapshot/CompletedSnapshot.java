@@ -21,12 +21,17 @@ import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.fs.FileSystem;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.server.kv.autoinc.AutoIncIDRange;
 import org.apache.fluss.utils.concurrent.FutureUtils;
 
+import javax.annotation.Nullable;
 import javax.annotation.concurrent.NotThreadSafe;
 
+import java.io.FileNotFoundException;
 import java.io.IOException;
+import java.nio.file.NoSuchFileException;
 import java.util.Arrays;
+import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executor;
@@ -68,22 +73,41 @@ public class CompletedSnapshot {
     /** The next log offset when the snapshot is triggered. */
     private final long logOffset;
 
+    /**
+     * The row count of the snapshot, null for legacy tables that doesn't support row count
+     * statistics.
+     */
+    @Nullable private final Long rowCount;
+
+    /**
+     * The auto-increment ID ranges of the snapshot, null for legacy tables that doesn't support or
+     * doesn't have auto-increment columns.
+     */
+    @Nullable private final List<AutoIncIDRange> autoIncIDRanges;
+
     /** The location where the snapshot is stored. */
     private final FsPath snapshotLocation;
 
     public static final String SNAPSHOT_DATA_NOT_EXISTS_ERROR_MESSAGE = "No such file or directory";
+
+    private static final String HADOOP_SNAPSHOT_DATA_NOT_EXISTS_ERROR_MESSAGE =
+            "File does not exist";
 
     public CompletedSnapshot(
             TableBucket tableBucket,
             long snapshotID,
             FsPath snapshotLocation,
             KvSnapshotHandle kvSnapshotHandle,
-            long logOffset) {
+            long logOffset,
+            @Nullable Long rowCount,
+            @Nullable List<AutoIncIDRange> autoIncIDRanges) {
         this.tableBucket = tableBucket;
         this.snapshotID = snapshotID;
         this.snapshotLocation = snapshotLocation;
         this.kvSnapshotHandle = kvSnapshotHandle;
         this.logOffset = logOffset;
+        this.rowCount = rowCount;
+        this.autoIncIDRanges = autoIncIDRanges;
     }
 
     @VisibleForTesting
@@ -92,7 +116,7 @@ public class CompletedSnapshot {
             long snapshotID,
             FsPath snapshotLocation,
             KvSnapshotHandle kvSnapshotHandle) {
-        this(tableBucket, snapshotID, snapshotLocation, kvSnapshotHandle, 0);
+        this(tableBucket, snapshotID, snapshotLocation, kvSnapshotHandle, 0, null, null);
     }
 
     public long getSnapshotID() {
@@ -111,6 +135,24 @@ public class CompletedSnapshot {
         return logOffset;
     }
 
+    @Nullable
+    public Long getRowCount() {
+        return rowCount;
+    }
+
+    @Nullable
+    public List<AutoIncIDRange> getAutoIncIDRanges() {
+        return autoIncIDRanges;
+    }
+
+    @Nullable
+    public AutoIncIDRange getFirstAutoIncIDRange() {
+        if (autoIncIDRanges == null || autoIncIDRanges.isEmpty()) {
+            return null;
+        }
+        return autoIncIDRanges.get(0);
+    }
+
     public long getSnapshotSize() {
         return kvSnapshotHandle.getSnapshotSize();
     }
@@ -126,9 +168,8 @@ public class CompletedSnapshot {
     }
 
     public CompletableFuture<Void> discardAsync(Executor ioExecutor) {
-        // it'll discard the snapshot files for kv, it'll always discard
-        // the private files; for shared files, only if they're not be registered in
-        // SharedKvRegistry, can the files be deleted.
+        // Always discard private files. Shared files are discarded directly only when the handle
+        // represents a newly created snapshot that has not been registered.
         CompletableFuture<Void> discardKvFuture =
                 FutureUtils.runAsync(kvSnapshotHandle::discard, ioExecutor);
 
@@ -156,6 +197,48 @@ public class CompletedSnapshot {
 
     public static FsPath getMetadataFilePath(FsPath snapshotLocation) {
         return new FsPath(snapshotLocation, SNAPSHOT_METADATA_FILE_NAME);
+    }
+
+    /**
+     * Returns whether the throwable or any of its causes indicates that snapshot data no longer
+     * exists in remote storage.
+     */
+    public static boolean isSnapshotDataNotExists(Throwable throwable) {
+        Throwable cause = throwable;
+        while (cause != null) {
+            if (cause instanceof FileNotFoundException || cause instanceof NoSuchFileException) {
+                return true;
+            }
+            String message = cause.getMessage();
+            if (message != null
+                    && (message.contains(SNAPSHOT_DATA_NOT_EXISTS_ERROR_MESSAGE)
+                            || message.contains(HADOOP_SNAPSHOT_DATA_NOT_EXISTS_ERROR_MESSAGE))) {
+                return true;
+            }
+            cause = cause.getCause();
+        }
+        return false;
+    }
+
+    /**
+     * Returns whether the throwable indicates missing snapshot data and the given path is confirmed
+     * to be absent from remote storage.
+     *
+     * <p>If checking the path fails, this method conservatively returns {@code false} so callers do
+     * not perform destructive cleanup. The verification failure is attached to the original
+     * throwable as a suppressed exception for diagnostics.
+     */
+    public static boolean isSnapshotDataNotExists(Throwable throwable, FsPath dataPath) {
+        if (!isSnapshotDataNotExists(throwable)) {
+            return false;
+        }
+
+        try {
+            return !dataPath.getFileSystem().exists(dataPath);
+        } catch (Exception verificationException) {
+            throwable.addSuppressed(verificationException);
+            return false;
+        }
     }
 
     private void disposeMetadata() throws IOException {
@@ -188,11 +271,20 @@ public class CompletedSnapshot {
                 && logOffset == that.logOffset
                 && Objects.equals(tableBucket, that.tableBucket)
                 && Objects.equals(kvSnapshotHandle, that.kvSnapshotHandle)
+                && Objects.equals(rowCount, that.rowCount)
+                && Objects.equals(autoIncIDRanges, that.autoIncIDRanges)
                 && Objects.equals(snapshotLocation, that.snapshotLocation);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(tableBucket, snapshotID, kvSnapshotHandle, logOffset, snapshotLocation);
+        return Objects.hash(
+                tableBucket,
+                snapshotID,
+                kvSnapshotHandle,
+                logOffset,
+                rowCount,
+                autoIncIDRanges,
+                snapshotLocation);
     }
 }

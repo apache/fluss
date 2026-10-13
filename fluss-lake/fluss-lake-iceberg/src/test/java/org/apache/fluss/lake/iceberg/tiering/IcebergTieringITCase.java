@@ -20,6 +20,7 @@ package org.apache.fluss.lake.iceberg.tiering;
 import org.apache.fluss.config.AutoPartitionTimeUnit;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.lake.iceberg.testutils.FlinkIcebergTieringTestBase;
+import org.apache.fluss.lake.iceberg.testutils.IcebergTestUtils;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableDescriptor;
@@ -54,6 +55,7 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 
+import static org.apache.fluss.lake.iceberg.utils.IcebergConversions.toIceberg;
 import static org.apache.fluss.testutils.DataTestUtils.row;
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -268,6 +270,34 @@ class IcebergTieringITCase extends FlinkIcebergTieringTestBase {
         }
     }
 
+    @Test
+    void testTieringForLegacyTable() throws Exception {
+        // FIP-27: verify tiering still works for a legacy table that carries the three trailing
+        // system columns (__bucket, __offset, __timestamp). This covers the legacy writer path,
+        // whereas testTiering covers the clean writer path.
+        TablePath t = TablePath.of(DEFAULT_DB, "legacyLogTable");
+        long tId = createLogTable(t, 1, false, logSchema);
+
+        // Turn the freshly created clean table into a legacy table before writing/tiering.
+        IcebergTestUtils.adjustToLegacyV1Table(icebergCatalog, toIceberg(t));
+
+        TableBucket tBucket = new TableBucket(tId, 0);
+        List<InternalRow> flussRows = new ArrayList<>();
+        for (int i = 0; i < 10; i++) {
+            List<InternalRow> rows = Arrays.asList(row(1, "v1"), row(2, "v2"), row(3, "v3"));
+            flussRows.addAll(rows);
+            writeRows(t, rows, true);
+        }
+
+        JobClient jobClient = buildTieringJob(execEnv);
+        try {
+            assertReplicaStatus(tBucket, 30);
+            checkDataInIcebergAppendOnlyTable(t, flussRows);
+        } finally {
+            jobClient.cancel().get();
+        }
+    }
+
     private void checkDataInIcebergPrimaryKeyTable(
             TablePath tablePath, List<InternalRow> expectedRows) throws Exception {
         Iterator<Record> actualIterator = getIcebergRecords(tablePath).iterator();
@@ -353,7 +383,7 @@ class IcebergTieringITCase extends FlinkIcebergTieringTestBase {
         assertReplicaStatus(t2Bucket, 30);
 
         // check data in iceberg
-        checkDataInIcebergAppendOnlyTable(t2, flussRows, 0);
+        checkDataInIcebergAppendOnlyTable(t2, flussRows);
     }
 
     private void testPartitionedTableTiering() throws Exception {
@@ -385,8 +415,7 @@ class IcebergTieringITCase extends FlinkIcebergTieringTestBase {
             checkDataInIcebergAppendOnlyPartitionedTable(
                     partitionedTablePath,
                     Collections.singletonMap(partitionCol, partitionName),
-                    writtenRowsByPartition.get(partitionName),
-                    0);
+                    writtenRowsByPartition.get(partitionName));
         }
 
         checkFlussOffsetsInSnapshot(partitionedTablePath, expectedOffsets);

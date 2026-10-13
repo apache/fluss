@@ -29,6 +29,7 @@ import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.row.TimestampNtz;
 import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.DataTypes;
+import org.apache.fluss.types.RowType;
 
 import org.junit.jupiter.api.Test;
 
@@ -44,6 +45,7 @@ import java.util.Set;
 
 import static org.apache.fluss.row.BinaryRow.BinaryRowFormat.ALIGNED;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Test for {@link AlignedRow}. */
 class AlignedRowTest {
@@ -815,5 +817,267 @@ class AlignedRowTest {
         assertThat(nestedArray2.getInt(0)).isEqualTo(40);
         assertThat(nestedArray2.getInt(1)).isEqualTo(50);
         assertThat(nestedArray2.getInt(2)).isEqualTo(60);
+    }
+
+    @Test
+    public void testSingleColumnInteger() {
+        // non-null integer
+        AlignedRow row = AlignedRow.singleColumn(42);
+        assertThat(row.getFieldCount()).isEqualTo(1);
+        assertThat(row.isNullAt(0)).isFalse();
+        assertThat(row.getInt(0)).isEqualTo(42);
+
+        // null integer
+        AlignedRow nullRow = AlignedRow.singleColumn((Integer) null);
+        assertThat(nullRow.getFieldCount()).isEqualTo(1);
+        assertThat(nullRow.isNullAt(0)).isTrue();
+    }
+
+    @Test
+    public void testSingleColumnBinaryString() {
+        // non-null BinaryString
+        BinaryString binaryString = BinaryString.fromString("binary");
+        AlignedRow row = AlignedRow.singleColumn(binaryString);
+        assertThat(row.getFieldCount()).isEqualTo(1);
+        assertThat(row.isNullAt(0)).isFalse();
+        assertThat(row.getString(0)).isEqualTo(binaryString);
+
+        // null BinaryString
+        AlignedRow nullRow = AlignedRow.singleColumn((BinaryString) null);
+        assertThat(nullRow.getFieldCount()).isEqualTo(1);
+        assertThat(nullRow.isNullAt(0)).isTrue();
+    }
+
+    @Test
+    public void testIsInFixedLengthPart() {
+        // fixed-length types
+        assertThat(AlignedRow.isInFixedLengthPart(DataTypes.BOOLEAN())).isTrue();
+        assertThat(AlignedRow.isInFixedLengthPart(DataTypes.TINYINT())).isTrue();
+        assertThat(AlignedRow.isInFixedLengthPart(DataTypes.SMALLINT())).isTrue();
+        assertThat(AlignedRow.isInFixedLengthPart(DataTypes.INT())).isTrue();
+        assertThat(AlignedRow.isInFixedLengthPart(DataTypes.DATE())).isTrue();
+        assertThat(AlignedRow.isInFixedLengthPart(DataTypes.TIME())).isTrue();
+        assertThat(AlignedRow.isInFixedLengthPart(DataTypes.BIGINT())).isTrue();
+        assertThat(AlignedRow.isInFixedLengthPart(DataTypes.FLOAT())).isTrue();
+        assertThat(AlignedRow.isInFixedLengthPart(DataTypes.DOUBLE())).isTrue();
+
+        // compact decimal (precision <= 18)
+        assertThat(AlignedRow.isInFixedLengthPart(DataTypes.DECIMAL(10, 2))).isTrue();
+        // non-compact decimal (precision > 18)
+        assertThat(AlignedRow.isInFixedLengthPart(DataTypes.DECIMAL(25, 5))).isFalse();
+
+        // compact timestamp (precision <= 3)
+        assertThat(AlignedRow.isInFixedLengthPart(DataTypes.TIMESTAMP(3))).isTrue();
+        // non-compact timestamp (precision > 3)
+        assertThat(AlignedRow.isInFixedLengthPart(DataTypes.TIMESTAMP(9))).isFalse();
+
+        // compact timestamp_ltz (precision <= 3)
+        assertThat(AlignedRow.isInFixedLengthPart(DataTypes.TIMESTAMP_LTZ(3))).isTrue();
+        // non-compact timestamp_ltz (precision > 3)
+        assertThat(AlignedRow.isInFixedLengthPart(DataTypes.TIMESTAMP_LTZ(9))).isFalse();
+
+        // variable-length types
+        assertThat(AlignedRow.isInFixedLengthPart(DataTypes.STRING())).isFalse();
+        assertThat(AlignedRow.isInFixedLengthPart(DataTypes.BYTES())).isFalse();
+    }
+
+    @Test
+    public void testFromWithNullInput() {
+        RowType rowType = RowType.of(DataTypes.INT(), DataTypes.STRING());
+        assertThat(AlignedRow.from(rowType, null)).isNull();
+    }
+
+    @Test
+    public void testFromWithAlignedRowInput() {
+        RowType rowType = RowType.of(DataTypes.INT(), DataTypes.STRING());
+
+        AlignedRow original = new AlignedRow(2);
+        AlignedRowWriter writer = new AlignedRowWriter(original);
+        writer.writeInt(0, 42);
+        writer.writeString(1, BinaryString.fromString("pass-through"));
+        writer.complete();
+
+        // should return the same instance
+        AlignedRow result = AlignedRow.from(rowType, original);
+        assertThat(result).isSameAs(original);
+    }
+
+    @Test
+    public void testFromWithGenericRowAllTypes() {
+        RowType rowType =
+                RowType.of(
+                        DataTypes.BOOLEAN(),
+                        DataTypes.TINYINT(),
+                        DataTypes.SMALLINT(),
+                        DataTypes.INT(),
+                        DataTypes.BIGINT(),
+                        DataTypes.FLOAT(),
+                        DataTypes.DOUBLE(),
+                        DataTypes.STRING(),
+                        DataTypes.DECIMAL(5, 2),
+                        DataTypes.DATE(),
+                        DataTypes.TIME(),
+                        DataTypes.TIMESTAMP(3),
+                        DataTypes.TIMESTAMP_LTZ(3));
+
+        GenericRow genericRow =
+                GenericRow.of(
+                        true,
+                        (byte) 10,
+                        (short) 200,
+                        3000,
+                        40000L,
+                        1.5f,
+                        2.5d,
+                        BinaryString.fromString("from-test"),
+                        Decimal.fromUnscaledLong(12345, 5, 2),
+                        18000, // date as days since epoch
+                        43200000, // time as millis since midnight
+                        TimestampNtz.fromMillis(1609459200000L),
+                        TimestampLtz.fromEpochMillis(1609459200000L));
+
+        AlignedRow result = AlignedRow.from(rowType, genericRow);
+        assertThat(result).isNotNull();
+        assertThat(result.getBoolean(0)).isTrue();
+        assertThat(result.getByte(1)).isEqualTo((byte) 10);
+        assertThat(result.getShort(2)).isEqualTo((short) 200);
+        assertThat(result.getInt(3)).isEqualTo(3000);
+        assertThat(result.getLong(4)).isEqualTo(40000L);
+        assertThat(result.getFloat(5)).isEqualTo(1.5f);
+        assertThat(result.getDouble(6)).isEqualTo(2.5d);
+        assertThat(result.getString(7).toString()).isEqualTo("from-test");
+        assertThat(result.getDecimal(8, 5, 2).toString()).isEqualTo("123.45");
+        assertThat(result.getInt(9)).isEqualTo(18000);
+        assertThat(result.getInt(10)).isEqualTo(43200000);
+        assertThat(result.getTimestampNtz(11, 3).getMillisecond()).isEqualTo(1609459200000L);
+        assertThat(result.getTimestampLtz(12, 3).getEpochMillisecond()).isEqualTo(1609459200000L);
+    }
+
+    @Test
+    public void testFromWithNullFields() {
+        RowType rowType = RowType.of(DataTypes.INT(), DataTypes.STRING(), DataTypes.DOUBLE());
+
+        GenericRow genericRow = GenericRow.of(null, null, null);
+
+        AlignedRow result = AlignedRow.from(rowType, genericRow);
+        assertThat(result).isNotNull();
+        assertThat(result.isNullAt(0)).isTrue();
+        assertThat(result.isNullAt(1)).isTrue();
+        assertThat(result.isNullAt(2)).isTrue();
+    }
+
+    @Test
+    public void testFromWithNonCompactTimestamp() {
+        RowType rowType = RowType.of(DataTypes.TIMESTAMP(9), DataTypes.TIMESTAMP_LTZ(9));
+
+        TimestampNtz timestampNtz = TimestampNtz.fromMillis(1609459200000L, 123456);
+        TimestampLtz timestampLtz =
+                TimestampLtz.fromInstant(
+                        LocalDateTime.of(2021, 1, 1, 0, 0, 0, 123456789).toInstant(ZoneOffset.UTC));
+
+        GenericRow genericRow = GenericRow.of(timestampNtz, timestampLtz);
+
+        AlignedRow result = AlignedRow.from(rowType, genericRow);
+        assertThat(result).isNotNull();
+        assertThat(result.getTimestampNtz(0, 9).getMillisecond()).isEqualTo(1609459200000L);
+        assertThat(result.getTimestampNtz(0, 9).getNanoOfMillisecond()).isEqualTo(123456);
+        assertThat(result.getTimestampLtz(1, 9).toString())
+                .isEqualTo("2021-01-01T00:00:00.123456789Z");
+    }
+
+    @Test
+    public void testFromWithNonCompactDecimal() {
+        RowType rowType = RowType.of(DataTypes.DECIMAL(25, 5));
+
+        Decimal decimal =
+                Decimal.fromBigDecimal(new BigDecimal("12345678901234567890.12345"), 25, 5);
+        GenericRow genericRow = GenericRow.of(decimal);
+
+        AlignedRow result = AlignedRow.from(rowType, genericRow);
+        assertThat(result).isNotNull();
+        assertThat(result.getDecimal(0, 25, 5).toBigDecimal())
+                .isEqualTo(new BigDecimal("12345678901234567890.12345"));
+    }
+
+    @Test
+    public void testFromWithUnsupportedType() {
+        RowType rowType = RowType.of(DataTypes.BYTES());
+        GenericRow genericRow = GenericRow.of(new byte[] {1, 2, 3});
+
+        assertThatThrownBy(() -> AlignedRow.from(rowType, genericRow))
+                .isInstanceOf(UnsupportedOperationException.class)
+                .hasMessageContaining("Statistics collection is not supported for type");
+    }
+
+    @Test
+    public void testSetTimestampNtzInPlace() {
+        // non-compact timestamp set in-place
+        int precision = 9;
+        TimestampNtz timestamp1 = TimestampNtz.fromMillis(1609459200000L, 111111);
+        TimestampNtz timestamp2 = TimestampNtz.fromMillis(1609459300000L, 222222);
+
+        AlignedRow row = new AlignedRow(2);
+        AlignedRowWriter writer = new AlignedRowWriter(row);
+        writer.writeTimestampNtz(0, timestamp1, precision);
+        writer.setNullAt(1);
+        writer.complete();
+
+        assertThat(row.getTimestampNtz(0, precision).getMillisecond()).isEqualTo(1609459200000L);
+        assertThat(row.getTimestampNtz(0, precision).getNanoOfMillisecond()).isEqualTo(111111);
+
+        // in-place update
+        row.setTimestampNtz(0, timestamp2, precision);
+        assertThat(row.getTimestampNtz(0, precision).getMillisecond()).isEqualTo(1609459300000L);
+        assertThat(row.getTimestampNtz(0, precision).getNanoOfMillisecond()).isEqualTo(222222);
+
+        // set to null
+        row.setTimestampNtz(0, null, precision);
+        assertThat(row.isNullAt(0)).isTrue();
+    }
+
+    @Test
+    public void testSetDecimalNullNonCompact() {
+        int precision = 25;
+        int scale = 5;
+        Decimal decimal = Decimal.fromBigDecimal(new BigDecimal("99.99"), precision, scale);
+
+        AlignedRow row = new AlignedRow(1);
+        AlignedRowWriter writer = new AlignedRowWriter(row);
+        writer.writeDecimal(0, decimal, precision);
+        writer.complete();
+
+        assertThat(row.getDecimal(0, precision, scale).toBigDecimal())
+                .isEqualByComparingTo(new BigDecimal("99.99"));
+
+        // set to null in-place
+        row.setDecimal(0, null, precision);
+        assertThat(row.isNullAt(0)).isTrue();
+    }
+
+    @Test
+    public void testSetTimestampLtzNullNonCompact() {
+        int precision = 9;
+        TimestampLtz timestamp =
+                TimestampLtz.fromInstant(
+                        LocalDateTime.of(2021, 1, 1, 0, 0, 0, 500000000).toInstant(ZoneOffset.UTC));
+
+        AlignedRow row = new AlignedRow(1);
+        AlignedRowWriter writer = new AlignedRowWriter(row);
+        writer.writeTimestampLtz(0, timestamp, precision);
+        writer.complete();
+
+        assertThat(row.getTimestampLtz(0, precision)).isNotNull();
+
+        // set to null in-place
+        row.setTimestampLtz(0, null, precision);
+        assertThat(row.isNullAt(0)).isTrue();
+    }
+
+    @Test
+    public void testCalculateFixPartSizeInBytes() {
+        assertThat(AlignedRow.calculateFixPartSizeInBytes(0)).isEqualTo(8);
+        assertThat(AlignedRow.calculateFixPartSizeInBytes(1)).isEqualTo(16);
+        assertThat(AlignedRow.calculateFixPartSizeInBytes(56)).isEqualTo(8 + 56 * 8);
+        assertThat(AlignedRow.calculateFixPartSizeInBytes(57)).isEqualTo(16 + 57 * 8);
     }
 }

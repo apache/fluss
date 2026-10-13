@@ -43,6 +43,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 public class TestLogScanner implements LogScanner {
     private final Map<TableBucket, List<ScanRecord>> recordsByBucket = new HashMap<>();
     private final Map<TableBucket, AtomicInteger> pollIndexByBucket = new HashMap<>();
+    private final Map<TableBucket, Long> consumedUpToOffsets = new HashMap<>();
 
     /** Number of empty polls to return before returning actual records. */
     private int emptyPollsBeforeData = 0;
@@ -60,14 +61,9 @@ public class TestLogScanner implements LogScanner {
         pollIndexByBucket.put(bucket, new AtomicInteger(0));
     }
 
-    /**
-     * Sets the number of empty polls to return before returning actual records.
-     *
-     * @param count number of empty polls
-     */
-    public void setEmptyPollsBeforeData(int count) {
-        this.emptyPollsBeforeData = count;
-        this.currentEmptyPollCount = 0;
+    /** Sets the exclusive upper bound of offsets consumed by a poll for the given bucket. */
+    public void setConsumedUpToOffset(TableBucket bucket, long offset) {
+        consumedUpToOffsets.put(bucket, offset);
     }
 
     /**
@@ -105,6 +101,7 @@ public class TestLogScanner implements LogScanner {
         }
 
         Map<TableBucket, List<ScanRecord>> result = new HashMap<>();
+        Map<TableBucket, Long> pollConsumedUpToOffsets = new HashMap<>();
 
         for (Map.Entry<TableBucket, List<ScanRecord>> entry : recordsByBucket.entrySet()) {
             TableBucket bucket = entry.getKey();
@@ -124,10 +121,14 @@ public class TestLogScanner implements LogScanner {
                 List<ScanRecord> batch = allRecords.subList(startIndex, endIndex);
                 result.put(bucket, new ArrayList<>(batch));
                 index.set(endIndex);
+                pollConsumedUpToOffsets.put(bucket, batch.get(batch.size() - 1).logOffset() + 1);
             }
         }
 
-        return result.isEmpty() ? ScanRecords.EMPTY : new ScanRecords(result);
+        pollConsumedUpToOffsets.putAll(consumedUpToOffsets);
+        return result.isEmpty() && pollConsumedUpToOffsets.isEmpty()
+                ? ScanRecords.EMPTY
+                : new ScanRecords(result, pollConsumedUpToOffsets);
     }
 
     @Override
@@ -151,6 +152,7 @@ public class TestLogScanner implements LogScanner {
     public void reset() {
         recordsByBucket.clear();
         pollIndexByBucket.clear();
+        consumedUpToOffsets.clear();
         emptyPollsBeforeData = 0;
         currentEmptyPollCount = 0;
         alwaysReturnEmpty = false;

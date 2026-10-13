@@ -22,11 +22,11 @@ import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.client.metadata.MetadataUpdater;
 import org.apache.fluss.client.metrics.ScannerMetricGroup;
 import org.apache.fluss.client.table.scanner.RemoteFileDownloader;
-import org.apache.fluss.client.table.scanner.ScanRecord;
 import org.apache.fluss.cluster.BucketLocation;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.ApiException;
+import org.apache.fluss.exception.InvalidBucketRoutingException;
 import org.apache.fluss.exception.InvalidMetadataException;
 import org.apache.fluss.exception.LeaderNotAvailableException;
 import org.apache.fluss.exception.PartitionNotExistException;
@@ -35,8 +35,10 @@ import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.SchemaGetter;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
+import org.apache.fluss.metadata.TableOrPartition;
 import org.apache.fluss.metadata.TablePartition;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.predicate.Predicate;
 import org.apache.fluss.record.LogRecordReadContext;
 import org.apache.fluss.record.LogRecords;
 import org.apache.fluss.record.MemoryLogRecords;
@@ -52,6 +54,10 @@ import org.apache.fluss.rpc.messages.PbFetchLogRespForBucket;
 import org.apache.fluss.rpc.messages.PbFetchLogRespForTable;
 import org.apache.fluss.rpc.protocol.ApiError;
 import org.apache.fluss.rpc.protocol.Errors;
+import org.apache.fluss.rpc.protocol.FetchLogReadPreference;
+import org.apache.fluss.rpc.util.PredicateMessageUtils;
+import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.ChunkedAllocationManager;
+import org.apache.fluss.shaded.netty4.io.netty.buffer.ByteBuf;
 import org.apache.fluss.utils.IOUtils;
 import org.apache.fluss.utils.Projection;
 
@@ -71,7 +77,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
-import java.util.stream.Collectors;
 
 import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.getFetchLogResultForBucket;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
@@ -85,14 +90,11 @@ import static org.apache.fluss.utils.Preconditions.checkNotNull;
 public class LogFetcher implements Closeable {
     private static final Logger LOG = LoggerFactory.getLogger(LogFetcher.class);
 
-    private final TablePath tablePath;
-    private final boolean isPartitioned;
-    private final LogRecordReadContext readContext;
-    // TODO this context can be merge with readContext. Introduce it only because log remote read
-    //  currently can only do project when generate scanRecord instead of doing project while read
-    //  bytes from remote file.
-    private final LogRecordReadContext remoteReadContext;
-    @Nullable private final Projection projection;
+    /** Per-table read contexts keyed by tableId. */
+    @GuardedBy("this")
+    private final Map<Long, TableReadContext> tableReadContexts;
+
+    private final ChunkedAllocationManager.ChunkedFactory chunkedFactory;
     private final int maxFetchBytes;
     private final int maxBucketFetchBytes;
     private final int minFetchBytes;
@@ -101,7 +103,9 @@ public class LogFetcher implements Closeable {
     private final LogScannerStatus logScannerStatus;
     private final LogFetchBuffer logFetchBuffer;
     private final LogFetchCollector logFetchCollector;
+    private final ArrowLogFetchCollector arrowLogFetchCollector;
     private final RemoteLogDownloader remoteLogDownloader;
+    private final FetchLogReadPreference readPreference;
 
     @GuardedBy("this")
     private final Set<Integer> nodesWithPendingFetchRequests;
@@ -111,23 +115,19 @@ public class LogFetcher implements Closeable {
 
     private final MetadataUpdater metadataUpdater;
     private final ScannerMetricGroup scannerMetricGroup;
+    private final LogRecordReadContext.SchemaResolution schemaResolution;
 
+    /** Create a multi-table LogFetcher without an initial table. */
     public LogFetcher(
-            TableInfo tableInfo,
-            @Nullable Projection projection,
+            String scannerName,
             LogScannerStatus logScannerStatus,
             Configuration conf,
             MetadataUpdater metadataUpdater,
             ScannerMetricGroup scannerMetricGroup,
             RemoteFileDownloader remoteFileDownloader,
-            SchemaGetter schemaGetter) {
-        this.tablePath = tableInfo.getTablePath();
-        this.isPartitioned = tableInfo.isPartitioned();
-        this.readContext =
-                LogRecordReadContext.createReadContext(tableInfo, false, projection, schemaGetter);
-        this.remoteReadContext =
-                LogRecordReadContext.createReadContext(tableInfo, true, projection, schemaGetter);
-        this.projection = projection;
+            LogRecordReadContext.SchemaResolution schemaResolution) {
+        this.tableReadContexts = new HashMap<>();
+        this.chunkedFactory = new ChunkedAllocationManager.ChunkedFactory();
         this.logScannerStatus = logScannerStatus;
         this.maxFetchBytes =
                 (int) conf.get(ConfigOptions.CLIENT_SCANNER_LOG_FETCH_MAX_BYTES).getBytes();
@@ -144,12 +144,49 @@ public class LogFetcher implements Closeable {
         this.logFetchBuffer = new LogFetchBuffer();
         this.nodesWithPendingFetchRequests = new HashSet<>();
         this.metadataUpdater = metadataUpdater;
-        this.logFetchCollector =
-                new LogFetchCollector(tablePath, logScannerStatus, conf, metadataUpdater);
+        this.logFetchCollector = new LogFetchCollector(logScannerStatus, conf, metadataUpdater);
+        this.arrowLogFetchCollector =
+                new ArrowLogFetchCollector(logScannerStatus, conf, metadataUpdater);
         this.scannerMetricGroup = scannerMetricGroup;
+        this.readPreference = conf.get(ConfigOptions.CLIENT_SCANNER_LOG_READ_PREFERENCE);
         this.remoteLogDownloader =
-                new RemoteLogDownloader(tablePath, conf, remoteFileDownloader, scannerMetricGroup);
+                new RemoteLogDownloader(
+                        scannerName, conf, remoteFileDownloader, scannerMetricGroup);
         remoteLogDownloader.start();
+        this.schemaResolution = schemaResolution;
+    }
+
+    /**
+     * Register a new table for multi-table fetching. If the table is already registered, this is a
+     * no-op.
+     *
+     * <p>The fetcher monitor protects registration against asynchronous fetch response callbacks.
+     */
+    public synchronized void registerTable(TableScanSpec spec, SchemaGetter schemaGetter) {
+        TableInfo tableInfo = spec.getTableInfo();
+        long tableId = tableInfo.getTableId();
+        if (!tableReadContexts.containsKey(tableId)) {
+            TableReadContext tableReadContext =
+                    new TableReadContext(
+                            tableInfo,
+                            schemaResolution,
+                            spec.getProjection(),
+                            spec.getFilter(),
+                            schemaGetter,
+                            chunkedFactory);
+            tableReadContexts.put(tableId, tableReadContext);
+        }
+    }
+
+    synchronized void unregisterTable(long tableId) {
+        TableReadContext tableReadContext = tableReadContexts.remove(tableId);
+        if (tableReadContext == null) {
+            return;
+        }
+        Set<TableBucket> retainedBuckets =
+                new HashSet<>(logScannerStatus.fetchableBuckets(ignored -> true));
+        logFetchBuffer.retainAll(retainedBuckets);
+        tableReadContext.close();
     }
 
     /**
@@ -161,8 +198,12 @@ public class LogFetcher implements Closeable {
         return !logFetchBuffer.isEmpty();
     }
 
-    public Map<TableBucket, List<ScanRecord>> collectFetch() {
+    public ScanRecords collectFetch() {
         return logFetchCollector.collectFetch(logFetchBuffer);
+    }
+
+    public ArrowScanRecords collectArrowFetch() {
+        return arrowLogFetchCollector.collectFetch(logFetchBuffer);
     }
 
     /**
@@ -172,9 +213,10 @@ public class LogFetcher implements Closeable {
     public void sendFetches() {
         checkAndUpdateMetadata(fetchableBuckets());
         synchronized (this) {
-            // NOTE: Don't perform heavy I/O operations or synchronous waits inside this lock to
-            // avoid blocking the future complete of FetchLogResponse.
-            Map<Integer, FetchLogRequest> fetchRequestMap = prepareFetchLogRequests();
+            // Recompute after metadata update because response callbacks can populate the buffer.
+            // Don't perform heavy I/O operations or synchronous waits here.
+            Map<Integer, FetchLogRequest> fetchRequestMap =
+                    prepareFetchLogRequests(fetchableBuckets());
             fetchRequestMap.forEach(
                     (nodeId, fetchLogRequest) -> {
                         LOG.debug("Adding pending request for node id {}", nodeId);
@@ -203,94 +245,118 @@ public class LogFetcher implements Closeable {
     }
 
     private void checkAndUpdateMetadata(List<TableBucket> tableBuckets) {
-        // If the table is partitioned table, check if we need update partition metadata.
-        List<Long> partitionIds = isPartitioned ? new ArrayList<>() : null;
-        // If the table is none-partitioned table, check if we need update table metadata.
-        boolean needUpdate = false;
+        // Group buckets (without a leader) by tableId to support multi-table fetching.
+        Map<Long, List<TableBucket>> bucketsByTable = new HashMap<>();
         for (TableBucket tb : tableBuckets) {
             if (getTableBucketLeader(tb) != null) {
                 continue;
             }
-
-            if (isPartitioned) {
-                partitionIds.add(tb.getPartitionId());
-            } else {
-                needUpdate = true;
-                break;
-            }
+            bucketsByTable.computeIfAbsent(tb.getTableId(), k -> new ArrayList<>()).add(tb);
         }
 
-        try {
-            if (isPartitioned && !partitionIds.isEmpty()) {
-                metadataUpdater.updateMetadata(
-                        Collections.singleton(tablePath), null, partitionIds);
-            } else if (needUpdate) {
-                metadataUpdater.updateTableOrPartitionMetadata(tablePath, null);
+        for (Map.Entry<Long, List<TableBucket>> entry : bucketsByTable.entrySet()) {
+            long tableId = entry.getKey();
+            List<TableBucket> buckets = entry.getValue();
+            TableReadContext tableReadContext;
+            synchronized (this) {
+                tableReadContext = tableReadContexts.get(tableId);
             }
-        } catch (Exception e) {
-            if (e instanceof PartitionNotExistException) {
-                // ignore this exception, this is probably happen because the partition is deleted.
-                // The fetcher can also work fine. The caller like flink can remove the partition
-                // from fetch list when receive exception.
-                LOG.warn("Receive PartitionNotExistException when update metadata, ignore it", e);
-            } else {
-                throw e;
+            checkNotNull(tableReadContext, "Table read context for table id " + tableId);
+            boolean isPartitioned = tableReadContext.isPartitioned;
+            TablePath tablePath = tableReadContext.tablePath;
+            try {
+                if (isPartitioned) {
+                    List<Long> partitionIds = new ArrayList<>();
+                    for (TableBucket tb : buckets) {
+                        partitionIds.add(tb.getPartitionId());
+                    }
+                    if (!partitionIds.isEmpty()) {
+                        metadataUpdater.updateMetadata(
+                                Collections.singleton(tablePath), null, partitionIds);
+                    }
+                } else {
+                    metadataUpdater.updateTableOrPartitionMetadata(tablePath, null);
+                }
+            } catch (Exception e) {
+                if (e instanceof PartitionNotExistException) {
+                    LOG.warn(
+                            "Receive PartitionNotExistException when update metadata, ignore it",
+                            e);
+                } else {
+                    throw e;
+                }
             }
         }
     }
 
     @VisibleForTesting
-    void sendFetchRequest(int destination, FetchLogRequest fetchLogRequest) {
-        TableOrPartitions tableOrPartitionsInFetchRequest =
-                getTableOrPartitionsInFetchRequest(fetchLogRequest);
+    synchronized void sendFetchRequest(int destination, FetchLogRequest fetchLogRequest) {
+        FetchRequestContext fetchRequestContext = createFetchRequestContext(fetchLogRequest);
         // TODO cache the tablet server gateway.
         TabletServerGateway gateway = metadataUpdater.newTabletServerClientForNode(destination);
         if (gateway == null) {
             handleFetchLogException(
                     destination,
-                    tableOrPartitionsInFetchRequest,
+                    fetchRequestContext,
                     new LeaderNotAvailableException(
                             "Server " + destination + " is not found in metadata cache."));
         } else {
             final long requestStartTime = System.currentTimeMillis();
             scannerMetricGroup.fetchRequestCount().inc();
 
-            gateway.fetchLog(fetchLogRequest)
-                    .whenComplete(
-                            (fetchLogResponse, e) -> {
-                                if (e != null) {
-                                    handleFetchLogException(
-                                            destination, tableOrPartitionsInFetchRequest, e);
-                                } else {
-                                    handleFetchLogResponse(
-                                            destination, requestStartTime, fetchLogResponse);
-                                }
-                            });
+            try {
+                gateway.fetchLog(fetchLogRequest)
+                        .whenComplete(
+                                (fetchLogResponse, e) -> {
+                                    if (e != null) {
+                                        handleFetchLogException(
+                                                destination, fetchRequestContext, e);
+                                    } else {
+                                        handleFetchLogResponse(
+                                                destination,
+                                                requestStartTime,
+                                                fetchLogResponse,
+                                                fetchRequestContext);
+                                    }
+                                });
+            } catch (Throwable t) {
+                handleFetchLogException(destination, fetchRequestContext, t);
+            }
         }
     }
 
-    private TableOrPartitions getTableOrPartitionsInFetchRequest(FetchLogRequest fetchLogRequest) {
-        Set<Long> tableIdsInFetchRequest = null;
-        Set<TablePartition> tablePartitionsInFetchRequest = null;
-        if (!isPartitioned) {
-            tableIdsInFetchRequest =
-                    fetchLogRequest.getTablesReqsList().stream()
-                            .map(PbFetchLogReqForTable::getTableId)
-                            .collect(Collectors.toSet());
-        } else {
-            tablePartitionsInFetchRequest = new HashSet<>();
-            // iterate over table requests
-            for (PbFetchLogReqForTable fetchTableRequest : fetchLogRequest.getTablesReqsList()) {
+    private FetchRequestContext createFetchRequestContext(FetchLogRequest fetchLogRequest) {
+        Map<Long, TableReadContext> requestedTableContexts = new HashMap<>();
+        Set<Long> tableIdsInFetchRequest = new HashSet<>();
+        Set<TablePartition> tablePartitionsInFetchRequest = new HashSet<>();
+        for (PbFetchLogReqForTable fetchTableRequest : fetchLogRequest.getTablesReqsList()) {
+            long tableId = fetchTableRequest.getTableId();
+            TableReadContext tableReadContext = tableReadContexts.get(tableId);
+            if (tableReadContext == null) {
+                LOG.warn(
+                        "Skip fetch log request for table id {} because its read context is not "
+                                + "registered. The table may have already been unregistered.",
+                        tableId);
+                continue;
+            }
+            requestedTableContexts.put(tableId, tableReadContext);
+            if (!tableReadContext.isPartitioned) {
+                tableIdsInFetchRequest.add(tableId);
+            } else {
                 for (PbFetchLogReqForBucket fetchLogReqForBucket :
                         fetchTableRequest.getBucketsReqsList()) {
                     tablePartitionsInFetchRequest.add(
-                            new TablePartition(
-                                    fetchTableRequest.getTableId(),
-                                    fetchLogReqForBucket.getPartitionId()));
+                            new TablePartition(tableId, fetchLogReqForBucket.getPartitionId()));
                 }
             }
         }
-        return new TableOrPartitions(tableIdsInFetchRequest, tablePartitionsInFetchRequest);
+        return new FetchRequestContext(
+                requestedTableContexts,
+                new TableOrPartitions(
+                        tableIdsInFetchRequest.isEmpty() ? null : tableIdsInFetchRequest,
+                        tablePartitionsInFetchRequest.isEmpty()
+                                ? null
+                                : tablePartitionsInFetchRequest));
     }
 
     /** A helper class to hold table ids or table partitions. */
@@ -314,8 +380,8 @@ public class LogFetcher implements Closeable {
         metadataUpdater.invalidPhysicalTableBucketMeta(physicalTablePaths);
     }
 
-    private void handleFetchLogException(
-            int destination, TableOrPartitions tableOrPartitionsInFetchRequest, Throwable e) {
+    private synchronized void handleFetchLogException(
+            int destination, FetchRequestContext fetchRequestContext, Throwable e) {
         try {
             if (isClosed) {
                 return;
@@ -329,7 +395,7 @@ public class LogFetcher implements Closeable {
                         "Invalid metadata error in fetch log request. "
                                 + "Going to request metadata update.",
                         e);
-                invalidTableOrPartitions(tableOrPartitionsInFetchRequest);
+                invalidTableOrPartitions(fetchRequestContext.tableOrPartitions);
             }
         } finally {
             LOG.debug("Removing pending request for node: {}", destination);
@@ -339,7 +405,15 @@ public class LogFetcher implements Closeable {
 
     /** Implements the core logic for a successful fetch log response. */
     private synchronized void handleFetchLogResponse(
-            int destination, long requestStartTime, FetchLogResponse fetchLogResponse) {
+            int destination,
+            long requestStartTime,
+            FetchLogResponse fetchLogResponse,
+            FetchRequestContext fetchRequestContext) {
+        // Capture the parsed ByteBuf for buffer lifecycle management. The response may
+        // have been lazily parsed from the network buffer. Each DefaultCompletedFetch
+        // that references the buffer's records data must retain it. We release the base
+        // reference in the finally block.
+        ByteBuf parsedByteBuf = fetchLogResponse.getParsedByteBuf();
         try {
             if (isClosed) {
                 return;
@@ -351,6 +425,14 @@ public class LogFetcher implements Closeable {
 
             for (PbFetchLogRespForTable respForTable : fetchLogResponse.getTablesRespsList()) {
                 long tableId = respForTable.getTableId();
+                TableReadContext trc = fetchRequestContext.requestedTableContexts.get(tableId);
+                if (trc == null || tableReadContexts.get(tableId) != trc) {
+                    LOG.debug(
+                            "Ignoring stale or unsolicited fetch log response for table id {}.",
+                            tableId);
+                    continue;
+                }
+                TablePath tablePathForResp = trc.tablePath;
                 for (PbFetchLogRespForBucket respForBucket : respForTable.getBucketsRespsList()) {
                     TableBucket tb =
                             new TableBucket(
@@ -360,7 +442,7 @@ public class LogFetcher implements Closeable {
                                             : null,
                                     respForBucket.getBucketId());
                     FetchLogResultForBucket fetchResultForBucket =
-                            getFetchLogResultForBucket(tb, tablePath, respForBucket);
+                            getFetchLogResultForBucket(tb, tablePathForResp, respForBucket);
 
                     // if error code is not NONE, it means the fetch log request failed, we need to
                     // clear table bucket meta for InvalidMetadataException.
@@ -380,32 +462,45 @@ public class LogFetcher implements Closeable {
                     } else {
                         if (fetchResultForBucket.fetchFromRemote()) {
                             pendRemoteFetches(
+                                    trc,
                                     fetchResultForBucket.remoteLogFetchInfo(),
                                     fetchOffset,
                                     fetchResultForBucket.getHighWatermark());
                         } else {
                             LogRecords logRecords = fetchResultForBucket.recordsOrEmpty();
-                            if (!MemoryLogRecords.EMPTY.equals(logRecords)
-                                    || fetchResultForBucket.getErrorCode() != Errors.NONE.code()) {
-                                // In oder to not signal notEmptyCondition, add completed
-                                // fetch to buffer until log records is not empty.
-                                DefaultCompletedFetch completedFetch =
+                            boolean hasRecords = !MemoryLogRecords.EMPTY.equals(logRecords);
+                            if (hasRecords
+                                    || fetchResultForBucket.getErrorCode() != Errors.NONE.code()
+                                    || fetchResultForBucket.hasFilteredEndOffset()) {
+                                // Retain the parsed buffer so it stays alive while
+                                // this CompletedFetch's records are being consumed.
+                                if (hasRecords && parsedByteBuf != null) {
+                                    parsedByteBuf.retain();
+                                }
+                                logFetchBuffer.add(
                                         new DefaultCompletedFetch(
                                                 tb,
+                                                tablePathForResp,
                                                 fetchResultForBucket,
-                                                readContext,
+                                                trc.readContext,
                                                 logScannerStatus,
                                                 // skipping CRC check if projection push downed as
                                                 // the data is pruned
                                                 isCheckCrcs,
-                                                fetchOffset);
-                                logFetchBuffer.add(completedFetch);
+                                                fetchOffset,
+                                                hasRecords ? parsedByteBuf : null));
                             }
                         }
                     }
                 }
             }
         } finally {
+            // Release the base reference from the network buffer. Any CompletedFetch
+            // objects created above hold their own retained references, keeping the
+            // buffer alive until they are drained.
+            if (parsedByteBuf != null) {
+                parsedByteBuf.release();
+            }
             LOG.debug("Removing pending request for node: {}", destination);
             nodesWithPendingFetchRequests.remove(destination);
         }
@@ -414,9 +509,10 @@ public class LogFetcher implements Closeable {
     private void handleFetchLogExceptionForBucket(TableBucket tb, int destination, ApiError error) {
         ApiException exception = error.error().exception();
         LOG.error("Failed to fetch log from node {} for bucket {}", destination, tb, exception);
-        if (exception instanceof InvalidMetadataException) {
+        if (exception instanceof InvalidMetadataException
+                || exception instanceof InvalidBucketRoutingException) {
             LOG.warn(
-                    "Invalid metadata error in fetch log request. "
+                    "Metadata or bucket routing error in fetch log request. "
                             + "Going to request metadata update.",
                     exception);
             long tableId = tb.getTableId();
@@ -435,7 +531,10 @@ public class LogFetcher implements Closeable {
     }
 
     private void pendRemoteFetches(
-            RemoteLogFetchInfo remoteLogFetchInfo, long firstFetchOffset, long highWatermark) {
+            TableReadContext tableReadContext,
+            RemoteLogFetchInfo remoteLogFetchInfo,
+            long firstFetchOffset,
+            long highWatermark) {
         checkNotNull(remoteLogFetchInfo);
         FsPath remoteLogTabletDir = new FsPath(remoteLogFetchInfo.remoteLogTabletDir());
         List<RemoteLogSegment> remoteLogSegments = remoteLogFetchInfo.remoteLogSegmentList();
@@ -453,26 +552,26 @@ public class LogFetcher implements Closeable {
                     new RemotePendingFetch(
                             segment,
                             downloadFuture,
+                            tableReadContext.tablePath,
                             posInLogSegment,
                             fetchOffset,
                             highWatermark,
-                            remoteReadContext,
+                            tableReadContext.remoteReadContext,
                             logScannerStatus,
                             isCheckCrcs);
             logFetchBuffer.pend(pendingFetch);
-            downloadFuture.onComplete(() -> logFetchBuffer.tryComplete(segment.tableBucket()));
+            downloadFuture.whenComplete(
+                    (throwable) -> logFetchBuffer.tryComplete(segment.tableBucket(), throwable));
         }
     }
 
     @VisibleForTesting
-    Map<Integer, FetchLogRequest> prepareFetchLogRequests() {
-        Map<Integer, List<PbFetchLogReqForBucket>> fetchLogReqForBuckets = new HashMap<>();
+    Map<Integer, FetchLogRequest> prepareFetchLogRequests(List<TableBucket> fetchableBuckets) {
+        // Outer key: leaderId, inner key: tableId -> list of bucket requests
+        Map<Integer, Map<Long, List<PbFetchLogReqForBucket>>> fetchReqsByLeaderAndTable =
+                new HashMap<>();
         int readyForFetchCount = 0;
-        Long tableId = null;
-        for (TableBucket tb : fetchableBuckets()) {
-            if (tableId == null) {
-                tableId = tb.getTableId();
-            }
+        for (TableBucket tb : fetchableBuckets) {
             Long offset = logScannerStatus.getBucketOffset(tb);
             if (offset == null) {
                 LOG.debug(
@@ -504,8 +603,13 @@ public class LogFetcher implements Closeable {
                 if (tb.getPartitionId() != null) {
                     fetchLogReqForBucket.setPartitionId(tb.getPartitionId());
                 }
-                fetchLogReqForBuckets
-                        .computeIfAbsent(leader, key -> new ArrayList<>())
+                metadataUpdater
+                        .getCluster()
+                        .getBucketCount(TableOrPartition.of(tb.getTableId(), tb.getPartitionId()))
+                        .ifPresent(fetchLogReqForBucket::setRoutingBucketCount);
+                fetchReqsByLeaderAndTable
+                        .computeIfAbsent(leader, k -> new HashMap<>())
+                        .computeIfAbsent(tb.getTableId(), k -> new ArrayList<>())
                         .add(fetchLogReqForBucket);
                 readyForFetchCount++;
             }
@@ -515,29 +619,57 @@ public class LogFetcher implements Closeable {
             return Collections.emptyMap();
         } else {
             Map<Integer, FetchLogRequest> fetchLogRequests = new HashMap<>();
-            long finalTableId = tableId;
-            fetchLogReqForBuckets.forEach(
-                    (leaderId, reqForBuckets) -> {
-                        FetchLogRequest fetchLogRequest =
-                                new FetchLogRequest()
-                                        .setFollowerServerId(-1)
-                                        .setMaxBytes(maxFetchBytes)
-                                        .setMinBytes(minFetchBytes)
-                                        .setMaxWaitMs(maxFetchWaitMs);
-                        PbFetchLogReqForTable reqForTable =
-                                new PbFetchLogReqForTable().setTableId(finalTableId);
-                        if (readContext.isProjectionPushDowned()) {
-                            assert projection != null;
-                            reqForTable
-                                    .setProjectionPushdownEnabled(true)
-                                    .setProjectedFields(projection.getProjectionInOrder());
-                        } else {
-                            reqForTable.setProjectionPushdownEnabled(false);
-                        }
-                        reqForTable.addAllBucketsReqs(reqForBuckets);
-                        fetchLogRequest.addAllTablesReqs(Collections.singletonList(reqForTable));
-                        fetchLogRequests.put(leaderId, fetchLogRequest);
-                    });
+            for (Map.Entry<Integer, Map<Long, List<PbFetchLogReqForBucket>>> leaderEntry :
+                    fetchReqsByLeaderAndTable.entrySet()) {
+                int leaderId = leaderEntry.getKey();
+                Map<Long, List<PbFetchLogReqForBucket>> tableReqs = leaderEntry.getValue();
+
+                FetchLogRequest fetchLogRequest =
+                        new FetchLogRequest()
+                                .setFollowerServerId(-1)
+                                .setMaxBytes(maxFetchBytes)
+                                .setMinBytes(minFetchBytes)
+                                .setMaxWaitMs(maxFetchWaitMs)
+                                .setReadPreference(readPreference.value());
+
+                List<PbFetchLogReqForTable> tablesReqs = new ArrayList<>();
+                for (Map.Entry<Long, List<PbFetchLogReqForBucket>> tableEntry :
+                        tableReqs.entrySet()) {
+                    long tableId = tableEntry.getKey();
+                    List<PbFetchLogReqForBucket> bucketReqs = tableEntry.getValue();
+                    TableReadContext trc = tableReadContexts.get(tableId);
+                    if (trc == null) {
+                        LOG.warn(
+                                "Skip fetch log request for table id {} because its read context "
+                                        + "is not registered. The table may have already been "
+                                        + "unregistered.",
+                                tableId);
+                        continue;
+                    }
+
+                    PbFetchLogReqForTable reqForTable =
+                            new PbFetchLogReqForTable().setTableId(tableId);
+                    if (trc.readContext.isProjectionPushDowned()) {
+                        assert trc.projection != null;
+                        reqForTable
+                                .setProjectionPushdownEnabled(true)
+                                .setProjectedFields(trc.projection.getProjectionInOrder());
+                    } else {
+                        reqForTable.setProjectionPushdownEnabled(false);
+                    }
+                    if (trc.cachedPbPredicate != null) {
+                        reqForTable.setFilterPredicate(trc.cachedPbPredicate);
+                        reqForTable.setFilterSchemaId(trc.filterSchemaId);
+                    }
+                    reqForTable.addAllBucketsReqs(bucketReqs);
+                    tablesReqs.add(reqForTable);
+                }
+                if (tablesReqs.isEmpty()) {
+                    continue;
+                }
+                fetchLogRequest.addAllTablesReqs(tablesReqs);
+                fetchLogRequests.put(leaderId, fetchLogRequest);
+            }
             return fetchLogRequests;
         }
     }
@@ -568,17 +700,95 @@ public class LogFetcher implements Closeable {
     @Override
     public synchronized void close() throws IOException {
         if (!isClosed) {
+            isClosed = true;
             IOUtils.closeQuietly(logFetchBuffer, "logFetchBuffer");
             IOUtils.closeQuietly(remoteLogDownloader, "remoteLogDownloader");
-            readContext.close();
-            remoteReadContext.close();
-            isClosed = true;
-            LOG.info("Fetcher for {} is closed.", tablePath);
+            for (TableReadContext tableReadContext : tableReadContexts.values()) {
+                tableReadContext.close();
+            }
+            chunkedFactory.close();
+            LOG.info("LogFetcher is closed.");
         }
+    }
+
+    @VisibleForTesting
+    LogScannerStatus getLogScannerStatus() {
+        return logScannerStatus;
     }
 
     @VisibleForTesting
     int getCompletedFetchesSize() {
         return logFetchBuffer.bufferedBuckets().size();
+    }
+
+    @VisibleForTesting
+    synchronized int getRegisteredTableCount() {
+        return tableReadContexts.size();
+    }
+
+    /** Request-scoped context snapshot. */
+    private static class FetchRequestContext {
+        private final Map<Long, TableReadContext> requestedTableContexts;
+        private final TableOrPartitions tableOrPartitions;
+
+        private FetchRequestContext(
+                Map<Long, TableReadContext> requestedTableContexts,
+                TableOrPartitions tableOrPartitions) {
+            this.requestedTableContexts = requestedTableContexts;
+            this.tableOrPartitions = tableOrPartitions;
+        }
+    }
+
+    /** Per-table context holding read contexts, projection, and predicate info. */
+    @VisibleForTesting
+    static class TableReadContext {
+        final TablePath tablePath;
+        final boolean isPartitioned;
+        final LogRecordReadContext readContext;
+        final LogRecordReadContext remoteReadContext;
+        @Nullable final Projection projection;
+        @Nullable final org.apache.fluss.rpc.messages.PbPredicate cachedPbPredicate;
+        final int filterSchemaId;
+
+        TableReadContext(
+                TableInfo tableInfo,
+                LogRecordReadContext.SchemaResolution schemaResolution,
+                @Nullable Projection projection,
+                @Nullable Predicate recordBatchFilter,
+                SchemaGetter schemaGetter,
+                ChunkedAllocationManager.ChunkedFactory chunkedFactory) {
+            this.tablePath = tableInfo.getTablePath();
+            this.isPartitioned = tableInfo.isPartitioned();
+            // Share the LogFetcher-owned chunked factory so all tables reuse one chunk
+            // pool and LogFetcher.close() releases the chunks after contexts are closed.
+            this.readContext =
+                    LogRecordReadContext.createReadContext(
+                            tableInfo,
+                            false,
+                            schemaResolution,
+                            projection,
+                            schemaGetter,
+                            chunkedFactory);
+            this.remoteReadContext =
+                    LogRecordReadContext.createReadContext(
+                            tableInfo,
+                            true,
+                            schemaResolution,
+                            projection,
+                            schemaGetter,
+                            chunkedFactory);
+            this.projection = projection;
+            this.cachedPbPredicate =
+                    recordBatchFilter != null
+                            ? PredicateMessageUtils.toPbPredicate(
+                                    recordBatchFilter, tableInfo.getRowType())
+                            : null;
+            this.filterSchemaId = tableInfo.getSchemaId();
+        }
+
+        void close() {
+            readContext.close();
+            remoteReadContext.close();
+        }
     }
 }

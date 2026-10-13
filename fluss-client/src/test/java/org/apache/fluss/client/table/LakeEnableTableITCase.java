@@ -22,6 +22,7 @@ import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.cluster.AlterConfig;
 import org.apache.fluss.config.cluster.AlterConfigOpType;
 import org.apache.fluss.exception.InvalidAlterTableException;
+import org.apache.fluss.exception.InvalidConfigException;
 import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.DatabaseDescriptor;
 import org.apache.fluss.metadata.Schema;
@@ -31,11 +32,14 @@ import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.types.DataTypes;
 
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 
+import static org.apache.fluss.config.ConfigOptions.DATALAKE_ENABLED;
 import static org.apache.fluss.config.ConfigOptions.DATALAKE_FORMAT;
 import static org.apache.fluss.config.ConfigOptions.TABLE_DATALAKE_ENABLED;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -43,6 +47,16 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** IT case for lake enable table. */
 class LakeEnableTableITCase extends ClientToServerITCaseBase {
+
+    @BeforeEach
+    void beforeEach() throws Exception {
+        admin.alterClusterConfigs(
+                        Arrays.asList(
+                                new AlterConfig(DATALAKE_FORMAT.key(), null, AlterConfigOpType.SET),
+                                new AlterConfig(
+                                        DATALAKE_ENABLED.key(), null, AlterConfigOpType.SET)))
+                .get();
+    }
 
     @Test
     void testCannotEnableDatalakeForTableCreatedBeforeClusterEnabledDatalake() throws Exception {
@@ -86,7 +100,9 @@ class LakeEnableTableITCase extends ClientToServerITCaseBase {
 
         // Enable datalake format for the cluster
         admin.alterClusterConfigs(
-                        Collections.singletonList(
+                        Arrays.asList(
+                                new AlterConfig(
+                                        DATALAKE_ENABLED.key(), null, AlterConfigOpType.SET),
                                 new AlterConfig(
                                         DATALAKE_FORMAT.key(),
                                         DataLakeFormat.PAIMON.toString(),
@@ -108,8 +124,66 @@ class LakeEnableTableITCase extends ClientToServerITCaseBase {
                 .cause()
                 .isInstanceOf(InvalidAlterTableException.class)
                 .hasMessageContaining(
-                        "The option 'table.datalake.enabled' cannot be altered for tables that were"
-                                + " created before the Fluss cluster enabled datalake.");
+                        "The following options cannot be altered for tables that were created before the Fluss cluster enabled datalake: 'table.datalake.enabled'.");
+    }
+
+    @Test
+    void testCanEnableDatalakeForLogTableWithoutBucketKeyCreatedBeforeClusterEnabledDatalake()
+            throws Exception {
+        String databaseName = "test_db";
+        String tableName =
+                "test_log_table_without_bucket_key_created_before_cluster_enabled_datalake";
+        TablePath tablePath = TablePath.of(databaseName, tableName);
+
+        admin.alterClusterConfigs(
+                        Collections.singletonList(
+                                new AlterConfig(
+                                        DATALAKE_FORMAT.key(), null, AlterConfigOpType.SET)))
+                .get();
+        assertThat(
+                        FLUSS_CLUSTER_EXTENSION
+                                .getCoordinatorServer()
+                                .getCoordinatorService()
+                                .getDataLakeFormat())
+                .isEqualTo(null);
+
+        admin.createDatabase(databaseName, DatabaseDescriptor.EMPTY, true).get();
+
+        TableDescriptor tableDescriptor =
+                TableDescriptor.builder()
+                        .schema(
+                                Schema.newBuilder()
+                                        .column("c1", DataTypes.INT())
+                                        .column("c2", DataTypes.STRING())
+                                        .build())
+                        .distributedBy(3)
+                        .build();
+        admin.createTable(tablePath, tableDescriptor, false).get();
+
+        // enable cluster with datalake
+        admin.alterClusterConfigs(
+                        Collections.singletonList(
+                                new AlterConfig(
+                                        DATALAKE_FORMAT.key(),
+                                        DataLakeFormat.PAIMON.toString(),
+                                        AlterConfigOpType.SET)))
+                .get();
+        assertThat(
+                        FLUSS_CLUSTER_EXTENSION
+                                .getCoordinatorServer()
+                                .getCoordinatorService()
+                                .getDataLakeFormat())
+                .isEqualTo(DataLakeFormat.PAIMON);
+
+        List<TableChange> enableDatalakeChange =
+                Collections.singletonList(TableChange.set(TABLE_DATALAKE_ENABLED.key(), "true"));
+        // alter table to enable datalake
+        admin.alterTable(tablePath, enableDatalakeChange, false).get();
+
+        TableInfo updatedTableInfo = admin.getTableInfo(tablePath).get();
+        assertThat(updatedTableInfo.getTableConfig().isDataLakeEnabled()).isTrue();
+        assertThat(updatedTableInfo.getTableConfig().getDataLakeFormat())
+                .contains(DataLakeFormat.PAIMON);
     }
 
     @Test
@@ -177,5 +251,143 @@ class LakeEnableTableITCase extends ClientToServerITCaseBase {
         // Verify datalake is now enabled
         TableInfo updatedTableInfo = admin.getTableInfo(tablePath).get();
         assertThat(updatedTableInfo.getTableConfig().isDataLakeEnabled()).isTrue();
+    }
+
+    @Test
+    void testCannotEnableTableWhenTableFormatDiffersFromClusterFormat() throws Exception {
+        String databaseName = "test_db";
+        String tableName = "test_table_format_mismatch";
+        TablePath tablePath = TablePath.of(databaseName, tableName);
+
+        admin.createDatabase(databaseName, DatabaseDescriptor.EMPTY, true).get();
+        admin.alterClusterConfigs(
+                        Collections.singletonList(
+                                new AlterConfig(
+                                        DATALAKE_FORMAT.key(), null, AlterConfigOpType.SET)))
+                .get();
+
+        TableDescriptor tableDescriptor =
+                TableDescriptor.builder()
+                        .schema(
+                                Schema.newBuilder()
+                                        .column("c1", DataTypes.INT())
+                                        .column("c2", DataTypes.STRING())
+                                        .build())
+                        .distributedBy(3, "c1")
+                        .property(ConfigOptions.TABLE_DATALAKE_FORMAT, DataLakeFormat.ICEBERG)
+                        .build();
+        admin.createTable(tablePath, tableDescriptor, false).get();
+
+        admin.alterClusterConfigs(
+                        Arrays.asList(
+                                new AlterConfig(
+                                        DATALAKE_FORMAT.key(),
+                                        DataLakeFormat.PAIMON.toString(),
+                                        AlterConfigOpType.SET),
+                                new AlterConfig(
+                                        DATALAKE_ENABLED.key(), "true", AlterConfigOpType.SET)))
+                .get();
+
+        List<TableChange> enableDatalakeChange =
+                Collections.singletonList(TableChange.set(TABLE_DATALAKE_ENABLED.key(), "true"));
+        assertThatThrownBy(() -> admin.alterTable(tablePath, enableDatalakeChange, false).get())
+                .cause()
+                .isInstanceOf(InvalidConfigException.class)
+                .hasMessageContaining("'table.datalake.format' ('iceberg')")
+                .hasMessageContaining("cluster 'datalake.format' ('paimon')");
+    }
+
+    @Test
+    void testEnableTableAfterClusterEnablesDataLake() throws Exception {
+        String databaseName = "test_db";
+        String tableName = "test_enable_datalake_table";
+        TablePath tablePath = TablePath.of(databaseName, tableName);
+
+        admin.createDatabase(databaseName, DatabaseDescriptor.EMPTY, true).get();
+        admin.alterClusterConfigs(
+                        Arrays.asList(
+                                new AlterConfig(
+                                        DATALAKE_FORMAT.key(),
+                                        DataLakeFormat.PAIMON.toString(),
+                                        AlterConfigOpType.SET),
+                                new AlterConfig(
+                                        DATALAKE_ENABLED.key(), "false", AlterConfigOpType.SET)))
+                .get();
+
+        TableDescriptor tableDescriptor =
+                TableDescriptor.builder()
+                        .schema(
+                                Schema.newBuilder()
+                                        .column("c1", DataTypes.INT())
+                                        .column("c2", DataTypes.STRING())
+                                        .build())
+                        .distributedBy(3, "c1")
+                        .build();
+        admin.createTable(tablePath, tableDescriptor, false).get();
+
+        TableInfo tableInfo = admin.getTableInfo(tablePath).get();
+        assertThat(tableInfo.getTableConfig().getDataLakeFormat()).hasValue(DataLakeFormat.PAIMON);
+        assertThat(tableInfo.getTableConfig().isDataLakeEnabled()).isFalse();
+
+        List<TableChange> enableDatalakeChange =
+                Collections.singletonList(TableChange.set(TABLE_DATALAKE_ENABLED.key(), "true"));
+        assertThatThrownBy(() -> admin.alterTable(tablePath, enableDatalakeChange, false).get())
+                .cause()
+                .isInstanceOf(InvalidAlterTableException.class)
+                .hasMessageContaining("doesn't enable datalake tables");
+
+        admin.alterClusterConfigs(
+                        Collections.singletonList(
+                                new AlterConfig(
+                                        DATALAKE_ENABLED.key(), "true", AlterConfigOpType.SET)))
+                .get();
+        admin.alterTable(tablePath, enableDatalakeChange, false).get();
+
+        TableInfo updatedTableInfo = admin.getTableInfo(tablePath).get();
+        assertThat(updatedTableInfo.getTableConfig().isDataLakeEnabled()).isTrue();
+        assertThat(updatedTableInfo.getTableConfig().getDataLakeFormat())
+                .hasValue(DataLakeFormat.PAIMON);
+    }
+
+    @Test
+    void testLegacyClusterCanStillEnableTableLevelDatalake() throws Exception {
+        String databaseName = "test_db_legacy_enable";
+        String tableName = "test_table_legacy_enable";
+        TablePath tablePath = TablePath.of(databaseName, tableName);
+
+        admin.createDatabase(databaseName, DatabaseDescriptor.EMPTY, true).get();
+        admin.alterClusterConfigs(
+                        Collections.singletonList(
+                                // not set DATALAKE_ENABLED to mock legacy cluster
+                                new AlterConfig(
+                                        DATALAKE_FORMAT.key(),
+                                        DataLakeFormat.PAIMON.toString(),
+                                        AlterConfigOpType.SET)))
+                .get();
+
+        TableDescriptor tableDescriptor =
+                TableDescriptor.builder()
+                        .schema(
+                                Schema.newBuilder()
+                                        .column("c1", DataTypes.INT())
+                                        .column("c2", DataTypes.STRING())
+                                        .build())
+                        .distributedBy(3, "c1")
+                        .build();
+        admin.createTable(tablePath, tableDescriptor, false).get();
+
+        TableInfo tableInfo = admin.getTableInfo(tablePath).get();
+        assertThat(tableInfo.getTableConfig().getDataLakeFormat()).hasValue(DataLakeFormat.PAIMON);
+        assertThat(tableInfo.getTableConfig().isDataLakeEnabled()).isFalse();
+
+        // make sure we can still enable datalake for the table
+        List<TableChange> enableDatalakeChange =
+                Collections.singletonList(TableChange.set(TABLE_DATALAKE_ENABLED.key(), "true"));
+        admin.alterTable(tablePath, enableDatalakeChange, false).get();
+
+        TableInfo updatedTableInfo = admin.getTableInfo(tablePath).get();
+        assertThat(updatedTableInfo.getTableConfig().isDataLakeEnabled()).isTrue();
+        assertThat(updatedTableInfo.getTableConfig().getDataLakeFormat())
+                .hasValue(DataLakeFormat.PAIMON);
     }
 }

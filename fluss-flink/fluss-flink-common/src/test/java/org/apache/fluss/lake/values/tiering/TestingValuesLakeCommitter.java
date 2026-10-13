@@ -19,6 +19,7 @@
 package org.apache.fluss.lake.values.tiering;
 
 import org.apache.fluss.lake.committer.CommittedLakeSnapshot;
+import org.apache.fluss.lake.committer.LakeCommitResult;
 import org.apache.fluss.lake.committer.LakeCommitter;
 import org.apache.fluss.lake.serializer.SimpleVersionedSerializer;
 import org.apache.fluss.lake.values.TestingValuesLake;
@@ -55,9 +56,11 @@ public class TestingValuesLakeCommitter
     }
 
     @Override
-    public long commit(TestingValuesCommittable committable, Map<String, String> snapshotProperties)
+    public LakeCommitResult commit(
+            TestingValuesCommittable committable, Map<String, String> snapshotProperties)
             throws IOException {
-        return TestingValuesLake.commit(tableId, committable.getStageIds(), snapshotProperties);
+        return LakeCommitResult.committedIsReadable(
+                TestingValuesLake.commit(tableId, committable.getStageIds(), snapshotProperties));
     }
 
     @Override

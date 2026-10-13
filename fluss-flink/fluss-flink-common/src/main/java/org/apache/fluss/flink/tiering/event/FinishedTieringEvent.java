@@ -17,7 +17,11 @@
 
 package org.apache.fluss.flink.tiering.event;
 
+import org.apache.fluss.lake.committer.TieringStats;
+
 import org.apache.flink.api.connector.source.SourceEvent;
+
+import javax.annotation.Nullable;
 
 /** SourceEvent used to represent a Fluss table has been tiered finished. */
 public class FinishedTieringEvent implements SourceEvent {
@@ -26,11 +30,24 @@ public class FinishedTieringEvent implements SourceEvent {
 
     private final long tableId;
 
-    public FinishedTieringEvent(long tableId) {
+    /** Statistics collected during this tiering round. */
+    @Nullable private final TieringStats stats;
+
+    public FinishedTieringEvent(long tableId, @Nullable TieringStats stats) {
         this.tableId = tableId;
+        this.stats = stats;
+    }
+
+    public FinishedTieringEvent(long tableId) {
+        this(tableId, null);
     }
 
     public long getTableId() {
         return tableId;
+    }
+
+    @Nullable
+    public TieringStats getStats() {
+        return stats;
     }
 }

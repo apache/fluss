@@ -21,6 +21,7 @@ package org.apache.fluss.server.kv.autoinc;
 
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.server.SequenceIDCounter;
 import org.apache.fluss.server.zk.ZkSequenceIDCounter;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.ZkData;
@@ -38,24 +39,30 @@ public class ZkSequenceGeneratorFactory implements SequenceGeneratorFactory {
     @Override
     public SequenceGenerator createSequenceGenerator(
             TablePath tablePath, Schema.Column autoIncrementColumn, long idCacheSize) {
-        DataTypeRoot typeRoot = autoIncrementColumn.getDataType().getTypeRoot();
-        final long maxAllowedValue;
+        return new BoundedSegmentSequenceGenerator(
+                tablePath,
+                autoIncrementColumn.getColumnId(),
+                autoIncrementColumn.getName(),
+                createSequenceIDCounter(tablePath, autoIncrementColumn.getColumnId()),
+                idCacheSize,
+                checkMaxAllowedValue(autoIncrementColumn));
+    }
+
+    private SequenceIDCounter createSequenceIDCounter(TablePath tablePath, int columnId) {
+        return new ZkSequenceIDCounter(
+                zkClient.getCuratorClient(),
+                ZkData.AutoIncrementColumnZNode.path(tablePath, columnId));
+    }
+
+    private static long checkMaxAllowedValue(Schema.Column column) {
+        DataTypeRoot typeRoot = column.getDataType().getTypeRoot();
         if (typeRoot == DataTypeRoot.INTEGER) {
-            maxAllowedValue = Integer.MAX_VALUE;
+            return Integer.MAX_VALUE;
         } else if (typeRoot == DataTypeRoot.BIGINT) {
-            maxAllowedValue = Long.MAX_VALUE;
+            return Long.MAX_VALUE;
         } else {
             throw new IllegalArgumentException(
                     "Auto-increment column must be of type INTEGER or BIGINT");
         }
-        return new BoundedSegmentSequenceGenerator(
-                tablePath,
-                autoIncrementColumn.getName(),
-                new ZkSequenceIDCounter(
-                        zkClient.getCuratorClient(),
-                        ZkData.AutoIncrementColumnZNode.path(
-                                tablePath, autoIncrementColumn.getColumnId())),
-                idCacheSize,
-                maxAllowedValue);
     }
 }

@@ -21,11 +21,13 @@ package org.apache.fluss.lake.paimon.source;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.lake.source.Planner;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.types.RowType;
 
 import org.apache.paimon.CoreOptions;
 import org.apache.paimon.catalog.Catalog;
 import org.apache.paimon.catalog.CatalogContext;
 import org.apache.paimon.catalog.CatalogFactory;
+import org.apache.paimon.data.BinaryRow;
 import org.apache.paimon.options.Options;
 import org.apache.paimon.predicate.Predicate;
 import org.apache.paimon.table.BucketMode;
@@ -40,6 +42,8 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 
+import static org.apache.fluss.lake.paimon.utils.PaimonConversions.toFlussPartitionValues;
+import static org.apache.fluss.lake.paimon.utils.PaimonConversions.toFlussRowType;
 import static org.apache.fluss.lake.paimon.utils.PaimonConversions.toPaimon;
 
 /** Split panner for paimon table. */
@@ -69,13 +73,20 @@ public class PaimonSplitPlanner implements Planner<PaimonSplit> {
                 FileStoreTable fileStoreTable = getTable(catalog, tablePath, snapshotId);
                 InnerTableScan tableScan = fileStoreTable.newScan();
                 boolean isBucketUnAware = fileStoreTable.bucketMode() == BucketMode.BUCKET_UNAWARE;
+                RowType flussPartitionType =
+                        toFlussRowType(fileStoreTable.schema().logicalPartitionType());
 
                 if (predicate != null) {
                     tableScan = tableScan.withFilter(predicate);
                 }
                 for (Split split : tableScan.plan().splits()) {
                     DataSplit dataSplit = (DataSplit) split;
-                    splits.add(new PaimonSplit(dataSplit, isBucketUnAware));
+                    BinaryRow partitionRow = dataSplit.partition();
+                    List<String> partition =
+                            partitionRow.getFieldCount() == 0
+                                    ? Collections.emptyList()
+                                    : toFlussPartitionValues(partitionRow, flussPartitionType);
+                    splits.add(new PaimonSplit(dataSplit, isBucketUnAware, partition));
                 }
             }
             return splits;

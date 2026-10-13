@@ -16,7 +16,10 @@ tablet-server.rack: RACK1
 ```
 
 :::note
-1. If rack awareness is enabled, the `tablet-server.rack` setting must be configured for each TabletServer. Failure to do so will prevent Fluss from starting and will result in an exception being thrown.
+Rack-aware assignment is enabled only when every live TabletServer reports a `tablet-server.rack` value. If any live
+TabletServer has no rack information, new tables and partitions fall back to rack-unaware assignment. This makes it
+possible to add rack configuration with a rolling restart, but assignments created during the transition are not
+guaranteed to span racks and are not automatically rearranged afterward.
 :::
 
 When a table is created, the rack constraint is honored, ensuring that replicas are spread across as many racks as possible. 

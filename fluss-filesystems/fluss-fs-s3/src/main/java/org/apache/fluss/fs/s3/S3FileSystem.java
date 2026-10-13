@@ -24,6 +24,8 @@ import org.apache.fluss.fs.token.ObtainedSecurityToken;
 
 import org.apache.hadoop.conf.Configuration;
 
+import java.io.IOException;
+
 /**
  * Implementation of the Fluss {@link FileSystem} interface for S3. This class implements the common
  * behavior implemented directly by Fluss and delegates common calls to an implementation of
@@ -52,7 +54,7 @@ public class S3FileSystem extends HadoopFileSystem {
     }
 
     @Override
-    public ObtainedSecurityToken obtainSecurityToken() {
+    public ObtainedSecurityToken obtainSecurityToken() throws IOException {
         if (s3DelegationTokenProvider == null) {
             synchronized (this) {
                 if (s3DelegationTokenProvider == null) {

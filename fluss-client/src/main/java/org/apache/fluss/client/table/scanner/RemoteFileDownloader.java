@@ -24,6 +24,7 @@ import org.apache.fluss.fs.FsPathAndFileName;
 import org.apache.fluss.fs.utils.FileDownloadSpec;
 import org.apache.fluss.fs.utils.FileDownloadUtils;
 import org.apache.fluss.utils.CloseableRegistry;
+import org.apache.fluss.utils.FileUtils;
 import org.apache.fluss.utils.IOUtils;
 import org.apache.fluss.utils.concurrent.ExecutorThreadFactory;
 
@@ -32,7 +33,6 @@ import java.io.IOException;
 import java.io.OutputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
@@ -76,8 +76,8 @@ public class RemoteFileDownloader implements Closeable {
                         FsPath remoteFilePath = fsPathAndFileName.getPath();
                         long downloadBytes = downloadFile(targetFilePath, remoteFilePath);
                         future.complete(downloadBytes);
-                    } catch (Exception e) {
-                        future.completeExceptionally(e);
+                    } catch (Throwable t) {
+                        future.completeExceptionally(t);
                     }
                 });
         return future;
@@ -88,21 +88,30 @@ public class RemoteFileDownloader implements Closeable {
      * downloaded bytes.
      */
     protected long downloadFile(Path targetFilePath, FsPath remoteFilePath) throws IOException {
-        List<Closeable> closeableRegistry = new ArrayList<>(2);
+        Path temporaryFile = null;
         try {
-            FileSystem fileSystem = remoteFilePath.getFileSystem();
-            FSDataInputStream inputStream = fileSystem.open(remoteFilePath);
-            closeableRegistry.add(inputStream);
-
             Files.createDirectories(targetFilePath.getParent());
-            OutputStream outputStream = Files.newOutputStream(targetFilePath);
-            closeableRegistry.add(outputStream);
+            temporaryFile =
+                    Files.createTempFile(targetFilePath.getParent(), ".fluss-download-", ".tmp");
 
-            return IOUtils.copyBytes(inputStream, outputStream, false);
+            FileSystem fileSystem = remoteFilePath.getFileSystem();
+            long downloadBytes;
+            try (FSDataInputStream inputStream = fileSystem.open(remoteFilePath);
+                    OutputStream outputStream = Files.newOutputStream(temporaryFile)) {
+                downloadBytes = IOUtils.copyBytes(inputStream, outputStream, false);
+            }
+
+            FileUtils.atomicMoveWithFallback(temporaryFile, targetFilePath, false);
+            return downloadBytes;
         } catch (Exception ex) {
             throw new IOException(ex);
         } finally {
-            closeableRegistry.forEach(IOUtils::closeQuietly);
+            if (temporaryFile != null) {
+                Path fileToDelete = temporaryFile;
+                IOUtils.closeQuietly(
+                        () -> Files.deleteIfExists(fileToDelete),
+                        "temporary download file " + fileToDelete);
+            }
         }
     }
 

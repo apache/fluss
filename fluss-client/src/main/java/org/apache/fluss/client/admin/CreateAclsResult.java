@@ -20,12 +20,12 @@ package org.apache.fluss.client.admin;
 import org.apache.fluss.rpc.messages.PbCreateAclRespInfo;
 import org.apache.fluss.rpc.protocol.ApiError;
 import org.apache.fluss.security.acl.AclBinding;
-import org.apache.fluss.utils.MapUtils;
 
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 
 import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.toAclBinding;
 
@@ -43,7 +43,7 @@ public class CreateAclsResult {
     private final Map<AclBinding, CompletableFuture<Void>> futures;
 
     public CreateAclsResult(Collection<AclBinding> aclBindings) {
-        Map<AclBinding, CompletableFuture<Void>> futures = MapUtils.newConcurrentHashMap();
+        Map<AclBinding, CompletableFuture<Void>> futures = new ConcurrentHashMap<>();
         aclBindings.forEach(aclBinding -> futures.put(aclBinding, new CompletableFuture<>()));
         this.futures = futures;
     }

@@ -18,11 +18,14 @@
 package org.apache.fluss.client.admin;
 
 import org.apache.fluss.annotation.VisibleForTesting;
+import org.apache.fluss.client.metadata.ActiveKvSnapshots;
 import org.apache.fluss.client.metadata.KvSnapshotMetadata;
 import org.apache.fluss.client.metadata.KvSnapshots;
 import org.apache.fluss.client.metadata.LakeSnapshot;
 import org.apache.fluss.client.metadata.MetadataUpdater;
+import org.apache.fluss.client.metadata.RemoteLogManifestInfo;
 import org.apache.fluss.client.utils.ClientRpcMessageUtils;
+import org.apache.fluss.client.utils.ClientUtils;
 import org.apache.fluss.cluster.Cluster;
 import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.cluster.rebalance.GoalType;
@@ -30,13 +33,18 @@ import org.apache.fluss.cluster.rebalance.RebalanceProgress;
 import org.apache.fluss.cluster.rebalance.ServerTag;
 import org.apache.fluss.config.cluster.AlterConfig;
 import org.apache.fluss.config.cluster.ConfigEntry;
+import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.exception.LeaderNotAvailableException;
+import org.apache.fluss.exception.PartitionNotExistException;
+import org.apache.fluss.metadata.BucketInfo;
+import org.apache.fluss.metadata.DatabaseChange;
 import org.apache.fluss.metadata.DatabaseDescriptor;
 import org.apache.fluss.metadata.DatabaseInfo;
 import org.apache.fluss.metadata.DatabaseSummary;
 import org.apache.fluss.metadata.PartitionInfo;
 import org.apache.fluss.metadata.PartitionSpec;
 import org.apache.fluss.metadata.PhysicalTablePath;
+import org.apache.fluss.metadata.ResolvedPartitionSpec;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.SchemaInfo;
 import org.apache.fluss.metadata.TableBucket;
@@ -44,13 +52,17 @@ import org.apache.fluss.metadata.TableChange;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.metadata.TableStats;
 import org.apache.fluss.rpc.GatewayClientProxy;
+import org.apache.fluss.rpc.RetryableGatewayClientProxy;
 import org.apache.fluss.rpc.RpcClient;
 import org.apache.fluss.rpc.gateway.AdminGateway;
 import org.apache.fluss.rpc.gateway.AdminReadOnlyGateway;
 import org.apache.fluss.rpc.gateway.TabletServerGateway;
+import org.apache.fluss.rpc.messages.AddServerTagByRackRequest;
 import org.apache.fluss.rpc.messages.AddServerTagRequest;
 import org.apache.fluss.rpc.messages.AlterClusterConfigsRequest;
+import org.apache.fluss.rpc.messages.AlterDatabaseRequest;
 import org.apache.fluss.rpc.messages.AlterTableRequest;
 import org.apache.fluss.rpc.messages.CancelRebalanceRequest;
 import org.apache.fluss.rpc.messages.CreateAclsRequest;
@@ -59,38 +71,50 @@ import org.apache.fluss.rpc.messages.CreateTableRequest;
 import org.apache.fluss.rpc.messages.DatabaseExistsRequest;
 import org.apache.fluss.rpc.messages.DatabaseExistsResponse;
 import org.apache.fluss.rpc.messages.DeleteProducerOffsetsRequest;
+import org.apache.fluss.rpc.messages.DescribeBucketsRequest;
 import org.apache.fluss.rpc.messages.DescribeClusterConfigsRequest;
 import org.apache.fluss.rpc.messages.DropAclsRequest;
 import org.apache.fluss.rpc.messages.DropDatabaseRequest;
 import org.apache.fluss.rpc.messages.DropTableRequest;
+import org.apache.fluss.rpc.messages.GetClusterHealthRequest;
 import org.apache.fluss.rpc.messages.GetDatabaseInfoRequest;
 import org.apache.fluss.rpc.messages.GetKvSnapshotMetadataRequest;
+import org.apache.fluss.rpc.messages.GetLakeSnapshotRequest;
 import org.apache.fluss.rpc.messages.GetLatestKvSnapshotsRequest;
-import org.apache.fluss.rpc.messages.GetLatestLakeSnapshotRequest;
 import org.apache.fluss.rpc.messages.GetProducerOffsetsRequest;
 import org.apache.fluss.rpc.messages.GetTableInfoRequest;
 import org.apache.fluss.rpc.messages.GetTableSchemaRequest;
+import org.apache.fluss.rpc.messages.GetTableStatsRequest;
+import org.apache.fluss.rpc.messages.GetTableStatsResponse;
 import org.apache.fluss.rpc.messages.ListAclsRequest;
 import org.apache.fluss.rpc.messages.ListDatabasesRequest;
 import org.apache.fluss.rpc.messages.ListDatabasesResponse;
+import org.apache.fluss.rpc.messages.ListKvSnapshotsRequest;
 import org.apache.fluss.rpc.messages.ListOffsetsRequest;
+import org.apache.fluss.rpc.messages.ListOffsetsResponse;
 import org.apache.fluss.rpc.messages.ListPartitionInfosRequest;
+import org.apache.fluss.rpc.messages.ListPartitionInfosResponse;
 import org.apache.fluss.rpc.messages.ListRebalanceProgressRequest;
+import org.apache.fluss.rpc.messages.ListRemoteLogManifestsRequest;
 import org.apache.fluss.rpc.messages.ListTablesRequest;
 import org.apache.fluss.rpc.messages.ListTablesResponse;
 import org.apache.fluss.rpc.messages.PbAlterConfig;
 import org.apache.fluss.rpc.messages.PbListOffsetsRespForBucket;
-import org.apache.fluss.rpc.messages.PbPartitionSpec;
+import org.apache.fluss.rpc.messages.PbPartitionInfo;
 import org.apache.fluss.rpc.messages.PbTablePath;
+import org.apache.fluss.rpc.messages.PbTableStatsRespForBucket;
 import org.apache.fluss.rpc.messages.RebalanceRequest;
 import org.apache.fluss.rpc.messages.RebalanceResponse;
+import org.apache.fluss.rpc.messages.RemoveServerTagByRackRequest;
 import org.apache.fluss.rpc.messages.RemoveServerTagRequest;
 import org.apache.fluss.rpc.messages.TableExistsRequest;
 import org.apache.fluss.rpc.messages.TableExistsResponse;
 import org.apache.fluss.rpc.protocol.ApiError;
 import org.apache.fluss.security.acl.AclBinding;
 import org.apache.fluss.security.acl.AclBindingFilter;
-import org.apache.fluss.utils.MapUtils;
+import org.apache.fluss.utils.ExceptionUtils;
+import org.apache.fluss.utils.concurrent.ExecutorThreadFactory;
+import org.apache.fluss.utils.concurrent.FutureUtils;
 
 import javax.annotation.Nullable;
 
@@ -102,10 +126,15 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
+import static org.apache.fluss.client.utils.ClientRpcMessageUtils.makeAlterDatabaseRequest;
 import static org.apache.fluss.client.utils.ClientRpcMessageUtils.makeAlterTableRequest;
 import static org.apache.fluss.client.utils.ClientRpcMessageUtils.makeCreatePartitionRequest;
 import static org.apache.fluss.client.utils.ClientRpcMessageUtils.makeDropPartitionRequest;
+import static org.apache.fluss.client.utils.ClientRpcMessageUtils.makeGetTableStatsRequest;
 import static org.apache.fluss.client.utils.ClientRpcMessageUtils.makeListOffsetsRequest;
 import static org.apache.fluss.client.utils.ClientRpcMessageUtils.makePbPartitionSpec;
 import static org.apache.fluss.client.utils.ClientRpcMessageUtils.makeRegisterProducerOffsetsRequest;
@@ -115,7 +144,10 @@ import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.toAclBindings;
 import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.toPbAclBindingFilters;
 import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.toPbAclFilter;
 import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.toPbAclInfos;
+import static org.apache.fluss.utils.PartitionUtils.HISTORICAL_PARTITION_VALUE;
+import static org.apache.fluss.utils.Preconditions.checkArgument;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
+import static org.apache.fluss.utils.StringUtils.isNullOrWhitespaceOnly;
 
 /**
  * The default implementation of {@link Admin}.
@@ -128,13 +160,33 @@ public class FlussAdmin implements Admin {
     private final AdminReadOnlyGateway readOnlyGateway;
     private final MetadataUpdater metadataUpdater;
 
+    /**
+     * Single-thread executor that runs the metadata-refresh callback for {@link
+     * RetryableGatewayClientProxy}.
+     */
+    private final ExecutorService refreshExecutor =
+            Executors.newFixedThreadPool(
+                    1, new ExecutorThreadFactory("fluss-admin-metadata-refresh"));
+
     public FlussAdmin(RpcClient client, MetadataUpdater metadataUpdater) {
+        // TODO: AdminGateway includes non-idempotent write operations (createTable, dropTable,
+        //  createDatabase, etc.). Wrapping it with RetryableGatewayClientProxy is unsafe because
+        //  a request may succeed on the server while the response is lost (surfacing as a
+        //  RetriableException), causing a duplicate mutation on retry. A future phase should
+        //  introduce idempotent retry semantics (e.g., request-id deduplication) before enabling
+        //  retry on the write gateway.
         this.gateway =
                 GatewayClientProxy.createGatewayProxy(
                         metadataUpdater::getCoordinatorServer, client, AdminGateway.class);
-        this.readOnlyGateway =
+        AdminGateway rawReadOnlyGateway =
                 GatewayClientProxy.createGatewayProxy(
                         metadataUpdater::getRandomTabletServer, client, AdminGateway.class);
+        this.readOnlyGateway =
+                RetryableGatewayClientProxy.createRetryableGatewayProxy(
+                        rawReadOnlyGateway,
+                        metadataUpdater::refreshClusterUntilAvailable,
+                        refreshExecutor,
+                        AdminGateway.class);
         this.metadataUpdater = metadataUpdater;
     }
 
@@ -277,6 +329,15 @@ public class FlussAdmin implements Admin {
     }
 
     @Override
+    public CompletableFuture<Void> alterDatabase(
+            String databaseName, List<DatabaseChange> databaseChanges, boolean ignoreIfNotExists) {
+        TablePath.validateDatabaseName(databaseName);
+        AlterDatabaseRequest request =
+                makeAlterDatabaseRequest(databaseName, databaseChanges, ignoreIfNotExists);
+        return gateway.alterDatabase(request).thenApply(r -> null);
+    }
+
+    @Override
     public CompletableFuture<TableInfo> getTableInfo(TablePath tablePath) {
         GetTableInfoRequest request = new GetTableInfoRequest();
         request.setTablePath()
@@ -291,8 +352,39 @@ public class FlussAdmin implements Admin {
                                         r.getTableId(),
                                         r.getSchemaId(),
                                         TableDescriptor.fromJsonBytes(r.getTableJson()),
+                                        // For backward compatibility, results returned by old
+                                        // clusters do not include the remote data dir
+                                        r.hasRemoteDataDir() ? r.getRemoteDataDir() : null,
                                         r.getCreatedTime(),
-                                        r.getModifiedTime()));
+                                        r.getModifiedTime(),
+                                        r.hasBucketCountEpoch() ? r.getBucketCountEpoch() : 0L));
+    }
+
+    @Override
+    public CompletableFuture<List<BucketInfo>> describeBuckets(TablePath tablePath) {
+        tablePath.validate();
+        DescribeBucketsRequest request = new DescribeBucketsRequest();
+        request.setTablePath()
+                .setDatabaseName(tablePath.getDatabaseName())
+                .setTableName(tablePath.getTableName());
+        return readOnlyGateway
+                .describeBuckets(request)
+                .thenApply(ClientRpcMessageUtils::toBucketInfos);
+    }
+
+    @Override
+    public CompletableFuture<List<BucketInfo>> describeBuckets(
+            TablePath tablePath, PartitionSpec partitionSpec) {
+        tablePath.validate();
+        checkNotNull(partitionSpec, "partitionSpec must not be null");
+        DescribeBucketsRequest request = new DescribeBucketsRequest();
+        request.setTablePath()
+                .setDatabaseName(tablePath.getDatabaseName())
+                .setTableName(tablePath.getTableName());
+        request.setPartitionSpec(makePbPartitionSpec(partitionSpec));
+        return readOnlyGateway
+                .describeBuckets(request)
+                .thenApply(ClientRpcMessageUtils::toBucketInfos);
     }
 
     @Override
@@ -323,25 +415,171 @@ public class FlussAdmin implements Admin {
 
     @Override
     public CompletableFuture<List<PartitionInfo>> listPartitionInfos(TablePath tablePath) {
-        return listPartitionInfos(tablePath, null);
+        return listPartitionInfos(tablePath, null, false);
+    }
+
+    @Override
+    public CompletableFuture<List<PartitionInfo>> listPartitionInfos(
+            TablePath tablePath, boolean includeSystemPartitions) {
+        return listPartitionInfos(tablePath, null, includeSystemPartitions);
     }
 
     @Override
     public CompletableFuture<List<PartitionInfo>> listPartitionInfos(
             TablePath tablePath, PartitionSpec partitionSpec) {
+        return listPartitionInfos(tablePath, partitionSpec, false);
+    }
+
+    private CompletableFuture<List<PartitionInfo>> listPartitionInfos(
+            TablePath tablePath,
+            @Nullable PartitionSpec partitionSpec,
+            boolean includeSystemPartitions) {
         ListPartitionInfosRequest request = new ListPartitionInfosRequest();
         request.setTablePath(
                 new PbTablePath()
                         .setDatabaseName(tablePath.getDatabaseName())
                         .setTableName(tablePath.getTableName()));
-
         if (partitionSpec != null) {
-            PbPartitionSpec pbPartitionSpec = makePbPartitionSpec(partitionSpec);
-            request.setPartialPartitionSpec(pbPartitionSpec);
+            request.setPartialPartitionSpec(makePbPartitionSpec(partitionSpec));
         }
+        if (includeSystemPartitions) {
+            request.setIncludeSystemPartitions(true);
+        }
+
         return readOnlyGateway
                 .listPartitionInfos(request)
-                .thenApply(ClientRpcMessageUtils::toPartitionInfos);
+                .thenCompose(
+                        response ->
+                                handleListPartitionInfosResponse(
+                                        tablePath, includeSystemPartitions, response));
+    }
+
+    @VisibleForTesting
+    CompletableFuture<List<PartitionInfo>> handleListPartitionInfosResponse(
+            TablePath tablePath,
+            boolean includeSystemPartitions,
+            ListPartitionInfosResponse response) {
+        boolean allHaveBucketCount =
+                response.getPartitionsInfosList().stream()
+                        .allMatch(PbPartitionInfo::hasBucketCount);
+        boolean systemPartitionsIncluded =
+                response.hasSystemPartitionsIncluded() && response.isSystemPartitionsIncluded();
+        if (allHaveBucketCount && (!includeSystemPartitions || systemPartitionsIncluded)) {
+            return CompletableFuture.completedFuture(
+                    ClientRpcMessageUtils.toPartitionInfos(response, -1));
+        }
+        return getTableInfo(tablePath)
+                .thenCompose(
+                        tableInfo -> {
+                            int defaultBucketCount =
+                                    allHaveBucketCount
+                                            ? -1
+                                            : ClientUtils.fallbackBucketCountOrFail(
+                                                    tableInfo, tablePath);
+                            List<PartitionInfo> partitionInfos =
+                                    ClientRpcMessageUtils.toPartitionInfos(
+                                            response, defaultBucketCount);
+                            if (includeSystemPartitions && !systemPartitionsIncluded) {
+                                return appendLegacyHistoricalPartition(tableInfo, partitionInfos);
+                            }
+                            return CompletableFuture.completedFuture(partitionInfos);
+                        });
+    }
+
+    private CompletableFuture<List<PartitionInfo>> appendLegacyHistoricalPartition(
+            TableInfo tableInfo, List<PartitionInfo> partitionInfos) {
+        if (!tableInfo.getTableConfig().isHistoricalPartitionEnabled()
+                || partitionInfos.stream()
+                        .anyMatch(
+                                partitionInfo ->
+                                        HISTORICAL_PARTITION_VALUE.equals(
+                                                partitionInfo.getPartitionName()))) {
+            return CompletableFuture.completedFuture(partitionInfos);
+        }
+
+        TablePath tablePath = tableInfo.getTablePath();
+        PhysicalTablePath historicalPartitionPath =
+                PhysicalTablePath.of(tablePath, HISTORICAL_PARTITION_VALUE);
+        Cluster cluster = metadataUpdater.getCluster();
+        // A cached partition may belong to a previous table with the same name.
+        Optional<Long> historicalPartitionId =
+                cluster.getTableId(tablePath)
+                        .filter(tableId -> tableId == tableInfo.getTableId())
+                        .flatMap(ignored -> cluster.getPartitionId(historicalPartitionPath));
+        CompletableFuture<Optional<Long>> partitionIdFuture;
+        if (historicalPartitionId.isPresent()) {
+            partitionIdFuture = CompletableFuture.completedFuture(historicalPartitionId);
+        } else {
+            partitionIdFuture =
+                    CompletableFuture.supplyAsync(
+                            () -> {
+                                try {
+                                    Cluster refreshedCluster =
+                                            sendMetadataRequestAndRebuildCluster(
+                                                    readOnlyGateway,
+                                                    true,
+                                                    cluster,
+                                                    Collections.singleton(tablePath),
+                                                    Collections.singleton(historicalPartitionPath),
+                                                    null);
+                                    return refreshedCluster.getPartitionId(historicalPartitionPath);
+                                } catch (Exception e) {
+                                    Throwable cause = ExceptionUtils.stripExecutionException(e);
+                                    if (cause instanceof PartitionNotExistException) {
+                                        return Optional.empty();
+                                    }
+                                    throw new FlussRuntimeException(
+                                            "Failed to resolve historical partition for "
+                                                    + tablePath,
+                                            cause);
+                                }
+                            },
+                            refreshExecutor);
+        }
+        return partitionIdFuture.thenApply(
+                partitionId -> {
+                    if (partitionId.isPresent()) {
+                        partitionInfos.add(
+                                new PartitionInfo(
+                                        partitionId.get(),
+                                        ResolvedPartitionSpec.fromPartitionName(
+                                                tableInfo.getPartitionKeys(),
+                                                HISTORICAL_PARTITION_VALUE),
+                                        null,
+                                        tableInfo.getNumBuckets()));
+                    }
+                    return partitionInfos;
+                });
+    }
+
+    /**
+     * Returns per-bucket remote log manifest path for the given table or partition.
+     *
+     * <p>Used by the orphan cleanup action to construct the active manifest path set without
+     * relying on FS LIST + mtime selection.
+     */
+    @Override
+    public CompletableFuture<List<RemoteLogManifestInfo>> listRemoteLogManifests(
+            long tableId, @Nullable Long partitionId) {
+        ListRemoteLogManifestsRequest request = new ListRemoteLogManifestsRequest();
+        request.setTableId(tableId);
+        if (partitionId != null) {
+            request.setPartitionId(partitionId);
+        }
+        return gateway.listRemoteLogManifests(request)
+                .thenApply(ClientRpcMessageUtils::toRemoteLogManifestInfos);
+    }
+
+    @Override
+    public CompletableFuture<ActiveKvSnapshots> listKvSnapshots(
+            long tableId, @Nullable Long partitionId) {
+        ListKvSnapshotsRequest request = new ListKvSnapshotsRequest();
+        request.setTableId(tableId);
+        if (partitionId != null) {
+            request.setPartitionId(partitionId);
+        }
+        return gateway.listKvSnapshots(request)
+                .thenApply(ClientRpcMessageUtils::toActiveKvSnapshots);
     }
 
     @Override
@@ -402,18 +640,48 @@ public class FlussAdmin implements Admin {
 
     @Override
     public KvSnapshotLease createKvSnapshotLease(String leaseId, long leaseDurationMs) {
-        return new KvSnapshotLeaseImpl(leaseId, leaseDurationMs, gateway);
+        return new KvSnapshotLeaseImpl(
+                leaseId,
+                leaseDurationMs,
+                gateway,
+                metadataUpdater::refreshClusterUntilAvailable,
+                refreshExecutor);
     }
 
     @Override
     public CompletableFuture<LakeSnapshot> getLatestLakeSnapshot(TablePath tablePath) {
-        GetLatestLakeSnapshotRequest request = new GetLatestLakeSnapshotRequest();
+        GetLakeSnapshotRequest request = new GetLakeSnapshotRequest();
         request.setTablePath()
                 .setDatabaseName(tablePath.getDatabaseName())
                 .setTableName(tablePath.getTableName());
 
         return readOnlyGateway
-                .getLatestLakeSnapshot(request)
+                .getLakeSnapshot(request)
+                .thenApply(ClientRpcMessageUtils::toLakeTableSnapshotInfo);
+    }
+
+    @Override
+    public CompletableFuture<LakeSnapshot> getLakeSnapshot(TablePath tablePath, long snapshotId) {
+        GetLakeSnapshotRequest request = new GetLakeSnapshotRequest();
+        request.setTablePath()
+                .setDatabaseName(tablePath.getDatabaseName())
+                .setTableName(tablePath.getTableName());
+        request.setSnapshotId(snapshotId);
+
+        return readOnlyGateway
+                .getLakeSnapshot(request)
+                .thenApply(ClientRpcMessageUtils::toLakeTableSnapshotInfo);
+    }
+
+    @Override
+    public CompletableFuture<LakeSnapshot> getReadableLakeSnapshot(TablePath tablePath) {
+        GetLakeSnapshotRequest request = new GetLakeSnapshotRequest();
+        request.setTablePath()
+                .setDatabaseName(tablePath.getDatabaseName())
+                .setTableName(tablePath.getTableName());
+        request.setReadable(true);
+        return readOnlyGateway
+                .getLakeSnapshot(request)
                 .thenApply(ClientRpcMessageUtils::toLakeTableSnapshotInfo);
     }
 
@@ -430,6 +698,47 @@ public class FlussAdmin implements Admin {
             Collection<Integer> buckets,
             OffsetSpec offsetSpec) {
         return listOffsets(PhysicalTablePath.of(tablePath, partitionName), buckets, offsetSpec);
+    }
+
+    @Override
+    public CompletableFuture<TableStats> getTableStats(TablePath tablePath) {
+        metadataUpdater.updateTableOrPartitionMetadata(tablePath, null);
+        TableInfo tableInfo = getTableInfo(tablePath).join();
+        try {
+            int tableBucketCount = tableInfo.getNumBuckets();
+            List<PartitionInfo> partitionInfos;
+            if (tableInfo.isPartitioned()) {
+                partitionInfos = listPartitionInfos(tablePath).get();
+            } else {
+                partitionInfos = Collections.singletonList(null);
+            }
+
+            long tableId = tableInfo.getTableId();
+            Map<TableBucket, CompletableFuture<Long>> bucketToRowCountMap = new HashMap<>();
+            for (PartitionInfo partitionInfo : partitionInfos) {
+                int bucketCount =
+                        PartitionInfo.bucketCountOrDefault(partitionInfo, tableBucketCount);
+                Long partitionId = partitionInfo == null ? null : partitionInfo.getPartitionId();
+                for (int bucket = 0; bucket < bucketCount; bucket++) {
+                    TableBucket tableBucket = new TableBucket(tableId, partitionId, bucket);
+                    bucketToRowCountMap.put(tableBucket, new CompletableFuture<>());
+                }
+            }
+
+            Map<Integer, GetTableStatsRequest> requestMap =
+                    prepareTableStatsRequests(
+                            metadataUpdater, bucketToRowCountMap.keySet(), tablePath);
+            sendTableStatsRequest(metadataUpdater, tableId, requestMap, bucketToRowCountMap);
+            return FutureUtils.combineAll(bucketToRowCountMap.values())
+                    .thenApply(
+                            counts -> {
+                                long totalRowCount = counts.stream().reduce(0L, Long::sum);
+                                return new TableStats(totalRowCount);
+                            });
+        } catch (Exception e) {
+            throw new FlussRuntimeException(
+                    String.format("Failed to get row count for the table '%s'.", tablePath), e);
+        }
     }
 
     private ListOffsetsResult listOffsets(
@@ -453,13 +762,13 @@ public class FlussAdmin implements Admin {
                         buckets,
                         offsetSpec,
                         tableInfo.getTablePath());
-        Map<Integer, CompletableFuture<Long>> bucketToOffsetMap = MapUtils.newConcurrentHashMap();
-        for (int bucket : buckets) {
-            bucketToOffsetMap.put(bucket, new CompletableFuture<>());
-        }
 
-        sendListOffsetsRequest(metadataUpdater, requestMap, bucketToOffsetMap);
-        return new ListOffsetsResult(bucketToOffsetMap);
+        Map<Integer, CompletableFuture<Long>> resultMap = new ConcurrentHashMap<>();
+        for (int bucket : buckets) {
+            resultMap.put(bucket, new CompletableFuture<>());
+        }
+        sendListOffsetsRequest(metadataUpdater, requestMap, resultMap);
+        return new ListOffsetsResult(resultMap);
     }
 
     @Override
@@ -575,6 +884,22 @@ public class FlussAdmin implements Admin {
     }
 
     @Override
+    public CompletableFuture<Void> addServerTagByRack(List<String> racks, ServerTag serverTag) {
+        validateRackRequest(racks, serverTag);
+        AddServerTagByRackRequest request =
+                new AddServerTagByRackRequest().addAllRacks(racks).setServerTag(serverTag.value);
+        return gateway.addServerTagByRack(request).thenApply(r -> null);
+    }
+
+    @Override
+    public CompletableFuture<Void> removeServerTagByRack(List<String> racks, ServerTag serverTag) {
+        validateRackRequest(racks, serverTag);
+        RemoveServerTagByRackRequest request =
+                new RemoveServerTagByRackRequest().addAllRacks(racks).setServerTag(serverTag.value);
+        return gateway.removeServerTagByRack(request).thenApply(r -> null);
+    }
+
+    @Override
     public CompletableFuture<String> rebalance(List<GoalType> priorityGoals) {
         RebalanceRequest request = new RebalanceRequest();
         priorityGoals.forEach(goal -> request.addGoal(goal.value));
@@ -650,7 +975,74 @@ public class FlussAdmin implements Admin {
 
     @Override
     public void close() {
-        // nothing to do yet
+        // Stop the metadata-refresh executor; any in-flight refresh will be interrupted, which
+        // refreshClusterUntilAvailable handles by surfacing the InterruptedException upward.
+        refreshExecutor.shutdownNow();
+    }
+
+    private static Map<Integer, GetTableStatsRequest> prepareTableStatsRequests(
+            MetadataUpdater metadataUpdater, Collection<TableBucket> buckets, TablePath tablePath) {
+        Map<Integer, List<TableBucket>> nodeForBucketList = new HashMap<>();
+        for (TableBucket tb : buckets) {
+            int leader = metadataUpdater.leaderFor(tablePath, tb);
+            nodeForBucketList.computeIfAbsent(leader, k -> new ArrayList<>()).add(tb);
+        }
+
+        Map<Integer, GetTableStatsRequest> requests = new HashMap<>();
+        nodeForBucketList.forEach(
+                (leader, tbs) ->
+                        requests.put(
+                                leader,
+                                makeGetTableStatsRequest(tbs, metadataUpdater.getCluster())));
+        return requests;
+    }
+
+    private static void sendTableStatsRequest(
+            MetadataUpdater metadataUpdater,
+            long tableId,
+            Map<Integer, GetTableStatsRequest> leaderToRequestMap,
+            Map<TableBucket, CompletableFuture<Long>> bucketToRowCountMap) {
+        leaderToRequestMap.forEach(
+                (leader, request) -> {
+                    TabletServerGateway gateway =
+                            metadataUpdater.newTabletServerClientForNode(leader);
+                    if (gateway == null) {
+                        throw new LeaderNotAvailableException(
+                                "Server " + leader + " is not found in metadata cache.");
+                    } else {
+                        gateway.getTableStats(request)
+                                .whenComplete(
+                                        (response, t) ->
+                                                handleTableStatsResponse(
+                                                        response, t, tableId, bucketToRowCountMap));
+                    }
+                });
+    }
+
+    private static void handleTableStatsResponse(
+            GetTableStatsResponse response,
+            Throwable t,
+            long tableId,
+            Map<TableBucket, CompletableFuture<Long>> bucketToRowCountMap) {
+        if (t != null) {
+            // fail all futures to fail fast
+            bucketToRowCountMap.values().forEach(f -> f.completeExceptionally(t));
+            return;
+        }
+        for (PbTableStatsRespForBucket resp : response.getBucketsRespsList()) {
+            TableBucket tb =
+                    new TableBucket(
+                            tableId,
+                            resp.hasPartitionId() ? resp.getPartitionId() : null,
+                            resp.getBucketId());
+            if (resp.hasErrorCode()) {
+                bucketToRowCountMap
+                        .get(tb)
+                        .completeExceptionally(ApiError.fromErrorMessage(resp).exception());
+            } else {
+                bucketToRowCountMap.get(tb).complete(resp.getRowCount());
+            }
+        }
     }
 
     private static Map<Integer, ListOffsetsRequest> prepareListOffsetsRequests(
@@ -673,11 +1065,17 @@ public class FlussAdmin implements Admin {
                 (leader, ids) ->
                         listOffsetsRequests.put(
                                 leader,
-                                makeListOffsetsRequest(tableId, partitionId, ids, offsetSpec)));
+                                makeListOffsetsRequest(
+                                        tableId,
+                                        partitionId,
+                                        ids,
+                                        offsetSpec,
+                                        metadataUpdater.getCluster())));
         return listOffsetsRequests;
     }
 
-    private static void sendListOffsetsRequest(
+    @VisibleForTesting
+    static void sendListOffsetsRequest(
             MetadataUpdater metadataUpdater,
             Map<Integer, ListOffsetsRequest> leaderToRequestMap,
             Map<Integer, CompletableFuture<Long>> bucketToOffsetMap) {
@@ -690,25 +1088,38 @@ public class FlussAdmin implements Admin {
                                 "Server " + leader + " is not found in metadata cache.");
                     } else {
                         gateway.listOffsets(request)
-                                .thenAccept(
-                                        r -> {
-                                            for (PbListOffsetsRespForBucket resp :
-                                                    r.getBucketsRespsList()) {
-                                                if (resp.hasErrorCode()) {
-                                                    bucketToOffsetMap
-                                                            .get(resp.getBucketId())
-                                                            .completeExceptionally(
-                                                                    ApiError.fromErrorMessage(resp)
-                                                                            .exception());
-                                                } else {
-                                                    bucketToOffsetMap
-                                                            .get(resp.getBucketId())
-                                                            .complete(resp.getOffset());
-                                                }
-                                            }
-                                        });
+                                .whenComplete(
+                                        (response, t) ->
+                                                handleListOffsetsResponse(
+                                                        bucketToOffsetMap, response, t));
                     }
                 });
+    }
+
+    private static void handleListOffsetsResponse(
+            Map<Integer, CompletableFuture<Long>> bucketToOffsetMap,
+            ListOffsetsResponse response,
+            Throwable t) {
+        // fail all futures to fail fast
+        if (t != null) {
+            bucketToOffsetMap.values().forEach(f -> f.completeExceptionally(t));
+            return;
+        }
+        for (PbListOffsetsRespForBucket resp : response.getBucketsRespsList()) {
+            if (resp.hasErrorCode()) {
+                bucketToOffsetMap
+                        .get(resp.getBucketId())
+                        .completeExceptionally(ApiError.fromErrorMessage(resp).exception());
+            } else {
+                bucketToOffsetMap.get(resp.getBucketId()).complete(resp.getOffset());
+            }
+        }
+    }
+
+    @Override
+    public CompletableFuture<ClusterHealth> getClusterHealth() {
+        return gateway.getClusterHealth(new GetClusterHealthRequest())
+                .thenApply(ClientRpcMessageUtils::toClusterHealth);
     }
 
     @VisibleForTesting
@@ -719,5 +1130,16 @@ public class FlussAdmin implements Admin {
     @VisibleForTesting
     public AdminReadOnlyGateway getAdminReadOnlyGateway() {
         return readOnlyGateway;
+    }
+
+    private static void validateRackRequest(List<String> racks, ServerTag serverTag) {
+        checkNotNull(serverTag, "serverTag must not be null");
+        checkNotNull(racks, "racks must not be null");
+        checkArgument(!racks.isEmpty(), "racks must not be empty");
+        for (String rack : racks) {
+            checkArgument(
+                    !isNullOrWhitespaceOnly(rack),
+                    "rack element must not be null, empty, or whitespace-only");
+        }
     }
 }

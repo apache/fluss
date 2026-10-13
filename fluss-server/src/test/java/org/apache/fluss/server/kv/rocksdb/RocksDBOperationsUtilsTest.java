@@ -19,11 +19,13 @@ package org.apache.fluss.server.kv.rocksdb;
 
 import org.apache.fluss.rocksdb.RocksDBOperationUtils;
 
+import io.github.fluss_contrib.rocksdb.ColumnFamilyDescriptor;
+import io.github.fluss_contrib.rocksdb.ColumnFamilyOptions;
+import io.github.fluss_contrib.rocksdb.DBOptions;
+import io.github.fluss_contrib.rocksdb.RocksDB;
+import io.github.fluss_contrib.rocksdb.RocksDBException;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
-import org.rocksdb.DBOptions;
-import org.rocksdb.RocksDB;
-import org.rocksdb.RocksDBException;
 
 import java.io.File;
 import java.io.IOException;
@@ -48,7 +50,10 @@ class RocksDBOperationsUtilsTest {
                                 RocksDB rocks =
                                         RocksDBOperationUtils.openDB(
                                                 rocksDir.getAbsolutePath(),
-                                                Collections.emptyList(),
+                                                Collections.singletonList(
+                                                        new ColumnFamilyDescriptor(
+                                                                RocksDB.DEFAULT_COLUMN_FAMILY,
+                                                                new ColumnFamilyOptions())),
                                                 Collections.emptyList(),
                                                 dbOptions,
                                                 false);

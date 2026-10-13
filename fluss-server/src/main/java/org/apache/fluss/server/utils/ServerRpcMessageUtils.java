@@ -27,8 +27,14 @@ import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.cluster.AlterConfigOpType;
 import org.apache.fluss.config.cluster.ColumnPositionType;
 import org.apache.fluss.config.cluster.ConfigEntry;
+import org.apache.fluss.exception.InvalidConfigException;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.fs.token.ObtainedSecurityToken;
+import org.apache.fluss.lake.committer.LakeCommitResult;
+import org.apache.fluss.metadata.AggFunction;
+import org.apache.fluss.metadata.AggFunctionType;
+import org.apache.fluss.metadata.AggFunctions;
+import org.apache.fluss.metadata.DatabaseChange;
 import org.apache.fluss.metadata.DatabaseSummary;
 import org.apache.fluss.metadata.PartitionSpec;
 import org.apache.fluss.metadata.PhysicalTablePath;
@@ -44,7 +50,6 @@ import org.apache.fluss.record.DefaultKvRecordBatch;
 import org.apache.fluss.record.DefaultValueRecordBatch;
 import org.apache.fluss.record.FileChannelChunk;
 import org.apache.fluss.record.FileLogRecords;
-import org.apache.fluss.record.KvRecordBatch;
 import org.apache.fluss.record.LogRecords;
 import org.apache.fluss.record.MemoryLogRecords;
 import org.apache.fluss.remote.RemoteLogFetchInfo;
@@ -56,10 +61,12 @@ import org.apache.fluss.rpc.entity.LookupResultForBucket;
 import org.apache.fluss.rpc.entity.PrefixLookupResultForBucket;
 import org.apache.fluss.rpc.entity.ProduceLogResultForBucket;
 import org.apache.fluss.rpc.entity.PutKvResultForBucket;
+import org.apache.fluss.rpc.entity.TableStatsResultForBucket;
 import org.apache.fluss.rpc.messages.AcquireKvSnapshotLeaseRequest;
 import org.apache.fluss.rpc.messages.AcquireKvSnapshotLeaseResponse;
 import org.apache.fluss.rpc.messages.AdjustIsrRequest;
 import org.apache.fluss.rpc.messages.AdjustIsrResponse;
+import org.apache.fluss.rpc.messages.AlterDatabaseRequest;
 import org.apache.fluss.rpc.messages.AlterTableRequest;
 import org.apache.fluss.rpc.messages.CommitKvSnapshotRequest;
 import org.apache.fluss.rpc.messages.CommitLakeTableSnapshotRequest;
@@ -70,9 +77,11 @@ import org.apache.fluss.rpc.messages.FetchLogRequest;
 import org.apache.fluss.rpc.messages.FetchLogResponse;
 import org.apache.fluss.rpc.messages.GetFileSystemSecurityTokenResponse;
 import org.apache.fluss.rpc.messages.GetKvSnapshotMetadataResponse;
+import org.apache.fluss.rpc.messages.GetLakeSnapshotResponse;
 import org.apache.fluss.rpc.messages.GetLatestKvSnapshotsResponse;
-import org.apache.fluss.rpc.messages.GetLatestLakeSnapshotResponse;
 import org.apache.fluss.rpc.messages.GetProducerOffsetsResponse;
+import org.apache.fluss.rpc.messages.GetTableStatsRequest;
+import org.apache.fluss.rpc.messages.GetTableStatsResponse;
 import org.apache.fluss.rpc.messages.InitWriterResponse;
 import org.apache.fluss.rpc.messages.LakeTieringHeartbeatResponse;
 import org.apache.fluss.rpc.messages.LimitScanResponse;
@@ -81,6 +90,7 @@ import org.apache.fluss.rpc.messages.ListOffsetsRequest;
 import org.apache.fluss.rpc.messages.ListOffsetsResponse;
 import org.apache.fluss.rpc.messages.ListPartitionInfosResponse;
 import org.apache.fluss.rpc.messages.ListRebalanceProgressResponse;
+import org.apache.fluss.rpc.messages.ListRemoteLogManifestsResponse;
 import org.apache.fluss.rpc.messages.LookupRequest;
 import org.apache.fluss.rpc.messages.LookupResponse;
 import org.apache.fluss.rpc.messages.MetadataResponse;
@@ -135,6 +145,7 @@ import org.apache.fluss.rpc.messages.PbPutKvReqForBucket;
 import org.apache.fluss.rpc.messages.PbPutKvRespForBucket;
 import org.apache.fluss.rpc.messages.PbRebalancePlanForBucket;
 import org.apache.fluss.rpc.messages.PbRebalanceProgressForBucket;
+import org.apache.fluss.rpc.messages.PbRemoteLogManifestEntry;
 import org.apache.fluss.rpc.messages.PbRemoteLogSegment;
 import org.apache.fluss.rpc.messages.PbRemotePathAndLocalFile;
 import org.apache.fluss.rpc.messages.PbRenameColumn;
@@ -145,6 +156,8 @@ import org.apache.fluss.rpc.messages.PbTableBucket;
 import org.apache.fluss.rpc.messages.PbTableMetadata;
 import org.apache.fluss.rpc.messages.PbTableOffsets;
 import org.apache.fluss.rpc.messages.PbTablePath;
+import org.apache.fluss.rpc.messages.PbTableStatsReqForBucket;
+import org.apache.fluss.rpc.messages.PbTableStatsRespForBucket;
 import org.apache.fluss.rpc.messages.PbValue;
 import org.apache.fluss.rpc.messages.PbValueList;
 import org.apache.fluss.rpc.messages.PrefixLookupRequest;
@@ -164,32 +177,42 @@ import org.apache.fluss.security.acl.AclBinding;
 import org.apache.fluss.server.authorizer.AclCreateResult;
 import org.apache.fluss.server.authorizer.AclDeleteResult;
 import org.apache.fluss.server.entity.AdjustIsrResultForBucket;
-import org.apache.fluss.server.entity.CommitLakeTableSnapshotData;
+import org.apache.fluss.server.entity.CommitLakeTableSnapshotsData;
 import org.apache.fluss.server.entity.CommitRemoteLogManifestData;
 import org.apache.fluss.server.entity.FetchReqInfo;
 import org.apache.fluss.server.entity.LakeBucketOffset;
+import org.apache.fluss.server.entity.LookupDataForBucket;
 import org.apache.fluss.server.entity.NotifyKvSnapshotOffsetData;
 import org.apache.fluss.server.entity.NotifyLakeTableOffsetData;
 import org.apache.fluss.server.entity.NotifyLeaderAndIsrData;
 import org.apache.fluss.server.entity.NotifyLeaderAndIsrResultForBucket;
 import org.apache.fluss.server.entity.NotifyRemoteLogOffsetsData;
+import org.apache.fluss.server.entity.ProduceLogDataForBucket;
+import org.apache.fluss.server.entity.PutKvDataForBucket;
 import org.apache.fluss.server.entity.StopReplicaData;
 import org.apache.fluss.server.entity.StopReplicaResultForBucket;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshot;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshotJsonSerde;
 import org.apache.fluss.server.kv.snapshot.KvSnapshotHandle;
+import org.apache.fluss.server.log.FilterInfo;
 import org.apache.fluss.server.metadata.BucketMetadata;
 import org.apache.fluss.server.metadata.ClusterMetadata;
 import org.apache.fluss.server.metadata.PartitionMetadata;
 import org.apache.fluss.server.metadata.ServerInfo;
 import org.apache.fluss.server.metadata.TableMetadata;
+import org.apache.fluss.server.zk.ZooKeeperClient.TableBucketAndManifest;
 import org.apache.fluss.server.zk.data.BucketSnapshot;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
+import org.apache.fluss.server.zk.data.PartitionRegistration;
 import org.apache.fluss.server.zk.data.lake.LakeTable;
 import org.apache.fluss.server.zk.data.lake.LakeTableSnapshot;
+import org.apache.fluss.utils.ByteArraySlice;
 import org.apache.fluss.utils.json.DataTypeJsonSerde;
 import org.apache.fluss.utils.json.JsonSerdeUtils;
 import org.apache.fluss.utils.json.TableBucketOffsets;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import javax.annotation.Nullable;
 
@@ -209,6 +232,7 @@ import java.util.Set;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
+import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.hasHistoricalProduce;
 import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.toByteBuffer;
 import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.toPbAclInfo;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
@@ -218,6 +242,8 @@ import static org.apache.fluss.utils.Preconditions.checkNotNull;
  * request/response.
  */
 public class ServerRpcMessageUtils {
+
+    private static final Logger LOG = LoggerFactory.getLogger(ServerRpcMessageUtils.class);
 
     public static TablePath toTablePath(PbTablePath pbTablePath) {
         return new TablePath(pbTablePath.getDatabaseName(), pbTablePath.getTableName());
@@ -286,7 +312,7 @@ public class ServerRpcMessageUtils {
             case SUBTRACT:
             default:
                 throw new IllegalArgumentException(
-                        "Unsupported alter configs op type " + pbAlterConfig.getOpType());
+                        "Unsupported alter table configs op type " + pbAlterConfig.getOpType());
         }
     }
 
@@ -295,6 +321,45 @@ public class ServerRpcMessageUtils {
                 .filter(Objects::nonNull)
                 .map(ServerRpcMessageUtils::toTableChange)
                 .collect(Collectors.toList());
+    }
+
+    public static List<TableChange.DistributionChange> toAlterTableDistributionChanges(
+            AlterTableRequest request) {
+        if (!request.hasModifyBucketCount()) {
+            return Collections.emptyList();
+        }
+        return Collections.singletonList(
+                TableChange.modifyBucketCount(request.getModifyBucketCount().getNewBucketCount()));
+    }
+
+    private static DatabaseChange toDatabaseChange(PbAlterConfig pbAlterConfig) {
+        AlterConfigOpType opType = AlterConfigOpType.from(pbAlterConfig.getOpType());
+        String configKey = pbAlterConfig.getConfigKey();
+        switch (opType) {
+            case SET: // SET_OPTION or SET_COMMENT
+                return DatabaseChange.set(configKey, pbAlterConfig.getConfigValue());
+            case DELETE: // RESET_OPTION or RESET_COMMENT
+                return DatabaseChange.reset(configKey);
+            case APPEND:
+            case SUBTRACT:
+            default:
+                throw new IllegalArgumentException(
+                        "Unsupported alter database configs op type " + pbAlterConfig.getOpType());
+        }
+    }
+
+    public static List<DatabaseChange> toDatabaseChanges(AlterDatabaseRequest request) {
+        List<DatabaseChange> databaseChanges =
+                request.getConfigChangesList().stream()
+                        .filter(Objects::nonNull)
+                        .map(ServerRpcMessageUtils::toDatabaseChange)
+                        .collect(Collectors.toList());
+
+        if (request.hasComment()) {
+            databaseChanges.add(DatabaseChange.updateComment(request.getComment()));
+        }
+
+        return databaseChanges;
     }
 
     public static List<TableChange> toAlterTableSchemaChanges(AlterTableRequest request) {
@@ -310,15 +375,38 @@ public class ServerRpcMessageUtils {
         return addColumns.stream()
                 .filter(Objects::nonNull)
                 .map(
-                        pbAddColumn ->
-                                TableChange.addColumn(
-                                        pbAddColumn.getColumnName(),
-                                        JsonSerdeUtils.readValue(
-                                                pbAddColumn.getDataTypeJson(),
-                                                DataTypeJsonSerde.INSTANCE),
-                                        pbAddColumn.hasComment() ? pbAddColumn.getComment() : null,
-                                        toColumnPosition(pbAddColumn.getColumnPositionType())))
+                        pbAddColumn -> {
+                            AggFunction aggFunction = toAggFunction(pbAddColumn);
+                            return TableChange.addColumn(
+                                    pbAddColumn.getColumnName(),
+                                    JsonSerdeUtils.readValue(
+                                            pbAddColumn.getDataTypeJson(),
+                                            DataTypeJsonSerde.INSTANCE),
+                                    pbAddColumn.hasComment() ? pbAddColumn.getComment() : null,
+                                    toColumnPosition(pbAddColumn.getColumnPositionType()),
+                                    aggFunction);
+                        })
                 .collect(Collectors.toList());
+    }
+
+    private static AggFunction toAggFunction(PbAddColumn pbAddColumn) {
+        if (!pbAddColumn.hasAggFunctionType()) {
+            return null;
+        }
+
+        AggFunctionType type = AggFunctionType.fromString(pbAddColumn.getAggFunctionType());
+        if (type == null) {
+            throw new InvalidConfigException(
+                    String.format(
+                            "Unknown aggregation function type: %s",
+                            pbAddColumn.getAggFunctionType()));
+        }
+
+        Map<String, String> parameters = new HashMap<>();
+        for (PbKeyValue parameter : pbAddColumn.getAggFunctionParamsList()) {
+            parameters.put(parameter.getKey(), parameter.getValue());
+        }
+        return AggFunctions.of(type, parameters);
     }
 
     public static List<TableChange.SchemaChange> toDropColumns(List<PbDropColumn> dropColumns) {
@@ -416,6 +504,7 @@ public class ServerRpcMessageUtils {
 
     public static UpdateMetadataRequest makeUpdateMetadataRequest(
             @Nullable ServerInfo coordinatorServer,
+            @Nullable Integer coordinatorEpoch,
             Set<ServerInfo> aliveTableServers,
             List<TableMetadata> tableMetadataList,
             List<PartitionMetadata> partitionMetadataList) {
@@ -458,6 +547,9 @@ public class ServerRpcMessageUtils {
         updateMetadataRequest.addAllTableMetadatas(pbTableMetadataList);
         updateMetadataRequest.addAllPartitionMetadatas(pbPartitionMetadataList);
 
+        if (coordinatorEpoch != null) {
+            updateMetadataRequest.setCoordinatorEpoch(coordinatorEpoch);
+        }
         return updateMetadataRequest;
     }
 
@@ -524,8 +616,10 @@ public class ServerRpcMessageUtils {
                         .setTableId(tableInfo.getTableId())
                         .setSchemaId(tableInfo.getSchemaId())
                         .setTableJson(tableInfo.toTableDescriptor().toJsonBytes())
+                        .setRemoteDataDir(tableInfo.getRemoteDataDir())
                         .setCreatedTime(tableInfo.getCreatedTime())
-                        .setModifiedTime(tableInfo.getModifiedTime());
+                        .setModifiedTime(tableInfo.getModifiedTime())
+                        .setBucketCountEpoch(tableInfo.getBucketCountEpoch());
         TablePath tablePath = tableInfo.getTablePath();
         pbTableMetadata
                 .setTablePath()
@@ -544,6 +638,16 @@ public class ServerRpcMessageUtils {
                         .setPartitionName(partitionMetadata.getPartitionName());
         pbPartitionMetadata.addAllBucketMetadatas(
                 toPbBucketMetadata(partitionMetadata.getBucketMetadataList()));
+        Integer bucketCount = partitionMetadata.getBucketCount();
+        int effectiveBucketCount =
+                bucketCount != null
+                        ? bucketCount
+                        : partitionMetadata.getBucketMetadataList().size();
+        // 0 means the partition assignment is not known yet, not a zero-bucket layout;
+        // omitting the field keeps the client on its table-level fallback instead of 0.
+        if (effectiveBucketCount > 0) {
+            pbPartitionMetadata.setBucketCount(effectiveBucketCount);
+        }
         return pbPartitionMetadata;
     }
 
@@ -568,6 +672,15 @@ public class ServerRpcMessageUtils {
                 pbBucketMetadata.addReplicaId(replica);
             }
 
+            Integer bucketEpoch = bucketMetadata.getBucketEpoch();
+            if (bucketEpoch != null) {
+                pbBucketMetadata.setBucketEpoch(bucketEpoch);
+            }
+
+            for (Integer isrId : bucketMetadata.getIsr()) {
+                pbBucketMetadata.addIsr(isrId);
+            }
+
             pbBucketMetadataList.add(pbBucketMetadata);
         }
         return pbBucketMetadataList;
@@ -582,8 +695,20 @@ public class ServerRpcMessageUtils {
                         tableId,
                         pbTableMetadata.getSchemaId(),
                         TableDescriptor.fromJsonBytes(pbTableMetadata.getTableJson()),
+                        // For backward capability. When an older Coordinator sends an
+                        // UpdateMetadataRequest to a newer TabletServer, the remoteDataDir will be
+                        // missing. In this case, setting it to null is acceptable because the
+                        // TabletServerMetadataCache does not maintain any remoteDataDir
+                        // information.
+                        pbTableMetadata.hasRemoteDataDir()
+                                ? pbTableMetadata.getRemoteDataDir()
+                                : null,
                         pbTableMetadata.getCreatedTime(),
-                        pbTableMetadata.getModifiedTime());
+                        pbTableMetadata.getModifiedTime(),
+                        // legacy Coordinators predate bucketCountEpoch; read as 0 (never ALTERed)
+                        pbTableMetadata.hasBucketCountEpoch()
+                                ? pbTableMetadata.getBucketCountEpoch()
+                                : 0L);
 
         List<BucketMetadata> bucketMetadata = new ArrayList<>();
         for (PbBucketMetadata pbBucketMetadata : pbTableMetadata.getBucketMetadatasList()) {
@@ -600,7 +725,9 @@ public class ServerRpcMessageUtils {
                 pbBucketMetadata.hasLeaderEpoch() ? pbBucketMetadata.getLeaderEpoch() : null,
                 Arrays.stream(pbBucketMetadata.getReplicaIds())
                         .boxed()
-                        .collect(Collectors.toList()));
+                        .collect(Collectors.toList()),
+                Arrays.stream(pbBucketMetadata.getIsrs()).boxed().collect(Collectors.toList()),
+                pbBucketMetadata.hasBucketEpoch() ? pbBucketMetadata.getBucketEpoch() : null);
     }
 
     private static PartitionMetadata toPartitionMetadata(PbPartitionMetadata pbPartitionMetadata) {
@@ -610,7 +737,8 @@ public class ServerRpcMessageUtils {
                 pbPartitionMetadata.getPartitionId(),
                 pbPartitionMetadata.getBucketMetadatasList().stream()
                         .map(ServerRpcMessageUtils::toBucketMetadata)
-                        .collect(Collectors.toList()));
+                        .collect(Collectors.toList()),
+                pbPartitionMetadata.hasBucketCount() ? pbPartitionMetadata.getBucketCount() : null);
     }
 
     public static NotifyLeaderAndIsrRequest makeNotifyLeaderAndIsrRequest(
@@ -626,7 +754,8 @@ public class ServerRpcMessageUtils {
                 new PbNotifyLeaderAndIsrReqForBucket()
                         .setLeader(notifyLeaderAndIsrData.getLeader())
                         .setLeaderEpoch(notifyLeaderAndIsrData.getLeaderEpoch())
-                        .setBucketEpoch(notifyLeaderAndIsrData.getBucketEpoch());
+                        .setBucketEpoch(notifyLeaderAndIsrData.getBucketEpoch())
+                        .setStandbyReplicas(notifyLeaderAndIsrData.getStandbyReplicasArray());
 
         TableBucket tb = notifyLeaderAndIsrData.getTableBucket();
         PbTableBucket pbTableBucket =
@@ -643,6 +772,12 @@ public class ServerRpcMessageUtils {
                 .setPhysicalTablePath(fromPhysicalTablePath(physicalTablePath))
                 .setReplicas(notifyLeaderAndIsrData.getReplicasArray())
                 .setIsrs(notifyLeaderAndIsrData.getIsrArray());
+        if (notifyLeaderAndIsrData.getBucketCount() != null) {
+            reqForBucket.setBucketCount(notifyLeaderAndIsrData.getBucketCount());
+        }
+        if (notifyLeaderAndIsrData.getBucketCountEpoch() != null) {
+            reqForBucket.setBucketCountEpoch(notifyLeaderAndIsrData.getBucketCountEpoch());
+        }
 
         return reqForBucket;
     }
@@ -662,6 +797,11 @@ public class ServerRpcMessageUtils {
                 isr.add(reqForBucket.getIsrAt(i));
             }
 
+            List<Integer> standbyReplicas = new ArrayList<>();
+            for (int i = 0; i < reqForBucket.getStandbyReplicasCount(); i++) {
+                standbyReplicas.add(reqForBucket.getStandbyReplicaAt(i));
+            }
+
             PbTableBucket pbTableBucket = reqForBucket.getTableBucket();
             notifyLeaderAndIsrDataList.add(
                     new NotifyLeaderAndIsrData(
@@ -672,8 +812,13 @@ public class ServerRpcMessageUtils {
                                     reqForBucket.getLeader(),
                                     reqForBucket.getLeaderEpoch(),
                                     isr,
+                                    standbyReplicas,
                                     request.getCoordinatorEpoch(),
-                                    reqForBucket.getBucketEpoch())));
+                                    reqForBucket.getBucketEpoch()),
+                            reqForBucket.hasBucketCount() ? reqForBucket.getBucketCount() : null,
+                            reqForBucket.hasBucketCountEpoch()
+                                    ? reqForBucket.getBucketCountEpoch()
+                                    : null));
         }
         return notifyLeaderAndIsrDataList;
     }
@@ -795,12 +940,20 @@ public class ServerRpcMessageUtils {
         return stopReplicaResponse;
     }
 
-    public static Map<TableBucket, MemoryLogRecords> getProduceLogData(
+    /** Converts produce-log requests while preserving their historical partition context. */
+    public static List<ProduceLogDataForBucket> toProduceLogDataForBuckets(
             ProduceLogRequest produceRequest) {
         long tableId = produceRequest.getTableId();
-        Map<TableBucket, MemoryLogRecords> produceEntryData = new HashMap<>();
+        List<ProduceLogDataForBucket> produceLogData =
+                new ArrayList<>(produceRequest.getBucketsReqsCount());
+        Map<TableBucket, Set<String>> originalPartitionsByBucket = new HashMap<>();
+        boolean historicalWriteRequest = hasHistoricalProduce(produceRequest);
         for (PbProduceLogReqForBucket produceLogReqForBucket :
                 produceRequest.getBucketsReqsList()) {
+            if (produceLogReqForBucket.hasOriginalPartitionName() != historicalWriteRequest) {
+                throw new IllegalArgumentException(
+                        "Normal and historical writes cannot be mixed in the same request.");
+            }
             ByteBuffer recordBuffer = toByteBuffer(produceLogReqForBucket.getRecordsSlice());
             MemoryLogRecords logRecords = MemoryLogRecords.pointToByteBuffer(recordBuffer);
             TableBucket tb =
@@ -810,9 +963,23 @@ public class ServerRpcMessageUtils {
                                     ? produceLogReqForBucket.getPartitionId()
                                     : null,
                             produceLogReqForBucket.getBucketId());
-            produceEntryData.put(tb, logRecords);
+            String originalPartitionName =
+                    produceLogReqForBucket.hasOriginalPartitionName()
+                            ? produceLogReqForBucket.getOriginalPartitionName()
+                            : null;
+            Set<String> originalPartitions =
+                    originalPartitionsByBucket.computeIfAbsent(tb, ignored -> new HashSet<>());
+            if (!originalPartitions.add(originalPartitionName)) {
+                throw new IllegalArgumentException(
+                        "A ProduceLog request contains duplicate table bucket "
+                                + tb
+                                + " and original partition "
+                                + originalPartitionName
+                                + '.');
+            }
+            produceLogData.add(new ProduceLogDataForBucket(tb, logRecords, originalPartitionName));
         }
-        return produceEntryData;
+        return produceLogData;
     }
 
     public static ProduceLogResponse makeProduceLogResponse(
@@ -826,6 +993,9 @@ public class ServerRpcMessageUtils {
             if (tableBucket.getPartitionId() != null) {
                 producedBucket.setPartitionId(tableBucket.getPartitionId());
             }
+            if (bucketResult.getOriginalPartitionName() != null) {
+                producedBucket.setOriginalPartitionName(bucketResult.getOriginalPartitionName());
+            }
 
             if (bucketResult.failed()) {
                 producedBucket.setError(
@@ -837,6 +1007,34 @@ public class ServerRpcMessageUtils {
         }
         produceResponse.addAllBucketsResps(produceLogRespForBucketList);
         return produceResponse;
+    }
+
+    public static @Nullable Map<Long, FilterInfo> getTableFilterInfoMap(FetchLogRequest request) {
+        Map<Long, FilterInfo> result = null;
+        for (PbFetchLogReqForTable tableReq : request.getTablesReqsList()) {
+            if (tableReq.hasFilterPredicate()) {
+                if (!tableReq.hasFilterSchemaId()) {
+                    throw new IllegalArgumentException(
+                            "Filter predicate is set but filterSchemaId is missing for table "
+                                    + tableReq.getTableId());
+                }
+                int schemaId = tableReq.getFilterSchemaId();
+                if (schemaId < 0) {
+                    throw new IllegalArgumentException(
+                            "Invalid filterSchemaId ("
+                                    + schemaId
+                                    + ") for table "
+                                    + tableReq.getTableId());
+                }
+                if (result == null) {
+                    result = new HashMap<>();
+                }
+                result.put(
+                        tableReq.getTableId(),
+                        new FilterInfo(tableReq.getFilterPredicate(), schemaId));
+            }
+        }
+        return result == null ? null : Collections.unmodifiableMap(result);
     }
 
     public static Map<TableBucket, FetchReqInfo> getFetchLogData(FetchLogRequest request) {
@@ -885,6 +1083,12 @@ public class ServerRpcMessageUtils {
             FetchLogResultForBucket bucketResult = entry.getValue();
             PbFetchLogRespForBucket fetchLogRespForBucket =
                     new PbFetchLogRespForBucket().setBucketId(tb.getBucket());
+            if (bucketResult.hasFilteredEndOffset()) {
+                fetchLogRespForBucket.setFilteredEndOffset(bucketResult.getFilteredEndOffset());
+            }
+            if (bucketResult.hasMinRetainOffset()) {
+                fetchLogRespForBucket.setMinRetainOffset(bucketResult.getMinRetainOffset());
+            }
             if (tb.getPartitionId() != null) {
                 fetchLogRespForBucket.setPartitionId(tb.getPartitionId());
             }
@@ -974,28 +1178,62 @@ public class ServerRpcMessageUtils {
         return fetchLogResponse;
     }
 
-    public static Map<TableBucket, KvRecordBatch> getPutKvData(PutKvRequest putKvRequest) {
+    /**
+     * Converts put-KV bucket requests while preserving their historical partition context.
+     *
+     * <p>The returned original partition name is null for normal writes. Normal and historical
+     * writes cannot be mixed in one request. Historical target and partition eligibility are
+     * validated by the historical write path.
+     */
+    public static List<PutKvDataForBucket> toPutKvDataForBuckets(PutKvRequest putKvRequest) {
         long tableId = putKvRequest.getTableId();
-        Map<TableBucket, KvRecordBatch> produceEntryData = new HashMap<>();
+        List<PutKvDataForBucket> putKvData = new ArrayList<>(putKvRequest.getBucketsReqsCount());
+        Map<TableBucket, Set<String>> originalPartitionsByBucket = new HashMap<>();
+        boolean historicalWriteRequest =
+                putKvRequest.getBucketsReqsCount() > 0
+                        && putKvRequest.getBucketsReqAt(0).hasOriginalPartitionName();
         for (PbPutKvReqForBucket putKvReqForBucket : putKvRequest.getBucketsReqsList()) {
+            if (putKvReqForBucket.hasOriginalPartitionName() != historicalWriteRequest) {
+                throw new IllegalArgumentException(
+                        "Normal and historical writes cannot be mixed in the same request.");
+            }
             ByteBuffer recordsBuffer = toByteBuffer(putKvReqForBucket.getRecordsSlice());
             DefaultKvRecordBatch kvRecords = DefaultKvRecordBatch.pointToByteBuffer(recordsBuffer);
-            TableBucket tb =
+            TableBucket tableBucket =
                     new TableBucket(
                             tableId,
                             putKvReqForBucket.hasPartitionId()
                                     ? putKvReqForBucket.getPartitionId()
                                     : null,
                             putKvReqForBucket.getBucketId());
-            produceEntryData.put(tb, kvRecords);
+            String originalPartitionName =
+                    putKvReqForBucket.hasOriginalPartitionName()
+                            ? putKvReqForBucket.getOriginalPartitionName()
+                            : null;
+            Set<String> originalPartitions =
+                    originalPartitionsByBucket.computeIfAbsent(
+                            tableBucket, ignored -> new HashSet<>());
+            if (!originalPartitions.add(originalPartitionName)) {
+                throw new IllegalArgumentException(
+                        "A PutKv request contains duplicate table bucket "
+                                + tableBucket
+                                + " and original partition "
+                                + originalPartitionName
+                                + '.');
+            }
+            putKvData.add(new PutKvDataForBucket(tableBucket, kvRecords, originalPartitionName));
         }
-        return produceEntryData;
+        return putKvData;
     }
 
     public static Map<TableBucket, List<byte[]>> toLookupData(LookupRequest lookupRequest) {
         long tableId = lookupRequest.getTableId();
         Map<TableBucket, List<byte[]>> lookupEntryData = new HashMap<>();
         for (PbLookupReqForBucket lookupReqForBucket : lookupRequest.getBucketsReqsList()) {
+            if (lookupReqForBucket.hasOriginalPartitionName()) {
+                throw new IllegalArgumentException(
+                        "Normal and historical lookups cannot be mixed in the same request.");
+            }
             TableBucket tb =
                     new TableBucket(
                             tableId,
@@ -1008,6 +1246,40 @@ public class ServerRpcMessageUtils {
                 keys.add(lookupReqForBucket.getKeyAt(i));
             }
             lookupEntryData.put(tb, keys);
+        }
+        return lookupEntryData;
+    }
+
+    /**
+     * Converts lookup bucket requests for historical partition lookup.
+     *
+     * <p>Unlike normal lookup data, historical lookup must keep the original partition name carried
+     * by each bucket request. The name is later used to resolve the original partition in lake
+     * storage, while the {@link TableBucket} points to the historical system partition.
+     */
+    public static List<LookupDataForBucket> toHistoricalLookupData(LookupRequest lookupRequest) {
+        long tableId = lookupRequest.getTableId();
+        List<LookupDataForBucket> lookupEntryData =
+                new ArrayList<>(lookupRequest.getBucketsReqsCount());
+        for (PbLookupReqForBucket lookupReqForBucket : lookupRequest.getBucketsReqsList()) {
+            if (!lookupReqForBucket.hasOriginalPartitionName()) {
+                throw new IllegalArgumentException(
+                        "Normal and historical lookups cannot be mixed in the same request.");
+            }
+            TableBucket tb =
+                    new TableBucket(
+                            tableId,
+                            lookupReqForBucket.hasPartitionId()
+                                    ? lookupReqForBucket.getPartitionId()
+                                    : null,
+                            lookupReqForBucket.getBucketId());
+            List<byte[]> keys = new ArrayList<>(lookupReqForBucket.getKeysCount());
+            for (int i = 0; i < lookupReqForBucket.getKeysCount(); i++) {
+                keys.add(lookupReqForBucket.getKeyAt(i));
+            }
+            lookupEntryData.add(
+                    new LookupDataForBucket(
+                            tb, keys, lookupReqForBucket.getOriginalPartitionName()));
         }
         return lookupEntryData;
     }
@@ -1049,6 +1321,9 @@ public class ServerRpcMessageUtils {
             if (tableBucket.getPartitionId() != null) {
                 putKvBucket.setPartitionId(tableBucket.getPartitionId());
             }
+            if (bucketResult.getOriginalPartitionName() != null) {
+                putKvBucket.setOriginalPartitionName(bucketResult.getOriginalPartitionName());
+            }
 
             if (bucketResult.failed()) {
                 putKvBucket.setError(bucketResult.getErrorCode(), bucketResult.getErrorMessage());
@@ -1058,6 +1333,12 @@ public class ServerRpcMessageUtils {
                 long logEndOffset = bucketResult.getWriteLogEndOffset();
                 if (logEndOffset >= 0) {
                     putKvBucket.setLogEndOffset(logEndOffset);
+                }
+                // Backpressure signal: only piggyback when there is actual pressure
+                // (i.e. L0 has crossed the Fluss-side proactive threshold).
+                float pressure = bucketResult.getPressure();
+                if (pressure > 0f) {
+                    putKvBucket.setPressure(pressure);
                 }
             }
             putKvRespForBucketList.add(putKvBucket);
@@ -1127,23 +1408,35 @@ public class ServerRpcMessageUtils {
 
     public static LookupResponse makeLookupResponse(
             Map<TableBucket, LookupResultForBucket> lookupResult) {
+        return makeLookupResponse(lookupResult.values());
+    }
+
+    /**
+     * Creates a lookup response from results that may contain the same table bucket for different
+     * original partitions.
+     */
+    public static LookupResponse makeLookupResponse(
+            Collection<LookupResultForBucket> lookupResults) {
         LookupResponse lookupResponse = new LookupResponse();
-        for (Map.Entry<TableBucket, LookupResultForBucket> entry : lookupResult.entrySet()) {
-            TableBucket tb = entry.getKey();
-            LookupResultForBucket bucketResult = entry.getValue();
+        for (LookupResultForBucket bucketResult : lookupResults) {
+            TableBucket tb = bucketResult.getTableBucket();
             PbLookupRespForBucket lookupRespForBucket = lookupResponse.addBucketsResp();
             lookupRespForBucket.setBucketId(tb.getBucket());
             if (tb.getPartitionId() != null) {
                 lookupRespForBucket.setPartitionId(tb.getPartitionId());
             }
+            if (bucketResult.originalPartitionName() != null) {
+                lookupRespForBucket.setOriginalPartitionName(bucketResult.originalPartitionName());
+            }
             if (bucketResult.failed()) {
                 lookupRespForBucket.setError(
                         bucketResult.getErrorCode(), bucketResult.getErrorMessage());
             } else {
-                for (byte[] value : bucketResult.lookupValues()) {
+                List<ByteArraySlice> values = bucketResult.lookupValues();
+                for (ByteArraySlice value : values) {
                     PbValue pbValue = lookupRespForBucket.addValue();
                     if (value != null) {
-                        pbValue.setValues(value);
+                        pbValue.setValues(value.array(), value.offset(), value.length());
                     }
                 }
             }
@@ -1175,10 +1468,10 @@ public class ServerRpcMessageUtils {
                 respForBucket.setError(bucketResult.getErrorCode(), bucketResult.getErrorMessage());
             } else {
                 List<PbValueList> keyResultList = new ArrayList<>();
-                for (List<byte[]> res : bucketResult.prefixLookupValues()) {
+                for (List<ByteArraySlice> res : bucketResult.prefixLookupValues()) {
                     PbValueList pbValueList = new PbValueList();
-                    for (byte[] bytes : res) {
-                        pbValueList.addValue(bytes);
+                    for (ByteArraySlice value : res) {
+                        pbValueList.addValue(value.array(), value.offset(), value.length());
                     }
                     keyResultList.add(pbValueList);
                 }
@@ -1206,6 +1499,7 @@ public class ServerRpcMessageUtils {
                         reqForBucket.setPartitionId(tb.getPartitionId());
                     }
                     leaderAndIsr.isr().forEach(reqForBucket::addNewIsr);
+                    leaderAndIsr.standbyReplicas().forEach(reqForBucket::addStandbyReplica);
                     if (reqForBucketByTableId.containsKey(tb.getTableId())) {
                         reqForBucketByTableId.get(tb.getTableId()).add(reqForBucket);
                     } else {
@@ -1247,12 +1541,18 @@ public class ServerRpcMessageUtils {
                 for (int i = 0; i < reqForBucket.getNewIsrsCount(); i++) {
                     newIsr.add(reqForBucket.getNewIsrAt(i));
                 }
+                List<Integer> standbyReplicas = new ArrayList<>();
+                for (int i = 0; i < reqForBucket.getStandbyReplicasCount(); i++) {
+                    standbyReplicas.add(reqForBucket.getStandbyReplicaAt(i));
+                }
+
                 leaderAndIsrMap.put(
                         tb,
                         new LeaderAndIsr(
                                 leaderId,
                                 reqForBucket.getLeaderEpoch(),
                                 newIsr,
+                                standbyReplicas,
                                 reqForBucket.getCoordinatorEpoch(),
                                 reqForBucket.getBucketEpoch()));
             }
@@ -1279,7 +1579,8 @@ public class ServerRpcMessageUtils {
                         .setLeaderEpoch(leaderAndIsr.leaderEpoch())
                         .setCoordinatorEpoch(leaderAndIsr.coordinatorEpoch())
                         .setBucketEpoch(leaderAndIsr.bucketEpoch())
-                        .setIsrs(leaderAndIsr.isrArray());
+                        .setIsrs(leaderAndIsr.isrArray())
+                        .setStandbyReplicas(leaderAndIsr.standbyReplicasArray());
             }
 
             if (respMap.containsKey(tb.getTableId())) {
@@ -1328,6 +1629,10 @@ public class ServerRpcMessageUtils {
                 for (int i = 0; i < respForBucket.getIsrsCount(); i++) {
                     isr.add(respForBucket.getIsrAt(i));
                 }
+                List<Integer> standbyReplicas = new ArrayList<>();
+                for (int i = 0; i < respForBucket.getStandbyReplicasCount(); i++) {
+                    standbyReplicas.add(respForBucket.getStandbyReplicaAt(i));
+                }
                 adjustIsrResult.put(
                         tb,
                         new AdjustIsrResultForBucket(
@@ -1336,6 +1641,7 @@ public class ServerRpcMessageUtils {
                                         respForBucket.getLeaderId(),
                                         respForBucket.getLeaderEpoch(),
                                         isr,
+                                        standbyReplicas,
                                         respForBucket.getCoordinatorEpoch(),
                                         respForBucket.getBucketEpoch())));
             }
@@ -1493,6 +1799,9 @@ public class ServerRpcMessageUtils {
                 new FsPath(request.getRemoteLogManifestPath()),
                 request.getRemoteLogStartOffset(),
                 request.getRemoteLogEndOffset(),
+                request.hasHighestCopiedEndOffset()
+                        ? request.getHighestCopiedEndOffset()
+                        : request.getRemoteLogEndOffset(),
                 request.getCoordinatorEpoch(),
                 request.getBucketLeaderEpoch());
     }
@@ -1510,6 +1819,7 @@ public class ServerRpcMessageUtils {
                         commitRemoteLogManifestData.getRemoteLogManifestPath().toString())
                 .setRemoteLogStartOffset(commitRemoteLogManifestData.getRemoteLogStartOffset())
                 .setRemoteLogEndOffset(commitRemoteLogManifestData.getRemoteLogEndOffset())
+                .setHighestCopiedEndOffset(commitRemoteLogManifestData.getHighestCopiedEndOffset())
                 .setCoordinatorEpoch(commitRemoteLogManifestData.getCoordinatorEpoch())
                 .setBucketLeaderEpoch(commitRemoteLogManifestData.getBucketLeaderEpoch());
         return request;
@@ -1517,6 +1827,15 @@ public class ServerRpcMessageUtils {
 
     public static NotifyRemoteLogOffsetsRequest makeNotifyRemoteLogOffsetsRequest(
             TableBucket tableBucket, long remoteLogStartOffset, long remoteLogEndOffset) {
+        return makeNotifyRemoteLogOffsetsRequest(
+                tableBucket, remoteLogStartOffset, remoteLogEndOffset, remoteLogEndOffset);
+    }
+
+    public static NotifyRemoteLogOffsetsRequest makeNotifyRemoteLogOffsetsRequest(
+            TableBucket tableBucket,
+            long remoteLogStartOffset,
+            long remoteLogEndOffset,
+            long highestCopiedEndOffset) {
         NotifyRemoteLogOffsetsRequest request = new NotifyRemoteLogOffsetsRequest();
         if (tableBucket.getPartitionId() != null) {
             request.setPartitionId(tableBucket.getPartitionId());
@@ -1524,7 +1843,8 @@ public class ServerRpcMessageUtils {
         request.setTableId(tableBucket.getTableId())
                 .setBucketId(tableBucket.getBucket())
                 .setRemoteStartOffset(remoteLogStartOffset)
-                .setRemoteEndOffset(remoteLogEndOffset);
+                .setRemoteEndOffset(remoteLogEndOffset)
+                .setHighestCopiedEndOffset(highestCopiedEndOffset);
         return request;
     }
 
@@ -1537,6 +1857,9 @@ public class ServerRpcMessageUtils {
                         request.getBucketId()),
                 request.getRemoteStartOffset(),
                 request.getRemoteEndOffset(),
+                request.hasHighestCopiedEndOffset()
+                        ? request.getHighestCopiedEndOffset()
+                        : request.getRemoteEndOffset(),
                 request.getCoordinatorEpoch());
     }
 
@@ -1564,16 +1887,24 @@ public class ServerRpcMessageUtils {
     }
 
     public static ListPartitionInfosResponse toListPartitionInfosResponse(
-            List<String> partitionKeys, Map<String, Long> partitionNameAndIds) {
+            List<String> partitionKeys,
+            Map<String, PartitionRegistration> partitionRegistrations,
+            int tableBucketCount,
+            long bucketCountEpoch) {
         ListPartitionInfosResponse listPartitionsResponse = new ListPartitionInfosResponse();
-        for (Map.Entry<String, Long> partitionNameAndId : partitionNameAndIds.entrySet()) {
+        for (Map.Entry<String, PartitionRegistration> partitionRegistration :
+                partitionRegistrations.entrySet()) {
             ResolvedPartitionSpec spec =
                     ResolvedPartitionSpec.fromPartitionName(
-                            partitionKeys, partitionNameAndId.getKey());
+                            partitionKeys, partitionRegistration.getKey());
+            PartitionRegistration partition = partitionRegistration.getValue();
             listPartitionsResponse
                     .addPartitionsInfo()
-                    .setPartitionId(partitionNameAndId.getValue())
-                    .setPartitionSpec(makePbPartitionSpec(spec));
+                    .setPartitionId(partition.getPartitionId())
+                    .setPartitionSpec(makePbPartitionSpec(spec))
+                    .setRemoteDataDir(partition.getRemoteDataDir())
+                    .setBucketCount(
+                            partition.getBucketCountOrDefault(tableBucketCount, bucketCountEpoch));
         }
         return listPartitionsResponse;
     }
@@ -1589,7 +1920,7 @@ public class ServerRpcMessageUtils {
         return pbPartitionSpec;
     }
 
-    public static CommitLakeTableSnapshotData getCommitLakeTableSnapshotData(
+    public static CommitLakeTableSnapshotsData getCommitLakeTableSnapshotData(
             CommitLakeTableSnapshotRequest request) {
         // handle rpc before 0.9
         Map<Long, LakeTableSnapshot> lakeTableInfoByTableId = new HashMap<>();
@@ -1623,12 +1954,25 @@ public class ServerRpcMessageUtils {
             tableBucketsMaxTimestamp.put(tableId, bucketLogMaxTimestamp);
         }
 
-        // handle rpc since 0.9
-        Map<Long, LakeTable.LakeSnapshotMetadata> lakeSnapshotMetadatas = new HashMap<>();
+        // Build using Builder pattern for cleaner code
+        CommitLakeTableSnapshotsData.Builder builder = CommitLakeTableSnapshotsData.builder();
+
+        // Add V1 format snapshots (legacy)
+        for (Map.Entry<Long, LakeTableSnapshot> entry : lakeTableInfoByTableId.entrySet()) {
+            long tableId = entry.getKey();
+            builder.addTableSnapshot(
+                    tableId,
+                    entry.getValue(),
+                    tableBucketsMaxTimestamp.get(tableId),
+                    null, // no metadata for V1
+                    LakeCommitResult.KEEP_LATEST); // V1: keep only latest snapshot
+        }
+
+        // Add V2 format snapshots (current)
         for (PbLakeTableSnapshotMetadata pbLakeTableSnapshotMetadata :
                 request.getLakeTableSnapshotMetadatasList()) {
-            lakeSnapshotMetadatas.put(
-                    pbLakeTableSnapshotMetadata.getTableId(),
+            long tableId = pbLakeTableSnapshotMetadata.getTableId();
+            LakeTable.LakeSnapshotMetadata lakeSnapshotMetadata =
                     new LakeTable.LakeSnapshotMetadata(
                             pbLakeTableSnapshotMetadata.getSnapshotId(),
                             new FsPath(
@@ -1637,10 +1981,22 @@ public class ServerRpcMessageUtils {
                                     ? new FsPath(
                                             pbLakeTableSnapshotMetadata
                                                     .getReadableBucketOffsetsFilePath())
-                                    : null));
+                                    : null);
+            Long earliestSnapshotIDToKeep =
+                    pbLakeTableSnapshotMetadata.hasEarliestSnapshotIdToKeep()
+                            ? pbLakeTableSnapshotMetadata.getEarliestSnapshotIdToKeep()
+                            : null;
+
+            // If this table already exists in builder (from V1), update it; otherwise add new
+            builder.addTableSnapshot(
+                    tableId,
+                    lakeTableInfoByTableId.get(tableId), // may be null for V2-only
+                    tableBucketsMaxTimestamp.get(tableId), // may be null
+                    lakeSnapshotMetadata,
+                    earliestSnapshotIDToKeep);
         }
-        return new CommitLakeTableSnapshotData(
-                lakeTableInfoByTableId, tableBucketsMaxTimestamp, lakeSnapshotMetadatas);
+
+        return builder.build();
     }
 
     public static TableBucketOffsets toTableBucketOffsets(PbTableOffsets pbTableOffsets) {
@@ -1774,10 +2130,9 @@ public class ServerRpcMessageUtils {
                 notifyLakeTableOffsetRequest.getCoordinatorEpoch(), lakeBucketOffsetMap);
     }
 
-    public static GetLatestLakeSnapshotResponse makeGetLatestLakeSnapshotResponse(
+    public static GetLakeSnapshotResponse makeGetLakeSnapshotResponse(
             long tableId, LakeTableSnapshot lakeTableSnapshot) {
-        GetLatestLakeSnapshotResponse getLakeTableSnapshotResponse =
-                new GetLatestLakeSnapshotResponse();
+        GetLakeSnapshotResponse getLakeTableSnapshotResponse = new GetLakeSnapshotResponse();
 
         getLakeTableSnapshotResponse.setTableId(tableId);
         getLakeTableSnapshotResponse.setSnapshotId(lakeTableSnapshot.getSnapshotId());
@@ -2036,6 +2391,45 @@ public class ServerRpcMessageUtils {
                 leaseForBucket.getSnapshotId());
     }
 
+    // -----------------------------------------------------------------------------------
+    // Table Stats Request and Response
+    // -----------------------------------------------------------------------------------
+
+    public static List<TableBucket> getTableStatsRequestData(GetTableStatsRequest request) {
+        List<TableBucket> tableBuckets = new ArrayList<>();
+        long tableId = request.getTableId();
+        for (PbTableStatsReqForBucket reqForBucket : request.getBucketsReqsList()) {
+            tableBuckets.add(
+                    new TableBucket(
+                            tableId,
+                            reqForBucket.hasPartitionId() ? reqForBucket.getPartitionId() : null,
+                            reqForBucket.getBucketId()));
+        }
+        return tableBuckets;
+    }
+
+    public static GetTableStatsResponse makeGetTableStatsResponse(
+            List<TableStatsResultForBucket> stats) {
+        GetTableStatsResponse response = new GetTableStatsResponse();
+        for (TableStatsResultForBucket statForBucket : stats) {
+            TableBucket tb = statForBucket.getTableBucket();
+            PbTableStatsRespForBucket respForBucket =
+                    response.addBucketsResp().setBucketId(tb.getBucket());
+            if (tb.getPartitionId() != null) {
+                respForBucket.setPartitionId(tb.getPartitionId());
+            }
+            if (statForBucket.failed()) {
+                respForBucket.setError(
+                        statForBucket.getErrorCode(), statForBucket.getErrorMessage());
+            } else {
+                respForBucket.setRowCount(statForBucket.getRowCount());
+            }
+        }
+        return response;
+    }
+
+    // -----------------------------------------------------------------------------------
+
     private static <T> Map<TableBucket, T> mergeResponse(
             Map<TableBucket, T> response, Map<TableBucket, T> errors) {
         if (errors.isEmpty()) {
@@ -2077,5 +2471,23 @@ public class ServerRpcMessageUtils {
             }
         }
         return offsets;
+    }
+
+    public static ListRemoteLogManifestsResponse makeListRemoteLogManifestsResponse(
+            List<TableBucketAndManifest> remoteLogManifestInfos) {
+        ListRemoteLogManifestsResponse response = new ListRemoteLogManifestsResponse();
+        for (TableBucketAndManifest entry : remoteLogManifestInfos) {
+            PbRemoteLogManifestEntry pb = response.addManifest();
+            PbTableBucket pbTb = pb.setTableBucket();
+            pbTb.setTableId(entry.getTableBucket().getTableId());
+            if (entry.getTableBucket().getPartitionId() != null) {
+                pbTb.setPartitionId(entry.getTableBucket().getPartitionId());
+            }
+            pbTb.setBucketId(entry.getTableBucket().getBucket());
+            pb.setRemoteLogManifestPath(
+                    entry.getManifestHandle().getRemoteLogManifestPath().toString());
+            pb.setRemoteLogEndOffset(entry.getManifestHandle().getRemoteLogEndOffset());
+        }
+        return response;
     }
 }

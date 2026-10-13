@@ -21,15 +21,15 @@ import org.apache.fluss.metrics.CharacterFilter;
 import org.apache.fluss.metrics.MetricNames;
 import org.apache.fluss.metrics.groups.AbstractMetricGroup;
 import org.apache.fluss.metrics.registry.MetricRegistry;
-import org.apache.fluss.utils.MapUtils;
 
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.ToLongFunction;
 
 /** The metric group for clients. */
 public class ClientMetricGroup extends AbstractMetricGroup {
     private final Map<String, ConnectionMetrics> nodeToConnectionMetrics =
-            MapUtils.newConcurrentHashMap();
+            new ConcurrentHashMap<>();
 
     private static final String NAME = "client";
 

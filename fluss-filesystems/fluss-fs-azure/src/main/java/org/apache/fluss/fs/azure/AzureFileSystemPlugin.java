@@ -43,7 +43,7 @@ import static org.apache.fluss.fs.azure.AzureFileSystemOptions.PROVIDER_CONFIG_N
  * (abfs, abfss, wasb, wasbs) based on Azure HDFS support in the hadoop-azure module.
  */
 abstract class AzureFileSystemPlugin implements FileSystemPlugin {
-    private static final String[] FLUSS_CONFIG_PREFIXES = {"fs.azure."};
+    private static final String[] FLUSS_CONFIG_PREFIXES = {"azure.", "fs.azure."};
 
     private static final String HADOOP_CONFIG_PREFIX = "fs.azure.";
 
@@ -58,7 +58,7 @@ abstract class AzureFileSystemPlugin implements FileSystemPlugin {
         // create the Azure Hadoop FileSystem
         org.apache.hadoop.fs.FileSystem fs = new AzureBlobFileSystem();
         fs.initialize(getInitURI(fsUri, hadoopConfig), hadoopConfig);
-        return new AzureFileSystem(getScheme(), fs, flussConfig);
+        return new AzureFileSystem(getScheme(), fs, hadoopConfig);
     }
 
     private void setCredentialProvider(org.apache.hadoop.conf.Configuration hadoopConfig) {

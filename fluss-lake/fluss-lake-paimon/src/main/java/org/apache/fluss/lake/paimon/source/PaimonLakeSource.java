@@ -26,6 +26,7 @@ import org.apache.fluss.lake.source.Planner;
 import org.apache.fluss.lake.source.RecordReader;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.predicate.Predicate;
+import org.apache.fluss.utils.ArrayUtils;
 
 import org.apache.paimon.catalog.Catalog;
 import org.apache.paimon.catalog.CatalogContext;
@@ -39,6 +40,7 @@ import javax.annotation.Nullable;
 
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
 
@@ -62,9 +64,21 @@ public class PaimonLakeSource implements LakeSource<PaimonSplit> {
         this.tablePath = tablePath;
     }
 
+    private PaimonLakeSource(PaimonLakeSource source) {
+        this.paimonConfig = new Configuration(source.paimonConfig);
+        this.tablePath = source.tablePath;
+        this.project = ArrayUtils.deepCopy(source.project);
+        this.predicate = source.predicate;
+    }
+
+    @Override
+    public PaimonLakeSource copy() {
+        return new PaimonLakeSource(this);
+    }
+
     @Override
     public void withProject(int[][] project) {
-        this.project = project;
+        this.project = ArrayUtils.deepCopy(project);
     }
 
     @Override
@@ -74,6 +88,11 @@ public class PaimonLakeSource implements LakeSource<PaimonSplit> {
 
     @Override
     public FilterPushDownResult withFilters(List<Predicate> predicates) {
+        if (predicates.isEmpty()) {
+            predicate = null;
+            return FilterPushDownResult.of(Collections.emptyList(), Collections.emptyList());
+        }
+
         List<Predicate> unConsumedPredicates = new ArrayList<>();
         List<Predicate> consumedPredicates = new ArrayList<>();
         List<org.apache.paimon.predicate.Predicate> converted = new ArrayList<>();
@@ -88,9 +107,7 @@ public class PaimonLakeSource implements LakeSource<PaimonSplit> {
                 unConsumedPredicates.add(predicate);
             }
         }
-        if (!converted.isEmpty()) {
-            predicate = PredicateBuilder.and(converted);
-        }
+        predicate = converted.isEmpty() ? null : PredicateBuilder.and(converted);
         return FilterPushDownResult.of(consumedPredicates, unConsumedPredicates);
     }
 

@@ -52,8 +52,8 @@ public interface ApiMessage {
      * (i.e. zero-copy) only for {@code "[optional|required] bytes records = ?"} (nested) fields. If
      * there is any lazy deserialization happens, the {@link #isLazilyParsed()} returns true.
      *
-     * <p>Note: the current message will hold the reference of {@link ByteBuf}, please remember to
-     * release the {@link ByteBuf} until the message has been fully consumed.
+     * <p>Note: the caller takes ownership of the {@link ByteBuf} reference. Do not release the
+     * buffer before the message has been fully consumed; release it only after processing is done.
      */
     void parseFrom(ByteBuf buffer, int size);
 

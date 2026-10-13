@@ -481,13 +481,15 @@ public class ReplicaStateMachine {
                                     .collect(Collectors.toList());
             LeaderAndIsr adjustLeaderAndIsr =
                     newLeader == LeaderAndIsr.NO_LEADER
-                            ? leaderAndIsr.newLeaderAndIsr(newLeader, newIsr)
+                            ? leaderAndIsr.newLeaderAndIsr(
+                                    newLeader, newIsr, leaderAndIsr.standbyReplicas())
                             : leaderAndIsr.newLeaderAndIsr(newIsr);
             adjustedLeaderAndIsr.put(tableBucketReplica, adjustLeaderAndIsr);
             toUpdateLeaderAndIsrList.put(tableBucket, adjustLeaderAndIsr);
         }
         try {
-            zooKeeperClient.batchUpdateLeaderAndIsr(toUpdateLeaderAndIsrList);
+            zooKeeperClient.batchUpdateLeaderAndIsr(
+                    toUpdateLeaderAndIsrList, coordinatorContext.getCoordinatorZkVersion());
             toUpdateLeaderAndIsrList.forEach(coordinatorContext::putBucketLeaderAndIsr);
             return adjustedLeaderAndIsr;
         } catch (Exception e) {

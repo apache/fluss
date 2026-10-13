@@ -1,0 +1,62 @@
+#
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+
+{{ if (include "fluss.security.jaas.required" .) }}
+{{- $internalMechanism := include "fluss.security.listener.mechanism" (dict "context" .Values "listener" "internal") -}}
+{{- $clientMechanism := include "fluss.security.listener.mechanism" (dict "context" .Values "listener" "client") -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "fluss.security.jaas.configName" . }}
+  labels:
+    {{- include "fluss.labels" . | nindent 4 }}
+data:
+  jaas.conf: |
+{{- if (include "fluss.security.sasl.plain.enabled" .) }}
+{{- if eq $internalMechanism "plain" }}
+    internal.FlussServer {
+       org.apache.fluss.security.auth.sasl.plain.PlainLoginModule required
+       user_${FLUSS_JAAS_INTERNAL_USERNAME}="${FLUSS_JAAS_INTERNAL_PASSWORD}";
+    };
+    FlussClient {
+       org.apache.fluss.security.auth.sasl.plain.PlainLoginModule required
+       username="${FLUSS_JAAS_INTERNAL_USERNAME}"
+       password="${FLUSS_JAAS_INTERNAL_PASSWORD}";
+    };
+{{- end }}
+{{- if eq $clientMechanism "plain" }}
+    client.FlussServer {
+       org.apache.fluss.security.auth.sasl.plain.PlainLoginModule required
+{{- range $idx, $user := .Values.security.client.sasl.plain.users | default (list) }}
+       user_${FLUSS_JAAS_CLIENT_USERNAME_{{ $idx }}}="${FLUSS_JAAS_CLIENT_PASSWORD_{{ $idx }}}"
+{{- end }};
+    };
+{{- end }}
+{{- end }}
+{{- if (include "fluss.security.zookeeper.sasl.enabled" .) }}
+    ZookeeperClient {
+       {{ .Values.security.zookeeper.sasl.plain.loginModuleClass }} required
+       username="${FLUSS_JAAS_ZOOKEEPER_USERNAME}"
+       password="${FLUSS_JAAS_ZOOKEEPER_PASSWORD}";
+    };
+{{- end }}
+{{- if (include "fluss.security.zookeeper.sasl.enabled" .) }}
+  zookeeper-client.properties: |
+    zookeeper.sasl.clientconfig=ZookeeperClient
+{{- end }}
+{{- end -}}

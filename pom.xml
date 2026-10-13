@@ -29,11 +29,14 @@
 
     <groupId>org.apache.fluss</groupId>
     <artifactId>fluss</artifactId>
-    <version>0.10-SNAPSHOT</version>
+    <version>1.1-SNAPSHOT</version>
 
-    <name>Fluss :</name>
+    <name>Apache Fluss</name>
     <packaging>pom</packaging>
-    <description>The Streaming Storage for Real-Time Analytics</description>
+    <description>
+        Apache Fluss is a streaming storage system built for
+        real-time analytics.
+    </description>
     <url>https://github.com/apache/fluss</url>
     <inceptionYear>2025</inceptionYear>
 
@@ -90,8 +93,9 @@
         <curator.version>5.4.0</curator.version>
         <netty.version>4.1.104.Final</netty.version>
         <arrow.version>15.0.0</arrow.version>
-        <paimon.version>1.3.1</paimon.version>
+        <paimon.version>2.1.0</paimon.version>
         <iceberg.version>1.10.1</iceberg.version>
+        <hudi.version>1.1.0</hudi.version>
         <roaringbitmap.version>1.3.0</roaringbitmap.version>
 
         <!-- spark & scala -->
@@ -100,15 +104,17 @@
         <scala.binary.version>2.12</scala.binary.version>
         <scala.version>${scala212.version}</scala.version>
         <spark.version>3.5.7</spark.version>
+        <scalatest.version>3.1.0</scalatest.version>
 
-        <fluss.hadoop.version>3.4.0</fluss.hadoop.version>
+        <fluss.hadoop.version>3.4.3</fluss.hadoop.version>
         <frocksdb.version>6.20.3-ververica-2.0</frocksdb.version>
+        <fluss-rocksdb.version>11.8.1-fluss-3</fluss-rocksdb.version>
         <slf4j.version>1.7.36</slf4j.version>
-        <log4j.version>2.17.1</log4j.version>
+        <log4j.version>2.25.4</log4j.version>
         <jaxb.api.version>2.3.1</jaxb.api.version>
         <junit5.version>5.9.1</junit5.version>
         <mockito.version>3.4.6</mockito.version>
-        <assertj.version>3.23.1</assertj.version>
+        <assertj.version>3.27.7</assertj.version>
 
         <protobuf.version>3.25.5</protobuf.version>
         <protostuff.version>1.7.2</protostuff.version>
@@ -362,9 +368,9 @@
             </dependency>
 
             <dependency>
-                <groupId>com.ververica</groupId>
-                <artifactId>frocksdbjni</artifactId>
-                <version>${frocksdb.version}</version>
+                <groupId>io.github.fluss-contrib</groupId>
+                <artifactId>fluss-rocksdbjni</artifactId>
+                <version>${fluss-rocksdb.version}</version>
             </dependency>
 
             <dependency>
@@ -472,6 +478,14 @@
             <id>test-coverage</id>
             <properties>
                 <test.skip.coverage>false</test.skip.coverage>
+            </properties>
+        </profile>
+
+        <profile>
+            <id>scala-2.13</id>
+            <properties>
+                <scala.binary.version>2.13</scala.binary.version>
+                <scala.version>${scala213.version}</scala.version>
             </properties>
         </profile>
 
@@ -663,6 +677,8 @@
                         <exclude>tools/releasing/release/**</exclude>
                         <!-- Configuration Files. -->
                         <exclude>**/fluss-bin/conf/servers</exclude>
+                        <!-- Cross-language encoding fixtures. -->
+                        <exclude>**/src/test/resources/encoding/*.hex</exclude>
                         <!-- Website Files. -->
                         <exclude>website/**/_category_.json</exclude>
                         <exclude>website/package.json</exclude>
@@ -670,6 +686,9 @@
                         <exclude>website/static/**</exclude>
                         <exclude>website/build/**</exclude>
                         <exclude>website/node_modules/**</exclude>
+                        <!-- Rust client and gateway: own license enforcement (skywalking-eyes + cargo-deny) -->
+                        <exclude>fluss-rust/**</exclude>
+                        <exclude>fluss-gateway/**</exclude>
                     </excludes>
                 </configuration>
             </plugin>

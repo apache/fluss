@@ -17,9 +17,9 @@
 
 package org.apache.fluss.fs.azure;
 
-import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.FlussRuntimeException;
 
+import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.LocalFileSystem;
 import org.junit.jupiter.api.Test;
 

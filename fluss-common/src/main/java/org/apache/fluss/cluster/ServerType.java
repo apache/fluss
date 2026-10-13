@@ -19,6 +19,29 @@ package org.apache.fluss.cluster;
 
 /** The type of server in Fluss cluster. */
 public enum ServerType {
-    COORDINATOR,
-    TABLET_SERVER
+    COORDINATOR(1),
+    TABLET_SERVER(2),
+    UNKNOWN(-1);
+
+    private final int typeId;
+
+    ServerType(int typeId) {
+        this.typeId = typeId;
+    }
+
+    /** Get the ServerType from its typeId. */
+    public static ServerType fromTypeId(int typeId) {
+        if (typeId == COORDINATOR.typeId) {
+            return COORDINATOR;
+        } else if (typeId == TABLET_SERVER.typeId) {
+            return TABLET_SERVER;
+        } else {
+            return UNKNOWN;
+        }
+    }
+
+    /** Get the typeId of this ServerType. */
+    public int toTypeId() {
+        return typeId;
+    }
 }

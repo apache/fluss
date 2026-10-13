@@ -45,10 +45,12 @@ public class TableRegistrationJsonSerde
     static final String BUCKET_COUNT_NAME = "bucket_count";
     static final String PROPERTIES_NAME = "properties";
     static final String CUSTOM_PROPERTIES_NAME = "custom_properties";
+    static final String REMOTE_DATA_DIR = "remote_data_dir";
     static final String CREATED_TIME = "created_time";
     static final String MODIFIED_TIME = "modified_time";
+    static final String BUCKET_COUNT_EPOCH = "bucket_count_epoch";
     private static final String VERSION_KEY = "version";
-    private static final int VERSION = 1;
+    private static final int VERSION = 2;
 
     @Override
     public void serialize(TableRegistration tableReg, JsonGenerator generator) throws IOException {
@@ -100,11 +102,19 @@ public class TableRegistrationJsonSerde
         }
         generator.writeEndObject();
 
+        // serialize remote data dir
+        if (tableReg.remoteDataDir != null) {
+            generator.writeStringField(REMOTE_DATA_DIR, tableReg.remoteDataDir);
+        }
+
         // serialize createdTime
         generator.writeNumberField(CREATED_TIME, tableReg.createdTime);
 
         // serialize modifiedTime
-        generator.writeNumberField(MODIFIED_TIME, tableReg.createdTime);
+        generator.writeNumberField(MODIFIED_TIME, tableReg.modifiedTime);
+
+        // serialize bucketCountEpoch
+        generator.writeNumberField(BUCKET_COUNT_EPOCH, tableReg.bucketCountEpoch);
 
         generator.writeEndObject();
     }
@@ -141,8 +151,20 @@ public class TableRegistrationJsonSerde
         Map<String, String> customProperties =
                 deserializeProperties(node.get(CUSTOM_PROPERTIES_NAME));
 
+        // When deserialize from an old version, the remote data dir may not exist.
+        // But we will fill it with ConfigOptions.REMOTE_DATA_DIR immediately.
+        String remoteDataDir = null;
+        if (node.has(REMOTE_DATA_DIR)) {
+            remoteDataDir = node.get(REMOTE_DATA_DIR).asText();
+        }
+
         long createdTime = node.get(CREATED_TIME).asLong();
         long modifiedTime = node.get(MODIFIED_TIME).asLong();
+
+        // When deserializing from a legacy version, the bucket layout epoch may not exist;
+        // read it as 0 (the table has never been ALTERed).
+        long bucketCountEpoch =
+                node.has(BUCKET_COUNT_EPOCH) ? node.get(BUCKET_COUNT_EPOCH).asLong() : 0L;
 
         return new TableRegistration(
                 tableId,
@@ -151,8 +173,10 @@ public class TableRegistrationJsonSerde
                 distribution,
                 properties,
                 customProperties,
+                remoteDataDir,
                 createdTime,
-                modifiedTime);
+                modifiedTime,
+                bucketCountEpoch);
     }
 
     private Map<String, String> deserializeProperties(JsonNode node) {

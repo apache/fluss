@@ -30,6 +30,7 @@ import org.apache.fluss.metadata.SchemaInfo;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableChange;
 import org.apache.fluss.metadata.TableInfo;
+import org.apache.fluss.record.LogRecordReadContext;
 import org.apache.fluss.record.MemoryLogRecords;
 import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.rpc.RpcClient;
@@ -62,6 +63,7 @@ import static org.apache.fluss.record.TestData.DATA1_TABLE_PATH;
 import static org.apache.fluss.record.TestData.DATA2;
 import static org.apache.fluss.record.TestData.DATA2_ROW_TYPE;
 import static org.apache.fluss.record.TestData.DATA2_SCHEMA;
+import static org.apache.fluss.record.TestData.DEFAULT_REMOTE_DATA_DIR;
 import static org.apache.fluss.server.testutils.RpcMessageTestUtils.newProduceLogRequest;
 import static org.apache.fluss.testutils.DataTestUtils.genMemoryLogRecordsByObject;
 import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
@@ -71,6 +73,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 public class LogFetcherITCase extends ClientToServerITCaseBase {
     private LogFetcher logFetcher;
     private long tableId;
+    private TableInfo tableInfo;
     private final int bucketId0 = 0;
     private final int bucketId1 = 1;
     private LogScannerStatus logScannerStatus;
@@ -101,14 +104,23 @@ public class LogFetcherITCase extends ClientToServerITCaseBase {
                 new ClientSchemaGetter(DATA1_TABLE_PATH, new SchemaInfo(DATA1_SCHEMA, 1), admin);
         logFetcher =
                 new LogFetcher(
-                        DATA1_TABLE_INFO,
-                        null,
+                        "default-scanner",
                         logScannerStatus,
                         clientConf,
                         metadataUpdater,
                         TestingScannerMetricGroup.newInstance(),
                         new RemoteFileDownloader(1),
-                        clientSchemaGetter);
+                        LogRecordReadContext.SchemaResolution.TARGET);
+        tableInfo =
+                TableInfo.of(
+                        DATA1_TABLE_PATH,
+                        tableId,
+                        1,
+                        DATA1_TABLE_DESCRIPTOR,
+                        DEFAULT_REMOTE_DATA_DIR,
+                        System.currentTimeMillis(),
+                        System.currentTimeMillis());
+        logFetcher.registerTable(new TableScanSpec(tableInfo, null, null), clientSchemaGetter);
     }
 
     @Test
@@ -147,9 +159,12 @@ public class LogFetcherITCase extends ClientToServerITCaseBase {
                     assertThat(logFetcher.hasAvailableFetches()).isTrue();
                     assertThat(logFetcher.getCompletedFetchesSize()).isEqualTo(2);
                 });
-        Map<TableBucket, List<ScanRecord>> records = logFetcher.collectFetch();
-        assertThat(records.size()).isEqualTo(1);
-        List<ScanRecord> scanRecords = records.get(tb0);
+        ScanRecords records = logFetcher.collectFetch();
+        // Both polled buckets are exposed; tb1 was polled but produced no records.
+        TableBucket tb1 = new TableBucket(tableId, bucketId1);
+        assertThat(records.buckets()).containsExactlyInAnyOrder(tb0, tb1);
+        assertThat(records.records(tb1)).isEmpty();
+        List<ScanRecord> scanRecords = records.records(tb0);
         assertThat(scanRecords.stream().map(ScanRecord::getRow).collect(Collectors.toList()))
                 .isEqualTo(expectedRows);
 
@@ -162,6 +177,15 @@ public class LogFetcherITCase extends ClientToServerITCaseBase {
         logScannerStatus.assignScanBuckets(Collections.singletonMap(tb0, 0L));
         LogFetcher newSchemaLogFetcher =
                 new LogFetcher(
+                        "default-scanner",
+                        logScannerStatus,
+                        clientConf,
+                        metadataUpdater,
+                        TestingScannerMetricGroup.newInstance(),
+                        new RemoteFileDownloader(1),
+                        LogRecordReadContext.SchemaResolution.TARGET);
+        newSchemaLogFetcher.registerTable(
+                new TableScanSpec(
                         new TableInfo(
                                 DATA1_TABLE_INFO.getTablePath(),
                                 tableId,
@@ -172,16 +196,13 @@ public class LogFetcherITCase extends ClientToServerITCaseBase {
                                 DATA1_TABLE_INFO.getNumBuckets(),
                                 DATA1_TABLE_INFO.getProperties(),
                                 DATA1_TABLE_INFO.getCustomProperties(),
+                                DATA1_TABLE_INFO.getRemoteDataDir(),
                                 DATA1_TABLE_INFO.getComment().orElse(null),
                                 DATA1_TABLE_INFO.getCreatedTime(),
                                 DATA1_TABLE_INFO.getModifiedTime()),
                         null,
-                        logScannerStatus,
-                        clientConf,
-                        metadataUpdater,
-                        TestingScannerMetricGroup.newInstance(),
-                        new RemoteFileDownloader(1),
-                        clientSchemaGetter);
+                        null),
+                clientSchemaGetter);
         newSchemaLogFetcher.sendFetches();
         // The fetcher is async to fetch data, so we need to wait the result write to the
         // logFetchBuffer.
@@ -192,9 +213,10 @@ public class LogFetcherITCase extends ClientToServerITCaseBase {
                     assertThat(newSchemaLogFetcher.getCompletedFetchesSize()).isEqualTo(2);
                 });
         records = newSchemaLogFetcher.collectFetch();
-        assertThat(records.size()).isEqualTo(1);
-        assertThat(records.get(tb0)).hasSize(20);
-        scanRecords = records.get(tb0);
+        assertThat(records.buckets()).containsExactlyInAnyOrder(tb0, tb1);
+        assertThat(records.records(tb1)).isEmpty();
+        assertThat(records.records(tb0)).hasSize(20);
+        scanRecords = records.records(tb0);
         assertThat(scanRecords.stream().map(ScanRecord::getRow).collect(Collectors.toList()))
                 .isEqualTo(expectedRows);
         newSchemaLogFetcher.close();
@@ -225,10 +247,10 @@ public class LogFetcherITCase extends ClientToServerITCaseBase {
                     assertThat(logFetcher.getCompletedFetchesSize()).isEqualTo(2);
                 });
 
-        Map<TableBucket, List<ScanRecord>> records = logFetcher.collectFetch();
-        assertThat(records.size()).isEqualTo(2);
-        assertThat(records.get(tb0).size()).isEqualTo(10);
-        assertThat(records.get(tb1).size()).isEqualTo(10);
+        ScanRecords records = logFetcher.collectFetch();
+        assertThat(records.buckets().size()).isEqualTo(2);
+        assertThat(records.records(tb0).size()).isEqualTo(10);
+        assertThat(records.records(tb1).size()).isEqualTo(10);
 
         // after collect fetch, the fetcher is empty.
         assertThat(logFetcher.hasAvailableFetches()).isFalse();
@@ -258,7 +280,8 @@ public class LogFetcherITCase extends ClientToServerITCaseBase {
                         oldCluster.getCoordinatorServer(),
                         oldCluster.getBucketLocationsByPath(),
                         oldCluster.getTableIdByPath(),
-                        oldCluster.getPartitionIdByPath());
+                        oldCluster.getPartitionIdByPath(),
+                        Collections.emptyMap());
         metadataUpdater = new MetadataUpdater(rpcClient, clientConf, newCluster);
 
         LogScannerStatus logScannerStatus = new LogScannerStatus();
@@ -272,15 +295,15 @@ public class LogFetcherITCase extends ClientToServerITCaseBase {
 
         LogFetcher logFetcher =
                 new LogFetcher(
-                        DATA1_TABLE_INFO,
-                        null,
+                        DATA1_TABLE_PATH.toString(),
                         logScannerStatus,
                         clientConf,
                         metadataUpdater,
                         TestingScannerMetricGroup.newInstance(),
                         new RemoteFileDownloader(1),
-                        clientSchemaGetter);
+                        LogRecordReadContext.SchemaResolution.TARGET);
 
+        logFetcher.registerTable(new TableScanSpec(tableInfo, null, null), clientSchemaGetter);
         // send fetches to fetch data, should have no available fetch.
         logFetcher.sendFetches();
         assertThat(logFetcher.hasAvailableFetches()).isFalse();
@@ -296,9 +319,9 @@ public class LogFetcherITCase extends ClientToServerITCaseBase {
                     assertThat(logFetcher.hasAvailableFetches()).isTrue();
                     assertThat(logFetcher.getCompletedFetchesSize()).isEqualTo(1);
                 });
-        Map<TableBucket, List<ScanRecord>> records = logFetcher.collectFetch();
-        assertThat(records.size()).isEqualTo(1);
-        assertThat(records.get(tb0).size()).isEqualTo(10);
+        ScanRecords records = logFetcher.collectFetch();
+        assertThat(records.buckets().size()).isEqualTo(1);
+        assertThat(records.records(tb0).size()).isEqualTo(10);
     }
 
     @Test
@@ -312,14 +335,14 @@ public class LogFetcherITCase extends ClientToServerITCaseBase {
                         new FlussAdmin(FLUSS_CLUSTER_EXTENSION.getRpcClient(), metadataUpdater1));
         logFetcher =
                 new LogFetcher(
-                        DATA1_TABLE_INFO,
-                        null,
+                        DATA1_TABLE_PATH.toString(),
                         logScannerStatus,
                         clientConf,
                         metadataUpdater1,
                         TestingScannerMetricGroup.newInstance(),
                         new RemoteFileDownloader(1),
-                        clientSchemaGetter);
+                        LogRecordReadContext.SchemaResolution.TARGET);
+        logFetcher.registerTable(new TableScanSpec(tableInfo, null, null), clientSchemaGetter);
 
         ExecutorService executor = Executors.newSingleThreadExecutor();
         Future<?> future =

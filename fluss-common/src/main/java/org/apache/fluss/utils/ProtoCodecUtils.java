@@ -1,12 +1,11 @@
 /*
- * Licensed to the Apache Software Foundation (ASF) under one or more
- * contributor license agreements.  See the NOTICE file distributed with
- * this work for additional information regarding copyright ownership.
- * The ASF licenses this file to You under the Apache License, Version 2.0
- * (the "License"); you may not use this file except in compliance with
- * the License.  You may obtain a copy of the License at
+ * Copyright 2020 Splunk Inc.
  *
- *    http://www.apache.org/licenses/LICENSE-2.0
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -179,6 +178,20 @@ public final class ProtoCodecUtils {
         return result;
     }
 
+    // Reads a length-delimited field's length, rejecting a value that cannot fit in the remaining
+    // buffer (or is negative) before the caller allocates for it.
+    public static int readBytesLen(ByteBuf buf) {
+        int len = readVarInt(buf);
+        if (len < 0 || len > buf.readableBytes()) {
+            throw new IllegalArgumentException(
+                    "Protobuf field length "
+                            + len
+                            + " exceeds remaining readable bytes "
+                            + buf.readableBytes());
+        }
+        return len;
+    }
+
     public static long readVarInt64(ByteBuf buf) {
         int shift = 0;
         long result = 0;
@@ -289,6 +302,7 @@ public final class ProtoCodecUtils {
     /** Holder for a byte array and byte length. */
     public static final class BytesHolder {
         public byte[] b;
+        public int offset;
         public int len;
     }
 }

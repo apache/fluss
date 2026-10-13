@@ -44,10 +44,44 @@ object SparkFlussConf {
       .defaultValue(StartUpMode.FULL.toString)
       .withDescription("The start up mode when read Fluss table.")
 
+  val SCAN_INCREMENTAL_START_TIMESTAMP: ConfigOption[String] =
+    ConfigBuilder
+      .key("scan.incremental.start.timestamp")
+      .stringType()
+      .noDefaultValue()
+      .withDescription(
+        "Enables an incremental (time-range) batch read and sets the inclusive lower bound of " +
+          "the window. Accepts either epoch milliseconds (e.g. '1678883047356') or a " +
+          "'yyyy-MM-dd HH:mm:ss' datetime string (e.g. '2023-12-09 23:09:12') interpreted in " +
+          "the Spark session time zone. Batch read only; it has no effect on streaming reads.")
+
+  val SCAN_INCREMENTAL_END_TIMESTAMP: ConfigOption[String] =
+    ConfigBuilder
+      .key("scan.incremental.end.timestamp")
+      .stringType()
+      .noDefaultValue()
+      .withDescription(
+        "The exclusive upper bound of an incremental (time-range) batch read, yielding a " +
+          "left-closed right-open '[start, end)' window. Accepts epoch milliseconds or a " +
+          "'yyyy-MM-dd HH:mm:ss' datetime string interpreted in the Spark session time zone; " +
+          "when unset the read runs up to the latest committed data. Setting it without " +
+          "'scan.incremental.start.timestamp' fails fast, as does a window whose start is not " +
+          "strictly before its end.")
+
   val SCAN_POLL_TIMEOUT: ConfigOption[Duration] =
     ConfigBuilder
       .key("scan.poll.timeout")
       .durationType()
       .defaultValue(Duration.ofMillis(10000L))
       .withDescription("The timeout for log scanner to poll records.")
+
+  val SCAN_MAX_RECORDS_PER_PARTITION: ConfigOption[java.lang.Long] =
+    ConfigBuilder
+      .key("scan.maxRecordsPerPartition")
+      .longType()
+      .noDefaultValue()
+      .withDescription(
+        "The maximum number of records per Spark input partition when reading a log table. " +
+          "When set, each Fluss bucket whose offset range exceeds this value will be split " +
+          "into multiple partitions. Disabled by default (one partition per bucket).")
 }

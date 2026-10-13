@@ -20,7 +20,10 @@ package org.apache.fluss.security.acl;
 import org.apache.fluss.annotation.PublicEvolving;
 
 import java.security.Principal;
+import java.util.Arrays;
 import java.util.Objects;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 /**
  * Represents a security principal in Fluss, defined by a {@code name} and {@code type}.
@@ -56,6 +59,17 @@ public class FlussPrincipal implements Principal {
         this.type = type;
     }
 
+    /**
+     * Parses principals from a semicolon separated list of {@code <type>:<name>} pairs, e.g. {@code
+     * User:root;Group:admins}.
+     */
+    public static Set<FlussPrincipal> parsePrincipals(String principals) {
+        return Arrays.stream(principals.split(";"))
+                .map(principal -> principal.trim().split(":"))
+                .map(principal -> new FlussPrincipal(principal[1], principal[0]))
+                .collect(Collectors.toSet());
+    }
+
     @Override
     public String getName() {
         return name;
@@ -77,6 +91,34 @@ public class FlussPrincipal implements Principal {
     @Override
     public int hashCode() {
         return Objects.hash(name, type);
+    }
+
+    /**
+     * Tests whether this principal matches another principal, with optional case-insensitive
+     * comparison for both name and type.
+     *
+     * @param other the other principal to match against
+     * @param ignoreCase if {@code true}, name and type are compared case-insensitively
+     * @return {@code true} if the principals match
+     */
+    public boolean matches(FlussPrincipal other, boolean ignoreCase) {
+        if (other == null) {
+            return false;
+        }
+        if (!ignoreCase) {
+            return this.equals(other);
+        }
+        return equalsIgnoreCase(name, other.name) && equalsIgnoreCase(type, other.type);
+    }
+
+    private static boolean equalsIgnoreCase(String a, String b) {
+        if (a == b) {
+            return true;
+        }
+        if (a == null || b == null) {
+            return false;
+        }
+        return a.equalsIgnoreCase(b);
     }
 
     @Override

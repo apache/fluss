@@ -22,8 +22,6 @@ import org.apache.fluss.cluster.Endpoint;
 import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
-import org.apache.fluss.exception.IllegalConfigurationException;
-import org.apache.fluss.exception.InvalidServerRackInfoException;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metrics.registry.MetricRegistry;
 import org.apache.fluss.rpc.GatewayClientProxy;
@@ -40,15 +38,19 @@ import org.apache.fluss.server.authorizer.Authorizer;
 import org.apache.fluss.server.authorizer.AuthorizerLoader;
 import org.apache.fluss.server.coordinator.LakeCatalogDynamicLoader;
 import org.apache.fluss.server.coordinator.MetadataManager;
+import org.apache.fluss.server.kv.KvCloseMode;
 import org.apache.fluss.server.kv.KvManager;
+import org.apache.fluss.server.kv.scan.ScannerManager;
 import org.apache.fluss.server.kv.snapshot.DefaultCompletedKvSnapshotCommitter;
 import org.apache.fluss.server.log.LogManager;
 import org.apache.fluss.server.log.remote.RemoteLogManager;
 import org.apache.fluss.server.metadata.TabletServerMetadataCache;
+import org.apache.fluss.server.metadata.TabletServerResource;
 import org.apache.fluss.server.metrics.ServerMetricUtils;
 import org.apache.fluss.server.metrics.UserMetrics;
 import org.apache.fluss.server.metrics.group.TabletServerMetricGroup;
 import org.apache.fluss.server.replica.ReplicaManager;
+import org.apache.fluss.server.storage.LocalDiskManager;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.ZooKeeperUtils;
 import org.apache.fluss.server.zk.data.TabletServerRegistration;
@@ -68,10 +70,10 @@ import org.slf4j.LoggerFactory;
 import javax.annotation.Nullable;
 import javax.annotation.concurrent.GuardedBy;
 
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
-import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -79,6 +81,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.apache.fluss.config.ConfigOptions.BACKGROUND_THREADS;
+import static org.apache.fluss.config.FlussConfigUtils.validateTabletConfigs;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toTableBucket;
 
 /**
@@ -99,8 +102,9 @@ public class TabletServer extends ServerBase {
      * rack-aware scenarios, this may lead to an inability to guarantee proper awareness
      * capabilities.
      *
-     * <p>Note: Either all tabletServers are configured with rack, or none of them are configured;
-     * otherwise, an {@link InvalidServerRackInfoException} will be thrown.
+     * <p>Rack-aware assignment is enabled only when all live tabletServers are configured with rack
+     * information. During a rolling configuration update, assignment falls back to rack-unaware
+     * mode until all live tabletServers report rack information.
      */
     private final @Nullable String rack;
 
@@ -144,7 +148,13 @@ public class TabletServer extends ServerBase {
     private KvManager kvManager;
 
     @GuardedBy("lock")
+    private LocalDiskManager localDiskManager;
+
+    @GuardedBy("lock")
     private ReplicaManager replicaManager;
+
+    @GuardedBy("lock")
+    private ScannerManager scannerManager;
 
     @GuardedBy("lock")
     private @Nullable RemoteLogManager remoteLogManager = null;
@@ -171,13 +181,21 @@ public class TabletServer extends ServerBase {
     @GuardedBy("lock")
     private ExecutorService ioExecutor;
 
+    /**
+     * Runs replica state changes outside RPC worker threads to prevent potentially slow state
+     * transitions from blocking other RPCs. A single thread is sufficient because replica state
+     * changes are serialized by the replica state change lock.
+     */
+    @GuardedBy("lock")
+    private ExecutorService replicaStateChangeExecutor;
+
     public TabletServer(Configuration conf) {
         this(conf, SystemClock.getInstance());
     }
 
     public TabletServer(Configuration conf, Clock clock) {
         super(conf);
-        validateConfigs(conf);
+        validateTabletConfigs(conf);
         this.terminationFuture = new CompletableFuture<>();
         this.serverId = conf.getInt(ConfigOptions.TABLET_SERVER_ID);
         this.rack = conf.getString(ConfigOptions.TABLET_SERVER_RACK);
@@ -187,6 +205,7 @@ public class TabletServer extends ServerBase {
 
     public static void main(String[] args) {
         Configuration configuration = loadConfiguration(args, TabletServer.class.getSimpleName());
+        applyServerDefaultConfigurations(configuration);
         TabletServer tabletServer = new TabletServer(configuration);
         startServer(tabletServer);
     }
@@ -218,22 +237,30 @@ public class TabletServer extends ServerBase {
                     new LakeCatalogDynamicLoader(conf, pluginManager, false);
             MetadataManager metadataManager =
                     new MetadataManager(zkClient, conf, lakeCatalogDynamicLoader);
-            this.dynamicConfigManager = new DynamicConfigManager(zkClient, conf, false);
-            dynamicConfigManager.register(lakeCatalogDynamicLoader);
+            this.dynamicConfigManager = new DynamicConfigManager(zkClient, conf);
 
             this.metadataCache = new TabletServerMetadataCache(metadataManager);
 
+            this.localDiskManager = LocalDiskManager.create(conf);
             this.logManager =
-                    LogManager.create(conf, zkClient, scheduler, clock, tabletServerMetricGroup);
+                    LogManager.create(
+                            conf,
+                            zkClient,
+                            scheduler,
+                            clock,
+                            tabletServerMetricGroup,
+                            localDiskManager);
             logManager.startup();
 
-            this.kvManager = KvManager.create(conf, zkClient, logManager, tabletServerMetricGroup);
+            this.kvManager =
+                    KvManager.create(
+                            conf,
+                            zkClient,
+                            logManager,
+                            tabletServerMetricGroup,
+                            localDiskManager,
+                            clock);
             kvManager.startup();
-
-            // Register kvManager to dynamicConfigManager for dynamic reconfiguration
-            dynamicConfigManager.register(kvManager);
-            // Start dynamicConfigManager after all reconfigurable components are registered
-            dynamicConfigManager.startup();
 
             this.authorizer = AuthorizerLoader.createAuthorizer(conf, zkClient, pluginManager);
             if (authorizer != null) {
@@ -243,7 +270,7 @@ public class TabletServer extends ServerBase {
             // to fetch log.
             this.clientMetricGroup =
                     new ClientMetricGroup(metricRegistry, SERVER_NAME + "-" + serverId);
-            this.rpcClient = RpcClient.create(conf, clientMetricGroup, true);
+            this.rpcClient = RpcClient.create(conf, clientMetricGroup);
 
             this.coordinatorGateway =
                     GatewayClientProxy.createGatewayProxy(
@@ -255,6 +282,11 @@ public class TabletServer extends ServerBase {
                     Executors.newFixedThreadPool(
                             conf.get(ConfigOptions.SERVER_IO_POOL_SIZE),
                             new ExecutorThreadFactory("tablet-server-io"));
+            this.replicaStateChangeExecutor =
+                    Executors.newSingleThreadExecutor(
+                            new ExecutorThreadFactory("tablet-server-replica-state-change"));
+
+            this.scannerManager = new ScannerManager(conf, scheduler);
 
             this.replicaManager =
                     new ReplicaManager(
@@ -272,8 +304,11 @@ public class TabletServer extends ServerBase {
                             this,
                             tabletServerMetricGroup,
                             userMetrics,
+                            scannerManager,
                             clock,
-                            ioExecutor);
+                            ioExecutor,
+                            localDiskManager,
+                            pluginManager);
             replicaManager.startup();
 
             this.tabletService =
@@ -286,7 +321,11 @@ public class TabletServer extends ServerBase {
                             metadataManager,
                             authorizer,
                             dynamicConfigManager,
-                            ioExecutor);
+                            ioExecutor,
+                            replicaStateChangeExecutor,
+                            scannerManager,
+                            coordinatorGateway,
+                            interListenerName);
 
             RequestsMetrics requestsMetrics =
                     RequestsMetrics.createTabletServerRequestMetrics(tabletServerMetricGroup);
@@ -297,6 +336,23 @@ public class TabletServer extends ServerBase {
                             tabletService,
                             tabletServerMetricGroup,
                             requestsMetrics);
+
+            dynamicConfigManager.register(lakeCatalogDynamicLoader);
+            // Register logManager for dynamic log retention configuration.
+            dynamicConfigManager.register(logManager);
+            // Register kvManager to dynamicConfigManager for dynamic reconfiguration
+            dynamicConfigManager.register(kvManager);
+            // Register DefaultSnapshotContext for dynamic kv.snapshot.interval
+            dynamicConfigManager.register(replicaManager.getKvSnapshotContext());
+            // Register replicaManager to dynamicConfigManager for dynamic config
+            dynamicConfigManager.register(replicaManager);
+            // Register localDiskManager for dynamic disk write-limit and recover ratios.
+            dynamicConfigManager.register(localDiskManager);
+            rpcServer.getServerReconfigurables().forEach(dynamicConfigManager::register);
+
+            // Start dynamicConfigManager after all reconfigurable components are registered
+            dynamicConfigManager.startup();
+
             rpcServer.start();
 
             registerTabletServer();
@@ -335,9 +391,13 @@ public class TabletServer extends ServerBase {
     private void registerTabletServer() throws Exception {
         long startTime = System.currentTimeMillis();
         List<Endpoint> bindEndpoints = rpcServer.getBindEndpoints();
+        TabletServerResource tabletServerResource = new TabletServerResourceProbe(conf).probe();
         TabletServerRegistration tabletServerRegistration =
                 new TabletServerRegistration(
-                        rack, Endpoint.loadAdvertisedEndpoints(bindEndpoints, conf), startTime);
+                        rack,
+                        Endpoint.loadAdvertisedEndpoints(bindEndpoints, conf),
+                        startTime,
+                        tabletServerResource);
 
         while (true) {
             try {
@@ -381,7 +441,7 @@ public class TabletServer extends ServerBase {
                 exception = ExceptionUtils.firstOrSuppressed(t, exception);
             }
 
-            final Collection<CompletableFuture<Void>> terminationFutures = new ArrayList<>(2);
+            final Collection<CompletableFuture<Void>> terminationFutures = new ArrayList<>(1);
             try {
                 if (metricRegistry != null) {
                     terminationFutures.add(metricRegistry.closeAsync());
@@ -390,17 +450,37 @@ public class TabletServer extends ServerBase {
                 exception = ExceptionUtils.firstOrSuppressed(t, exception);
             }
 
+            CompletableFuture<Void> rpcServerTerminationFuture =
+                    CompletableFuture.completedFuture(null);
             try {
-                if (rpcServer != null) {
-                    terminationFutures.add(rpcServer.closeAsync());
+                rpcServerTerminationFuture = shutdownRpcServer();
+            } catch (Throwable t) {
+                exception = ExceptionUtils.firstOrSuppressed(t, exception);
+            }
+
+            // Stop dispatching new RPC calls and drain the request processors before shutting down
+            // the components that can access tablets. RPC calls may leave delayed operations
+            // behind; ReplicaManager is shut down below before the tablet managers to stop those
+            // operations as well as snapshot and replica-fetcher activity.
+            try {
+                rpcServerTerminationFuture.join();
+            } catch (Throwable t) {
+                exception =
+                        ExceptionUtils.firstOrSuppressed(
+                                ExceptionUtils.stripCompletionException(t), exception);
+            }
+
+            try {
+                if (tabletService != null) {
+                    tabletService.shutdown();
                 }
             } catch (Throwable t) {
                 exception = ExceptionUtils.firstOrSuppressed(t, exception);
             }
 
             try {
-                if (tabletService != null) {
-                    tabletService.shutdown();
+                if (replicaStateChangeExecutor != null) {
+                    ExecutorUtils.gracefulShutdown(5, TimeUnit.SECONDS, replicaStateChangeExecutor);
                 }
             } catch (Throwable t) {
                 exception = ExceptionUtils.firstOrSuppressed(t, exception);
@@ -428,20 +508,28 @@ public class TabletServer extends ServerBase {
                     scheduler.shutdown();
                 }
 
-                if (kvManager != null) {
-                    kvManager.shutdown();
+                if (scannerManager != null) {
+                    scannerManager.close();
                 }
+            } catch (Throwable t) {
+                exception = ExceptionUtils.firstOrSuppressed(t, exception);
+            }
 
-                if (remoteLogManager != null) {
-                    remoteLogManager.close();
-                }
+            try {
+                shutdownReplicaManager();
+            } catch (Throwable t) {
+                exception = ExceptionUtils.firstOrSuppressed(t, exception);
+            }
 
-                if (logManager != null) {
-                    logManager.shutdown();
-                }
+            try {
+                shutdownTabletManagers();
+            } catch (Throwable t) {
+                exception = ExceptionUtils.firstOrSuppressed(t, exception);
+            }
 
-                if (replicaManager != null) {
-                    replicaManager.shutdown();
+            try {
+                if (localDiskManager != null) {
+                    localDiskManager.close();
                 }
 
                 if (authorizer != null) {
@@ -475,7 +563,43 @@ public class TabletServer extends ServerBase {
         }
     }
 
+    @VisibleForTesting
+    CompletableFuture<Void> shutdownRpcServer() {
+        if (rpcServer != null) {
+            return rpcServer.closeAsync();
+        }
+        return CompletableFuture.completedFuture(null);
+    }
+
+    @VisibleForTesting
+    void shutdownReplicaManager() throws InterruptedException {
+        if (replicaManager != null) {
+            replicaManager.shutdown();
+        }
+    }
+
+    @VisibleForTesting
+    void shutdownTabletManagers() throws IOException {
+        shutdownKvManager(KvCloseMode.DISCARD_UNPERSISTED_STATE);
+
+        if (remoteLogManager != null) {
+            remoteLogManager.close();
+        }
+
+        if (logManager != null) {
+            logManager.shutdown();
+        }
+    }
+
+    @VisibleForTesting
+    void shutdownKvManager(KvCloseMode closeMode) {
+        if (kvManager != null) {
+            kvManager.shutdown(closeMode);
+        }
+    }
+
     private void controlledShutDown() {
+        long startTime = System.currentTimeMillis();
         LOG.info("Starting controlled shutdown.");
 
         // We request the CoordinatorServer to do a controlled shutdown. On failure, we backoff for
@@ -531,6 +655,11 @@ public class TabletServer extends ServerBase {
             LOG.warn(
                     "Proceeding to do an unclean shutdown as all the controlled shutdown attempts failed.");
         }
+
+        LOG.info(
+                "Controlled shutdown attempts finished in {} ms, succeeded: {}.",
+                System.currentTimeMillis() - startTime,
+                shutdownSucceeded);
     }
 
     @Override
@@ -556,40 +685,6 @@ public class TabletServer extends ServerBase {
     @VisibleForTesting
     public @Nullable Authorizer getAuthorizer() {
         return authorizer;
-    }
-
-    private static void validateConfigs(Configuration conf) {
-        Optional<Integer> serverId = conf.getOptional(ConfigOptions.TABLET_SERVER_ID);
-        if (!serverId.isPresent()) {
-            throw new IllegalConfigurationException(
-                    String.format("Configuration %s must be set.", ConfigOptions.TABLET_SERVER_ID));
-        }
-
-        if (serverId.get() < 0) {
-            throw new IllegalConfigurationException(
-                    String.format(
-                            "Invalid configuration for %s, it must be greater than or equal 0.",
-                            ConfigOptions.TABLET_SERVER_ID.key()));
-        }
-
-        if (conf.get(ConfigOptions.BACKGROUND_THREADS) < 1) {
-            throw new IllegalConfigurationException(
-                    String.format(
-                            "Invalid configuration for %s, it must be greater than or equal 1.",
-                            ConfigOptions.BACKGROUND_THREADS.key()));
-        }
-
-        if (conf.get(ConfigOptions.REMOTE_DATA_DIR) == null) {
-            throw new IllegalConfigurationException(
-                    String.format("Configuration %s must be set.", ConfigOptions.REMOTE_DATA_DIR));
-        }
-
-        if (conf.get(ConfigOptions.LOG_SEGMENT_FILE_SIZE).getBytes() > Integer.MAX_VALUE) {
-            throw new IllegalConfigurationException(
-                    String.format(
-                            "Invalid configuration for %s, it must be less than or equal %d bytes.",
-                            ConfigOptions.LOG_SEGMENT_FILE_SIZE.key(), Integer.MAX_VALUE));
-        }
     }
 
     @VisibleForTesting

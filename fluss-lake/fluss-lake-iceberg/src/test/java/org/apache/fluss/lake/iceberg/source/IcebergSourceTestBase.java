@@ -39,6 +39,7 @@ import org.apache.iceberg.data.GenericRecord;
 import org.apache.iceberg.data.Record;
 import org.apache.iceberg.io.TaskWriter;
 import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.io.TempDir;
 
 import javax.annotation.Nullable;
@@ -68,6 +69,14 @@ class IcebergSourceTestBase {
         configuration.setString("name", "fluss_test_catalog");
         lakeStorage = new IcebergLakeStorage(configuration);
         icebergCatalog = IcebergCatalogUtils.createIcebergCatalog(configuration);
+    }
+
+    @BeforeEach
+    void dropDefaultTable() {
+        TableIdentifier tableId = TableIdentifier.of(DEFAULT_DB, DEFAULT_TABLE);
+        if (icebergCatalog.tableExists(tableId)) {
+            icebergCatalog.dropTable(tableId, true);
+        }
     }
 
     public void createTable(TablePath tablePath, Schema schema, PartitionSpec partitionSpec)

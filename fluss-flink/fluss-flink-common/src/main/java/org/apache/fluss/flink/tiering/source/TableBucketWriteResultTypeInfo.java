@@ -17,9 +17,9 @@
 
 package org.apache.fluss.flink.tiering.source;
 
+import org.apache.fluss.flink.adapter.TypeInformationAdapter;
 import org.apache.fluss.lake.serializer.SimpleVersionedSerializer;
 
-import org.apache.flink.api.common.ExecutionConfig;
 import org.apache.flink.api.common.typeinfo.TypeInformation;
 import org.apache.flink.api.common.typeutils.TypeSerializer;
 import org.apache.flink.core.io.SimpleVersionedSerializerTypeSerializerProxy;
@@ -27,7 +27,7 @@ import org.apache.flink.util.function.SerializableSupplier;
 
 /** A {@link TypeInformation} for {@link TableBucketWriteResult} . */
 public class TableBucketWriteResultTypeInfo<WriteResult>
-        extends TypeInformation<TableBucketWriteResult<WriteResult>> {
+        extends TypeInformationAdapter<TableBucketWriteResult<WriteResult>> {
 
     private final SerializableSupplier<SimpleVersionedSerializer<WriteResult>>
             writeResultSerializerFactory;
@@ -76,8 +76,8 @@ public class TableBucketWriteResultTypeInfo<WriteResult>
     }
 
     @Override
-    public TypeSerializer<TableBucketWriteResult<WriteResult>> createSerializer(
-            ExecutionConfig executionConfig) {
+    protected TypeSerializer<TableBucketWriteResult<WriteResult>> createSerializer(
+            TypeSerializerCreator typeSerializerCreator) {
         // no copy, so that data from lake writer is directly going into lake committer while
         // chaining
         return new SimpleVersionedSerializerTypeSerializerProxy<

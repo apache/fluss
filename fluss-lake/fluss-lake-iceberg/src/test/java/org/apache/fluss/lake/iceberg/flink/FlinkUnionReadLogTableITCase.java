@@ -39,6 +39,7 @@ import org.apache.flink.types.Row;
 import org.apache.flink.util.CloseableIterator;
 import org.apache.flink.util.CollectionUtil;
 import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
@@ -48,6 +49,7 @@ import javax.annotation.Nullable;
 import java.io.File;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.util.ArrayList;
@@ -251,6 +253,61 @@ public class FlinkUnionReadLogTableITCase extends FlinkUnionReadTestBase {
         // cancel jobs
         insertResult.getJobClient().get().cancel().get();
         jobClient.cancel().get();
+    }
+
+    @Test
+    void testUnionReadWithTemporalFilterPushDown() throws Exception {
+        JobClient jobClient = buildTieringJob(execEnv);
+        String tableName = "temporal_filter_log_table";
+        TablePath tablePath = TablePath.of(DEFAULT_DB, tableName);
+        Schema schema =
+                Schema.newBuilder()
+                        .column("f_int", DataTypes.INT())
+                        .column("f_date", DataTypes.DATE())
+                        .column("f_ts", DataTypes.TIMESTAMP(6))
+                        .build();
+        long tableId = createLogTable(tablePath, DEFAULT_BUCKET_NUM, false, schema);
+        writeRows(tablePath, temporalRows(1, 3), true);
+        waitUntilBucketSynced(tablePath, tableId, DEFAULT_BUCKET_NUM, false);
+        jobClient.cancel().get();
+        writeRows(tablePath, temporalRows(4, 5), true);
+
+        String dateQuery =
+                "SELECT f_int, f_date FROM " + tableName + " WHERE f_date > DATE '2024-01-02'";
+        assertThat(batchTEnv.explainSql(dateQuery)).contains("filter=[>(f_date, 2024-01-02)]");
+        assertThat(CollectionUtil.iteratorToList(batchTEnv.executeSql(dateQuery).collect()))
+                .containsExactlyInAnyOrder(
+                        Row.of(3, LocalDate.of(2024, 1, 3)),
+                        Row.of(4, LocalDate.of(2024, 1, 4)),
+                        Row.of(5, LocalDate.of(2024, 1, 5)));
+
+        // the literal equals the timestamp of row 2, so the micros must be compared exactly
+        String timestampQuery =
+                "SELECT f_int, f_ts FROM "
+                        + tableName
+                        + " WHERE f_ts > TIMESTAMP '2024-01-02 10:00:00.123456'";
+        assertThat(batchTEnv.explainSql(timestampQuery)).contains("filter=[>(f_ts, ");
+        assertThat(CollectionUtil.iteratorToList(batchTEnv.executeSql(timestampQuery).collect()))
+                .containsExactlyInAnyOrder(
+                        Row.of(3, temporalTimestamp(3)),
+                        Row.of(4, temporalTimestamp(4)),
+                        Row.of(5, temporalTimestamp(5)));
+    }
+
+    private static List<InternalRow> temporalRows(int fromDay, int toDay) {
+        List<InternalRow> rows = new ArrayList<>();
+        for (int day = fromDay; day <= toDay; day++) {
+            rows.add(
+                    row(
+                            day,
+                            (int) LocalDate.of(2024, 1, day).toEpochDay(),
+                            TimestampNtz.fromLocalDateTime(temporalTimestamp(day))));
+        }
+        return rows;
+    }
+
+    private static LocalDateTime temporalTimestamp(int day) {
+        return LocalDateTime.of(2024, 1, day, 10, 0, 0, 123_456_000);
     }
 
     private long prepareLogTable(

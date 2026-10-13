@@ -22,7 +22,6 @@ import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.server.utils.timer.DefaultTimer;
 import org.apache.fluss.server.utils.timer.Timer;
 import org.apache.fluss.server.utils.timer.TimerTask;
-import org.apache.fluss.utils.MapUtils;
 import org.apache.fluss.utils.concurrent.ShutdownableThread;
 
 import org.slf4j.Logger;
@@ -34,6 +33,7 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Queue;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.Lock;
@@ -236,7 +236,7 @@ public final class DelayedOperationManager<T extends DelayedOperation> {
         private final Lock watcherLock;
 
         public WatcherList() {
-            this.watchersByKey = MapUtils.newConcurrentHashMap();
+            this.watchersByKey = new ConcurrentHashMap<>();
             this.watcherLock = new ReentrantLock();
         }
 

@@ -55,10 +55,12 @@ public class BytesTest {
 
     @Test
     public void testBytes() throws Exception {
-        B lpb = new B().setPayload(new byte[] {1, 2, 3, 4, 5});
+        byte[] payload = new byte[] {1, 2, 3, 4, 5};
+        B lpb = new B().setPayload(payload);
 
         assertThat(lpb.getPayloadSize()).isEqualTo(5);
         assertThat(lpb.getPayload()).isEqualTo(new byte[] {1, 2, 3, 4, 5});
+        assertThat(lpb.getPayload()).isSameAs(payload);
 
         // test binary equals to protobuf
         Bytes.B pbb =
@@ -99,6 +101,32 @@ public class BytesTest {
         byte[] expected = new byte[lpb.totalSize()];
         System.arraycopy(b1, 0, expected, 0, lpb.totalSize());
         assertThat(b3).isEqualTo(expected);
+    }
+
+    @Test
+    public void testBytesSlice() throws Exception {
+        byte[] backing = new byte[] {9, 9, 1, 2, 3, 9};
+        B message = new B().setPayload(backing, 2, 3);
+
+        assertThat(message.getPayloadSize()).isEqualTo(3);
+        assertThat(message.getPayload()).containsExactly(1, 2, 3);
+
+        message.writeTo(bb1);
+        B parsed = new B();
+        parsed.parseFrom(bb1, bb1.readableBytes());
+        assertThat(parsed.getPayload()).containsExactly(1, 2, 3);
+    }
+
+    @Test
+    public void testUnsetAndClearedPayloadReturnsNull() {
+        B message = new B();
+
+        assertThat(message.getPayload()).isNull();
+
+        message.setPayload(new byte[] {1});
+        message.clearPayload();
+
+        assertThat(message.getPayload()).isNull();
     }
 
     @Test
@@ -243,14 +271,16 @@ public class BytesTest {
 
     @Test
     public void testRepeatedBytes() throws Exception {
+        byte[] firstExtraItem = new byte[] {1, 2, 3};
         B lpb = new B();
-        lpb.addExtraItem(new byte[] {1, 2, 3});
+        lpb.addExtraItem(firstExtraItem);
         lpb.addExtraItem(new byte[] {4, 5, 6, 7});
 
         assertThat(lpb.getExtraItemsCount()).isEqualTo(2);
         assertThat(lpb.getExtraItemSizeAt(0)).isEqualTo(3);
         assertThat(lpb.getExtraItemSizeAt(1)).isEqualTo(4);
         assertThat(lpb.getExtraItemAt(0)).isEqualTo(new byte[] {1, 2, 3});
+        assertThat(lpb.getExtraItemAt(0)).isSameAs(firstExtraItem);
         assertThat(lpb.getExtraItemAt(1)).isEqualTo(new byte[] {4, 5, 6, 7});
 
         Bytes.B pbb =
@@ -275,5 +305,14 @@ public class BytesTest {
         assertThat(parsed.getExtraItemSizeAt(1)).isEqualTo(4);
         assertThat(parsed.getExtraItemAt(0)).isEqualTo(new byte[] {1, 2, 3});
         assertThat(parsed.getExtraItemAt(1)).isEqualTo(new byte[] {4, 5, 6, 7});
+    }
+
+    @Test
+    public void testRepeatedBytesSlice() throws Exception {
+        byte[] backing = new byte[] {9, 1, 2, 3, 9};
+        B message = new B();
+        message.addExtraItem(backing, 1, 3);
+
+        assertThat(message.getExtraItemAt(0)).containsExactly(1, 2, 3);
     }
 }

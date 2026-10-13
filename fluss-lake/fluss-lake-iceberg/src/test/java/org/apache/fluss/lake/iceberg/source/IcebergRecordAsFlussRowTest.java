@@ -18,6 +18,7 @@
 
 package org.apache.fluss.lake.iceberg.source;
 
+import org.apache.fluss.row.InternalArray;
 import org.apache.fluss.row.InternalRow;
 
 import org.apache.iceberg.Schema;
@@ -29,10 +30,14 @@ import org.junit.jupiter.api.Test;
 
 import java.math.BigDecimal;
 import java.nio.ByteBuffer;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.LocalTime;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
+import java.util.Arrays;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 import static org.apache.iceberg.types.Types.NestedField.optional;
@@ -87,7 +92,16 @@ class IcebergRecordAsFlussRowTest {
                                 "map_field",
                                 Types.MapType.ofOptional(
                                         20, 21, Types.StringType.get(), Types.IntegerType.get())),
-                        // System columns
+                        optional(25, "date_field", Types.DateType.get()),
+                        optional(26, "time_field", Types.TimeType.get()),
+                        optional(
+                                27,
+                                "date_array",
+                                Types.ListType.ofOptional(28, Types.DateType.get())),
+                        optional(
+                                29,
+                                "time_array",
+                                Types.ListType.ofOptional(30, Types.TimeType.get())),
                         required(22, "__bucket", Types.IntegerType.get()),
                         required(23, "__offset", Types.LongType.get()),
                         required(24, "__timestamp", Types.TimestampType.withZone()));
@@ -107,8 +121,45 @@ class IcebergRecordAsFlussRowTest {
 
         icebergRecordAsFlussRow.replaceIcebergRecord(record);
 
-        // Should return count excluding system columns (3 system columns)
-        assertThat(icebergRecordAsFlussRow.getFieldCount()).isEqualTo(15);
+        assertThat(icebergRecordAsFlussRow.getFieldCount()).isEqualTo(19);
+    }
+
+    @Test
+    void testGetFieldCountCleanRecord() {
+        // A clean record (FIP-27) has no system columns; the business field count is the full size.
+        Schema cleanSchema =
+                new Schema(
+                        required(1, "id", Types.LongType.get()),
+                        optional(2, "name", Types.StringType.get()),
+                        optional(3, "age", Types.IntegerType.get()));
+        Record cleanRecord = GenericRecord.create(cleanSchema);
+        cleanRecord.setField("id", 1L);
+        cleanRecord.setField("name", "John");
+        cleanRecord.setField("age", 30);
+
+        icebergRecordAsFlussRow.replaceIcebergRecord(cleanRecord);
+
+        assertThat(icebergRecordAsFlussRow.getFieldCount()).isEqualTo(3);
+    }
+
+    @Test
+    void testGetFieldCountLegacyProjectedRecord() {
+        // A projected legacy record carries only the system columns that were projected. The reader
+        // projects __offset and __timestamp (but not __bucket), so a single projected business
+        // column yields [id, __offset, __timestamp]; the business field count must be 1, not 0.
+        Schema projectedSchema =
+                new Schema(
+                        required(1, "id", Types.LongType.get()),
+                        required(23, "__offset", Types.LongType.get()),
+                        required(24, "__timestamp", Types.TimestampType.withZone()));
+        Record projectedRecord = GenericRecord.create(projectedSchema);
+        projectedRecord.setField("id", 1L);
+        projectedRecord.setField("__offset", 100L);
+        projectedRecord.setField("__timestamp", OffsetDateTime.now(ZoneOffset.UTC));
+
+        icebergRecordAsFlussRow.replaceIcebergRecord(projectedRecord);
+
+        assertThat(icebergRecordAsFlussRow.getFieldCount()).isEqualTo(1);
     }
 
     @Test
@@ -170,8 +221,59 @@ class IcebergRecordAsFlussRowTest {
         assertThat(icebergRecordAsFlussRow.getChar(12, 10).toString())
                 .isEqualTo("Hello"); // char_data
 
-        // Test field count (excluding system columns)
-        assertThat(icebergRecordAsFlussRow.getFieldCount()).isEqualTo(15);
+        assertThat(icebergRecordAsFlussRow.getFieldCount()).isEqualTo(19);
+    }
+
+    @Test
+    void testGetIntWithLocalDateAndLocalTime() {
+        LocalDate date = LocalDate.of(2020, 6, 15);
+        LocalTime time = LocalTime.of(14, 30, 0);
+
+        record.setField("id", 1L);
+        record.setField("date_field", date);
+        record.setField("time_field", time);
+        record.setField("date_array", Arrays.asList(date));
+        record.setField("time_array", Arrays.asList(time));
+        record.setField("__bucket", 1);
+        record.setField("__offset", 100L);
+        record.setField("__timestamp", OffsetDateTime.now(ZoneOffset.UTC));
+
+        icebergRecordAsFlussRow.replaceIcebergRecord(record);
+
+        assertThat(icebergRecordAsFlussRow.getInt(15)).isEqualTo((int) date.toEpochDay());
+        assertThat(icebergRecordAsFlussRow.getInt(16))
+                .isEqualTo((int) (time.toNanoOfDay() / 1_000_000));
+
+        InternalArray dateArray = icebergRecordAsFlussRow.getArray(17);
+        InternalArray timeArray = icebergRecordAsFlussRow.getArray(18);
+        assertThat(dateArray.getInt(0)).isEqualTo((int) date.toEpochDay());
+        assertThat(timeArray.getInt(0)).isEqualTo((int) (time.toNanoOfDay() / 1_000_000));
+    }
+
+    @Test
+    void testGetIntWithLocalTimeNearEndOfDay() {
+        // 23:59:59.999 -> 86_399_999 ms
+        LocalTime endOfDay = LocalTime.of(23, 59, 59, 999_000_000);
+        long expectedNanos = endOfDay.toNanoOfDay();
+        assertThat(expectedNanos).isGreaterThan(Integer.MAX_VALUE);
+        int expectedMillisOfDay = (int) (expectedNanos / 1_000_000L);
+        assertThat(expectedMillisOfDay).isEqualTo(86_399_999);
+
+        record.setField("id", 1L);
+        record.setField("date_field", LocalDate.of(2020, 6, 15));
+        record.setField("time_field", endOfDay);
+        record.setField("date_array", List.of(LocalDate.of(2020, 6, 15)));
+        record.setField("time_array", List.of(endOfDay));
+        record.setField("__bucket", 1);
+        record.setField("__offset", 100L);
+        record.setField("__timestamp", OffsetDateTime.now(ZoneOffset.UTC));
+
+        icebergRecordAsFlussRow.replaceIcebergRecord(record);
+
+        assertThat(icebergRecordAsFlussRow.getInt(16)).isEqualTo(expectedMillisOfDay);
+
+        InternalArray timeArray = icebergRecordAsFlussRow.getArray(18);
+        assertThat(timeArray.getInt(0)).isEqualTo(expectedMillisOfDay);
     }
 
     @Test

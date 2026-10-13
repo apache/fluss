@@ -19,8 +19,11 @@ package org.apache.fluss.spark.read
 
 import org.apache.fluss.config.Configuration
 import org.apache.fluss.metadata.{TableInfo, TablePath}
+import org.apache.fluss.predicate.{Predicate => FlussPredicate}
 import org.apache.fluss.spark.SparkConversions
 
+import org.apache.spark.sql.connector.expressions.filter.Predicate
+import org.apache.spark.sql.connector.metric.CustomMetric
 import org.apache.spark.sql.connector.read.{Batch, Scan}
 import org.apache.spark.sql.connector.read.streaming.MicroBatchStream
 import org.apache.spark.sql.types.StructType
@@ -30,24 +33,83 @@ import org.apache.spark.sql.util.CaseInsensitiveStringMap
 trait FlussScan extends Scan {
   def tableInfo: TableInfo
 
+  def tablePath: TablePath
+
   def requiredSchema: Option[StructType]
+
+  /** Spark predicates that the scan reports as pushed down (used in [[description]]). */
+  def pushedSparkPredicates: Seq[Predicate] = Seq.empty
+
+  def partitionPredicate: Option[FlussPredicate] = None
+
+  def limit: Option[Int] = None
+
+  def timeRange: Option[FlussTimeRange] = None
+
+  protected def scanType: String
 
   override def readSchema(): StructType = {
     requiredSchema.getOrElse(SparkConversions.toSparkDataType(tableInfo.getRowType))
   }
+
+  override def description(): String = {
+    val base = s"FlussScan: [$tablePath], Type: [$scanType]"
+    val withPushed =
+      if (pushedSparkPredicates.isEmpty) base
+      else s"$base [PushedPredicates: ${pushedSparkPredicates.mkString("[", ", ", "]")}]"
+    val withPartition = partitionPredicate match {
+      case Some(p) => s"$withPushed [PartitionFilter: $p]"
+      case None => withPushed
+    }
+    val withTimeRange = timeRange match {
+      case Some(r) if r.endMs == Long.MaxValue =>
+        s"$withPartition [TimeRange: [${r.startMs}, latest)]"
+      case Some(r) => s"$withPartition [TimeRange: [${r.startMs}, ${r.endMs})]"
+      case None => withPartition
+    }
+    limit match {
+      case Some(l) => s"$withTimeRange [Limit: $l]"
+      case None => withTimeRange
+    }
+  }
+
+  override def supportedCustomMetrics(): Array[CustomMetric] =
+    Array(FlussNumRowsReadMetric())
 }
 
-/** Fluss Append Scan. */
+/**
+ * Fluss Append (log-table) scan. Whether the underlying batch reads from Fluss only or unions Fluss
+ * with a lake snapshot is determined by the [[AppendSplitPlanner]] instance passed in from the
+ * ScanBuilder. Description reflects the planner category.
+ */
 case class FlussAppendScan(
     tablePath: TablePath,
     tableInfo: TableInfo,
     requiredSchema: Option[StructType],
+    pushedPredicate: Option[FlussPredicate],
+    override val partitionPredicate: Option[FlussPredicate],
+    override val pushedSparkPredicates: Seq[Predicate],
+    override val limit: Option[Int],
     options: CaseInsensitiveStringMap,
-    flussConfig: Configuration)
+    flussConfig: Configuration,
+    planner: AppendSplitPlanner)
   extends FlussScan {
 
+  override protected lazy val scanType: String =
+    if (planner.hasLakeSnapshot) "LakeAppend" else "Append"
+
+  override def timeRange: Option[FlussTimeRange] = planner.timeRange
+
   override def toBatch: Batch = {
-    new FlussAppendBatch(tablePath, tableInfo, readSchema, options, flussConfig)
+    new FlussAppendBatch(
+      tablePath,
+      tableInfo,
+      readSchema,
+      pushedPredicate,
+      limit,
+      options,
+      flussConfig,
+      planner)
   }
 
   override def toMicroBatchStream(checkpointLocation: String): MicroBatchStream = {
@@ -61,17 +123,39 @@ case class FlussAppendScan(
   }
 }
 
-/** Fluss Upsert Scan. */
+/**
+ * Fluss Upsert (primary-key table) scan. Whether the underlying batch reads from Fluss only or
+ * unions Fluss with a lake snapshot is determined by the [[UpsertSplitPlanner]] instance passed in
+ * from the ScanBuilder.
+ */
 case class FlussUpsertScan(
     tablePath: TablePath,
     tableInfo: TableInfo,
     requiredSchema: Option[StructType],
+    pushedPredicate: Option[FlussPredicate],
+    override val partitionPredicate: Option[FlussPredicate],
+    override val pushedSparkPredicates: Seq[Predicate],
+    override val limit: Option[Int],
     options: CaseInsensitiveStringMap,
-    flussConfig: Configuration)
+    flussConfig: Configuration,
+    planner: UpsertSplitPlanner)
   extends FlussScan {
 
+  override protected lazy val scanType: String =
+    if (planner.hasLakeSnapshot) "LakeUpsert" else "Upsert"
+
+  override def timeRange: Option[FlussTimeRange] = planner.timeRange
+
   override def toBatch: Batch = {
-    new FlussUpsertBatch(tablePath, tableInfo, readSchema, options, flussConfig)
+    new FlussUpsertBatch(
+      tablePath,
+      tableInfo,
+      readSchema,
+      pushedPredicate,
+      limit,
+      options,
+      flussConfig,
+      planner)
   }
 
   override def toMicroBatchStream(checkpointLocation: String): MicroBatchStream = {

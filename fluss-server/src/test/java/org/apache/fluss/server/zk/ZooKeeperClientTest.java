@@ -25,6 +25,7 @@ import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.DatabaseSummary;
+import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.SchemaInfo;
 import org.apache.fluss.metadata.TableBucket;
@@ -32,16 +33,20 @@ import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePartition;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.server.entity.RegisterTableBucketLeadAndIsrInfo;
+import org.apache.fluss.server.zk.ZkAsyncResponse.ZkGetDataResponse;
 import org.apache.fluss.server.zk.data.BucketAssignment;
 import org.apache.fluss.server.zk.data.BucketSnapshot;
 import org.apache.fluss.server.zk.data.CoordinatorAddress;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
 import org.apache.fluss.server.zk.data.PartitionAssignment;
+import org.apache.fluss.server.zk.data.PartitionRegistration;
 import org.apache.fluss.server.zk.data.RebalanceTask;
 import org.apache.fluss.server.zk.data.ServerTags;
 import org.apache.fluss.server.zk.data.TableAssignment;
 import org.apache.fluss.server.zk.data.TableRegistration;
 import org.apache.fluss.server.zk.data.TabletServerRegistration;
+import org.apache.fluss.server.zk.data.ZkData.BucketIdZNode;
+import org.apache.fluss.server.zk.data.ZkData.TableIdZNode;
 import org.apache.fluss.server.zk.data.lease.KvSnapshotLeaseMetadata;
 import org.apache.fluss.shaded.curator5.org.apache.curator.CuratorZookeeperClient;
 import org.apache.fluss.shaded.curator5.org.apache.curator.framework.CuratorFramework;
@@ -55,6 +60,7 @@ import org.apache.fluss.utils.types.Tuple2;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -73,8 +79,13 @@ import java.util.stream.Collectors;
 import static org.apache.fluss.cluster.rebalance.RebalanceStatus.COMPLETED;
 import static org.apache.fluss.cluster.rebalance.RebalanceStatus.NOT_STARTED;
 import static org.apache.fluss.server.utils.TableAssignmentUtils.generateAssignment;
+import static org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.common.ZKConfig.JUTE_MAXBUFFER;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.anyCollection;
+import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.spy;
+import static org.mockito.Mockito.verify;
 
 /** Test for {@link ZooKeeperClient}. */
 class ZooKeeperClientTest {
@@ -84,6 +95,8 @@ class ZooKeeperClientTest {
             new AllCallbackWrapper<>(new ZooKeeperExtension());
 
     private static ZooKeeperClient zookeeperClient;
+    private static String remoteDataDir;
+    private static ZkEpoch zkEpoch;
 
     @BeforeAll
     static void beforeAll() {
@@ -91,6 +104,13 @@ class ZooKeeperClientTest {
                 ZOO_KEEPER_EXTENSION_WRAPPER
                         .getCustomExtension()
                         .getZooKeeperClient(NOPErrorHandler.INSTANCE);
+        remoteDataDir = zookeeperClient.getDefaultRemoteDataDir();
+    }
+
+    @BeforeEach
+    void beforeEach() throws Exception {
+        // create epoch node in beforeEach(), because it will always be cleaned up in afterEach()
+        zkEpoch = zookeeperClient.fenceBecomeCoordinatorLeader("tmp");
     }
 
     @AfterEach
@@ -107,14 +127,14 @@ class ZooKeeperClientTest {
     void testCoordinatorLeader() throws Exception {
         // try to get leader address, should return empty since node leader address stored in
         // zk
-        assertThat(zookeeperClient.getCoordinatorAddress()).isEmpty();
+        assertThat(zookeeperClient.getCoordinatorLeaderAddress()).isEmpty();
         CoordinatorAddress coordinatorAddress =
                 new CoordinatorAddress(
                         "2", Endpoint.fromListenersString("CLIENT://localhost1:10012"));
         // register leader address
         zookeeperClient.registerCoordinatorLeader(coordinatorAddress);
         // check get leader address
-        CoordinatorAddress gottenAddress = zookeeperClient.getCoordinatorAddress().get();
+        CoordinatorAddress gottenAddress = zookeeperClient.getCoordinatorLeaderAddress().get();
         assertThat(gottenAddress).isEqualTo(coordinatorAddress);
     }
 
@@ -171,15 +191,34 @@ class ZooKeeperClientTest {
         assertThat(zookeeperClient.getTablesAssignments(Arrays.asList(tableId1, tableId2)))
                 .containsValues(tableAssignment1, tableAssignment2);
 
+        // An existing table id node may have no assignment when it only contains child nodes.
+        long tableIdWithoutAssignment = 3L;
+        zookeeperClient
+                .getCuratorClient()
+                .create()
+                .forPath(TableIdZNode.path(tableIdWithoutAssignment), new byte[0]);
+        assertThat(
+                        zookeeperClient.getTablesAssignments(
+                                Arrays.asList(tableId1, tableId2, tableIdWithoutAssignment)))
+                .containsOnlyKeys(tableId1, tableId2)
+                .containsEntry(tableId1, tableAssignment1)
+                .containsEntry(tableId2, tableAssignment2);
+
         // test update
         TableAssignment tableAssignment3 =
                 TableAssignment.builder().add(3, BucketAssignment.of(1, 5)).build();
-        zookeeperClient.updateTableAssignment(tableId1, tableAssignment3);
+        zookeeperClient.updateTableAssignment(
+                tableId1, tableAssignment3, zkEpoch.getCoordinatorEpochZkVersion());
         assertThat(zookeeperClient.getTableAssignment(tableId1)).contains(tableAssignment3);
 
         // test delete
         zookeeperClient.deleteTableAssignment(tableId1);
         assertThat(zookeeperClient.getTableAssignment(tableId1)).isEmpty();
+        assertThat(
+                        zookeeperClient.getTablesAssignments(
+                                Arrays.asList(tableId1, tableId2, tableIdWithoutAssignment)))
+                .containsOnlyKeys(tableId2)
+                .containsEntry(tableId2, tableAssignment2);
     }
 
     @Test
@@ -191,24 +230,66 @@ class ZooKeeperClientTest {
         assertThat(zookeeperClient.getLeaderAndIsr(tableBucket2)).isEmpty();
 
         // try to register bucket leaderAndIsr
-        LeaderAndIsr leaderAndIsr1 = new LeaderAndIsr(1, 10, Arrays.asList(1, 2, 3), 100, 1000);
-        LeaderAndIsr leaderAndIsr2 = new LeaderAndIsr(2, 10, Arrays.asList(4, 5, 6), 100, 1000);
+        LeaderAndIsr leaderAndIsr1 =
+                new LeaderAndIsr(
+                        1, 10, Arrays.asList(1, 2, 3), Collections.singletonList(2), 0, 1000);
+        LeaderAndIsr leaderAndIsr2 =
+                new LeaderAndIsr(2, 10, Arrays.asList(4, 5, 6), Collections.emptyList(), 0, 1000);
 
-        zookeeperClient.registerLeaderAndIsr(tableBucket1, leaderAndIsr1);
-        zookeeperClient.registerLeaderAndIsr(tableBucket2, leaderAndIsr2);
+        zookeeperClient.registerLeaderAndIsr(
+                tableBucket1, leaderAndIsr1, zkEpoch.getCoordinatorEpochZkVersion());
+        zookeeperClient.registerLeaderAndIsr(
+                tableBucket2, leaderAndIsr2, zkEpoch.getCoordinatorEpochZkVersion());
         assertThat(zookeeperClient.getLeaderAndIsr(tableBucket1)).hasValue(leaderAndIsr1);
         assertThat(zookeeperClient.getLeaderAndIsr(tableBucket2)).hasValue(leaderAndIsr2);
-        assertThat(zookeeperClient.getLeaderAndIsrs(Arrays.asList(tableBucket1, tableBucket2)))
-                .containsValues(leaderAndIsr1, leaderAndIsr2);
+        Map<TableBucket, LeaderAndIsr> leaderAndIsrs =
+                zookeeperClient.getLeaderAndIsrs(
+                        Arrays.asList(tableBucket1, tableBucket2, new TableBucket(1, 3)));
+        assertThat(leaderAndIsrs)
+                .containsOnlyKeys(tableBucket1, tableBucket2)
+                .containsEntry(tableBucket1, leaderAndIsr1)
+                .containsEntry(tableBucket2, leaderAndIsr2);
 
         // test update
-        leaderAndIsr1 = new LeaderAndIsr(2, 20, Collections.emptyList(), 200, 2000);
-        zookeeperClient.updateLeaderAndIsr(tableBucket1, leaderAndIsr1);
+        leaderAndIsr1 =
+                new LeaderAndIsr(
+                        2, 20, Collections.emptyList(), Collections.singletonList(3), 0, 2000);
+        zookeeperClient.updateLeaderAndIsr(
+                tableBucket1, leaderAndIsr1, zkEpoch.getCoordinatorEpochZkVersion());
         assertThat(zookeeperClient.getLeaderAndIsr(tableBucket1)).hasValue(leaderAndIsr1);
 
         // test delete
         zookeeperClient.deleteLeaderAndIsr(tableBucket1);
         assertThat(zookeeperClient.getLeaderAndIsr(tableBucket1)).isEmpty();
+    }
+
+    @Test
+    void testProcessGetDataResponsesOrThrow() throws Exception {
+        String existingPath = "/existing";
+        List<ZkGetDataResponse> responses =
+                Arrays.asList(
+                        new ZkGetDataResponse(
+                                existingPath, KeeperException.Code.OK, new byte[] {1}, null),
+                        new ZkGetDataResponse(
+                                "/without-value", KeeperException.Code.OK, new byte[0], null),
+                        new ZkGetDataResponse("/missing", KeeperException.Code.NONODE, null, null));
+
+        Map<String, Integer> result =
+                ZooKeeperClient.processGetDataResponsesOrThrow(
+                        responses,
+                        ZkGetDataResponse::getPath,
+                        data -> data.length == 0 ? null : (int) data[0]);
+        assertThat(result).containsOnlyKeys(existingPath).containsEntry(existingPath, 1);
+
+        ZkGetDataResponse failedResponse =
+                new ZkGetDataResponse("/failed", KeeperException.Code.CONNECTIONLOSS, null, null);
+        assertThatThrownBy(
+                        () ->
+                                ZooKeeperClient.processGetDataResponsesOrThrow(
+                                        Collections.singletonList(failedResponse),
+                                        ZkGetDataResponse::getPath,
+                                        data -> data))
+                .isInstanceOf(KeeperException.ConnectionLossException.class);
     }
 
     @ParameterizedTest
@@ -220,7 +301,13 @@ class ZooKeeperClientTest {
             TableBucket tableBucket =
                     isPartitionTable ? new TableBucket(1, 2L, i) : new TableBucket(1, i);
             LeaderAndIsr leaderAndIsr =
-                    new LeaderAndIsr(i, 10, Arrays.asList(i + 1, i + 2, i + 3), 100, 1000);
+                    new LeaderAndIsr(
+                            i,
+                            10,
+                            Arrays.asList(i + 1, i + 2, i + 3),
+                            Collections.emptyList(),
+                            0,
+                            1000);
             leaderAndIsrList.add(leaderAndIsr);
             RegisterTableBucketLeadAndIsrInfo info =
                     isPartitionTable
@@ -231,7 +318,8 @@ class ZooKeeperClientTest {
             tableBucketInfo.add(info);
         }
         // batch create
-        zookeeperClient.batchRegisterLeaderAndIsrForTablePartition(tableBucketInfo);
+        zookeeperClient.batchRegisterLeaderAndIsrForTablePartition(
+                tableBucketInfo, zkEpoch.getCoordinatorEpochZkVersion());
 
         for (int i = 0; i < 100; i++) {
             // each should register successful
@@ -256,12 +344,13 @@ class ZooKeeperClientTest {
                             LeaderAndIsr adjustLeaderAndIsr =
                                     originalLeaderAndIsr.newLeaderAndIsr(
                                             LeaderAndIsr.NO_LEADER,
-                                            originalLeaderAndIsr.isr().subList(0, 1));
+                                            originalLeaderAndIsr.isr().subList(0, 1),
+                                            Collections.emptyList());
                             leaderAndIsrUpdateList.add(adjustLeaderAndIsr);
                             entry.setValue(adjustLeaderAndIsr);
                         });
         // batch update
-        zookeeperClient.batchUpdateLeaderAndIsr(updateMap);
+        zookeeperClient.batchUpdateLeaderAndIsr(updateMap, zkEpoch.getCoordinatorEpochZkVersion());
         for (int i = 0; i < 100; i++) {
             // each should update successful
             Optional<LeaderAndIsr> optionalLeaderAndIsr =
@@ -280,9 +369,16 @@ class ZooKeeperClientTest {
         for (int i = 0; i < totalCount; i++) {
             TableBucket tableBucket = new TableBucket(1, i);
             LeaderAndIsr leaderAndIsr =
-                    new LeaderAndIsr(i, 10, Arrays.asList(i + 1, i + 2, i + 3), 100, 1000);
+                    new LeaderAndIsr(
+                            i,
+                            10,
+                            Arrays.asList(i + 1, i + 2, i + 3),
+                            Collections.emptyList(),
+                            0,
+                            1000);
             leaderAndIsrList.put(tableBucket, leaderAndIsr);
-            zookeeperClient.registerLeaderAndIsr(tableBucket, leaderAndIsr);
+            zookeeperClient.registerLeaderAndIsr(
+                    tableBucket, leaderAndIsr, zkEpoch.getCoordinatorEpochZkVersion());
         }
 
         // try to batch update
@@ -297,10 +393,12 @@ class ZooKeeperClientTest {
                                                     old.leader() + 1,
                                                     old.leaderEpoch() + 1,
                                                     old.isr(),
-                                                    old.coordinatorEpoch() + 1,
+                                                    Collections.emptyList(),
+                                                    old.coordinatorEpoch(),
                                                     old.bucketEpoch() + 1);
                                         }));
-        zookeeperClient.batchUpdateLeaderAndIsr(updateLeaderAndIsrList);
+        zookeeperClient.batchUpdateLeaderAndIsr(
+                updateLeaderAndIsrList, zkEpoch.getCoordinatorEpochZkVersion());
         for (Map.Entry<TableBucket, LeaderAndIsr> entry : updateLeaderAndIsrList.entrySet()) {
             TableBucket tableBucket = entry.getKey();
             LeaderAndIsr leaderAndIsr = entry.getValue();
@@ -331,6 +429,7 @@ class ZooKeeperClientTest {
                         new TableDescriptor.TableDistribution(16, Collections.singletonList("a")),
                         options,
                         Collections.singletonMap("custom-1", "100"),
+                        remoteDataDir,
                         currentMillis,
                         currentMillis);
         TableRegistration tableReg2 =
@@ -341,6 +440,7 @@ class ZooKeeperClientTest {
                         new TableDescriptor.TableDistribution(16, Collections.singletonList("a")),
                         options,
                         Collections.singletonMap("custom-2", "200"),
+                        remoteDataDir,
                         currentMillis,
                         currentMillis);
         zookeeperClient.registerTable(tablePath1, tableReg1);
@@ -366,6 +466,7 @@ class ZooKeeperClientTest {
                         new TableDescriptor.TableDistribution(16, Collections.singletonList("a")),
                         options,
                         Collections.singletonMap("custom-3", "300"),
+                        remoteDataDir,
                         currentMillis,
                         currentMillis);
         zookeeperClient.updateTable(tablePath1, tableReg1);
@@ -492,6 +593,125 @@ class ZooKeeperClientTest {
     }
 
     @Test
+    void testGetLatestBucketSnapshotsInBatch() throws Exception {
+        long tableId = 1L;
+        TableBucket bucketWithSnapshots = new TableBucket(tableId, 0);
+        TableBucket bucketWithoutPath = new TableBucket(tableId, 1);
+        TableBucket bucketWithoutSnapshotsPath = new TableBucket(tableId, 2);
+        TableBucket bucketWithEmptySnapshotsPath = new TableBucket(tableId, 3);
+        TableBucket unassignedBucketWithoutSnapshotsPath = new TableBucket(tableId, 4);
+        zookeeperClient.registerTableAssignment(
+                tableId,
+                TableAssignment.builder()
+                        .add(bucketWithSnapshots.getBucket(), BucketAssignment.of(0))
+                        .add(bucketWithoutPath.getBucket(), BucketAssignment.of(0))
+                        .add(bucketWithoutSnapshotsPath.getBucket(), BucketAssignment.of(0))
+                        .add(bucketWithEmptySnapshotsPath.getBucket(), BucketAssignment.of(0))
+                        .build());
+
+        BucketSnapshot olderSnapshot = new BucketSnapshot(1L, 10L, "oss://test/cp1");
+        BucketSnapshot latestSnapshot = new BucketSnapshot(3L, 30L, "oss://test/cp3");
+        zookeeperClient.registerTableBucketSnapshot(bucketWithSnapshots, olderSnapshot);
+        zookeeperClient.registerTableBucketSnapshot(bucketWithSnapshots, latestSnapshot);
+
+        // Create a bucket path without its snapshots child path.
+        zookeeperClient
+                .getCuratorClient()
+                .create()
+                .creatingParentsIfNeeded()
+                .forPath(BucketIdZNode.path(bucketWithoutSnapshotsPath));
+        zookeeperClient
+                .getCuratorClient()
+                .create()
+                .creatingParentsIfNeeded()
+                .forPath(BucketIdZNode.path(unassignedBucketWithoutSnapshotsPath));
+
+        // Deleting the only snapshot leaves an empty snapshots path.
+        BucketSnapshot deletedSnapshot = new BucketSnapshot(2L, 20L, "oss://test/cp2");
+        zookeeperClient.registerTableBucketSnapshot(bucketWithEmptySnapshotsPath, deletedSnapshot);
+        zookeeperClient.deleteTableBucketSnapshot(
+                bucketWithEmptySnapshotsPath, deletedSnapshot.getSnapshotId());
+
+        Map<Integer, Optional<BucketSnapshot>> expectedSnapshots = new HashMap<>();
+        expectedSnapshots.put(bucketWithSnapshots.getBucket(), Optional.of(latestSnapshot));
+        expectedSnapshots.put(bucketWithoutPath.getBucket(), Optional.empty());
+        expectedSnapshots.put(bucketWithoutSnapshotsPath.getBucket(), Optional.empty());
+        expectedSnapshots.put(bucketWithEmptySnapshotsPath.getBucket(), Optional.empty());
+        expectedSnapshots.put(unassignedBucketWithoutSnapshotsPath.getBucket(), Optional.empty());
+
+        assertThat(zookeeperClient.getTableLatestBucketSnapshot(tableId))
+                .isEqualTo(expectedSnapshots);
+
+        long partitionId = 2L;
+        Map<Integer, BucketAssignment> partitionBucketAssignments =
+                Collections.singletonMap(0, BucketAssignment.of(0));
+        zookeeperClient.registerPartitionAssignmentAndMetadata(
+                partitionId,
+                "p1",
+                new PartitionAssignment(tableId, partitionBucketAssignments),
+                remoteDataDir,
+                TablePath.of("db", "partitioned_table"),
+                tableId,
+                partitionBucketAssignments.size());
+        TableBucket partitionBucket = new TableBucket(tableId, partitionId, 0);
+        BucketSnapshot partitionSnapshot = new BucketSnapshot(5L, 50L, "oss://test/partition-cp5");
+        zookeeperClient.registerTableBucketSnapshot(partitionBucket, partitionSnapshot);
+
+        assertThat(zookeeperClient.getPartitionLatestBucketSnapshot(partitionId))
+                .containsEntry(partitionBucket.getBucket(), Optional.of(partitionSnapshot));
+    }
+
+    @Test
+    void testGetLatestBucketSnapshotsBeyondMaxInflightRequests() throws Exception {
+        long tableId = 1L;
+        int bucketCount = ConfigOptions.ZOOKEEPER_MAX_INFLIGHT_REQUESTS.defaultValue() + 1;
+        TableAssignment.Builder assignmentBuilder = TableAssignment.builder();
+        Map<Integer, Optional<BucketSnapshot>> expectedSnapshots = new HashMap<>();
+        for (int bucketId = 0; bucketId < bucketCount; bucketId++) {
+            assignmentBuilder.add(bucketId, BucketAssignment.of(0));
+            BucketSnapshot snapshot = new BucketSnapshot(1L, bucketId, "oss://test/cp-" + bucketId);
+            expectedSnapshots.put(bucketId, Optional.of(snapshot));
+        }
+        zookeeperClient.registerTableAssignment(tableId, assignmentBuilder.build());
+
+        for (Map.Entry<Integer, Optional<BucketSnapshot>> entry : expectedSnapshots.entrySet()) {
+            zookeeperClient.registerTableBucketSnapshot(
+                    new TableBucket(tableId, entry.getKey()), entry.getValue().get());
+        }
+
+        assertThat(zookeeperClient.getTableLatestBucketSnapshot(tableId))
+                .isEqualTo(expectedSnapshots);
+    }
+
+    @Test
+    void testLatestBucketSnapshotDeletedBetweenBatchReads() throws Exception {
+        long tableId = 1L;
+        TableBucket tableBucket = new TableBucket(tableId, 0);
+        zookeeperClient.registerTableAssignment(
+                tableId,
+                TableAssignment.builder()
+                        .add(tableBucket.getBucket(), BucketAssignment.of(0))
+                        .build());
+        BucketSnapshot olderSnapshot = new BucketSnapshot(1L, 10L, "oss://test/cp1");
+        BucketSnapshot latestSnapshot = new BucketSnapshot(2L, 20L, "oss://test/cp2");
+        zookeeperClient.registerTableBucketSnapshot(tableBucket, olderSnapshot);
+        zookeeperClient.registerTableBucketSnapshot(tableBucket, latestSnapshot);
+
+        ZooKeeperClient raceTestingClient = spy(zookeeperClient);
+        doAnswer(
+                        invocation -> {
+                            zookeeperClient.deleteTableBucketSnapshot(
+                                    tableBucket, latestSnapshot.getSnapshotId());
+                            return invocation.callRealMethod();
+                        })
+                .when(raceTestingClient)
+                .getDataInBackground(anyCollection());
+
+        assertThat(raceTestingClient.getTableLatestBucketSnapshot(tableId))
+                .containsEntry(tableBucket.getBucket(), Optional.empty());
+    }
+
+    @Test
     void testKvSnapshotLease() throws Exception {
         Map<Long, FsPath> tableIdToRemotePath = new HashMap<>();
         tableIdToRemotePath.put(150002L, new FsPath("/test/cp1"));
@@ -550,6 +770,7 @@ class ZooKeeperClientTest {
                         new TableDescriptor.TableDistribution(16, Collections.singletonList("a")),
                         Collections.emptyMap(),
                         Collections.emptyMap(),
+                        remoteDataDir,
                         currentMillis,
                         currentMillis);
         zookeeperClient.registerTable(tablePath, tableReg);
@@ -571,22 +792,78 @@ class ZooKeeperClientTest {
                                         })
                                 .getBucketAssignments());
         zookeeperClient.registerPartitionAssignmentAndMetadata(
-                1L, "p1", partitionAssignment, tablePath, tableId);
+                1L,
+                "p1",
+                partitionAssignment,
+                remoteDataDir,
+                tablePath,
+                tableId,
+                partitionAssignment.getBucketAssignments().size());
         zookeeperClient.registerPartitionAssignmentAndMetadata(
-                2L, "p2", partitionAssignment, tablePath, tableId);
+                2L,
+                "p2",
+                partitionAssignment,
+                remoteDataDir,
+                tablePath,
+                tableId,
+                partitionAssignment.getBucketAssignments().size());
+
+        assertThat(zookeeperClient.getPartitionsAssignments(Arrays.asList(1L, 2L, 3L)))
+                .containsOnlyKeys(1L, 2L)
+                .containsEntry(1L, partitionAssignment)
+                .containsEntry(2L, partitionAssignment);
 
         // check created partitions
         partitions = zookeeperClient.getPartitions(tablePath);
         assertThat(partitions).containsExactly("p1", "p2");
-        TablePartition partition = zookeeperClient.getPartition(tablePath, "p1").get();
+        PartitionRegistration partition = zookeeperClient.getPartition(tablePath, "p1").get();
         assertThat(partition.getPartitionId()).isEqualTo(1L);
         partition = zookeeperClient.getPartition(tablePath, "p2").get();
         assertThat(partition.getPartitionId()).isEqualTo(2L);
+        Map<String, PartitionRegistration> partitionRegistrations =
+                zookeeperClient.getPartitionRegistrations(tablePath);
+        assertThat(partitionRegistrations).containsOnlyKeys("p1", "p2");
+        assertThat(partitionRegistrations.get("p1").getPartitionId()).isEqualTo(1L);
+        assertThat(partitionRegistrations.get("p2").getPartitionId()).isEqualTo(2L);
         assertThat(zookeeperClient.getPartitionsForTables(Arrays.asList(tablePath)))
                 .containsValues(new ArrayList<>(partitions));
 
-        // test delete partition
-        zookeeperClient.deletePartition(tablePath, "p1");
+        PhysicalTablePath partitionPath1 = PhysicalTablePath.of(tablePath, "p1");
+        PhysicalTablePath partitionPath2 = PhysicalTablePath.of(tablePath, "p2");
+        PhysicalTablePath missingPartitionPath = PhysicalTablePath.of(tablePath, "p3");
+        Map<PhysicalTablePath, TablePartition> partitionIds =
+                zookeeperClient.getPartitionIds(
+                        Arrays.asList(partitionPath1, partitionPath2, missingPartitionPath));
+        assertThat(partitionIds).containsOnlyKeys(partitionPath1, partitionPath2);
+        assertThat(partitionIds.get(partitionPath1).getTableId()).isEqualTo(tableId);
+        assertThat(partitionIds.get(partitionPath1).getPartitionId()).isEqualTo(1L);
+        assertThat(partitionIds.get(partitionPath2).getTableId()).isEqualTo(tableId);
+        assertThat(partitionIds.get(partitionPath2).getPartitionId()).isEqualTo(2L);
+
+        // A batch read returns every registration and preserves the version needed by CAS updates.
+        PartitionRegistration p1Registration = zookeeperClient.getPartition(tablePath, "p1").get();
+        zookeeperClient.updatePartitionRegistration(tablePath, "p1", p1Registration);
+        ZooKeeperClient batchReadClient = spy(zookeeperClient);
+        Map<String, ZooKeeperClient.VersionedData<PartitionRegistration>> registrations =
+                batchReadClient.getPartitionRegistrationsWithVersion(tablePath);
+        verify(batchReadClient).getDataInBackground(anyCollection());
+        assertThat(registrations).containsOnlyKeys("p1", "p2");
+        assertThat(registrations.get("p1").data().getPartitionId()).isEqualTo(1L);
+        assertThat(registrations.get("p1").zkVersion()).isEqualTo(1);
+        assertThat(registrations.get("p2").data().getPartitionId()).isEqualTo(2L);
+        assertThat(registrations.get("p2").zkVersion()).isZero();
+
+        // A partition dropped after the children listing is omitted from the batch result.
+        ZooKeeperClient raceTestingClient = spy(zookeeperClient);
+        doAnswer(
+                        invocation -> {
+                            zookeeperClient.deletePartition(tablePath, "p1");
+                            return invocation.callRealMethod();
+                        })
+                .when(raceTestingClient)
+                .getDataInBackground(anyCollection());
+        assertThat(raceTestingClient.getPartitionRegistrationsWithVersion(tablePath))
+                .containsOnlyKeys("p2");
         partitions = zookeeperClient.getPartitions(tablePath);
         assertThat(partitions).containsExactly("p2");
     }
@@ -677,6 +954,7 @@ class ZooKeeperClientTest {
         config.setString(
                 ConfigOptions.ZOOKEEPER_ADDRESS,
                 ZOO_KEEPER_EXTENSION_WRAPPER.getCustomExtension().getConnectString());
+        config.set(ConfigOptions.REMOTE_DATA_DIR, remoteDataDir.toString());
         config.setString(ConfigOptions.ZOOKEEPER_CONFIG_PATH, "./no-file.properties");
         assertThatThrownBy(
                         () -> ZooKeeperUtils.startZookeeperClient(config, NOPErrorHandler.INSTANCE))
@@ -702,12 +980,33 @@ class ZooKeeperClientTest {
     }
 
     @Test
+    void testZookeeperMaxBufferSizeWithoutConfigPath() throws Exception {
+        final Configuration config = new Configuration();
+        config.setString(
+                ConfigOptions.ZOOKEEPER_ADDRESS,
+                ZOO_KEEPER_EXTENSION_WRAPPER.getCustomExtension().getConnectString());
+        config.set(ConfigOptions.REMOTE_DATA_DIR, remoteDataDir);
+        config.set(ConfigOptions.ZOOKEEPER_MAX_BUFFER_SIZE, 2 * 1024 * 1024);
+
+        try (ZooKeeperClient zookeeperClient =
+                        ZooKeeperUtils.startZookeeperClient(config, NOPErrorHandler.INSTANCE);
+                CuratorFramework curatorClient = zookeeperClient.getCuratorClient();
+                CuratorZookeeperClient curatorZookeeperClient = curatorClient.getZookeeperClient();
+                ZooKeeper zooKeeper = curatorZookeeperClient.getZooKeeper()) {
+            ZKClientConfig clientConfig = zooKeeper.getClientConfig();
+            assertThat(clientConfig.getProperty(JUTE_MAXBUFFER)).isEqualTo("2097152");
+        }
+    }
+
+    @Test
     void testGetDatabaseSummary() throws Exception {
-        TablePath tablePath = TablePath.of("db", "tb1");
+        TablePath tablePath1 = TablePath.of("db", "tb1");
+        TablePath tablePath2 = TablePath.of("db", "tb2");
+        TablePath tablePath3 = TablePath.of("db2", "tb1");
 
         assertThat(
                         zookeeperClient.listDatabaseSummaries(
-                                Collections.singletonList(tablePath.getDatabaseName())))
+                                Collections.singletonList(tablePath1.getDatabaseName())))
                 .isEmpty();
 
         // register table.
@@ -720,20 +1019,51 @@ class ZooKeeperClientTest {
                         new TableDescriptor.TableDistribution(16, Collections.singletonList("a")),
                         Collections.emptyMap(),
                         Collections.emptyMap(),
+                        remoteDataDir,
                         beforeCreateTime,
                         beforeCreateTime);
-        zookeeperClient.registerTable(tablePath, tableReg1);
-
+        zookeeperClient.registerTable(tablePath1, tableReg1);
         long afterCreateTime = System.currentTimeMillis();
+
+        TableRegistration tableReg2 =
+                new TableRegistration(
+                        12,
+                        "second table",
+                        Arrays.asList("a", "b"),
+                        new TableDescriptor.TableDistribution(16, Collections.singletonList("a")),
+                        Collections.emptyMap(),
+                        Collections.emptyMap(),
+                        remoteDataDir,
+                        beforeCreateTime,
+                        beforeCreateTime);
+        zookeeperClient.registerTable(tablePath2, tableReg2);
+
+        TableRegistration tableReg3 =
+                new TableRegistration(
+                        13,
+                        "third table",
+                        Arrays.asList("a", "b"),
+                        new TableDescriptor.TableDistribution(16, Collections.singletonList("a")),
+                        Collections.emptyMap(),
+                        Collections.emptyMap(),
+                        remoteDataDir,
+                        beforeCreateTime,
+                        beforeCreateTime);
+        zookeeperClient.registerTable(tablePath3, tableReg3);
+
         List<DatabaseSummary> databaseSummaries =
                 zookeeperClient.listDatabaseSummaries(
-                        Collections.singletonList(tablePath.getDatabaseName()));
-        assertThat(databaseSummaries).hasSize(1);
+                        Arrays.asList(tablePath1.getDatabaseName(), tablePath3.getDatabaseName()));
+        assertThat(databaseSummaries).hasSize(2);
         DatabaseSummary databaseSummary = databaseSummaries.get(0);
         assertThat(databaseSummary.getDatabaseName()).isEqualTo("db");
-        assertThat(databaseSummary.getTableCount()).isEqualTo(1);
+        assertThat(databaseSummary.getTableCount()).isEqualTo(2);
         assertThat(databaseSummary.getCreatedTime())
                 .isGreaterThanOrEqualTo(beforeCreateTime)
                 .isLessThanOrEqualTo(afterCreateTime);
+        databaseSummary = databaseSummaries.get(1);
+        assertThat(databaseSummary.getDatabaseName()).isEqualTo("db2");
+        assertThat(databaseSummary.getTableCount()).isEqualTo(1);
+        assertThat(databaseSummary.getCreatedTime()).isGreaterThan(afterCreateTime);
     }
 }

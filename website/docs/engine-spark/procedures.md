@@ -4,7 +4,7 @@ title: Procedures
 sidebar_position: 3
 ---
 
-# Procedures
+# Spark Procedures
 
 Fluss provides stored procedures to perform administrative and management operations through Spark SQL. All procedures are located in the `sys` namespace and can be invoked using the `CALL` statement.
 

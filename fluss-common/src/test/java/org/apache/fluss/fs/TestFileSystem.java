@@ -21,11 +21,11 @@ import org.apache.fluss.config.Configuration;
 import org.apache.fluss.fs.local.LocalDataOutputStream;
 import org.apache.fluss.fs.local.LocalFileStatus;
 import org.apache.fluss.fs.local.LocalFileSystem;
-import org.apache.fluss.utils.MapUtils;
 
 import java.io.IOException;
 import java.net.URI;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
@@ -43,7 +43,7 @@ public class TestFileSystem extends LocalFileSystem {
 
     // current number of created, unclosed (output) stream
     private static final Map<FsPath, Integer> currentUnclosedOutputStream =
-            MapUtils.newConcurrentHashMap();
+            new ConcurrentHashMap<>();
 
     private final Configuration configuration;
 

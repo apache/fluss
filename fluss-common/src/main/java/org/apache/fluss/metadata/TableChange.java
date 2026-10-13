@@ -22,6 +22,9 @@ import org.apache.fluss.types.DataType;
 import javax.annotation.Nullable;
 
 import java.util.Objects;
+import java.util.Optional;
+
+import static org.apache.fluss.utils.Preconditions.checkArgument;
 
 /** {@link TableChange} represents the modification of the Fluss Table. */
 public interface TableChange {
@@ -42,7 +45,21 @@ public interface TableChange {
             DataType dataType,
             @Nullable String comment,
             ColumnPosition position) {
-        return new AddColumn(columnName, dataType, comment, position);
+        return new AddColumn(columnName, dataType, comment, position, null);
+    }
+
+    /**
+     * A table change to add the column with specified position and aggregation function.
+     *
+     * @return a TableChange represents the modification.
+     */
+    static AddColumn addColumn(
+            String columnName,
+            DataType dataType,
+            @Nullable String comment,
+            ColumnPosition position,
+            @Nullable AggFunction aggFunction) {
+        return new AddColumn(columnName, dataType, comment, position, aggFunction);
     }
 
     /**
@@ -115,6 +132,18 @@ public interface TableChange {
 
     static ResetOption reset(String key) {
         return new ResetOption(key);
+    }
+
+    /**
+     * Changes the default bucket count for newly created partitions.
+     *
+     * <p>Existing partitions retain their bucket counts.
+     *
+     * @param newBucketCount the new default bucket count; must be positive
+     * @return the bucket count change
+     */
+    static ModifyBucketCount modifyBucketCount(int newBucketCount) {
+        return new ModifyBucketCount(newBucketCount);
     }
 
     /**
@@ -214,6 +243,50 @@ public interface TableChange {
         }
     }
 
+    /** A change to the table's distribution. */
+    interface DistributionChange extends TableChange {}
+
+    /** Changes the default bucket count for newly created partitions. */
+    final class ModifyBucketCount implements DistributionChange {
+
+        private final int newBucketCount;
+
+        private ModifyBucketCount(int newBucketCount) {
+            checkArgument(
+                    newBucketCount > 0,
+                    "Bucket count must be positive, but was %s.",
+                    newBucketCount);
+            this.newBucketCount = newBucketCount;
+        }
+
+        /** Returns the new default bucket count. */
+        public int getNewBucketCount() {
+            return newBucketCount;
+        }
+
+        @Override
+        public boolean equals(Object o) {
+            if (this == o) {
+                return true;
+            }
+            if (!(o instanceof ModifyBucketCount)) {
+                return false;
+            }
+            ModifyBucketCount that = (ModifyBucketCount) o;
+            return newBucketCount == that.newBucketCount;
+        }
+
+        @Override
+        public int hashCode() {
+            return Objects.hash(newBucketCount);
+        }
+
+        @Override
+        public String toString() {
+            return "ModifyBucketCount{" + "newBucketCount=" + newBucketCount + '}';
+        }
+    }
+
     /** A table change to modify the table schema. */
     interface SchemaChange extends TableChange {}
 
@@ -230,15 +303,21 @@ public interface TableChange {
         private final String name;
         private final DataType dataType;
         private final @Nullable String comment;
+        private final @Nullable AggFunction aggFunction;
 
         private final ColumnPosition position;
 
         private AddColumn(
-                String name, DataType dataType, @Nullable String comment, ColumnPosition position) {
+                String name,
+                DataType dataType,
+                @Nullable String comment,
+                ColumnPosition position,
+                @Nullable AggFunction aggFunction) {
             this.name = name;
             this.dataType = dataType;
             this.comment = comment;
             this.position = position;
+            this.aggFunction = aggFunction;
         }
 
         public String getName() {
@@ -258,20 +337,26 @@ public interface TableChange {
             return position;
         }
 
+        public Optional<AggFunction> getAggFunction() {
+            return Optional.ofNullable(aggFunction);
+        }
+
         @Override
         public String toString() {
-            return "AddColumn{"
-                    + "name='"
-                    + name
-                    + '\''
-                    + ", dataType="
-                    + dataType
-                    + ", comment='"
-                    + comment
-                    + '\''
-                    + ", position="
-                    + position
-                    + '}';
+            String result =
+                    "AddColumn{"
+                            + "name='"
+                            + name
+                            + '\''
+                            + ", dataType="
+                            + dataType
+                            + ", comment='"
+                            + comment
+                            + '\'';
+            if (aggFunction != null) {
+                result += ", aggFunction=" + aggFunction;
+            }
+            return result + ", position=" + position + '}';
         }
     }
 

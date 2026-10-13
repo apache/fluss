@@ -49,6 +49,8 @@ if [ "$(uname)" == "Darwin" ]; then
     export COPYFILE_DISABLE=1
 else
     SHASUM="sha512sum"
+    # Initialize TAR_OPTIONS as empty for Linux to avoid "unbound variable" errors
+    TAR_OPTIONS=""
 fi
 
 cd ..
@@ -68,11 +70,6 @@ make_binary_release() {
   $MVN clean package -Prelease -am -Dgpg.skip -Dcheckstyle.skip=true -DskipTests
 
   cd fluss-dist/target/fluss-${RELEASE_VERSION}-bin
-  cp ${FLUSS_DIR}/LICENSE ./fluss-${RELEASE_VERSION}/LICENSE
-  cp ${FLUSS_DIR}/DISCLAIMER ./fluss-${RELEASE_VERSION}/DISCLAIMER
-  cp ${FLUSS_DIR}/NOTICE ./fluss-${RELEASE_VERSION}/NOTICE
-  ${FLUSS_DIR}/tools/releasing/collect_license_files.sh ./fluss-${RELEASE_VERSION} ./fluss-${RELEASE_VERSION}
-
   tar $TAR_OPTIONS -czf "${dir_name}.tgz" fluss-*
 
   cp fluss-*.tgz ${RELEASE_DIR}

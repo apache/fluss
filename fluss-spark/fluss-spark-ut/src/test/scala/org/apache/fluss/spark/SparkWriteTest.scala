@@ -17,15 +17,22 @@
 
 package org.apache.fluss.spark
 
-import org.apache.fluss.metadata.{Schema, TableDescriptor}
+import org.apache.fluss.client.table.writer.{AppendResult, TableWriter}
+import org.apache.fluss.config.Configuration
+import org.apache.fluss.metadata.{Schema, TableDescriptor, TablePath}
 import org.apache.fluss.row.{BinaryString, GenericRow, InternalRow}
+import org.apache.fluss.spark.row.SparkAsFlussRow
 import org.apache.fluss.spark.util.TestUtils.{createGenericRow, FLUSS_ROWTYPE}
+import org.apache.fluss.spark.write.{FlussDataWriter, FlussWriterCommitMessage}
 import org.apache.fluss.types.DataTypes
 
-import org.assertj.core.api.Assertions.assertThat
+import org.apache.spark.sql.catalyst.{InternalRow => SparkInternalRow}
+import org.apache.spark.sql.types.StructType
+import org.assertj.core.api.Assertions.{assertThat, assertThatThrownBy}
 
+import java.io.IOException
 import java.sql.Timestamp
-import java.time.Duration
+import java.util.concurrent.CompletableFuture
 
 import scala.collection.JavaConverters._
 
@@ -47,7 +54,9 @@ class SparkWriteTest extends FlussSparkTestBase {
                  |  1234567.89, 12345678900987654321.12,
                  |  "test",
                  |  TO_TIMESTAMP('2025-12-31 10:00:00', 'yyyy-MM-dd kk:mm:ss'),
-                 |  array(11.11F, 22.22F), struct(123L, "apache fluss")
+                 |  array(11.11F, 22.22F),
+                 |  map("k1", 111, "k2", 222),
+                 |  struct(123L, "apache fluss")
                  |)
                  |""".stripMargin)
 
@@ -56,7 +65,7 @@ class SparkWriteTest extends FlussSparkTestBase {
     assertThat(rows.length).isEqualTo(1)
 
     val row = rows.head
-    assertThat(row.getFieldCount).isEqualTo(13)
+    assertThat(row.getFieldCount).isEqualTo(14)
     assertThat(row.getBoolean(0)).isEqualTo(true)
     assertThat(row.getByte(1)).isEqualTo(1.toByte)
     assertThat(row.getShort(2)).isEqualTo(10.toShort)
@@ -71,7 +80,12 @@ class SparkWriteTest extends FlussSparkTestBase {
     assertThat(row.getTimestampLtz(10, 6).toInstant)
       .isEqualTo(Timestamp.valueOf("2025-12-31 10:00:00.0").toInstant)
     assertThat(row.getArray(11).toFloatArray).containsExactly(Array(11.11f, 22.22f): _*)
-    val nestedRow = row.getRow(12, 2)
+    val mapData = row.getMap(12)
+    assertThat(mapData.size()).isEqualTo(2)
+    assertThat(mapData.keyArray().getString(0).toString).isEqualTo("k1")
+    assertThat(mapData.keyArray().getString(1).toString).isEqualTo("k2")
+    assertThat(mapData.valueArray().toIntArray).containsExactly(Array(111, 222): _*)
+    val nestedRow = row.getRow(13, 2)
     assertThat(nestedRow.getFieldCount).isEqualTo(2)
     assertThat(nestedRow.getLong(0)).isEqualTo(123L)
     assertThat(nestedRow.getString(1).toString).isEqualTo("apache fluss")
@@ -143,6 +157,66 @@ class SparkWriteTest extends FlussSparkTestBase {
     )
     assertThat(flussRows2.length).isEqualTo(4)
     assertThat(flussRows2).containsAll(expectRows2.toIterable.asJava)
+  }
+
+  test("asynchronous failure is propagated on the next write") {
+    val result = new CompletableFuture[AppendResult]()
+    val writer = createWriter(result)
+    val failure = new IOException("Fluss append failed")
+
+    writer.write(SparkInternalRow.empty)
+    result.completeExceptionally(failure)
+
+    assertThatThrownBy(() => writer.write(SparkInternalRow.empty))
+      .isInstanceOf(classOf[IOException])
+      .hasCause(failure)
+  }
+
+  test("asynchronous failure during flush is propagated on commit") {
+    val result = new CompletableFuture[AppendResult]()
+    val failure = new IOException("Fluss append failed")
+    val writer = createWriter(
+      result,
+      () => {
+        result.completeExceptionally(failure)
+        ()
+      })
+
+    writer.write(SparkInternalRow.empty)
+
+    assertThatThrownBy(() => writer.commit())
+      .isInstanceOf(classOf[IOException])
+      .hasCause(failure)
+  }
+
+  test("successful asynchronous write can commit") {
+    val result = new CompletableFuture[AppendResult]()
+    val writer = createWriter(
+      result,
+      () => {
+        result.complete(new AppendResult())
+        ()
+      })
+
+    writer.write(SparkInternalRow.empty)
+
+    assertThat(writer.commit()).isEqualTo(FlussWriterCommitMessage())
+    assertThat(result.isDone).isTrue
+  }
+
+  private def createWriter(
+      result: CompletableFuture[AppendResult],
+      onFlush: () => Unit = () => ()): FlussDataWriter[AppendResult] = {
+    new FlussDataWriter[AppendResult](
+      TablePath.of("test", "log_table"),
+      new StructType(),
+      new Configuration()) {
+      override val writer: TableWriter = new TableWriter {
+        override def flush(): Unit = onFlush()
+      }
+
+      override def writeRow(record: SparkAsFlussRow): CompletableFuture[AppendResult] = result
+    }
   }
 }
 

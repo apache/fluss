@@ -23,11 +23,14 @@ import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
+import java.lang.reflect.Type;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
+
+import static org.apache.fluss.utils.Preconditions.checkArgument;
 
 /**
  * Internal representation of a POJO type, used to validate POJO requirements and to provide unified
@@ -72,33 +75,58 @@ final class PojoType<T> {
 
         Map<String, Property> props = new LinkedHashMap<>();
         for (Map.Entry<String, Field> e : allFields.entrySet()) {
-            String name = e.getKey();
+            String fieldName = e.getKey();
             Field field = e.getValue();
             // Enforce nullable fields: primitives are not allowed in POJO definitions.
             if (field.getType().isPrimitive()) {
                 throw new IllegalArgumentException(
                         String.format(
                                 "POJO class %s has primitive field '%s' of type %s. Primitive types are not allowed; all fields must be nullable (use wrapper types).",
-                                pojoClass.getName(), name, field.getType().getName()));
+                                pojoClass.getName(), fieldName, field.getType().getName()));
             }
+            // Check for @ColumnName annotation to determine the mapped column name
+            ColumnName columnNameAnnotation = field.getAnnotation(ColumnName.class);
+            String mappedColumnName =
+                    columnNameAnnotation != null ? columnNameAnnotation.value() : fieldName;
+            checkArgument(
+                    !mappedColumnName.isEmpty(),
+                    "Column name cannot be empty for field '%s' in POJO class %s",
+                    fieldName,
+                    pojoClass.getName());
+
             // use boxed type as effective type
             Class<?> effectiveType = boxIfPrimitive(field.getType());
             boolean publicField = Modifier.isPublic(field.getModifiers());
-            Method getter = getters.get(name);
-            Method setter = setters.get(name);
+            Method getter = getters.get(fieldName);
+            Method setter = setters.get(fieldName);
             if (!publicField) {
                 // When not a public field, require both getter and setter
                 if (getter == null || setter == null) {
-                    final String capitalizedName = capitalize(name);
+                    final String capitalizedName = capitalize(fieldName);
                     throw new IllegalArgumentException(
                             String.format(
                                     "POJO class %s field '%s' must be public or have both getter and setter (get%s/set%s).",
-                                    pojoClass.getName(), name, capitalizedName, capitalizedName));
+                                    pojoClass.getName(),
+                                    fieldName,
+                                    capitalizedName,
+                                    capitalizedName));
                 }
             }
+            if (props.get(mappedColumnName) != null) {
+                throw new IllegalArgumentException(
+                        String.format(
+                                "Duplicated property name '%s' in class %s",
+                                mappedColumnName, pojoClass.getName()));
+            }
             props.put(
-                    name,
-                    new Property(name, effectiveType, publicField ? field : null, getter, setter));
+                    mappedColumnName,
+                    new Property(
+                            fieldName,
+                            effectiveType,
+                            field.getGenericType(),
+                            publicField ? field : null,
+                            getter,
+                            setter));
         }
 
         return new PojoType<>(pojoClass, ctor, props);
@@ -262,8 +290,13 @@ final class PojoType<T> {
     }
 
     static final class Property {
+        /** The name of the field in the POJO class (e.g. "userId"). */
         final String name;
+
         final Class<?> type;
+        /** The generic type of the field (e.g. {@code Map<String, AddressPojo>}). */
+        final Type genericType;
+
         @Nullable final Field publicField;
         @Nullable final Method getter;
         @Nullable final Method setter;
@@ -271,11 +304,13 @@ final class PojoType<T> {
         Property(
                 String name,
                 Class<?> type,
+                Type genericType,
                 @Nullable Field publicField,
                 @Nullable Method getter,
                 @Nullable Method setter) {
             this.name = Objects.requireNonNull(name, "name");
             this.type = Objects.requireNonNull(type, "type");
+            this.genericType = Objects.requireNonNull(genericType, "genericType");
             this.publicField = publicField;
             this.getter = getter;
             this.setter = setter;

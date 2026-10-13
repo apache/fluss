@@ -23,12 +23,16 @@ import org.apache.fluss.metadata.ChangelogImage;
 import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.DeleteBehavior;
 import org.apache.fluss.metadata.KvFormat;
+import org.apache.fluss.metadata.LakeLookupMode;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.MergeEngineType;
 import org.apache.fluss.utils.AutoPartitionStrategy;
 
 import java.time.Duration;
+import java.util.Arrays;
+import java.util.List;
 import java.util.Optional;
+import java.util.stream.Collectors;
 
 /**
  * Helper class to get table configs (prefixed with "table.*" properties).
@@ -74,9 +78,39 @@ public class TableConfig {
         return config.getOptional(ConfigOptions.TABLE_KV_FORMAT_VERSION);
     }
 
+    /**
+     * Gets the physical KV value layout version persisted with the table.
+     *
+     * <p>The KV format version controls the key encoding strategy, while the value layout version
+     * controls the fixed header surrounding the BinaryRow payload in RocksDB. An empty value
+     * identifies tables created before value layouts were versioned; those tables use the plain
+     * layout.
+     */
+    public Optional<Integer> getKvValueLayoutVersion() {
+        return config.getOptional(ConfigOptions.TABLE_KV_VALUE_LAYOUT_VERSION);
+    }
+
+    /**
+     * Whether standby replicas are enabled for this primary key table. Returns false for legacy
+     * tables that were created before this option was introduced.
+     */
+    public boolean isStandbyReplicaEnabled() {
+        return config.getOptional(ConfigOptions.TABLE_KV_STANDBY_REPLICA_ENABLED).orElse(false);
+    }
+
     /** Gets the log TTL of the table. */
     public long getLogTTLMs() {
         return config.get(ConfigOptions.TABLE_LOG_TTL).toMillis();
+    }
+
+    /** Gets the row-level TTL of the table. */
+    public Optional<Duration> getKvTTL() {
+        return config.getOptional(ConfigOptions.TABLE_KV_TTL);
+    }
+
+    /** Gets the optional row-level TTL time column of the table. */
+    public Optional<String> getKvTTLTimeColumn() {
+        return config.getOptional(ConfigOptions.TABLE_KV_TTL_TIME_COLUMN);
     }
 
     /** Gets the local segments to retain for tiered log of the table. */
@@ -84,9 +118,26 @@ public class TableConfig {
         return config.get(ConfigOptions.TABLE_TIERED_LOG_LOCAL_SEGMENTS);
     }
 
+    /** Gets the TTL of local segments for tiered log. */
+    public long getLocalLogTTLMs() {
+        return config.getOptional(ConfigOptions.TABLE_LOG_LOCAL_TTL)
+                .orElseGet(() -> config.get(ConfigOptions.TABLE_LOG_TTL))
+                .toMillis();
+    }
+
     /** Whether the data lake is enabled. */
     public boolean isDataLakeEnabled() {
         return config.get(ConfigOptions.TABLE_DATALAKE_ENABLED);
+    }
+
+    /** Whether historical partition access is enabled. */
+    public boolean isHistoricalPartitionEnabled() {
+        return config.get(ConfigOptions.TABLE_DATALAKE_HISTORICAL_PARTITION_ENABLED);
+    }
+
+    /** Gets the lookup mode for historical partitions of the table. */
+    public LakeLookupMode getHistoricalLookupMode() {
+        return config.get(ConfigOptions.TABLE_DATALAKE_HISTORICAL_PARTITION_LOOKUP_MODE);
     }
 
     /**
@@ -153,5 +204,32 @@ public class TableConfig {
     /** Gets the number of auto-increment IDs cached per segment. */
     public long getAutoIncrementCacheSize() {
         return config.get(ConfigOptions.TABLE_AUTO_INCREMENT_CACHE_SIZE);
+    }
+
+    /** Gets whether statistics collection is enabled for the table. */
+    public boolean isStatisticsEnabled() {
+        return getStatisticsColumns().isEnabled();
+    }
+
+    /**
+     * Gets the statistics columns configuration of the table.
+     *
+     * @return a {@link StatisticsColumnsConfig} representing the statistics collection mode:
+     *     DISABLED if not configured, ALL if "*", or SPECIFIED with the list of column names.
+     */
+    public StatisticsColumnsConfig getStatisticsColumns() {
+        String columnsStr = config.get(ConfigOptions.TABLE_STATISTICS_COLUMNS);
+        if (columnsStr == null) {
+            return StatisticsColumnsConfig.disabled();
+        }
+        if ("*".equals(columnsStr)) {
+            return StatisticsColumnsConfig.all();
+        }
+        List<String> columns =
+                Arrays.stream(columnsStr.split(","))
+                        .map(String::trim)
+                        .filter(s -> !s.isEmpty())
+                        .collect(Collectors.toList());
+        return StatisticsColumnsConfig.of(columns);
     }
 }

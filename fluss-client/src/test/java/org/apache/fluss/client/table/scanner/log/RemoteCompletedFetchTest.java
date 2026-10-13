@@ -32,6 +32,7 @@ import org.apache.fluss.record.LogRecordReadContext;
 import org.apache.fluss.record.TestingSchemaGetter;
 import org.apache.fluss.remote.RemoteLogSegment;
 import org.apache.fluss.row.InternalRow;
+import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.ChunkedAllocationManager;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.types.RowType;
 import org.apache.fluss.utils.Projection;
@@ -61,6 +62,7 @@ import static org.apache.fluss.record.TestData.DATA2_SCHEMA;
 import static org.apache.fluss.record.TestData.DATA2_TABLE_ID;
 import static org.apache.fluss.record.TestData.DATA2_TABLE_INFO;
 import static org.apache.fluss.record.TestData.DATA2_TABLE_PATH;
+import static org.apache.fluss.record.TestData.DEFAULT_REMOTE_DATA_DIR;
 import static org.apache.fluss.record.TestData.DEFAULT_SCHEMA_ID;
 import static org.apache.fluss.testutils.DataTestUtils.genLogFile;
 import static org.apache.fluss.utils.FlussPaths.remoteLogSegmentDir;
@@ -218,6 +220,7 @@ class RemoteCompletedFetchTest {
                                 .distributedBy(3)
                                 .logFormat(logFormat)
                                 .build(),
+                        DEFAULT_REMOTE_DATA_DIR,
                         System.currentTimeMillis(),
                         System.currentTimeMillis());
         long fetchOffset = 0L;
@@ -296,9 +299,16 @@ class RemoteCompletedFetchTest {
             Runnable recycle) {
         return new RemoteCompletedFetch(
                 tableBucket,
+                DATA2_TABLE_PATH,
                 fileLogRecords,
                 10L,
-                LogRecordReadContext.createReadContext(tableInfo, true, projection, schemaGetter),
+                LogRecordReadContext.createReadContext(
+                        tableInfo,
+                        true,
+                        LogRecordReadContext.SchemaResolution.DYNAMIC,
+                        projection,
+                        schemaGetter,
+                        new ChunkedAllocationManager.ChunkedFactory()),
                 logScannerStatus,
                 true,
                 fetchOffset,

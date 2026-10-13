@@ -77,9 +77,12 @@ public class BinlogDeserializationSchema implements FlussDeserializationSchema<R
      */
     @Override
     public TypeInformation<RowData> getProducedType(RowType rowSchema) {
-        // Build the output type with nested before/after ROW columns
-        org.apache.flink.table.types.logical.RowType outputType =
-                BinlogRowConverter.buildBinlogRowType(toFlinkRowType(rowSchema));
-        return InternalTypeInfo.of(outputType);
+        return InternalTypeInfo.of(
+                BinlogRowConverter.buildBinlogRowType(toFlinkRowType(rowSchema)));
+    }
+
+    @Override
+    public TypeInformation<RowData> getProducedType(RowType scanRowType, RowType expectRowSchema) {
+        return InternalTypeInfo.of(toFlinkRowType(expectRowSchema));
     }
 }

@@ -22,8 +22,6 @@ import org.apache.fluss.types.RowType;
 
 import org.junit.jupiter.api.Test;
 
-import javax.annotation.Nullable;
-
 import java.util.Arrays;
 
 import static org.apache.fluss.testutils.DataTestUtils.row;
@@ -43,11 +41,11 @@ public class PredicateBuilderTest {
         assertThat(predicate.test(row(4))).isEqualTo(false);
         assertThat(predicate.test(row((Object) null))).isEqualTo(false);
 
-        assertThat(test(predicate, 3, 0, 5, 0L)).isEqualTo(true);
-        assertThat(test(predicate, 3, 2, 5, 0L)).isEqualTo(true);
-        assertThat(test(predicate, 3, 0, 2, 0L)).isEqualTo(true);
-        assertThat(test(predicate, 3, 6, 7, 0L)).isEqualTo(false);
-        assertThat(test(predicate, 1, null, null, 1L)).isEqualTo(false);
+        assertThat(test(predicate, 3, 0, 5, 0)).isEqualTo(true);
+        assertThat(test(predicate, 3, 2, 5, 0)).isEqualTo(true);
+        assertThat(test(predicate, 3, 0, 2, 0)).isEqualTo(true);
+        assertThat(test(predicate, 3, 6, 7, 0)).isEqualTo(false);
+        assertThat(test(predicate, 1, null, null, 1)).isEqualTo(false);
     }
 
     @Test
@@ -61,11 +59,11 @@ public class PredicateBuilderTest {
         assertThat(predicate.test(row(4))).isEqualTo(false);
         assertThat(predicate.test(row((Object) null))).isEqualTo(false);
 
-        assertThat(test(predicate, 3, 0, 5, 0L)).isEqualTo(false);
-        assertThat(test(predicate, 3, 2, 5, 0L)).isEqualTo(false);
-        assertThat(test(predicate, 3, 0, 2, 0L)).isEqualTo(false);
-        assertThat(test(predicate, 3, 6, 7, 0L)).isEqualTo(false);
-        assertThat(test(predicate, 1, null, null, 1L)).isEqualTo(false);
+        assertThat(test(predicate, 3, 0, 5, 0)).isEqualTo(false);
+        assertThat(test(predicate, 3, 2, 5, 0)).isEqualTo(false);
+        assertThat(test(predicate, 3, 0, 2, 0)).isEqualTo(false);
+        assertThat(test(predicate, 3, 6, 7, 0)).isEqualTo(false);
+        assertThat(test(predicate, 1, null, null, 1)).isEqualTo(false);
     }
 
     @Test
@@ -97,12 +95,7 @@ public class PredicateBuilderTest {
                                 child3));
     }
 
-    static boolean test(
-            Predicate predicate,
-            long rowCount,
-            @Nullable Object min,
-            @Nullable Object max,
-            @Nullable Long nullCount) {
-        return predicate.test(rowCount, row(min), row(max), new Long[] {nullCount});
+    static boolean test(Predicate predicate, long rowCount, Object min, Object max, int nullCount) {
+        return predicate.test(rowCount, row(min), row(max), new int[] {nullCount});
     }
 }

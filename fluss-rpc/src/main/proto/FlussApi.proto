@@ -27,6 +27,12 @@ option optimize_for = LITE_RUNTIME;
 * 2. DO NOT USE "enum" type
  */
 
+/**
+* NOTICE: The Rust client checks in the code generated from this file. After changing it, run
+* fluss-rust/crates/fluss/regen.sh and commit the result; the proto-up-to-date job of the Rust
+* CI fails otherwise.
+ */
+
 // the message indicates a failed request of a server failure.
 message ErrorResponse {
   required int32 error_code = 1;
@@ -40,6 +46,7 @@ message ApiVersionsRequest {
 
 message ApiVersionsResponse {
   repeated PbApiVersion api_versions = 1;
+  optional int32 server_type = 2;
 }
 
 // get schema request and response
@@ -61,6 +68,17 @@ message CreateDatabaseRequest {
 }
 
 message CreateDatabaseResponse {
+}
+
+// alter database request and response
+message AlterDatabaseRequest {
+  required string database_name = 1;
+  required bool ignore_if_not_exists = 2;
+  repeated PbAlterConfig config_changes = 3;
+  optional string comment = 4;
+}
+
+message AlterDatabaseResponse {
 }
 
 // get table request and response
@@ -120,6 +138,11 @@ message AlterTableRequest {
   repeated PbDropColumn drop_columns = 5;
   repeated PbRenameColumn rename_columns = 6;
   repeated PbModifyColumn modify_columns = 7;
+  optional PbModifyBucketCount modify_bucket_count = 8;
+}
+
+message PbModifyBucketCount {
+  required int32 new_bucket_count = 1;
 }
 
 message AlterTableResponse {
@@ -138,6 +161,20 @@ message GetTableInfoResponse {
   required bytes table_json = 3;
   required int64 created_time = 4;
   required int64 modified_time = 5;
+  optional string remote_data_dir = 6;
+  optional int64 bucket_count_epoch = 7;
+}
+
+// describe buckets request and response
+message DescribeBucketsRequest {
+  required PbTablePath table_path = 1;
+  optional PbPartitionSpec partition_spec = 2;
+}
+
+message DescribeBucketsResponse {
+  required PbTablePath table_path = 1;
+  required int64 table_id = 2;
+  repeated PbBucketInfo bucket_info = 3;
 }
 
 // list tables request and response
@@ -216,6 +253,7 @@ message FetchLogRequest {
   repeated PbFetchLogReqForTable tables_req = 3;
   optional int32 max_wait_ms = 4;
   optional int32 min_bytes = 5;
+  optional int32 read_preference = 6;
 }
 
 message FetchLogResponse {
@@ -275,6 +313,7 @@ message LimitScanRequest {
   optional int64 partition_id = 3;
   required int32 bucket_id = 4;
   required int32 limit = 5;
+  optional int32 routing_bucket_count = 6;
 }
 
 message LimitScanResponse{
@@ -286,6 +325,59 @@ message LimitScanResponse{
   optional bytes records = 4;
 }
 
+
+// Full KV scan request and response.
+// A new scan is initiated with bucket_scan_req; subsequent batches use scanner_id.
+message PbScanReqForBucket {
+  required int64 table_id = 1;
+  optional int64 partition_id = 2;
+  required int32 bucket_id = 3;
+  // If set, stops returning rows after this many records.
+  optional int64 limit = 4;
+  optional int32 routing_bucket_count = 5;
+}
+
+message ScanKvRequest {
+  // Mutually exclusive: either scanner_id (continuation) or bucket_scan_req (new scan).
+  optional bytes scanner_id = 1;
+  optional PbScanReqForBucket bucket_scan_req = 2;
+  // Monotonically increasing sequence number for in-order delivery validation.
+  optional int32 call_seq_id = 3;
+  // Maximum number of bytes of record data to return in this batch.
+  optional int32 batch_size_bytes = 4;
+  // If true, the server closes the scanner session immediately.
+  optional bool close_scanner = 5;
+}
+
+message ScanKvResponse {
+  optional int32 error_code = 1;
+  optional string error_message = 2;
+  // Opaque server-assigned session identifier; echoed on every response.
+  optional bytes scanner_id = 3;
+  // False when the scan is complete and the scanner session has been closed.
+  optional bool has_more_results = 4;
+  // Serialised DefaultValueRecordBatch; absent when the batch is empty.
+  optional bytes records = 5;
+  // Log high-watermark at the time the RocksDB snapshot was opened.
+  // Only set on the first response (new scan initiation).
+  optional int64 log_offset = 6;
+}
+
+
+// Get table statistics request and response.
+// Sent to TabletServer to get per-bucket statistics.
+message GetTableStatsRequest {
+  required int64 table_id = 1;
+  repeated PbTableStatsReqForBucket buckets_req = 2;
+  // Column indexes for column-level stats (e.g., ndv, sum).
+  // If empty, column stats are not collected.
+  // Reserved for future use.
+  repeated int32 target_columns = 3 [packed = true];
+}
+
+message GetTableStatsResponse {
+  repeated PbTableStatsRespForBucket buckets_resp = 1;
+}
 
 // notify bucket leader and isr request
 message NotifyLeaderAndIsrRequest {
@@ -327,6 +419,7 @@ message ListOffsetsRequest {
   optional int64 partition_id = 4;
   repeated int32 bucket_id = 5 [packed = true]; // it is recommended to use packed for repeated numerics to get more efficient encoding
   optional int64 startTimestamp = 6;
+  optional int32 routing_bucket_count = 7;
 }
 message ListOffsetsResponse {
   repeated PbListOffsetsRespForBucket buckets_resp = 1;
@@ -401,11 +494,13 @@ message DropKvSnapshotLeaseRequest {
 
 message DropKvSnapshotLeaseResponse {}
 
-message GetLatestLakeSnapshotRequest {
+message GetLakeSnapshotRequest {
   required PbTablePath table_path = 1;
+  optional int64 snapshot_id = 2; // If not set, returns the latest snapshot
+  optional bool readable = 3; // If true, returns the latest readable snapshot
 }
 
-message GetLatestLakeSnapshotResponse {
+message GetLakeSnapshotResponse {
   required int64 table_id = 1;
   required int64 snapshotId = 2;
   repeated PbLakeSnapshotForBucket bucket_snapshots = 3;
@@ -433,10 +528,42 @@ message InitWriterResponse {
 message ListPartitionInfosRequest {
   required PbTablePath table_path = 1;
   optional PbPartitionSpec partial_partition_spec = 2;
+  optional bool include_system_partitions = 3;
 }
 
 message ListPartitionInfosResponse {
   repeated PbPartitionInfo partitions_info = 1;
+  optional bool system_partitions_included = 2;
+}
+
+// list remote log manifest entries (one per bucket of a table or partition)
+message ListRemoteLogManifestsRequest {
+  required int64 table_id = 1;
+  optional int64 partition_id = 2;   // required if table is partitioned
+}
+
+message ListRemoteLogManifestsResponse {
+  repeated PbRemoteLogManifestEntry manifests = 1;
+}
+
+message PbRemoteLogManifestEntry {
+  required PbTableBucket table_bucket = 1;
+  required string remote_log_manifest_path = 2;
+  required int64  remote_log_end_offset = 3;
+}
+
+// list active KV snapshot dirs (retained_N + still-in-use) for a unit
+message ListKvSnapshotsRequest {
+  required int64 table_id = 1;
+  optional int64 partition_id = 2;
+}
+
+message ListKvSnapshotsResponse {
+  required int64 table_id = 1;
+  // null if it is a non-partitioned table, otherwise, it must be not null
+  optional int64 partition_id = 2;
+  // Active snapshots = retained_N ∪ still-in-use; multiple entries per bucket allowed.
+  repeated PbKvSnapshot active_snapshots = 3;
 }
 
 // create partition request and response
@@ -467,6 +594,7 @@ message CommitRemoteLogManifestRequest {
   required int64 remote_log_end_offset = 6;
   required int32 coordinator_epoch = 7;
   required int32 bucket_leader_epoch = 8;
+  optional int64 highest_copied_end_offset = 9;
 }
 
 message CommitRemoteLogManifestResponse {
@@ -481,6 +609,7 @@ message NotifyRemoteLogOffsetsRequest {
   required int32 coordinator_epoch = 4;
   required int64 remote_start_offset = 5;
   required int64 remote_end_offset = 6;
+  optional int64 highest_copied_end_offset = 7;
 }
 
 message NotifyRemoteLogOffsetsResponse {
@@ -488,6 +617,11 @@ message NotifyRemoteLogOffsetsResponse {
 
 message PrepareLakeTableSnapshotRequest {
   repeated PbTableOffsets bucket_offsets = 1;
+  // If true, ignore previous table offsets and do not merge with existing lake table offsets.
+  // If false (default), the system will merge the provided bucket offsets with the previous
+  // lake table offsets to ensure continuity. This is useful when you want to replace all offsets
+  // instead of merging with existing ones.
+  optional bool ignore_previous_table_offsets = 2;
 }
 
 message PrepareLakeTableSnapshotResponse {
@@ -627,12 +761,28 @@ message AddServerTagRequest {
 message AddServerTagResponse {
 }
 
+message AddServerTagByRackRequest {
+  repeated string racks = 1;
+  required int32 server_tag = 2;
+}
+
+message AddServerTagByRackResponse {
+}
+
 message RemoveServerTagRequest {
   repeated int32 server_ids = 1 [packed = true];
   required int32 server_tag = 2;
 }
 
 message RemoveServerTagResponse {
+}
+
+message RemoveServerTagByRackRequest {
+  repeated string racks = 1;
+  required int32 server_tag = 2;
+}
+
+message RemoveServerTagByRackResponse {
 }
 
 message RebalanceRequest {
@@ -695,6 +845,15 @@ message DeleteProducerOffsetsRequest {
 message DeleteProducerOffsetsResponse {
 }
 
+message GetClusterHealthRequest { }
+
+message GetClusterHealthResponse {
+  required int32 num_replicas = 1;
+  required int32 in_sync_replicas = 2;
+  required int32 num_leader_replicas = 3;
+  required int32 active_leader_replicas = 4;
+  required int32 status = 5; // PbClusterHealthStatus: GREEN=0, YELLOW=1, RED=2, UNKNOWN=3
+}
 
 
 // --------------- Inner classes ----------------
@@ -739,6 +898,9 @@ message PbTableMetadata {
   repeated PbBucketMetadata bucket_metadata = 5;
   required int64 created_time = 6;
   required int64 modified_time = 7;
+  optional string remote_data_dir = 8;
+  // A table-level, monotonically increasing version for bucket.num changes.
+  optional int64 bucket_count_epoch = 9;
 
   // TODO add a new filed 'deleted_table' to indicate this table is deleted in UpdateMetadataRequest.
   // trace by: https://github.com/apache/fluss/issues/981
@@ -750,6 +912,8 @@ message PbPartitionMetadata {
   required string partition_name = 2;
   required int64 partition_id = 3;
   repeated PbBucketMetadata bucket_metadata = 4;
+  // the actual bucket count for this partition, used for per-partition bucket rescale
+  optional int32 bucket_count = 5;
 }
 
 message PbBucketMetadata {
@@ -757,14 +921,34 @@ message PbBucketMetadata {
   // optional as some time the leader may not elected yet
   optional int32 leader_id = 2;
   repeated int32 replica_id = 3 [packed = true];
-  // TODO: Add isr here.
   optional int32 leader_epoch = 4;
+  // Generation of the complete leader/ISR state.
+  // Absence indicates legacy metadata; -1 indicates no leader/ISR state exists.
+  optional int32 bucket_epoch = 5;
+  repeated int32 isr = 6 [packed = true];
+}
+
+message PbBucketInfo {
+  optional int64 partition_id = 1;
+  optional string partition_name = 2;
+  required int32 bucket_id = 3;
+  // optional as the leader may not be elected yet
+  optional int32 leader_id = 4;
+  repeated int32 replica_id = 5 [packed = true];
+  optional int32 leader_epoch = 6;
+  // Generation of the complete leader/ISR state.
+  // Absence indicates legacy metadata; -1 indicates no leader/ISR state exists.
+  optional int32 bucket_epoch = 7;
+  repeated int32 isr = 8 [packed = true];
 }
 
 message PbProduceLogReqForBucket {
   optional int64 partition_id = 1;
   required int32 bucket_id = 2;
   required bytes records = 3;
+  // The original partition name for a historical write; unset for a normal write.
+  optional string original_partition_name = 4;
+  optional int32 routing_bucket_count = 5;
 }
 
 message PbProduceLogRespForBucket {
@@ -773,6 +957,8 @@ message PbProduceLogRespForBucket {
   optional int32 error_code = 3;
   optional string error_message = 4;
   optional int64 base_offset = 5;
+  // The original partition name echoed from a historical write request; unset for a normal write.
+  optional string original_partition_name = 6;
 }
 
 message PbFetchLogReqForTable {
@@ -780,6 +966,11 @@ message PbFetchLogReqForTable {
   required bool projection_pushdown_enabled = 2;
   repeated int32 projected_fields = 3 [packed = true];
   repeated PbFetchLogReqForBucket buckets_req = 4;
+  // filter_predicate and filter_schema_id MUST be set together.
+  // filter_predicate is the serialized predicate; filter_schema_id identifies
+  // the schema against which the predicate was compiled.
+  optional PbPredicate filter_predicate = 5;
+  optional int32 filter_schema_id = 6;
 }
 
 message PbFetchLogReqForBucket {
@@ -788,6 +979,7 @@ message PbFetchLogReqForBucket {
   // TODO leader epoch
   required int64 fetch_offset = 3;
   required int32 max_fetch_bytes = 4;
+  optional int32 routing_bucket_count = 5;
 }
 
 message PbFetchLogRespForTable {
@@ -803,12 +995,24 @@ message PbFetchLogRespForBucket {
   optional int64 log_start_offset = 6; // TODO now we don't introduce log start offset, but remain it in protobuf
   optional PbRemoteLogFetchInfo remote_log_fetch_info = 7;
   optional bytes records = 8;
+  // The offset the server scanned up to while filtering out batches, which may accompany a
+  // non-empty records field when only trailing batches were filtered. The client should start
+  // its next fetch from the later of this offset and the end of the records it received.
+  optional int64 filtered_end_offset = 9;
+  // The safe local log retention boundary confirmed by a committed KV snapshot. This is only
+  // returned for KV follower fetches and is distinct from the physical log_start_offset.
+  optional int64 min_retain_offset = 10;
 }
 
 message PbPutKvReqForBucket {
   optional int64 partition_id = 1;
   required int32 bucket_id = 2;
   required bytes records = 3;
+  // The original partition name for historical PK writes. It is unset for normal writes.
+  optional string original_partition_name = 4;
+  // the bucket count the sender used to form bucket_id; the server compares it against the
+  // actual count to detect stale routing. Not authoritative metadata.
+  optional int32 routing_bucket_count = 5;
 }
 
 message PbPutKvRespForBucket {
@@ -819,12 +1023,21 @@ message PbPutKvRespForBucket {
   // the log end offset (LEO) of the changelog after this write
   // this is the offset of the next record to be written, used for exactly-once semantics
   optional int64 log_end_offset = 5;
+  // backpressure signal from RocksDB write stall detection:
+  // 0 = normal (no pressure), (0,1) = DELAYED zone (normalized L0 ratio)
+  // introduced in v1.0
+  optional float pressure = 6;
+  // The original partition name for historical PK writes. It is unset for normal writes.
+  optional string original_partition_name = 7;
 }
 
 message PbLookupReqForBucket {
   optional int64 partition_id = 1;
   required int32 bucket_id = 2;
   repeated bytes keys = 3;
+  // The original partition name for historical lookup. It is unset for normal lookup.
+  optional string original_partition_name = 4;
+  optional int32 routing_bucket_count = 5;
 }
 
 message PbLookupRespForBucket {
@@ -833,6 +1046,8 @@ message PbLookupRespForBucket {
   optional int32 error_code = 3;
   optional string error_message = 4;
   repeated PbValue values = 5;
+  // The original partition name for historical lookup. It is unset for normal lookup.
+  optional string original_partition_name = 6;
 }
 
 message PbValue {
@@ -848,6 +1063,7 @@ message PbPrefixLookupReqForBucket {
   optional int64 partition_id = 1;
   required int32 bucket_id = 2;
   repeated bytes keys = 3;
+  optional int32 routing_bucket_count = 4;
 }
 
 message PbPrefixLookupRespForBucket {
@@ -877,6 +1093,7 @@ message PbAdjustIsrReqForBucket {
   repeated int32 new_isr = 4 [packed = true];
   required int32 coordinator_epoch = 5;
   required int32 bucket_epoch = 6;
+  repeated int32 standby_replicas = 7 [packed = true];
 }
 
 message PbAdjustIsrRespForTable {
@@ -894,6 +1111,7 @@ message PbAdjustIsrRespForBucket {
   repeated int32 isr = 7 [packed = true];
   optional int32 bucket_epoch = 8;
   optional int32 coordinator_epoch = 9;
+  repeated int32 standby_replicas = 10 [packed = true];
 }
 
 message PbListOffsetsRespForBucket {
@@ -914,6 +1132,9 @@ message PbNotifyLeaderAndIsrReqForBucket {
   repeated int32 replicas = 5 [packed = true];
   repeated int32 isr = 6 [packed = true];
   required int32 bucket_epoch = 7;
+  repeated int32 standby_replicas = 8 [packed = true];
+  optional int32 bucket_count = 9;
+  optional int64 bucket_count_epoch = 10;
 }
 
 message PbNotifyLeaderAndIsrRespForBucket {
@@ -983,6 +1204,9 @@ message PbRemoteLogSegment {
 message PbPartitionInfo {
   required int64 partition_id = 1;
   required PbPartitionSpec partition_spec = 2;
+  optional string remote_data_dir = 3;
+  // the actual bucket count for this partition, used for per-partition bucket rescale
+  optional int32 bucket_count = 4;
 }
 
 message PbPartitionSpec {
@@ -1040,6 +1264,16 @@ message PbHeartbeatReqForTable {
   required int32 coordinator_epoch = 2;
   // the tiering epoch when the table is assigned to be tiering service
   required int64 tiering_epoch = 3;
+  // stats for the last tiering round; only set for finished_tables in LakeTieringHeartbeatRequest
+  optional PbLakeTieringStats lake_tiering_stats = 4;
+}
+
+// Stats reported by the tiering service when a table finishes a tiering round.
+message PbLakeTieringStats {
+  // cumulative total file size (bytes) of the lake table after tiering
+  optional int64 file_size = 1;
+  // cumulative total record count of the lake table after tiering
+  optional int64 record_count = 2;
 }
 
 message PbHeartbeatRespForTable {
@@ -1058,6 +1292,8 @@ message PbAddColumn {
   required bytes data_type_json = 2;
   optional string comment = 3;
   required int32 column_position_type = 4; // LAST=0,FIRST=1,AFTER=3
+  optional string agg_function_type = 5;
+  repeated PbKeyValue agg_function_params = 6;
 }
 
 message PbDropColumn {
@@ -1111,6 +1347,10 @@ message PbLakeTableSnapshotMetadata {
   required int64 snapshot_id = 2;
   required string tiered_bucket_offsets_file_path = 3;
   optional string readable_bucket_offsets_file_path = 4;
+  // Snapshot retention policy: The earliest snapshot ID to retain.
+  // 1. If set, the system will keep all snapshots in the range [earliest_snapshot_id_to_keep, current_snapshot_id].
+  // 2. If not set, the system defaults to a "Single Snapshot Retention" policy, keeping only the snapshot specified in this request.
+  optional int64 earliest_snapshot_id_to_keep = 5;
 }
 
 message PbLakeTableSnapshotInfo {
@@ -1172,4 +1412,102 @@ message PbKvSnapshotLeaseForBucket {
   optional int64 partition_id = 1;
   required int32 bucket_id = 2;
   required int64 snapshot_id = 3;
+}
+
+message PbTableStatsReqForBucket {
+  optional int64 partition_id = 1;
+  required int32 bucket_id = 2;
+  optional int32 routing_bucket_count = 3;
+}
+
+message PbTableStatsRespForBucket {
+  optional int32 error_code = 1;
+  optional string error_message = 2;
+  optional int64 partition_id = 3;
+  required int32 bucket_id = 4;
+
+  // --- Table-level stats ---
+  // The number of rows in this bucket.
+  // For KV tables: the number of unique keys (live rows).
+  // For Log tables: total number of log records (highWatermark - logStartOffset).
+  // Absent if row count is not available (e.g., WAL changelog mode or legacy tables).
+  optional int64 row_count = 5;
+
+  // --- data size stats (future) ---
+  // The data size in bytes of this bucket.
+  // For KV tables: the size of the KV store.
+  // For Log tables: the size of the log segments.
+  // Reserved for future use.
+  // optional int64 data_size_bytes = 6;
+
+  // --- Column-level stats (future) ---
+  // Per-column statistics, keyed by column index.
+  // Only populated when target_columns is specified in the request.
+  // repeated PbColumnStats column_stats = 10;
+}
+
+/**
+* Definition of predicate system related message
+*/
+
+// PbPredicateType constants (using int32 instead of enum for proto3 compatibility)
+// LEAF = 0, COMPOUND = 1
+
+// Represents a predicate that can be serialized and transmitted across
+// languages
+message PbPredicate {
+  // See PbPredicateType constants: LEAF = 0, COMPOUND = 1
+  required int32 type = 1;
+  optional PbLeafPredicate leaf = 2;
+  optional PbCompoundPredicate compound = 3;
+}
+
+// Represents a leaf predicate that compares a field with literals
+message PbLeafPredicate {
+  // The function to apply (see PbLeafFunction constants: EQUAL=0 ... NOT_IN=12)
+  required int32 function = 1;
+  // The schema field id of the referenced top-level field
+  required int32 field_id = 2;
+  // The literals to compare with
+  repeated PbLiteralValue literals = 3;
+}
+
+// Represents a compound predicate that combines multiple predicates
+message PbCompoundPredicate {
+  // The function to apply (see PbCompoundFunction constants: AND=0, OR=1)
+  required int32 function = 1;
+  // The child predicates
+  repeated PbPredicate children = 2;
+}
+
+// PbLeafFunction constants (using int32 instead of enum for proto3 compatibility)
+// EQUAL=0, NOT_EQUAL=1, LESS_THAN=2, LESS_OR_EQUAL=3, GREATER_THAN=4,
+// GREATER_OR_EQUAL=5, IS_NULL=6, IS_NOT_NULL=7, STARTS_WITH=8, CONTAINS=9,
+// END_WITH=10, IN=11, NOT_IN=12
+
+// PbCompoundFunction constants (using int32 instead of enum for proto3 compatibility)
+// AND=0, OR=1
+
+// PbDataTypeRoot constants (using int32 instead of enum for proto3 compatibility)
+// BOOLEAN=0, TINYINT=1, SMALLINT=2, INT=3, BIGINT=4, FLOAT=5, DOUBLE=6,
+// CHAR=7, VARCHAR=8, DECIMAL=9, DATE=10, TIME_WITHOUT_TIME_ZONE=11,
+// TIMESTAMP_WITHOUT_TIME_ZONE=12, TIMESTAMP_WITH_LOCAL_TIME_ZONE=13,
+// BINARY=14, BYTES=15
+
+// Represents a literal value
+message PbLiteralValue {
+  // See PbDataTypeRoot constants: indicates which value field is populated
+  required int32 literal_type = 1;
+  required bool is_null = 2;
+  optional bool boolean_value = 3;
+  optional int32 int_value = 4;
+  optional int64 bigint_value = 5;
+  optional float float_value = 6;
+  optional double double_value = 7;
+  optional string string_value = 8;
+  optional bytes binary_value = 9;
+  optional int64 decimal_value = 10;   // Serialized decimal (compact mode)
+  optional int64 timestamp_millis_value = 11;      // Epoch millis
+  optional int32 timestamp_nano_of_millis_value = 12; // Nano of millis
+  optional bytes decimal_bytes = 13;   // Serialized decimal (non-compact mode)
 }

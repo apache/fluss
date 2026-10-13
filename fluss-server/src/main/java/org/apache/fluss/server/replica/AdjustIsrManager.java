@@ -25,7 +25,6 @@ import org.apache.fluss.rpc.messages.AdjustIsrRequest;
 import org.apache.fluss.rpc.messages.AdjustIsrResponse;
 import org.apache.fluss.server.entity.AdjustIsrResultForBucket;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
-import org.apache.fluss.utils.MapUtils;
 import org.apache.fluss.utils.concurrent.Scheduler;
 
 import org.slf4j.Logger;
@@ -36,6 +35,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getAdjustIsrResponseData;
@@ -61,8 +61,7 @@ public class AdjustIsrManager {
     private final int serverId;
 
     /** Used to allow only one pending adjust Isr request per bucket (visible for testing). */
-    protected final Map<TableBucket, AdjustIsrItem> unsentAdjustIsrMap =
-            MapUtils.newConcurrentHashMap();
+    protected final Map<TableBucket, AdjustIsrItem> unsentAdjustIsrMap = new ConcurrentHashMap<>();
 
     /** Used to allow only one in-flight request at a time. */
     private final AtomicBoolean inflightRequest = new AtomicBoolean(false);

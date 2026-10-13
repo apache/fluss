@@ -39,6 +39,9 @@ import java.util.Objects;
 public class TablePath implements Serializable {
     private static final long serialVersionUID = 1L;
 
+    // Default database name used when none is specified.
+    public static final String DEFAULT_DATABASE_NAME = "fluss";
+
     // database name and table name are used as local folder names in Fluss. The name of such
     // folders consists of "{database_name}/{table_name}-{table_id}/log-{bucket_id}/xxx.log". Since
     // a typical folder name can not be over 255 characters long, there will be a limitation on the

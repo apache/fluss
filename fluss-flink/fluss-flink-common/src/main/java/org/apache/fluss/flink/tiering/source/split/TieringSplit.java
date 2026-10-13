@@ -31,6 +31,8 @@ public abstract class TieringSplit implements SourceSplit {
 
     public static final byte TIERING_SNAPSHOT_SPLIT_FLAG = 1;
     public static final byte TIERING_LOG_SPLIT_FLAG = 2;
+    public static final int UNKNOWN_SPLIT_INDEX = -1;
+    public static final long UNKNOWN_TIERING_ROUND_TIMESTAMP = -1L;
 
     protected static final int UNKNOWN_NUMBER_OF_SPLITS = -1;
 
@@ -40,6 +42,10 @@ public abstract class TieringSplit implements SourceSplit {
 
     // the total number of splits in one round of tiering
     protected final int numberOfSplits;
+    // the split index in one round of tiering
+    protected final int splitIndex;
+    // the timestamp when one round of tiering was generated
+    protected final long tieringRoundTimestamp;
 
     /**
      * Indicates whether to skip tiering data for this split in the current round of tiering. When
@@ -53,6 +59,24 @@ public abstract class TieringSplit implements SourceSplit {
             @Nullable String partitionName,
             int numberOfSplits,
             boolean skipCurrentRound) {
+        this(
+                tablePath,
+                tableBucket,
+                partitionName,
+                numberOfSplits,
+                skipCurrentRound,
+                UNKNOWN_SPLIT_INDEX,
+                UNKNOWN_TIERING_ROUND_TIMESTAMP);
+    }
+
+    public TieringSplit(
+            TablePath tablePath,
+            TableBucket tableBucket,
+            @Nullable String partitionName,
+            int numberOfSplits,
+            boolean skipCurrentRound,
+            int splitIndex,
+            long tieringRoundTimestamp) {
         this.tablePath = tablePath;
         this.tableBucket = tableBucket;
         this.partitionName = partitionName;
@@ -63,6 +87,8 @@ public abstract class TieringSplit implements SourceSplit {
         }
         this.numberOfSplits = numberOfSplits;
         this.skipCurrentRound = skipCurrentRound;
+        this.splitIndex = splitIndex;
+        this.tieringRoundTimestamp = tieringRoundTimestamp;
     }
 
     /** Checks whether this split is a primary key table split to tier. */
@@ -116,6 +142,18 @@ public abstract class TieringSplit implements SourceSplit {
         return numberOfSplits;
     }
 
+    public int getSplitIndex() {
+        return splitIndex;
+    }
+
+    public boolean isFirstSplit() {
+        return splitIndex == 0;
+    }
+
+    public long getTieringRoundTimestamp() {
+        return tieringRoundTimestamp;
+    }
+
     protected static String toSplitId(String splitPrefix, TableBucket tableBucket) {
         if (tableBucket.getPartitionId() != null) {
             return splitPrefix
@@ -142,7 +180,12 @@ public abstract class TieringSplit implements SourceSplit {
         return partitionName;
     }
 
-    public abstract TieringSplit copy(int numberOfSplits);
+    public TieringSplit copy(int numberOfSplits) {
+        return copy(numberOfSplits, splitIndex, tieringRoundTimestamp);
+    }
+
+    public abstract TieringSplit copy(
+            int numberOfSplits, int splitIndex, long tieringRoundTimestamp);
 
     @Override
     public boolean equals(Object object) {
@@ -154,12 +197,20 @@ public abstract class TieringSplit implements SourceSplit {
                 && Objects.equals(tableBucket, that.tableBucket)
                 && Objects.equals(partitionName, that.partitionName)
                 && numberOfSplits == that.numberOfSplits
-                && skipCurrentRound == that.skipCurrentRound;
+                && skipCurrentRound == that.skipCurrentRound
+                && splitIndex == that.splitIndex
+                && tieringRoundTimestamp == that.tieringRoundTimestamp;
     }
 
     @Override
     public int hashCode() {
         return Objects.hash(
-                tablePath, tableBucket, partitionName, numberOfSplits, skipCurrentRound);
+                tablePath,
+                tableBucket,
+                partitionName,
+                numberOfSplits,
+                skipCurrentRound,
+                splitIndex,
+                tieringRoundTimestamp);
     }
 }

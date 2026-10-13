@@ -39,8 +39,8 @@ import org.apache.fluss.utils.CloseableRegistry;
 import org.apache.fluss.utils.FileUtils;
 import org.apache.fluss.utils.types.Tuple2;
 
-import org.rocksdb.RocksDB;
-import org.rocksdb.RocksIterator;
+import io.github.fluss_contrib.rocksdb.RocksDB;
+import io.github.fluss_contrib.rocksdb.RocksIterator;
 
 import javax.annotation.Nullable;
 
@@ -128,8 +128,10 @@ public class KvTestUtils {
                                         tableBucket.getTableId(),
                                         tableBucket.getBucket(),
                                         snapshotId)),
-                new KvSnapshotHandle(Collections.emptyList(), Collections.emptyList(), 0),
-                0);
+                KvSnapshotHandle.create(Collections.emptyList(), Collections.emptyList(), 0),
+                0,
+                null,
+                null);
     }
 
     public static int getKeyCounts(RocksDB rocksDB) {

@@ -28,6 +28,7 @@ import org.apache.fluss.flink.source.metrics.FlinkSourceReaderMetrics;
 import org.apache.fluss.flink.source.reader.fetcher.FlinkSourceFetcherManager;
 import org.apache.fluss.flink.source.split.HybridSnapshotLogSplit;
 import org.apache.fluss.flink.source.split.HybridSnapshotLogSplitState;
+import org.apache.fluss.flink.source.split.KvBatchSplitState;
 import org.apache.fluss.flink.source.split.LogSplitState;
 import org.apache.fluss.flink.source.split.SourceSplitBase;
 import org.apache.fluss.flink.source.split.SourceSplitState;
@@ -35,6 +36,7 @@ import org.apache.fluss.lake.source.LakeSource;
 import org.apache.fluss.lake.source.LakeSplit;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.predicate.Predicate;
 import org.apache.fluss.types.RowType;
 
 import org.apache.flink.api.connector.source.SourceEvent;
@@ -69,6 +71,7 @@ public class FlinkSourceReader<OUT>
             RowType sourceOutputType,
             SourceReaderContext context,
             @Nullable int[] projectedFields,
+            @Nullable Predicate logRecordBatchFilter,
             FlinkSourceReaderMetrics flinkSourceReaderMetrics,
             FlinkRecordEmitter<OUT> recordEmitter,
             LakeSource<LakeSplit> lakeSource) {
@@ -82,8 +85,9 @@ public class FlinkSourceReader<OUT>
                                         tablePath,
                                         sourceOutputType,
                                         projectedFields,
-                                        flinkSourceReaderMetrics,
-                                        lakeSource),
+                                        logRecordBatchFilter,
+                                        lakeSource,
+                                        flinkSourceReaderMetrics),
                         (ignore) -> {}),
                 recordEmitter,
                 context.getConfiguration(),
@@ -160,6 +164,8 @@ public class FlinkSourceReader<OUT>
             return new HybridSnapshotLogSplitState(split.asHybridSnapshotLogSplit());
         } else if (split.isLogSplit()) {
             return new LogSplitState(split.asLogSplit());
+        } else if (split.isKvBatchSplit()) {
+            return new KvBatchSplitState(split.asKvBatchSplit());
         } else if (split.isLakeSplit()) {
             return LakeSplitStateInitializer.initializedState(split);
         } else {

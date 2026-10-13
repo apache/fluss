@@ -1,12 +1,11 @@
 /*
- * Licensed to the Apache Software Foundation (ASF) under one or more
- * contributor license agreements.  See the NOTICE file distributed with
- * this work for additional information regarding copyright ownership.
- * The ASF licenses this file to You under the Apache License, Version 2.0
- * (the "License"); you may not use this file except in compliance with
- * the License.  You may obtain a copy of the License at
+ * Copyright 2020 Splunk Inc.
  *
- *    http://www.apache.org/licenses/LICENSE-2.0
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -44,7 +43,7 @@ public class ProtobufRepeatedBytesField extends ProtobufAbstractRepeated<Field.B
         w.format(
                 "ProtoCodecUtils.BytesHolder _%sBh = _%sBytesHolder();\n",
                 ccName, ProtoGenUtil.camelCase("new", singularName));
-        w.format("_%sBh.len = ProtoCodecUtils.readVarInt(_buffer);\n", ccName);
+        w.format("_%sBh.len = ProtoCodecUtils.readBytesLen(_buffer);\n", ccName);
         w.format("_%sBh.b = new byte[_%sBh.len];\n", ccName, ccName);
         w.format("_buffer.readBytes(_%sBh.b);\n", ccName);
     }
@@ -78,7 +77,12 @@ public class ProtobufRepeatedBytesField extends ProtobufAbstractRepeated<Field.B
                 "        throw new IndexOutOfBoundsException(\"Index \" + idx + \" is out of the list size (\" + _%sCount + \") for field '%s'\");\n",
                 pluralName, field.getName());
         w.format("    }\n");
-        w.format("    return %s.get(idx).b;\n", pluralName);
+        w.format("    ProtoCodecUtils.BytesHolder _bh = %s.get(idx);\n", pluralName);
+        w.format("    if (_bh.offset == 0 && _bh.len == _bh.b.length) {\n");
+        w.format("        return _bh.b;\n");
+        w.format("    }\n");
+        w.format(
+                "    return java.util.Arrays.copyOfRange(_bh.b, _bh.offset, _bh.offset + _bh.len);\n");
         w.format("}\n");
     }
 
@@ -88,7 +92,7 @@ public class ProtobufRepeatedBytesField extends ProtobufAbstractRepeated<Field.B
         w.format("    ProtoCodecUtils.BytesHolder _bh = %s.get(i);\n", pluralName);
         w.format("    _w.writeVarInt(%s);\n", tagName());
         w.format("    _w.writeVarInt(_bh.len);\n");
-        w.format("    _w.writeByteArray(_bh.b, 0, _bh.len);\n");
+        w.format("    _w.writeByteArray(_bh.b, _bh.offset, _bh.len);\n");
         w.format("}\n");
     }
 
@@ -98,17 +102,23 @@ public class ProtobufRepeatedBytesField extends ProtobufAbstractRepeated<Field.B
         w.format(
                 "public void %s(byte[] %s) {\n",
                 ProtoGenUtil.camelCase("add", singularName), singularName);
-        w.format("    if (%s == null) {\n", pluralName);
         w.format(
-                "        %s = new java.util.ArrayList<ProtoCodecUtils.BytesHolder>();\n",
-                pluralName);
-        w.format("    }\n");
+                "    %s(%s, 0, %s.length);\n",
+                ProtoGenUtil.camelCase("add", singularName), singularName, singularName);
+        w.format("}\n");
+        w.println();
+
+        // add byte[] slice
+        w.format(
+                "public void %s(byte[] %s, int offset, int length) {\n",
+                ProtoGenUtil.camelCase("add", singularName), singularName);
         w.format(
                 "    ProtoCodecUtils.BytesHolder _bh = _%sBytesHolder();\n",
                 ProtoGenUtil.camelCase("new", singularName));
         w.format("    _cachedSize = -1;\n");
         w.format("    _bh.b = %s;\n", singularName);
-        w.format("    _bh.len = %s.length;\n", singularName);
+        w.format("    _bh.offset = offset;\n");
+        w.format("    _bh.len = length;\n");
         w.format("}\n");
         w.println();
 

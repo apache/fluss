@@ -39,15 +39,23 @@ import static org.apache.fluss.utils.Preconditions.checkArgument;
 public final class IndexedLogWriteBatch extends AbstractRowLogWriteBatch<IndexedRow> {
 
     public IndexedLogWriteBatch(
+            long tableId,
             int bucketId,
+            int bucketCount,
             PhysicalTablePath physicalTablePath,
             int schemaId,
             int writeLimit,
             AbstractPagedOutputView outputView,
+            boolean isHistoricalPartition,
             long createdMs) {
         super(
+                tableId,
                 bucketId,
+                bucketCount,
                 physicalTablePath,
+                schemaId,
+                WriteFormat.INDEXED_LOG,
+                isHistoricalPartition,
                 createdMs,
                 outputView,
                 MemoryLogRecordsIndexedBuilder.builder(schemaId, writeLimit, outputView, true),

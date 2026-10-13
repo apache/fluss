@@ -18,6 +18,7 @@
 package org.apache.fluss.metadata;
 
 import org.apache.fluss.annotation.PublicEvolving;
+import org.apache.fluss.types.DataType;
 
 import javax.annotation.Nullable;
 
@@ -104,18 +105,38 @@ public final class AggFunction implements Serializable {
     }
 
     /**
+     * Validates data type of this aggregation function. This method checks that the field data type
+     * is valid
+     *
+     * @param fieldType the field data type
+     * @throws IllegalArgumentException if any data type is invalid
+     */
+    public void validateDataType(DataType fieldType) {
+        type.validateDataType(fieldType);
+    }
+
+    /**
      * Validates all parameters of this aggregation function.
      *
      * <p>This method checks that:
      *
      * <ul>
+     *   <li>All parameters required by the function type are present
      *   <li>All parameter names are supported by the function type
      *   <li>All parameter values are valid
      * </ul>
      *
-     * @throws IllegalArgumentException if any parameter is invalid
+     * @throws IllegalArgumentException if any parameter is missing or invalid
      */
-    public void validate() {
+    public void validateParameters() {
+        for (String required : type.getRequiredParameters()) {
+            if (!parameters.containsKey(required)) {
+                throw new IllegalArgumentException(
+                        String.format(
+                                "Parameter '%s' is required for aggregation function '%s'.",
+                                required, type));
+            }
+        }
         for (Map.Entry<String, String> entry : parameters.entrySet()) {
             type.validateParameter(entry.getKey(), entry.getValue());
         }

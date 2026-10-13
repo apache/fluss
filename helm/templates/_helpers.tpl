@@ -64,3 +64,70 @@ Selector labels
 app.kubernetes.io/name: {{ include "fluss.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}
+
+{{/*
+Image name
+*/}}
+{{- define "fluss.image" -}}
+
+{{- $registry := .Values.image.registry | default "" -}}
+{{- $repo := required "image.repository is required" .Values.image.repository -}}
+{{- $tag := .Values.image.tag | default "" | toString -}}
+
+{{- $image := $repo -}}
+
+{{- if $registry -}}
+  {{- $image = printf "%s/%s" $registry $image -}}
+{{- end -}}
+
+{{- if $tag -}}
+  {{- $image = printf "%s:%s" $image $tag -}}
+{{- end -}}
+
+{{- $image -}}
+{{- end -}}
+
+{{/*
+Render pull secrets
+*/}}
+{{- define "fluss.imagePullSecrets" -}}
+{{- $secrets := .Values.image.pullSecrets -}}
+{{- if $secrets -}}
+imagePullSecrets:
+{{- range $secrets }}
+  - name: {{ . }}
+{{- end }}
+{{- end }}
+{{- end }}
+
+{{/*
+  Validate PodDisruptionBudget for a given component.
+  Usage: include "fluss.pdb.validate" (dict "component" "tablet" "pdb" .Values.tablet.podDisruptionBudget)
+*/}}
+{{- define "fluss.pdb.validate" -}}
+{{- if .pdb.enabled -}}
+  {{- $hasMin := hasKey .pdb "minAvailable" -}}
+  {{- $hasMax := hasKey .pdb "maxUnavailable" -}}
+  {{- if and $hasMin $hasMax -}}
+    {{- printf "%s.podDisruptionBudget: cannot set both minAvailable and maxUnavailable" .component -}}
+  {{- else if not (or $hasMin $hasMax) -}}
+    {{- printf "%s.podDisruptionBudget: must set either minAvailable or maxUnavailable when enabled" .component -}}
+  {{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+  Aggregate PDB validation for all components.
+  include "fluss.pdb.validateValues" .
+*/}}
+{{- define "fluss.pdb.validateValues" -}}
+{{- $errMessages := list -}}
+{{- $errMessages = append $errMessages (include "fluss.pdb.validate" (dict "component" "tablet" "pdb" .Values.tablet.podDisruptionBudget)) -}}
+{{- $errMessages = append $errMessages (include "fluss.pdb.validate" (dict "component" "coordinator" "pdb" .Values.coordinator.podDisruptionBudget)) -}}
+{{- $errMessages = without $errMessages "" -}}
+{{- $errMessage := join "\n" $errMessages -}}
+{{- if $errMessage -}}
+{{-   printf "\nPDB VALIDATION:\n%s" $errMessage | fail -}}
+{{- end -}}
+{{- end -}}
+

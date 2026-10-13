@@ -38,10 +38,12 @@ public class OBSFileSystemPlugin implements FileSystemPlugin {
     public static final String SCHEME = "obs";
 
     /**
-     * In order to simplify, we make fluss obs configuration keys same with hadoop obs module. So,
-     * we add all configuration key with prefix `fs.obs` in fluss conf to hadoop conf
+     * Fluss config prefixes that are mapped to the Hadoop config prefix. Users may configure with
+     * either the short prefix or the full Hadoop prefix.
      */
-    private static final String[] FLUSS_CONFIG_PREFIXES = {"fs.obs."};
+    private static final String[] FLUSS_CONFIG_PREFIXES = {"obs.", "fs.obs."};
+
+    private static final String HADOOP_CONFIG_PREFIX = "fs.obs.";
 
     private static final String ACCESS_KEY_ID = "fs.obs.access.key";
     public static final String CREDENTIALS_PROVIDER = "fs.obs.security.provider";
@@ -116,15 +118,14 @@ public class OBSFileSystemPlugin implements FileSystemPlugin {
         for (String key : flussConfig.keySet()) {
             for (String prefix : FLUSS_CONFIG_PREFIXES) {
                 if (key.startsWith(prefix)) {
+                    String newKey = HADOOP_CONFIG_PREFIX + key.substring(prefix.length());
                     String value =
                             flussConfig.getString(
                                     ConfigBuilder.key(key).stringType().noDefaultValue(), null);
-                    conf.set(key, value);
+                    conf.set(newKey, value);
 
                     LOG.debug(
-                            "Adding Fluss config entry for {} as {} to Hadoop config",
-                            key,
-                            conf.get(key));
+                            "Adding Fluss config entry for {} as {} to Hadoop config", key, newKey);
                 }
             }
         }

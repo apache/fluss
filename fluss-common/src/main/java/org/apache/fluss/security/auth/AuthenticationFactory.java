@@ -68,8 +68,15 @@ public class AuthenticationFactory {
             Configuration configuration) {
         String clientAuthenticateProtocol =
                 configuration.getString(ConfigOptions.CLIENT_SECURITY_PROTOCOL);
+        PluginManager pluginManager = null;
+        if (configuration.getBoolean(ConfigOptions.CLIENT_SECURITY_ENABLE_PLUGIN_DISCOVERY)) {
+            pluginManager = PluginUtils.createPluginManagerFromRootFolder(configuration);
+        }
         ClientAuthenticationPlugin authenticatorPlugin =
-                discoverPlugin(clientAuthenticateProtocol, ClientAuthenticationPlugin.class, null);
+                discoverPlugin(
+                        clientAuthenticateProtocol,
+                        ClientAuthenticationPlugin.class,
+                        pluginManager);
         return () -> authenticatorPlugin.createClientAuthenticator(configuration);
     }
 

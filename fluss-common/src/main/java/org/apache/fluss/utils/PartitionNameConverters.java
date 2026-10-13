@@ -21,6 +21,7 @@ import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.row.TimestampNtz;
 
 import java.time.Instant;
+import java.time.LocalDateTime;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
@@ -129,5 +130,142 @@ public class PartitionNameConverters {
                 .toLocalDateTime()
                 .atOffset(ZoneOffset.UTC)
                 .format(TimestampFormatter);
+    }
+
+    // ---- Reverse parsing methods (inverse of the above formatting methods) ----
+
+    /** Parses a hex string back to byte array. Reverse of {@link #hexString(byte[])}. */
+    public static byte[] parseHexString(String hex) {
+        int len = hex.length();
+        byte[] bytes = new byte[len / 2];
+        for (int i = 0; i < len; i += 2) {
+            bytes[i / 2] =
+                    (byte)
+                            ((Character.digit(hex.charAt(i), 16) << 4)
+                                    + Character.digit(hex.charAt(i + 1), 16));
+        }
+        return bytes;
+    }
+
+    /**
+     * Parses "YYYY-MM-DD" date string back to days since epoch. Reverse of {@link
+     * #dayToString(int)}.
+     */
+    public static int parseDayString(String dayStr) {
+        String[] parts = dayStr.split("-");
+        int year = Integer.parseInt(parts[0]);
+        int month = Integer.parseInt(parts[1]);
+        int day = Integer.parseInt(parts[2]);
+        LocalDateTime date = LocalDateTime.of(year, month, day, 0, 0);
+        long epochDay = date.toLocalDate().toEpochDay();
+        return (int) epochDay;
+    }
+
+    /**
+     * Parses "HH-MM-SS_mmm" time string back to milliseconds of day. Reverse of {@link
+     * #milliToString(int)}.
+     */
+    public static int parseMilliString(String timeStr) {
+        String[] mainParts = timeStr.split("_");
+        String[] timeParts = mainParts[0].split("-");
+        int hour = Integer.parseInt(timeParts[0]);
+        int min = Integer.parseInt(timeParts[1]);
+        int sec = Integer.parseInt(timeParts[2]);
+        int millis = Integer.parseInt(mainParts[1]);
+        return hour * 3600000 + min * 60000 + sec * 1000 + millis;
+    }
+
+    /** Parses reformatted float string back to Float. Reverse of {@link #reformatFloat(Float)}. */
+    public static Float parseFloat(String value) {
+        if ("NaN".equals(value)) {
+            return Float.NaN;
+        } else if ("Inf".equals(value)) {
+            return Float.POSITIVE_INFINITY;
+        } else if ("-Inf".equals(value)) {
+            return Float.NEGATIVE_INFINITY;
+        } else {
+            return java.lang.Float.parseFloat(value.replace("_", "."));
+        }
+    }
+
+    /**
+     * Parses reformatted double string back to Double. Reverse of {@link #reformatDouble(Double)}.
+     */
+    public static Double parseDouble(String value) {
+        if ("NaN".equals(value)) {
+            return Double.NaN;
+        } else if ("Inf".equals(value)) {
+            return Double.POSITIVE_INFINITY;
+        } else if ("-Inf".equals(value)) {
+            return Double.NEGATIVE_INFINITY;
+        } else {
+            return java.lang.Double.parseDouble(value.replace("_", "."));
+        }
+    }
+
+    /**
+     * Parses timestamp string back to TimestampNtz. Reverse of {@link
+     * #timestampToString(TimestampNtz)}.
+     *
+     * <p>Format: "yyyy-MM-dd-HH-mm-ss_nnnnnnnnn" where the nano part has 0-9 digits.
+     */
+    public static TimestampNtz parseTimestampNtz(String value) {
+        long[] millisAndNano = parseTimestampString(value);
+        return TimestampNtz.fromMillis(millisAndNano[0], (int) millisAndNano[1]);
+    }
+
+    /**
+     * Parses timestamp string back to TimestampLtz. Reverse of {@link
+     * #timestampToString(TimestampLtz)}.
+     */
+    public static TimestampLtz parseTimestampLtz(String value) {
+        long[] millisAndNano = parseTimestampString(value);
+        return TimestampLtz.fromEpochMillis(millisAndNano[0], (int) millisAndNano[1]);
+    }
+
+    /**
+     * Parses a timestamp string into [epochMillis, nanoOfMillisecond].
+     *
+     * <p>Format: "yyyy-MM-dd-HH-mm-ss_nnnnnnnnn" (the time and nano parts are optional).
+     */
+    private static long[] parseTimestampString(String value) {
+        int underscoreIdx = value.lastIndexOf('_');
+        String dateTimePart;
+        String nanoPart;
+        if (underscoreIdx >= 0) {
+            dateTimePart = value.substring(0, underscoreIdx);
+            nanoPart = value.substring(underscoreIdx + 1);
+        } else {
+            dateTimePart = value;
+            nanoPart = "";
+        }
+
+        String[] parts = dateTimePart.split("-");
+        int year = Integer.parseInt(parts[0]);
+        int month = Integer.parseInt(parts[1]);
+        int day = Integer.parseInt(parts[2]);
+        int hour = parts.length > 3 ? Integer.parseInt(parts[3]) : 0;
+        int min = parts.length > 4 ? Integer.parseInt(parts[4]) : 0;
+        int sec = parts.length > 5 ? Integer.parseInt(parts[5]) : 0;
+
+        LocalDateTime dateTime = LocalDateTime.of(year, month, day, hour, min, sec);
+        long epochMillis =
+                dateTime.toLocalDate().toEpochDay() * 86400000L
+                        + dateTime.toLocalTime().toSecondOfDay() * 1000L;
+
+        int nanoOfMillisecond = 0;
+        if (!nanoPart.isEmpty()) {
+            // Pad to 9 digits (nano of second)
+            StringBuilder sb = new StringBuilder(nanoPart);
+            while (sb.length() < 9) {
+                sb.append('0');
+            }
+            long nanoOfSecond = Long.parseLong(sb.toString());
+            // First 3 digits are millis-of-second, rest are nano-of-millis
+            epochMillis += nanoOfSecond / 1_000_000;
+            nanoOfMillisecond = (int) (nanoOfSecond % 1_000_000);
+        }
+
+        return new long[] {epochMillis, nanoOfMillisecond};
     }
 }

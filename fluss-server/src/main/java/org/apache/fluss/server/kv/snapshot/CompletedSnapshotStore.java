@@ -125,6 +125,27 @@ public class CompletedSnapshotStore {
     }
 
     /**
+     * Returns the union of every snapshot still held by this store and the snapshots recorded as
+     * still-in-use. Any snapshot whose ZK handle has not yet been pruned is potentially active
+     * (lease, in-flight RPC, recovery, etc.), so the orphan cleaner must keep its files. Orphan
+     * cleanup is conservative by design — a slightly broader active set is harmless, while
+     * excluding a still-referenced snapshot is not.
+     */
+    public Set<Long> getActiveSnapshotIds() {
+        return inLock(
+                lock,
+                () -> {
+                    Set<Long> ids =
+                            new HashSet<>(completedSnapshots.size() + stillInUseSnapshots.size());
+                    for (CompletedSnapshot snapshot : completedSnapshots) {
+                        ids.add(snapshot.getSnapshotID());
+                    }
+                    ids.addAll(stillInUseSnapshots.keySet());
+                    return ids;
+                });
+    }
+
+    /**
      * Synchronously writes the new snapshots to snapshot handle store and asynchronously removes
      * older ones.
      *

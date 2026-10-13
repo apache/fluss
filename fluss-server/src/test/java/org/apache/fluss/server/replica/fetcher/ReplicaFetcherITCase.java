@@ -57,6 +57,7 @@ import static org.apache.fluss.record.TestData.DATA1_TABLE_PATH;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_PATH_PK;
 import static org.apache.fluss.record.TestData.DATA_1_WITH_KEY_AND_VALUE;
 import static org.apache.fluss.record.TestData.EXPECTED_LOG_RESULTS_FOR_DATA_1_WITH_PK;
+import static org.apache.fluss.record.TestData.TEST_SCHEMA_GETTER;
 import static org.apache.fluss.server.testutils.KvTestUtils.assertLookupResponse;
 import static org.apache.fluss.server.testutils.RpcMessageTestUtils.assertFetchLogResponse;
 import static org.apache.fluss.server.testutils.RpcMessageTestUtils.assertFetchLogResponseWithRowKind;
@@ -155,7 +156,7 @@ public class ReplicaFetcherITCase {
                     new CompletableFuture<>();
             // mock client fetch from follower.
             replicaManager.fetchLogRecords(
-                    new FetchParams(-1, false, Integer.MAX_VALUE, -1, -1),
+                    new FetchParams(-1, false, Integer.MAX_VALUE, -1, -1, null),
                     Collections.singletonMap(tb, new FetchReqInfo(tableId, 0L, 1024 * 1024)),
                     null,
                     future::complete);
@@ -165,7 +166,7 @@ public class ReplicaFetcherITCase {
             assertThat(resultForBucket.getTableBucket()).isEqualTo(tb);
             LogRecords records = resultForBucket.records();
             assertThat(records).isNotNull();
-            assertLogRecordsEquals(DATA1_ROW_TYPE, records, DATA1);
+            assertLogRecordsEquals(DATA1_ROW_TYPE, records, DATA1, TEST_SCHEMA_GETTER);
         }
     }
 
@@ -232,7 +233,7 @@ public class ReplicaFetcherITCase {
                     new CompletableFuture<>();
             // mock client fetch from follower.
             replicaManager.fetchLogRecords(
-                    new FetchParams(-1, false, Integer.MAX_VALUE, -1, -1),
+                    new FetchParams(-1, false, Integer.MAX_VALUE, -1, -1, null),
                     Collections.singletonMap(tb, new FetchReqInfo(tableId, 0L, 1024 * 1024)),
                     null,
                     future::complete);
@@ -315,6 +316,7 @@ public class ReplicaFetcherITCase {
                         currentLeaderAndIsr.leader(),
                         currentLeaderAndIsr.leaderEpoch() + 1,
                         currentLeaderAndIsr.isr(),
+                        Collections.emptyList(),
                         currentLeaderAndIsr.coordinatorEpoch(),
                         currentLeaderAndIsr.bucketEpoch());
         FLUSS_CLUSTER_EXTENSION.notifyLeaderAndIsr(

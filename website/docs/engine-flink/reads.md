@@ -154,7 +154,174 @@ TableSourceScan(table=[[fluss_catalog, fluss, log_partitioned_table, filter=[=(c
 
 This confirms that only partitions matching `c_nationkey = 'US'` will be scanned.
 
+### Filter Pushdown
+
+Filter pushdown is a server-side optimization for **Log Tables** (non-primary-key tables). When enabled, the server evaluates filter predicates against per-batch column statistics (min, max, null count) and skips entire record batches that cannot contain matching rows. This reduces network I/O and deserialization cost without changing query semantics — Flink still applies the filter on the client side as a safety net.
+
+:::note
+1. Filter pushdown requires the Arrow log format (`'table.log.format' = 'arrow'`), which is enabled by default.
+2. Column statistics must be explicitly enabled via the `table.statistics.columns` table property. Without this configuration, no filters will be pushed down.
+3. Only data written **after** enabling statistics will contain batch-level statistics. Historical data will not benefit from filter pushdown.
+:::
+
+#### Enabling Column Statistics
+
+Set the `table.statistics.columns` property when creating or altering a table. It is recommended to specify only the columns used in your filter conditions to minimize overhead:
+
+```sql title="Flink SQL"
+-- Recommended: collect statistics only for columns used in filter conditions
+CREATE TABLE sensor_data (
+    sensor_id INT NOT NULL,
+    temperature DOUBLE NOT NULL,
+    humidity DOUBLE NOT NULL,
+    location STRING NOT NULL,
+    ts TIMESTAMP NOT NULL
+) WITH (
+    'table.statistics.columns' = 'temperature,humidity,location'
+);
+
+-- Or use '*' to collect statistics for all supported columns (higher overhead)
+ALTER TABLE sensor_data SET ('table.statistics.columns' = '*');
+```
+
+Statistics collection supports the following types: `BOOLEAN`, `TINYINT`, `SMALLINT`, `INTEGER`, `BIGINT`, `FLOAT`, `DOUBLE`, `STRING`, `CHAR`, `DECIMAL`, `DATE`, `TIME`, `TIMESTAMP`, `TIMESTAMP_LTZ`. Unsupported types (`BYTES`, `BINARY`, `ARRAY`, `MAP`, `ROW`) are automatically excluded.
+
+#### Supported Filter Operators
+
+The following filter operators can be pushed down to the server:
+
+- `=`, `<>`, `>`, `>=`, `<`, `<=`
+- `IN (...)`
+- `IS NULL`, `IS NOT NULL`
+- `BETWEEN ... AND ...`
+- `LIKE 'abc%'` (prefix), `LIKE '%abc'` (suffix), `LIKE '%abc%'` (contains)
+- `AND` / `OR` conjunctions
+
+All columns referenced in a filter expression must have statistics enabled. If any referenced column lacks statistics, that filter will not be pushed down.
+
+#### Example
+
+**1. Create a table with statistics enabled:**
+```sql title="Flink SQL"
+CREATE TABLE sensor_data (
+    sensor_id INT NOT NULL,
+    temperature DOUBLE NOT NULL,
+    humidity DOUBLE NOT NULL,
+    location STRING NOT NULL,
+    ts TIMESTAMP NOT NULL
+) WITH (
+    'table.statistics.columns' = 'temperature,location'
+);
+```
+
+**2. Query with filter:**
+```sql title="Flink SQL"
+SELECT * FROM sensor_data WHERE temperature > 30.0 AND location = 'warehouse-A';
+```
+
+**3. Verify with `EXPLAIN`:**
+```sql title="Flink SQL"
+EXPLAIN SELECT * FROM sensor_data WHERE temperature > 30.0 AND location = 'warehouse-A';
+```
+
+If filter pushdown is active, the `TableSourceScan` node in the execution plan will contain a `filter=[...]` clause showing the pushed-down predicates. For example:
+
+```text
+TableSourceScan(table=[[..., sensor_data, filter=[and(>(temperature, 30.0:DOUBLE), =(location, ...))]]], fields=[...])
+```
+
+The server evaluates these predicates against per-batch column statistics and skips entire record batches that cannot contain matching rows. Note that the filter also appears in a `Calc` node above the source — this is expected because Flink retains all filters for client-side verification as a safety net.
+
 ## Batch Read
+
+### Virtual Table Batch Read
+
+The `$changelog` and `$binlog` virtual tables support bounded batch scans. A batch query starts from the position configured by `scan.startup.mode`, captures the latest offset of each bucket as its stopping offset, and terminates after consuming all bounded splits. Unlike a streaming query, it does not wait for changes written after the stopping offsets are captured.
+
+```sql title="Flink SQL"
+SET 'execution.runtime-mode' = 'batch';
+
+-- Replay changes from a timestamp up to the bounded stopping offsets.
+SELECT _change_type, _log_offset, order_id, amount
+FROM orders$changelog
+/*+ OPTIONS(
+  'scan.startup.mode' = 'timestamp',
+  'scan.startup.timestamp' = '1705312200000'
+) */
+ORDER BY _log_offset;
+
+-- Query before/after images from a primary-key table.
+SELECT _change_type, `before`, `after`
+FROM orders$binlog
+WHERE `after`.order_id = 1001
+LIMIT 100;
+```
+
+`$changelog` is available for Primary Key Tables and Log Tables, while `$binlog` is available only for Primary Key Tables. See [Virtual Tables](/table-design/virtual-tables.md#flink-runtime-modes) for schemas, startup modes, and detailed bounded-read semantics.
+
+### Server-Side Scan of Primary Key Tables
+
+A bounded read of a primary-key table merges the latest kv snapshot with the changelog range that
+follows it. Setting `client.scanner.kv.batch-strategy` to `server-scan` reads the live kv state on
+the tablet server instead, which avoids downloading snapshot files and replaying the changelog.
+
+This is intended for interactive queries over small primary-key tables — the kind of full scan that
+backs a dashboard of a few thousand rows. It is not a general replacement for the default strategy.
+
+The option applies only to primary-key tables that have no lake snapshot to read from. On a
+lake-enabled primary-key table with a lake snapshot, a bounded read performs the lake + Fluss-log
+union read and this option is not consulted.
+
+#### Example
+
+**1. Create a primary-key table:**
+```sql title="Flink SQL"
+CREATE TABLE pk_table (
+    id     INT NOT NULL,
+    name   STRING,
+    region STRING,
+    PRIMARY KEY (id) NOT ENFORCED
+) WITH (
+    'bucket.num' = '4'
+);
+```
+
+**2. Write some data:**
+```sql title="Flink SQL"
+INSERT INTO pk_table VALUES
+    (1, 'Alice', 'us-east'),
+    (2, 'Bob',   'eu-west'),
+    (3, 'Carol', 'ap-south');
+```
+
+**3. Run a full scan in batch mode:**
+```sql title="Flink SQL"
+SET 'execution.runtime-mode' = 'batch';
+SELECT * FROM pk_table /*+ OPTIONS('client.scanner.kv.batch-strategy' = 'server-scan') */;
+```
+
+The option can also be set in `CREATE TABLE`, but prefer the hint: as a table property it applies to
+every bounded reader of that table, including jobs written later by other users.
+
+#### Trade-offs
+
+Both strategies return the current state of the table. They differ in guarantees and cost:
+
+| | `snapshot-merge` (default) | `server-scan` |
+|---|---|---|
+| Resumable | Yes — the scan resumes from its checkpointed position | No — the bucket is re-read from the start, so rows already emitted are emitted again |
+| Point in time | Fixed when splits are planned: every bucket is cut at its latest offset at that moment | Per bucket, fixed when that bucket's scanner opens — buckets open as readers reach them |
+| Client cost | Downloads snapshot files and replays the changelog | None |
+| Server cost | None beyond serving the changelog | Holds a scan session on the tablet server serving the bucket |
+
+Because `server-scan` is not resumable, a bounded source that is checkpointed (a `setBounded()`
+DataStream source in streaming runtime mode) will emit duplicates after a restore. Batch runtime
+mode does not checkpoint and is unaffected.
+
+Each `server-scan` session lives on the tablet server that leads the bucket and is subject to
+`kv.scanner.ttl` (10 minutes of idleness) and `kv.scanner.max-per-bucket` (8 concurrent sessions per
+bucket). A source that is back-pressured for longer than the TTL fails its split; a bucket read
+concurrently by more queries than the limit fails to open.
 
 ### Limit Read
 The Fluss source supports limiting reads for both primary-key tables and log tables, making it convenient to preview the latest `N` records in a table.
@@ -238,19 +405,28 @@ SELECT * FROM pk_table WHERE c_custkey = 1;
 ```
 
 ### Aggregations
-The Fluss source supports pushdown count aggregation for the log table in batch mode. It is useful to preview the total number of the log table;
+The Fluss source supports pushdown `COUNT(*)` aggregation in batch mode for both **Log Tables** and **Primary Key Tables**. This feature enables efficient row counting without scanning all records.
+
+#### Example for Log Table
 ```sql title="Flink SQL"
 -- Execute the flink job in batch mode for current session context
 SET 'execution.runtime-mode' = 'batch';
-```
-
-```sql title="Flink SQL"
 SET 'sql-client.execution.result-mode' = 'tableau';
-```
 
-```sql title="Flink SQL"
 SELECT COUNT(*) FROM log_table;
 ```
+
+#### Example for Primary Key Table
+```sql title="Flink SQL"
+SET 'execution.runtime-mode' = 'batch';
+SET 'sql-client.execution.result-mode' = 'tableau';
+
+SELECT COUNT(*) FROM pk_table;
+```
+
+:::note
+`COUNT(*)` pushdown for Primary Key Tables requires the table to use the default changelog mode (`'table.changelog.image' = 'FULL'`). Tables configured with `'table.changelog.image' = 'WAL'` do not support this feature.
+:::
 
 
 ## Read Options
@@ -282,6 +458,40 @@ SELECT * FROM log_table
 SELECT * FROM log_table
 /*+ OPTIONS('scan.startup.mode' = 'timestamp',
 'scan.startup.timestamp' = '2023-12-09 23:09:12') */;
+```
+
+### Stop Reading Position
+
+The config option `scan.bounded.mode` enables you to specify where the source stops reading. A bounded mode other than `unbounded` makes the source bounded even in streaming execution mode: the job finishes once the source reaches the stopping position (a bounded streaming read). Typical usages are replaying a bounded time range of the log, backfilling and archiving.
+
+It is supported for Log Tables, the changelog of Primary Key Tables (`earliest`, `latest` or `timestamp` startup mode) and the `$changelog`/`$binlog` virtual tables, but not for the `full` startup mode of Primary Key Tables (the snapshot reading phase has no bounded end) or the datalake union read.
+
+Fluss supports the following `scan.bounded.mode` options:
+- `unbounded` (default): In streaming execution mode, the source never stops. In batch execution mode, the source reads up to the latest log offsets captured when the source starts.
+- `latest-offset`: The source stops at the latest log offsets captured when the source starts. In batch execution mode, this behaves the same as `unbounded`.
+- `timestamp`: The source stops before the first record batch whose commit timestamp is greater than or equal to the specified time (defined by the configuration item `scan.bounded.timestamp`), i.e. only records with a commit timestamp smaller than the specified time are read. The specified time must not be in the future.
+
+The following SQL statement reads the `log_table` table up to a specified time.
+```sql title="Flink SQL"
+SELECT * FROM log_table
+/*+ OPTIONS('scan.bounded.mode' = 'timestamp',
+'scan.bounded.timestamp' = '2023-12-09 23:09:12') */;
+```
+
+The start and stop reading positions can be combined to replay a time range of the log, even in streaming execution mode.
+```sql title="Flink SQL"
+SELECT * FROM log_table
+/*+ OPTIONS('scan.startup.mode' = 'timestamp',
+'scan.startup.timestamp' = '2023-12-09 00:00:00',
+'scan.bounded.mode' = 'timestamp',
+'scan.bounded.timestamp' = '2023-12-10 00:00:00') */;
+```
+
+The following SQL statement reads the changelog of a primary key table up to the latest log offsets captured when the source starts, and then finishes.
+```sql title="Flink SQL"
+SELECT * FROM pk_table
+/*+ OPTIONS('scan.startup.mode' = 'earliest',
+'scan.bounded.mode' = 'latest-offset') */;
 ```
 
 

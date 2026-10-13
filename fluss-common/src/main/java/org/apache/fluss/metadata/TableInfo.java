@@ -19,11 +19,15 @@ package org.apache.fluss.metadata;
 
 import org.apache.fluss.annotation.PublicEvolving;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.config.StatisticsColumnsConfig;
 import org.apache.fluss.config.TableConfig;
+import org.apache.fluss.types.DataType;
+import org.apache.fluss.types.DataTypeChecks;
 import org.apache.fluss.types.RowType;
 
 import javax.annotation.Nullable;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
@@ -59,10 +63,14 @@ public final class TableInfo {
     private final Configuration properties;
     private final TableConfig tableConfig;
     private final Configuration customProperties;
+    private final @Nullable String remoteDataDir;
     private final @Nullable String comment;
 
     private final long createdTime;
     private final long modifiedTime;
+    private final long bucketCountEpoch;
+
+    private int[] cachedStatsIndexMapping = null;
 
     public TableInfo(
             TablePath tablePath,
@@ -74,9 +82,42 @@ public final class TableInfo {
             int numBuckets,
             Configuration properties,
             Configuration customProperties,
+            @Nullable String remoteDataDir,
             @Nullable String comment,
             long createdTime,
             long modifiedTime) {
+        this(
+                tablePath,
+                tableId,
+                schemaId,
+                schema,
+                bucketKeys,
+                partitionKeys,
+                numBuckets,
+                properties,
+                customProperties,
+                remoteDataDir,
+                comment,
+                createdTime,
+                modifiedTime,
+                0L);
+    }
+
+    public TableInfo(
+            TablePath tablePath,
+            long tableId,
+            int schemaId,
+            Schema schema,
+            List<String> bucketKeys,
+            List<String> partitionKeys,
+            int numBuckets,
+            Configuration properties,
+            Configuration customProperties,
+            @Nullable String remoteDataDir,
+            @Nullable String comment,
+            long createdTime,
+            long modifiedTime,
+            long bucketCountEpoch) {
         this.tablePath = tablePath;
         this.tableId = tableId;
         this.schemaId = schemaId;
@@ -90,9 +131,11 @@ public final class TableInfo {
         this.properties = properties;
         this.tableConfig = new TableConfig(properties);
         this.customProperties = customProperties;
+        this.remoteDataDir = remoteDataDir;
         this.comment = comment;
         this.createdTime = createdTime;
         this.modifiedTime = modifiedTime;
+        this.bucketCountEpoch = bucketCountEpoch;
     }
 
     /**
@@ -101,6 +144,17 @@ public final class TableInfo {
      */
     public TablePath getTablePath() {
         return tablePath;
+    }
+
+    /**
+     * Returns the table path used to access the external datalake table.
+     *
+     * <p>The returned path is derived from the Fluss table path and table-level datalake path
+     * options. If no custom datalake path option is configured, this returns the same path as
+     * {@link #getTablePath()}.
+     */
+    public TablePath getLakeTablePath() {
+        return LakeTableUtil.resolveLakeTablePath(tablePath, properties);
     }
 
     /**
@@ -221,6 +275,94 @@ public final class TableInfo {
     }
 
     /**
+     * Check if statistics collection is enabled for this table.
+     *
+     * <p>Statistics collection helps optimize query performance by providing data distribution
+     * information about the table's columns. When enabled, the system collects and maintains
+     * statistical information such as min/max values, null counts, and cardinality estimates.
+     *
+     * @return true if statistics collection is enabled, false otherwise
+     */
+    public boolean isStatisticsEnabled() {
+        return tableConfig.isStatisticsEnabled();
+    }
+
+    /**
+     * Returns the column index mapping for statistics collection.
+     *
+     * <p>This method provides a mapping array where each element at index {@code i} represents the
+     * original column index in the table schema for the {@code i}-th statistics column. This
+     * mapping is used to efficiently project rows when collecting statistics data.
+     *
+     * <p>The behavior varies based on the statistics configuration:
+     *
+     * <ul>
+     *   <li><b>Disabled</b>: Returns an empty array when statistics collection is disabled
+     *   <li><b>Specific columns</b>: When specific columns are configured, returns mapping for
+     *       those columns only
+     *   <li><b>All columns ("*")</b>: Returns mapping for all supported columns in the table schema
+     *       (unsupported types are excluded as they are not suitable for statistical analysis)
+     * </ul>
+     *
+     * <p>The result is cached after the first computation to avoid repeated processing.
+     *
+     * @return an array where {@code result[i]} is the original column index for the {@code i}-th
+     *     statistics column. Returns an empty array if statistics collection is disabled.
+     * @throws IllegalArgumentException if a configured statistics column is not found in the table
+     *     schema
+     */
+    public int[] getStatsIndexMapping() {
+        if (cachedStatsIndexMapping != null) {
+            return cachedStatsIndexMapping;
+        }
+
+        StatisticsColumnsConfig statsConfig = tableConfig.getStatisticsColumns();
+        List<String> statsColumns;
+
+        switch (statsConfig.getMode()) {
+            case DISABLED:
+                cachedStatsIndexMapping = new int[0];
+                return cachedStatsIndexMapping;
+            case SPECIFIED:
+                statsColumns = statsConfig.getColumns();
+                break;
+            case ALL:
+                // Collect all supported columns
+                statsColumns = new ArrayList<>();
+                for (int rowIndex = 0; rowIndex < rowType.getFieldCount(); rowIndex++) {
+                    DataType columnType = rowType.getTypeAt(rowIndex);
+                    if (DataTypeChecks.isSupportedStatisticsType(columnType)) {
+                        String columnName = rowType.getFields().get(rowIndex).getName();
+                        statsColumns.add(columnName);
+                    }
+                }
+                break;
+            default:
+                throw new IllegalStateException(
+                        "Unknown statistics columns mode: " + statsConfig.getMode());
+        }
+
+        // Build mapping from stats column index to original row column index
+        int[] mapping = new int[statsColumns.size()];
+        for (int statsIndex = 0; statsIndex < statsColumns.size(); statsIndex++) {
+            String statsColumnName = statsColumns.get(statsIndex);
+            // Find the original column index for this stats column
+            int originalIndex = rowType.getFieldIndex(statsColumnName);
+            if (originalIndex == -1) {
+                throw new IllegalArgumentException(
+                        String.format(
+                                "Statistics column '%s' not found in table schema",
+                                statsColumnName));
+            }
+            mapping[statsIndex] = originalIndex;
+        }
+
+        // Cache the result
+        cachedStatsIndexMapping = mapping;
+        return mapping;
+    }
+
+    /**
      * Get the partition keys of the table. This will be an empty set if the table is not
      * partitioned.
      *
@@ -263,6 +405,12 @@ public final class TableInfo {
         return customProperties;
     }
 
+    /** Returns the remote data directory of the table. */
+    @Nullable
+    public String getRemoteDataDir() {
+        return remoteDataDir;
+    }
+
     /** Returns the comment/description of the table. */
     public Optional<String> getComment() {
         return Optional.ofNullable(comment);
@@ -290,6 +438,14 @@ public final class TableInfo {
     }
 
     /**
+     * Returns the bucket layout epoch of the table. New tables start at 0; every committed
+     * bucket.num change increments it (see {@code TableRegistration#withBucketCount(int)}).
+     */
+    public long getBucketCountEpoch() {
+        return bucketCountEpoch;
+    }
+
+    /**
      * Converts this table info to a {@link TableDescriptor}.
      *
      * <p>NOTE: It is not recommended to use this method to get metadata of a table, such as bucket
@@ -314,8 +470,33 @@ public final class TableInfo {
             long tableId,
             int schemaId,
             TableDescriptor tableDescriptor,
+            String remoteDataDir,
             long createdTime,
             long modifiedTime) {
+        return of(
+                tablePath,
+                tableId,
+                schemaId,
+                tableDescriptor,
+                remoteDataDir,
+                createdTime,
+                modifiedTime,
+                0L);
+    }
+
+    /**
+     * Creates a {@link TableInfo} from a {@link TableDescriptor} and other metadata, including the
+     * bucket layout epoch.
+     */
+    public static TableInfo of(
+            TablePath tablePath,
+            long tableId,
+            int schemaId,
+            TableDescriptor tableDescriptor,
+            String remoteDataDir,
+            long createdTime,
+            long modifiedTime,
+            long bucketCountEpoch) {
         Schema schema = tableDescriptor.getSchema();
         int numBuckets =
                 tableDescriptor
@@ -335,9 +516,11 @@ public final class TableInfo {
                 numBuckets,
                 Configuration.fromMap(tableDescriptor.getProperties()),
                 Configuration.fromMap(tableDescriptor.getCustomProperties()),
+                remoteDataDir,
                 tableDescriptor.getComment().orElse(null),
                 createdTime,
-                modifiedTime);
+                modifiedTime,
+                bucketCountEpoch);
     }
 
     @Override
@@ -350,6 +533,7 @@ public final class TableInfo {
         return tableId == that.tableId
                 && schemaId == that.schemaId
                 && numBuckets == that.numBuckets
+                && bucketCountEpoch == that.bucketCountEpoch
                 && Objects.equals(tablePath, that.tablePath)
                 && Objects.equals(rowType, that.rowType)
                 && Objects.equals(primaryKeys, that.primaryKeys)
@@ -358,6 +542,7 @@ public final class TableInfo {
                 && Objects.equals(partitionKeys, that.partitionKeys)
                 && Objects.equals(properties, that.properties)
                 && Objects.equals(customProperties, that.customProperties)
+                && Objects.equals(remoteDataDir, that.remoteDataDir)
                 && Objects.equals(comment, that.comment);
     }
 
@@ -376,7 +561,9 @@ public final class TableInfo {
                 numBuckets,
                 properties,
                 customProperties,
-                comment);
+                remoteDataDir,
+                comment,
+                bucketCountEpoch);
     }
 
     @Override
@@ -402,6 +589,8 @@ public final class TableInfo {
                 + properties
                 + ", customProperties="
                 + customProperties
+                + ", remoteDataDir="
+                + remoteDataDir
                 + ", comment='"
                 + comment
                 + '\''
@@ -409,6 +598,8 @@ public final class TableInfo {
                 + createdTime
                 + ", modifiedTime="
                 + modifiedTime
+                + ", bucketCountEpoch="
+                + bucketCountEpoch
                 + '}';
     }
 

@@ -164,7 +164,6 @@ class SparkStreamingTest extends FlussSparkTestBase with StreamTest {
         StartStream(),
         AddFlussData(tableName, schema, Seq(Row(4, "data4"), Row(5, "data5"))),
         ProcessAllAvailable(),
-        CheckLastBatch(Row(4, "data4"), Row(5, "data5")),
         CheckAnswer(Row(4, "data4"), Row(5, "data5"))
       )
 
@@ -206,7 +205,6 @@ class SparkStreamingTest extends FlussSparkTestBase with StreamTest {
         StartStream(),
         AddFlussData(tableName, schema, Seq(Row(4, "data4", "22"), Row(5, "data5", "11"))),
         ProcessAllAvailable(),
-        CheckLastBatch(Row(4, "data4", "22"), Row(5, "data5", "11")),
         CheckAnswer(Row(4, "data4", "22"), Row(5, "data5", "11"))
       )
 
@@ -254,7 +252,6 @@ class SparkStreamingTest extends FlussSparkTestBase with StreamTest {
         StartStream(),
         AddFlussData(tableName, schema, Seq(Row(4, "data4", 44, "dd"), Row(5, "data5", 55, "ee"))),
         ProcessAllAvailable(),
-        CheckLastBatch(Row(4, "data4", 44, "dd"), Row(5, "data5", 55, "ee")),
         CheckAnswer(Row(4, "data4", 44, "dd"), Row(5, "data5", 55, "ee"))
       )
 

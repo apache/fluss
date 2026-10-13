@@ -94,6 +94,20 @@ public class CoordinatorMetadataCache implements ServerMetadataCache {
         return Collections.unmodifiableSet(tabletServerInfos);
     }
 
+    public Set<ServerInfo> getLiveTabletServerInfos() {
+        NodeMetadataSnapshot snapshot = metadataSnapshot;
+        Map<Integer, ServerInfo> aliveTabletServers = snapshot.aliveTabletServers;
+        Set<ServerInfo> serverInfos = new HashSet<>();
+        aliveTabletServers.forEach(
+                (serverId, serverInfo) -> {
+                    ServerTag tag = snapshot.serverTags.get(serverId);
+                    if (tag != ServerTag.PERMANENT_OFFLINE) {
+                        serverInfos.add(serverInfo);
+                    }
+                });
+        return Collections.unmodifiableSet(serverInfos);
+    }
+
     /**
      * Servers with {@code PERMANENT_OFFLINE} tags are no longer returned here. So that no new
      * replicas will be assigned to these servers.

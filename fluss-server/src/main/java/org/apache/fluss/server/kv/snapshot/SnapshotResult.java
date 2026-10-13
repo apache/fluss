@@ -33,12 +33,14 @@ public class SnapshotResult implements Serializable {
     private final KvSnapshotHandle kvSnapshotHandle;
 
     private final FsPath snapshotPath;
-    private final long logOffset;
 
-    public SnapshotResult(KvSnapshotHandle kvSnapshotHandle, FsPath snapshotPath, long logOffset) {
+    private final TabletState tabletState;
+
+    public SnapshotResult(
+            KvSnapshotHandle kvSnapshotHandle, FsPath snapshotPath, TabletState tabletState) {
         this.kvSnapshotHandle = kvSnapshotHandle;
         this.snapshotPath = snapshotPath;
-        this.logOffset = logOffset;
+        this.tabletState = tabletState;
     }
 
     public KvSnapshotHandle getKvSnapshotHandle() {
@@ -49,8 +51,8 @@ public class SnapshotResult implements Serializable {
         return snapshotPath;
     }
 
-    public long getLogOffset() {
-        return logOffset;
+    public TabletState getTabletState() {
+        return tabletState;
     }
 
     public long getSnapshotSize() {

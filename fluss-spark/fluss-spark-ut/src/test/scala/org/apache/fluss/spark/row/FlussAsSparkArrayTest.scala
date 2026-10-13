@@ -212,9 +212,9 @@ class FlussAsSparkArrayTest extends AnyFunSuite {
     val flussArray = new GenericArray(decimals)
     val sparkArray = new FlussAsSparkArray(elementType).replace(flussArray)
 
-    assertThat(sparkArray.getDecimal(0, 10, 2).toBigDecimal.doubleValue()).isEqualTo(10.50)
-    assertThat(sparkArray.getDecimal(1, 10, 2).toBigDecimal.doubleValue()).isEqualTo(20.75)
-    assertThat(sparkArray.getDecimal(2, 10, 2).toBigDecimal.doubleValue()).isEqualTo(30.99)
+    assertThat(sparkArray.getDecimal(0, 10, 2).toBigDecimal.doubleValue).isEqualTo(10.50)
+    assertThat(sparkArray.getDecimal(1, 10, 2).toBigDecimal.doubleValue).isEqualTo(20.75)
+    assertThat(sparkArray.getDecimal(2, 10, 2).toBigDecimal.doubleValue).isEqualTo(30.99)
   }
 
   test("getUTF8String: read string array") {
@@ -308,14 +308,17 @@ class FlussAsSparkArrayTest extends AnyFunSuite {
     assertThat(sparkInnerArray2.getInt(2)).isEqualTo(6)
   }
 
-  test("getMap: unsupported operation") {
+  test("getMap: read map array") {
     val mapType = DataTypes.MAP(DataTypes.INT, DataTypes.STRING)
-    val flussArray = GenericArray.of(new GenericMap(Map(1 -> "map").asJava))
+    val innerMap =
+      new GenericMap(Map(Integer.valueOf(1) -> BinaryString.fromString("value1")).asJava)
+    val flussArray = new GenericArray(Array[Object](innerMap))
     val sparkArray = new FlussAsSparkArray(mapType).replace(flussArray)
 
-    assertThrows[UnsupportedOperationException] {
-      sparkArray.getMap(0)
-    }
+    val sparkMap = sparkArray.getMap(0)
+    assertThat(sparkMap.numElements()).isEqualTo(1)
+    assertThat(sparkMap.keyArray().getInt(0)).isEqualTo(1)
+    assertThat(sparkMap.valueArray().getUTF8String(0).toString).isEqualTo("value1")
   }
 
   test("getInterval: unsupported operation") {

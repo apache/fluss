@@ -21,24 +21,30 @@ import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.rpc.gateway.TabletServerGateway;
 import org.apache.fluss.rpc.messages.DatabaseExistsRequest;
 import org.apache.fluss.rpc.messages.DatabaseExistsResponse;
+import org.apache.fluss.rpc.messages.DescribeBucketsRequest;
+import org.apache.fluss.rpc.messages.DescribeBucketsResponse;
 import org.apache.fluss.rpc.messages.DescribeClusterConfigsRequest;
 import org.apache.fluss.rpc.messages.DescribeClusterConfigsResponse;
 import org.apache.fluss.rpc.messages.FetchLogRequest;
 import org.apache.fluss.rpc.messages.FetchLogResponse;
+import org.apache.fluss.rpc.messages.GetClusterHealthRequest;
+import org.apache.fluss.rpc.messages.GetClusterHealthResponse;
 import org.apache.fluss.rpc.messages.GetDatabaseInfoRequest;
 import org.apache.fluss.rpc.messages.GetDatabaseInfoResponse;
 import org.apache.fluss.rpc.messages.GetFileSystemSecurityTokenRequest;
 import org.apache.fluss.rpc.messages.GetFileSystemSecurityTokenResponse;
 import org.apache.fluss.rpc.messages.GetKvSnapshotMetadataRequest;
 import org.apache.fluss.rpc.messages.GetKvSnapshotMetadataResponse;
+import org.apache.fluss.rpc.messages.GetLakeSnapshotRequest;
+import org.apache.fluss.rpc.messages.GetLakeSnapshotResponse;
 import org.apache.fluss.rpc.messages.GetLatestKvSnapshotsRequest;
 import org.apache.fluss.rpc.messages.GetLatestKvSnapshotsResponse;
-import org.apache.fluss.rpc.messages.GetLatestLakeSnapshotRequest;
-import org.apache.fluss.rpc.messages.GetLatestLakeSnapshotResponse;
 import org.apache.fluss.rpc.messages.GetTableInfoRequest;
 import org.apache.fluss.rpc.messages.GetTableInfoResponse;
 import org.apache.fluss.rpc.messages.GetTableSchemaRequest;
 import org.apache.fluss.rpc.messages.GetTableSchemaResponse;
+import org.apache.fluss.rpc.messages.GetTableStatsRequest;
+import org.apache.fluss.rpc.messages.GetTableStatsResponse;
 import org.apache.fluss.rpc.messages.InitWriterRequest;
 import org.apache.fluss.rpc.messages.InitWriterResponse;
 import org.apache.fluss.rpc.messages.LimitScanRequest;
@@ -71,6 +77,8 @@ import org.apache.fluss.rpc.messages.ProduceLogRequest;
 import org.apache.fluss.rpc.messages.ProduceLogResponse;
 import org.apache.fluss.rpc.messages.PutKvRequest;
 import org.apache.fluss.rpc.messages.PutKvResponse;
+import org.apache.fluss.rpc.messages.ScanKvRequest;
+import org.apache.fluss.rpc.messages.ScanKvResponse;
 import org.apache.fluss.rpc.messages.StopReplicaRequest;
 import org.apache.fluss.rpc.messages.StopReplicaResponse;
 import org.apache.fluss.rpc.messages.TableExistsRequest;
@@ -83,9 +91,10 @@ import java.util.concurrent.CompletableFuture;
 /** A testing implementation of the {@link TabletServerGateway} interface. */
 public class TestingTabletGatewayService extends TestingGatewayService
         implements TabletServerGateway {
+
     @Override
     public ServerType providerType() {
-        return null;
+        return ServerType.TABLET_SERVER;
     }
 
     @Override
@@ -132,6 +141,11 @@ public class TestingTabletGatewayService extends TestingGatewayService
 
     @Override
     public CompletableFuture<LimitScanResponse> limitScan(LimitScanRequest request) {
+        return null;
+    }
+
+    @Override
+    public CompletableFuture<GetTableStatsResponse> getTableStats(GetTableStatsRequest request) {
         return null;
     }
 
@@ -190,6 +204,12 @@ public class TestingTabletGatewayService extends TestingGatewayService
     }
 
     @Override
+    public CompletableFuture<DescribeBucketsResponse> describeBuckets(
+            DescribeBucketsRequest request) {
+        return null;
+    }
+
+    @Override
     public CompletableFuture<GetTableSchemaResponse> getTableSchema(GetTableSchemaRequest request) {
         return null;
     }
@@ -234,8 +254,8 @@ public class TestingTabletGatewayService extends TestingGatewayService
     }
 
     @Override
-    public CompletableFuture<GetLatestLakeSnapshotResponse> getLatestLakeSnapshot(
-            GetLatestLakeSnapshotRequest request) {
+    public CompletableFuture<GetLakeSnapshotResponse> getLakeSnapshot(
+            GetLakeSnapshotRequest request) {
         return null;
     }
 
@@ -247,6 +267,17 @@ public class TestingTabletGatewayService extends TestingGatewayService
     @Override
     public CompletableFuture<DescribeClusterConfigsResponse> describeClusterConfigs(
             DescribeClusterConfigsRequest request) {
+        return null;
+    }
+
+    @Override
+    public CompletableFuture<ScanKvResponse> scanKv(ScanKvRequest request) {
+        return null;
+    }
+
+    @Override
+    public CompletableFuture<GetClusterHealthResponse> getClusterHealth(
+            GetClusterHealthRequest request) {
         return null;
     }
 }

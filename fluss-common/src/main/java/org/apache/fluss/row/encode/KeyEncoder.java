@@ -20,6 +20,7 @@ package org.apache.fluss.row.encode;
 import org.apache.fluss.config.TableConfig;
 import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.row.InternalRow;
+import org.apache.fluss.row.encode.hudi.HudiKeyEncoder;
 import org.apache.fluss.row.encode.iceberg.IcebergKeyEncoder;
 import org.apache.fluss.row.encode.paimon.PaimonKeyEncoder;
 import org.apache.fluss.types.RowType;
@@ -28,6 +29,8 @@ import javax.annotation.Nullable;
 
 import java.util.List;
 import java.util.Optional;
+
+import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
 /** An interface for encoding key of row into bytes. */
 public interface KeyEncoder {
@@ -76,6 +79,14 @@ public interface KeyEncoder {
         Optional<Integer> optKvFormatVersion = tableConfig.getKvFormatVersion();
         DataLakeFormat dataLakeFormat = tableConfig.getDataLakeFormat().orElse(null);
         int kvFormatVersion = optKvFormatVersion.orElse(1);
+
+        // Hudi's HudiKeyEncoder is lossy (4-byte hash); it must NOT be used for
+        // primary key encoding because different keys with the same List#hashCode
+        // would collide. Use CompactedKeyEncoder instead.
+        if (dataLakeFormat == DataLakeFormat.HUDI) {
+            return CompactedKeyEncoder.createKeyEncoder(rowType, keyFields);
+        }
+
         if (kvFormatVersion == 1) {
             return of(rowType, keyFields, dataLakeFormat);
         }
@@ -105,6 +116,34 @@ public interface KeyEncoder {
     }
 
     /**
+     * Creates a bucket key encoder for bucket calculation and reuses the primary key encoder when
+     * the bucket key encoding is compatible with the primary key encoding.
+     *
+     * <p>When the bucket key is the same as the primary key, most formats can reuse the primary key
+     * encoder and avoid encoding twice. Hudi is an exception: its primary key encoder must be
+     * lossless, while bucket routing must keep using Hudi's hash-based bucket key encoding.
+     *
+     * @param rowType the row type of the input row
+     * @param keyFields the bucket key fields to encode
+     * @param tableConfig the table configuration containing lake format
+     * @param isDefaultBucketKey true if bucket key equals primary key
+     * @param primaryKeyEncoder the primary key encoder to reuse when compatible
+     * @return the bucket key encoder
+     */
+    static KeyEncoder ofBucketKeyEncoder(
+            RowType rowType,
+            List<String> keyFields,
+            TableConfig tableConfig,
+            boolean isDefaultBucketKey,
+            KeyEncoder primaryKeyEncoder) {
+        DataLakeFormat dataLakeFormat = tableConfig.getDataLakeFormat().orElse(null);
+        if (isDefaultBucketKey && dataLakeFormat != DataLakeFormat.HUDI) {
+            return checkNotNull(primaryKeyEncoder, "Primary key encoder must not be null.");
+        }
+        return ofBucketKeyEncoder(rowType, keyFields, dataLakeFormat);
+    }
+
+    /**
      * Creates a key encoder based on the datalake format.
      *
      * <p>Internal use only. This method should be private, but Java 8 doesn't support private
@@ -129,6 +168,8 @@ public interface KeyEncoder {
             return CompactedKeyEncoder.createKeyEncoder(rowType, keyFields);
         } else if (lakeFormat == DataLakeFormat.ICEBERG) {
             return new IcebergKeyEncoder(rowType, keyFields);
+        } else if (lakeFormat == DataLakeFormat.HUDI) {
+            return new HudiKeyEncoder(rowType, keyFields);
         } else {
             throw new UnsupportedOperationException("Unsupported datalake format: " + lakeFormat);
         }

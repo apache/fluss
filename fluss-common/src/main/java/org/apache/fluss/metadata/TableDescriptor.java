@@ -283,6 +283,18 @@ public final class TableDescriptor implements Serializable {
 
     /**
      * Returns a new TableDescriptor instance that is a copy of this TableDescriptor with a new
+     * standby replica enabled.
+     */
+    public TableDescriptor withStandbyReplicaEnabled(boolean standbyReplicaEnabled) {
+        Map<String, String> newProperties = new HashMap<>(properties);
+        newProperties.put(
+                ConfigOptions.TABLE_KV_STANDBY_REPLICA_ENABLED.key(),
+                String.valueOf(standbyReplicaEnabled));
+        return withProperties(newProperties);
+    }
+
+    /**
+     * Returns a new TableDescriptor instance that is a copy of this TableDescriptor with a new
      * bucket count.
      */
     public TableDescriptor withBucketCount(int newBucketCount) {

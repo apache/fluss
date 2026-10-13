@@ -22,9 +22,11 @@ import org.apache.fluss.client.table.scanner.batch.BatchScanner;
 import org.apache.fluss.client.table.scanner.log.LogScanner;
 import org.apache.fluss.client.table.scanner.log.TypedLogScanner;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.predicate.Predicate;
 
 import javax.annotation.Nullable;
 
+import java.io.IOException;
 import java.util.List;
 
 /**
@@ -60,6 +62,17 @@ public interface Scan {
     Scan limit(int rowNumber);
 
     /**
+     * Returns a new scan from this that will apply the given predicate filter.
+     *
+     * <p>Note: the filter currently only supports record batch level filtering for log scanners,
+     * not row level filtering. The computing engine still needs to perform secondary filtering on
+     * the results. Batch scanners do not support filter pushdown.
+     *
+     * @param predicate the predicate to apply for record batch level filtering
+     */
+    Scan filter(@Nullable Predicate predicate);
+
+    /**
      * Creates a {@link LogScanner} to continuously read log data for this scan.
      *
      * <p>Note: this API doesn't support pre-configured with {@link #limit(int)}.
@@ -74,9 +87,10 @@ public interface Scan {
     <T> TypedLogScanner<T> createTypedLogScanner(Class<T> pojoClass);
 
     /**
-     * Creates a {@link BatchScanner} to read current data in the given table bucket for this scan.
+     * Creates a {@link BatchScanner} to read current data in the given table bucket.
      *
-     * <p>Note: this API doesn't support pre-configured with {@link #project}.
+     * <p>For Primary Key Tables, this performs a full RocksDB-backed KV scan of the bucket and does
+     * not require {@link #limit(int)}. For Log Tables, {@link #limit(int)} must be set.
      */
     BatchScanner createBatchScanner(TableBucket tableBucket);
 
@@ -88,4 +102,10 @@ public interface Scan {
      * #limit(int)} and only support for Primary Key Tables.
      */
     BatchScanner createBatchScanner(TableBucket tableBucket, long snapshotId);
+
+    /**
+     * Creates a {@link BatchScanner} that scans across all buckets of the table, expanding all
+     * partitions for partitioned tables. For Log Tables, {@link #limit(int)} must be set.
+     */
+    BatchScanner createBatchScanner() throws IOException;
 }

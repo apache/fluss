@@ -24,5 +24,5 @@ import org.apache.fluss.annotation.Internal;
 public enum LookupType {
     LOOKUP,
     LOOKUP_WITH_INSERT_IF_NOT_EXISTS,
-    PREFIX_LOOKUP;
+    PREFIX_LOOKUP
 }

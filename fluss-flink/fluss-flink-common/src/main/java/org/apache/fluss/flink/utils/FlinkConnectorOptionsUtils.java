@@ -17,15 +17,23 @@
 
 package org.apache.fluss.flink.utils;
 
+import org.apache.fluss.client.initializer.NoStoppingOffsetsInitializer;
+import org.apache.fluss.client.initializer.OffsetsInitializer;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.flink.FlinkConnectorOptions;
+import org.apache.fluss.flink.FlinkConnectorOptions.ScanBoundedMode;
 import org.apache.fluss.flink.FlinkConnectorOptions.ScanStartupMode;
+import org.apache.fluss.flink.sink.shuffle.DistributionMode;
+import org.apache.fluss.metadata.MergeEngineType;
 
-import org.apache.flink.configuration.CoreOptions;
+import org.apache.flink.api.connector.source.Boundedness;
+import org.apache.flink.configuration.ConfigurationUtils;
 import org.apache.flink.configuration.ReadableConfig;
 import org.apache.flink.table.api.ValidationException;
 import org.apache.flink.table.api.config.TableConfigOptions;
 import org.apache.flink.table.types.logical.RowType;
+
+import javax.annotation.Nullable;
 
 import java.io.File;
 import java.time.LocalDateTime;
@@ -37,8 +45,11 @@ import java.util.List;
 import java.util.Optional;
 import java.util.stream.Collectors;
 
-import static org.apache.flink.configuration.CoreOptions.TMP_DIRS;
 import static org.apache.fluss.config.ConfigOptions.CLIENT_SCANNER_IO_TMP_DIR;
+import static org.apache.fluss.config.ConfigOptions.LAKE_TIERING_IO_TMP_DIRS;
+import static org.apache.fluss.flink.FlinkConnectorOptions.SCAN_BOUNDED_MODE;
+import static org.apache.fluss.flink.FlinkConnectorOptions.SCAN_BOUNDED_TIMESTAMP;
+import static org.apache.fluss.flink.FlinkConnectorOptions.SCAN_SPLIT_ASSIGNMENT_BATCH_SIZE;
 import static org.apache.fluss.flink.FlinkConnectorOptions.SCAN_STARTUP_MODE;
 import static org.apache.fluss.flink.FlinkConnectorOptions.SCAN_STARTUP_TIMESTAMP;
 import static org.apache.fluss.flink.FlinkConnectorOptions.ScanStartupMode.TIMESTAMP;
@@ -57,6 +68,81 @@ public class FlinkConnectorOptionsUtils {
 
     public static void validateTableSourceOptions(ReadableConfig tableOptions) {
         validateScanStartupMode(tableOptions);
+        validateScanBoundedMode(tableOptions);
+        validateScanSplitAssignmentBatchSize(tableOptions);
+    }
+
+    /**
+     * Validates that the distribution mode is compatible with merge engine tables.
+     *
+     * <p>For primary key tables with any merge engine, keyed shuffle must be enabled to ensure
+     * correct data routing. This is required because:
+     *
+     * <ul>
+     *   <li>AGGREGATION: aggregate state cannot be correctly redistributed on rescale
+     *   <li>FIRST_ROW/VERSIONED: merge semantics require same-key records go to same task
+     * </ul>
+     *
+     * <p>Additionally, the AGGREGATION merge engine enables Undo Recovery on the sink, whose
+     * one-writer-per-bucket assumption further excludes BUCKET_BALANCE; see {@link
+     * #validateDistributionModeForUndoRecovery}.
+     *
+     * @param mergeEngineType the merge engine type (can be null for non-merge-engine tables)
+     * @param distributionMode the distribution mode configured for the sink
+     * @throws IllegalArgumentException if distribution mode is incompatible with merge engine
+     */
+    public static void validateDistributionModeForMergeEngine(
+            @Nullable MergeEngineType mergeEngineType, DistributionMode distributionMode) {
+        if (mergeEngineType != null
+                && distributionMode != DistributionMode.BUCKET
+                && distributionMode != DistributionMode.BUCKET_BALANCE
+                && distributionMode != DistributionMode.AUTO) {
+            throw new IllegalArgumentException(
+                    String.format(
+                            "For primary key tables with merge engine ('%s'), "
+                                    + "'sink.distribution-mode' must be 'bucket', 'bucket_balance' or 'auto' (default). "
+                                    + "Disabling keyed shuffle breaks merge semantics because records with the same key "
+                                    + "must be processed by the same task. Current mode: %s",
+                            mergeEngineType, distributionMode));
+        }
+        // The AGGREGATION merge engine enables Undo Recovery on the sink; the
+        // one-writer-per-bucket constraint of Undo Recovery further excludes BUCKET_BALANCE.
+        validateDistributionModeForUndoRecovery(
+                mergeEngineType == MergeEngineType.AGGREGATION, distributionMode);
+    }
+
+    /**
+     * Validates that the distribution mode is safe for the sink's Undo Recovery.
+     *
+     * <p>Undo Recovery, which is enabled automatically for aggregation tables, assumes each bucket
+     * is written by exactly one sink subtask: the writer state tracks the last written offset per
+     * bucket and fails on conflicting offsets during recovery. BUCKET_BALANCE and NONE may fan one
+     * bucket out to several subtasks and break that assumption.
+     *
+     * <p>This is the single guard shared by the entry-point validation ({@link
+     * #validateDistributionModeForMergeEngine}) and the sink builder's defense-in-depth check, so
+     * the two can never drift apart.
+     *
+     * @param enableUndoRecovery whether Undo Recovery is enabled for the sink
+     * @param distributionMode the distribution mode configured for the sink
+     * @throws IllegalArgumentException if the distribution mode may fan one bucket out to several
+     *     subtasks while Undo Recovery is enabled
+     */
+    public static void validateDistributionModeForUndoRecovery(
+            boolean enableUndoRecovery, DistributionMode distributionMode) {
+        if (enableUndoRecovery
+                && distributionMode != DistributionMode.AUTO
+                && distributionMode != DistributionMode.BUCKET) {
+            throw new IllegalArgumentException(
+                    String.format(
+                            "'sink.distribution-mode' = '%s' is not supported when Undo Recovery "
+                                    + "is enabled (automatic for the aggregation merge engine): "
+                                    + "Undo Recovery assumes each bucket is written by exactly one "
+                                    + "sink subtask, but this distribution mode may fan one bucket "
+                                    + "out to several subtasks. Please use 'bucket' or 'auto' "
+                                    + "(default) instead.",
+                            distributionMode));
+        }
     }
 
     public static StartupOptions getStartupOptions(ReadableConfig tableOptions, ZoneId timeZone) {
@@ -71,6 +157,60 @@ public class FlinkConnectorOptionsUtils {
                             timeZone);
         }
         return options;
+    }
+
+    public static BoundedOptions getBoundedOptions(ReadableConfig tableOptions, ZoneId timeZone) {
+        ScanBoundedMode scanBoundedMode = tableOptions.get(SCAN_BOUNDED_MODE);
+        switch (scanBoundedMode) {
+            case UNBOUNDED:
+                return BoundedOptions.unbounded();
+            case LATEST_OFFSET:
+                return BoundedOptions.latestOffset();
+            case TIMESTAMP:
+                return BoundedOptions.timestamp(
+                        parseTimestamp(
+                                tableOptions.get(SCAN_BOUNDED_TIMESTAMP),
+                                SCAN_BOUNDED_TIMESTAMP.key(),
+                                timeZone));
+            default:
+                throw new IllegalArgumentException("Unsupported bounded mode: " + scanBoundedMode);
+        }
+    }
+
+    /** Creates the stopping offsets initializer from the given bounded options. */
+    public static OffsetsInitializer toStoppingOffsetsInitializer(BoundedOptions boundedOptions) {
+        switch (boundedOptions.getBoundedMode()) {
+            case UNBOUNDED:
+                return new NoStoppingOffsetsInitializer();
+            case LATEST_OFFSET:
+                return OffsetsInitializer.latest();
+            case TIMESTAMP:
+                return OffsetsInitializer.timestamp(boundedOptions.getBoundedTimestampMs());
+            default:
+                throw new IllegalArgumentException(
+                        "Unsupported bounded mode: " + boundedOptions.getBoundedMode());
+        }
+    }
+
+    /**
+     * Creates the stopping offsets initializer for the execution mode and bounded options.
+     *
+     * <p>Batch execution remains bounded by the latest offsets when no explicit bounded mode is
+     * configured.
+     */
+    public static OffsetsInitializer toStoppingOffsetsInitializer(
+            boolean streaming, BoundedOptions boundedOptions) {
+        if (!streaming && boundedOptions.getBoundedMode() == ScanBoundedMode.UNBOUNDED) {
+            return OffsetsInitializer.latest();
+        }
+        return toStoppingOffsetsInitializer(boundedOptions);
+    }
+
+    /** Returns the Flink source boundedness for the execution mode and bounded options. */
+    public static Boundedness toBoundedness(boolean streaming, BoundedOptions boundedOptions) {
+        return streaming && boundedOptions.getBoundedMode() == ScanBoundedMode.UNBOUNDED
+                ? Boundedness.CONTINUOUS_UNBOUNDED
+                : Boundedness.BOUNDED;
     }
 
     public static List<String> getBucketKeys(ReadableConfig tableOptions) {
@@ -120,6 +260,28 @@ public class FlinkConnectorOptionsUtils {
         }
     }
 
+    private static void validateScanBoundedMode(ReadableConfig tableOptions) {
+        ScanBoundedMode scanBoundedMode = tableOptions.get(SCAN_BOUNDED_MODE);
+        if (scanBoundedMode == ScanBoundedMode.TIMESTAMP) {
+            if (!tableOptions.getOptional(SCAN_BOUNDED_TIMESTAMP).isPresent()) {
+                throw new ValidationException(
+                        String.format(
+                                "'%s' is required in '%s' bounded mode but missing.",
+                                SCAN_BOUNDED_TIMESTAMP.key(), ScanBoundedMode.TIMESTAMP));
+            }
+        }
+    }
+
+    private static void validateScanSplitAssignmentBatchSize(ReadableConfig tableOptions) {
+        int batchSize = tableOptions.get(SCAN_SPLIT_ASSIGNMENT_BATCH_SIZE);
+        if (batchSize <= 0) {
+            throw new ValidationException(
+                    String.format(
+                            "'%s' must be positive, but was %s.",
+                            SCAN_SPLIT_ASSIGNMENT_BATCH_SIZE.key(), batchSize));
+        }
+    }
+
     /**
      * Parses timestamp String to Long.
      *
@@ -155,18 +317,77 @@ public class FlinkConnectorOptionsUtils {
 
     public static String getClientScannerIoTmpDir(
             Configuration flussConf, org.apache.flink.configuration.Configuration flinkConfig) {
-        if (!flussConf.contains(CLIENT_SCANNER_IO_TMP_DIR)) {
-            if (flinkConfig.contains(TMP_DIRS)) {
-                // pass flink io tmp dir to fluss client.
-                return new File(flinkConfig.get(CoreOptions.TMP_DIRS), "/fluss").getAbsolutePath();
-            }
+        return flussConf
+                .getOptional(CLIENT_SCANNER_IO_TMP_DIR)
+                .orElseGet(
+                        () ->
+                                new File(
+                                                ConfigurationUtils.getRandomTempDirectory(
+                                                        flinkConfig),
+                                                "fluss")
+                                        .getAbsolutePath());
+    }
+
+    /**
+     * Returns the configured lake-tiering temporary directories, or Flink's temporary directories
+     * with a {@code fluss} child directory when no tiering-specific value is configured.
+     */
+    public static String[] getLakeTieringIoTmpDirs(
+            Configuration lakeTieringConfig,
+            org.apache.flink.configuration.Configuration flinkConfig) {
+        Optional<String> configuredTmpDirs =
+                lakeTieringConfig.getOptional(LAKE_TIERING_IO_TMP_DIRS);
+        if (configuredTmpDirs.isPresent()) {
+            return ConfigurationUtils.splitPaths(configuredTmpDirs.get());
         }
-        return flussConf.getString(CLIENT_SCANNER_IO_TMP_DIR);
+
+        String[] flinkTmpDirs = ConfigurationUtils.parseTempDirectories(flinkConfig);
+        String[] lakeTieringTmpDirs = new String[flinkTmpDirs.length];
+        for (int i = 0; i < flinkTmpDirs.length; i++) {
+            lakeTieringTmpDirs[i] = new File(flinkTmpDirs[i], "fluss").getAbsolutePath();
+        }
+        return lakeTieringTmpDirs;
     }
 
     /** Fluss startup options. * */
     public static class StartupOptions {
         public ScanStartupMode startupMode;
         public long startupTimestampMs;
+    }
+
+    /** Immutable Fluss bounded options. */
+    public static final class BoundedOptions {
+        private final ScanBoundedMode boundedMode;
+        private final long boundedTimestampMs;
+
+        private BoundedOptions(ScanBoundedMode boundedMode, long boundedTimestampMs) {
+            this.boundedMode = boundedMode;
+            this.boundedTimestampMs = boundedTimestampMs;
+        }
+
+        /** Returns the default bounded options, i.e. no user-specified stopping offsets. */
+        public static BoundedOptions unbounded() {
+            return new BoundedOptions(ScanBoundedMode.UNBOUNDED, 0L);
+        }
+
+        /** Returns bounded options that stop at the latest offsets resolved at startup. */
+        public static BoundedOptions latestOffset() {
+            return new BoundedOptions(ScanBoundedMode.LATEST_OFFSET, 0L);
+        }
+
+        /** Returns bounded options that stop at offsets resolved from the given timestamp. */
+        public static BoundedOptions timestamp(long timestampMs) {
+            return new BoundedOptions(ScanBoundedMode.TIMESTAMP, timestampMs);
+        }
+
+        /** Returns the configured bounded mode. */
+        public ScanBoundedMode getBoundedMode() {
+            return boundedMode;
+        }
+
+        /** Returns the timestamp used by timestamp bounded mode. */
+        public long getBoundedTimestampMs() {
+            return boundedTimestampMs;
+        }
     }
 }

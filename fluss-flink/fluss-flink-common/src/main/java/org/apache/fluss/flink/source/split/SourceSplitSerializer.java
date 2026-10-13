@@ -32,18 +32,38 @@ import java.io.IOException;
 
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
-/** A serializer for the {@link SourceSplitBase}. */
+/**
+ * A serializer for the {@link SourceSplitBase}.
+ *
+ * <h3>Version Evolution:</h3>
+ *
+ * <ul>
+ *   <li><b>Version 0:</b> Initial version.
+ *   <li><b>Version 1:</b> Adds the log stopping offset and the batch flag to {@link
+ *       HybridSnapshotLogSplit}.
+ *   <li><b>Version 2 (Current):</b> Adds {@code recordsToSkip} to {@link
+ *       org.apache.fluss.flink.lake.split.LakeSnapshotSplit}, so that a partially consumed lake
+ *       snapshot split resumes from where it stopped instead of re-emitting already emitted
+ *       records. Lake snapshot splits restored from older versions start from the beginning.
+ * </ul>
+ *
+ * <p>This serializer can deserialize splits of all previous versions, but always produces the
+ * current version during serialization.
+ */
 public class SourceSplitSerializer implements SimpleVersionedSerializer<SourceSplitBase> {
 
     private static final int VERSION_0 = 0;
+    private static final int VERSION_1 = 1;
+    private static final int VERSION_2 = 2;
 
     private static final ThreadLocal<DataOutputSerializer> SERIALIZER_CACHE =
             ThreadLocal.withInitial(() -> new DataOutputSerializer(64));
 
     private static final byte HYBRID_SNAPSHOT_SPLIT_FLAG = 1;
     private static final byte LOG_SPLIT_FLAG = 2;
+    private static final byte KV_BATCH_SPLIT_FLAG = 3;
 
-    private static final int CURRENT_VERSION = VERSION_0;
+    private static final int CURRENT_VERSION = VERSION_2;
 
     @Nullable private final LakeSource<LakeSplit> lakeSource;
 
@@ -75,12 +95,21 @@ public class SourceSplitSerializer implements SimpleVersionedSerializer<SourceSp
                 out.writeBoolean(hybridSnapshotLogSplit.isSnapshotFinished());
                 // write log starting offset
                 out.writeLong(hybridSnapshotLogSplit.getLogStartingOffset());
-            } else {
+                // write log stopping offset
+                out.writeLong(
+                        hybridSnapshotLogSplit
+                                .getLogStoppingOffset()
+                                .orElse(LogSplit.NO_STOPPING_OFFSET));
+                // write whether this is a bounded batch split
+                out.writeBoolean(hybridSnapshotLogSplit.isBatch());
+            } else if (split.isLogSplit()) {
                 LogSplit logSplit = split.asLogSplit();
                 // write starting offset
                 out.writeLong(logSplit.getStartingOffset());
                 // write stopping offset
                 out.writeLong(logSplit.getStoppingOffset().orElse(LogSplit.NO_STOPPING_OFFSET));
+            } else {
+                // KvBatchSplit has no extra fields to serialize beyond the common header.
             }
         } else {
             LakeSplitSerializer lakeSplitSerializer =
@@ -111,7 +140,7 @@ public class SourceSplitSerializer implements SimpleVersionedSerializer<SourceSp
 
     @Override
     public SourceSplitBase deserialize(int version, byte[] serialized) throws IOException {
-        if (version != VERSION_0) {
+        if (version < VERSION_0 || version > CURRENT_VERSION) {
             throw new IOException("Unknown version " + version);
         }
         final DataInputDeserializer in = new DataInputDeserializer(serialized);
@@ -133,21 +162,34 @@ public class SourceSplitSerializer implements SimpleVersionedSerializer<SourceSp
             long recordsToSkip = in.readLong();
             boolean isSnapshotFinished = in.readBoolean();
             long logStartingOffset = in.readLong();
+            long logStoppingOffset = LogSplit.NO_STOPPING_OFFSET;
+            boolean isBatch = false;
+            if (version >= VERSION_1) {
+                logStoppingOffset = in.readLong();
+                isBatch = in.readBoolean();
+            }
             return new HybridSnapshotLogSplit(
                     tableBucket,
                     partitionName,
                     snapshotId,
                     recordsToSkip,
                     isSnapshotFinished,
-                    logStartingOffset);
+                    logStartingOffset,
+                    logStoppingOffset,
+                    isBatch);
         } else if (splitKind == LOG_SPLIT_FLAG) {
             long startingOffset = in.readLong();
             long stoppingOffset = in.readLong();
             return new LogSplit(tableBucket, partitionName, startingOffset, stoppingOffset);
+        } else if (splitKind == KV_BATCH_SPLIT_FLAG) {
+            return new KvBatchSplit(tableBucket, partitionName);
         } else {
             LakeSplitSerializer lakeSplitSerializer =
                     new LakeSplitSerializer(checkNotNull(lakeSource).getSplitSerializer());
-            return lakeSplitSerializer.deserialize(splitKind, tableBucket, partitionName, in);
+            // records to skip of LakeSnapshotSplit are persisted since VERSION_2
+            boolean readRecordsToSkip = version >= VERSION_2;
+            return lakeSplitSerializer.deserialize(
+                    splitKind, tableBucket, partitionName, in, readRecordsToSkip);
         }
     }
 }

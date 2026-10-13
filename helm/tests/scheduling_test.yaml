@@ -1,0 +1,209 @@
+#
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+
+suite: scheduling-defaults
+templates:
+  - templates/sts-tablet.yaml
+  - templates/sts-coordinator.yaml
+tests:
+  - it: does not render scheduling fields by default for tablet
+    template: templates/sts-tablet.yaml
+    asserts:
+      - isNull:
+          path: spec.template.spec.affinity
+      - isNull:
+          path: spec.template.spec.nodeSelector
+      - isNull:
+          path: spec.template.spec.tolerations
+      - isNull:
+          path: spec.template.spec.topologySpreadConstraints
+  - it: does not render scheduling fields by default for coordinator
+    template: templates/sts-coordinator.yaml
+    asserts:
+      - isNull:
+          path: spec.template.spec.affinity
+      - isNull:
+          path: spec.template.spec.nodeSelector
+      - isNull:
+          path: spec.template.spec.tolerations
+      - isNull:
+          path: spec.template.spec.topologySpreadConstraints
+
+---
+
+suite: tablet-affinity
+templates:
+  - templates/sts-tablet.yaml
+tests:
+  - it: renders pod anti-affinity for tablet server
+    set:
+      tablet.affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchLabels:
+                  app.kubernetes.io/component: tablet
+              topologyKey: kubernetes.io/hostname
+    asserts:
+      - equal:
+          path: spec.template.spec.affinity.podAntiAffinity.requiredDuringSchedulingIgnoredDuringExecution[0].topologyKey
+          value: kubernetes.io/hostname
+      - equal:
+          path: spec.template.spec.affinity.podAntiAffinity.requiredDuringSchedulingIgnoredDuringExecution[0].labelSelector.matchLabels["app.kubernetes.io/component"]
+          value: tablet
+
+---
+
+suite: coordinator-affinity
+templates:
+  - templates/sts-coordinator.yaml
+tests:
+  - it: renders pod anti-affinity for coordinator server
+    set:
+      coordinator.affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchLabels:
+                    app.kubernetes.io/component: coordinator
+                topologyKey: kubernetes.io/hostname
+    asserts:
+      - equal:
+          path: spec.template.spec.affinity.podAntiAffinity.preferredDuringSchedulingIgnoredDuringExecution[0].weight
+          value: 100
+      - equal:
+          path: spec.template.spec.affinity.podAntiAffinity.preferredDuringSchedulingIgnoredDuringExecution[0].podAffinityTerm.topologyKey
+          value: kubernetes.io/hostname
+
+---
+
+suite: tablet-node-selector
+templates:
+  - templates/sts-tablet.yaml
+tests:
+  - it: renders node selector for tablet server
+    set:
+      tablet.nodeSelector:
+        disktype: ssd
+        workload: fluss
+    asserts:
+      - equal:
+          path: spec.template.spec.nodeSelector.disktype
+          value: ssd
+      - equal:
+          path: spec.template.spec.nodeSelector.workload
+          value: fluss
+
+---
+
+suite: tablet-tolerations
+templates:
+  - templates/sts-tablet.yaml
+tests:
+  - it: renders tolerations for tablet server
+    set:
+      tablet.tolerations:
+        - key: dedicated
+          operator: Equal
+          value: fluss
+          effect: NoSchedule
+    asserts:
+      - contains:
+          path: spec.template.spec.tolerations
+          content:
+            key: dedicated
+            operator: Equal
+            value: fluss
+            effect: NoSchedule
+
+---
+
+suite: tablet-topology-spread-constraints
+templates:
+  - templates/sts-tablet.yaml
+tests:
+  - it: renders topology spread constraints for tablet server
+    set:
+      tablet.topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: DoNotSchedule
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/component: tablet
+    asserts:
+      - contains:
+          path: spec.template.spec.topologySpreadConstraints
+          content:
+            maxSkew: 1
+            topologyKey: topology.kubernetes.io/zone
+            whenUnsatisfiable: DoNotSchedule
+            labelSelector:
+              matchLabels:
+                app.kubernetes.io/component: tablet
+
+---
+
+suite: coordinator-node-selector-and-tolerations
+templates:
+  - templates/sts-coordinator.yaml
+tests:
+  - it: renders node selector for coordinator server
+    set:
+      coordinator.nodeSelector:
+        workload: fluss
+    asserts:
+      - equal:
+          path: spec.template.spec.nodeSelector.workload
+          value: fluss
+  - it: renders tolerations for coordinator server
+    set:
+      coordinator.tolerations:
+        - key: dedicated
+          operator: Equal
+          value: fluss
+          effect: NoSchedule
+    asserts:
+      - contains:
+          path: spec.template.spec.tolerations
+          content:
+            key: dedicated
+            operator: Equal
+            value: fluss
+            effect: NoSchedule
+  - it: renders topology spread constraints for coordinator server
+    set:
+      coordinator.topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/component: coordinator
+    asserts:
+      - contains:
+          path: spec.template.spec.topologySpreadConstraints
+          content:
+            maxSkew: 1
+            topologyKey: topology.kubernetes.io/zone
+            whenUnsatisfiable: ScheduleAnyway
+            labelSelector:
+              matchLabels:
+                app.kubernetes.io/component: coordinator

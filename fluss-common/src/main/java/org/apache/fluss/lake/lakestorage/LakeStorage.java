@@ -18,6 +18,7 @@
 package org.apache.fluss.lake.lakestorage;
 
 import org.apache.fluss.annotation.PublicEvolving;
+import org.apache.fluss.lake.lakestorage.LakeTableLookuperManager.LookupCacheOptions;
 import org.apache.fluss.lake.source.LakeSource;
 import org.apache.fluss.lake.writer.LakeTieringFactory;
 import org.apache.fluss.metadata.TablePath;
@@ -50,4 +51,17 @@ public interface LakeStorage {
      * @return a configured lake source instance for the specified table
      */
     LakeSource<?> createLakeSource(TablePath tablePath);
+
+    /**
+     * Creates a TabletServer-scoped manager for lake table lookupers and their shared resources.
+     *
+     * @param ioTmpDir local directory shared by lookupers for temporary files
+     * @param options initial runtime resource settings
+     * @return the lookuper manager
+     */
+    default LakeTableLookuperManager createLakeTableLookuperManager(
+            String ioTmpDir, LookupCacheOptions options) {
+        throw new UnsupportedOperationException(
+                "Point lookup is not supported for this lake storage.");
+    }
 }

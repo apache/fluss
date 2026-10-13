@@ -17,6 +17,9 @@
 
 package org.apache.fluss.server.zk;
 
+import org.apache.fluss.config.ConfigOptions;
+import org.apache.fluss.config.Configuration;
+import org.apache.fluss.fs.local.LocalFileSystem;
 import org.apache.fluss.server.utils.FatalErrorHandler;
 import org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.KeeperException;
 import org.apache.fluss.testutils.common.CustomExtension;
@@ -30,7 +33,9 @@ import org.slf4j.LoggerFactory;
 
 import javax.annotation.Nullable;
 
+import java.io.File;
 import java.io.IOException;
+import java.nio.file.Files;
 
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 import static org.apache.fluss.utils.Preconditions.checkState;
@@ -43,6 +48,8 @@ public class ZooKeeperExtension implements CustomExtension {
     @Nullable private TestingServer zooKeeperServer;
 
     @Nullable private ZooKeeperClient zooKeeperClient;
+
+    private File tempDir;
 
     @Override
     public void before(ExtensionContext context) throws Exception {
@@ -96,7 +103,27 @@ public class ZooKeeperExtension implements CustomExtension {
     }
 
     public ZooKeeperClient createZooKeeperClient(FatalErrorHandler fatalErrorHandler) {
-        return ZooKeeperTestUtils.createZooKeeperClient(getConnectString(), fatalErrorHandler);
+        try {
+            tempDir = Files.createTempDirectory(null).toFile();
+            Configuration conf = new Configuration();
+            setRemoteDataDir(conf);
+            return ZooKeeperTestUtils.createZooKeeperClient(
+                    conf, getConnectString(), fatalErrorHandler);
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    private void setRemoteDataDir(Configuration conf) {
+        conf.set(ConfigOptions.REMOTE_DATA_DIR, getRemoteDataDir());
+    }
+
+    public String getRemoteDataDir() {
+        return LocalFileSystem.getLocalFsURI().getScheme()
+                + "://"
+                + tempDir.getAbsolutePath()
+                + File.separator
+                + "remote-data-dir";
     }
 
     public void restart() throws Exception {

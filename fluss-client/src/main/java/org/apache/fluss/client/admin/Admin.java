@@ -18,9 +18,11 @@
 package org.apache.fluss.client.admin;
 
 import org.apache.fluss.annotation.PublicEvolving;
+import org.apache.fluss.client.metadata.ActiveKvSnapshots;
 import org.apache.fluss.client.metadata.KvSnapshotMetadata;
 import org.apache.fluss.client.metadata.KvSnapshots;
 import org.apache.fluss.client.metadata.LakeSnapshot;
+import org.apache.fluss.client.metadata.RemoteLogManifestInfo;
 import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.cluster.rebalance.GoalType;
 import org.apache.fluss.cluster.rebalance.RebalanceProgress;
@@ -53,6 +55,8 @@ import org.apache.fluss.exception.TableNotExistException;
 import org.apache.fluss.exception.TableNotPartitionedException;
 import org.apache.fluss.exception.TooManyBucketsException;
 import org.apache.fluss.exception.TooManyPartitionsException;
+import org.apache.fluss.metadata.BucketInfo;
+import org.apache.fluss.metadata.DatabaseChange;
 import org.apache.fluss.metadata.DatabaseDescriptor;
 import org.apache.fluss.metadata.DatabaseInfo;
 import org.apache.fluss.metadata.DatabaseSummary;
@@ -65,6 +69,7 @@ import org.apache.fluss.metadata.TableChange;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.metadata.TableStats;
 import org.apache.fluss.security.acl.AclBinding;
 import org.apache.fluss.security.acl.AclBindingFilter;
 
@@ -135,6 +140,24 @@ public interface Admin extends AutoCloseable {
      */
     CompletableFuture<Void> createDatabase(
             String databaseName, DatabaseDescriptor databaseDescriptor, boolean ignoreIfExists);
+
+    /**
+     * Alter a database with the given {@code databaseChanges}.
+     *
+     * <p>The following exceptions can be anticipated when calling {@code get()} on returned future.
+     *
+     * <ul>
+     *   <li>{@link DatabaseNotExistException} when the database does not exist and {@code
+     *       ignoreIfNotExists} is false.
+     * </ul>
+     *
+     * @param databaseName The name of the database.
+     * @param databaseChanges The database changes.
+     * @param ignoreIfNotExists if it is true, do nothing if database does not exist. If false,
+     *     throw a {@link DatabaseNotExistException}.
+     */
+    CompletableFuture<Void> alterDatabase(
+            String databaseName, List<DatabaseChange> databaseChanges, boolean ignoreIfNotExists);
 
     /**
      * Get the database with the given database name asynchronously.
@@ -232,6 +255,46 @@ public interface Admin extends AutoCloseable {
     CompletableFuture<TableInfo> getTableInfo(TablePath tablePath);
 
     /**
+     * Describes the buckets of the given table asynchronously.
+     *
+     * <p>For a non-partitioned table, this returns the table buckets. For a partitioned table, this
+     * returns the buckets of all partitions. For a partitioned table with many partitions, prefer
+     * {@link #describeBuckets(TablePath, PartitionSpec)} to limit the result.
+     *
+     * <p>The following exceptions can be anticipated when calling {@code get()} on the returned
+     * future.
+     *
+     * <ul>
+     *   <li>{@link TableNotExistException} if the table does not exist.
+     * </ul>
+     *
+     * @param tablePath The table path of the table.
+     * @since 1.0
+     */
+    CompletableFuture<List<BucketInfo>> describeBuckets(TablePath tablePath);
+
+    /**
+     * Describes the buckets matching the given partition spec asynchronously.
+     *
+     * <p>The partition spec may contain all partition keys or a subset of them.
+     *
+     * <p>The following exceptions can be anticipated when calling {@code get()} on the returned
+     * future.
+     *
+     * <ul>
+     *   <li>{@link TableNotExistException} if the table does not exist.
+     *   <li>{@link TableNotPartitionedException} if the table is not partitioned.
+     *   <li>{@link InvalidPartitionException} if the partition spec is invalid.
+     * </ul>
+     *
+     * @param tablePath The table path of the table.
+     * @param partitionSpec The complete or partial partition spec.
+     * @since 1.0
+     */
+    CompletableFuture<List<BucketInfo>> describeBuckets(
+            TablePath tablePath, PartitionSpec partitionSpec);
+
+    /**
      * Drop the table with the given table path asynchronously.
      *
      * <p>The following exceptions can be anticipated when calling {@code get()} on returned future.
@@ -303,6 +366,30 @@ public interface Admin extends AutoCloseable {
     CompletableFuture<List<PartitionInfo>> listPartitionInfos(TablePath tablePath);
 
     /**
+     * List partitions in the given table asynchronously, optionally including coordinator-managed
+     * system partitions.
+     *
+     * <p>System partitions are created and managed by the coordinator to support internal table
+     * functionality. For example, the {@code __historical__} partition is created when {@link
+     * ConfigOptions#TABLE_DATALAKE_HISTORICAL_PARTITION_ENABLED} is enabled. It provides a shared
+     * routing target for writes to expired partitions and, for primary-key tables, lookups of
+     * expired partition data in lake storage.
+     *
+     * <p>The following exceptions can be anticipated when calling {@code get()} on returned future.
+     *
+     * <ul>
+     *   <li>{@link TableNotExistException} if the table does not exist.
+     *   <li>{@link TableNotPartitionedException} if the table is not partitioned.
+     * </ul>
+     *
+     * @param tablePath The path of the table.
+     * @param includeSystemPartitions If true, also include system partitions such as {@code
+     *     __historical__}; otherwise, return only regular partitions.
+     */
+    CompletableFuture<List<PartitionInfo>> listPartitionInfos(
+            TablePath tablePath, boolean includeSystemPartitions);
+
+    /**
      * List all partitions in fluss cluster that are under the given table and the given partial
      * PartitionSpec asynchronously.
      *
@@ -334,7 +421,7 @@ public interface Admin extends AutoCloseable {
      *   <li>{@link TooManyPartitionsException} if the number of partitions is larger than the
      *       maximum number of partitions of one table, see {@link ConfigOptions#MAX_PARTITION_NUM}.
      *   <li>{@link TooManyBucketsException} if the number of buckets is larger than the maximum
-     *       number of buckets of one table, see {@link ConfigOptions#MAX_BUCKET_NUM}.
+     *       number of buckets of one partition, see {@link ConfigOptions#MAX_BUCKET_NUM}.
      * </ul>
      *
      * @param tablePath The table path of the table.
@@ -438,20 +525,73 @@ public interface Admin extends AutoCloseable {
     KvSnapshotLease createKvSnapshotLease(String leaseId, long leaseDurationMs);
 
     /**
-     * Get table lake snapshot info of the given table asynchronously.
+     * Retrieves the absolute latest lake snapshot metadata for a table asynchronously.
      *
-     * <p>It'll get the latest snapshot for all the buckets of the table.
+     * <p>This returns the most recent snapshot regardless of its visibility or compaction status.
+     * It includes the latest tiered offsets for all buckets.
      *
-     * <p>The following exceptions can be anticipated when calling {@code get()} on returned future.
+     * <p><b>NOTE: This API is not intended for union reads and should be considered internal.</b>
+     * For union read operations (e.g. Flink/Spark reading from Fluss + lake), use {@link
+     * #getReadableLakeSnapshot(TablePath)} instead. Using this method for union reads can lead to
+     * data loss when the latest tiered snapshot is not yet readable (e.g. Paimon DV tables with
+     * un-compacted L0 data). This method remains for internal use cases such as tiering commit and
+     * readable-offset resolution.
+     *
+     * <p>Exceptions expected when calling {@code get()} on the returned future:
      *
      * <ul>
-     *   <li>{@link TableNotExistException} if the table does not exist.
-     *   <li>{@link LakeTableSnapshotNotExistException} if no any lake snapshot exist.
+     *   <li>{@link TableNotExistException}: If the table does not exist.
+     *   <li>{@link LakeTableSnapshotNotExistException}: If no any snapshots.
      * </ul>
      *
-     * @param tablePath the table path of the table.
+     * @param tablePath The path of the target table.
+     * @return A future returning the latest tiered snapshot.
      */
     CompletableFuture<LakeSnapshot> getLatestLakeSnapshot(TablePath tablePath);
+
+    /**
+     * Retrieves a specific historical lake snapshot by its ID asynchronously.
+     *
+     * <p>It provides the tiered bucket offsets as they existed at the moment the specified snapshot
+     * was committed.
+     *
+     * <p>Exceptions expected when calling {@code get()} on the returned future:
+     *
+     * <ul>
+     *   <li>{@link TableNotExistException}: If the table does not exist.
+     *   <li>{@link LakeTableSnapshotNotExistException}: If the specified snapshot ID is missing in
+     *       Fluss
+     * </ul>
+     *
+     * @param tablePath The path of the target table.
+     * @param snapshotId The unique identifier of the snapshot.
+     * @return A future returning the specific lake snapshot.
+     */
+    CompletableFuture<LakeSnapshot> getLakeSnapshot(TablePath tablePath, long snapshotId);
+
+    /**
+     * Retrieves the latest readable lake snapshot and its corresponding readable log offsets.
+     *
+     * <p>For Paimon DV tables, the tiered log offset may not be readable because the corresponding
+     * data might be in the L0 layer. Using tiered offset directly can lead to data loss. This
+     * method returns a readable snapshot (where L0 data has been compacted) and its corresponding
+     * readable offsets, which represent safe log offsets that can be read without data loss.
+     *
+     * <p>For union read operations, use this method instead of {@link
+     * #getLatestLakeSnapshot(TablePath)} to ensure data safety and avoid data loss.
+     *
+     * <p>Exceptions expected when calling {@code get()} on the returned future:
+     *
+     * <ul>
+     *   <li>{@link TableNotExistException}: If the table does not exist.
+     *   <li>{@link LakeTableSnapshotNotExistException}: If no readable snapshot exists yet.
+     * </ul>
+     *
+     * @param tablePath The path of the target table.
+     * @return A future returning a {@link LakeSnapshot} containing the readable snapshot ID and
+     *     readable log offsets for each bucket.
+     */
+    CompletableFuture<LakeSnapshot> getReadableLakeSnapshot(TablePath tablePath);
 
     /**
      * List offset for the specified buckets. This operation enables to find the beginning offset,
@@ -481,6 +621,13 @@ public interface Admin extends AutoCloseable {
             OffsetSpec offsetSpec);
 
     /**
+     * Asynchronously gets the statistics of this table.
+     *
+     * @return A future TableStats
+     */
+    CompletableFuture<TableStats> getTableStats(TablePath tablePath);
+
+    /**
      * Retrieves ACL entries filtered by principal for the specified resource.
      *
      * <p>1. Validates the user has 'describe' permission on the resource. 2. Returns entries
@@ -493,8 +640,8 @@ public interface Admin extends AutoCloseable {
     /**
      * Creates multiple ACL entries in a single atomic operation.
      *
-     * <p>1. Validates the user has 'alter' permission on the resource. 2. Creates the ACL entries
-     * if valid and permitted.
+     * <p>1. Validates the user has 'ALL' permission on the resource. 2. Creates the ACL entries if
+     * valid and permitted.
      *
      * <p>Each entry in {@code aclBindings} must have a valid principal, operation and permission.
      *
@@ -506,7 +653,7 @@ public interface Admin extends AutoCloseable {
     /**
      * Removes multiple ACL entries in a single atomic operation.
      *
-     * <p>1. Validates the user has 'alter' permission on the resource. 2. Removes entries only if
+     * <p>1. Validates the user has 'ALL' permission on the resource. 2. Removes entries only if
      * they exactly match the provided entries (principal, operation, permission). 3. Does not
      * remove entries if any of the ACL entries do not exist.
      *
@@ -571,6 +718,41 @@ public interface Admin extends AutoCloseable {
      * @param tabletServers the tabletServers we want to remove server tags.
      */
     CompletableFuture<Void> removeServerTag(List<Integer> tabletServers, ServerTag serverTag);
+
+    /**
+     * Add a server tag to all currently registered tabletServers in the specified racks.
+     *
+     * <p>Rack membership is resolved once to a snapshot of server IDs. TabletServers registered in
+     * those racks later do not inherit the tag. Callers must cordon the racks before invoking this
+     * method if new tabletServers must not enter them.
+     *
+     * <p>If no registered tabletServer matches, authorization is still checked and the operation
+     * completes successfully without making changes.
+     *
+     * @param racks the rack identifiers to match. Must not be null or empty and must not contain
+     *     null, empty, or whitespace-only elements.
+     * @param serverTag the server tag to add. Must not be null.
+     * @throws IllegalArgumentException if {@code racks} is empty or contains a null, empty, or
+     *     whitespace-only element.
+     */
+    CompletableFuture<Void> addServerTagByRack(List<String> racks, ServerTag serverTag);
+
+    /**
+     * Remove a server tag from all currently registered tabletServers in the specified racks.
+     *
+     * <p>Only current rack membership is considered. Tags on offline tabletServers or tabletServers
+     * that moved to another rack must be removed by ID with {@link #removeServerTag}.
+     *
+     * <p>If no registered tabletServer matches, authorization is still checked and the operation
+     * completes successfully without making changes.
+     *
+     * @param racks the rack identifiers to match. Must not be null or empty and must not contain
+     *     null, empty, or whitespace-only elements.
+     * @param serverTag the server tag to remove. Must not be null.
+     * @throws IllegalArgumentException if {@code racks} is empty or contains a null, empty, or
+     *     whitespace-only element.
+     */
+    CompletableFuture<Void> removeServerTagByRack(List<String> racks, ServerTag serverTag);
 
     /**
      * Based on the provided {@code priorityGoals}, Fluss performs load balancing on the cluster's
@@ -690,4 +872,49 @@ public interface Admin extends AutoCloseable {
      * @since 0.9
      */
     CompletableFuture<Void> deleteProducerOffsets(String producerId);
+
+    /**
+     * Get the health status of the cluster asynchronously.
+     *
+     * <p>The returned {@link ClusterHealth} contains replica statistics and an overall {@link
+     * ClusterHealthStatus}:
+     *
+     * <ul>
+     *   <li>{@link ClusterHealthStatus#GREEN} — all replicas are in-sync and all leaders are
+     *       active. The cluster is fully healthy.
+     *   <li>{@link ClusterHealthStatus#YELLOW} — all leaders are active, but some replicas have not
+     *       yet rejoined the in-sync replica set (ISR).
+     *   <li>{@link ClusterHealthStatus#RED} — one or more leader replicas have not yet been
+     *       confirmed active (e.g., leader election or KV snapshot recovery is still in progress).
+     *   <li>{@link ClusterHealthStatus#UNKNOWN} — the Coordinator was unable to determine cluster
+     *       health (e.g., the server does not support this API).
+     * </ul>
+     *
+     * <p>This API is designed for the situation like a Kubernetes readiness-probe gate during
+     * rolling upgrades: only proceed to the next pod when the status is {@code GREEN}, ensuring all
+     * replicas have fully recovered before the next server is restarted.
+     *
+     * @return a {@link CompletableFuture} that completes with the cluster health information.
+     * @since 1.0
+     */
+    CompletableFuture<ClusterHealth> getClusterHealth();
+
+    /**
+     * List per-bucket remote log manifest entries for a table or partition scope.
+     *
+     * @param tableId the table to query
+     * @param partitionId optional partition id (null for non-partitioned tables)
+     * @return per-bucket manifest paths and end offsets
+     */
+    CompletableFuture<List<RemoteLogManifestInfo>> listRemoteLogManifests(
+            long tableId, @Nullable Long partitionId);
+
+    /**
+     * List per-bucket active KV snapshot ids for a table or partition scope.
+     *
+     * @param tableId the table to query
+     * @param partitionId optional partition id (null for non-partitioned tables)
+     * @return per-bucket active snapshot ids grouped by bucket
+     */
+    CompletableFuture<ActiveKvSnapshots> listKvSnapshots(long tableId, @Nullable Long partitionId);
 }

@@ -22,6 +22,7 @@ import org.apache.fluss.server.zk.data.LeaderAndIsr;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
 
 /* This file is based on source code of Apache Kafka Project (https://kafka.apache.org/), licensed by the Apache
  * Software Foundation (ASF) under the Apache License, Version 2.0. See the NOTICE file distributed with this work for
@@ -40,20 +41,35 @@ public interface IsrState {
      */
     List<Integer> maximalIsr();
 
+    /**
+     * Returns the list of standby replicas for this bucket. Standby replicas are follower replicas
+     * designated to maintain a recent KV snapshot so that they can be quickly promoted to leader
+     * without a full data rebuild. Currently, at most one standby replica is supported per bucket,
+     * and it is only applicable to primary-key tables.
+     */
+    List<Integer> standbyReplicas();
+
     /** Indicates if we have an AdjustIsr request inflight. */
     boolean isInflight();
 
     /** Class to represent the committed isr state of a {@link TableBucket}. */
     class CommittedIsrState implements IsrState {
         private final List<Integer> isr;
+        private final List<Integer> standbyReplicas;
 
-        public CommittedIsrState(List<Integer> isr) {
+        public CommittedIsrState(List<Integer> isr, List<Integer> standbyReplicas) {
             this.isr = isr;
+            this.standbyReplicas = standbyReplicas;
         }
 
         @Override
         public List<Integer> isr() {
             return isr;
+        }
+
+        @Override
+        public List<Integer> standbyReplicas() {
+            return standbyReplicas;
         }
 
         @Override
@@ -76,6 +92,11 @@ public interface IsrState {
             }
             CommittedIsrState that = (CommittedIsrState) o;
             return isr.equals(that.isr);
+        }
+
+        @Override
+        public int hashCode() {
+            return Objects.hash(isr);
         }
 
         @Override
@@ -136,6 +157,11 @@ public interface IsrState {
         }
 
         @Override
+        public List<Integer> standbyReplicas() {
+            return lastCommittedState.standbyReplicas();
+        }
+
+        @Override
         public List<Integer> maximalIsr() {
             ArrayList<Integer> maximalIsr = new ArrayList<>(lastCommittedState.isr());
             maximalIsr.add(newInSyncReplicaId);
@@ -159,6 +185,11 @@ public interface IsrState {
             return newInSyncReplicaId == that.newInSyncReplicaId
                     && sentLeaderAndIsr.equals(that.sentLeaderAndIsr)
                     && lastCommittedState.equals(that.lastCommittedState);
+        }
+
+        @Override
+        public int hashCode() {
+            return Objects.hash(newInSyncReplicaId, sentLeaderAndIsr, lastCommittedState);
         }
 
         @Override
@@ -206,6 +237,11 @@ public interface IsrState {
         }
 
         @Override
+        public List<Integer> standbyReplicas() {
+            return lastCommittedState.standbyReplicas();
+        }
+
+        @Override
         public List<Integer> maximalIsr() {
             return lastCommittedState.isr();
         }
@@ -227,6 +263,11 @@ public interface IsrState {
             return outOfSyncReplicaIds.equals(that.outOfSyncReplicaIds)
                     && sentLeaderAndIsr.equals(that.sentLeaderAndIsr)
                     && lastCommittedState.equals(that.lastCommittedState);
+        }
+
+        @Override
+        public int hashCode() {
+            return Objects.hash(outOfSyncReplicaIds, sentLeaderAndIsr, lastCommittedState);
         }
 
         @Override

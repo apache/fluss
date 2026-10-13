@@ -483,8 +483,7 @@ public abstract class BinaryArray extends BinarySection
     public boolean[] toBooleanArray() {
         checkNoNull();
         boolean[] values = new boolean[size];
-        BinarySegmentUtils.copyToUnsafe(
-                segments, elementOffset, values, BOOLEAN_ARRAY_OFFSET, size);
+        BinarySegmentUtils.copyToUnsafe(segments, elementOffset, values, 0, size);
         return values;
     }
 
@@ -492,8 +491,7 @@ public abstract class BinaryArray extends BinarySection
     public byte[] toByteArray() {
         checkNoNull();
         byte[] values = new byte[size];
-        BinarySegmentUtils.copyToUnsafe(
-                segments, elementOffset, values, BYTE_ARRAY_BASE_OFFSET, size);
+        BinarySegmentUtils.copyToUnsafe(segments, elementOffset, values, 0, size);
         return values;
     }
 
@@ -501,8 +499,7 @@ public abstract class BinaryArray extends BinarySection
     public short[] toShortArray() {
         checkNoNull();
         short[] values = new short[size];
-        BinarySegmentUtils.copyToUnsafe(
-                segments, elementOffset, values, SHORT_ARRAY_OFFSET, size * 2);
+        BinarySegmentUtils.copyToUnsafe(segments, elementOffset, values, 0, size * 2);
         return values;
     }
 
@@ -510,8 +507,7 @@ public abstract class BinaryArray extends BinarySection
     public int[] toIntArray() {
         checkNoNull();
         int[] values = new int[size];
-        BinarySegmentUtils.copyToUnsafe(
-                segments, elementOffset, values, INT_ARRAY_OFFSET, size * 4);
+        BinarySegmentUtils.copyToUnsafe(segments, elementOffset, values, 0, size * 4);
         return values;
     }
 
@@ -519,8 +515,7 @@ public abstract class BinaryArray extends BinarySection
     public long[] toLongArray() {
         checkNoNull();
         long[] values = new long[size];
-        BinarySegmentUtils.copyToUnsafe(
-                segments, elementOffset, values, LONG_ARRAY_OFFSET, size * 8);
+        BinarySegmentUtils.copyToUnsafe(segments, elementOffset, values, 0, size * 8);
         return values;
     }
 
@@ -528,8 +523,7 @@ public abstract class BinaryArray extends BinarySection
     public float[] toFloatArray() {
         checkNoNull();
         float[] values = new float[size];
-        BinarySegmentUtils.copyToUnsafe(
-                segments, elementOffset, values, FLOAT_ARRAY_OFFSET, size * 4);
+        BinarySegmentUtils.copyToUnsafe(segments, elementOffset, values, 0, size * 4);
         return values;
     }
 
@@ -537,8 +531,7 @@ public abstract class BinaryArray extends BinarySection
     public double[] toDoubleArray() {
         checkNoNull();
         double[] values = new double[size];
-        BinarySegmentUtils.copyToUnsafe(
-                segments, elementOffset, values, DOUBLE_ARRAY_OFFSET, size * 8);
+        BinarySegmentUtils.copyToUnsafe(segments, elementOffset, values, 0, size * 8);
         return values;
     }
 

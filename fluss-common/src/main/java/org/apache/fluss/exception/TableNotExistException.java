@@ -33,4 +33,8 @@ public class TableNotExistException extends ApiException {
     public TableNotExistException(String message, Throwable cause) {
         super(message, cause);
     }
+
+    public TableNotExistException(String message, Throwable cause, boolean stackTraceEnabled) {
+        super(message, cause, stackTraceEnabled);
+    }
 }

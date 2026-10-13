@@ -21,6 +21,7 @@ import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.compression.ArrowCompressionFactory;
 import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.memory.MemorySegment;
+import org.apache.fluss.record.FlussVectorLoader;
 import org.apache.fluss.row.arrow.ArrowReader;
 import org.apache.fluss.row.arrow.vectors.ArrowArrayColumnVector;
 import org.apache.fluss.row.arrow.vectors.ArrowBigIntColumnVector;
@@ -86,7 +87,6 @@ import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.TypeLayout;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.ValueVector;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.VarBinaryVector;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.VarCharVector;
-import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.VectorLoader;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.VectorSchemaRoot;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.complex.ListVector;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.complex.MapVector;
@@ -172,8 +172,8 @@ public class ArrowUtils {
         try (ReadChannel channel =
                         new ReadChannel(new ByteBufferReadableChannel(arrowBatchBuffer));
                 ArrowRecordBatch batch = deserializeRecordBatch(channel, allocator)) {
-            VectorLoader vectorLoader =
-                    new VectorLoader(schemaRoot, ArrowCompressionFactory.INSTANCE);
+            FlussVectorLoader vectorLoader =
+                    new FlussVectorLoader(schemaRoot, ArrowCompressionFactory.INSTANCE);
             vectorLoader.load(batch);
             List<ColumnVector> columnVectors = new ArrayList<>();
             List<FieldVector> fieldVectors = schemaRoot.getFieldVectors();

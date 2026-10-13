@@ -17,7 +17,7 @@
 
 package org.apache.fluss.server.kv.snapshot;
 
-import org.apache.fluss.fs.FsPath;
+import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.utils.function.FunctionWithException;
@@ -54,9 +54,6 @@ public interface SnapshotContext {
     /** Get the size of the write buffer for writing the kv snapshot file to remote filesystem. */
     int getSnapshotFsWriteBufferSize();
 
-    /** Get the remote root path to store kv snapshot files. */
-    FsPath getRemoteKvDir();
-
     /**
      * Get the provider of latest CompletedSnapshot for a table bucket. When no completed snapshot
      * exists, the CompletedSnapshot provided will be null.
@@ -82,4 +79,20 @@ public interface SnapshotContext {
      * log during recovering.
      */
     int maxFetchLogSizeInRecoverKv();
+
+    /**
+     * Get the maximum number of remote log segments that can be downloaded but not yet consumed
+     * during KV recovery. See {@code kv.recover.remote-log.prefetch-num}.
+     */
+    default int remoteLogPrefetchNumInRecoverKv() {
+        return ConfigOptions.KV_RECOVERY_REMOTE_LOG_PREFETCH_NUM.defaultValue();
+    }
+
+    /**
+     * Get the number of threads used to download remote log segments during KV recovery. See {@code
+     * kv.recover.remote-log.download-threads}.
+     */
+    default int remoteLogDownloadThreadsInRecoverKv() {
+        return ConfigOptions.KV_RECOVERY_REMOTE_LOG_DOWNLOAD_THREADS.defaultValue();
+    }
 }

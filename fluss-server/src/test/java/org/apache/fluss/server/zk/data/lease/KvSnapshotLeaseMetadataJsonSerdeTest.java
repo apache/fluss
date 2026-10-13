@@ -36,8 +36,8 @@ public class KvSnapshotLeaseMetadataJsonSerdeTest
     protected KvSnapshotLeaseMetadata[] createObjects() {
         KvSnapshotLeaseMetadata[] kvSnapshotLeaseMetadata = new KvSnapshotLeaseMetadata[2];
         Map<Long, FsPath> tableIdToRemoteMetadataFilePath = new HashMap<>();
-        tableIdToRemoteMetadataFilePath.put(1L, new FsPath("/path/to/metadata1"));
-        tableIdToRemoteMetadataFilePath.put(2L, new FsPath("/path/to/metadata2"));
+        tableIdToRemoteMetadataFilePath.put(1L, new FsPath("oss://path/to/metadata1"));
+        tableIdToRemoteMetadataFilePath.put(2L, new FsPath("s3://path/to/metadata2"));
         kvSnapshotLeaseMetadata[0] =
                 new KvSnapshotLeaseMetadata(1735538268L, tableIdToRemoteMetadataFilePath);
         kvSnapshotLeaseMetadata[1] =
@@ -49,8 +49,8 @@ public class KvSnapshotLeaseMetadataJsonSerdeTest
     protected String[] expectedJsons() {
         return new String[] {
             "{\"version\":1,\"expiration_time\":1735538268,\"tables\":"
-                    + "[{\"table_id\":1,\"lease_metadata_path\":\"/path/to/metadata1\"},"
-                    + "{\"table_id\":2,\"lease_metadata_path\":\"/path/to/metadata2\"}]}",
+                    + "[{\"table_id\":1,\"lease_metadata_path\":\"oss://path/to/metadata1\"},"
+                    + "{\"table_id\":2,\"lease_metadata_path\":\"s3://path/to/metadata2\"}]}",
             "{\"version\":1,\"expiration_time\":1735538268,\"tables\":[]}"
         };
     }

@@ -61,6 +61,7 @@ class AzureDelegationTokenReceiverTest {
         AzureDelegationTokenReceiver.updateHadoopConfig(hadoopConfiguration);
         assertThat(hadoopConfiguration.get(PROVIDER_CONFIG_NAME.key()))
                 .isEqualTo(DynamicTemporaryAzureCredentialsProvider.NAME);
+        assertThat(hadoopConfiguration.get("fs.azure.account.auth.type")).isEqualTo("Custom");
     }
 
     @Test
@@ -73,6 +74,7 @@ class AzureDelegationTokenReceiverTest {
         assertThat(providers.length).isEqualTo(2);
         assertThat(providers[0]).isEqualTo(DynamicTemporaryAzureCredentialsProvider.NAME);
         assertThat(providers[1]).isEqualTo(PROVIDER_CLASS_NAME);
+        assertThat(hadoopConfiguration.get("fs.azure.account.auth.type")).isEqualTo("Custom");
     }
 
     @Test
@@ -84,5 +86,6 @@ class AzureDelegationTokenReceiverTest {
         AzureDelegationTokenReceiver.updateHadoopConfig(hadoopConfiguration);
         assertThat(hadoopConfiguration.get(PROVIDER_CONFIG_NAME.key()))
                 .isEqualTo(DynamicTemporaryAzureCredentialsProvider.NAME);
+        assertThat(hadoopConfiguration.get("fs.azure.account.auth.type")).isEqualTo("Custom");
     }
 }

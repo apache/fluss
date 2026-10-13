@@ -20,6 +20,7 @@ package org.apache.fluss.flink.utils;
 import org.apache.fluss.metadata.AggFunction;
 import org.apache.fluss.metadata.AggFunctionType;
 import org.apache.fluss.metadata.AggFunctions;
+import org.apache.fluss.types.DataTypes;
 
 import org.apache.flink.configuration.Configuration;
 import org.junit.jupiter.api.Test;
@@ -37,7 +38,8 @@ class FlinkAggFunctionParserTest {
     @Test
     void testParseNoAggFunction() {
         Configuration options = new Configuration();
-        assertThat(FlinkAggFunctionParser.parseAggFunction("total", options)).isEmpty();
+        assertThat(FlinkAggFunctionParser.parseAggFunction("total", DataTypes.INT(), options))
+                .isEmpty();
     }
 
     @Test
@@ -45,7 +47,8 @@ class FlinkAggFunctionParserTest {
         Configuration options = new Configuration();
         options.setString("fields.total.agg", "sum");
 
-        Optional<AggFunction> result = FlinkAggFunctionParser.parseAggFunction("total", options);
+        Optional<AggFunction> result =
+                FlinkAggFunctionParser.parseAggFunction("total", DataTypes.INT(), options);
 
         assertThat(result).isPresent();
         assertThat(result.get().getType()).isEqualTo(AggFunctionType.SUM);
@@ -58,7 +61,8 @@ class FlinkAggFunctionParserTest {
         options.setString("fields.tags.agg", "listagg");
         options.setString("fields.tags.listagg.delimiter", ";");
 
-        Optional<AggFunction> result = FlinkAggFunctionParser.parseAggFunction("tags", options);
+        Optional<AggFunction> result =
+                FlinkAggFunctionParser.parseAggFunction("tags", DataTypes.STRING(), options);
 
         assertThat(result).isPresent();
         assertThat(result.get().getType()).isEqualTo(AggFunctionType.LISTAGG);
@@ -76,7 +80,8 @@ class FlinkAggFunctionParserTest {
         options.setString("fields.tags.agg", "LISTAGG");
         options.setString("fields.tags.listagg.delimiter", ";");
 
-        Optional<AggFunction> result = FlinkAggFunctionParser.parseAggFunction("tags", options);
+        Optional<AggFunction> result =
+                FlinkAggFunctionParser.parseAggFunction("tags", DataTypes.STRING(), options);
 
         assertThat(result).isPresent();
         assertThat(result.get().getType()).isEqualTo(AggFunctionType.LISTAGG);
@@ -91,9 +96,12 @@ class FlinkAggFunctionParserTest {
         options.setString("fields.col2.agg", "listagg");
         options.setString("fields.col2.listagg.delimiter", "|"); // This should not affect col1
 
-        Optional<AggFunction> col1Func = FlinkAggFunctionParser.parseAggFunction("col1", options);
-        Optional<AggFunction> col2Func = FlinkAggFunctionParser.parseAggFunction("col2", options);
-        Optional<AggFunction> col3Func = FlinkAggFunctionParser.parseAggFunction("col3", options);
+        Optional<AggFunction> col1Func =
+                FlinkAggFunctionParser.parseAggFunction("col1", DataTypes.INT(), options);
+        Optional<AggFunction> col2Func =
+                FlinkAggFunctionParser.parseAggFunction("col2", DataTypes.STRING(), options);
+        Optional<AggFunction> col3Func =
+                FlinkAggFunctionParser.parseAggFunction("col3", DataTypes.STRING(), options);
 
         // col1 should have SUM without parameters
         assertThat(col1Func).isPresent();
@@ -114,7 +122,10 @@ class FlinkAggFunctionParserTest {
         Configuration options = new Configuration();
         options.setString("fields.total.agg", "invalid_function");
 
-        assertThatThrownBy(() -> FlinkAggFunctionParser.parseAggFunction("total", options))
+        assertThatThrownBy(
+                        () ->
+                                FlinkAggFunctionParser.parseAggFunction(
+                                        "total", DataTypes.STRING(), options))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("Unknown aggregation function")
                 .hasMessageContaining("invalid_function");
@@ -125,7 +136,10 @@ class FlinkAggFunctionParserTest {
         Configuration options = new Configuration();
         options.setString("fields.total.agg", "");
 
-        assertThatThrownBy(() -> FlinkAggFunctionParser.parseAggFunction("total", options))
+        assertThatThrownBy(
+                        () ->
+                                FlinkAggFunctionParser.parseAggFunction(
+                                        "total", DataTypes.STRING(), options))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("Empty aggregation function name");
     }
@@ -142,8 +156,10 @@ class FlinkAggFunctionParserTest {
 
         // Parse them back
         Configuration config = Configuration.fromMap(options);
-        Optional<AggFunction> col1Func = FlinkAggFunctionParser.parseAggFunction("col1", config);
-        Optional<AggFunction> col2Func = FlinkAggFunctionParser.parseAggFunction("col2", config);
+        Optional<AggFunction> col1Func =
+                FlinkAggFunctionParser.parseAggFunction("col1", DataTypes.INT(), config);
+        Optional<AggFunction> col2Func =
+                FlinkAggFunctionParser.parseAggFunction("col2", DataTypes.STRING(), config);
 
         // Verify they match the original functions
         assertThat(col1Func).isPresent();

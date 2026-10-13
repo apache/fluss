@@ -33,7 +33,7 @@ public abstract class LeafUnaryFunction extends LeafFunction {
     public abstract boolean test(DataType type, Object value);
 
     public abstract boolean test(
-            DataType type, long rowCount, Object min, Object max, Long nullCount);
+            DataType type, long rowCount, Object min, Object max, long nullCount);
 
     @Override
     public boolean test(DataType type, Object value, List<Object> literals) {
@@ -46,7 +46,7 @@ public abstract class LeafUnaryFunction extends LeafFunction {
             long rowCount,
             Object min,
             Object max,
-            Long nullCount,
+            long nullCount,
             List<Object> literals) {
         return test(type, rowCount, min, max, nullCount);
     }

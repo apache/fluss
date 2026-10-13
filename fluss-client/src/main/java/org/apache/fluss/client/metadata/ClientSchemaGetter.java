@@ -31,10 +31,10 @@ import org.slf4j.LoggerFactory;
 
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 
 import static org.apache.fluss.utils.ExceptionUtils.stripExecutionException;
-import static org.apache.fluss.utils.MapUtils.newConcurrentHashMap;
 
 /** Schema getter for client. */
 @Internal
@@ -50,7 +50,7 @@ public class ClientSchemaGetter implements SchemaGetter {
         this.tablePath = tablePath;
         this.latestSchemaInfo = latestSchemaInfo;
         this.admin = admin;
-        this.schemasById = newConcurrentHashMap();
+        this.schemasById = new ConcurrentHashMap<>();
         schemasById.put(latestSchemaInfo.getSchemaId(), latestSchemaInfo.getSchema());
     }
 
@@ -67,6 +67,7 @@ public class ClientSchemaGetter implements SchemaGetter {
             try {
                 SchemaInfo schemaInfo =
                         admin.getTableSchema(tablePath, schemaId).get(1, TimeUnit.MINUTES);
+                schemasById.put(schemaId, schemaInfo.getSchema());
                 if (schemaId > latestSchemaInfo.getSchemaId()) {
                     latestSchemaInfo = schemaInfo;
                 }

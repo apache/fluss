@@ -23,11 +23,11 @@
     <parent>
         <groupId>org.apache.fluss</groupId>
         <artifactId>fluss-spark</artifactId>
-        <version>0.10-SNAPSHOT</version>
+        <version>1.1-SNAPSHOT</version>
     </parent>
 
     <artifactId>fluss-spark-common_${scala.binary.version}</artifactId>
-    <name>Fluss : Engine Spark : Common</name>
+    <name>Apache Fluss : Engine Spark : Common</name>
 
     <dependencies>
         <dependency>
@@ -69,26 +69,17 @@
                 </configuration>
             </plugin>
 
+            <!-- Configure Javadoc to limit source scanning to only the main Scala source directory.
+                 This excludes ANTLR4 generated code from target/generated-sources/antlr4 which causes issues with release=8 config.
+                 Without this exclusion, the javadoc plugin scans generated parser files and fails with
+                 "No source files for package org.apache.spark.sql.catalyst.parser" error because the generated code is incompatible with release=8.
+                 This causes build failure and blocks release builds. -->
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
-                <artifactId>maven-shade-plugin</artifactId>
-                <executions>
-                    <execution>
-                        <id>shade-fluss</id>
-                        <phase>package</phase>
-                        <goals>
-                            <goal>shade</goal>
-                        </goals>
-                        <configuration>
-                            <artifactSet>
-                                <includes combine.children="append">
-                                    <include>org.apache.fluss:fluss-spark-common</include>
-                                    <include>org.apache.fluss:fluss-client</include>
-                                </includes>
-                            </artifactSet>
-                        </configuration>
-                    </execution>
-                </executions>
+                <artifactId>maven-javadoc-plugin</artifactId>
+                <configuration>
+                    <sourcepath>${basedir}/src/main/scala</sourcepath>
+                </configuration>
             </plugin>
         </plugins>
     </build>

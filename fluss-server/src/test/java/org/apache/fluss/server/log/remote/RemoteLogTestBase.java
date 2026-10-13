@@ -29,6 +29,7 @@ import org.apache.fluss.server.log.LogTablet;
 import org.apache.fluss.server.replica.Replica;
 import org.apache.fluss.server.replica.ReplicaTestBase;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
+import org.apache.fluss.utils.FlussPaths;
 
 import org.junit.jupiter.api.BeforeEach;
 
@@ -56,6 +57,7 @@ public class RemoteLogTestBase extends ReplicaTestBase {
 
         conf.set(ConfigOptions.REMOTE_LOG_INDEX_FILE_CACHE_SIZE, MemorySize.parse("1mb"));
         conf.set(ConfigOptions.REMOTE_FS_WRITE_BUFFER_SIZE, MemorySize.parse("10b"));
+        conf.setInt(ConfigOptions.REMOTE_LOG_TASK_MAX_UPLOAD_SEGMENTS, Integer.MAX_VALUE);
         return conf;
     }
 
@@ -86,13 +88,16 @@ public class RemoteLogTestBase extends ReplicaTestBase {
                         physicalTablePath,
                         tb,
                         Collections.singletonList(0),
-                        new LeaderAndIsr(0, 0, Collections.singletonList(0), 0, 0)));
+                        new LeaderAndIsr(
+                                0, 0, Collections.singletonList(0), Collections.emptyList(), 0, 0),
+                        3,
+                        0L));
         addMultiSegmentsToLogTablet(replica.getLogTablet(), segmentSize);
         return replica;
     }
 
-    protected static RemoteLogSegment copyLogSegmentToRemote(
-            LogTablet logTablet, RemoteLogStorage remoteLogStorage, int segmentIndex)
+    protected RemoteLogSegment copyLogSegmentToRemote(
+            LogTablet logTablet, DefaultRemoteLogStorage remoteLogStorage, int segmentIndex)
             throws Exception {
         PhysicalTablePath tp = logTablet.getPhysicalTablePath();
         TableBucket tb = logTablet.getTableBucket();
@@ -121,7 +126,8 @@ public class RemoteLogTestBase extends ReplicaTestBase {
                         .physicalTablePath(tp)
                         .build();
 
-        remoteLogStorage.copyLogSegmentFiles(remoteLogSegment, logSegmentFiles);
+        remoteLogStorage.copyLogSegmentFiles(
+                FlussPaths.remoteLogDir(conf), remoteLogSegment, logSegmentFiles);
         return remoteLogSegment;
     }
 
@@ -129,10 +135,10 @@ public class RemoteLogTestBase extends ReplicaTestBase {
         return new RemoteLogTablet(
                 logTablet.getPhysicalTablePath(),
                 logTablet.getTableBucket(),
-                conf.get(ConfigOptions.TABLE_LOG_TTL).toMillis());
+                FlussPaths.remoteLogDir(conf));
     }
 
-    protected static List<RemoteLogSegment> createRemoteLogSegmentList(LogTablet logTablet) {
+    protected List<RemoteLogSegment> createRemoteLogSegmentList(LogTablet logTablet) {
         return logTablet.getSegments().stream()
                 .map(
                         segment -> {

@@ -51,7 +51,9 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
+import java.time.Duration;
 import java.util.Collections;
+import java.util.concurrent.CompletableFuture;
 import java.util.function.BiConsumer;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -199,6 +201,55 @@ public class FlinkSinkWriterTest extends FlinkTestBase {
                     assertThatThrownBy(writer::close)
                             .hasRootCauseExactlyInstanceOf(NetworkException.class);
                 });
+    }
+
+    @Test
+    void testCloseReturnsPromptlyWhenFlussUnavailable() throws Exception {
+        // Regression test for the sink blocking in close during failover: with pending records
+        // that can never be sent (cluster down + infinite writer retries by default), a graceful
+        // close would wait indefinitely. The sink must close the connection immediately instead.
+        FlussClusterExtension flussClusterExtension = FlussClusterExtension.builder().build();
+        try {
+            flussClusterExtension.start();
+
+            Configuration clientConfig = flussClusterExtension.getClientConfig();
+            // keep the default infinite retries so that pending records are never given up,
+            // which is exactly the situation that used to block close forever
+            try (Connection connection = ConnectionFactory.createConnection(clientConfig);
+                    Admin admin = connection.getAdmin()) {
+                admin.createDatabase(
+                                DEFAULT_SINK_TABLE_PATH.getDatabaseName(),
+                                DatabaseDescriptor.EMPTY,
+                                true)
+                        .get();
+                admin.createTable(DEFAULT_SINK_TABLE_PATH, TABLE_DESCRIPTOR, true).get();
+            }
+
+            MockWriterInitContext mockWriterInitContext =
+                    new MockWriterInitContext(new InterceptingOperatorMetricGroup());
+            FlinkSinkWriter<RowData> writer =
+                    createSinkWriter(clientConfig, mockWriterInitContext.getMailboxExecutor());
+            writer.initialize(mockWriterInitContext.metricGroup());
+            // make the cluster unavailable while a record is still pending in the writer
+            flussClusterExtension.close();
+            writer.write(
+                    GenericRowData.of(1, StringData.fromString("a")), new MockSinkWriterContext());
+
+            // close must return promptly instead of waiting for the pending record
+            CompletableFuture<Void> closeFuture =
+                    CompletableFuture.runAsync(
+                            () -> {
+                                try {
+                                    writer.close();
+                                } catch (Exception e) {
+                                    // exceptions (e.g. pending record failures) are
+                                    // acceptable; blocking is not
+                                }
+                            });
+            assertThat(closeFuture).succeedsWithin(Duration.ofSeconds(30));
+        } finally {
+            flussClusterExtension.close();
+        }
     }
 
     @Test

@@ -38,6 +38,7 @@ import java.util.concurrent.Future;
 
 import static org.apache.fluss.record.TestData.DATA1;
 import static org.apache.fluss.record.TestData.DATA1_ROW_TYPE;
+import static org.apache.fluss.record.TestData.TEST_SCHEMA_GETTER;
 import static org.apache.fluss.shaded.guava32.com.google.common.collect.Lists.newArrayList;
 import static org.apache.fluss.testutils.DataTestUtils.assertLogRecordBatchEquals;
 import static org.apache.fluss.testutils.DataTestUtils.assertLogRecordsEquals;
@@ -182,7 +183,10 @@ public class FileLogRecordsTest extends LogTestBase {
         for (MemoryLogRecords value : values) {
             assertThat(fileLogRecordsIterator.hasNext()).isTrue();
             assertLogRecordBatchEquals(
-                    DATA1_ROW_TYPE, fileLogRecordsIterator.next(), value.batchIterator().next());
+                    DATA1_ROW_TYPE,
+                    fileLogRecordsIterator.next(),
+                    value.batchIterator().next(),
+                    TEST_SCHEMA_GETTER);
         }
         assertThat(fileLogRecords.channel().position()).isEqualTo(position);
     }
@@ -191,7 +195,7 @@ public class FileLogRecordsTest extends LogTestBase {
     void testRead() throws Exception {
         FileLogRecords read = fileLogRecords.slice(0, fileLogRecords.sizeInBytes());
         assertThat(read.sizeInBytes()).isEqualTo(fileLogRecords.sizeInBytes());
-        assertLogRecordsEquals(DATA1_ROW_TYPE, read, fileLogRecords);
+        assertLogRecordsEquals(DATA1_ROW_TYPE, read, fileLogRecords, TEST_SCHEMA_GETTER);
 
         List<LogRecordBatch> items = batches(read);
         LogRecordBatch first = items.get(0);

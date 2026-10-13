@@ -22,6 +22,8 @@ import org.apache.fluss.client.admin.FlussAdmin;
 import org.apache.fluss.client.lookup.LookupClient;
 import org.apache.fluss.client.metadata.MetadataUpdater;
 import org.apache.fluss.client.table.FlussTable;
+import org.apache.fluss.client.table.MultiTable;
+import org.apache.fluss.client.table.MultiTableImpl;
 import org.apache.fluss.client.table.Table;
 import org.apache.fluss.client.table.scanner.RemoteFileDownloader;
 import org.apache.fluss.client.token.DefaultSecurityTokenManager;
@@ -32,6 +34,7 @@ import org.apache.fluss.client.write.WriterClient;
 import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.config.FlussConfigUtils;
 import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.fs.FileSystem;
 import org.apache.fluss.metadata.TablePath;
@@ -48,7 +51,7 @@ import java.util.List;
 
 import static org.apache.fluss.client.utils.MetadataUtils.getOneAvailableTabletServerNode;
 import static org.apache.fluss.config.FlussConfigUtils.CLIENT_PREFIX;
-import static org.apache.fluss.utils.PropertiesUtils.extractPrefix;
+import static org.apache.fluss.utils.PropertiesUtils.extractAndRemovePrefix;
 
 /** A connection to Fluss cluster, and holds the client session resources. */
 public final class FlussConnection implements Connection {
@@ -70,18 +73,19 @@ public final class FlussConnection implements Connection {
 
     FlussConnection(Configuration conf, MetricRegistry metricRegistry) {
         this.conf = conf;
+        FlussConfigUtils.validateClientConfigs(conf);
         // init Filesystem with configuration from FlussConnection,
         // only pass options with 'client.fs.' prefix
         FileSystem.initialize(
                 Configuration.fromMap(
-                        extractPrefix(new HashMap<>(conf.toMap()), CLIENT_PREFIX + "fs.")),
+                        extractAndRemovePrefix(new HashMap<>(conf.toMap()), CLIENT_PREFIX + "fs.")),
                 null);
         // for client metrics.
         setupClientMetricsConfiguration();
         String clientId = conf.getString(ConfigOptions.CLIENT_ID);
         this.metricRegistry = metricRegistry;
         this.clientMetricGroup = new ClientMetricGroup(metricRegistry, clientId);
-        this.rpcClient = RpcClient.create(conf, clientMetricGroup, false);
+        this.rpcClient = RpcClient.create(conf, clientMetricGroup);
 
         // TODO this maybe remove after we introduce client metadata.
         this.metadataUpdater = new MetadataUpdater(conf, rpcClient);
@@ -104,6 +108,11 @@ public final class FlussConnection implements Connection {
         metadataUpdater.updateTableOrPartitionMetadata(tablePath, null);
         Admin admin = getOrCreateAdmin();
         return new FlussTable(this, tablePath, admin.getTableInfo(tablePath).join());
+    }
+
+    @Override
+    public MultiTable getMultiTable() {
+        return new MultiTableImpl(this);
     }
 
     public MetadataUpdater getMetadataUpdater() {
@@ -194,14 +203,18 @@ public final class FlussConnection implements Connection {
 
     @Override
     public void close() throws Exception {
+        // graceful close: wait for all pending write/lookup requests to be processed
+        close(Duration.ofMillis(Long.MAX_VALUE));
+    }
+
+    @Override
+    public void close(Duration timeout) throws Exception {
         if (writerClient != null) {
-            writerClient.close(Duration.ofMillis(Long.MAX_VALUE));
+            writerClient.close(timeout);
         }
 
         if (lookupClient != null) {
-            // timeout is Long.MAX_VALUE to make the pending get request
-            // to be processed
-            lookupClient.close(Duration.ofMillis(Long.MAX_VALUE));
+            lookupClient.close(timeout);
         }
 
         if (remoteFileDownloader != null) {

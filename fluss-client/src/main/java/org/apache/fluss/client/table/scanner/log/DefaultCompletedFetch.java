@@ -19,9 +19,13 @@ package org.apache.fluss.client.table.scanner.log;
 
 import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.record.LogRecordReadContext;
 import org.apache.fluss.rpc.entity.FetchLogResultForBucket;
 import org.apache.fluss.rpc.messages.FetchLogRequest;
+import org.apache.fluss.shaded.netty4.io.netty.buffer.ByteBuf;
+
+import javax.annotation.Nullable;
 
 /**
  * {@link DefaultCompletedFetch} is a {@link CompletedFetch} that represents a completed fetch that
@@ -30,15 +34,25 @@ import org.apache.fluss.rpc.messages.FetchLogRequest;
 @Internal
 class DefaultCompletedFetch extends CompletedFetch {
 
+    /**
+     * The parsed ByteBuf backing the lazily-parsed records data. This reference is retained to keep
+     * the underlying network buffer alive while the records are being consumed. Released in {@link
+     * #drain()}.
+     */
+    @Nullable private ByteBuf parsedByteBuf;
+
     public DefaultCompletedFetch(
             TableBucket tableBucket,
+            TablePath tablePath,
             FetchLogResultForBucket fetchLogResultForBucket,
             LogRecordReadContext readContext,
             LogScannerStatus logScannerStatus,
             boolean isCheckCrc,
-            Long fetchOffset) {
+            Long fetchOffset,
+            @Nullable ByteBuf parsedByteBuf) {
         super(
                 tableBucket,
+                tablePath,
                 fetchLogResultForBucket.getError(),
                 fetchLogResultForBucket.recordsOrEmpty().sizeInBytes(),
                 fetchLogResultForBucket.getHighWatermark(),
@@ -46,6 +60,23 @@ class DefaultCompletedFetch extends CompletedFetch {
                 readContext,
                 logScannerStatus,
                 isCheckCrc,
-                fetchOffset);
+                fetchOffset,
+                fetchLogResultForBucket.getFilteredEndOffset());
+        this.parsedByteBuf = parsedByteBuf;
+    }
+
+    @Override
+    void drain() {
+        try {
+            // Note: if super.drain() throws, isConsumed stays false in the parent.
+            // The finally block below still nulls parsedByteBuf after releasing it,
+            // so a subsequent drain() call will not double-release the buffer.
+            super.drain();
+        } finally {
+            if (parsedByteBuf != null) {
+                parsedByteBuf.release();
+                parsedByteBuf = null;
+            }
+        }
     }
 }

@@ -25,12 +25,15 @@ import org.apache.paimon.data.Timestamp;
 import org.apache.paimon.types.RowKind;
 import org.apache.paimon.types.RowType;
 
-import static org.apache.fluss.lake.paimon.PaimonLakeCatalog.SYSTEM_COLUMNS;
+import static org.apache.fluss.lake.paimon.PaimonLakeCatalog.LEGACY_SYSTEM_COLUMNS;
 import static org.apache.fluss.lake.paimon.utils.PaimonConversions.toRowKind;
+import static org.apache.fluss.utils.Preconditions.checkNotNull;
+import static org.apache.fluss.utils.Preconditions.checkState;
 
 /** To wrap Fluss {@link LogRecord} as paimon {@link InternalRow}. */
 public class FlussRecordAsPaimonRow extends FlussRowAsPaimonRow {
 
+    private final boolean paimonIncludingSystemColumns;
     private final int bucket;
     private LogRecord logRecord;
     private int originRowFieldCount;
@@ -39,16 +42,26 @@ public class FlussRecordAsPaimonRow extends FlussRowAsPaimonRow {
     private final int offsetFieldIndex;
     private final int timestampFieldIndex;
 
-    public FlussRecordAsPaimonRow(int bucket, RowType tableTowType) {
-        super(tableTowType);
+    public FlussRecordAsPaimonRow(int bucket, RowType tableRowType) {
+        this(bucket, tableRowType, false);
+    }
+
+    public FlussRecordAsPaimonRow(
+            int bucket, RowType tableRowType, boolean paimonIncludingSystemColumns) {
+        super(tableRowType);
         this.bucket = bucket;
-        this.businessFieldCount = tableRowType.getFieldCount() - SYSTEM_COLUMNS.size();
+        this.paimonIncludingSystemColumns = paimonIncludingSystemColumns;
+        this.businessFieldCount =
+                tableRowType.getFieldCount()
+                        - (paimonIncludingSystemColumns ? LEGACY_SYSTEM_COLUMNS.size() : 0);
+        // only valid when paimon includes the system columns
         this.bucketFieldIndex = businessFieldCount;
         this.offsetFieldIndex = businessFieldCount + 1;
         this.timestampFieldIndex = businessFieldCount + 2;
     }
 
     public void setFlussRecord(LogRecord logRecord) {
+        checkNotNull(logRecord, "logRecord must not be null.");
         this.logRecord = logRecord;
         this.internalRow = logRecord.getRow();
         int flussFieldCount = internalRow.getFieldCount();
@@ -74,11 +87,13 @@ public class FlussRecordAsPaimonRow extends FlussRowAsPaimonRow {
 
     @Override
     public RowKind getRowKind() {
+        checkState(logRecord != null, "setFlussRecord() must be called before accessing the row.");
         return toRowKind(logRecord.getChangeType());
     }
 
     @Override
     public boolean isNullAt(int pos) {
+        checkState(logRecord != null, "setFlussRecord() must be called before accessing the row.");
         if (pos < originRowFieldCount) {
             return super.isNullAt(pos);
         }
@@ -92,10 +107,11 @@ public class FlussRecordAsPaimonRow extends FlussRowAsPaimonRow {
 
     @Override
     public int getInt(int pos) {
-        if (pos == bucketFieldIndex) {
+        if (paimonIncludingSystemColumns && pos == bucketFieldIndex) {
             // bucket system column
             return bucket;
         }
+        checkState(logRecord != null, "setFlussRecord() must be called before accessing the row.");
         if (pos >= originRowFieldCount) {
             throw new IllegalStateException(
                     String.format(
@@ -107,12 +123,15 @@ public class FlussRecordAsPaimonRow extends FlussRowAsPaimonRow {
 
     @Override
     public long getLong(int pos) {
-        if (pos == offsetFieldIndex) {
-            //  offset system column
-            return logRecord.logOffset();
-        } else if (pos == timestampFieldIndex) {
-            //  timestamp system column
-            return logRecord.timestamp();
+        checkState(logRecord != null, "setFlussRecord() must be called before accessing the row.");
+        if (paimonIncludingSystemColumns) {
+            if (pos == offsetFieldIndex) {
+                //  offset system column
+                return logRecord.logOffset();
+            } else if (pos == timestampFieldIndex) {
+                //  timestamp system column
+                return logRecord.timestamp();
+            }
         }
         if (pos >= originRowFieldCount) {
             throw new IllegalStateException(
@@ -126,8 +145,9 @@ public class FlussRecordAsPaimonRow extends FlussRowAsPaimonRow {
 
     @Override
     public Timestamp getTimestamp(int pos, int precision) {
+        checkState(logRecord != null, "setFlussRecord() must be called before accessing the row.");
         // it's timestamp system column
-        if (pos == timestampFieldIndex) {
+        if (paimonIncludingSystemColumns && pos == timestampFieldIndex) {
             return Timestamp.fromEpochMillis(logRecord.timestamp());
         }
         if (pos >= originRowFieldCount) {

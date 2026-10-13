@@ -104,8 +104,8 @@ public final class Dependency {
                 + ":"
                 + artifactId
                 + ":"
+                + (classifier != null ? classifier + ":" : "")
                 + version
-                + (classifier != null ? ":" + classifier : "")
                 + (scope != null ? ":" + scope : "")
                 + (isOptional != null && isOptional ? " (optional)" : "");
     }

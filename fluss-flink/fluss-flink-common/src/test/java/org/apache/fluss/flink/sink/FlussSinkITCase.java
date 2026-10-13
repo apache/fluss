@@ -314,11 +314,11 @@ public class FlussSinkITCase extends FlinkTestBase {
     public void testPartialUpdateWithTwoWriters() throws Exception {
         createTable(TablePath.of(DEFAULT_DB, "partial_update_two_writers_test"), pkTableDescriptor);
 
-        // Initial inserts
+        // Initial inserts targeting only orderId+itemId; amount and address are non-target
         ArrayList<TestOrder> initialOrders = new ArrayList<>();
-        initialOrders.add(new TestOrder(2001, 3001, -1, null, RowKind.INSERT));
-        initialOrders.add(new TestOrder(2002, 3002, -1, null, RowKind.INSERT));
-        initialOrders.add(new TestOrder(2003, 3003, -1, null, RowKind.INSERT));
+        initialOrders.add(new TestOrder(2001, 3001, null, null, RowKind.INSERT));
+        initialOrders.add(new TestOrder(2002, 3002, null, null, RowKind.INSERT));
+        initialOrders.add(new TestOrder(2003, 3003, null, null, RowKind.INSERT));
 
         DataStream<TestOrder> initialStream = env.fromData(initialOrders);
 
@@ -361,15 +361,16 @@ public class FlussSinkITCase extends FlinkTestBase {
         }
 
         // Build expected change log: 3 inserts, then before/after for 2001 and 2003
+        // Initial inserts target only orderId+itemId, so amount is null (non-target column)
         List<TestOrder> expected = new ArrayList<>();
-        expected.add(new TestOrder(2001, 3001, -1, null, RowKind.INSERT));
-        expected.add(new TestOrder(2002, 3002, -1, null, RowKind.INSERT));
-        expected.add(new TestOrder(2003, 3003, -1, null, RowKind.INSERT));
-        // update for 2001: before and after (itemId stays, amount/address updated)
-        expected.add(new TestOrder(2001, 3001, -1, null, RowKind.UPDATE_BEFORE));
+        expected.add(new TestOrder(2001, 3001, null, null, RowKind.INSERT));
+        expected.add(new TestOrder(2002, 3002, null, null, RowKind.INSERT));
+        expected.add(new TestOrder(2003, 3003, null, null, RowKind.INSERT));
+        // update for 2001: before shows stored state (amount=null), after has amount/address set
+        expected.add(new TestOrder(2001, 3001, null, null, RowKind.UPDATE_BEFORE));
         expected.add(new TestOrder(2001, 3001, 100, "addr1", RowKind.UPDATE_AFTER));
         // update for 2003
-        expected.add(new TestOrder(2003, 3003, -1, null, RowKind.UPDATE_BEFORE));
+        expected.add(new TestOrder(2003, 3003, null, null, RowKind.UPDATE_BEFORE));
         expected.add(new TestOrder(2003, 3003, 300, "addr3", RowKind.UPDATE_AFTER));
 
         // Poll actual changelog until we have all expected records or timeout
@@ -382,12 +383,13 @@ public class FlussSinkITCase extends FlinkTestBase {
             for (TableBucket bucket : scanRecords.buckets()) {
                 for (ScanRecord record : scanRecords.records(bucket)) {
                     InternalRow row = record.getRow();
+                    Integer amount = row.isNullAt(2) ? null : row.getInt(2);
                     String address = row.getString(3) != null ? row.getString(3).toString() : null;
                     TestOrder order =
                             new TestOrder(
                                     row.getLong(0),
                                     row.getLong(1),
-                                    row.getInt(2),
+                                    amount,
                                     address,
                                     toFlinkRowKind(record.getChangeType()));
                     actual.add(order);
@@ -654,11 +656,12 @@ public class FlussSinkITCase extends FlinkTestBase {
         private static final long serialVersionUID = 1L;
         private final long orderId;
         private final long itemId;
-        private final int amount;
+        private final Integer amount;
         private final String address;
         private final RowKind rowKind;
 
-        public TestOrder(long orderId, long itemId, int amount, String address, RowKind rowKind) {
+        public TestOrder(
+                long orderId, long itemId, Integer amount, String address, RowKind rowKind) {
             this.orderId = orderId;
             this.itemId = itemId;
             this.amount = amount;
@@ -674,7 +677,7 @@ public class FlussSinkITCase extends FlinkTestBase {
             TestOrder testOrder = (TestOrder) o;
             return orderId == testOrder.orderId
                     && itemId == testOrder.itemId
-                    && amount == testOrder.amount
+                    && Objects.equals(amount, testOrder.amount)
                     && Objects.equals(address, testOrder.address)
                     && rowKind == testOrder.rowKind;
         }
