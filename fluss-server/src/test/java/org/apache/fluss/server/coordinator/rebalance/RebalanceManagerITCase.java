@@ -18,7 +18,6 @@
 package org.apache.fluss.server.coordinator.rebalance;
 
 import org.apache.fluss.cluster.rebalance.RebalancePlanForBucket;
-import org.apache.fluss.cluster.rebalance.RebalanceStatus;
 import org.apache.fluss.cluster.rebalance.ServerTag;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
@@ -172,9 +171,7 @@ public class RebalanceManagerITCase {
         assertThat(newReplicaStates).allMatch(Objects::isNull);
 
         rebalanceManager.registerRebalance(
-                "test-rebalance-dsds",
-                Collections.singletonMap(tb, planForBucket),
-                RebalanceStatus.NOT_STARTED);
+                "test-rebalance-dsds", Collections.singletonMap(tb, planForBucket));
 
         retry(
                 Duration.ofMinutes(2),
