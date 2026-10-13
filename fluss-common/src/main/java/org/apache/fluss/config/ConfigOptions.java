@@ -2270,6 +2270,45 @@ public class ConfigOptions {
                                     + "as older versions cannot parse the extended batch format.");
 
     // ------------------------------------------------------------------------
+    //  ConfigOptions for Consumer Offsets
+    // ------------------------------------------------------------------------
+
+    public static final ConfigOption<Integer> OFFSET_METADATA_MAX_BYTES =
+            key("server.consumer-offsets.metadata.max-size")
+                    .intType()
+                    .defaultValue(4096)
+                    .withDescription(
+                            "The maximum size for a metadata entry associated with an offset commit.");
+
+    public static final ConfigOption<Long> OFFSETS_RETENTION_MS =
+            key("server.consumer-offsets.ttl")
+                    .longType()
+                    .defaultValue(7L * 24L * 60L * 60L * 1000L)
+                    .withDescription(
+                            "The retention period for committed consumer offsets after they become inactive.");
+
+    public static final ConfigOption<Integer> OFFSETS_TABLE_NUM_BUCKETS =
+            key("server.consumer-offsets.table.bucket-count")
+                    .intType()
+                    .defaultValue(50)
+                    .withDescription(
+                            "The number of buckets for the consumer-offset system table. This value should not change after deployment.");
+
+    public static final ConfigOption<Integer> OFFSETS_TABLE_REPLICATION_FACTOR =
+            key("server.consumer-offsets.table.replication-factor")
+                    .intType()
+                    .defaultValue(3)
+                    .withDescription(
+                            "The replication factor for the consumer-offset system table. Table creation waits until the cluster has enough tablet servers.");
+
+    public static final ConfigOption<Integer> OFFSET_COMMIT_TIMEOUT_MS =
+            key("server.consumer-offsets.commit-timeout")
+                    .intType()
+                    .defaultValue(5000)
+                    .withDescription(
+                            "The maximum time in milliseconds to wait for all replicas to acknowledge an offset commit.");
+
+    // ------------------------------------------------------------------------
     //  ConfigOptions for Kv
     // ------------------------------------------------------------------------
     public static final ConfigOption<Duration> KV_SNAPSHOT_INTERVAL =
