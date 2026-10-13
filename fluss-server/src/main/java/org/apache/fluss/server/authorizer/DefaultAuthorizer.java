@@ -127,15 +127,13 @@ public class DefaultAuthorizer extends AbstractAuthorizer implements FatalErrorH
     private final ZooKeeperClient zooKeeperClient;
     private final ZkNodeChangeNotificationWatcher aclChangeNotificationWatcher;
     private final Object lock = new Object();
-    private final Object aclCacheLock = new Object();
 
     // Main cache: Stores the mapping between resources and access control entries, sorted by
-    // resource.
-    @GuardedBy("aclCacheLock")
-    private final TreeMap<Resource, VersionedAcls> aclCache = new TreeMap<>(new ResourceOrdering());
+    // resource. Writers publish immutable snapshots so authorization reads remain lock-free.
+    private volatile Map<Resource, VersionedAcls> aclCache = Collections.emptyMap();
 
     // Reverse index cache: Maps access control entry types to resources for quick lookups.
-    @GuardedBy("aclCacheLock")
+    @GuardedBy("lock")
     private final HashMap<ResourceTypeKey, Set<String>> resourceCache = new HashMap<>();
 
     public DefaultAuthorizer(AuthorizationPlugin.Context context) {
@@ -249,10 +247,8 @@ public class DefaultAuthorizer extends AbstractAuthorizer implements FatalErrorH
                         .collect(Collectors.toList());
 
         synchronized (lock) {
-            Set<Resource> resources;
-            synchronized (aclCacheLock) {
-                resources = new HashSet<>(aclCache.keySet());
-            }
+            Map<Resource, VersionedAcls> aclCacheSnapshot = aclCache;
+            Set<Resource> resources = new HashSet<>(aclCacheSnapshot.keySet());
             Map<Resource, List<Tuple2<AclBindingFilter, Integer>>> resourcesToUpdate =
                     new HashMap<>();
             for (Resource resource : resources) {
@@ -324,7 +320,7 @@ public class DefaultAuthorizer extends AbstractAuthorizer implements FatalErrorH
 
     @Override
     public Collection<AclBinding> listAcls(Session session, AclBindingFilter aclBindingFilter) {
-        Map<Resource, VersionedAcls> aclCacheSnapshot = getAclCacheSnapshot();
+        Map<Resource, VersionedAcls> aclCacheSnapshot = aclCache;
         Set<AclBinding> aclBindings = new HashSet<>();
 
         aclCacheSnapshot.forEach(
@@ -341,20 +337,6 @@ public class DefaultAuthorizer extends AbstractAuthorizer implements FatalErrorH
                 });
 
         return aclBindings;
-    }
-
-    private Map<Resource, VersionedAcls> getAclCacheSnapshot() {
-        synchronized (aclCacheLock) {
-            Map<Resource, VersionedAcls> snapshot = new TreeMap<>(new ResourceOrdering());
-            aclCache.forEach(
-                    (resource, versionedAcls) ->
-                            snapshot.put(
-                                    resource,
-                                    new VersionedAcls(
-                                            versionedAcls.zkVersion,
-                                            new HashSet<>(versionedAcls.acls))));
-            return snapshot;
-        }
     }
 
     private boolean isAuthorized(
@@ -375,15 +357,20 @@ public class DefaultAuthorizer extends AbstractAuthorizer implements FatalErrorH
 
     private void loadCache() throws Exception {
         synchronized (lock) {
+            Map<Resource, VersionedAcls> loadedAcls = new TreeMap<>(new ResourceOrdering());
             ResourceType[] resourceTypes = ResourceType.values();
             for (ResourceType resourceType : resourceTypes) {
                 List<String> resourceNames = zooKeeperClient.listResourcesByType(resourceType);
                 for (String resourceName : resourceNames) {
                     Resource resource = new Resource(resourceType, resourceName);
                     VersionedAcls versionedAcls = getAclsFromZk(resource);
-                    updateCache(resource, versionedAcls);
+                    if (!versionedAcls.acls.isEmpty()) {
+                        loadedAcls.put(resource, versionedAcls);
+                    }
                 }
             }
+            rebuildResourceCache(loadedAcls);
+            aclCache = Collections.unmodifiableMap(loadedAcls);
         }
     }
 
@@ -475,9 +462,12 @@ public class DefaultAuthorizer extends AbstractAuthorizer implements FatalErrorH
     }
 
     private void updateCache(Resource resource, VersionedAcls versionedAcls) {
-        synchronized (aclCacheLock) {
+        synchronized (lock) {
+            Map<Resource, VersionedAcls> currentCache = aclCache;
             Set<AccessControlEntry> currentAces =
-                    aclCache.containsKey(resource) ? aclCache.get(resource).acls : new HashSet<>();
+                    Optional.ofNullable(currentCache.get(resource))
+                            .map(value -> value.acls)
+                            .orElse(Collections.emptySet());
             Set<AccessControlEntry> acesToAdd = new HashSet<>(versionedAcls.acls);
             acesToAdd.removeAll(currentAces);
             Set<AccessControlEntry> acesToRemove = new HashSet<>(currentAces);
@@ -504,12 +494,31 @@ public class DefaultAuthorizer extends AbstractAuthorizer implements FatalErrorH
                                 });
                     });
 
+            Map<Resource, VersionedAcls> nextCache = new TreeMap<>(new ResourceOrdering());
+            nextCache.putAll(currentCache);
             if (versionedAcls.acls.isEmpty()) {
-                aclCache.remove(resource);
+                nextCache.remove(resource);
             } else {
-                aclCache.put(resource, versionedAcls);
+                nextCache.put(resource, versionedAcls);
             }
+            aclCache = Collections.unmodifiableMap(nextCache);
         }
+    }
+
+    @GuardedBy("lock")
+    private void rebuildResourceCache(Map<Resource, VersionedAcls> cache) {
+        resourceCache.clear();
+        cache.forEach(
+                (resource, versionedAcls) ->
+                        versionedAcls.acls.forEach(
+                                ace -> {
+                                    ResourceTypeKey resourceTypeKey =
+                                            new ResourceTypeKey(ace, resource.getType());
+                                    resourceCache
+                                            .computeIfAbsent(
+                                                    resourceTypeKey, ignored -> new HashSet<>())
+                                            .add(resource.getName());
+                                }));
     }
 
     private void updateAclChangedFlag(Resource resource) {
@@ -604,9 +613,8 @@ public class DefaultAuthorizer extends AbstractAuthorizer implements FatalErrorH
     }
 
     private Set<AccessControlEntry> matchingAcls(Resource resource) {
-        synchronized (aclCacheLock) {
-            return matchingAcls(resource, aclCache);
-        }
+        Map<Resource, VersionedAcls> aclCacheSnapshot = aclCache;
+        return matchingAcls(resource, aclCacheSnapshot);
     }
 
     private Set<AccessControlEntry> matchingAcls(
@@ -637,9 +645,8 @@ public class DefaultAuthorizer extends AbstractAuthorizer implements FatalErrorH
     public void onFatalError(Throwable exception) {}
 
     private @Nullable VersionedAcls getAclsFromCache(Resource resource) {
-        synchronized (aclCacheLock) {
-            return aclCache.get(resource);
-        }
+        Map<Resource, VersionedAcls> aclCacheSnapshot = aclCache;
+        return aclCacheSnapshot.get(resource);
     }
 
     private VersionedAcls getAclsFromZk(Resource resource) throws Exception {
@@ -741,12 +748,12 @@ public class DefaultAuthorizer extends AbstractAuthorizer implements FatalErrorH
      * zknode version.
      */
     public static class VersionedAcls {
-        public Set<AccessControlEntry> acls;
-        int zkVersion;
+        public final Set<AccessControlEntry> acls;
+        final int zkVersion;
 
         public VersionedAcls(int zkVersion, Set<AccessControlEntry> acls) {
             this.zkVersion = zkVersion;
-            this.acls = acls;
+            this.acls = Collections.unmodifiableSet(new HashSet<>(acls));
         }
 
         boolean exists() {

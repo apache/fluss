@@ -531,15 +531,30 @@ public class DefaultAuthorizerTest {
     }
 
     @Test
-    void testListAclsDoesNotBlockCacheUpdatesOrAuthorization() throws Exception {
-        Resource resource = Resource.database("foo-" + UUID.randomUUID());
+    void testVersionedAclsAreImmutable() {
+        AccessControlEntry acl = createAclEntry("user1", "host-1", READ);
+        Set<AccessControlEntry> source = new HashSet<>(Collections.singleton(acl));
+        DefaultAuthorizer.VersionedAcls versionedAcls =
+                new DefaultAuthorizer.VersionedAcls(1, source);
+
+        source.clear();
+
+        assertThat(versionedAcls.acls).containsExactly(acl);
+        assertThatThrownBy(versionedAcls.acls::clear)
+                .isInstanceOf(UnsupportedOperationException.class);
+    }
+
+    @Test
+    void testListAclsUsesImmutableSnapshotWithoutBlockingUpdatesOrAuthorization() throws Exception {
+        Resource existingResource = Resource.database("foo-" + UUID.randomUUID());
+        Resource addedResource = Resource.database("foo-" + UUID.randomUUID());
         FlussPrincipal principal = new FlussPrincipal("user1", "User");
         AccessControlEntry originalAcl =
                 new AccessControlEntry(principal, "host-1", READ, PermissionType.ALLOW);
         AccessControlEntry addedAcl =
                 new AccessControlEntry(
                         new FlussPrincipal("user2", "User"), "host-2", WRITE, PermissionType.ALLOW);
-        addAcls(authorizer, resource, Collections.singleton(originalAcl));
+        addAcls(authorizer, existingResource, Collections.singleton(originalAcl));
 
         CountDownLatch filterEntered = new CountDownLatch(1);
         CountDownLatch continueListing = new CountDownLatch(1);
@@ -570,18 +585,24 @@ public class DefaultAuthorizerTest {
 
             Future<?> updateFuture =
                     executor.submit(
-                            () -> addAcls(authorizer, resource, Collections.singleton(addedAcl)));
+                            () ->
+                                    addAcls(
+                                            authorizer,
+                                            addedResource,
+                                            Collections.singleton(addedAcl)));
             Future<Boolean> authorizationFuture =
                     executor.submit(
-                            () -> authorizer.aclsAllowAccess(resource, principal, READ, "host-1"));
+                            () ->
+                                    authorizer.aclsAllowAccess(
+                                            existingResource, principal, READ, "host-1"));
 
             updateFuture.get(10, TimeUnit.SECONDS);
             assertThat(authorizationFuture.get(10, TimeUnit.SECONDS)).isTrue();
             continueListing.countDown();
             assertThat(listFuture.get(10, TimeUnit.SECONDS))
-                    .containsExactly(new AclBinding(resource, originalAcl));
-            assertThat(listAcls(authorizer, resource))
-                    .containsExactlyInAnyOrder(originalAcl, addedAcl);
+                    .containsExactly(new AclBinding(existingResource, originalAcl));
+            assertThat(listAcls(authorizer, existingResource)).containsExactly(originalAcl);
+            assertThat(listAcls(authorizer, addedResource)).containsExactly(addedAcl);
         } finally {
             continueListing.countDown();
             executor.shutdownNow();
