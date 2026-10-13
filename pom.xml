@@ -607,9 +607,11 @@
                 <configuration>
                     <consoleOutput>true</consoleOutput>
                     <excludeSubProjects>false</excludeSubProjects>
-                    <counterMax>Unapproved:0</counterMax>
                     <inputExcludeStd>ALL</inputExcludeStd>
-                    <config>.rat-config.xml</config>
+                    <config>.rat/fluss-rat-config.xml</config>
+                    <counterMax>Unapproved:0</counterMax>
+                    <outputLicenses>ALL</outputLicenses>
+                    <licenseFamiliesDenied>BAN</licenseFamiliesDenied>
                     <inputExcludes>
                         <!-- Additional files like .gitignore etc.-->
                         <exclude>**/.*/**</exclude>
