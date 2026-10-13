@@ -90,6 +90,21 @@ CREATE TABLE my_log_table (
 );
 ```
 
+### Bucketing with DISTRIBUTED BY
+
+On Flink 1.20 and later, you can declare the bucket key and the bucket count with the `DISTRIBUTED BY` clause instead of the `bucket.key` and `bucket.num` options. On Flink 2.2 and later, this also works for materialized tables.
+
+```sql title="Flink SQL"
+CREATE TABLE my_distributed_table (
+  shop_id BIGINT,
+  user_id BIGINT,
+  num_orders INT,
+  PRIMARY KEY (shop_id, user_id) NOT ENFORCED
+) DISTRIBUTED BY HASH(shop_id) INTO 4 BUCKETS;
+```
+
+`DISTRIBUTED INTO 4 BUCKETS` sets only the bucket count and keeps the default bucket key. Fluss supports hash distribution only, so `DISTRIBUTED BY RANGE` is rejected. A table can't combine `DISTRIBUTED BY` with the `bucket.key` or `bucket.num` options.
+
 ### Partitioned (Primary Key/Log) Table
 
 :::note

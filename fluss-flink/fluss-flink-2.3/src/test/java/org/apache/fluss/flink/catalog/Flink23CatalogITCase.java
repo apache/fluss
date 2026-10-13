@@ -193,6 +193,50 @@ public class Flink23CatalogITCase extends FlinkCatalogITCase {
         catalog.dropTable(new ObjectPath(DEFAULT_DB, "show_mt_source"), false);
     }
 
+    @Test
+    @MultiVersionTest
+    void testCreateMaterializedTableWithDistributedBy() throws Exception {
+        tEnv.executeSql("create table distributed_mt_source (a int, b string)").await();
+        tEnv.executeSql(
+                        "create materialized table distributed_mt"
+                                + " distributed by hash(a) into 3 buckets"
+                                + " freshness = interval '30' second"
+                                + " as select a, b from distributed_mt_source")
+                .await();
+
+        try (Connection conn =
+                ConnectionFactory.createConnection(FLUSS_CLUSTER_EXTENSION.getClientConfig())) {
+            TableInfo tableInfo =
+                    conn.getAdmin().getTableInfo(TablePath.of(DEFAULT_DB, "distributed_mt")).get();
+            assertThat(tableInfo.getNumBuckets()).isEqualTo(3);
+            assertThat(tableInfo.getBucketKeys()).containsExactly("a");
+        }
+
+        catalog.dropTable(new ObjectPath(DEFAULT_DB, "distributed_mt"), false);
+        catalog.dropTable(new ObjectPath(DEFAULT_DB, "distributed_mt_source"), false);
+    }
+
+    @Test
+    @MultiVersionTest
+    void testCreateTableAsSelectWithDistributedBy() throws Exception {
+        tEnv.executeSql(
+                        "create table distributed_ctas distributed by hash(a) into 4 buckets"
+                                + " as select 1 as a, 'x' as b")
+                .await();
+
+        try (Connection conn =
+                ConnectionFactory.createConnection(FLUSS_CLUSTER_EXTENSION.getClientConfig())) {
+            TableInfo tableInfo =
+                    conn.getAdmin()
+                            .getTableInfo(TablePath.of(DEFAULT_DB, "distributed_ctas"))
+                            .get();
+            assertThat(tableInfo.getNumBuckets()).isEqualTo(4);
+            assertThat(tableInfo.getBucketKeys()).containsExactly("a");
+        }
+
+        catalog.dropTable(new ObjectPath(DEFAULT_DB, "distributed_ctas"), false);
+    }
+
     @Override
     protected void addDefaultIndexKey(Schema.Builder schemaBuilder) {
         super.addDefaultIndexKey(schemaBuilder);

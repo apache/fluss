@@ -17,6 +17,8 @@
 
 package org.apache.fluss.flink.adapter;
 
+import org.apache.fluss.metadata.TableDescriptor;
+
 import org.apache.flink.table.api.Schema;
 import org.apache.flink.table.catalog.CatalogBaseTable;
 import org.apache.flink.table.catalog.CatalogTable;
@@ -25,6 +27,7 @@ import javax.annotation.Nullable;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 /**
  * A adapter for {@link CatalogTable} constructor, and adapter MATERIALIZED_TABLE for {@link
@@ -42,5 +45,11 @@ public class CatalogTableAdapter {
     public static boolean isMaterializedTable(CatalogBaseTable.TableKind tableKind) {
         // flink 1.19 not support MaterializedTable
         return false;
+    }
+
+    public static Optional<TableDescriptor.TableDistribution> toFlussDistribution(
+            CatalogBaseTable table) {
+        // flink 1.19 not support DISTRIBUTED BY
+        return Optional.empty();
     }
 }
