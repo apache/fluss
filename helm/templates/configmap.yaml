@@ -28,6 +28,13 @@ data:
     {{ $key }}: {{ tpl (printf "%v" $val) $ }}
     {{- end }}
 
+    {{- if .Values.tablet.storage.volumes }}
+
+    ### Storage
+
+    data.dirs: {{ include "fluss.tablet.storage.dataDirs" . }}
+    {{- end }}
+
     ### Security
 
     {{- $internalProtocol := include "fluss.security.listener.protocol" (dict "context" .Values "listener" "internal") | trim -}}
