@@ -32,8 +32,15 @@ defmodule Fluss.Config do
   """
 
   @enforce_keys [:bootstrap_servers]
+  # One field per core config key; built once per connection, so the field count is harmless.
+  # credo:disable-for-next-line Credo.Check.Warning.StructFieldAmount
   defstruct bootstrap_servers: nil,
             connect_timeout_ms: nil,
+            lookup_batch_timeout_ms: nil,
+            lookup_max_batch_size: nil,
+            lookup_max_inflight_requests: nil,
+            lookup_max_retries: nil,
+            lookup_queue_size: nil,
             remote_file_download_thread_num: nil,
             scanner_log_fetch_max_bytes: nil,
             scanner_log_fetch_max_bytes_for_bucket: nil,
@@ -65,6 +72,11 @@ defmodule Fluss.Config do
   @type t :: %__MODULE__{
           bootstrap_servers: String.t(),
           connect_timeout_ms: non_neg_integer() | nil,
+          lookup_batch_timeout_ms: non_neg_integer() | nil,
+          lookup_max_batch_size: non_neg_integer() | nil,
+          lookup_max_inflight_requests: non_neg_integer() | nil,
+          lookup_max_retries: non_neg_integer() | nil,
+          lookup_queue_size: non_neg_integer() | nil,
           remote_file_download_thread_num: non_neg_integer() | nil,
           scanner_log_fetch_max_bytes: non_neg_integer() | nil,
           scanner_log_fetch_max_bytes_for_bucket: non_neg_integer() | nil,
@@ -111,6 +123,26 @@ defmodule Fluss.Config do
   @spec set_connect_timeout_ms(t(), non_neg_integer()) :: t()
   def set_connect_timeout_ms(%__MODULE__{} = config, ms) when is_non_neg_integer(ms),
     do: %{config | connect_timeout_ms: ms}
+
+  @spec set_lookup_batch_timeout_ms(t(), non_neg_integer()) :: t()
+  def set_lookup_batch_timeout_ms(%__MODULE__{} = config, ms) when is_non_neg_integer(ms),
+    do: %{config | lookup_batch_timeout_ms: ms}
+
+  @spec set_lookup_max_batch_size(t(), non_neg_integer()) :: t()
+  def set_lookup_max_batch_size(%__MODULE__{} = config, size) when is_non_neg_integer(size),
+    do: %{config | lookup_max_batch_size: size}
+
+  @spec set_lookup_max_inflight_requests(t(), non_neg_integer()) :: t()
+  def set_lookup_max_inflight_requests(%__MODULE__{} = config, n) when is_non_neg_integer(n),
+    do: %{config | lookup_max_inflight_requests: n}
+
+  @spec set_lookup_max_retries(t(), non_neg_integer()) :: t()
+  def set_lookup_max_retries(%__MODULE__{} = config, n) when is_non_neg_integer(n),
+    do: %{config | lookup_max_retries: n}
+
+  @spec set_lookup_queue_size(t(), non_neg_integer()) :: t()
+  def set_lookup_queue_size(%__MODULE__{} = config, size) when is_non_neg_integer(size),
+    do: %{config | lookup_queue_size: size}
 
   @spec set_remote_file_download_thread_num(t(), non_neg_integer()) :: t()
   def set_remote_file_download_thread_num(%__MODULE__{} = config, threads)

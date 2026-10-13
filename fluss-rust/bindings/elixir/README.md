@@ -2,9 +2,9 @@
 
 Elixir client for [Apache Fluss](https://fluss.apache.org/), built on the official Rust client via [Rustler](https://github.com/rusterlium/rustler) NIFs.
 
-Supports **log tables** (append + scan) and **primary key (KV) tables** (upsert, delete and
-partial update, with the changelog readable through the log scanner). Primary key lookup is
-not bound yet.
+Supports **log tables** (append + scan) and **primary key (KV) tables** (upsert, delete,
+partial update, primary key and prefix lookup, with the changelog readable through the log
+scanner).
 
 ## Requirements
 
@@ -71,6 +71,19 @@ writer =
   |> Fluss.TableUpsert.new!()
   |> Fluss.TableUpsert.partial_update_by_name!([:id, :email])
   |> Fluss.TableUpsert.create_writer!()
+```
+
+Rows are read back by primary key with `Fluss.Lookuper`, or by key prefix with
+`Fluss.PrefixLookuper`. A lookuper can be shared by many processes:
+
+```elixir
+Fluss.UpsertWriter.upsert(writer, %{id: 2, name: "bob"})
+:ok = Fluss.UpsertWriter.flush(writer)
+
+lookuper = Fluss.Lookuper.new!(table)
+
+{:ok, %{id: 2, name: "bob", email: nil}} = Fluss.Lookuper.lookup(lookuper, %{id: 2})
+{:ok, nil} = Fluss.Lookuper.lookup(lookuper, [1])  # deleted above
 ```
 
 A primary key table's changelog is read with `Fluss.LogScanner`, exactly as above; each

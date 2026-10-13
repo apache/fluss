@@ -21,7 +21,7 @@ use crate::row_convert;
 use crate::table::TableResource;
 use crate::upsert_writer::UpsertWriterResource;
 use fluss::client::TableUpsert;
-use fluss::metadata::{Column, TableInfo};
+use fluss::metadata::TableInfo;
 use rustler::{ResourceArc, Term};
 
 /// Core's `TableUpsert` holds the schema and target columns but exposes neither, so both
@@ -87,7 +87,7 @@ fn table_upsert_partial_update_by_name<'a>(
         })
         .collect::<Result<Vec<usize>, String>>()
         .map_err(client_err)?;
-    check_distinct_targets(table_upsert.table_info.schema.columns(), &target_indices)
+    row_convert::check_distinct_columns(table_upsert.table_info.schema.columns(), &target_indices)
         .map_err(client_err)?;
 
     Ok(ResourceArc::new(TableUpsertResource {
@@ -117,7 +117,7 @@ fn table_upsert_partial_update_by_index<'a>(
         .inner
         .partial_update(Some(column_indices.clone()))
         .map_err(to_nif_err)?;
-    check_distinct_targets(table_upsert.table_info.schema.columns(), &column_indices)
+    row_convert::check_distinct_columns(table_upsert.table_info.schema.columns(), &column_indices)
         .map_err(client_err)?;
 
     Ok(ResourceArc::new(TableUpsertResource {
@@ -125,18 +125,6 @@ fn table_upsert_partial_update_by_index<'a>(
         table_info: table_upsert.table_info.clone(),
         target_indices: Some(column_indices),
     }))
-}
-
-/// Core only range-checks targets, so `[0, 0]` would expect two values for one column.
-/// Indices must already be in range.
-fn check_distinct_targets(columns: &[Column], indices: &[usize]) -> Result<(), String> {
-    let mut seen = vec![false; columns.len()];
-    for &idx in indices {
-        if std::mem::replace(&mut seen[idx], true) {
-            return Err(format!("duplicate target column `{}`", columns[idx].name()));
-        }
-    }
-    Ok(())
 }
 
 #[rustler::nif]

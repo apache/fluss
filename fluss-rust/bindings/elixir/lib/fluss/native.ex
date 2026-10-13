@@ -90,6 +90,14 @@ defmodule Fluss.Native do
   def upsert_writer_delete(_writer, _primary_key), do: :erlang.nif_error(:nif_not_loaded)
   def upsert_writer_flush(_writer), do: :erlang.nif_error(:nif_not_loaded)
 
+  # Lookuper
+  def lookuper_new(_table), do: :erlang.nif_error(:nif_not_loaded)
+  def lookuper_lookup(_lookuper, _key), do: :erlang.nif_error(:nif_not_loaded)
+
+  # PrefixLookuper
+  def prefix_lookuper_new(_table, _columns), do: :erlang.nif_error(:nif_not_loaded)
+  def prefix_lookuper_lookup(_lookuper, _prefix), do: :erlang.nif_error(:nif_not_loaded)
+
   # LogScanner
   def log_scanner_new(_table), do: :erlang.nif_error(:nif_not_loaded)
   def log_scanner_subscribe(_scanner, _bucket, _offset), do: :erlang.nif_error(:nif_not_loaded)

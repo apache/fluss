@@ -57,6 +57,16 @@ where
     F: Future<Output = Result<T, CoreError>> + Send + 'static,
     T: Encoder + Send + 'static,
 {
+    spawn_task_encode(env, future, |env, val| Ok(val.encode(env)))
+}
+
+/// `encode` builds the reply term in the reply `Env`; an `Err` is sent as a client error.
+pub fn spawn_task_encode<'a, F, T, E>(env: Env<'a>, future: F, encode: E) -> Term<'a>
+where
+    F: Future<Output = Result<T, CoreError>> + Send + 'static,
+    T: Send + 'static,
+    E: for<'b> FnOnce(Env<'b>, T) -> Result<Term<'b>, String> + Send + 'static,
+{
     let pid = env.pid();
     let ref_term: Term<'a> = *env.make_ref();
     let mut task_env = OwnedEnv::new();
@@ -67,7 +77,12 @@ where
         let _ = task_env.send_and_clear(&pid, |env| {
             let r = saved_ref.load(env);
             match result {
-                Ok(val) => (r, (atoms::ok(), val)).encode(env),
+                Ok(val) => match encode(env, val) {
+                    Ok(term) => (r, (atoms::ok(), term)).encode(env),
+                    Err(message) => {
+                        (r, (atoms::error(), NifFlussError::client(message))).encode(env)
+                    }
+                },
                 Err(e) => (r, encode_err(env, e)).encode(env),
             }
         });
