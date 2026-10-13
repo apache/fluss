@@ -25,6 +25,9 @@ import org.apache.fluss.row.aligned.AlignedRow;
 import org.apache.fluss.row.aligned.AlignedRowWriter;
 import org.apache.fluss.types.DataType;
 
+import java.util.BitSet;
+import java.util.Collections;
+
 import static org.apache.fluss.row.BinaryRow.BinaryRowFormat.ALIGNED;
 
 /**
@@ -32,12 +35,13 @@ import static org.apache.fluss.row.BinaryRow.BinaryRowFormat.ALIGNED;
  *
  * @since 0.9
  */
-public class AlignedRowEncoder implements RowEncoder {
+public class AlignedRowEncoder extends AbstractRowEncoder {
     private final AlignedRow reuseRow;
     private final AlignedRowWriter reuseWriter;
     private final BinaryWriter.ValueWriter[] valueWriters;
 
     public AlignedRowEncoder(DataType[] fieldTypes) {
+        super(new BitSet(), Collections.emptyMap());
         this.reuseRow = new AlignedRow(fieldTypes.length);
         this.reuseWriter = new AlignedRowWriter(reuseRow);
         this.valueWriters = new BinaryWriter.ValueWriter[fieldTypes.length];
@@ -52,7 +56,7 @@ public class AlignedRowEncoder implements RowEncoder {
     }
 
     @Override
-    public void encodeField(int pos, Object value) {
+    protected void encode(int pos, Object value) {
         valueWriters[pos].writeValue(reuseWriter, pos, value);
     }
 
