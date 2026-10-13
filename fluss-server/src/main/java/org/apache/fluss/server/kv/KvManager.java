@@ -84,6 +84,7 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Predicate;
 
 import static org.apache.fluss.utils.Preconditions.checkState;
@@ -151,6 +152,9 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
 
     /** The memory segment pool to allocate memorySegment. */
     private final LazyMemorySegmentPool memorySegmentPool;
+
+    /** Server-wide pre-write buffer memory usage shared by all KV tablets, in bytes. */
+    private final AtomicLong kvPreWriteBufferMemoryUsageBytes = new AtomicLong();
 
     private final FsPath remoteKvDir;
 
@@ -239,6 +243,8 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
             throw e;
         }
         this.kvFlushScheduler = createdFlushScheduler;
+        tabletServerMetricGroup.setKvPreWriteBufferMemoryUsageMetrics(
+                kvPreWriteBufferMemoryUsageBytes::get);
         if (sharedBlockCache != null) {
             tabletServerMetricGroup.setSharedBlockCacheMetrics(
                     this::getSharedBlockCacheUsage,
@@ -583,6 +589,7 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
                                     sharedRocksDBRateLimiter,
                                     sharedBlockCache,
                                     sharedWriteBufferManager,
+                                    kvPreWriteBufferMemoryUsageBytes,
                                     kvFlushScheduler,
                                     flushCompleteListener,
                                     autoIncrementManager,
@@ -745,6 +752,7 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
                         sharedRocksDBRateLimiter,
                         sharedBlockCache,
                         sharedWriteBufferManager,
+                        kvPreWriteBufferMemoryUsageBytes,
                         kvFlushScheduler,
                         flushCompleteListener,
                         autoIncrementManager,
