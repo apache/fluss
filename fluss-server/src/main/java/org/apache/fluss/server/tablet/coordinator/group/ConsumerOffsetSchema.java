@@ -72,13 +72,6 @@ public final class ConsumerOffsetSchema {
     private static final RowType ROW_TYPE = TABLE_SCHEMA.getRowType();
     private static final DataType[] DATA_TYPES = ROW_TYPE.getChildren().toArray(new DataType[0]);
 
-    private static final KeyEncoder FULL_KEY_ENCODER =
-            KeyEncoder.ofBucketKeyEncoder(ROW_TYPE, PRIMARY_KEYS, null);
-
-    private static final KeyEncoder GROUP_PREFIX_ENCODER =
-            KeyEncoder.ofBucketKeyEncoder(
-                    ROW_TYPE, Collections.singletonList(GROUP_ID_COLUMN), null);
-
     private ConsumerOffsetSchema() {}
 
     /** Returns the schema of the consumer-offset system table. */
@@ -99,31 +92,54 @@ public final class ConsumerOffsetSchema {
     /** Encodes the complete primary key of an offset row. */
     public static byte[] encodeOffsetKey(
             String groupId, long tableId, Long partitionId, int bucketId) {
-        return FULL_KEY_ENCODER.encodeKey(
-                encodeOffsetRow(
-                        groupId,
-                        OFFSET_COMMIT_RECORD_TYPE,
-                        tableId,
-                        partitionId,
-                        bucketId,
-                        EMPTY_OFFSET));
+        return createFullKeyEncoder()
+                .encodeKey(
+                        encodeOffsetRow(
+                                groupId,
+                                OFFSET_COMMIT_RECORD_TYPE,
+                                tableId,
+                                partitionId,
+                                bucketId,
+                                EMPTY_OFFSET));
     }
 
     /** Encodes the {@code group_id} prefix used to enumerate all rows belonging to a group. */
     public static byte[] encodeGroupPrefix(String groupId) {
-        return GROUP_PREFIX_ENCODER.encodeKey(
-                encodeOffsetRow(
-                        groupId,
-                        OFFSET_COMMIT_RECORD_TYPE,
-                        -1L,
-                        NON_PARTITIONED_PARTITION_ID,
-                        -1,
-                        EMPTY_OFFSET));
+        return createGroupPrefixEncoder()
+                .encodeKey(
+                        encodeOffsetRow(
+                                groupId,
+                                OFFSET_COMMIT_RECORD_TYPE,
+                                -1L,
+                                NON_PARTITIONED_PARTITION_ID,
+                                -1,
+                                EMPTY_OFFSET));
     }
 
     /** Encodes the complete primary key of an already materialized offset row. */
     static byte[] encodeOffsetKey(InternalRow row) {
-        return FULL_KEY_ENCODER.encodeKey(row);
+        return createFullKeyEncoder().encodeKey(row);
+    }
+
+    /**
+     * Creates a new full-key encoder.
+     *
+     * <p>{@link KeyEncoder} implementations may reuse mutable internal writers, so a new encoder
+     * must be created for each call to keep concurrent key encoding isolated.
+     */
+    private static KeyEncoder createFullKeyEncoder() {
+        return KeyEncoder.ofBucketKeyEncoder(ROW_TYPE, PRIMARY_KEYS, null);
+    }
+
+    /**
+     * Creates a new group-prefix encoder.
+     *
+     * <p>{@link KeyEncoder} implementations may reuse mutable internal writers, so a new encoder
+     * must be created for each call to keep concurrent key encoding isolated.
+     */
+    private static KeyEncoder createGroupPrefixEncoder() {
+        return KeyEncoder.ofBucketKeyEncoder(
+                ROW_TYPE, Collections.singletonList(GROUP_ID_COLUMN), null);
     }
 
     /** Encodes one consumer-offset table row. */

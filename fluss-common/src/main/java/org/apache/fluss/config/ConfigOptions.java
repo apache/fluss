@@ -2290,9 +2290,12 @@ public class ConfigOptions {
     public static final ConfigOption<Integer> OFFSETS_TABLE_NUM_BUCKETS =
             key("server.consumer-offsets.table.bucket-count")
                     .intType()
-                    .defaultValue(50)
+                    .defaultValue(16)
                     .withDescription(
-                            "The number of buckets for the consumer-offset system table. This value should not change after deployment.");
+                            "The number of buckets for the consumer-offset system table. This value should not change after deployment. "
+                                    + "Unlike log tables, each KV bucket leader maintains a separate RocksDB instance, so a large value "
+                                    + "introduces overhead for small and medium clusters. Increase it only if the consumer-offset write "
+                                    + "load cannot be handled by the default number of bucket leaders.");
 
     public static final ConfigOption<Integer> OFFSETS_TABLE_REPLICATION_FACTOR =
             key("server.consumer-offsets.table.replication-factor")

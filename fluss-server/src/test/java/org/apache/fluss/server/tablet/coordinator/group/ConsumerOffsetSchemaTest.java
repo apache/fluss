@@ -28,7 +28,14 @@ import org.apache.fluss.row.encode.ValueEncoder;
 
 import org.junit.jupiter.api.Test;
 
+import java.util.ArrayList;
 import java.util.Collections;
+import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -205,6 +212,39 @@ class ConsumerOffsetSchemaTest {
             assertThat(bucket1)
                     .as("bucketing must be deterministic for group %s", group)
                     .isEqualTo(bucket2);
+        }
+    }
+
+    @Test
+    void testConcurrentKeyEncodingIsIsolated() throws Exception {
+        int threads = 8;
+        int iterations = 128;
+        ExecutorService executor = Executors.newFixedThreadPool(threads);
+        try {
+            CountDownLatch startLatch = new CountDownLatch(1);
+            List<Future<?>> futures = new ArrayList<>();
+            for (int i = 0; i < threads; i++) {
+                String groupId = "group-" + i;
+                byte[] expected = ConsumerOffsetSchema.encodeOffsetKey(groupId, 42L, 7L, 3);
+                futures.add(
+                        executor.submit(
+                                () -> {
+                                    startLatch.await();
+                                    for (int j = 0; j < iterations; j++) {
+                                        assertThat(
+                                                        ConsumerOffsetSchema.encodeOffsetKey(
+                                                                groupId, 42L, 7L, 3))
+                                                .isEqualTo(expected);
+                                    }
+                                    return null;
+                                }));
+            }
+            startLatch.countDown();
+            for (Future<?> future : futures) {
+                future.get(30, TimeUnit.SECONDS);
+            }
+        } finally {
+            executor.shutdownNow();
         }
     }
 
