@@ -1419,9 +1419,9 @@ public final class RecordAccumulator {
         return throttle.diskRemainingMs(tableBucket);
     }
 
-    /** Reclaims expired backoff entries even when their queues no longer contain any batches. */
-    void maybeEvictExpiredWriteBackoffs() {
-        throttle.maybeEvictExpiredBackoffs();
+    /** Reclaims stale per-bucket throttle state using the current cluster snapshot. */
+    void maybeEvictStaleThrottleState(Cluster cluster) {
+        throttle.maybeEvictStaleThrottleState(cluster);
     }
 
     @VisibleForTesting
@@ -1436,10 +1436,6 @@ public final class RecordAccumulator {
 
     boolean updateThrottle(TableBucket tableBucket, float pressure) {
         return throttle.updateKvPressure(tableBucket, pressure);
-    }
-
-    void maybeEvictStaleThrottles(Cluster cluster) {
-        throttle.maybeEvictStaleThrottles(cluster);
     }
 
     private int getDrainIndex(int id) {
