@@ -739,6 +739,15 @@ public class ConfigOptions {
                     .defaultValue("JKS")
                     .withDescription("Format of the server truststore: `JKS` or `PKCS12`.");
 
+    public static final ConfigOption<String> SERVER_SSL_PRINCIPAL_MAPPING_RULES =
+            key("security.ssl.principal.mapping.rules")
+                    .stringType()
+                    .defaultValue("DEFAULT")
+                    .withDescription(
+                            "Rules that map the distinguished name of a client certificate, in "
+                                    + "RFC 2253 form, to the principal name of an `mTLS` listener. "
+                                    + "`DEFAULT` keeps the full distinguished name.");
+
     public static final ConfigOption<Integer> TABLET_SERVER_ID =
             key("tablet-server.id")
                     .intType()
