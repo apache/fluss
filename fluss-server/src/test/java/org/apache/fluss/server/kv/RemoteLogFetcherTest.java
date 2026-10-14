@@ -312,6 +312,7 @@ class RemoteLogFetcherTest extends RemoteLogTestBase {
                         executor,
                         scannerManager,
                         testCoordinatorGateway,
+                        () -> -1L,
                         "CLIENT");
         try (RpcServer server =
                 RpcServer.create(

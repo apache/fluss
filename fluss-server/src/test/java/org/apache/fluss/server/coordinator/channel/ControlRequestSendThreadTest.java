@@ -34,6 +34,8 @@ import org.junit.jupiter.api.Test;
 
 import java.lang.reflect.Proxy;
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.CompletableFuture;
@@ -104,15 +106,17 @@ class ControlRequestSendThreadTest {
     }
 
     @Test
-    void testRetryThenSucceed() throws Exception {
+    void testTransportFailureRetainsFifoBacklogUntilRetrySucceeds() throws Exception {
         BlockingQueue<QueueItem<?>> queue = new LinkedBlockingQueue<>();
         MetricGroup metricGroup = TestMetricGroup.createTestMetricGroup();
 
         ApiVersionsResponse response = new ApiVersionsResponse();
         AtomicInteger callCount = new AtomicInteger(0);
         TabletServerGateway gateway = unusedGateway();
+        List<String> invocationOrder = new ArrayList<>();
+        List<String> callbackOrder = new ArrayList<>();
 
-        CountDownLatch callbackLatch = new CountDownLatch(1);
+        CountDownLatch callbackLatch = new CountDownLatch(2);
         AtomicInteger invalidationCount = new AtomicInteger(0);
 
         thread =
@@ -132,6 +136,7 @@ class ControlRequestSendThreadTest {
                 new QueueItem<>(
                         ApiKeys.API_VERSIONS,
                         ignored -> {
+                            invocationOrder.add("first");
                             if (callCount.incrementAndGet() == 1) {
                                 CompletableFuture<ApiVersionsResponse> fail =
                                         new CompletableFuture<>();
@@ -140,11 +145,29 @@ class ControlRequestSendThreadTest {
                             }
                             return CompletableFuture.completedFuture(response);
                         },
-                        (resp, err) -> callbackLatch.countDown(),
+                        (resp, err) -> {
+                            callbackOrder.add("first");
+                            callbackLatch.countDown();
+                        },
+                        EPOCH,
+                        System.currentTimeMillis()));
+        queue.put(
+                new QueueItem<>(
+                        ApiKeys.API_VERSIONS,
+                        ignored -> {
+                            invocationOrder.add("second");
+                            return CompletableFuture.completedFuture(response);
+                        },
+                        (resp, err) -> {
+                            callbackOrder.add("second");
+                            callbackLatch.countDown();
+                        },
                         EPOCH,
                         System.currentTimeMillis()));
 
         assertThat(callbackLatch.await(5, TimeUnit.SECONDS)).isTrue();
+        assertThat(invocationOrder).containsExactly("first", "first", "second");
+        assertThat(callbackOrder).containsExactly("first", "second");
         assertThat(getCounter(metricGroup, MetricNames.SENDER_RETRY_COUNT).getCount())
                 .isGreaterThanOrEqualTo(1);
         assertThat(invalidationCount.get()).isEqualTo(1);
@@ -427,23 +450,73 @@ class ControlRequestSendThreadTest {
     }
 
     @Test
-    void testGatewayAbsentThenPresent() throws Exception {
+    void testRetryingQueueHeadIsDroppedWhenCoordinatorEpochAdvances() throws Exception {
+        BlockingQueue<QueueItem<?>> queue = new LinkedBlockingQueue<>();
+        MetricGroup metricGroup = TestMetricGroup.createTestMetricGroup();
+        TabletServerGateway gateway = unusedGateway();
+        AtomicInteger coordinatorEpoch = new AtomicInteger(EPOCH);
+        CompletableFuture<Void> invalidationFuture = new CompletableFuture<>();
+        CountDownLatch invalidationStarted = new CountDownLatch(1);
+        CountDownLatch currentEpochCallback = new CountDownLatch(1);
+        AtomicInteger staleSendCount = new AtomicInteger();
+
+        thread =
+                createThread(
+                        queue,
+                        () -> Optional.of(gateway),
+                        () -> {
+                            invalidationStarted.countDown();
+                            return invalidationFuture;
+                        },
+                        coordinatorEpoch::get,
+                        metricGroup,
+                        Duration.ofMillis(20));
+        thread.start();
+
+        queue.put(
+                new QueueItem<>(
+                        ApiKeys.API_VERSIONS,
+                        ignored -> {
+                            staleSendCount.incrementAndGet();
+                            CompletableFuture<ApiVersionsResponse> failure =
+                                    new CompletableFuture<>();
+                            failure.completeExceptionally(new NetworkException("transient error"));
+                            return failure;
+                        },
+                        (response, failure) -> {},
+                        EPOCH,
+                        System.currentTimeMillis()));
+
+        assertThat(invalidationStarted.await(5, TimeUnit.SECONDS)).isTrue();
+        coordinatorEpoch.incrementAndGet();
+        queue.put(
+                new QueueItem<>(
+                        ApiKeys.API_VERSIONS,
+                        ignored -> CompletableFuture.completedFuture(new ApiVersionsResponse()),
+                        (response, failure) -> currentEpochCallback.countDown(),
+                        coordinatorEpoch.get(),
+                        System.currentTimeMillis()));
+
+        assertThat(currentEpochCallback.await(5, TimeUnit.SECONDS)).isTrue();
+        assertThat(staleSendCount.get()).isEqualTo(1);
+        assertThat(getCounter(metricGroup, MetricNames.SENDER_STALE_DROP_COUNT).getCount())
+                .isEqualTo(1);
+    }
+
+    @Test
+    void testGatewayAbsenceRetainsFifoBacklogUntilRecovery() throws Exception {
         BlockingQueue<QueueItem<?>> queue = new LinkedBlockingQueue<>();
         MetricGroup metricGroup = TestMetricGroup.createTestMetricGroup();
 
         ApiVersionsResponse response = new ApiVersionsResponse();
-        TabletServerGateway gateway = unusedGateway();
-
-        AtomicInteger gatewayCallCount = new AtomicInteger(0);
+        TabletServerGateway recoveredGateway = unusedGateway();
+        AtomicReference<TabletServerGateway> gateway = new AtomicReference<>();
         Supplier<Optional<TabletServerGateway>> gatewaySupplier =
-                () -> {
-                    if (gatewayCallCount.incrementAndGet() <= 3) {
-                        return Optional.empty();
-                    }
-                    return Optional.of(gateway);
-                };
+                () -> Optional.ofNullable(gateway.get());
+        List<String> invocationOrder = new ArrayList<>();
+        List<String> callbackOrder = new ArrayList<>();
 
-        CountDownLatch callbackLatch = new CountDownLatch(1);
+        CountDownLatch callbackLatch = new CountDownLatch(2);
 
         thread = createThread(queue, gatewaySupplier, () -> EPOCH, metricGroup);
         thread.start();
@@ -451,12 +524,42 @@ class ControlRequestSendThreadTest {
         queue.put(
                 new QueueItem<>(
                         ApiKeys.API_VERSIONS,
-                        ignored -> CompletableFuture.completedFuture(response),
-                        (resp, err) -> callbackLatch.countDown(),
+                        ignored -> {
+                            invocationOrder.add("first");
+                            return CompletableFuture.completedFuture(response);
+                        },
+                        (callbackResult, failure) -> {
+                            callbackOrder.add("first");
+                            callbackLatch.countDown();
+                        },
+                        EPOCH,
+                        System.currentTimeMillis()));
+        queue.put(
+                new QueueItem<>(
+                        ApiKeys.API_VERSIONS,
+                        ignored -> {
+                            invocationOrder.add("second");
+                            return CompletableFuture.completedFuture(response);
+                        },
+                        (callbackResult, failure) -> {
+                            callbackOrder.add("second");
+                            callbackLatch.countDown();
+                        },
                         EPOCH,
                         System.currentTimeMillis()));
 
+        waitUntil(
+                () -> getCounter(metricGroup, MetricNames.SENDER_RETRY_COUNT).getCount() >= 3,
+                Duration.ofSeconds(5),
+                "The queue head was not retained while the tablet server gateway was absent");
+        assertThat(callbackLatch.getCount()).isEqualTo(2);
+        assertThat(invocationOrder).isEmpty();
+
+        gateway.set(recoveredGateway);
+
         assertThat(callbackLatch.await(5, TimeUnit.SECONDS)).isTrue();
+        assertThat(invocationOrder).containsExactly("first", "second");
+        assertThat(callbackOrder).containsExactly("first", "second");
         assertThat(getCounter(metricGroup, MetricNames.SENDER_RETRY_COUNT).getCount())
                 .isGreaterThanOrEqualTo(3);
     }

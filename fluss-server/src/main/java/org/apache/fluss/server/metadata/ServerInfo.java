@@ -34,6 +34,8 @@ import java.util.stream.Collectors;
  * ServerInfo is used to save the endpoint metadata in controller and synchronize for each server.
  */
 public class ServerInfo {
+    public static final long UNKNOWN_TABLET_SERVER_EPOCH = -1L;
+
     private final Integer id;
 
     /**
@@ -45,10 +47,17 @@ public class ServerInfo {
     private final Map<String, Endpoint> endpointMap;
     private final ServerType serverType;
     private final TabletServerResource resource;
+    private final long tabletServerEpoch;
 
     public ServerInfo(
             Integer id, @Nullable String rack, List<Endpoint> endpoints, ServerType serverType) {
-        this(id, rack, endpoints, serverType, TabletServerResource.unknown());
+        this(
+                id,
+                rack,
+                endpoints,
+                serverType,
+                TabletServerResource.unknown(),
+                UNKNOWN_TABLET_SERVER_EPOCH);
     }
 
     public ServerInfo(
@@ -57,6 +66,16 @@ public class ServerInfo {
             List<Endpoint> endpoints,
             ServerType serverType,
             TabletServerResource resource) {
+        this(id, rack, endpoints, serverType, resource, UNKNOWN_TABLET_SERVER_EPOCH);
+    }
+
+    public ServerInfo(
+            Integer id,
+            @Nullable String rack,
+            List<Endpoint> endpoints,
+            ServerType serverType,
+            TabletServerResource resource,
+            long tabletServerEpoch) {
         this.id = id;
         this.rack = rack;
         this.endpointMap =
@@ -64,6 +83,7 @@ public class ServerInfo {
                         .collect(Collectors.toMap(Endpoint::getListenerName, endpoint -> endpoint));
         this.serverType = serverType;
         this.resource = resource;
+        this.tabletServerEpoch = tabletServerEpoch;
     }
 
     public Integer id() {
@@ -112,6 +132,11 @@ public class ServerInfo {
         return resource;
     }
 
+    /** Returns the epoch of this tablet server incarnation, or {@code -1} when unavailable. */
+    public long tabletServerEpoch() {
+        return tabletServerEpoch;
+    }
+
     @Override
     public boolean equals(Object o) {
         if (o == null || getClass() != o.getClass()) {
@@ -121,12 +146,13 @@ public class ServerInfo {
         return Objects.equals(id, that.id)
                 && Objects.equals(rack, that.rack)
                 && Objects.equals(endpointMap, that.endpointMap)
-                && Objects.equals(resource, that.resource);
+                && Objects.equals(resource, that.resource)
+                && tabletServerEpoch == that.tabletServerEpoch;
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(id, rack, endpointMap, resource);
+        return Objects.hash(id, rack, endpointMap, resource, tabletServerEpoch);
     }
 
     @Override
@@ -142,6 +168,8 @@ public class ServerInfo {
                 + serverType
                 + ", resource="
                 + resource
+                + ", tabletServerEpoch="
+                + tabletServerEpoch
                 + '}';
     }
 }

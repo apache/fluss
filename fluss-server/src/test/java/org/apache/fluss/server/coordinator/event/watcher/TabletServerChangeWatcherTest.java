@@ -28,6 +28,7 @@ import org.apache.fluss.server.zk.NOPErrorHandler;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.ZooKeeperExtension;
 import org.apache.fluss.server.zk.data.TabletServerRegistration;
+import org.apache.fluss.server.zk.data.ZkData.ServerIdZNode;
 import org.apache.fluss.testutils.common.AllCallbackWrapper;
 
 import org.junit.jupiter.api.Test;
@@ -61,21 +62,53 @@ class TabletServerChangeWatcherTest {
 
         // register new servers
         List<CoordinatorEvent> expectedEvents = new ArrayList<>();
+        List<TabletServerRegistration> registrations = new ArrayList<>();
         for (int i = 0; i < 10; i++) {
             TabletServerRegistration tabletServerRegistration =
                     new TabletServerRegistration(
                             "rack" + i,
                             Collections.singletonList(new Endpoint("host" + i, 1234, "CLIENT")),
                             System.currentTimeMillis());
+            registrations.add(tabletServerRegistration);
             expectedEvents.add(
                     new NewTabletServerEvent(
                             new ServerInfo(
                                     i,
                                     tabletServerRegistration.getRack(),
                                     tabletServerRegistration.getEndpoints(),
-                                    ServerType.TABLET_SERVER)));
+                                    ServerType.TABLET_SERVER,
+                                    tabletServerRegistration.getResource(),
+                                    tabletServerRegistration.getRegisterTimestamp())));
             zookeeperClient.registerTabletServer(i, tabletServerRegistration);
         }
+
+        retry(
+                Duration.ofMinutes(1),
+                () ->
+                        assertThat(eventManager.getEvents())
+                                .containsExactlyInAnyOrderElementsOf(expectedEvents));
+
+        TabletServerRegistration oldRegistration = registrations.get(0);
+        TabletServerRegistration newRegistration =
+                new TabletServerRegistration(
+                        oldRegistration.getRack(),
+                        oldRegistration.getEndpoints(),
+                        oldRegistration.getRegisterTimestamp() + 1);
+        expectedEvents.add(new DeadTabletServerEvent(0, oldRegistration.getRegisterTimestamp()));
+        expectedEvents.add(
+                new NewTabletServerEvent(
+                        new ServerInfo(
+                                0,
+                                newRegistration.getRack(),
+                                newRegistration.getEndpoints(),
+                                ServerType.TABLET_SERVER,
+                                newRegistration.getResource(),
+                                newRegistration.getRegisterTimestamp())));
+        registrations.set(0, newRegistration);
+        zookeeperClient
+                .getCuratorClient()
+                .setData()
+                .forPath(ServerIdZNode.path(0), ServerIdZNode.encode(newRegistration));
 
         retry(
                 Duration.ofMinutes(1),
@@ -88,7 +121,8 @@ class TabletServerChangeWatcherTest {
 
         // unregister servers
         for (int i = 0; i < 10; i++) {
-            expectedEvents.add(new DeadTabletServerEvent(i));
+            expectedEvents.add(
+                    new DeadTabletServerEvent(i, registrations.get(i).getRegisterTimestamp()));
         }
 
         retry(

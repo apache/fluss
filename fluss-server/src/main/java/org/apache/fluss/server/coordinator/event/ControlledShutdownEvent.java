@@ -24,12 +24,12 @@ import java.util.concurrent.CompletableFuture;
 /** An event for controlled shutdown of TabletServer. */
 public class ControlledShutdownEvent implements CoordinatorEvent {
     private final int tabletServerId;
-    private final int tabletServerEpoch;
+    private final long tabletServerEpoch;
     private final CompletableFuture<ControlledShutdownResponse> respCallback;
 
     public ControlledShutdownEvent(
             int tabletServerId,
-            int tabletServerEpoch,
+            long tabletServerEpoch,
             CompletableFuture<ControlledShutdownResponse> respCallback) {
         this.tabletServerId = tabletServerId;
         this.tabletServerEpoch = tabletServerEpoch;
@@ -40,7 +40,7 @@ public class ControlledShutdownEvent implements CoordinatorEvent {
         return tabletServerId;
     }
 
-    public int getTabletServerEpoch() {
+    public long getTabletServerEpoch() {
         return tabletServerEpoch;
     }
 

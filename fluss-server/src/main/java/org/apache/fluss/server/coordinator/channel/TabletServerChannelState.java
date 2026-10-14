@@ -33,6 +33,7 @@ public final class TabletServerChannelState {
 
     private final BlockingQueue<QueueItem<?>> queue;
     private final ControlRequestSendThread sendThread;
+    private final long tabletServerEpoch;
 
     /**
      * The per-TS child {@link MetricGroup}. Held so {@code removeTabletServer} can {@code close()}
@@ -43,10 +44,12 @@ public final class TabletServerChannelState {
     public TabletServerChannelState(
             BlockingQueue<QueueItem<?>> queue,
             ControlRequestSendThread sendThread,
-            MetricGroup metricGroup) {
+            MetricGroup metricGroup,
+            long tabletServerEpoch) {
         this.queue = queue;
         this.sendThread = sendThread;
         this.metricGroup = metricGroup;
+        this.tabletServerEpoch = tabletServerEpoch;
     }
 
     public BlockingQueue<QueueItem<?>> getQueue() {
@@ -59,5 +62,9 @@ public final class TabletServerChannelState {
 
     public MetricGroup getMetricGroup() {
         return metricGroup;
+    }
+
+    public long getTabletServerEpoch() {
+        return tabletServerEpoch;
     }
 }

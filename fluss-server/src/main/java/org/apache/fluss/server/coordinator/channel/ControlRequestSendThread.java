@@ -49,12 +49,13 @@ import static org.apache.fluss.utils.ExceptionUtils.stripExecutionException;
  * transient RPC failures.
  *
  * <p>Each invocation of {@link #doWork()} takes one {@link QueueItem} from the queue. Stale items
- * (whose {@code coordinatorEpoch} is less than the current epoch) are dropped immediately.
- * Otherwise the item is sent to the tablet server via the gateway, retrying with a configurable
- * backoff after transport failures until the send succeeds or the thread is shut down. Before a
- * retry, the old connection is closed so its in-flight request cannot accumulate in the RPC layer.
- * Explicit server rejections and local request construction failures are completed through the
- * callback without retrying, allowing the next FIFO item to make progress.
+ * (whose {@code coordinatorEpoch} is less than the current epoch) are dropped immediately and the
+ * epoch is checked again while an item is being retried. Otherwise the item is sent to the tablet
+ * server via the gateway, retrying with a configurable backoff after transport failures until the
+ * send succeeds or the thread is shut down. Before a retry, the old connection is closed so its
+ * in-flight request cannot accumulate in the RPC layer. Explicit server rejections and local
+ * request construction failures are completed through the callback without retrying, allowing the
+ * next FIFO item to make progress.
  *
  * <p>The callback is invoked outside the retry loop so a response-handler failure does not retry a
  * request that the tablet server has already completed.
@@ -136,15 +137,7 @@ public class ControlRequestSendThread extends ShutdownableThread {
             QueueItem<?> item = queue.take();
             queueTimeMsHistogram.update(System.currentTimeMillis() - item.getEnqueueTimeMs());
 
-            int currentEpoch = epochSupplier.getAsInt();
-            if (item.getCoordinatorEpoch() < currentEpoch) {
-                staleDropCount.inc();
-                log.warn(
-                        "Dropping stale {} for tabletServer {}: itemEpoch={} < currentEpoch={}",
-                        item.getApiKey(),
-                        tabletServerId,
-                        item.getCoordinatorEpoch(),
-                        currentEpoch);
+            if (dropIfStale(item)) {
                 return;
             }
 
@@ -157,6 +150,10 @@ public class ControlRequestSendThread extends ShutdownableThread {
     private <ResponseT extends ApiMessage> void send(QueueItem<ResponseT> item)
             throws InterruptedException {
         while (isRunning()) {
+            if (dropIfStale(item)) {
+                return;
+            }
+
             Optional<TabletServerGateway> gatewayOpt;
             try {
                 gatewayOpt = gatewaySupplier.get();
@@ -230,6 +227,10 @@ public class ControlRequestSendThread extends ShutdownableThread {
     private boolean invalidateConnection(QueueItem<?> item) throws InterruptedException {
         CompletableFuture<Void> invalidationFuture = null;
         while (isRunning()) {
+            if (dropIfStale(item)) {
+                return false;
+            }
+
             if (invalidationFuture == null) {
                 try {
                     invalidationFuture = connectionInvalidator.get();
@@ -265,6 +266,22 @@ public class ControlRequestSendThread extends ShutdownableThread {
             backoff();
         }
         return false;
+    }
+
+    private boolean dropIfStale(QueueItem<?> item) {
+        int currentEpoch = epochSupplier.getAsInt();
+        if (item.getCoordinatorEpoch() >= currentEpoch) {
+            return false;
+        }
+
+        staleDropCount.inc();
+        log.warn(
+                "Dropping stale {} for tabletServer {}: itemEpoch={} < currentEpoch={}",
+                item.getApiKey(),
+                tabletServerId,
+                item.getCoordinatorEpoch(),
+                currentEpoch);
+        return true;
     }
 
     private void logInvalidationFailure(QueueItem<?> item, Throwable failure) {
