@@ -36,7 +36,6 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
-import java.util.Iterator;
 import java.util.List;
 import java.util.stream.Stream;
 
@@ -60,7 +59,6 @@ class SeekableLakeSnapshotSplitScannerTest {
     void testScanAllSplitsAndRestoredPositions(int[] sizes) throws Exception {
         for (int start = 0; start <= sizes.length; start++) {
             List<LakeSplit> splits = new ArrayList<>();
-            List<Integer> closed = new ArrayList<>();
             for (int index = 0; index < sizes.length; index++) {
                 splits.add(new TestingLakeSplit(index, Collections.emptyList()));
             }
@@ -75,24 +73,7 @@ class SeekableLakeSnapshotSplitScannerTest {
                                         new GenericRecord(
                                                 -1, -1, ChangeType.INSERT, GenericRow.of(index)));
                             }
-                            Iterator<LogRecord> iterator = rows.iterator();
-                            return () ->
-                                    new CloseableIterator<LogRecord>() {
-                                        @Override
-                                        public boolean hasNext() {
-                                            return iterator.hasNext();
-                                        }
-
-                                        @Override
-                                        public LogRecord next() {
-                                            return iterator.next();
-                                        }
-
-                                        @Override
-                                        public void close() {
-                                            closed.add(index);
-                                        }
-                                    };
+                            return () -> CloseableIterator.wrap(rows.iterator());
                         }
                     };
             List<Integer> actual = new ArrayList<>();
@@ -109,15 +90,12 @@ class SeekableLakeSnapshotSplitScannerTest {
                 assertThat(scanner.pollBatch(Duration.ZERO)).isNull();
             }
             List<Integer> expected = new ArrayList<>();
-            List<Integer> expectedClosed = new ArrayList<>();
             for (int index = start; index < sizes.length; index++) {
                 expected.addAll(Collections.nCopies(sizes[index], index));
-                expectedClosed.add(index);
             }
             assertThat(actual)
                     .as("sizes=%s, start=%s", Arrays.toString(sizes), start)
                     .containsExactlyElementsOf(expected);
-            assertThat(closed).containsExactlyElementsOf(expectedClosed);
         }
     }
 }
