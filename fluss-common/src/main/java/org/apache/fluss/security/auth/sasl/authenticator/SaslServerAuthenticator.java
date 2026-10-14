@@ -21,99 +21,45 @@ import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.AuthenticationException;
 import org.apache.fluss.security.acl.FlussPrincipal;
 import org.apache.fluss.security.auth.ServerAuthenticator;
-import org.apache.fluss.security.auth.sasl.jaas.JaasContext;
-import org.apache.fluss.security.auth.sasl.jaas.LoginManager;
+import org.apache.fluss.security.auth.sasl.SaslAuthenticatorFactory;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import javax.security.sasl.SaslException;
-import javax.security.sasl.SaslServer;
-
 import java.util.List;
 import java.util.Locale;
-import java.util.Map;
 import java.util.stream.Collectors;
 
 import static org.apache.fluss.config.ConfigOptions.SERVER_SASL_ENABLED_MECHANISMS_CONFIG;
 import static org.apache.fluss.security.auth.sasl.authenticator.SaslAuthenticationPlugin.SASL_AUTH_PROTOCOL;
-import static org.apache.fluss.security.auth.sasl.jaas.JaasContext.SASL_JAAS_CONFIG;
-import static org.apache.fluss.security.auth.sasl.jaas.SaslServerFactory.createSaslServer;
 
-/** An authenticator that uses SASL to authenticate clients. */
+/** A connection-local authenticator that selects one SASL mechanism. */
 public class SaslServerAuthenticator implements ServerAuthenticator {
     private static final Logger LOG = LoggerFactory.getLogger(SaslServerAuthenticator.class);
-    private static final String SERVER_AUTHENTICATOR_PREFIX = "security.sasl.";
+
+    private final Configuration configuration;
     private final List<String> enabledMechanisms;
-    private SaslServer saslServer;
-    private final Map<String, String> configs;
+
+    private ServerAuthenticator delegate;
 
     public SaslServerAuthenticator(Configuration configuration) {
-        this.configs = configuration.toMap();
+        this.configuration = configuration;
         List<String> enabledMechanisms = configuration.get(SERVER_SASL_ENABLED_MECHANISMS_CONFIG);
         if (enabledMechanisms == null || enabledMechanisms.isEmpty()) {
             throw new IllegalArgumentException("No SASL mechanisms are enabled");
         }
         this.enabledMechanisms =
-                enabledMechanisms.stream().map(String::toUpperCase).collect(Collectors.toList());
+                enabledMechanisms.stream()
+                        .map(mechanism -> mechanism.toUpperCase(Locale.ROOT))
+                        .collect(Collectors.toList());
     }
 
     @Override
     public void initialize(AuthenticateContext context) {
-        String mechanism = context.protocol();
-        String listenerName = context.listenerName();
-        String address = context.ipAddress();
+        String mechanism = context.protocol().toUpperCase(Locale.ROOT);
         matchProtocol(mechanism);
-        // Try to load JAAS config in the following order:
-        // 1. security.sasl.listener.name.{listenerName}.{mechanism}.jaas.config (fine-grained per
-        // listener and mechanism)
-        // 2. security.sasl.{mechanism}.jaas.config (fallback global config for mechanism)
-        // 3. JVM option -Djava.security.auth.login.config (system-level fallback)
-
-        String dynamicJaasConfig;
-
-        // 1. Check listener-specific and mechanism-specific config
-        String listenerMechanismKey =
-                String.format(
-                        SERVER_AUTHENTICATOR_PREFIX + "listener.name.%s.%s." + SASL_JAAS_CONFIG,
-                        listenerName.toLowerCase(Locale.ROOT),
-                        mechanism.toLowerCase(Locale.ROOT));
-        dynamicJaasConfig = configs.get(listenerMechanismKey);
-
-        if (dynamicJaasConfig == null || dynamicJaasConfig.isEmpty()) {
-            String globalMechanismKey =
-                    SERVER_AUTHENTICATOR_PREFIX
-                            + mechanism.toLowerCase(Locale.ROOT)
-                            + "."
-                            + SASL_JAAS_CONFIG;
-            LOG.debug(
-                    "No listener-mechanism JAAS config found for key: '{}'. Falling back to mechanism-level config: '{}'",
-                    listenerMechanismKey,
-                    globalMechanismKey);
-            // 2. Fallback to global mechanism-level config
-            dynamicJaasConfig = configs.get(globalMechanismKey);
-            if (dynamicJaasConfig == null || dynamicJaasConfig.isEmpty()) {
-                LOG.warn(
-                        "No mechanism-level JAAS config found for key: '{}'. Falling back to JVM option: -D{}",
-                        globalMechanismKey,
-                        JaasContext.JAVA_LOGIN_CONFIG_PARAM);
-            }
-        }
-
-        JaasContext jaasContext = JaasContext.loadServerContext(listenerName, dynamicJaasConfig);
-
-        try {
-            LoginManager loginManager = LoginManager.acquireLoginManager(jaasContext);
-            saslServer =
-                    createSaslServer(
-                            mechanism,
-                            address,
-                            configs,
-                            loginManager,
-                            jaasContext.configurationEntries());
-        } catch (Exception e) {
-            throw new RuntimeException(e);
-        }
+        delegate = SaslAuthenticatorFactory.createServerAuthenticator(mechanism, configuration);
+        delegate.initialize(context);
     }
 
     @Override
@@ -123,31 +69,43 @@ public class SaslServerAuthenticator implements ServerAuthenticator {
 
     @Override
     public void matchProtocol(String protocol) {
-        if (!enabledMechanisms.contains(protocol.toUpperCase())) {
+        if (!enabledMechanisms.contains(protocol.toUpperCase(Locale.ROOT))) {
             throw new AuthenticationException(
                     String.format(
                             "SASL server enables %s while protocol of client is '%s'",
                             enabledMechanisms, protocol));
         }
-    }
-
-    @Override
-    public byte[] evaluateResponse(byte[] token) throws AuthenticationException {
-        try {
-            return saslServer.evaluateResponse(token);
-        } catch (SaslException e) {
+        if (!SaslAuthenticatorFactory.supportsServerMechanism(protocol)) {
             throw new AuthenticationException(
-                    String.format("Failed to evaluate SASL response，reason is %s", e.getMessage()));
+                    "Unable to find a matching SASL mechanism for "
+                            + protocol.toUpperCase(Locale.ROOT));
         }
     }
 
     @Override
+    public byte[] evaluateResponse(byte[] token) throws AuthenticationException {
+        return delegate.evaluateResponse(token);
+    }
+
+    @Override
     public boolean isCompleted() {
-        return saslServer != null && saslServer.isComplete();
+        return delegate != null && delegate.isCompleted();
     }
 
     @Override
     public FlussPrincipal createPrincipal() {
-        return new FlussPrincipal(saslServer.getAuthorizationID(), "User");
+        return delegate.createPrincipal();
+    }
+
+    @Override
+    public void close() {
+        if (delegate != null) {
+            try {
+                delegate.close();
+            } catch (Exception e) {
+                LOG.warn("Failed to close SASL server authenticator.", e);
+            }
+            delegate = null;
+        }
     }
 }
