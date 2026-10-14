@@ -24,6 +24,7 @@ import org.apache.fluss.client.table.scanner.ScanRecord;
 import org.apache.fluss.client.table.scanner.log.LogScanner;
 import org.apache.fluss.client.table.scanner.log.ScanRecords;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.exception.InvalidConfigException;
 import org.apache.fluss.flink.sink.shuffle.DistributionMode;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TablePath;
@@ -1320,8 +1321,9 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
     }
 
     @Test
-    void testUpdateIfChangedMergeEngineSupportsMutations() throws Exception {
-        String tableName = "updateIfChangedMergeEngineTable";
+    @MultiVersionTest
+    void testSkipUnchangedUpsertsSupportsMutations() throws Exception {
+        String tableName = "skipUnchangedUpsertsTable";
         tBatchEnv.executeSql(
                 String.format(
                         "create table %s ("
@@ -1329,7 +1331,7 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
                                 + " b bigint null, "
                                 + " c string null, "
                                 + " primary key (a) not enforced"
-                                + ") with ('table.merge-engine' = 'update_if_changed')",
+                                + ") with ('table.upsert.skip-unchanged' = 'true')",
                         tableName));
 
         tBatchEnv
@@ -1339,7 +1341,7 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
                                 tableName))
                 .await();
 
-        // Verify that the Flink sink accepts partial updates for this merge engine.
+        // Verify that the Flink sink accepts partial updates with unchanged writes skipped.
         tBatchEnv
                 .executeSql(String.format("INSERT INTO %s (a, c) VALUES (1, 'partial')", tableName))
                 .await();
@@ -1351,6 +1353,38 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
         CloseableIterator<Row> rowIter =
                 tBatchEnv.executeSql(String.format("SELECT * FROM %s", tableName)).collect();
         assertResultsIgnoreOrder(rowIter, Collections.singletonList("+I[1, 11, partial]"), true);
+    }
+
+    @Test
+    @MultiVersionTest
+    void testSkipUnchangedUpsertsRejectsWalImage() {
+        assertThatThrownBy(
+                        () ->
+                                tBatchEnv.executeSql(
+                                        "create table skip_unchanged_wal ("
+                                                + "a int not null, b string, primary key (a) not enforced"
+                                                + ") with ('table.upsert.skip-unchanged' = 'true', "
+                                                + "'table.changelog.image' = 'wal')"))
+                .rootCause()
+                .isInstanceOf(InvalidConfigException.class)
+                .hasMessageContaining("table.upsert.skip-unchanged")
+                .hasMessageContaining("table.changelog.image");
+    }
+
+    @Test
+    @MultiVersionTest
+    void testSkipUnchangedUpsertsRejectsKvTtl() {
+        assertThatThrownBy(
+                        () ->
+                                tBatchEnv.executeSql(
+                                        "create table skip_unchanged_ttl ("
+                                                + "a int not null, b string, primary key (a) not enforced"
+                                                + ") with ('table.upsert.skip-unchanged' = 'true', "
+                                                + "'table.kv.ttl' = '1 h')"))
+                .rootCause()
+                .isInstanceOf(InvalidConfigException.class)
+                .hasMessageContaining("table.upsert.skip-unchanged")
+                .hasMessageContaining("table.kv.ttl");
     }
 
     @Test

@@ -183,7 +183,7 @@ class RowMergerCreateTest {
     }
 
     @Test
-    void testCreateUpdateIfChangedRowMerger() {
+    void testSkipUnchangedUsesDefaultRowMerger() {
         Schema schema =
                 Schema.newBuilder()
                         .column("id", DataTypes.INT())
@@ -192,23 +192,23 @@ class RowMergerCreateTest {
                         .build();
 
         Configuration conf = new Configuration();
-        conf.setString(
-                ConfigOptions.TABLE_MERGE_ENGINE.key(), MergeEngineType.UPDATE_IF_CHANGED.name());
+        conf.setBoolean(ConfigOptions.TABLE_UPSERT_SKIP_UNCHANGED.key(), true);
         TableConfig tableConfig = new TableConfig(conf);
 
         RowMerger merger =
                 RowMerger.create(tableConfig, KvFormat.COMPACTED, createSchemaGetter(schema));
         merger.configureTargetColumns(null, SCHEMA_ID, schema);
 
-        assertThat(merger).isInstanceOf(UpdateIfChangedRowMerger.class);
+        assertThat(merger).isInstanceOf(DefaultRowMerger.class);
         // delete is supported and defaults to ALLOW
         assertThat(merger.deleteBehavior()).isEqualTo(DeleteBehavior.ALLOW);
 
-        // value-identical write is a no-op (returns the old value instance)
+        // The merger constructs the candidate. The KV write path decides whether to skip it.
         BinaryRow oldRow = compactedRow(schema.getRowType(), new Object[] {1, "a"});
         BinaryRow newRow = compactedRow(schema.getRowType(), new Object[] {1, "a"});
         BinaryValue oldValue = toBinaryValue(oldRow);
-        assertThat(merger.merge(oldValue, toBinaryValue(newRow))).isSameAs(oldValue);
+        BinaryValue sameValue = toBinaryValue(newRow);
+        assertThat(merger.merge(oldValue, sameValue)).isSameAs(sameValue);
 
         // changed write returns the new value
         BinaryValue changed =

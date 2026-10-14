@@ -218,7 +218,8 @@ public final class KvTablet {
             AutoIncrementManager autoIncrementManager,
             @Nullable RowTtlTimestampProvider rowTtlTimestampProvider,
             Clock clock,
-            boolean rowTtlEnabled) {
+            boolean rowTtlEnabled,
+            boolean skipUnchangedUpsert) {
         this.physicalPath = physicalPath;
         this.tableBucket = tableBucket;
         this.historicalPartition =
@@ -256,7 +257,8 @@ public final class KvTablet {
                         stateValueEncoder,
                         valueDecoder,
                         rowTtlTimestampProvider,
-                        clock);
+                        clock,
+                        skipUnchangedUpsert);
         this.rocksDBStatistics = rocksDBStatistics;
         this.autoIncrementManager = autoIncrementManager;
         this.flushCompleteListener = flushCompleteListener;
@@ -518,7 +520,8 @@ public final class KvTablet {
                 autoIncrementManager,
                 rowTtlTimestampProvider,
                 clock,
-                rowTtl.isPresent());
+                rowTtl.isPresent(),
+                tableConfig.isUpsertSkipUnchanged());
     }
 
     public static KvTablet create(

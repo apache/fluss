@@ -50,8 +50,7 @@ public interface RowMerger {
      * DeleteBehavior#ALLOW}.
      *
      * @param oldRow the old row.
-     * @return the merged row, or null if the row is deleted. Returning the same instance as {@code
-     *     oldRow} means that nothing happens to the row.
+     * @return the merged row, or null if the row is deleted.
      */
     @Nullable
     BinaryValue delete(BinaryValue oldRow);
@@ -101,8 +100,6 @@ public interface RowMerger {
                     return new VersionedRowMerger(versionColumn.get(), deleteBehavior);
                 case AGGREGATION:
                     return new AggregateRowMerger(tableConf, kvFormat, schemaGetter);
-                case UPDATE_IF_CHANGED:
-                    return new UpdateIfChangedRowMerger(kvFormat, schemaGetter, deleteBehavior);
                 default:
                     throw new IllegalArgumentException(
                             "Unsupported merge engine type: " + mergeEngineType.get());

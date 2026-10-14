@@ -86,8 +86,9 @@ The following merge engines are supported:
 2. [FirstRow Merge Engine](/table-design/merge-engines/first-row.md)
 3. [Versioned Merge Engine](/table-design/merge-engines/versioned.md)
 4. [Aggregation Merge Engine](/table-design/merge-engines/aggregation.md)
-5. [UpdateIfChanged Merge Engine](/table-design/merge-engines/update-if-changed.md)
 
+To suppress value-identical writes while keeping the default merge engine, enable
+[`table.upsert.skip-unchanged`](/table-design/table-types/skip-unchanged-upserts.md). It is disabled by default.
 
 ## Change Data Feed
 

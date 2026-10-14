@@ -2010,12 +2010,20 @@ public class ConfigOptions {
                     .noDefaultValue()
                     .withDescription(
                             "Defines the merge engine for the primary key table. By default, primary key table doesn't have merge engine. "
-                                    + "The supported merge engines are `first_row`, `versioned`, `aggregation`, and `update_if_changed`. "
+                                    + "The supported merge engines are `first_row`, `versioned`, and `aggregation`. "
                                     + "The `first_row` merge engine will keep the first row of the same primary key. "
                                     + "The `versioned` merge engine will keep the row with the largest version of the same primary key. "
-                                    + "The `aggregation` merge engine will aggregate rows with the same primary key using field-level aggregate functions. "
-                                    + "The `update_if_changed` merge engine keeps last-row upsert semantics but suppresses value-identical writes: "
-                                    + "when an incoming row is logically equal to the stored row, the write is a no-op and no changelog is emitted.");
+                                    + "The `aggregation` merge engine will aggregate rows with the same primary key using field-level aggregate functions.");
+
+    public static final ConfigOption<Boolean> TABLE_UPSERT_SKIP_UNCHANGED =
+            key("table.upsert.skip-unchanged")
+                    .booleanType()
+                    .defaultValue(false)
+                    .withDescription(
+                            "For a primary key table using the default merge behavior, skip the state write and changelog when the complete candidate row is logically equal to the stored row. "
+                                    + "This also applies to partial updates and partial deletes. "
+                                    + "It requires FULL changelog image mode and cannot be combined with row-level KV TTL or a merge engine. "
+                                    + "The previous value must be read for every upsert to determine whether it is unchanged.");
 
     public static final ConfigOption<String> TABLE_MERGE_ENGINE_VERSION_COLUMN =
             // we may need to introduce "del-column" in the future to support delete operation

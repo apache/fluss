@@ -36,7 +36,6 @@ import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.MemorySize;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.fs.TestFileSystem;
-import org.apache.fluss.metadata.ChangelogImage;
 import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.LogFormat;
@@ -64,7 +63,6 @@ import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
-import org.junit.jupiter.params.provider.EnumSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import javax.annotation.Nullable;
@@ -1564,20 +1562,16 @@ class FlussTableITCase extends ClientToServerITCaseBase {
     }
 
     @ParameterizedTest
-    @EnumSource(ChangelogImage.class)
-    void testUpdateIfChangedMergeEngine(ChangelogImage changelogImage) throws Exception {
+    @ValueSource(booleans = {false, true})
+    void testSkipUnchangedUpsertsIsOptIn(boolean skipUnchanged) throws Exception {
         TableDescriptor tableDescriptor =
                 TableDescriptor.builder()
                         .schema(DATA1_SCHEMA_PK)
-                        .property(
-                                ConfigOptions.TABLE_MERGE_ENGINE, MergeEngineType.UPDATE_IF_CHANGED)
-                        .property(ConfigOptions.TABLE_CHANGELOG_IMAGE, changelogImage)
+                        .property(ConfigOptions.TABLE_UPSERT_SKIP_UNCHANGED, skipUnchanged)
                         .build();
         RowType rowType = DATA1_SCHEMA_PK.getRowType();
         TablePath tablePath =
-                TablePath.of(
-                        "test_db_1",
-                        "test_update_if_changed_merge_engine_" + changelogImage.name());
+                TablePath.of("test_db_1", "test_skip_unchanged_upserts_" + skipUnchanged);
         createTable(tablePath, tableDescriptor, false);
 
         try (Table table = conn.getTable(tablePath)) {
@@ -1593,12 +1587,16 @@ class FlussTableITCase extends ClientToServerITCaseBase {
             upsertWriter.delete(row(0, "v1"));
             upsertWriter.flush();
 
-            // No records should be emitted for the value-identical upserts.
+            // Identical writes emit changelog only when suppression is disabled.
             List<ScanRecord> expected = new ArrayList<>();
             expected.add(new ScanRecord(-1, -1, ChangeType.INSERT, row(0, "v0")));
-            if (changelogImage == ChangelogImage.FULL) {
-                expected.add(new ScanRecord(-1, -1, ChangeType.UPDATE_BEFORE, row(0, "v0")));
+            if (!skipUnchanged) {
+                for (int i = 0; i < 2; i++) {
+                    expected.add(new ScanRecord(-1, -1, ChangeType.UPDATE_BEFORE, row(0, "v0")));
+                    expected.add(new ScanRecord(-1, -1, ChangeType.UPDATE_AFTER, row(0, "v0")));
+                }
             }
+            expected.add(new ScanRecord(-1, -1, ChangeType.UPDATE_BEFORE, row(0, "v0")));
             expected.add(new ScanRecord(-1, -1, ChangeType.UPDATE_AFTER, row(0, "v1")));
             expected.add(new ScanRecord(-1, -1, ChangeType.DELETE, row(0, "v1")));
 
@@ -1623,10 +1621,8 @@ class FlussTableITCase extends ClientToServerITCaseBase {
         }
     }
 
-    @ParameterizedTest
-    @EnumSource(ChangelogImage.class)
-    void testUpdateIfChangedMergeEngineWithPartialUpdate(ChangelogImage changelogImage)
-            throws Exception {
+    @Test
+    void testSkipUnchangedPartialUpdatesAndDeletes() throws Exception {
         Schema schema =
                 Schema.newBuilder()
                         .column("id", DataTypes.INT())
@@ -1638,20 +1634,19 @@ class FlussTableITCase extends ClientToServerITCaseBase {
                 TableDescriptor.builder()
                         .schema(schema)
                         .distributedBy(1, "id")
-                        .property(
-                                ConfigOptions.TABLE_MERGE_ENGINE, MergeEngineType.UPDATE_IF_CHANGED)
-                        .property(ConfigOptions.TABLE_CHANGELOG_IMAGE, changelogImage)
+                        .property(ConfigOptions.TABLE_UPSERT_SKIP_UNCHANGED, true)
                         .build();
         RowType rowType = schema.getRowType();
-        TablePath tablePath =
-                TablePath.of(
-                        "test_db_1",
-                        "test_update_if_changed_partial_update_" + changelogImage.name());
+        TablePath tablePath = TablePath.of("test_db_1", "test_skip_unchanged_partial_update");
         createTable(tablePath, tableDescriptor, false);
 
         try (Table table = conn.getTable(tablePath)) {
             UpsertWriter fullWriter = table.newUpsert().createWriter();
             fullWriter.upsert(row(0, "v0", "kept")).get();
+
+            UpsertWriter keyOnlyWriter = table.newUpsert().partialUpdate("id").createWriter();
+            // A primary-key-only partial upsert leaves the complete row unchanged.
+            keyOnlyWriter.upsert(row(0, null, null)).get();
 
             UpsertWriter partialWriter =
                     table.newUpsert().partialUpdate("id", "name").createWriter();
@@ -1669,15 +1664,9 @@ class FlussTableITCase extends ClientToServerITCaseBase {
 
             List<ScanRecord> expected = new ArrayList<>();
             expected.add(new ScanRecord(-1, -1, ChangeType.INSERT, row(0, "v0", "kept")));
-            if (changelogImage == ChangelogImage.FULL) {
-                expected.add(
-                        new ScanRecord(-1, -1, ChangeType.UPDATE_BEFORE, row(0, "v0", "kept")));
-            }
+            expected.add(new ScanRecord(-1, -1, ChangeType.UPDATE_BEFORE, row(0, "v0", "kept")));
             expected.add(new ScanRecord(-1, -1, ChangeType.UPDATE_AFTER, row(0, "v1", "kept")));
-            if (changelogImage == ChangelogImage.FULL) {
-                expected.add(
-                        new ScanRecord(-1, -1, ChangeType.UPDATE_BEFORE, row(0, "v1", "kept")));
-            }
+            expected.add(new ScanRecord(-1, -1, ChangeType.UPDATE_BEFORE, row(0, "v1", "kept")));
             expected.add(new ScanRecord(-1, -1, ChangeType.UPDATE_AFTER, row(0, null, "kept")));
 
             LogScanner logScanner = table.newScan().createLogScanner();
