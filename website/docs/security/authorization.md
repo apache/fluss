@@ -66,7 +66,7 @@ Fluss implements a permission inheritance model, where certain operations imply 
 The FlussPrincipal is a core concept in the Fluss security architecture. It represents the identity of an authenticated entity (such as a user or service) and serves as the central bridge between authentication and authorization. Once a client successfully authenticates via a supported mechanism (e.g., SASL/PLAIN, Kerberos), a FlussPrincipal is created to represent that client's identity.
 This principal is then used throughout the system for access control decisions, linking who the user is with what they are allowed to do.
 
-The principal type indicates the category of the principal (e. g., "User", "Group", "Role"), while the name identifies the specific entity within that category. By default, the simple authorizer uses "User" as the principal type, but custom authorizers can extend this to support role-based or group-based access control lists (ACLs).
+The principal type indicates the category of the principal (e. g., "User", "Group", "Role"), while the name identifies the specific entity within that category. An authenticated session has one primary principal and may have additional principals such as groups or roles. The default authorizer evaluates ACLs against the primary and additional principals, while superuser checks use only the primary principal.
 Example usage:
 * `new FlussPrincipal("admin", "User")` – A standard user principal.
 * `new FlussPrincipal("admins", "Group")` – A group-based principal for authorization.

@@ -21,6 +21,9 @@ import org.apache.fluss.security.acl.FlussPrincipal;
 
 import java.io.Serializable;
 import java.net.InetAddress;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
 
 /** The connection session of a request. */
 public class Session implements Serializable {
@@ -29,6 +32,7 @@ public class Session implements Serializable {
     private final boolean isInternal;
     private final InetAddress inetAddress;
     private final FlussPrincipal principal;
+    private final List<FlussPrincipal> additionalPrincipals;
 
     public Session(
             short apiVersion,
@@ -36,11 +40,24 @@ public class Session implements Serializable {
             boolean isInternal,
             InetAddress inetAddress,
             FlussPrincipal principal) {
+        this(apiVersion, listenerName, isInternal, inetAddress, principal, Collections.emptyList());
+    }
+
+    /** Creates a session with the primary and additional authenticated principals. */
+    public Session(
+            short apiVersion,
+            String listenerName,
+            boolean isInternal,
+            InetAddress inetAddress,
+            FlussPrincipal principal,
+            List<FlussPrincipal> additionalPrincipals) {
         this.apiVersion = apiVersion;
         this.listenerName = listenerName;
         this.isInternal = isInternal;
         this.inetAddress = inetAddress;
         this.principal = principal;
+        this.additionalPrincipals =
+                Collections.unmodifiableList(new ArrayList<>(additionalPrincipals));
     }
 
     public short getApiVersion() {
@@ -57,6 +74,11 @@ public class Session implements Serializable {
 
     public FlussPrincipal getPrincipal() {
         return principal;
+    }
+
+    /** Returns additional principals associated with the authenticated identity. */
+    public List<FlussPrincipal> getAdditionalPrincipals() {
+        return additionalPrincipals;
     }
 
     public boolean isInternal() {
