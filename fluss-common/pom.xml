@@ -166,6 +166,25 @@
     </dependencies>
 
     <build>
+        <resources>
+            <!-- Filter only fluss-version.properties, so VersionInfo can read the resolved
+                 project version; every other resource here (e.g. META-INF/services) stays
+                 unfiltered. -->
+            <resource>
+                <directory>src/main/resources</directory>
+                <filtering>true</filtering>
+                <includes>
+                    <include>org/apache/fluss/utils/fluss-version.properties</include>
+                </includes>
+            </resource>
+            <resource>
+                <directory>src/main/resources</directory>
+                <filtering>false</filtering>
+                <excludes>
+                    <exclude>org/apache/fluss/utils/fluss-version.properties</exclude>
+                </excludes>
+            </resource>
+        </resources>
         <plugins>
             <plugin>
                 <artifactId>maven-assembly-plugin</artifactId>
