@@ -66,6 +66,7 @@ import static org.apache.fluss.server.metadata.PartitionMetadata.DELETED_PARTITI
 import static org.apache.fluss.server.metadata.PartitionMetadata.DELETED_PARTITION_NAME;
 import static org.apache.fluss.server.metadata.TableMetadata.DELETED_TABLE_ID;
 import static org.apache.fluss.server.metadata.TableMetadata.DELETED_TABLE_PATH;
+import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getNotifyLeaderAndIsrRequestData;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getNotifyLeaderAndIsrResponseData;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeNotifyBucketLeaderAndIsr;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeNotifyKvSnapshotOffsetRequest;
@@ -456,6 +457,8 @@ public class CoordinatorRequestBatch {
             NotifyLeaderAndIsrRequest notifyLeaderAndIsrRequest =
                     makeNotifyLeaderAndIsrRequest(
                             coordinatorEpoch, notifyRequestEntry.getValue().values());
+            List<NotifyLeaderAndIsrData> requestData =
+                    getNotifyLeaderAndIsrRequestData(notifyLeaderAndIsrRequest);
 
             // Track exactly which buckets THIS request marked as pending leader activation. Only
             // those entries (where leader == serverId) need to be cleared if the request fails
@@ -504,7 +507,9 @@ public class CoordinatorRequestBatch {
                         // put the response receive event into the event manager
                         eventManager.put(
                                 new NotifyLeaderAndIsrResponseReceivedEvent(
-                                        getNotifyLeaderAndIsrResponseData(response), serverId));
+                                        getNotifyLeaderAndIsrResponseData(response),
+                                        serverId,
+                                        requestData));
                     });
         }
         notifyLeaderAndIsrRequestMap.clear();

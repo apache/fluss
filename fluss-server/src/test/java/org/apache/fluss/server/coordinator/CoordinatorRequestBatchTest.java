@@ -27,6 +27,8 @@ import org.apache.fluss.rpc.messages.NotifyLeaderAndIsrResponse;
 import org.apache.fluss.rpc.messages.PbNotifyLeaderAndIsrReqForBucket;
 import org.apache.fluss.server.coordinator.event.AccessContextEvent;
 import org.apache.fluss.server.coordinator.event.EventManager;
+import org.apache.fluss.server.coordinator.event.NotifyLeaderAndIsrResponseReceivedEvent;
+import org.apache.fluss.server.entity.NotifyLeaderAndIsrData;
 import org.apache.fluss.server.zk.ZkEpoch;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
 
@@ -188,6 +190,48 @@ class CoordinatorRequestBatchTest {
         assertThat(bucketRequest.hasBucketCount()).isFalse();
         assertThat(bucketRequest.hasBucketCountEpoch()).isFalse();
         assertThat(coordinatorContext.getPendingLeaderActivationBuckets()).isEmpty();
+    }
+
+    @Test
+    void testNotifyLeaderAndIsrResponseEventKeepsRequestState() {
+        long tableId = 400L;
+        TableBucket tableBucket = new TableBucket(tableId, 0);
+        TablePath tablePath = TablePath.of("db1", "t4");
+        LeaderAndIsr leaderAndIsr =
+                new LeaderAndIsr(0, 3, Collections.singletonList(0), Collections.emptyList(), 2, 4);
+        AtomicReference<NotifyLeaderAndIsrResponseReceivedEvent> responseEvent =
+                new AtomicReference<>();
+        TestCoordinatorChannelManager channelManager =
+                new TestCoordinatorChannelManager() {
+                    @Override
+                    public void sendBucketLeaderAndIsrRequest(
+                            int receiveServerId,
+                            NotifyLeaderAndIsrRequest request,
+                            BiConsumer<NotifyLeaderAndIsrResponse, ? super Throwable>
+                                    responseConsumer) {
+                        responseConsumer.accept(new NotifyLeaderAndIsrResponse(), null);
+                    }
+                };
+        EventManager eventManager =
+                event -> {
+                    if (event instanceof NotifyLeaderAndIsrResponseReceivedEvent) {
+                        responseEvent.set((NotifyLeaderAndIsrResponseReceivedEvent) event);
+                    }
+                };
+        CoordinatorRequestBatch batch =
+                new CoordinatorRequestBatch(channelManager, eventManager, coordinatorContext);
+
+        batch.addNotifyLeaderRequestForTabletServers(
+                Collections.singleton(0),
+                PhysicalTablePath.of(tablePath),
+                tableBucket,
+                Collections.singletonList(0),
+                leaderAndIsr);
+        batch.sendRequestToTabletServers(2);
+
+        NotifyLeaderAndIsrData requestData = responseEvent.get().getRequestData(tableBucket).get();
+        assertThat(requestData.getReplicas()).containsExactly(0);
+        assertThat(requestData.getLeaderAndIsr()).isEqualTo(leaderAndIsr);
     }
 
     /** Registers table metadata so normal notifications carry the bucket layout epoch. */
