@@ -376,6 +376,9 @@
                             <goal>check</goal>
                         </goals>
                         <configuration>
+                            <!-- Modules that require Java 11 skip their tests on Java 8, so the
+                            coverage gate is only meaningful (and enforced) on Java 11+ builds. -->
+                            <skip>${skip.on.java8}</skip>
                             <dataFile>${project.basedir}/target/jacoco-aggregate.exec</dataFile>
                             <rules>
                                 <rule>
