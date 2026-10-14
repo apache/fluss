@@ -204,6 +204,10 @@ Apache Fluss follows a layered Maven module architecture: `fluss-common` (founda
 
 **`fluss-docgen`** - Configuration documentation generation
 
+#### Development Tooling
+
+**`devkit/`** - Local development toolkit for running and testing Fluss across core and lakehouse scenarios
+
 #### Key Directories
 
 ```
@@ -488,6 +492,10 @@ The `--web` flag opens browser for final review before submission.
 - Database schema or migration changes
 - Changes to build system or CI pipeline
 - Destructive operations (delete branches, force-push, reset --hard)
+
+### DevKit
+
+When a code change needs end-to-end validation, use DevKit to quickly start Fluss services from the current checkout. Choose a profile for the workflow; it determines the services and configuration. See `devkit/README.md` for details.
 
 ### Never Do (Without Explicit Permission)
 
