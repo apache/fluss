@@ -171,9 +171,16 @@ public final class NettyClient implements RpcClient {
                     shutdownFutures.add(conn.getValue().close());
                 }
             }
-            shutdownFutures.add(NettyUtils.shutdownGroup(eventGroup));
-            CompletableFuture.allOf(shutdownFutures.toArray(new CompletableFuture<?>[0]))
-                    .get(10, TimeUnit.SECONDS);
+            try {
+                CompletableFuture.allOf(shutdownFutures.toArray(new CompletableFuture<?>[0]))
+                        .get(10, TimeUnit.SECONDS);
+            } finally {
+                // The client is closed and its connections are shut down, so no new work reaches
+                // the event loop. Skip Netty's default 2 second quiet period, which would
+                // otherwise delay every close() by at least 2 seconds.
+                NettyUtils.shutdownGroup(eventGroup, 0, 10, TimeUnit.SECONDS)
+                        .get(10, TimeUnit.SECONDS);
+            }
             LOG.info("Netty client was shutdown successfully.");
         } catch (Exception e) {
             LOG.warn("Netty client shutdown failed: ", e);

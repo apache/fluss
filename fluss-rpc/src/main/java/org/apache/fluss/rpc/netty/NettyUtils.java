@@ -30,8 +30,11 @@ import org.apache.fluss.shaded.netty4.io.netty.channel.socket.nio.NioServerSocke
 import org.apache.fluss.shaded.netty4.io.netty.channel.socket.nio.NioSocketChannel;
 import org.apache.fluss.shaded.netty4.io.netty.channel.unix.Errors;
 import org.apache.fluss.shaded.netty4.io.netty.util.concurrent.DefaultThreadFactory;
+import org.apache.fluss.shaded.netty4.io.netty.util.concurrent.Future;
 
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
+import java.util.function.Function;
 
 /** Utils of netty. */
 public class NettyUtils {
@@ -71,9 +74,23 @@ public class NettyUtils {
     }
 
     public static CompletableFuture<Void> shutdownGroup(EventLoopGroup group) {
+        return shutdownGroup(group, EventLoopGroup::shutdownGracefully);
+    }
+
+    /**
+     * Shuts down the given event loop group with the given quiet period and timeout instead of
+     * Netty's defaults (a 2 second quiet period and a 15 second timeout).
+     */
+    public static CompletableFuture<Void> shutdownGroup(
+            EventLoopGroup group, long quietPeriod, long timeout, TimeUnit unit) {
+        return shutdownGroup(group, g -> g.shutdownGracefully(quietPeriod, timeout, unit));
+    }
+
+    private static CompletableFuture<Void> shutdownGroup(
+            EventLoopGroup group, Function<EventLoopGroup, Future<?>> shutdown) {
         CompletableFuture<Void> shutdownFuture = new CompletableFuture<>();
         if (group != null) {
-            group.shutdownGracefully()
+            shutdown.apply(group)
                     .addListener(
                             finished -> {
                                 if (finished.isSuccess()) {
