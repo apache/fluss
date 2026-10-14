@@ -594,7 +594,6 @@
                 <groupId>org.apache.rat</groupId>
                 <artifactId>apache-rat-plugin</artifactId>
                 <version>0.18</version>
-                <inherited>false</inherited>
                 <executions>
                     <execution>
                         <id>rat-check</id>
@@ -608,7 +607,7 @@
                     <consoleOutput>true</consoleOutput>
                     <excludeSubProjects>false</excludeSubProjects>
                     <inputExcludeStd>ALL</inputExcludeStd>
-                    <config>.rat/fluss-rat-config.xml</config>
+                    <config>${maven.multiModuleProjectDirectory}/.rat/fluss-rat-config.xml</config>
                     <counterMax>Unapproved:0</counterMax>
                     <outputLicenses>ALL</outputLicenses>
                     <licenseFamiliesDenied>BAN</licenseFamiliesDenied>
