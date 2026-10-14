@@ -991,6 +991,25 @@ class RecordAccumulatorTest {
     }
 
     @Test
+    void testThrottleMaintenanceEvictsMetadataAndTimeBasedState() throws Exception {
+        RecordAccumulator accum = createDiskAccumulator(new ExponentialBackoff(1000, 2, 1000, 0));
+        ReadyWriteBatch batch = appendAndDrain(accum, 0);
+        accum.updateThrottle(tb1, 1.0f);
+        accum.backoffAfterDiskWriteLocked(batch);
+
+        Cluster clusterWithoutBucket = updateCluster(Collections.singletonList(bucket2));
+        accum.maybeEvictStaleThrottleState(clusterWithoutBucket);
+        assertThat(accum.isThrottled(tb1)).isFalse();
+        assertThat(accum.diskWriteBackoffCount()).isOne();
+
+        clock.advanceTime(Duration.ofSeconds(1));
+        accum.maybeEvictStaleThrottleState(clusterWithoutBucket);
+        assertThat(accum.diskWriteBackoffCount()).isZero();
+        accum.abortAllBatches(new RuntimeException("test cleanup"));
+        accum.destroyResources();
+    }
+
+    @Test
     void testThrottledBucketSkippedInDrain() throws Exception {
         IndexedRow row = indexedRow(DATA1_ROW_TYPE, new Object[] {1, "a"});
         long batchSize = getTestBatchSize(row);
@@ -1162,14 +1181,16 @@ class RecordAccumulatorTest {
                                     () -> accum.backoffAfterDiskWriteLocked(shortBatch)),
                             CompletableFuture.runAsync(
                                     () -> accum.backoffAfterDiskWriteLocked(longBatch)),
-                            CompletableFuture.runAsync(accum::maybeEvictExpiredWriteBackoffs))
+                            CompletableFuture.runAsync(
+                                    () -> accum.maybeEvictStaleThrottleState(cluster)))
                     .get();
             assertThat(accum.diskWriteBackoffRemainingMs(tb1)).isEqualTo(10000);
         }
         clock.advanceTime(Duration.ofSeconds(10));
         // Race expiry cleanup with a new rejection. Conditional removal must preserve the new gate.
         CompletableFuture.allOf(
-                        CompletableFuture.runAsync(accum::maybeEvictExpiredWriteBackoffs),
+                        CompletableFuture.runAsync(
+                                () -> accum.maybeEvictStaleThrottleState(cluster)),
                         CompletableFuture.runAsync(() -> accum.diskWriteBackoffRemainingMs(tb1)),
                         CompletableFuture.runAsync(
                                 () -> accum.backoffAfterDiskWriteLocked(longBatch)))
@@ -1177,7 +1198,7 @@ class RecordAccumulatorTest {
         assertThat(accum.diskWriteBackoffRemainingMs(tb1)).isEqualTo(10000);
         assertThat(accum.hasUnDrained()).isFalse();
         clock.advanceTime(Duration.ofSeconds(10));
-        accum.maybeEvictExpiredWriteBackoffs();
+        accum.maybeEvictStaleThrottleState(cluster);
         assertThat(accum.diskWriteBackoffCount()).isZero();
         accum.abortAllBatches(new RuntimeException("test cleanup"));
         accum.destroyResources();

@@ -120,6 +120,12 @@ final class WriteThrottleController {
         return remainingDelayMs(tableBucket) > 0;
     }
 
+    /** Runs the guarded maintenance strategies for all per-bucket throttle state. */
+    void maybeEvictStaleThrottleState(Cluster cluster) {
+        maybeEvictStaleKvThrottles(cluster);
+        maybeEvictExpiredBackoffs();
+    }
+
     // ------------------------------------------------------------------------
     // KV backpressure (wall-clock millis, latest-wins, quadratic delay).
     // ------------------------------------------------------------------------
@@ -196,7 +202,7 @@ final class WriteThrottleController {
      * makes this an O(1) no-op when metadata hasn't changed, so the actual O(N) walk only runs once
      * per real metadata refresh.
      */
-    void maybeEvictStaleThrottles(Cluster cluster) {
+    private void maybeEvictStaleKvThrottles(Cluster cluster) {
         if (cluster == lastClusterRef) {
             return;
         }
@@ -288,7 +294,7 @@ final class WriteThrottleController {
     }
 
     /** Reclaims expired backoff entries even when their queues no longer contain any batches. */
-    void maybeEvictExpiredBackoffs() {
+    private void maybeEvictExpiredBackoffs() {
         if (retryBackoffDeadlineNanos.isEmpty() && diskBackoffDeadlineNanos.isEmpty()) {
             return;
         }
