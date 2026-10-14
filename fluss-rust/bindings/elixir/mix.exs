@@ -19,6 +19,7 @@ defmodule Fluss.MixProject do
   use Mix.Project
 
   @version "1.0.0"
+  @source_url "https://github.com/apache/fluss"
 
   def project do
     [
@@ -30,6 +31,10 @@ defmodule Fluss.MixProject do
       aliases: aliases(),
       deps: deps(),
       description: "Elixir client for Apache Fluss",
+      name: "Fluss",
+      source_url: @source_url,
+      homepage_url: "https://fluss.apache.org",
+      docs: docs(),
       dialyzer: [
         plt_add_apps: [:ex_unit, :mix],
         plt_file: {:no_warn, "priv/plts/dialyzer.plt"},
@@ -69,6 +74,30 @@ defmodule Fluss.MixProject do
       "credo --strict",
       "compile --warnings-as-errors",
       "dialyzer"
+    ]
+  end
+
+  defp docs do
+    [
+      main: "readme",
+      extras: ["README.md", "guides/log_tables.md", "guides/data_types.md"],
+      groups_for_extras: [Guides: ~r{guides/}],
+      # The binding lives in a monorepo subdirectory.
+      source_url_pattern: "#{@source_url}/blob/main/fluss-rust/bindings/elixir/%{path}#L%{line}",
+      groups_for_modules: [
+        "Connection & Configuration": [Fluss, Fluss.Config, Fluss.Connection, Fluss.Error],
+        Admin: [
+          Fluss.Admin,
+          Fluss.DatabaseDescriptor,
+          Fluss.DatabaseInfo,
+          Fluss.Schema,
+          Fluss.SchemaInfo,
+          Fluss.ServerNode,
+          Fluss.TableDescriptor,
+          Fluss.TableInfo
+        ],
+        "Log Tables": [Fluss.Table, Fluss.AppendWriter, Fluss.WriteHandle, Fluss.LogScanner]
+      ]
     ]
   end
 

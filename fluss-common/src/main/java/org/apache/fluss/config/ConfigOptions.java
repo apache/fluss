@@ -2867,6 +2867,15 @@ public class ConfigOptions {
                                     + ConfigOptions.TABLE_DATALAKE_AUTO_EXPIRE_SNAPSHOT
                                     + " is false.");
 
+    public static final ConfigOption<Boolean> LAKE_TIERING_PARTITION_MARK_DONE_ENABLED =
+            key("lake.tiering.partition.mark-done.enabled")
+                    .booleanType()
+                    .defaultValue(false)
+                    .withDescription(
+                            "Whether the tiering service marks idle partitions of tiered partitioned tables as done. "
+                                    + "Disabled by default. When enabled, mark-done uses the actual lake table's options "
+                                    + "(e.g. 'partition.idle-time-to-done' on the Paimon table).");
+
     public static final ConfigOption<String> LAKE_TIERING_IO_TMP_DIRS =
             key("lake.tiering.io.tmp.dirs")
                     .stringType()
@@ -2902,13 +2911,6 @@ public class ConfigOptions {
                     .defaultValue("kafka")
                     .withDescription(
                             "The database for fluss kafka. The default database is `kafka`.");
-
-    public static final ConfigOption<Duration> KAFKA_CONNECTION_MAX_IDLE_TIME =
-            key("kafka.connection.max-idle-time")
-                    .durationType()
-                    .defaultValue(Duration.ofSeconds(60))
-                    .withDescription(
-                            "Close kafka idle connections after the given time specified by this config.");
 
     /**
      * Compaction style for Fluss's kv, which is same to rocksdb's, but help use avoid including

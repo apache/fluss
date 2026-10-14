@@ -255,4 +255,6 @@ Kafka protocol compatibility is still in development.
 | kafka.enabled                  | Boolean  | false   | Whether enable Fluss Kafka. Disabled by default. When this option is set to true, the Fluss Kafka will be enabled. |
 | kafka.listener.names           | String   | KAFKA   | The listener names for Kafka wire protocol communication. Support multiple listener names, separated by comma.     |
 | kafka.database                 | String   | kafka   | The database for Fluss Kafka. The default database is `kafka`.                                                     |
-| kafka.connection.max-idle-time | Duration | 60s     | Close kafka idle connections after the given time specified by this config.                                        |
+
+Kafka listeners share `netty.connection.max-idle-time` with native Fluss RPC listeners (see [Netty](#netty)).
+The default is `10min`; connections close when neither reads nor writes occur for the configured duration.

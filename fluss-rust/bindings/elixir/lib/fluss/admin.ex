@@ -19,6 +19,10 @@ defmodule Fluss.Admin do
   @moduledoc """
   Admin client for DDL operations (create/drop databases and tables).
 
+  `create_*` and `drop_*` default to ignoring an existing or missing database or table, and
+  return `:ok`; pass `false` as the last argument to get an error instead. `drop_database/3`
+  doesn't cascade: drop the tables first.
+
   ## Examples
 
       admin = Fluss.Admin.new!(conn)

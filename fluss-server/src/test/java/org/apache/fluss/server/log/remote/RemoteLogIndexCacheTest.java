@@ -60,7 +60,7 @@ class RemoteLogIndexCacheTest extends RemoteLogTestBase {
         // 1. first upload one segment to remote.
         RemoteLogSegment remoteLogSegment = copyLogSegmentToRemote(logTablet, remoteLogStorage, 0);
 
-        Entry entry = rlIndexCache.getIndexEntry(remoteLogSegment);
+        Entry entry = rlIndexCache.getIndexEntry(FlussPaths.remoteLogDir(conf), remoteLogSegment);
         Path offsetIndexPath = entry.offsetIndex().file().toPath();
         Path timeIndexPath = entry.timeIndex().file().toPath();
         String expectedOffsetIndexFileName =
@@ -88,10 +88,16 @@ class RemoteLogIndexCacheTest extends RemoteLogTestBase {
         // 1. first upload one segment to remote.
         RemoteLogSegment remoteLogSegment = copyLogSegmentToRemote(logTablet, remoteLogStorage, 0);
 
-        OffsetIndex offsetIndex = rlIndexCache.getIndexEntry(remoteLogSegment).offsetIndex();
+        OffsetIndex offsetIndex =
+                rlIndexCache
+                        .getIndexEntry(FlussPaths.remoteLogDir(conf), remoteLogSegment)
+                        .offsetIndex();
         OffsetPosition offsetPosition1 = offsetIndex.entry(1);
         int resultPosition =
-                rlIndexCache.lookupPosition(remoteLogSegment, offsetPosition1.getOffset());
+                rlIndexCache.lookupPosition(
+                        FlussPaths.remoteLogDir(conf),
+                        remoteLogSegment,
+                        offsetPosition1.getOffset());
         assertThat(offsetPosition1.getPosition()).isEqualTo(resultPosition);
     }
 
@@ -101,13 +107,20 @@ class RemoteLogIndexCacheTest extends RemoteLogTestBase {
         LogTablet logTablet = makeLogTabletAndAddSegments(partitionTable);
         // 1. first upload one segment to remote.
         RemoteLogSegment remoteLogSegment = copyLogSegmentToRemote(logTablet, remoteLogStorage, 0);
-        TimeIndex timeIndex = rlIndexCache.getIndexEntry(remoteLogSegment).timeIndex();
+        TimeIndex timeIndex =
+                rlIndexCache
+                        .getIndexEntry(FlussPaths.remoteLogDir(conf), remoteLogSegment)
+                        .timeIndex();
         TimestampOffset timestampOffset = timeIndex.entry(0);
 
-        OffsetIndex offsetIndex = rlIndexCache.getIndexEntry(remoteLogSegment).offsetIndex();
+        OffsetIndex offsetIndex =
+                rlIndexCache
+                        .getIndexEntry(FlussPaths.remoteLogDir(conf), remoteLogSegment)
+                        .offsetIndex();
         OffsetPosition offsetPosition = offsetIndex.lookup(timestampOffset.offset);
         long resultOffset =
-                rlIndexCache.lookupOffsetForTimestamp(remoteLogSegment, timestampOffset.timestamp);
+                rlIndexCache.lookupOffsetForTimestamp(
+                        FlussPaths.remoteLogDir(conf), remoteLogSegment, timestampOffset.timestamp);
         assertThat(offsetPosition.getOffset()).isEqualTo(resultOffset);
     }
 
@@ -117,7 +130,7 @@ class RemoteLogIndexCacheTest extends RemoteLogTestBase {
         LogTablet logTablet = makeLogTabletAndAddSegments(partitionTable);
         RemoteLogSegment remoteLogSegment = copyLogSegmentToRemote(logTablet, remoteLogStorage, 0);
 
-        Entry entry = rlIndexCache.getIndexEntry(remoteLogSegment);
+        Entry entry = rlIndexCache.getIndexEntry(FlussPaths.remoteLogDir(conf), remoteLogSegment);
         int expectedWeight = entry.offsetIndex().sizeInBytes() + entry.timeIndex().sizeInBytes();
 
         assertThat(
@@ -138,7 +151,11 @@ class RemoteLogIndexCacheTest extends RemoteLogTestBase {
         RemoteLogSegment remoteLogSegment = copyLogSegmentToRemote(logTablet, remoteLogStorage, 0);
 
         rlIndexCache = new RemoteLogIndexCache(1024 * 1024L, remoteLogStorage, tempDir);
-        File file = rlIndexCache.getIndexEntry(remoteLogSegment).timeIndex().file();
+        File file =
+                rlIndexCache
+                        .getIndexEntry(FlussPaths.remoteLogDir(conf), remoteLogSegment)
+                        .timeIndex()
+                        .file();
         // mock corrupt index
         try (FileChannel fileChannel = FileChannel.open(file.toPath(), StandardOpenOption.APPEND)) {
             for (int i = 0; i < 12; i++) {
@@ -148,13 +165,20 @@ class RemoteLogIndexCacheTest extends RemoteLogTestBase {
 
         // re-initialize index cache and lookup offset
         rlIndexCache = new RemoteLogIndexCache(1024 * 1024L, remoteLogStorage, tempDir);
-        TimeIndex timeIndex = rlIndexCache.getIndexEntry(remoteLogSegment).timeIndex();
+        TimeIndex timeIndex =
+                rlIndexCache
+                        .getIndexEntry(FlussPaths.remoteLogDir(conf), remoteLogSegment)
+                        .timeIndex();
         TimestampOffset timestampOffset = timeIndex.entry(0);
 
-        OffsetIndex offsetIndex = rlIndexCache.getIndexEntry(remoteLogSegment).offsetIndex();
+        OffsetIndex offsetIndex =
+                rlIndexCache
+                        .getIndexEntry(FlussPaths.remoteLogDir(conf), remoteLogSegment)
+                        .offsetIndex();
         OffsetPosition offsetPosition = offsetIndex.lookup(timestampOffset.offset);
         long resultOffset =
-                rlIndexCache.lookupOffsetForTimestamp(remoteLogSegment, timestampOffset.timestamp);
+                rlIndexCache.lookupOffsetForTimestamp(
+                        FlussPaths.remoteLogDir(conf), remoteLogSegment, timestampOffset.timestamp);
         assertThat(offsetPosition.getOffset()).isEqualTo(resultOffset);
     }
 
@@ -165,7 +189,11 @@ class RemoteLogIndexCacheTest extends RemoteLogTestBase {
         RemoteLogSegment remoteLogSegment = copyLogSegmentToRemote(logTablet, remoteLogStorage, 0);
 
         rlIndexCache = new RemoteLogIndexCache(1024 * 1024L, remoteLogStorage, tempDir);
-        File offsetIndexFile = rlIndexCache.getIndexEntry(remoteLogSegment).offsetIndex().file();
+        File offsetIndexFile =
+                rlIndexCache
+                        .getIndexEntry(FlussPaths.remoteLogDir(conf), remoteLogSegment)
+                        .offsetIndex()
+                        .file();
         File tmpFile =
                 new File(offsetIndexFile.getParentFile(), offsetIndexFile.getName() + ".tmp");
         Files.write(tmpFile.toPath(), new byte[] {0});
@@ -183,18 +211,30 @@ class RemoteLogIndexCacheTest extends RemoteLogTestBase {
         // 1. first upload one segment to remote.
         RemoteLogSegment remoteLogSegment = copyLogSegmentToRemote(logTablet, remoteLogStorage, 0);
 
-        OffsetIndex offsetIndex = rlIndexCache.getIndexEntry(remoteLogSegment).offsetIndex();
+        OffsetIndex offsetIndex =
+                rlIndexCache
+                        .getIndexEntry(FlussPaths.remoteLogDir(conf), remoteLogSegment)
+                        .offsetIndex();
         int lastOffsetIndex =
-                rlIndexCache.lookupPosition(remoteLogSegment, offsetIndex.lastOffset());
+                rlIndexCache.lookupPosition(
+                        FlussPaths.remoteLogDir(conf), remoteLogSegment, offsetIndex.lastOffset());
         long greaterOffsetThatLastOffset = offsetIndex.lastOffset() + 1;
-        assertThat(rlIndexCache.lookupPosition(remoteLogSegment, greaterOffsetThatLastOffset))
+        assertThat(
+                        rlIndexCache.lookupPosition(
+                                FlussPaths.remoteLogDir(conf),
+                                remoteLogSegment,
+                                greaterOffsetThatLastOffset))
                 .isEqualTo(lastOffsetIndex);
 
         // offsetIndex.lookup() returns OffsetPosition(baseOffset, 0) for offsets smaller
         // than the least entry in the offset index.
         OffsetPosition nonExistentOffsetPosition = new OffsetPosition(0, 0);
         long lowerOffsetThatBaseOffset = offsetIndex.baseOffset() - 1;
-        assertThat(rlIndexCache.lookupPosition(remoteLogSegment, lowerOffsetThatBaseOffset))
+        assertThat(
+                        rlIndexCache.lookupPosition(
+                                FlussPaths.remoteLogDir(conf),
+                                remoteLogSegment,
+                                lowerOffsetThatBaseOffset))
                 .isEqualTo(nonExistentOffsetPosition.getPosition());
     }
 
@@ -208,11 +248,14 @@ class RemoteLogIndexCacheTest extends RemoteLogTestBase {
         rlIndexCache = new RemoteLogIndexCache(1024 * 1024L, remoteLogStorage, tempDir);
         RemoteLogSegment remoteLogSegment = copyLogSegmentToRemote(logTablet, remoteLogStorage, 0);
         assertThat(rlIndexCache.getInternalCache().asMap().size()).isEqualTo(0);
-        rlIndexCache.getIndexEntry(remoteLogSegment);
+        rlIndexCache.getIndexEntry(FlussPaths.remoteLogDir(conf), remoteLogSegment);
         assertThat(rlIndexCache.getInternalCache().asMap().size()).isEqualTo(1);
 
         rlIndexCache.close();
-        assertThatThrownBy(() -> rlIndexCache.getIndexEntry(remoteLogSegment))
+        assertThatThrownBy(
+                        () ->
+                                rlIndexCache.getIndexEntry(
+                                        FlussPaths.remoteLogDir(conf), remoteLogSegment))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining(
                         "Unable to fetch index for remote-segment-id = "
@@ -227,8 +270,8 @@ class RemoteLogIndexCacheTest extends RemoteLogTestBase {
         // 1. first upload two segment to remote.
         RemoteLogSegment remoteLogSegment1 = copyLogSegmentToRemote(logTablet, remoteLogStorage, 0);
         RemoteLogSegment remoteLogSegment2 = copyLogSegmentToRemote(logTablet, remoteLogStorage, 1);
-        rlIndexCache.getIndexEntry(remoteLogSegment1);
-        rlIndexCache.getIndexEntry(remoteLogSegment2);
+        rlIndexCache.getIndexEntry(FlussPaths.remoteLogDir(conf), remoteLogSegment1);
+        rlIndexCache.getIndexEntry(FlussPaths.remoteLogDir(conf), remoteLogSegment2);
 
         File file = rlIndexCache.cacheDir();
         File[] files = file.listFiles();
@@ -247,7 +290,7 @@ class RemoteLogIndexCacheTest extends RemoteLogTestBase {
         LogTablet logTablet = makeLogTabletAndAddSegments(partitionTable);
         // 1. first upload one segment to remote.
         RemoteLogSegment remoteLogSegment = copyLogSegmentToRemote(logTablet, remoteLogStorage, 0);
-        rlIndexCache.getIndexEntry(remoteLogSegment);
+        rlIndexCache.getIndexEntry(FlussPaths.remoteLogDir(conf), remoteLogSegment);
 
         assertThat(rlIndexCache.getInternalCache().asMap().size()).isEqualTo(1);
         rlIndexCache.remove(UUID.randomUUID());
@@ -267,8 +310,8 @@ class RemoteLogIndexCacheTest extends RemoteLogTestBase {
         // 1. first upload two segment to remote.
         RemoteLogSegment remoteLogSegment1 = copyLogSegmentToRemote(logTablet, remoteLogStorage, 0);
         RemoteLogSegment remoteLogSegment2 = copyLogSegmentToRemote(logTablet, remoteLogStorage, 1);
-        rlIndexCache.getIndexEntry(remoteLogSegment1);
-        rlIndexCache.getIndexEntry(remoteLogSegment2);
+        rlIndexCache.getIndexEntry(FlussPaths.remoteLogDir(conf), remoteLogSegment1);
+        rlIndexCache.getIndexEntry(FlussPaths.remoteLogDir(conf), remoteLogSegment2);
 
         assertThat(rlIndexCache.getInternalCache().asMap().size()).isEqualTo(2);
         rlIndexCache.removeAll(
@@ -290,7 +333,7 @@ class RemoteLogIndexCacheTest extends RemoteLogTestBase {
         LogTablet logTablet = makeLogTabletAndAddSegments(partitionTable);
         // upload one segment to remote.
         RemoteLogSegment remoteLogSegment = copyLogSegmentToRemote(logTablet, remoteLogStorage, 0);
-        Entry entry = rlIndexCache.getIndexEntry(remoteLogSegment);
+        Entry entry = rlIndexCache.getIndexEntry(FlussPaths.remoteLogDir(conf), remoteLogSegment);
         assertThat(entry.offsetIndex().file().exists()).isTrue();
         // trigger cleanup.
         rlIndexCache.remove(remoteLogSegment.remoteLogSegmentId());

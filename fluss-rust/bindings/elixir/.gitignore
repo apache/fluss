@@ -1,6 +1,7 @@
 # Elixir build artifacts
 _build/
 deps/
+doc/
 
 # Generated NIF shared library
 priv/native/
