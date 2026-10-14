@@ -18,15 +18,19 @@
 package org.apache.fluss.rpc.netty.server;
 
 import org.apache.fluss.rpc.netty.NettyChannelInitializer;
+import org.apache.fluss.rpc.netty.ssl.SslContextFactory;
 import org.apache.fluss.rpc.protocol.ApiManager;
 import org.apache.fluss.security.auth.ServerAuthenticator;
 import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelHandlerContext;
 import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelInitializer;
 import org.apache.fluss.shaded.netty4.io.netty.channel.socket.SocketChannel;
+import org.apache.fluss.shaded.netty4.io.netty.handler.ssl.SslContext;
 import org.apache.fluss.utils.MathUtils;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import javax.annotation.Nullable;
 
 import java.util.function.Supplier;
 
@@ -44,6 +48,10 @@ final class ServerChannelInitializer extends NettyChannelInitializer {
     private final RequestsMetrics requestsMetrics;
     private final int maxRequestSize;
     private final Supplier<ServerAuthenticator> authenticatorSupplier;
+    /** The TLS context of this listener, or {@code null} when the listener is plaintext. */
+    @Nullable private final SslContext sslContext;
+
+    private final boolean requireClientAuth;
 
     public ServerChannelInitializer(
             RequestChannel[] requestChannels,
@@ -53,7 +61,9 @@ final class ServerChannelInitializer extends NettyChannelInitializer {
             RequestsMetrics requestsMetrics,
             long maxIdleTimeSeconds,
             int maxRequestSize,
-            Supplier<ServerAuthenticator> authenticatorSupplier) {
+            Supplier<ServerAuthenticator> authenticatorSupplier,
+            @Nullable SslContext sslContext,
+            boolean requireClientAuth) {
         super(maxIdleTimeSeconds);
         this.requestChannels = requestChannels;
         this.apiManager = apiManager;
@@ -62,11 +72,25 @@ final class ServerChannelInitializer extends NettyChannelInitializer {
         this.requestsMetrics = requestsMetrics;
         this.maxRequestSize = maxRequestSize;
         this.authenticatorSupplier = authenticatorSupplier;
+        this.sslContext = sslContext;
+        this.requireClientAuth = requireClientAuth;
     }
 
     @Override
     protected void initChannel(SocketChannel ch) throws Exception {
         super.initChannel(ch);
+        if (sslContext != null) {
+            // First in the pipeline, so framing and authentication run inside the encrypted
+            // channel.
+            ch.pipeline()
+                    .addFirst(
+                            "ssl",
+                            SslContextFactory.createServerSslHandler(
+                                    sslContext, ch.alloc(), requireClientAuth));
+            // Writes travel from the end of the pipeline to the start, so this handler sees each
+            // write before SslHandler does.
+            ch.pipeline().addAfter("ssl", "fileRegionToByteBuf", new TlsFileRegionHandler());
+        }
         // initialBytesToStrip=0 to include the frame size field after decoding
         addFrameDecoder(ch, maxRequestSize, 0, false);
         addIdleStateHandler(ch);
