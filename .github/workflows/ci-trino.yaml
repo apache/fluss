@@ -41,21 +41,16 @@ on:
       - 'tools/maven/**'
       - '.github/workflows/ci-trino.yaml'
 
+  # Core PRs do not pay for this job; core changes that break the connector are caught by the
+  # push trigger above. To check a core change up front, run it manually on a branch.
   pull_request:
     paths:
       - 'fluss-trino/**'
-      - 'fluss-client/**'
-      - 'fluss-common/**'
-      - 'fluss-rpc/**'
-      - 'fluss-server/**'
-      - 'fluss-test-utils/**'
-      - 'fluss-metrics/**'
-      - 'fluss-protogen/**'
-      - 'pom.xml'
-      - '.mvn/**'
-      - 'mvnw'
-      - 'tools/maven/**'
+      - 'tools/maven/checkstyle.xml'
+      - 'tools/maven/suppressions.xml'
       - '.github/workflows/ci-trino.yaml'
+
+  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.number || github.run_id }}

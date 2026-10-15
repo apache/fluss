@@ -26,7 +26,6 @@ import static io.trino.spi.ErrorType.EXTERNAL;
 
 /** Error codes reported by the Fluss connector. */
 enum FlussErrorCode implements ErrorCodeSupplier {
-    AUTHENTICATION_NOT_SUPPORTED(0, EXTERNAL),
     FLUSS_METADATA_ERROR(1, EXTERNAL),
     FLUSS_SPLIT_ERROR(2, EXTERNAL),
     FLUSS_READ_ERROR(3, EXTERNAL),

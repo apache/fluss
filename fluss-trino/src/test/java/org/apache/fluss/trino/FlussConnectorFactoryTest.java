@@ -21,6 +21,7 @@ import org.apache.fluss.client.Connection;
 import org.apache.fluss.client.ConnectionFactory;
 import org.apache.fluss.client.admin.Admin;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.shaded.guava32.com.google.common.collect.ImmutableMap;
 
 import io.trino.plugin.base.classloader.ClassLoaderSafeConnectorMetadata;
 import io.trino.plugin.base.classloader.ClassLoaderSafeConnectorPageSourceProvider;
@@ -33,6 +34,7 @@ import org.junit.jupiter.api.Test;
 import org.mockito.MockedStatic;
 
 import java.util.Collections;
+import java.util.Map;
 
 import static io.trino.spi.transaction.IsolationLevel.READ_COMMITTED;
 import static java.util.concurrent.CompletableFuture.completedFuture;
@@ -108,6 +110,34 @@ final class FlussConnectorFactoryTest {
                 connector.shutdown();
             }
             factory.verifyNoInteractions();
+        }
+    }
+
+    @Test
+    void testRejectAuthenticationAtCatalogCreation() {
+        ConnectorContext context = mock(ConnectorContext.class, RETURNS_MOCKS);
+        when(context.getSpiVersion()).thenReturn(new ConnectorContext() {}.getSpiVersion());
+
+        for (Map.Entry<String, String> property :
+                ImmutableMap.of(
+                                "client.security.protocol", "SASL",
+                                "client.security.sasl.mechanism", "PLAIN",
+                                "client.security.sasl.username", "test-user",
+                                "client.security.sasl.password", "test-password")
+                        .entrySet()) {
+            Map<String, String> config =
+                    ImmutableMap.of(
+                            "bootstrap.servers",
+                            "localhost:9123",
+                            property.getKey(),
+                            property.getValue());
+
+            try (MockedStatic<ConnectionFactory> factory = mockStatic(ConnectionFactory.class)) {
+                assertThatThrownBy(
+                                () -> new FlussConnectorFactory().create("fluss", config, context))
+                        .hasMessageContaining("only PLAINTEXT connections are currently supported");
+                factory.verifyNoInteractions();
+            }
         }
     }
 

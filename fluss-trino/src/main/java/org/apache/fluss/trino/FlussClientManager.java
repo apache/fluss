@@ -30,7 +30,6 @@ import jakarta.annotation.PreDestroy;
 
 import static org.apache.fluss.utils.ExceptionUtils.firstOrSuppressed;
 import static org.apache.fluss.utils.ExceptionUtils.rethrowException;
-import static org.apache.fluss.utils.Preconditions.checkArgument;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 import static org.apache.fluss.utils.Preconditions.checkState;
 
@@ -39,8 +38,6 @@ public final class FlussClientManager {
 
     private static final String BOOTSTRAP_SERVERS = "bootstrap.servers";
     private static final String SECURITY_PROTOCOL = "client.security.protocol";
-
-    private static final String PLAINTEXT = "PLAINTEXT";
 
     private final Object lock = new Object();
     private final Configuration configuration;
@@ -54,7 +51,6 @@ public final class FlussClientManager {
     @Inject
     public FlussClientManager(FlussConfig config) {
         checkNotNull(config, "config is null");
-        validateSecurityConfiguration(config);
 
         this.configuration = new Configuration();
         configuration.setString(BOOTSTRAP_SERVERS, config.getBootstrapServers());
@@ -117,24 +113,15 @@ public final class FlussClientManager {
     Table openTable(TablePath tablePath) {
         checkNotNull(tablePath, "tablePath is null");
 
+        Connection currentConnection;
         synchronized (lock) {
             initializeIfNeeded();
-            return connection.getTable(tablePath);
+            currentConnection = connection;
         }
-    }
 
-    private static void validateSecurityConfiguration(FlussConfig config) {
-        boolean unsupportedProtocol =
-                config.getSecurityProtocol().isPresent()
-                        && !PLAINTEXT.equalsIgnoreCase(config.getSecurityProtocol().get());
-
-        checkArgument(
-                !unsupportedProtocol
-                        && !config.getSaslMechanism().isPresent()
-                        && !config.getSaslUsername().isPresent()
-                        && !config.getSaslPassword().isPresent(),
-                "Authentication is not supported by the Fluss Trino connector; "
-                        + "only PLAINTEXT connections are currently supported");
+        // Opening a table issues blocking metadata RPCs; holding the lock here would block Admin
+        // callers and other splits behind them.
+        return currentConnection.getTable(tablePath);
     }
 
     /** Initializes both resources while holding lock. */

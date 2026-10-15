@@ -33,6 +33,12 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Tests connector configuration through Airlift's configuration binding. */
 final class FlussConfigTest {
+    private static final Map<String, String> SASL_PROPERTIES =
+            ImmutableMap.of(
+                    "client.security.sasl.mechanism", "PLAIN",
+                    "client.security.sasl.username", "test-user",
+                    "client.security.sasl.password", "test-password");
+
     @Test
     void testDefaults() {
         assertRecordedDefaults(
@@ -49,18 +55,48 @@ final class FlussConfigTest {
         Map<String, String> properties =
                 ImmutableMap.of(
                         "bootstrap.servers", "localhost:9123,localhost:9124",
-                        "client.security.protocol", "SASL",
-                        "client.security.sasl.mechanism", "PLAIN",
-                        "client.security.sasl.username", "test-user",
-                        "client.security.sasl.password", "test-password");
+                        "client.security.protocol", "plaintext");
         FlussConfig expected =
                 new FlussConfig()
                         .setBootstrapServers("localhost:9123,localhost:9124")
-                        .setSecurityProtocol("SASL")
-                        .setSaslMechanism("PLAIN")
-                        .setSaslUsername("test-user")
-                        .setSaslPassword("test-password");
-        assertFullMapping(properties, expected);
+                        .setSecurityProtocol("plaintext");
+        // SASL properties cannot pass validation yet; their mapping is covered below.
+        assertFullMapping(properties, expected, SASL_PROPERTIES.keySet());
+    }
+
+    @Test
+    void testAuthenticationPropertiesAreRejected() {
+        Map<String, String> unsupported =
+                ImmutableMap.<String, String>builder()
+                        .put("client.security.protocol", "SASL")
+                        .putAll(SASL_PROPERTIES)
+                        .build();
+        for (Map.Entry<String, String> property : unsupported.entrySet()) {
+            assertThatThrownBy(
+                            () ->
+                                    new ConfigurationFactory(
+                                                    ImmutableMap.of(
+                                                            "bootstrap.servers",
+                                                            "localhost:9123",
+                                                            property.getKey(),
+                                                            property.getValue()))
+                                            .build(FlussConfig.class))
+                    .hasMessageContaining("only PLAINTEXT connections are currently supported");
+        }
+    }
+
+    @Test
+    void testPlaintextOnly() {
+        assertThat(new FlussConfig().isPlaintextOnly()).isTrue();
+        assertThat(new FlussConfig().setSecurityProtocol("PLAINTEXT").isPlaintextOnly()).isTrue();
+        assertThat(new FlussConfig().setSecurityProtocol("plaintext").isPlaintextOnly()).isTrue();
+        assertThat(new FlussConfig().setSecurityProtocol("SASL").isPlaintextOnly()).isFalse();
+        assertThat(
+                        new FlussConfig()
+                                .setSecurityProtocol("PLAINTEXT")
+                                .setSaslUsername("test-user")
+                                .isPlaintextOnly())
+                .isFalse();
     }
 
     @Test

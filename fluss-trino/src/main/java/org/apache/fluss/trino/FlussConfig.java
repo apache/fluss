@@ -21,6 +21,7 @@ package org.apache.fluss.trino;
 import io.airlift.configuration.Config;
 import io.airlift.configuration.ConfigDescription;
 import io.airlift.configuration.ConfigSecuritySensitive;
+import jakarta.validation.constraints.AssertTrue;
 import jakarta.validation.constraints.NotEmpty;
 import jakarta.validation.constraints.NotNull;
 
@@ -28,6 +29,8 @@ import java.util.Optional;
 
 /** Configuration for the Fluss connector. */
 public class FlussConfig {
+
+    private static final String PLAINTEXT = "PLAINTEXT";
 
     private String bootstrapServers;
     private String securityProtocol;
@@ -94,5 +97,17 @@ public class FlussConfig {
     public FlussConfig setSaslPassword(String saslPassword) {
         this.saslPassword = saslPassword;
         return this;
+    }
+
+    /** Rejects authentication settings during catalog creation until SASL is supported. */
+    @AssertTrue(
+            message =
+                    "Authentication is not supported by the Fluss Trino connector; "
+                            + "only PLAINTEXT connections are currently supported")
+    public boolean isPlaintextOnly() {
+        return (securityProtocol == null || PLAINTEXT.equalsIgnoreCase(securityProtocol))
+                && saslMechanism == null
+                && saslUsername == null
+                && saslPassword == null;
     }
 }

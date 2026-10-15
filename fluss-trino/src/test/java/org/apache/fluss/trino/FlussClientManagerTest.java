@@ -20,6 +20,7 @@ package org.apache.fluss.trino;
 import org.apache.fluss.client.Connection;
 import org.apache.fluss.client.ConnectionFactory;
 import org.apache.fluss.client.admin.Admin;
+import org.apache.fluss.client.table.Table;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.AuthenticationException;
 import org.apache.fluss.metadata.TablePath;
@@ -29,7 +30,13 @@ import org.mockito.InOrder;
 import org.mockito.MockedStatic;
 
 import java.io.IOException;
+import java.time.Duration;
 import java.util.Arrays;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -115,21 +122,48 @@ final class FlussClientManagerTest {
     }
 
     @Test
-    void testUnsupportedAuthenticationConfiguration() {
-        for (FlussConfig config :
-                Arrays.asList(
-                        new FlussConfig().setSecurityProtocol("SASL"),
-                        new FlussConfig().setSaslMechanism("PLAIN"),
-                        new FlussConfig().setSaslUsername("test-user"),
-                        new FlussConfig().setSaslPassword("test-password"))) {
-            config.setBootstrapServers("localhost:9123");
+    void testSlowTableOpenDoesNotBlockOtherCallers() throws Exception {
+        Connection connection = mock(Connection.class);
+        Admin admin = mock(Admin.class);
+        Table table = mock(Table.class);
+        when(connection.getAdmin()).thenReturn(admin);
 
-            try (MockedStatic<ConnectionFactory> factory = mockStatic(ConnectionFactory.class)) {
-                assertThatThrownBy(() -> new FlussClientManager(config))
-                        .isInstanceOf(IllegalArgumentException.class)
-                        .hasMessageContaining("only PLAINTEXT");
+        CountDownLatch openStarted = new CountDownLatch(1);
+        CountDownLatch releaseOpen = new CountDownLatch(1);
+        when(connection.getTable(any(TablePath.class)))
+                .thenAnswer(
+                        invocation -> {
+                            openStarted.countDown();
+                            releaseOpen.await();
+                            return table;
+                        });
 
-                factory.verifyNoInteractions();
+        try (MockedStatic<ConnectionFactory> factory = mockStatic(ConnectionFactory.class)) {
+            factory.when(() -> ConnectionFactory.createConnection(any(Configuration.class)))
+                    .thenReturn(connection);
+
+            FlussClientManager manager =
+                    new FlussClientManager(new FlussConfig().setBootstrapServers("localhost:9123"));
+            // Static mocks are thread-local, so initialize on the test thread.
+            assertThat(manager.getAdmin()).isSameAs(admin);
+
+            ExecutorService executor = Executors.newFixedThreadPool(2);
+            try {
+                Future<Table> opening =
+                        executor.submit(() -> manager.openTable(TablePath.of("sales", "users")));
+                assertThat(openStarted.await(30, TimeUnit.SECONDS)).isTrue();
+
+                // Table opens issue blocking RPCs and must not serialize other callers.
+                assertThat(executor.submit(manager::getAdmin))
+                        .succeedsWithin(Duration.ofSeconds(30))
+                        .isSameAs(admin);
+
+                releaseOpen.countDown();
+                assertThat(opening).succeedsWithin(Duration.ofSeconds(30)).isSameAs(table);
+            } finally {
+                releaseOpen.countDown();
+                executor.shutdownNow();
+                manager.close();
             }
         }
     }

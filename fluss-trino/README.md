@@ -101,12 +101,12 @@ client compatibility fix is planned.
 The properties `client.security.protocol`, `client.security.sasl.mechanism`,
 `client.security.sasl.username`, and `client.security.sasl.password` remain
 recognized configuration keys for future compatibility. Retaining them does not
-enable authentication: the connector currently rejects initialization if a
+enable authentication: catalog creation fails with a configuration error if a
 protocol other than `PLAINTEXT`, or any SASL property, is configured. Leave SASL
 properties unset, even when explicitly selecting `PLAINTEXT`.
 
-Unsupported authentication configurations are rejected during catalog creation, 
-while the Fluss connection itself remains lazily initialized. This allows the 
+Unsupported authentication configurations are rejected during catalog creation,
+while the Fluss connection itself remains lazily initialized. This allows the
 catalog to be created without requiring a running Fluss cluster.
 
 Upgrading the Fluss client alone will not enable SASL support. The connector's 
