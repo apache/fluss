@@ -114,8 +114,8 @@ final class LogicalRowEqualizer {
             @Nullable DataType leftType, @Nullable DataType rightType, DataType latestType) {
         if (leftType == null
                 || rightType == null
-                || leftType.getTypeRoot() != latestType.getTypeRoot()
-                || rightType.getTypeRoot() != latestType.getTypeRoot()) {
+                || !leftType.equals(latestType)
+                || !rightType.equals(latestType)) {
             return (left, right) -> false;
         }
 

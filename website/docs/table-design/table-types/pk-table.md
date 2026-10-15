@@ -87,8 +87,9 @@ The following merge engines are supported:
 3. [Versioned Merge Engine](/table-design/merge-engines/versioned.md)
 4. [Aggregation Merge Engine](/table-design/merge-engines/aggregation.md)
 
-To suppress value-identical writes while keeping the default merge engine, enable
-[`table.upsert.skip-unchanged`](/table-design/table-types/skip-unchanged-upserts.md). It is disabled by default.
+To avoid redundant KV state writes and changelog records when an upsert leaves the stored row unchanged, enable
+[`table.upsert.skip-unchanged`](/table-design/table-types/skip-unchanged-upserts.md).
+The default merge engine remains in use, and the option is disabled by default.
 
 ## Change Data Feed
 

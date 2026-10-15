@@ -2023,7 +2023,7 @@ public class ConfigOptions {
                             "For a primary key table using the default merge behavior, skip the state write and changelog when the complete candidate row is logically equal to the stored row. "
                                     + "This also applies to partial updates and partial deletes. "
                                     + "It requires FULL changelog image mode and cannot be combined with row-level KV TTL or a merge engine. "
-                                    + "The previous value must be read for every upsert to determine whether it is unchanged.");
+                                    + "FULL changelog image mode already reads the previous value for every upsert. Comparing it with the complete candidate row adds comparison and allocation costs.");
 
     public static final ConfigOption<String> TABLE_MERGE_ENGINE_VERSION_COLUMN =
             // we may need to introduce "del-column" in the future to support delete operation

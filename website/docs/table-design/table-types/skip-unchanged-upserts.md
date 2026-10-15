@@ -6,8 +6,9 @@ sidebar_position: 2
 
 # Skip Unchanged Upserts
 
-Set `'table.upsert.skip-unchanged' = 'true'` to suppress value-identical writes to a primary key table. The option
-defaults to `false`. The [default merge engine](/table-design/merge-engines/default.md) still produces the complete
+Set `'table.upsert.skip-unchanged' = 'true'` to avoid redundant KV state writes and changelog records when an upsert
+leaves the stored row unchanged. The option defaults to `false`.
+The [default merge engine](/table-design/merge-engines/default.md) still produces the complete
 candidate row, including when an incoming write is a [partial update](pk-table.md#partial-update). Fluss then compares
 that candidate with the stored row. When their logical values are equal, Fluss keeps the stored row and emits no
 changelog record. When they differ, Fluss stores the candidate and emits the normal changelog records.
@@ -54,10 +55,10 @@ The TTL combination is rejected because skipping an unchanged write would also s
 time. `WAL` image mode is rejected because finding unchanged values requires a lookup of the stored row, removing
 the full-row WAL write optimization.
 
-With this option enabled, each upsert looks up the existing value while holding the write lock. When a row exists,
-Fluss compares it with the complete candidate row. This adds read, comparison, and allocation costs to updates,
-including updates that change the row. Measure throughput and latency with your workload before enabling it on a
-write-heavy table.
+In the required `FULL` changelog image mode, each upsert already looks up the existing value while holding the write
+lock. When a row exists, this option also compares it with the complete candidate row. The comparison and its setup
+add costs even to updates that change the row. Measure throughput and latency with your workload before enabling it
+on a write-heavy table.
 
 ## Example
 
