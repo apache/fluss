@@ -38,11 +38,14 @@ import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableChange;
 import org.apache.fluss.metadata.TableDescriptor;
+import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.server.coordinator.event.RecoverRebalanceEvent;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
 import org.apache.fluss.server.zk.data.RebalanceTask;
 import org.apache.fluss.types.DataTypes;
+import org.apache.fluss.types.RowType;
 
 import org.apache.kafka.clients.producer.KafkaProducer;
 import org.apache.kafka.clients.producer.ProducerConfig;
@@ -66,6 +69,7 @@ import org.apache.kafka.common.requests.ProduceResponse;
 import org.apache.kafka.common.requests.RequestHeader;
 import org.apache.kafka.common.requests.RequestUtils;
 import org.apache.kafka.common.serialization.ByteArraySerializer;
+import org.assertj.core.groups.Tuple;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 
@@ -199,9 +203,9 @@ class KafkaProduceRegressionITCase {
         try (Connection connection = ConnectionFactory.createConnection(CLUSTER.getClientConfig());
                 Admin admin = connection.getAdmin()) {
             try {
-                createTable(admin, path, 3);
-                TableBucket bucket =
-                        new TableBucket(admin.getTableInfo(path).get().getTableId(), 0);
+                createTable(admin, path, 3, metadataSchema(), 1);
+                TableInfo tableInfo = admin.getTableInfo(path).get();
+                TableBucket bucket = new TableBucket(tableInfo.getTableId(), 0);
                 MetadataResponsePartition initial =
                         waitForTopic(topic).data().topics().find(topic).partitions().get(0);
                 int oldLeader = initial.leaderId();
@@ -222,32 +226,21 @@ class KafkaProduceRegressionITCase {
                             (MetadataResponse) sendRequest(oldLeaderSocket, metadataRequest(topic));
                     assertThat(before.data().topics().find(topic).partitions().get(0).leaderId())
                             .isEqualTo(oldLeader);
-                    assertThat(send(producer, topic, "before_handoff").offset()).isZero();
+                    assertThat(send(producer, topic, 0, 123L, "before_handoff").offset()).isZero();
+                    assertRecordsWithMetadata(
+                            connection,
+                            path,
+                            0,
+                            0L,
+                            tableInfo.getSchemaId(),
+                            tuple(0L, "before_handoff", 123L, 0, 0));
                     CLUSTER.waitUntilReplicaExpandToIsr(bucket, newLeader);
                     double retriesBefore = producerMetric(producer, "record-retry-total");
                     double disconnectsBefore = producerMetric(producer, "connection-close-total");
 
                     rebalanceLeader(bucket, initial, newLeader, rebalanceId);
-                    retry(
-                            Duration.ofMinutes(1),
-                            () -> {
-                                assertThat(admin.listRebalanceProgress(rebalanceId).get())
-                                        .isPresent()
-                                        .get()
-                                        .extracting(RebalanceProgress::status)
-                                        .isEqualTo(RebalanceStatus.COMPLETED);
-                                MetadataResponsePartition updated =
-                                        fetchMetadata(topic)
-                                                .data()
-                                                .topics()
-                                                .find(topic)
-                                                .partitions()
-                                                .get(0);
-                                assertThat(updated.errorCode()).isEqualTo(Errors.NONE.code());
-                                assertThat(updated.leaderId()).isEqualTo(newLeader);
-                                assertThat(updated.leaderEpoch())
-                                        .isGreaterThan(initial.leaderEpoch());
-                            });
+                    waitForLeaderChange(
+                            admin, topic, 0, newLeader, initial.leaderEpoch(), rebalanceId);
                     CLUSTER.waitAndGetFollowerReplica(bucket, oldLeader);
                     assertThat(CLUSTER.getTabletServerNodes("KAFKA"))
                             .containsExactlyInAnyOrderElementsOf(nodes);
@@ -269,14 +262,22 @@ class KafkaProduceRegressionITCase {
                     // Metadata requests above must not refresh this route before the next send.
                     assertThat(producer.partitionsFor(topic).get(0).leader().id())
                             .isEqualTo(oldLeader);
-                    assertThat(send(producer, topic, "after_handoff").offset()).isEqualTo(1L);
+                    assertThat(send(producer, topic, 0, 456L, "after_handoff").offset())
+                            .isEqualTo(1L);
                     assertThat(producerMetric(producer, "record-retry-total"))
                             .isGreaterThan(retriesBefore);
                     assertThat(producerMetric(producer, "connection-close-total"))
                             .isEqualTo(disconnectsBefore);
                     assertThat(producer.partitionsFor(topic).get(0).leader().id())
                             .isEqualTo(newLeader);
-                    assertValues(connection, path, "before_handoff", "after_handoff");
+                    assertRecordsWithMetadata(
+                            connection,
+                            path,
+                            0,
+                            0L,
+                            tableInfo.getSchemaId(),
+                            tuple(0L, "before_handoff", 123L, 0, 0),
+                            tuple(1L, "after_handoff", 456L, 0, 0));
                 }
             } finally {
                 try {
@@ -382,6 +383,68 @@ class KafkaProduceRegressionITCase {
                     assertThat(send(producer, full, "recreated_full").offset()).isZero();
                     assertThat(send(producer, alias, "recreated_alias").offset()).isEqualTo(1L);
                     assertValues(connection, path, "recreated_full", "recreated_alias");
+                }
+            } finally {
+                admin.dropTable(path, true).get();
+            }
+        }
+    }
+
+    @Test
+    void testSameProducerAliasesUseAddedMetadataColumn() throws Exception {
+        TablePath path = TablePath.of(DATABASE, "cached_schema_alter");
+        String full = path.toString();
+        String alias = path.getTableName();
+        try (Connection connection = ConnectionFactory.createConnection(CLUSTER.getClientConfig());
+                Admin admin = connection.getAdmin()) {
+            try {
+                createTable(admin, path, 3);
+                TableInfo before = admin.getTableInfo(path).get();
+                Uuid fullId = topicId(full);
+                Uuid aliasId = topicId(alias);
+                try (KafkaProducer<byte[], byte[]> producer = producer("all", true)) {
+                    // Populate both name mappings and the write plan before changing the schema.
+                    assertThat(send(producer, full, "old_full").offset()).isZero();
+                    assertThat(send(producer, alias, "old_alias").offset()).isEqualTo(1L);
+                    assertValues(connection, path, "old_full", "old_alias");
+
+                    admin.alterTable(
+                                    path,
+                                    Collections.singletonList(
+                                            TableChange.addColumn(
+                                                    "_kafka_metadata",
+                                                    metadataType(),
+                                                    null,
+                                                    TableChange.ColumnPosition.last())),
+                                    false)
+                            .get();
+                    TableInfo after = admin.getTableInfo(path).get();
+                    assertThat(after.getTableId()).isEqualTo(before.getTableId());
+                    assertThat(after.getSchemaId()).isGreaterThan(before.getSchemaId());
+                    assertThat(after.getProperties().toMap())
+                            .isEqualTo(before.getProperties().toMap());
+                    assertThat(after.getSchema().getColumns()).hasSize(2);
+                    assertThat(after.getSchema().getColumn("_kafka_metadata").getDataType())
+                            .isEqualTo(metadataType());
+
+                    // Neither producer recreation nor a Kafka Metadata refresh should be needed.
+                    assertThat(send(producer, full, 0, 789L, "new_full").offset()).isEqualTo(2L);
+                    assertThat(send(producer, alias, 0, 987L, "new_alias").offset()).isEqualTo(3L);
+                    assertThat(topicId(full)).isEqualTo(fullId);
+                    assertThat(topicId(alias)).isEqualTo(aliasId);
+                    // Read the new batches using the new native schema, independently of the
+                    // native client's earlier cached table handle.
+                    try (Connection reader =
+                            ConnectionFactory.createConnection(CLUSTER.getClientConfig())) {
+                        assertRecordsWithMetadata(
+                                reader,
+                                path,
+                                0,
+                                2L,
+                                after.getSchemaId(),
+                                tuple(2L, "new_full", 789L, 0, 0),
+                                tuple(3L, "new_alias", 987L, 0, 0));
+                    }
                 }
             } finally {
                 admin.dropTable(path, true).get();
@@ -510,56 +573,108 @@ class KafkaProduceRegressionITCase {
     }
 
     @Test
-    void testReplicatedOffsetsSurviveLeaderLossAndRestart() throws Exception {
+    void testReplicatedOffsetsAndMetadataSurviveLeaderLossAndRestart() throws Exception {
         TablePath path = TablePath.of(DATABASE, "durable_restart");
+        String topic = path.toString();
+        String rebalanceId = "kafka-recovered-leader";
+        int partition = 1;
         int stopped = -1;
         try (Connection connection = ConnectionFactory.createConnection(CLUSTER.getClientConfig());
                 Admin admin = connection.getAdmin()) {
             try {
-                createTable(admin, path, 3);
-                TableBucket bucket =
-                        new TableBucket(admin.getTableInfo(path).get().getTableId(), 0);
+                createTable(admin, path, 3, metadataSchema(), 2);
+                TableInfo tableInfo = admin.getTableInfo(path).get();
+                TableBucket bucket = new TableBucket(tableInfo.getTableId(), partition);
                 MetadataResponsePartition initial =
-                        waitForTopic(path.toString())
+                        waitForTopic(topic, 2)
                                 .data()
                                 .topics()
-                                .find(path.toString())
+                                .find(topic)
                                 .partitions()
-                                .get(0);
+                                .get(partition);
                 for (int replica : initial.replicaNodes()) {
                     CLUSTER.waitUntilReplicaExpandToIsr(bucket, replica);
                 }
                 try (KafkaProducer<byte[], byte[]> producer = producer("all", true)) {
-                    assertThat(send(producer, path.toString(), "before").offset()).isZero();
+                    assertThat(send(producer, topic, partition, 123L, "before").offset()).isZero();
+                    assertRecordsWithMetadata(
+                            connection,
+                            path,
+                            partition,
+                            0L,
+                            tableInfo.getSchemaId(),
+                            tuple(0L, "before", 123L, 0, partition));
                     stopped = initial.leaderId();
                     CLUSTER.stopTabletServer(stopped);
                     retry(
                             Duration.ofMinutes(1),
                             () ->
                                     assertThat(
-                                                    waitForTopic(path.toString())
+                                                    waitForTopic(topic, 2)
                                                             .data()
                                                             .topics()
-                                                            .find(path.toString())
+                                                            .find(topic)
                                                             .partitions()
-                                                            .get(0)
+                                                            .get(partition)
                                                             .leaderId())
                                             .isNotEqualTo(initial.leaderId()));
-                    assertThat(send(producer, path.toString(), "after_loss").offset())
+                    assertThat(send(producer, topic, partition, 456L, "after_loss").offset())
                             .isEqualTo(1L);
+                    assertRecordsWithMetadata(
+                            connection,
+                            path,
+                            partition,
+                            0L,
+                            tableInfo.getSchemaId(),
+                            tuple(0L, "before", 123L, 0, partition),
+                            tuple(1L, "after_loss", 456L, 0, partition));
                     CLUSTER.startTabletServer(stopped);
                     CLUSTER.assertHasTabletServerNumber(3);
                     CLUSTER.waitUntilReplicaExpandToIsr(bucket, stopped);
-                    assertThat(send(producer, path.getTableName(), "after_restart").offset())
+                    // Make the recovered replica serve reads and writes, including the record
+                    // produced while it was offline. ISR membership alone does not prove readback.
+                    MetadataResponsePartition current =
+                            waitForTopic(topic, 2)
+                                    .data()
+                                    .topics()
+                                    .find(topic)
+                                    .partitions()
+                                    .get(partition);
+                    rebalanceLeader(bucket, current, stopped, rebalanceId);
+                    waitForLeaderChange(
+                            admin, topic, partition, stopped, current.leaderEpoch(), rebalanceId);
+                    assertThat(
+                                    send(
+                                                    producer,
+                                                    path.getTableName(),
+                                                    partition,
+                                                    789L,
+                                                    "after_restart")
+                                            .offset())
                             .isEqualTo(2L);
-                    assertValues(connection, path, "before", "after_loss", "after_restart");
+                    try (Connection reader =
+                            ConnectionFactory.createConnection(CLUSTER.getClientConfig())) {
+                        assertRecordsWithMetadata(
+                                reader,
+                                path,
+                                partition,
+                                0L,
+                                tableInfo.getSchemaId(),
+                                tuple(0L, "before", 123L, 0, partition),
+                                tuple(1L, "after_loss", 456L, 0, partition),
+                                tuple(2L, "after_restart", 789L, 0, partition));
+                    }
                 }
             } finally {
                 if (stopped >= 0 && CLUSTER.getTabletServerById(stopped) == null) {
                     CLUSTER.startTabletServer(stopped);
                     CLUSTER.assertHasTabletServerNumber(3);
                 }
-                admin.dropTable(path, true).get();
+                try {
+                    admin.cancelRebalance(rebalanceId).get();
+                } finally {
+                    admin.dropTable(path, true).get();
+                }
             }
         }
     }
@@ -608,15 +723,23 @@ class KafkaProduceRegressionITCase {
     }
 
     private static void createTable(Admin admin, TablePath path, int replicas) throws Exception {
+        createTable(
+                admin,
+                path,
+                replicas,
+                Schema.newBuilder().column("_kafka_value", DataTypes.BYTES()).build(),
+                1);
+    }
+
+    private static void createTable(
+            Admin admin, TablePath path, int replicas, Schema schema, int buckets)
+            throws Exception {
         admin.createDatabase(path.getDatabaseName(), DatabaseDescriptor.EMPTY, true).get();
         admin.createTable(
                         path,
                         TableDescriptor.builder()
-                                .schema(
-                                        Schema.newBuilder()
-                                                .column("_kafka_value", DataTypes.BYTES())
-                                                .build())
-                                .distributedBy(1)
+                                .schema(schema)
+                                .distributedBy(buckets)
                                 .logFormat(LogFormat.ARROW)
                                 .property(ConfigOptions.TABLE_REPLICATION_FACTOR, replicas)
                                 .property(ConfigOptions.TABLE_KAFKA_ENABLED, true)
@@ -625,6 +748,20 @@ class KafkaProduceRegressionITCase {
                         false)
                 .get();
         CLUSTER.waitUntilTableReady(admin.getTableInfo(path).get().getTableId());
+    }
+
+    private static Schema metadataSchema() {
+        return Schema.newBuilder()
+                .column("_kafka_value", DataTypes.BYTES())
+                .column("_kafka_metadata", metadataType())
+                .build();
+    }
+
+    private static RowType metadataType() {
+        return DataTypes.ROW(
+                DataTypes.FIELD("timestamp", DataTypes.TIMESTAMP_LTZ(3)),
+                DataTypes.FIELD("timestamp_type", DataTypes.INT()),
+                DataTypes.FIELD("partition", DataTypes.INT()));
     }
 
     private static void setMinIsr(Admin admin, int minIsr) throws Exception {
@@ -668,7 +805,52 @@ class KafkaProduceRegressionITCase {
         }
     }
 
+    private static void assertRecordsWithMetadata(
+            Connection connection,
+            TablePath path,
+            int partition,
+            long startOffset,
+            int schemaId,
+            Tuple... expected)
+            throws Exception {
+        try (Table table = connection.getTable(path);
+                LogScanner scanner = table.newScan().createLogScanner()) {
+            scanner.subscribe(partition, startOffset);
+            List<Tuple> actual = new ArrayList<>();
+            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(30);
+            while (actual.size() < expected.length && System.nanoTime() < deadline) {
+                for (ScanRecord record : scanner.poll(Duration.ofSeconds(1))) {
+                    assertThat(record.getSchemaId())
+                            .as("Schema at offset %s", record.logOffset())
+                            .isEqualTo(schemaId);
+                    InternalRow row = record.getRow();
+                    assertThat(row.getFieldCount()).isEqualTo(2);
+                    assertThat(row.isNullAt(1)).isFalse();
+                    InternalRow metadata = row.getRow(1, 3);
+                    assertThat(metadata.getFieldCount()).isEqualTo(3);
+                    assertThat(metadata.isNullAt(0)).isFalse();
+                    assertThat(metadata.isNullAt(1)).isFalse();
+                    assertThat(metadata.isNullAt(2)).isFalse();
+                    actual.add(
+                            tuple(
+                                    record.logOffset(),
+                                    new String(row.getBytes(0), StandardCharsets.UTF_8),
+                                    metadata.getTimestampLtz(0, 3).getEpochMillisecond(),
+                                    metadata.getInt(1),
+                                    metadata.getInt(2)));
+                }
+            }
+            assertThat(actual)
+                    .as("Native metadata readback for %s bucket %s", path, partition)
+                    .containsExactly(expected);
+        }
+    }
+
     private static MetadataResponse waitForTopic(String topic) {
+        return waitForTopic(topic, 1);
+    }
+
+    private static MetadataResponse waitForTopic(String topic, int partitions) {
         AtomicReference<MetadataResponse> result = new AtomicReference<>();
         retry(
                 Duration.ofMinutes(1),
@@ -676,8 +858,10 @@ class KafkaProduceRegressionITCase {
                     MetadataResponse response = fetchMetadata(topic);
                     MetadataResponseTopic metadata = response.data().topics().find(topic);
                     assertThat(metadata.errorCode()).isEqualTo(Errors.NONE.code());
-                    assertThat(metadata.partitions()).hasSize(1);
-                    assertThat(metadata.partitions().get(0).leaderId()).isNotEqualTo(-1);
+                    assertThat(metadata.partitions())
+                            .hasSize(partitions)
+                            .allSatisfy(
+                                    partition -> assertThat(partition.leaderId()).isNotEqualTo(-1));
                     result.set(response);
                 });
         return result.get();
@@ -796,6 +980,34 @@ class KafkaProduceRegressionITCase {
                 .put(new RecoverRebalanceEvent(task));
     }
 
+    private static void waitForLeaderChange(
+            Admin admin,
+            String topic,
+            int partition,
+            int newLeader,
+            int oldEpoch,
+            String rebalanceId) {
+        retry(
+                Duration.ofMinutes(1),
+                () -> {
+                    assertThat(admin.listRebalanceProgress(rebalanceId).get())
+                            .isPresent()
+                            .get()
+                            .extracting(RebalanceProgress::status)
+                            .isEqualTo(RebalanceStatus.COMPLETED);
+                    MetadataResponsePartition updated =
+                            fetchMetadata(topic)
+                                    .data()
+                                    .topics()
+                                    .find(topic)
+                                    .partitions()
+                                    .get(partition);
+                    assertThat(updated.errorCode()).isEqualTo(Errors.NONE.code());
+                    assertThat(updated.leaderId()).isEqualTo(newLeader);
+                    assertThat(updated.leaderEpoch()).isGreaterThan(oldEpoch);
+                });
+    }
+
     private static double producerMetric(KafkaProducer<byte[], byte[]> producer, String name) {
         return producer.metrics().entrySet().stream()
                 .filter(
@@ -812,6 +1024,23 @@ class KafkaProduceRegressionITCase {
         return producer.send(
                         new ProducerRecord<>(
                                 topic, 0, null, value.getBytes(StandardCharsets.UTF_8)))
+                .get(60, TimeUnit.SECONDS);
+    }
+
+    private static RecordMetadata send(
+            KafkaProducer<byte[], byte[]> producer,
+            String topic,
+            int partition,
+            long timestamp,
+            String value)
+            throws Exception {
+        return producer.send(
+                        new ProducerRecord<>(
+                                topic,
+                                partition,
+                                timestamp,
+                                null,
+                                value.getBytes(StandardCharsets.UTF_8)))
                 .get(60, TimeUnit.SECONDS);
     }
 
