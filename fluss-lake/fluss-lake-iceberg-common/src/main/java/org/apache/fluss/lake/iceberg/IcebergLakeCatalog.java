@@ -191,19 +191,20 @@ public class IcebergLakeCatalog implements LakeCatalog {
         for (TableChange tableChange : propertyChanges) {
             if (tableChange instanceof TableChange.SetOption) {
                 TableChange.SetOption option = (TableChange.SetOption) tableChange;
+                String icebergKey = convertFlussPropertyKeyToIceberg(option.getKey());
                 checkArgument(
-                        !RESERVED_PROPERTIES.contains(option.getKey()),
+                        !isReservedProperty(option.getKey(), icebergKey),
                         "Cannot set table property '%s'",
                         option.getKey());
-                updateProperties.set(
-                        convertFlussPropertyKeyToIceberg(option.getKey()), option.getValue());
+                updateProperties.set(icebergKey, option.getValue());
             } else if (tableChange instanceof TableChange.ResetOption) {
                 TableChange.ResetOption option = (TableChange.ResetOption) tableChange;
+                String icebergKey = convertFlussPropertyKeyToIceberg(option.getKey());
                 checkArgument(
-                        !RESERVED_PROPERTIES.contains(option.getKey()),
+                        !isReservedProperty(option.getKey(), icebergKey),
                         "Cannot reset table property '%s'",
                         option.getKey());
-                updateProperties.remove(convertFlussPropertyKeyToIceberg(option.getKey()));
+                updateProperties.remove(icebergKey);
             } else {
                 throw new UnsupportedOperationException(
                         "Unsupported table change: " + tableChange.getClass());
@@ -544,6 +545,15 @@ public class IcebergLakeCatalog implements LakeCatalog {
         } else {
             icebergProperties.put(FLUSS_CONF_PREFIX + key, value);
         }
+    }
+
+    /**
+     * Whether a Fluss option names a reserved Iceberg property. The check covers the key as given
+     * and the Iceberg key it converts to, because a reserved property is reached through the
+     * "iceberg." prefix.
+     */
+    private static boolean isReservedProperty(String flussKey, String icebergKey) {
+        return RESERVED_PROPERTIES.contains(flussKey) || RESERVED_PROPERTIES.contains(icebergKey);
     }
 
     private static String convertFlussPropertyKeyToIceberg(String key) {
