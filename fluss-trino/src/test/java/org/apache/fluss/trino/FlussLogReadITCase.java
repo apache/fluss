@@ -499,7 +499,7 @@ class FlussLogReadITCase {
             append("replaced_events", GenericRow.of(2));
             barrier.close();
             assertThatThrownBy(() -> query.get(30, TimeUnit.SECONDS))
-                    .hasStackTraceContaining("changed during query planning");
+                    .hasStackTraceContaining("changed");
         } finally {
             executor.shutdownNow();
             assertThat(executor.awaitTermination(30, TimeUnit.SECONDS)).isTrue();
@@ -528,7 +528,7 @@ class FlussLogReadITCase {
                     .get(30, TimeUnit.SECONDS);
             barrier.close();
             assertThatThrownBy(() -> query.get(30, TimeUnit.SECONDS))
-                    .hasStackTraceContaining("changed during query planning");
+                    .hasStackTraceContaining("changed");
         } finally {
             executor.shutdownNow();
             assertThat(executor.awaitTermination(30, TimeUnit.SECONDS)).isTrue();

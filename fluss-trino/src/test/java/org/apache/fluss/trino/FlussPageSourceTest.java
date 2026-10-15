@@ -483,6 +483,97 @@ final class FlussPageSourceTest {
         assertThat(source.getCompletedBytes()).isZero();
     }
 
+    @Test
+    void testReadAndCloseUsePluginClassLoader() throws Exception {
+        ClassLoader pluginClassLoader = FlussPageSource.class.getClassLoader();
+
+        when(clients.openTable(PATH))
+                .thenAnswer(
+                        invocation -> {
+                            assertThat(Thread.currentThread().getContextClassLoader())
+                                    .isSameAs(pluginClassLoader);
+                            return table;
+                        });
+
+        when(scan.createBatchScanner(BUCKET))
+                .thenAnswer(
+                        invocation -> {
+                            assertThat(Thread.currentThread().getContextClassLoader())
+                                    .isSameAs(pluginClassLoader);
+                            return scanner;
+                        });
+
+        when(scanner.pollBatch(POLL_TIMEOUT))
+                .thenAnswer(
+                        invocation -> {
+                            assertThat(Thread.currentThread().getContextClassLoader())
+                                    .isSameAs(pluginClassLoader);
+                            return rows(1);
+                        });
+
+        doAnswer(
+                        invocation -> {
+                            assertThat(Thread.currentThread().getContextClassLoader())
+                                    .isSameAs(pluginClassLoader);
+                            return null;
+                        })
+                .when(scanner)
+                .close();
+
+        doAnswer(
+                        invocation -> {
+                            assertThat(Thread.currentThread().getContextClassLoader())
+                                    .isSameAs(pluginClassLoader);
+                            return null;
+                        })
+                .when(table)
+                .close();
+
+        source = create();
+
+        ClassLoader original = Thread.currentThread().getContextClassLoader();
+        ClassLoader other = new ClassLoader(null) {};
+
+        try {
+            Thread.currentThread().setContextClassLoader(other);
+
+            assertThat(source.getNextSourcePage()).isNotNull();
+            assertThat(Thread.currentThread().getContextClassLoader()).isSameAs(other);
+
+            source.close();
+
+            assertThat(source.isFinished()).isTrue();
+            assertThat(Thread.currentThread().getContextClassLoader()).isSameAs(other);
+        } finally {
+            Thread.currentThread().setContextClassLoader(original);
+        }
+
+        verify(scanner).close();
+        verify(table).close();
+    }
+
+    @Test
+    void testClassLoaderRestoredAfterInitializationFailure() {
+        RuntimeException failure = new IllegalStateException("open failed");
+        when(clients.openTable(PATH)).thenThrow(failure);
+
+        source = create();
+
+        ClassLoader original = Thread.currentThread().getContextClassLoader();
+        ClassLoader other = new ClassLoader(null) {};
+
+        try {
+            Thread.currentThread().setContextClassLoader(other);
+
+            assertThatThrownBy(source::getNextSourcePage).isSameAs(failure);
+
+            assertThat(Thread.currentThread().getContextClassLoader()).isSameAs(other);
+            assertThat(source.isFinished()).isTrue();
+        } finally {
+            Thread.currentThread().setContextClassLoader(original);
+        }
+    }
+
     private FlussPageSource create() {
         return create(
                 FlussSplit.forKv(new FlussBucketHandle(42, Optional.empty(), 0)),

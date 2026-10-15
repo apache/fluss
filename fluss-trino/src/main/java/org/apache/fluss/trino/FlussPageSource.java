@@ -27,6 +27,7 @@ import io.trino.spi.Page;
 import io.trino.spi.PageBuilder;
 import io.trino.spi.TrinoException;
 import io.trino.spi.block.DuplicateMapKeyException;
+import io.trino.spi.classloader.ThreadContextClassLoader;
 import io.trino.spi.connector.ConnectorPageSource;
 import io.trino.spi.connector.MemoryContext;
 import io.trino.spi.connector.SourcePage;
@@ -93,7 +94,8 @@ final class FlussPageSource implements ConnectorPageSource {
         if (closed) {
             return null;
         }
-        try {
+        try (ThreadContextClassLoader ignored =
+                new ThreadContextClassLoader(FlussPageSource.class.getClassLoader())) {
             initialize();
             if (!reader.hasNext()) {
                 if (reader.isFinished()) {
@@ -191,50 +193,56 @@ final class FlussPageSource implements ConnectorPageSource {
         if (closed) {
             return;
         }
+        try (ThreadContextClassLoader ignored =
+                new ThreadContextClassLoader(FlussPageSource.class.getClassLoader())) {
+            closed = true;
 
-        closed = true;
+            FlussSplitReader readerToClose = reader;
+            Table tableToClose = table;
 
-        FlussSplitReader readerToClose = reader;
-        Table tableToClose = table;
+            reader = null;
+            table = null;
+            decoder = null;
 
-        reader = null;
-        table = null;
-        decoder = null;
+            Throwable failure = null;
 
-        Throwable failure = null;
+            if (readerToClose != null) {
+                try {
+                    completedBytes = readerToClose.getCompletedBytes();
+                } catch (RuntimeException | Error e) {
+                    failure = firstOrSuppressed(e, failure);
+                }
+                try {
+                    readerToClose.close();
+                } catch (Exception | Error e) {
+                    failure = firstOrSuppressed(e, failure);
+                }
+            }
 
-        if (readerToClose != null) {
+            if (tableToClose != null) {
+                try {
+                    tableToClose.close();
+                } catch (Exception | Error e) {
+                    failure = firstOrSuppressed(e, failure);
+                }
+            }
+
             try {
-                completedBytes = readerToClose.getCompletedBytes();
-                readerToClose.close();
-            } catch (Exception | Error e) {
+                memory.setBytes(0);
+            } catch (RuntimeException | Error e) {
                 failure = firstOrSuppressed(e, failure);
             }
-        }
 
-        if (tableToClose != null) {
-            try {
-                tableToClose.close();
-            } catch (Exception | Error e) {
-                failure = firstOrSuppressed(e, failure);
+            if (failure instanceof Error) {
+                throw (Error) failure;
             }
-        }
 
-        try {
-            memory.setBytes(0);
-        } catch (RuntimeException | Error e) {
-            failure = firstOrSuppressed(e, failure);
-        }
-
-        if (failure instanceof Error) {
-            throw (Error) failure;
-        }
-
-        if (failure != null) {
-            throw new TrinoException(
-                    GENERIC_INTERNAL_ERROR,
-                    "Failed closing Fluss reader for " + handle + ", split " + split,
-                    failure);
+            if (failure != null) {
+                throw new TrinoException(
+                        GENERIC_INTERNAL_ERROR,
+                        "Failed closing Fluss reader for " + handle + ", split " + split,
+                        failure);
+            }
         }
     }
 

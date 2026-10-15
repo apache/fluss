@@ -24,7 +24,6 @@ import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.AuthenticationException;
 import org.apache.fluss.metadata.TablePath;
 
-import io.trino.spi.TrinoException;
 import org.junit.jupiter.api.Test;
 import org.mockito.InOrder;
 import org.mockito.MockedStatic;
@@ -32,7 +31,6 @@ import org.mockito.MockedStatic;
 import java.io.IOException;
 import java.util.Arrays;
 
-import static org.apache.fluss.trino.FlussErrorCode.AUTHENTICATION_NOT_SUPPORTED;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
@@ -117,7 +115,7 @@ final class FlussClientManagerTest {
     }
 
     @Test
-    void testAuthenticationConfigurationIsRejectedOnFirstUse() throws Exception {
+    void testUnsupportedAuthenticationConfiguration() {
         for (FlussConfig config :
                 Arrays.asList(
                         new FlussConfig().setSecurityProtocol("SASL"),
@@ -125,21 +123,28 @@ final class FlussClientManagerTest {
                         new FlussConfig().setSaslUsername("test-user"),
                         new FlussConfig().setSaslPassword("test-password"))) {
             config.setBootstrapServers("localhost:9123");
+
+            try (MockedStatic<ConnectionFactory> factory = mockStatic(ConnectionFactory.class)) {
+                assertThatThrownBy(() -> new FlussClientManager(config))
+                        .isInstanceOf(IllegalArgumentException.class)
+                        .hasMessageContaining("only PLAINTEXT");
+
+                factory.verifyNoInteractions();
+            }
+        }
+    }
+
+    @Test
+    void testPlaintextConfigurationDoesNotInitializeConnection() throws Exception {
+        for (FlussConfig config :
+                Arrays.asList(
+                        new FlussConfig(), new FlussConfig().setSecurityProtocol("PLAINTEXT"))) {
+            config.setBootstrapServers("localhost:9123");
+
             try (MockedStatic<ConnectionFactory> factory = mockStatic(ConnectionFactory.class)) {
                 FlussClientManager manager = new FlussClientManager(config);
                 try {
                     factory.verifyNoInteractions();
-                    assertThatThrownBy(manager::getAdmin)
-                            .isInstanceOfSatisfying(
-                                    TrinoException.class,
-                                    failure ->
-                                            assertThat(failure.getErrorCode())
-                                                    .isEqualTo(
-                                                            AUTHENTICATION_NOT_SUPPORTED
-                                                                    .toErrorCode()));
-                    assertThatThrownBy(() -> manager.openTable(TablePath.of("sales", "users")))
-                            .isInstanceOf(TrinoException.class)
-                            .hasMessageContaining("only PLAINTEXT");
                 } finally {
                     manager.close();
                 }

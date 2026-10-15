@@ -117,6 +117,22 @@ final class FlussMetadataTest {
     }
 
     @Test
+    void testTableHandleRejectsAmbiguousPhysicalNames() {
+        givenTables("Users", "users");
+        assertThatThrownBy(
+                        () ->
+                                metadata.getTableHandle(
+                                        session, USERS, Optional.empty(), Optional.empty()))
+                .isInstanceOfSatisfying(
+                        TrinoException.class,
+                        failure ->
+                                assertThat(failure.getErrorCode())
+                                        .isEqualTo(NOT_SUPPORTED.toErrorCode()))
+                .hasMessageContaining("Ambiguous Fluss table");
+        verify(admin, never()).getTableInfo(PHYSICAL_USERS);
+    }
+
+    @Test
     void testTableMetadataAndColumnHandles() {
         when(admin.getTableInfo(PHYSICAL_USERS)).thenReturn(completedFuture(usersTable()));
         FlussTableHandle handle = new FlussTableHandle("sales", "users", "Sales", "Users", 42, 3);

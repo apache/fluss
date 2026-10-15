@@ -26,12 +26,11 @@ import org.apache.fluss.config.Configuration;
 import org.apache.fluss.metadata.TablePath;
 
 import com.google.inject.Inject;
-import io.trino.spi.TrinoException;
 import jakarta.annotation.PreDestroy;
 
-import static org.apache.fluss.trino.FlussErrorCode.AUTHENTICATION_NOT_SUPPORTED;
 import static org.apache.fluss.utils.ExceptionUtils.firstOrSuppressed;
 import static org.apache.fluss.utils.ExceptionUtils.rethrowException;
+import static org.apache.fluss.utils.Preconditions.checkArgument;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 import static org.apache.fluss.utils.Preconditions.checkState;
 
@@ -40,15 +39,11 @@ public final class FlussClientManager {
 
     private static final String BOOTSTRAP_SERVERS = "bootstrap.servers";
     private static final String SECURITY_PROTOCOL = "client.security.protocol";
-    private static final String SASL_MECHANISM = "client.security.sasl.mechanism";
-    private static final String SASL_USERNAME = "client.security.sasl.username";
-    private static final String SASL_PASSWORD = "client.security.sasl.password";
 
     private static final String PLAINTEXT = "PLAINTEXT";
 
     private final Object lock = new Object();
     private final Configuration configuration;
-    private final boolean authenticationConfigured;
 
     // All mutable state is guarded by lock.
     private Connection connection;
@@ -59,17 +54,13 @@ public final class FlussClientManager {
     @Inject
     public FlussClientManager(FlussConfig config) {
         checkNotNull(config, "config is null");
+        validateSecurityConfiguration(config);
 
         this.configuration = new Configuration();
         configuration.setString(BOOTSTRAP_SERVERS, config.getBootstrapServers());
 
         config.getSecurityProtocol()
                 .ifPresent(value -> configuration.setString(SECURITY_PROTOCOL, value));
-        config.getSaslMechanism()
-                .ifPresent(value -> configuration.setString(SASL_MECHANISM, value));
-        config.getSaslUsername().ifPresent(value -> configuration.setString(SASL_USERNAME, value));
-        config.getSaslPassword().ifPresent(value -> configuration.setString(SASL_PASSWORD, value));
-        this.authenticationConfigured = isAuthenticationConfigured(config);
     }
 
     /** Closes initialized resources without triggering initialization. */
@@ -132,19 +123,26 @@ public final class FlussClientManager {
         }
     }
 
+    private static void validateSecurityConfiguration(FlussConfig config) {
+        boolean unsupportedProtocol =
+                config.getSecurityProtocol().isPresent()
+                        && !PLAINTEXT.equalsIgnoreCase(config.getSecurityProtocol().get());
+
+        checkArgument(
+                !unsupportedProtocol
+                        && !config.getSaslMechanism().isPresent()
+                        && !config.getSaslUsername().isPresent()
+                        && !config.getSaslPassword().isPresent(),
+                "Authentication is not supported by the Fluss Trino connector; "
+                        + "only PLAINTEXT connections are currently supported");
+    }
+
     /** Initializes both resources while holding lock. */
     private void initializeIfNeeded() {
         checkState(!closed, "Fluss client manager is closed");
 
         if (connection != null) {
             return;
-        }
-
-        if (authenticationConfigured) {
-            throw new TrinoException(
-                    AUTHENTICATION_NOT_SUPPORTED,
-                    "Authentication is not supported by the Fluss Trino connector; "
-                            + "only PLAINTEXT connections are currently supported");
         }
 
         Connection newConnection = null;
@@ -166,13 +164,5 @@ public final class FlussClientManager {
 
             throw failure;
         }
-    }
-
-    private static boolean isAuthenticationConfigured(FlussConfig config) {
-        return (config.getSecurityProtocol().isPresent()
-                        && !PLAINTEXT.equalsIgnoreCase(config.getSecurityProtocol().get()))
-                || config.getSaslMechanism().isPresent()
-                || config.getSaslUsername().isPresent()
-                || config.getSaslPassword().isPresent();
     }
 }

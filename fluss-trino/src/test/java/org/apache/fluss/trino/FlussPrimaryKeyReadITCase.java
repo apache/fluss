@@ -390,7 +390,7 @@ class FlussPrimaryKeyReadITCase {
             addColumn("schema_planned");
             barrier.close();
             assertThatThrownBy(() -> query.get(30, TimeUnit.SECONDS))
-                    .hasStackTraceContaining("changed during query planning");
+                    .hasStackTraceContaining("changed");
         } finally {
             shutdown(executor);
         }
@@ -433,7 +433,7 @@ class FlussPrimaryKeyReadITCase {
             upsert("replacement_planned", row(2, "replacement"));
             barrier.close();
             assertThatThrownBy(() -> query.get(30, TimeUnit.SECONDS))
-                    .hasStackTraceContaining("changed during query planning");
+                    .hasStackTraceContaining("changed");
         } finally {
             shutdown(executor);
         }

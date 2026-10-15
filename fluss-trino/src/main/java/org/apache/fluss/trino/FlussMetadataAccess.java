@@ -21,6 +21,7 @@ package org.apache.fluss.trino;
 import org.apache.fluss.client.admin.Admin;
 import org.apache.fluss.client.admin.OffsetSpec;
 import org.apache.fluss.exception.DatabaseNotExistException;
+import org.apache.fluss.exception.PartitionNotExistException;
 import org.apache.fluss.exception.TableNotExistException;
 import org.apache.fluss.metadata.BucketInfo;
 import org.apache.fluss.metadata.TableInfo;
@@ -61,7 +62,6 @@ import static org.apache.fluss.utils.Preconditions.checkNotNull;
  * the requested name is ambiguous.
  */
 final class FlussMetadataAccess {
-
     private final FlussClientManager clientManager;
 
     @Inject
@@ -133,6 +133,12 @@ final class FlussMetadataAccess {
         return tableNameMappingBuilder.build();
     }
 
+    /**
+     * Resolves case-insensitive Trino identifiers to physical Fluss names.
+     *
+     * <p>Both schema and table discovery are required to detect ambiguous names that differ only in
+     * case.
+     */
     Optional<ResolvedTableName> resolveTable(SchemaTableName tableName) {
         checkNotNull(tableName, "tableName is null");
 
@@ -234,16 +240,35 @@ final class FlussMetadataAccess {
         }
     }
 
-    void validateCurrentBuckets(FlussTableHandle table, List<FlussPhysicalBucket> expectedBuckets) {
+    List<FlussPhysicalBucket> retainCurrentBuckets(
+            FlussTableHandle table, List<FlussPhysicalBucket> expectedBuckets) {
         Set<FlussPhysicalBucket> currentBuckets = new HashSet<>(listScanBuckets(table));
-        for (FlussPhysicalBucket expected : expectedBuckets) {
-            if (!currentBuckets.contains(expected)) {
-                throw new TrinoException(
-                        FLUSS_SPLIT_ERROR,
-                        "Fluss bucket topology changed during split planning; retry the query: missing "
-                                + expected);
+        Set<Long> currentPartitionIds = new HashSet<>();
+        for (FlussPhysicalBucket current : currentBuckets) {
+            FlussBucketHandle bucket = current.getBucket();
+            if (bucket.isPartitioned()) {
+                currentPartitionIds.add(bucket.getRequiredPartitionId());
             }
         }
+        ImmutableList.Builder<FlussPhysicalBucket> remaining = ImmutableList.builder();
+        for (FlussPhysicalBucket expected : expectedBuckets) {
+            if (currentBuckets.contains(expected)) {
+                remaining.add(expected);
+                continue;
+            }
+            FlussBucketHandle bucket = expected.getBucket();
+            if (bucket.isPartitioned()
+                    && !currentPartitionIds.contains(bucket.getRequiredPartitionId())) {
+                // The original physical partition no longer exists.
+                continue;
+            }
+            throw new TrinoException(
+                    FLUSS_SPLIT_ERROR,
+                    "Fluss bucket topology changed during split planning; retry the query: missing "
+                            + expected);
+        }
+
+        return remaining.build();
     }
 
     private Admin getAdmin() {
@@ -301,23 +326,36 @@ final class FlussMetadataAccess {
                             .map(FlussPhysicalBucket::getBucket)
                             .map(FlussBucketHandle::getBucketId)
                             .collect(ImmutableList.toImmutableList());
-            futures.put(
-                    partitionName,
-                    admin.listOffsets(tablePath, partitionName, bucketIds, offsetSpec).all());
+            try {
+                futures.put(
+                        partitionName,
+                        admin.listOffsets(tablePath, partitionName, bucketIds, offsetSpec).all());
+            } catch (PartitionNotExistException e) {
+                // The partition may have expired since bucket discovery.
+            }
         }
 
         ImmutableMap.Builder<FlussBucketHandle, Long> result = ImmutableMap.builder();
-
         for (Map.Entry<String, List<FlussPhysicalBucket>> entry : bucketsByPartition.entrySet()) {
             String partitionName = entry.getKey();
-            Map<Integer, Long> rawOffsets =
-                    await(
-                            futures.get(partitionName),
-                            FLUSS_SPLIT_ERROR,
-                            "Failed to list Fluss offsets for "
-                                    + table
-                                    + " partition "
-                                    + partitionName);
+            CompletableFuture<Map<Integer, Long>> future = futures.get(partitionName);
+            if (future == null) {
+                continue;
+            }
+            Map<Integer, Long> rawOffsets;
+            try {
+                rawOffsets =
+                        await(
+                                future,
+                                FLUSS_SPLIT_ERROR,
+                                "Failed to list Fluss offsets for "
+                                        + table
+                                        + " partition "
+                                        + partitionName);
+            } catch (PartitionNotExistException e) {
+                // The partition disappeared while fetching offsets.
+                continue;
+            }
 
             for (FlussPhysicalBucket physicalBucket : entry.getValue()) {
                 FlussBucketHandle bucket = physicalBucket.getBucket();
@@ -466,6 +504,9 @@ final class FlussMetadataAccess {
             }
             if (cause instanceof Error) {
                 throw (Error) cause;
+            }
+            if (cause instanceof PartitionNotExistException) {
+                throw (PartitionNotExistException) cause;
             }
 
             throw new TrinoException(errorCode, message, cause);

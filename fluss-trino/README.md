@@ -105,10 +105,12 @@ enable authentication: the connector currently rejects initialization if a
 protocol other than `PLAINTEXT`, or any SASL property, is configured. Leave SASL
 properties unset, even when explicitly selecting `PLAINTEXT`.
 
-Client initialization is lazy, so this rejection occurs on the first operation
-that needs the Fluss client, rather than during catalog creation. Upgrading the
-Fluss client alone will not enable SASL while the connector's explicit restriction
-remains in place; it must also be removed after compatibility is verified.
+Unsupported authentication configurations are rejected during catalog creation, 
+while the Fluss connection itself remains lazily initialized. This allows the 
+catalog to be created without requiring a running Fluss cluster.
+
+Upgrading the Fluss client alone will not enable SASL support. The connector's 
+explicit restriction must also be removed once compatibility has been verified.
 
 The Arrow JVM option below does not resolve the SASL incompatibility.
 

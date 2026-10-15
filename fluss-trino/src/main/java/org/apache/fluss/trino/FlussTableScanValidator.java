@@ -23,8 +23,8 @@ import org.apache.fluss.metadata.TableInfo;
 import io.trino.spi.TrinoException;
 
 import static io.trino.spi.StandardErrorCode.GENERIC_INTERNAL_ERROR;
-import static io.trino.spi.StandardErrorCode.NOT_SUPPORTED;
 import static io.trino.spi.StandardErrorCode.UNSUPPORTED_TABLE_TYPE;
+import static org.apache.fluss.trino.FlussErrorCode.FLUSS_METADATA_CHANGED;
 
 final class FlussTableScanValidator {
 
@@ -33,13 +33,12 @@ final class FlussTableScanValidator {
     static void validateIdentity(FlussTableHandle handle, TableInfo info) {
         if (handle.getTableId() != info.getTableId()) {
             throw new TrinoException(
-                    NOT_SUPPORTED, "Fluss table changed during query planning; retry the query");
+                    FLUSS_METADATA_CHANGED, "Fluss table changed; retry the query");
         }
 
         if (handle.getSchemaId() != info.getSchemaId()) {
             throw new TrinoException(
-                    NOT_SUPPORTED,
-                    "Fluss table schema changed during query planning; retry the query");
+                    FLUSS_METADATA_CHANGED, "Fluss table schema changed; retry the query");
         }
     }
 

@@ -36,6 +36,7 @@ import java.util.Optional;
 
 import static io.trino.spi.StandardErrorCode.NOT_SUPPORTED;
 import static java.util.concurrent.CompletableFuture.completedFuture;
+import static org.apache.fluss.trino.FlussErrorCode.FLUSS_METADATA_CHANGED;
 import static org.apache.fluss.trino.FlussErrorCode.FLUSS_METADATA_ERROR;
 import static org.apache.fluss.trino.FlussErrorCode.FLUSS_SPLIT_ERROR;
 import static org.apache.fluss.trino.TestingFlussMetadata.metadataAccess;
@@ -208,15 +209,15 @@ final class FlussMetadataAccessTest {
                         TrinoException.class,
                         failure ->
                                 assertThat(failure.getErrorCode())
-                                        .isEqualTo(NOT_SUPPORTED.toErrorCode()))
-                .hasMessageContaining("changed during query planning");
+                                        .isEqualTo(FLUSS_METADATA_CHANGED.toErrorCode()))
+                .hasMessageContaining("changed");
         assertThatThrownBy(
                         () ->
                                 access.getTableInfo(
                                         new FlussTableHandle(
                                                 "sales", "users", "Sales", "Users", 42, 2)))
                 .isInstanceOf(TrinoException.class)
-                .hasMessageContaining("changed during query planning");
+                .hasMessageContaining("changed");
     }
 
     @Test

@@ -97,15 +97,21 @@ final class FlussSplitPlanner {
         Map<FlussBucketHandle, Long> stops =
                 metadataAccess.resolveOffsets(table, buckets, new OffsetSpec.LatestSpec());
 
-        metadataAccess.validateCurrentBuckets(table, buckets);
+        List<FlussPhysicalBucket> remainingBuckets =
+                metadataAccess.retainCurrentBuckets(table, buckets);
 
         ImmutableList.Builder<FlussSplit> splits = ImmutableList.builder();
 
-        for (FlussPhysicalBucket physicalBucket : buckets) {
+        for (FlussPhysicalBucket physicalBucket : remainingBuckets) {
             FlussBucketHandle bucket = physicalBucket.getBucket();
 
-            long start = starts.get(bucket);
-            long stop = stops.get(bucket);
+            Long start = starts.get(bucket);
+            Long stop = stops.get(bucket);
+
+            if (start == null || stop == null) {
+                throw new TrinoException(
+                        FLUSS_SPLIT_ERROR, "Missing Fluss log offsets for " + bucket);
+            }
 
             if (start > stop) {
                 throw new TrinoException(
