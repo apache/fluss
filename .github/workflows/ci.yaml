@@ -41,7 +41,36 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  changes:
+    name: "Detect changed modules"
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: read
+    outputs:
+      spark-only: ${{ steps.changes.outputs.spark-only }}
+    steps:
+      - name: Detect Spark-only pull requests
+        id: changes
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const files = await github.paginate(github.rest.pulls.listFiles, {
+              ...context.repo,
+              pull_number: context.issue.number,
+              per_page: 100
+            });
+            // Incomplete file lists must fall back to the full CI matrix.
+            const sparkOnly = files.length > 0 &&
+              files.length === context.payload.pull_request.changed_files &&
+              files.every(file => file.filename.startsWith('fluss-spark/') &&
+                (!file.previous_filename || file.previous_filename.startsWith('fluss-spark/')));
+            core.setOutput('spark-only', sparkOnly);
+            core.info(`Spark-only pull request: ${sparkOnly}`);
+
   compile-on-jdk8:
+    needs: changes
+    if: needs.changes.outputs.spark-only != 'true'
     name: "Compile Java 8"
     runs-on: ubuntu-latest
     steps:
@@ -57,7 +86,9 @@ jobs:
           mvn -T 1C -B clean install -DskipTests -Pjava8
 
   build-on-jdk11:
+    needs: changes
     name: "Java 11"
     uses: ./.github/workflows/ci-template.yaml
     with:
-        java-version: "11"
+      java-version: "11"
+      spark-only: ${{ needs.changes.outputs.spark-only == 'true' }}
