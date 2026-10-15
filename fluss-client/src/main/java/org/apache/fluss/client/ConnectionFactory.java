@@ -34,7 +34,6 @@ import org.apache.fluss.metrics.registry.MetricRegistry;
 @PublicEvolving
 public class ConnectionFactory {
 
-    // CI scope probe: Changes outside Spark should select the full CI matrix.
     private ConnectionFactory() {}
 
     /**

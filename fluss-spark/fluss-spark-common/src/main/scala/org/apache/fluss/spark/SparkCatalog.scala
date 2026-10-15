@@ -34,7 +34,6 @@ import java.util.concurrent.ExecutionException
 
 import scala.collection.JavaConverters._
 
-// CI scope probe: Spark-only changes should select only Spark CI stages.
 class SparkCatalog
   extends TableCatalog
   with SupportsFlussNamespaces
