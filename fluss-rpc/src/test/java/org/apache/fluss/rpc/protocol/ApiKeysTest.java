@@ -48,4 +48,14 @@ class ApiKeysTest {
     void testAlterTableSupportsBucketCountChange() {
         assertThat(ApiKeys.ALTER_TABLE.highestSupportedVersion).isEqualTo((short) 1);
     }
+
+    @Test
+    void testConsumerOffsetApiKeys() {
+        assertThat(ApiKeys.FIND_CONSUMER_GROUP_OWNER.id).isEqualTo((short) 1068);
+        assertThat(ApiKeys.COMMIT_CONSUMER_OFFSETS.id).isEqualTo((short) 1069);
+        assertThat(ApiKeys.GET_CONSUMER_OFFSETS.id).isEqualTo((short) 1070);
+        assertThat(ApiKeys.DELETE_CONSUMER_OFFSETS.id).isEqualTo((short) 1071);
+        assertThat(ApiKeys.DELETE_CONSUMER_GROUPS.id).isEqualTo((short) 1072);
+        assertThat(ApiKeys.LIST_CONSUMER_GROUPS.id).isEqualTo((short) 1073);
+    }
 }
