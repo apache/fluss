@@ -35,6 +35,52 @@ You can also do streaming read without reading the snapshot data, you can use `l
 SELECT * FROM my_table /*+ OPTIONS('scan.startup.mode' = 'latest') */;
 ```
 
+### Historical Partition Changelogs
+
+For primary-key tables with `table.datalake.historical-partition.enabled` set to `true`,
+streaming reads also consume the internal historical partition's changelog using the table's changelog semantics.
+Records retain their original business partition values. Partition predicates still prune ordinary
+partitions and lake snapshots; Flink evaluates the predicates on records from the shared historical log.
+
+In `full` mode, the source groups historical business partitions' lake splits by bucket and reads
+each group before consuming that historical bucket's changelog from the offset recorded in the same lake snapshot.
+Historical snapshot parallelism is therefore limited by both the historical bucket count and the source parallelism.
+Changelog-only startup modes skip this snapshot phase and use the existing per-bucket log reading path.
+
+#### Limitations
+
+This support covers streaming reads of primary-key tables and assumes that ordinary partitions
+being read do not transition to historical partitions during the job, including during full startup.
+The source does not prevent such transitions or coordinate their handoff. The existing historical
+partition feature is limited to auto-partitioned Paimon tables with a single partition key.
+
+- **Ordering across a transition is not guaranteed.** If an ordinary partition has unread records
+  when it expires, later changes to the same key in the historical bucket may be emitted first.
+  This can affect downstream materialized results or aggregation state. The limitation applies
+  to both full and changelog-only startup; choosing a starting offset does not coordinate the two logs.
+- **Unread ordinary-partition records may be lost to the consumer.** The existing source behavior
+  unsubscribes from a removed partition without first draining its log. Historical changelog
+  subscription does not fix this pre-existing limitation or recover the unread records.
+- **Full startup can have lower snapshot parallelism.** Lake splits from different historical
+  business partitions in the same bucket are read sequentially. Snapshot parallelism is at most
+  `min(historical bucket count, source parallelism)`, and slow snapshots delay log output on the
+  same reader. Changelog-only startup has no additional snapshot grouping cost, but its parallelism
+  is still limited by the historical bucket count.
+- **Partition filters may not reduce historical log I/O.** A historical bucket shares the logs
+  of multiple business partitions, so records outside the selected partitions may still be read
+  and then filtered by Flink.
+- **Existing retention limits still apply.** When no readable lake snapshot exists, full startup
+  falls back to the earliest retained historical changelog. It cannot guarantee a complete baseline
+  if the required history is no longer available.
+- **Checkpoint upgrades need separate consideration.** Checkpoints from a source version that did
+  not subscribe to historical logs have no historical consumption offset. When the historical
+  partition is discovered as new after restoration, the existing discovery rule starts it at the
+  earliest retained offset. This can replay history already represented in downstream state;
+  the unchanged checkpoint format does not provide an offset migration or deduplication mechanism.
+
+Long-running jobs on auto-partitioned tables can encounter partition expiration. Historical
+changelog subscription alone does not guarantee complete, ordered consumption across that transition.
+
 ### Column Pruning
 
 Column pruning minimizes I/O by reading only the columns used in a query and ignoring unused ones at the storage layer.
@@ -493,7 +539,6 @@ SELECT * FROM pk_table
 /*+ OPTIONS('scan.startup.mode' = 'earliest',
 'scan.bounded.mode' = 'latest-offset') */;
 ```
-
 
 
 

@@ -47,6 +47,7 @@ import java.util.stream.IntStream;
 import static org.apache.fluss.client.table.scanner.log.LogScanner.EARLIEST_OFFSET;
 import static org.apache.fluss.flink.source.split.LogSplit.NO_STOPPING_OFFSET;
 import static org.apache.fluss.metadata.ResolvedPartitionSpec.PARTITION_SPEC_SEPARATOR;
+import static org.apache.fluss.utils.PartitionUtils.HISTORICAL_PARTITION_VALUE;
 
 /** A generator for lake splits. */
 public class LakeSplitGenerator {
@@ -148,6 +149,9 @@ public class LakeSplitGenerator {
                                         (existing, replacement) -> existing,
                                         LinkedHashMap::new));
         long lakeSplitPartitionId = -1L;
+        boolean hasHistoricalPartition =
+                !isLogTable && flussPartitionByName.containsKey(HISTORICAL_PARTITION_VALUE);
+        Map<Integer, List<LakeSplit>> historicalLakeSplits = new HashMap<>();
 
         // iterate lake splits
         for (Map.Entry<String, Map<Integer, List<LakeSplit>>> lakeSplitEntry :
@@ -175,6 +179,16 @@ public class LakeSplitGenerator {
                                 tableBucketSnapshotLogOffset,
                                 bucketEndOffset));
 
+            } else if (hasHistoricalPartition) {
+                // Tiering preserves the Fluss bucket for each business partition. Group its lake
+                // splits with the corresponding historical log so the existing hybrid reader
+                // emits the complete baseline before any later changes for those keys.
+                lakeSplitsOfPartition.forEach(
+                        (bucket, bucketSplits) -> {
+                            historicalLakeSplits
+                                    .computeIfAbsent(bucket, ignored -> new ArrayList<>())
+                                    .addAll(bucketSplits);
+                        });
             } else {
                 // only lake data
                 splits.addAll(
@@ -193,6 +207,8 @@ public class LakeSplitGenerator {
         // iterate remain fluss splits
         for (PartitionInfo flussPartition : flussPartitionByName.values()) {
             String partitionName = flussPartition.getPartitionName();
+            boolean historical =
+                    hasHistoricalPartition && HISTORICAL_PARTITION_VALUE.equals(partitionName);
             int partitionBucketCount = flussPartition.getBucketCount();
             Map<Integer, Long> bucketEndOffset =
                     stoppingOffsetInitializer.getBucketOffsets(
@@ -203,7 +219,7 @@ public class LakeSplitGenerator {
                             bucketOffsetsRetriever);
             splits.addAll(
                     generateSplit(
-                            null,
+                            historical ? historicalLakeSplits : null,
                             flussPartition.getPartitionId(),
                             partitionName,
                             partitionBucketCount,
@@ -321,11 +337,13 @@ public class LakeSplitGenerator {
             @Nullable String partitionName,
             @Nullable Long snapshotLogOffset,
             long stoppingOffset) {
-        // no snapshot data for this bucket or no a corresponding log offset in this bucket,
-        // can only scan from change log
         if (snapshotLogOffset == null || snapshotLogOffset < 0) {
-            return new LakeSnapshotAndFlussLogSplit(
-                    tableBucket, partitionName, null, EARLIEST_OFFSET, stoppingOffset);
+            snapshotLogOffset = EARLIEST_OFFSET;
+            // Historical lake splits are baselines from expired normal partitions. Keep them even
+            // when the historical changelog has no tiered offset yet.
+            if (!HISTORICAL_PARTITION_VALUE.equals(partitionName)) {
+                lakeSplits = null;
+            }
         }
 
         return new LakeSnapshotAndFlussLogSplit(
