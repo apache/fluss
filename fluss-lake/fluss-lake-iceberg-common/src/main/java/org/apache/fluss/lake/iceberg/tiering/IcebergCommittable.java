@@ -21,12 +21,17 @@ import org.apache.fluss.lake.iceberg.maintenance.RewriteDataFileResult;
 
 import org.apache.iceberg.DataFile;
 import org.apache.iceberg.DeleteFile;
+import org.apache.iceberg.PartitionSpec;
 import org.apache.iceberg.util.DataFileSet;
 import org.apache.iceberg.util.DeleteFileSet;
 
+import javax.annotation.Nullable;
+
 import java.io.Serializable;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 /** The committable that derived from {@link IcebergWriteResult} to commit to Iceberg. */
 public class IcebergCommittable implements Serializable {
@@ -38,13 +43,19 @@ public class IcebergCommittable implements Serializable {
 
     private final List<RewriteDataFileResult> rewriteDataFiles;
 
+    // the partition specs of the table by spec id, to serialize the files of the committable.
+    // Null if restored from version 1 of the serializer, which did not persist the specs.
+    @Nullable private final Map<Integer, PartitionSpec> specs;
+
     private IcebergCommittable(
             DataFileSet dataFiles,
             DeleteFileSet deleteFiles,
-            List<RewriteDataFileResult> rewriteDataFiles) {
+            List<RewriteDataFileResult> rewriteDataFiles,
+            Map<Integer, PartitionSpec> specs) {
         this.dataFiles = dataFiles;
         this.deleteFiles = deleteFiles;
         this.rewriteDataFiles = rewriteDataFiles;
+        this.specs = specs;
     }
 
     public DataFileSet getDataFiles() {
@@ -57,6 +68,11 @@ public class IcebergCommittable implements Serializable {
 
     public List<RewriteDataFileResult> rewriteDataFileResults() {
         return rewriteDataFiles;
+    }
+
+    @Nullable
+    public Map<Integer, PartitionSpec> specs() {
+        return specs;
     }
 
     public static Builder builder() {
@@ -73,6 +89,8 @@ public class IcebergCommittable implements Serializable {
 
         private final List<RewriteDataFileResult> rewriteDataFileResults = new ArrayList<>();
 
+        private final Map<Integer, PartitionSpec> specs = new HashMap<>();
+
         public Builder addDataFile(DataFile dataFile) {
             this.dataFiles.add(dataFile);
             return this;
@@ -88,8 +106,13 @@ public class IcebergCommittable implements Serializable {
             return this;
         }
 
+        public Builder addSpecs(Map<Integer, PartitionSpec> specs) {
+            this.specs.putAll(specs);
+            return this;
+        }
+
         public IcebergCommittable build() {
-            return new IcebergCommittable(dataFiles, deleteFiles, rewriteDataFileResults);
+            return new IcebergCommittable(dataFiles, deleteFiles, rewriteDataFileResults, specs);
         }
     }
 

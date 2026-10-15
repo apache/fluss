@@ -20,8 +20,10 @@
 
 package org.apache.fluss.lake.iceberg.source;
 
+import org.apache.fluss.lake.iceberg.utils.TestingGoldenFiles;
 import org.apache.fluss.lake.source.LakeSource;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.utils.InstantiationUtils;
 
 import org.apache.iceberg.PartitionSpec;
 import org.apache.iceberg.Schema;
@@ -39,12 +41,17 @@ import java.io.ObjectOutputStream;
 import java.util.Arrays;
 import java.util.List;
 
+import static org.apache.fluss.lake.iceberg.utils.TestingGoldenFiles.SPLIT_DIR;
+import static org.apache.fluss.lake.iceberg.utils.TestingGoldenFiles.assertSplitEquals;
+import static org.apache.fluss.lake.iceberg.utils.TestingGoldenFiles.goldenSplit;
 import static org.apache.iceberg.types.Types.NestedField.optional;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assumptions.assumeThat;
 
 /** Test case for {@link IcebergSplitSerializer}. */
 class IcebergSplitSerializerTest extends IcebergSourceTestBase {
+
     private final IcebergSplitSerializer serializer = new IcebergSplitSerializer();
 
     @Test
@@ -77,10 +84,50 @@ class IcebergSplitSerializerTest extends IcebergSourceTestBase {
         byte[] serialized = serializer.serialize(originalIcebergSplit);
         IcebergSplit deserialized = serializer.deserialize(serializer.getVersion(), serialized);
 
-        assertThat(deserialized.fileScanTask().file().location())
-                .isEqualTo(originalIcebergSplit.fileScanTask().file().location());
-        assertThat(deserialized.partition()).isEqualTo(originalIcebergSplit.partition());
-        assertThat(deserialized.bucket()).isEqualTo(originalIcebergSplit.bucket());
+        assertSplitEquals(deserialized, originalIcebergSplit);
+    }
+
+    @Test
+    void testSerializeNullPartitionValues() throws Exception {
+        IcebergSplit goldenSplit = goldenSplit();
+        IcebergSplit nullPartition = new IcebergSplit(goldenSplit.fileScanTask(), 1, null);
+        IcebergSplit nullPartitionValue =
+                new IcebergSplit(goldenSplit.fileScanTask(), 1, Arrays.asList("a", null));
+
+        for (IcebergSplit split : Arrays.asList(nullPartition, nullPartitionValue)) {
+            IcebergSplit deserialized =
+                    serializer.deserialize(serializer.getVersion(), serializer.serialize(split));
+            assertSplitEquals(deserialized, split);
+        }
+    }
+
+    @Test
+    void testDeserializeGoldenFiles() throws Exception {
+        IcebergSplit expected = goldenSplit();
+        for (int version = 1; version <= serializer.getVersion(); version++) {
+            IcebergSplit deserialized =
+                    serializer.deserialize(version, TestingGoldenFiles.read(SPLIT_DIR, version));
+            assertSplitEquals(deserialized, expected);
+        }
+    }
+
+    @Test
+    void testCurrentVersionMatchesGoldenFile() throws Exception {
+        // the current format must not change without bumping the version
+        assertThat(serializer.serialize(goldenSplit()))
+                .isEqualTo(TestingGoldenFiles.read(SPLIT_DIR, serializer.getVersion()));
+    }
+
+    @Test
+    void testRegenerateGoldenFiles() throws Exception {
+        assumeThat(TestingGoldenFiles.shouldRegenerate())
+                .as("golden files are only regenerated on request")
+                .isTrue();
+
+        IcebergSplit goldenSplit = goldenSplit();
+        TestingGoldenFiles.write(SPLIT_DIR, 1, InstantiationUtils.serializeObject(goldenSplit));
+        TestingGoldenFiles.write(
+                SPLIT_DIR, serializer.getVersion(), serializer.serialize(goldenSplit));
     }
 
     @Test
@@ -131,9 +178,22 @@ class IcebergSplitSerializerTest extends IcebergSourceTestBase {
     }
 
     @Test
-    void testDeserializeWithInvalidData() {
+    void testDeserializeWithInvalidData() throws Exception {
         byte[] invalidData = "invalid".getBytes();
         assertThatThrownBy(() -> serializer.deserialize(1, invalidData))
                 .isInstanceOf(IOException.class);
+        assertThatThrownBy(() -> serializer.deserialize(2, invalidData))
+                .isInstanceOf(IOException.class);
+
+        assertThatThrownBy(() -> serializer.deserialize(2, "{}".getBytes()))
+                .isInstanceOf(IOException.class)
+                .hasStackTraceContaining("Missing field");
+    }
+
+    @Test
+    void testDeserializeUnknownVersion() {
+        assertThatThrownBy(() -> serializer.deserialize(3, new byte[0]))
+                .isInstanceOf(IOException.class)
+                .hasMessageContaining("Unsupported IcebergSplit serializer version 3");
     }
 }

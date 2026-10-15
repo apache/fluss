@@ -138,7 +138,7 @@ public class IcebergLakeWriter implements LakeWriter<IcebergWriteResult> {
             if (compactionFuture != null) {
                 rewriteDataFileResult = compactionFuture.get();
             }
-            return new IcebergWriteResult(writeResult, rewriteDataFileResult);
+            return new IcebergWriteResult(writeResult, icebergTable.specs(), rewriteDataFileResult);
         } catch (Exception e) {
             throw new IOException("Failed to complete Iceberg write.", e);
         }

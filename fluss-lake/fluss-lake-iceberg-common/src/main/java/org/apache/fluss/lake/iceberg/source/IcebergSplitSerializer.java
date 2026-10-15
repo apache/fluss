@@ -23,9 +23,29 @@ import org.apache.fluss.utils.InstantiationUtils;
 
 import java.io.IOException;
 
-/** Serializer for Iceberg split. */
+import static org.apache.fluss.lake.iceberg.utils.IcebergJsonSerdeUtils.fromJsonBytes;
+import static org.apache.fluss.lake.iceberg.utils.IcebergJsonSerdeUtils.toJsonBytes;
+
+/**
+ * Serializer for {@link IcebergSplit}.
+ *
+ * <h3>Version Evolution:</h3>
+ *
+ * <ul>
+ *   <li><b>Version 1:</b> Initial version. Java serialization of {@link IcebergSplit}, which can
+ *       only be read by the Iceberg version that wrote it.
+ *   <li><b>Version 2 (Current):</b> A JSON document written by {@link IcebergSplitJsonSerde}, so
+ *       that the split can be read across Iceberg versions.
+ * </ul>
+ *
+ * <p>This serializer can deserialize splits of all previous versions, but always produces the
+ * current version during serialization.
+ */
 public class IcebergSplitSerializer implements SimpleVersionedSerializer<IcebergSplit> {
-    private static final int CURRENT_VERSION = 1;
+
+    private static final int VERSION_1 = 1;
+    private static final int VERSION_2 = 2;
+    private static final int CURRENT_VERSION = VERSION_2;
 
     @Override
     public int getVersion() {
@@ -34,18 +54,29 @@ public class IcebergSplitSerializer implements SimpleVersionedSerializer<Iceberg
 
     @Override
     public byte[] serialize(IcebergSplit icebergSplit) throws IOException {
-        return InstantiationUtils.serializeObject(icebergSplit);
+        return toJsonBytes(icebergSplit, IcebergSplitJsonSerde.INSTANCE);
     }
 
     @Override
     public IcebergSplit deserialize(int version, byte[] serialized) throws IOException {
-        IcebergSplit icebergSplit;
+        switch (version) {
+            case VERSION_1:
+                return deserializeV1(serialized);
+            case VERSION_2:
+                return fromJsonBytes(serialized, IcebergSplitJsonSerde.INSTANCE, "IcebergSplit");
+            default:
+                throw new IOException(
+                        String.format(
+                                "Unsupported IcebergSplit serializer version %s, the supported versions are %s and %s.",
+                                version, VERSION_1, VERSION_2));
+        }
+    }
+
+    private IcebergSplit deserializeV1(byte[] serialized) throws IOException {
         try {
-            icebergSplit =
-                    InstantiationUtils.deserializeObject(serialized, getClass().getClassLoader());
+            return InstantiationUtils.deserializeObject(serialized, getClass().getClassLoader());
         } catch (ClassNotFoundException e) {
             throw new IOException(e);
         }
-        return icebergSplit;
     }
 }

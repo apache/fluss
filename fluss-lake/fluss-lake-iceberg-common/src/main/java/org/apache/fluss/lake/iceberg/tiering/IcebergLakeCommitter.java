@@ -76,7 +76,8 @@ public class IcebergLakeCommitter implements LakeCommitter<IcebergWriteResult, I
     @Override
     public IcebergCommittable toCommittable(List<IcebergWriteResult> icebergWriteResults) {
         // Aggregate all write results into a single committable
-        IcebergCommittable.Builder builder = IcebergCommittable.builder();
+        IcebergCommittable.Builder builder =
+                IcebergCommittable.builder().addSpecs(icebergTable.specs());
 
         for (IcebergWriteResult result : icebergWriteResults) {
             WriteResult writeResult = result.getWriteResult();

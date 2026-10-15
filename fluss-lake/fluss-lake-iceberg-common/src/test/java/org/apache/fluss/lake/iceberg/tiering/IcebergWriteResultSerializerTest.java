@@ -19,6 +19,8 @@
 package org.apache.fluss.lake.iceberg.tiering;
 
 import org.apache.fluss.lake.iceberg.maintenance.RewriteDataFileResult;
+import org.apache.fluss.lake.iceberg.utils.TestingGoldenFiles;
+import org.apache.fluss.utils.InstantiationUtils;
 
 import org.apache.iceberg.DataFile;
 import org.apache.iceberg.DataFiles;
@@ -34,10 +36,18 @@ import org.apache.iceberg.util.DataFileSet;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import java.io.ByteArrayOutputStream;
+import java.io.DataOutputStream;
 import java.io.IOException;
 import java.util.Collections;
+import java.util.Map;
 
+import static org.apache.fluss.lake.iceberg.utils.TestingGoldenFiles.WRITE_RESULT_DIR;
+import static org.apache.fluss.lake.iceberg.utils.TestingGoldenFiles.assertWriteResultEquals;
+import static org.apache.fluss.lake.iceberg.utils.TestingGoldenFiles.goldenWriteResult;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assumptions.assumeThat;
 
 /** UT for {@link IcebergWriteResultSerializer}. */
 class IcebergWriteResultSerializerTest {
@@ -69,7 +79,7 @@ class IcebergWriteResultSerializerTest {
         WriteResult writeResult =
                 WriteResult.builder().addDataFiles(dataFile).addDeleteFiles(deleteFile).build();
 
-        IcebergWriteResult originalResult = new IcebergWriteResult(writeResult, null);
+        IcebergWriteResult originalResult = new IcebergWriteResult(writeResult, specs(), null);
 
         // 2. Act: Serialize and then deserialize the object
         byte[] serializedData = serializer.serialize(originalResult);
@@ -83,10 +93,82 @@ class IcebergWriteResultSerializerTest {
                         1L,
                         DataFileSet.of(Collections.singletonList(dataFile)),
                         DataFileSet.of(Collections.singletonList(dataFile)));
-        originalResult = new IcebergWriteResult(writeResult, rewriteDataFileResult);
+        originalResult = new IcebergWriteResult(writeResult, specs(), rewriteDataFileResult);
         serializedData = serializer.serialize(originalResult);
         deserializedResult = serializer.deserialize(serializer.getVersion(), serializedData);
         assertThat(deserializedResult.toString()).isEqualTo(originalResult.toString());
+    }
+
+    @Test
+    void testDeserializeGoldenFiles() throws Exception {
+        IcebergWriteResult expected = goldenWriteResult();
+        for (int version = 1; version <= serializer.getVersion(); version++) {
+            IcebergWriteResult actual =
+                    serializer.deserialize(
+                            version, TestingGoldenFiles.read(WRITE_RESULT_DIR, version));
+            assertWriteResultEquals(actual, expected);
+        }
+    }
+
+    @Test
+    void testCurrentVersionMatchesGoldenFile() throws Exception {
+        // the current format must not change without bumping the version
+        assertThat(serializer.serialize(goldenWriteResult()))
+                .isEqualTo(TestingGoldenFiles.read(WRITE_RESULT_DIR, serializer.getVersion()));
+    }
+
+    @Test
+    void testRegenerateGoldenFiles() throws Exception {
+        assumeThat(TestingGoldenFiles.shouldRegenerate())
+                .as("golden files are only regenerated on request")
+                .isTrue();
+        IcebergWriteResult goldenWriteResult = goldenWriteResult();
+        TestingGoldenFiles.write(WRITE_RESULT_DIR, 1, serializeV1(goldenWriteResult));
+        TestingGoldenFiles.write(
+                WRITE_RESULT_DIR, serializer.getVersion(), serializer.serialize(goldenWriteResult));
+    }
+
+    @Test
+    void testSerializeWithoutSpecs() {
+        IcebergWriteResult withoutSpecs =
+                new IcebergWriteResult(goldenWriteResult().getWriteResult(), null, null);
+        assertThatThrownBy(() -> serializer.serialize(withoutSpecs))
+                .isInstanceOf(IOException.class)
+                .hasMessageContaining("without partition specs");
+    }
+
+    @Test
+    void testDeserializeInvalidData() throws Exception {
+        byte[] serialized = serializer.serialize(goldenWriteResult());
+        assertThatThrownBy(() -> serializer.deserialize(2, "{}".getBytes()))
+                .isInstanceOf(IOException.class)
+                .hasStackTraceContaining("Missing field");
+        assertThatThrownBy(() -> serializer.deserialize(2, "invalid".getBytes()))
+                .isInstanceOf(IOException.class);
+        assertThatThrownBy(() -> serializer.deserialize(3, serialized))
+                .isInstanceOf(IOException.class)
+                .hasMessageContaining("Unsupported IcebergWriteResult serializer version 3");
+    }
+
+    /** Serializes a write result like version 1 of {@link IcebergWriteResultSerializer} did. */
+    private static byte[] serializeV1(IcebergWriteResult writeResult) throws IOException {
+        byte[] writeResultBytes = InstantiationUtils.serializeObject(writeResult.getWriteResult());
+        byte[] rewriteResultBytes =
+                InstantiationUtils.serializeObject(writeResult.rewriteDataFileResult());
+        try (ByteArrayOutputStream baos = new ByteArrayOutputStream();
+                DataOutputStream dos = new DataOutputStream(baos)) {
+            dos.writeInt(writeResultBytes.length);
+            dos.write(writeResultBytes);
+            dos.writeBoolean(true);
+            dos.writeInt(rewriteResultBytes.length);
+            dos.write(rewriteResultBytes);
+            dos.flush();
+            return baos.toByteArray();
+        }
+    }
+
+    private Map<Integer, PartitionSpec> specs() {
+        return Collections.singletonMap(spec.specId(), spec);
     }
 
     private DeleteFile createDeleteFile(String path, long recordCount) {

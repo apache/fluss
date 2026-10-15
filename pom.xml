@@ -682,6 +682,8 @@
                         <exclude>**/fluss-bin/conf/servers</exclude>
                         <!-- Cross-language encoding fixtures. -->
                         <exclude>**/src/test/resources/encoding/*.hex</exclude>
+                        <!-- Serializer golden files. -->
+                        <exclude>**/src/test/resources/golden/**</exclude>
                         <!-- Website Files. -->
                         <exclude>website/**/_category_.json</exclude>
                         <exclude>website/package.json</exclude>

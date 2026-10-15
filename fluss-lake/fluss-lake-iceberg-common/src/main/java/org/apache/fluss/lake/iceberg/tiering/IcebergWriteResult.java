@@ -19,11 +19,13 @@ package org.apache.fluss.lake.iceberg.tiering;
 
 import org.apache.fluss.lake.iceberg.maintenance.RewriteDataFileResult;
 
+import org.apache.iceberg.PartitionSpec;
 import org.apache.iceberg.io.WriteResult;
 
 import javax.annotation.Nullable;
 
 import java.io.Serializable;
+import java.util.Map;
 
 /** The write result of Iceberg lake writer to pass to committer to commit. */
 public class IcebergWriteResult implements Serializable {
@@ -33,17 +35,29 @@ public class IcebergWriteResult implements Serializable {
     // the normal result of tiering writing to iceberg
     private final WriteResult writeResult;
 
+    // the partition specs of the table by spec id, to serialize the files of the write result.
+    // Null if restored from version 1 of the serializer, which did not persist the specs.
+    @Nullable private final Map<Integer, PartitionSpec> specs;
+
     // the rewrite result
     @Nullable private final RewriteDataFileResult rewriteDataFileResult;
 
     public IcebergWriteResult(
-            WriteResult writeResult, @Nullable RewriteDataFileResult rewriteDataFileResult) {
+            WriteResult writeResult,
+            @Nullable Map<Integer, PartitionSpec> specs,
+            @Nullable RewriteDataFileResult rewriteDataFileResult) {
         this.writeResult = writeResult;
+        this.specs = specs;
         this.rewriteDataFileResult = rewriteDataFileResult;
     }
 
     public WriteResult getWriteResult() {
         return writeResult;
+    }
+
+    @Nullable
+    public Map<Integer, PartitionSpec> specs() {
+        return specs;
     }
 
     @Nullable

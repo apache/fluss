@@ -23,10 +23,29 @@ import org.apache.fluss.utils.InstantiationUtils;
 
 import java.io.IOException;
 
-/** Serializer for {@link IcebergCommittable}. */
+import static org.apache.fluss.lake.iceberg.utils.IcebergJsonSerdeUtils.fromJsonBytes;
+import static org.apache.fluss.lake.iceberg.utils.IcebergJsonSerdeUtils.toJsonBytes;
+
+/**
+ * Serializer for {@link IcebergCommittable}.
+ *
+ * <h3>Version Evolution:</h3>
+ *
+ * <ul>
+ *   <li><b>Version 1:</b> Initial version. Java serialization of {@link IcebergCommittable}, which
+ *       can only be read by the Iceberg version that wrote it.
+ *   <li><b>Version 2 (Current):</b> A JSON document written by {@link IcebergCommittableJsonSerde},
+ *       so that the committable can be read across Iceberg versions.
+ * </ul>
+ *
+ * <p>This serializer can deserialize committables of all previous versions, but always produces the
+ * current version during serialization.
+ */
 public class IcebergCommittableSerializer implements SimpleVersionedSerializer<IcebergCommittable> {
 
-    private static final int CURRENT_VERSION = 1;
+    private static final int VERSION_1 = 1;
+    private static final int VERSION_2 = 2;
+    private static final int CURRENT_VERSION = VERSION_2;
 
     @Override
     public int getVersion() {
@@ -34,19 +53,31 @@ public class IcebergCommittableSerializer implements SimpleVersionedSerializer<I
     }
 
     @Override
-    public byte[] serialize(IcebergCommittable committable) throws IOException {
-        return InstantiationUtils.serializeObject(committable);
+    public byte[] serialize(IcebergCommittable value) throws IOException {
+        return toJsonBytes(value, IcebergCommittableJsonSerde.INSTANCE);
     }
 
     @Override
     public IcebergCommittable deserialize(int version, byte[] serialized) throws IOException {
-        IcebergCommittable icebergCommittable;
+        switch (version) {
+            case VERSION_1:
+                return deserializeV1(serialized);
+            case VERSION_2:
+                return fromJsonBytes(
+                        serialized, IcebergCommittableJsonSerde.INSTANCE, "IcebergCommittable");
+            default:
+                throw new IOException(
+                        String.format(
+                                "Unsupported IcebergCommittable serializer version %s, the supported versions are %s and %s.",
+                                version, VERSION_1, VERSION_2));
+        }
+    }
+
+    private IcebergCommittable deserializeV1(byte[] serialized) throws IOException {
         try {
-            icebergCommittable =
-                    InstantiationUtils.deserializeObject(serialized, getClass().getClassLoader());
+            return InstantiationUtils.deserializeObject(serialized, getClass().getClassLoader());
         } catch (ClassNotFoundException e) {
             throw new IOException(e);
         }
-        return icebergCommittable;
     }
 }

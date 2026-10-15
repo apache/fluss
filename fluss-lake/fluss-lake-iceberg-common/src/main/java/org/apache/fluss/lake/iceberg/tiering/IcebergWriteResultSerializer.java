@@ -25,15 +25,33 @@ import org.apache.fluss.utils.InstantiationUtils;
 import org.apache.iceberg.io.WriteResult;
 
 import java.io.ByteArrayInputStream;
-import java.io.ByteArrayOutputStream;
 import java.io.DataInputStream;
-import java.io.DataOutputStream;
 import java.io.IOException;
 
-/** Serializer for {@link IcebergWriteResult}. */
+import static org.apache.fluss.lake.iceberg.utils.IcebergJsonSerdeUtils.fromJsonBytes;
+import static org.apache.fluss.lake.iceberg.utils.IcebergJsonSerdeUtils.toJsonBytes;
+
+/**
+ * Serializer for {@link IcebergWriteResult}.
+ *
+ * <h3>Version Evolution:</h3>
+ *
+ * <ul>
+ *   <li><b>Version 1:</b> Initial version. Java serialization of the {@link WriteResult} and the
+ *       optional {@link RewriteDataFileResult}, which can only be read by the Iceberg version that
+ *       wrote them.
+ *   <li><b>Version 2 (Current):</b> A JSON document written by {@link IcebergWriteResultJsonSerde},
+ *       so that the write result can be read across Iceberg versions.
+ * </ul>
+ *
+ * <p>This serializer can deserialize write results of all previous versions, but always produces
+ * the current version during serialization.
+ */
 public class IcebergWriteResultSerializer implements SimpleVersionedSerializer<IcebergWriteResult> {
 
-    private static final int CURRENT_VERSION = 1;
+    private static final int VERSION_1 = 1;
+    private static final int VERSION_2 = 2;
+    private static final int CURRENT_VERSION = VERSION_2;
 
     @Override
     public int getVersion() {
@@ -41,35 +59,27 @@ public class IcebergWriteResultSerializer implements SimpleVersionedSerializer<I
     }
 
     @Override
-    public byte[] serialize(IcebergWriteResult icebergWriteResult) throws IOException {
-        byte[] writeResultBytes =
-                InstantiationUtils.serializeObject(icebergWriteResult.getWriteResult());
-
-        RewriteDataFileResult rewriteDataFileResult = icebergWriteResult.rewriteDataFileResult();
-        byte[] rewriteResultBytes =
-                rewriteDataFileResult == null
-                        ? null
-                        : InstantiationUtils.serializeObject(rewriteDataFileResult);
-
-        try (ByteArrayOutputStream baos = new ByteArrayOutputStream(writeResultBytes.length);
-                DataOutputStream dos = new DataOutputStream(baos)) {
-            // Frame WriteResult
-            dos.writeInt(writeResultBytes.length);
-            dos.write(writeResultBytes);
-
-            // optional, rewrite
-            boolean hasRewrite = rewriteResultBytes != null;
-            dos.writeBoolean(hasRewrite);
-            if (hasRewrite) {
-                dos.writeInt(rewriteResultBytes.length);
-                dos.write(rewriteResultBytes);
-            }
-            return baos.toByteArray();
-        }
+    public byte[] serialize(IcebergWriteResult value) throws IOException {
+        return toJsonBytes(value, IcebergWriteResultJsonSerde.INSTANCE);
     }
 
     @Override
     public IcebergWriteResult deserialize(int version, byte[] serialized) throws IOException {
+        switch (version) {
+            case VERSION_1:
+                return deserializeV1(serialized);
+            case VERSION_2:
+                return fromJsonBytes(
+                        serialized, IcebergWriteResultJsonSerde.INSTANCE, "IcebergWriteResult");
+            default:
+                throw new IOException(
+                        String.format(
+                                "Unsupported IcebergWriteResult serializer version %s, the supported versions are %s and %s.",
+                                version, VERSION_1, VERSION_2));
+        }
+    }
+
+    private IcebergWriteResult deserializeV1(byte[] serialized) throws IOException {
         WriteResult writeResult;
         RewriteDataFileResult rewriteDataFileResult;
         try (DataInputStream dis = new DataInputStream(new ByteArrayInputStream(serialized))) {
@@ -100,6 +110,7 @@ public class IcebergWriteResultSerializer implements SimpleVersionedSerializer<I
         } catch (ClassNotFoundException e) {
             throw new IOException(e);
         }
-        return new IcebergWriteResult(writeResult, rewriteDataFileResult);
+        // version 1 did not persist the partition specs
+        return new IcebergWriteResult(writeResult, null, rewriteDataFileResult);
     }
 }
