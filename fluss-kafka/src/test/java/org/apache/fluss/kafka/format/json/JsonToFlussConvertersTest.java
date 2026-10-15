@@ -26,8 +26,11 @@ import org.apache.fluss.row.Decimal;
 import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.row.TimestampNtz;
 import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.DeserializationFeature;
+import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.JsonNode;
 import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.ObjectMapper;
 import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.node.DecimalNode;
+import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.node.DoubleNode;
+import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.node.FloatNode;
 import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.DataTypes;
 
@@ -89,6 +92,77 @@ class JsonToFlussConvertersTest {
                 .isInstanceOf(KafkaRecordEncodingException.class)
                 .hasMessageContaining("$.field")
                 .hasMessageContaining("overflowing number");
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void testFloatingPointPreservesZeroSignIncludingUnderflow(boolean negative) {
+        double zero = negative ? -0.0D : 0.0D;
+        for (JsonNode node :
+                new JsonNode[] {
+                    DoubleNode.valueOf(zero),
+                    FloatNode.valueOf((float) zero),
+                    DecimalNode.valueOf(new BigDecimal(negative ? "-1e-1000" : "1e-1000"))
+                }) {
+            float floatValue =
+                    (float) JsonToFlussConverters.create(DataTypes.FLOAT()).convert(node, "$.f");
+            double doubleValue =
+                    (double) JsonToFlussConverters.create(DataTypes.DOUBLE()).convert(node, "$.d");
+            assertThat(Float.floatToRawIntBits(floatValue))
+                    .isEqualTo(Float.floatToRawIntBits((float) zero));
+            assertThat(Double.doubleToRawLongBits(doubleValue))
+                    .isEqualTo(Double.doubleToRawLongBits(zero));
+        }
+    }
+
+    @ParameterizedTest
+    @MethodSource("nonFiniteNumbers")
+    void testRejectsNonFiniteNumericNodes(JsonNode node) {
+        for (DataType type :
+                new DataType[] {DataTypes.FLOAT(), DataTypes.DOUBLE(), DataTypes.DECIMAL(38, 18)}) {
+            assertThatThrownBy(() -> JsonToFlussConverters.create(type).convert(node, "$.number"))
+                    .isInstanceOf(KafkaRecordEncodingException.class)
+                    .hasMessageContaining("$.number")
+                    .hasMessageContaining(type.asSummaryString());
+        }
+    }
+
+    private static Stream<JsonNode> nonFiniteNumbers() {
+        return Stream.of(
+                DoubleNode.valueOf(Double.NaN),
+                DoubleNode.valueOf(Double.NEGATIVE_INFINITY),
+                DoubleNode.valueOf(Double.POSITIVE_INFINITY),
+                FloatNode.valueOf(Float.NaN),
+                FloatNode.valueOf(Float.NEGATIVE_INFINITY),
+                FloatNode.valueOf(Float.POSITIVE_INFINITY));
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"A", "AQ===", "AQ==x", "A Q==", "AQ==\n", "_w=="})
+    void testBase64RejectsInvalidPaddingAlphabetAndWhitespace(String value) {
+        for (DataType type : new DataType[] {DataTypes.BYTES(), DataTypes.BINARY(1)}) {
+            assertThatThrownBy(
+                            () ->
+                                    JsonToFlussConverters.create(type)
+                                            .convert(
+                                                    MAPPER.getNodeFactory().textNode(value), "$.b"))
+                    .isInstanceOf(KafkaRecordEncodingException.class)
+                    .hasMessageContaining("$.b")
+                    .hasMessageContaining("invalid Base64");
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(
+            strings = {
+                "1969-12-31T23:59:59.999999999Z",
+                "1970-01-01T05:44:59.999999999+05:45",
+                "1969-12-31T20:29:59.999999999-03:30"
+            })
+    void testTimestampLtzNormalizesOffsetsBeforeEpoch(String value) throws Exception {
+        TimestampLtz timestamp =
+                (TimestampLtz) convert(DataTypes.TIMESTAMP_LTZ(9), "\"" + value + "\"");
+        assertThat(timestamp.toInstant()).isEqualTo(Instant.EPOCH.minusNanos(1));
     }
 
     @Test
