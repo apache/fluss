@@ -24,8 +24,11 @@ no-op instead of producing new changelog records.
 | Absent     | Insert/upsert                      | Store the incoming row and emit an insert changelog         |
 | Present    | Candidate row is logically equal   | Keep the stored row and emit no changelog                   |
 | Present    | Candidate row logically differs    | Store the candidate and emit the normal update changelog    |
-| Present    | Delete                             | Delete the row and emit a delete changelog                  |
-| Absent     | Delete                             | No-op and emit no changelog                                 |
+| Present    | Full-row delete                    | Delete the row and emit a delete changelog                  |
+| Absent     | Full-row delete                    | No-op and emit no changelog                                 |
+
+The delete rows assume `table.delete.behavior = 'allow'` (the default). With `ignore`, Fluss skips deletes; with
+`disable`, it rejects them.
 
 Equality is based on logical field values, not raw serialized bytes:
 
@@ -37,8 +40,8 @@ Equality is based on logical field values, not raw serialized bytes:
   the latest schema but are absent from a compared row are treated as null.
 - For partial updates, the incoming update is first merged into a complete candidate row and then compared with
   the stored row.
-- A partial delete follows the same rule: if clearing its target columns leaves the row unchanged, it emits no
-  changelog record.
+- A partial delete removes the whole row if all non-target columns are null. Otherwise, it clears the target columns
+  and emits no changelog record if the resulting row is unchanged.
 
 :::note
 This is value-based duplicate suppression, not version ordering. Replaying a row that is identical to the current
@@ -48,12 +51,13 @@ accepted. The option preserves the default merge engine's `UPDATE`, `DELETE`, an
 
 ## Requirements and write cost
 
-This option is supported only for primary key tables using the default merge engine and the default
-`'table.changelog.image' = 'FULL'` mode. It cannot be combined with `table.kv.ttl` or a custom merge engine.
+This option is supported only for primary key tables with no `table.merge-engine` setting and
+`'table.changelog.image' = 'FULL'` (the default). It cannot be combined with `table.kv.ttl`.
+Writes using `MergeMode.OVERWRITE` are rejected while this option is enabled.
 Set it when creating the table; it cannot be changed with `ALTER TABLE`.
-The TTL combination is rejected because skipping an unchanged write would also skip refreshing its row expiration
-time. `WAL` image mode is rejected because finding unchanged values requires a lookup of the stored row, removing
-the full-row WAL write optimization.
+Both processing-time and event-time row-level TTL are rejected. With processing-time TTL, skipping an unchanged write
+would prevent the row expiration time from refreshing. `WAL` image mode is rejected because finding unchanged values
+requires a lookup of the stored row, removing the full-row WAL write optimization.
 
 In the required `FULL` changelog image mode, each upsert already looks up the existing value while holding the write
 lock. When a row exists, this option also compares it with the complete candidate row. The comparison and its setup

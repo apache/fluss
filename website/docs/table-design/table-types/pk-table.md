@@ -89,7 +89,7 @@ The following merge engines are supported:
 
 To avoid redundant KV state writes and changelog records when an upsert leaves the stored row unchanged, enable
 [`table.upsert.skip-unchanged`](/table-design/table-types/skip-unchanged-upserts.md).
-The default merge engine remains in use, and the option is disabled by default.
+This option is available only when `table.merge-engine` is not set and is disabled by default.
 
 ## Change Data Feed
 
