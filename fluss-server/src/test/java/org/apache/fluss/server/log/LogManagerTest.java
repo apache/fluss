@@ -72,6 +72,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.apache.fluss.record.TestData.ANOTHER_DATA1;
 import static org.apache.fluss.record.TestData.DATA1;
@@ -396,6 +397,47 @@ final class LogManagerTest extends LogTestBase {
 
             blockingTableConfig.unblock();
             assertThat(blockedCreation.get(10, TimeUnit.SECONDS)).isNotNull();
+        } finally {
+            blockingTableConfig.unblock();
+            executor.shutdownNow();
+            assertThat(executor.awaitTermination(10, TimeUnit.SECONDS)).isTrue();
+        }
+    }
+
+    @Test
+    void testDropLogRacingGetOrCreateLog() throws Exception {
+        initTableBuckets(null);
+        BlockingTableConfig blockingTableConfig = new BlockingTableConfig();
+        AtomicReference<Thread> droppingThread = new AtomicReference<>();
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+        try {
+            Future<LogTablet> creation =
+                    executor.submit(() -> getOrCreateLog(tableBucket1, blockingTableConfig));
+            blockingTableConfig.awaitBlocked();
+
+            Future<?> drop =
+                    executor.submit(
+                            () -> {
+                                droppingThread.set(Thread.currentThread());
+                                logManager.dropLog(tableBucket1);
+                            });
+            waitUntil(
+                    () ->
+                            drop.isDone()
+                                    || (droppingThread.get() != null
+                                            && droppingThread.get().getState()
+                                                    == Thread.State.BLOCKED),
+                    Duration.ofSeconds(10),
+                    "The drop should wait on the lock held by getOrCreateLog.");
+            assertThat(drop.isDone()).isFalse();
+
+            blockingTableConfig.unblock();
+            LogTablet createdLog = creation.get(10, TimeUnit.SECONDS);
+            drop.get(10, TimeUnit.SECONDS);
+            assertThat(logManager.getLog(tableBucket1)).isNotPresent();
+            assertThat(logManager.hasLogLock(tableBucket1)).isFalse();
+            assertThat(createdLog.getLogDir()).doesNotExist();
+            assertThat(getOrCreateLog(tablePath1, null, tableBucket1)).isNotSameAs(createdLog);
         } finally {
             blockingTableConfig.unblock();
             executor.shutdownNow();
