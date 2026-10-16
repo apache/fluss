@@ -147,7 +147,8 @@ public class TieringCommitter<WriteResult, Committable> {
             boolean markDoneStateChanged =
                     markDoneSupported
                             && (hasTieringProgress || hasLakeSnapshot)
-                            && preparePartitionMarkDone(lakeCommitter, committable);
+                            && preparePartitionMarkDone(
+                                    lakeTieringFactory, lakeCommitter, committable);
             if (!hasTieringProgress && !markDoneStateChanged) {
                 return new TieringCommitResult<>(null, null);
             }
@@ -187,7 +188,8 @@ public class TieringCommitter<WriteResult, Committable> {
         }
     }
 
-    private TableInfo getAndValidateTableInfo(Admin admin, TablePath tablePath, long tableId) throws Exception {
+    private TableInfo getAndValidateTableInfo(Admin admin, TablePath tablePath, long tableId)
+            throws Exception {
         // Check if the table was dropped and recreated during tiering.
         // If the current table id differs from the committable's table id, fail this commit
         // to avoid dirty commit to a newly created table.
@@ -205,7 +207,9 @@ public class TieringCommitter<WriteResult, Committable> {
 
     @SuppressWarnings("unchecked")
     private boolean preparePartitionMarkDone(
-            LakeCommitter<WriteResult, Committable> lakeCommitter, Committable committable)
+            LakeTieringFactory<WriteResult, Committable> lakeTieringFactory,
+            LakeCommitter<WriteResult, Committable> lakeCommitter,
+            Committable committable)
             throws IOException {
         checkState(
                 lakeCommitter instanceof PartitionMarkDoneCommitter,
@@ -219,7 +223,7 @@ public class TieringCommitter<WriteResult, Committable> {
     private LakeSnapshot getLatestLakeSnapshot(Admin admin, TablePath tablePath) throws Exception {
         LakeSnapshot flussCurrentLakeSnapshot;
         try {
-            flussCurrentLakeSnapshot = admin.getLatestLakeSnapshot(admin, tablePath).get();
+            flussCurrentLakeSnapshot = admin.getLatestLakeSnapshot(tablePath).get();
         } catch (Exception e) {
             Throwable throwable = e.getCause();
             if (throwable instanceof LakeTableSnapshotNotExistException) {
@@ -307,5 +311,4 @@ public class TieringCommitter<WriteResult, Committable> {
         }
         return missingCommittedSnapshot;
     }
-
 }

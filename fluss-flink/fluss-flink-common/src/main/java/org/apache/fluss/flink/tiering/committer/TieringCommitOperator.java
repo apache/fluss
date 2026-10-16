@@ -60,7 +60,7 @@ import static org.apache.fluss.utils.Preconditions.checkState;
  * <p>When it collects all {@link TableBucketWriteResult}s of a round of tiering for a table, it
  * will combine all the {@link WriteResult}s to {@link Committable} via method {@link
  * LakeCommitter#toCommittable(List)}, and then call method {@link LakeCommitter#commit(Object,
- * Map)} to commit to lake.
+ * LakeCommitter.CommitContext)} to commit to lake.
  *
  * <p>Finally, it will also commit the committed lake snapshot to Fluss cluster to make Fluss aware
  * of the tiering progress.

@@ -381,7 +381,7 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
 
             tieringConfig.set(ConfigOptions.LAKE_TIERING_PARTITION_MARK_DONE_ENABLED, true);
             enumerator.generateAndAssignSplits(Tuple3.of(tableId, 1L, tablePath), null);
-            List<TieringSplit> maintenanceSplits = new ArrayList<>();
+            List<FlinkTieringSplit> maintenanceSplits = new ArrayList<>();
             context.getSplitsAssignmentSequence()
                     .forEach(a -> a.assignment().values().forEach(maintenanceSplits::addAll));
             assertThat(maintenanceSplits)
