@@ -223,6 +223,11 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
     public void shutdown() {}
 
     @Override
+    public void tryCompleteActions() {
+        replicaManager.tryCompleteActions();
+    }
+
+    @Override
     public CompletableFuture<ProduceLogResponse> produceLog(ProduceLogRequest request) {
         authorizeTable(WRITE, request.getTableId());
         long tableId = request.getTableId();
