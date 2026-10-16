@@ -309,6 +309,10 @@
                                                 <exclude>fluss-test-utils/**</exclude>
                                                 <!-- exclude adapter classes to avoid Jacoco error: "Can't add different class with same name" -->
                                                 <exclude>fluss-flink/**/target/classes/org/apache/fluss/flink/adapter/**</exclude>
+                                                <!-- exclude the Iceberg 1.12 classes that replace the classes of the same name in fluss-lake-iceberg-common, for the same reason -->
+                                                <exclude>fluss-lake/fluss-lake-iceberg-1.12/target/classes/org/apache/fluss/lake/iceberg/IcebergLakeStoragePlugin.class</exclude>
+                                                <exclude>fluss-lake/fluss-lake-iceberg-1.12/target/classes/org/apache/fluss/lake/iceberg/source/IcebergSplitSerializer.class</exclude>
+                                                <exclude>fluss-lake/fluss-lake-iceberg-1.12/target/classes/org/apache/fluss/lake/iceberg/tiering/writer/**</exclude>
                                             </excludes>
                                         </resource>
                                     </resources>
