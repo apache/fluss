@@ -194,16 +194,18 @@ public class IcebergLakeCatalog implements LakeCatalog {
                 String icebergKey = convertFlussPropertyKeyToIceberg(option.getKey());
                 checkArgument(
                         !isReservedProperty(option.getKey(), icebergKey),
-                        "Cannot set table property '%s'",
-                        option.getKey());
+                        "Cannot set table property '%s'%s",
+                        option.getKey(),
+                        reservedIcebergPropertySuffix(option.getKey(), icebergKey));
                 updateProperties.set(icebergKey, option.getValue());
             } else if (tableChange instanceof TableChange.ResetOption) {
                 TableChange.ResetOption option = (TableChange.ResetOption) tableChange;
                 String icebergKey = convertFlussPropertyKeyToIceberg(option.getKey());
                 checkArgument(
                         !isReservedProperty(option.getKey(), icebergKey),
-                        "Cannot reset table property '%s'",
-                        option.getKey());
+                        "Cannot reset table property '%s'%s",
+                        option.getKey(),
+                        reservedIcebergPropertySuffix(option.getKey(), icebergKey));
                 updateProperties.remove(icebergKey);
             } else {
                 throw new UnsupportedOperationException(
@@ -554,6 +556,16 @@ public class IcebergLakeCatalog implements LakeCatalog {
      */
     private static boolean isReservedProperty(String flussKey, String icebergKey) {
         return RESERVED_PROPERTIES.contains(flussKey) || RESERVED_PROPERTIES.contains(icebergKey);
+    }
+
+    /**
+     * Names the reserved Iceberg property in the error when the Fluss key reached it through the
+     * "iceberg." prefix. Returns an empty string when the Fluss key is the reserved property.
+     */
+    private static String reservedIcebergPropertySuffix(String flussKey, String icebergKey) {
+        return RESERVED_PROPERTIES.contains(flussKey)
+                ? ""
+                : String.format(": it maps to the reserved Iceberg property '%s'", icebergKey);
     }
 
     private static String convertFlussPropertyKeyToIceberg(String key) {

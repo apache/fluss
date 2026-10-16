@@ -669,7 +669,11 @@ class IcebergLakeCatalogTest {
         for (String property : IcebergLakeCatalog.RESERVED_PROPERTIES) {
             // A Fluss option reaches an Iceberg property through the "iceberg." prefix, so the
             // prefixed key must be refused as well as the bare one.
-            for (String key : List.of(property, "iceberg." + property)) {
+            String prefixedKey = "iceberg." + property;
+            String reservedSuffix =
+                    String.format(": it maps to the reserved Iceberg property '%s'", property);
+            for (String key : List.of(property, prefixedKey)) {
+                String expectedSuffix = key.equals(prefixedKey) ? reservedSuffix : "";
                 assertThatThrownBy(
                                 () ->
                                         flussIcebergCatalog.alterTable(
@@ -681,7 +685,7 @@ class IcebergLakeCatalogTest {
                                                                         .modeName())),
                                                 context))
                         .isInstanceOf(IllegalArgumentException.class)
-                        .hasMessage("Cannot set table property '%s'", key);
+                        .hasMessage("Cannot set table property '%s'%s", key, expectedSuffix);
 
                 assertThatThrownBy(
                                 () ->
@@ -690,7 +694,7 @@ class IcebergLakeCatalogTest {
                                                 List.of(TableChange.reset(key)),
                                                 context))
                         .isInstanceOf(IllegalArgumentException.class)
-                        .hasMessage("Cannot reset table property '%s'", key);
+                        .hasMessage("Cannot reset table property '%s'%s", key, expectedSuffix);
             }
         }
     }
