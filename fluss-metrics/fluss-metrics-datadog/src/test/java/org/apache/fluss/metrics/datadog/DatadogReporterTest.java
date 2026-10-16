@@ -39,6 +39,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.net.InetSocketAddress;
 import java.net.URL;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -46,6 +47,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.zip.GZIPInputStream;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -72,6 +74,8 @@ class DatadogReporterTest {
     private final ObjectMapper mapper = new ObjectMapper();
     private final List<Request> requests = Collections.synchronizedList(new ArrayList<>());
     private final ConcurrentLinkedQueue<Integer> statuses = new ConcurrentLinkedQueue<>();
+    private final ConcurrentLinkedQueue<Integer> validateStatuses = new ConcurrentLinkedQueue<>();
+    private final AtomicInteger validateCalls = new AtomicInteger();
 
     private HttpServer server;
 
@@ -98,7 +102,17 @@ class DatadogReporterTest {
     void startServer() throws IOException {
         server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
         server.createContext(
-                "/",
+                "/api/v1/validate",
+                exchange -> {
+                    validateCalls.incrementAndGet();
+                    Integer status = validateStatuses.poll();
+                    byte[] body = "{\"valid\":true}".getBytes(StandardCharsets.UTF_8);
+                    exchange.sendResponseHeaders(status == null ? 200 : status, body.length);
+                    exchange.getResponseBody().write(body);
+                    exchange.close();
+                });
+        server.createContext(
+                "/api/v2/series",
                 exchange -> {
                     byte[] body;
                     try (InputStream in = new GZIPInputStream(exchange.getRequestBody())) {
@@ -268,11 +282,55 @@ class DatadogReporterTest {
         assertThat(requests.get(0).series().get(0).get("metric").asText()).isEqualTo(resent.get(0));
     }
 
+    @Test
+    void testApiKeyIsCheckedOnceOnTheFirstReport() throws Exception {
+        DatadogReporter reporter = createReporter(2000, Collections.emptyList());
+        reporter.notifyOfAddedMetric((Gauge<Integer>) () -> 1, "gauge", TABLET_SERVER_GROUP);
+
+        reporter.report();
+        reporter.report();
+
+        assertThat(validateCalls.get()).isEqualTo(1);
+        assertThat(requests).hasSize(2);
+    }
+
+    @Test
+    void testRejectedApiKeyIsNotCheckedAgainAndMetricsAreStillSent() throws Exception {
+        DatadogReporter reporter = createReporter(2000, Collections.emptyList());
+        reporter.notifyOfAddedMetric((Gauge<Integer>) () -> 1, "gauge", TABLET_SERVER_GROUP);
+        validateStatuses.add(403);
+
+        reporter.report();
+        reporter.report();
+
+        assertThat(validateCalls.get()).isEqualTo(1);
+        assertThat(requests).hasSize(2);
+    }
+
+    @Test
+    void testApiKeyCheckIsRetriedWhenDatadogCannotAnswer() throws Exception {
+        DatadogReporter reporter = createReporter(2000, Collections.emptyList());
+        reporter.notifyOfAddedMetric((Gauge<Integer>) () -> 1, "gauge", TABLET_SERVER_GROUP);
+        validateStatuses.add(500);
+
+        reporter.report();
+        reporter.report();
+        reporter.report();
+
+        assertThat(validateCalls.get()).isEqualTo(2);
+        assertThat(requests).hasSize(3);
+    }
+
     private DatadogReporter createReporter(int maxSeriesPerRequest, List<String> tags)
             throws Exception {
-        URL url = new URL("http://127.0.0.1:" + server.getAddress().getPort() + "/api/v2/series");
+        String base = "http://127.0.0.1:" + server.getAddress().getPort();
         return new DatadogReporter(
-                new DatadogHttpClient(url, new Password(API_KEY), null, 10),
+                new DatadogHttpClient(
+                        new URL(base + "/api/v2/series"),
+                        new URL(base + "/api/v1/validate"),
+                        new Password(API_KEY),
+                        null,
+                        10),
                 Duration.ofSeconds(10),
                 maxSeriesPerRequest,
                 tags);

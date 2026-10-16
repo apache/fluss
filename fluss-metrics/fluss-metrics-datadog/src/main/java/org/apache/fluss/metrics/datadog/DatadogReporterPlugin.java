@@ -46,6 +46,7 @@ public class DatadogReporterPlugin implements MetricReporterPlugin {
 
     private static final String PLUGIN_NAME = "datadog";
     private static final String SERIES_PATH = "/api/v2/series";
+    private static final String VALIDATE_PATH = "/api/v1/validate";
 
     @Override
     public MetricReporter createMetricReporter(Configuration configuration) {
@@ -85,14 +86,19 @@ public class DatadogReporterPlugin implements MetricReporterPlugin {
                                         configuration.get(METRICS_REPORTER_DATADOG_PROXY_PORT)));
 
         URL seriesUrl;
+        URL validateUrl;
         try {
             seriesUrl = new URL("https://api." + site + SERIES_PATH);
+            validateUrl = new URL("https://api." + site + VALIDATE_PATH);
         } catch (MalformedURLException e) {
             throw new IllegalArgumentException("Invalid Datadog site '" + site + "'.", e);
         }
 
+        DatadogHttpClient client =
+                new DatadogHttpClient(
+                        seriesUrl, validateUrl, apiKey, proxy, pushInterval.getSeconds());
         return new DatadogReporter(
-                new DatadogHttpClient(seriesUrl, apiKey, proxy, pushInterval.getSeconds()),
+                client,
                 pushInterval,
                 maxMetricsPerRequest,
                 tags == null ? Collections.emptyList() : tags);

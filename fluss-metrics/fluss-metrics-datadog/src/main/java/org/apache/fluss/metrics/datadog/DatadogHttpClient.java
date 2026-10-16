@@ -47,12 +47,19 @@ class DatadogHttpClient {
     private static final JsonFactory JSON_FACTORY = new JsonFactory();
 
     private final URL seriesUrl;
+    private final URL validateUrl;
     private final Password apiKey;
     @Nullable private final Proxy proxy;
     private final long intervalSeconds;
 
-    DatadogHttpClient(URL seriesUrl, Password apiKey, @Nullable Proxy proxy, long intervalSeconds) {
+    DatadogHttpClient(
+            URL seriesUrl,
+            URL validateUrl,
+            Password apiKey,
+            @Nullable Proxy proxy,
+            long intervalSeconds) {
         this.seriesUrl = seriesUrl;
+        this.validateUrl = validateUrl;
         this.apiKey = apiKey;
         this.proxy = proxy;
         this.intervalSeconds = intervalSeconds;
@@ -69,22 +76,45 @@ class DatadogHttpClient {
         return proxy;
     }
 
+    /**
+     * Returns whether Datadog accepts the API key.
+     *
+     * <p>The series API answers metrics sent with an unknown key as if it had accepted them, so a
+     * wrong key can only be detected through this check.
+     */
+    boolean isApiKeyValid() throws IOException {
+        HttpURLConnection connection = open(validateUrl);
+        try {
+            connection.setRequestMethod("GET");
+            int status = connection.getResponseCode();
+            if (status == 403) {
+                return false;
+            }
+            if (status < 200 || status >= 300) {
+                throw new IOException(
+                        "Datadog answered the API key check with HTTP "
+                                + status
+                                + ": "
+                                + readErrorBody(connection));
+            }
+            try (InputStream in = connection.getInputStream()) {
+                drain(in);
+            }
+            return true;
+        } finally {
+            connection.disconnect();
+        }
+    }
+
     /** Sends the series in one request, throwing if Datadog does not accept them. */
     void send(List<DatadogSeries> series, long timestampSeconds) throws IOException {
         byte[] body = gzip(toJson(series, timestampSeconds));
-        HttpURLConnection connection =
-                (HttpURLConnection)
-                        (proxy == null
-                                ? seriesUrl.openConnection()
-                                : seriesUrl.openConnection(proxy));
+        HttpURLConnection connection = open(seriesUrl);
         try {
             connection.setRequestMethod("POST");
-            connection.setConnectTimeout(CONNECT_TIMEOUT_MS);
-            connection.setReadTimeout(READ_TIMEOUT_MS);
             connection.setDoOutput(true);
             connection.setRequestProperty("Content-Type", "application/json");
             connection.setRequestProperty("Content-Encoding", "gzip");
-            connection.setRequestProperty("DD-API-KEY", apiKey.value());
             connection.setFixedLengthStreamingMode(body.length);
             try (OutputStream out = connection.getOutputStream()) {
                 out.write(body);
@@ -106,6 +136,16 @@ class DatadogHttpClient {
         } finally {
             connection.disconnect();
         }
+    }
+
+    private HttpURLConnection open(URL url) throws IOException {
+        HttpURLConnection connection =
+                (HttpURLConnection)
+                        (proxy == null ? url.openConnection() : url.openConnection(proxy));
+        connection.setConnectTimeout(CONNECT_TIMEOUT_MS);
+        connection.setReadTimeout(READ_TIMEOUT_MS);
+        connection.setRequestProperty("DD-API-KEY", apiKey.value());
+        return connection;
     }
 
     byte[] toJson(List<DatadogSeries> series, long timestampSeconds) throws IOException {

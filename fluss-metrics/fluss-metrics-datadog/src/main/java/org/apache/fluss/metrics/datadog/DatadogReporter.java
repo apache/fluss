@@ -34,6 +34,7 @@ import org.slf4j.LoggerFactory;
 
 import javax.annotation.Nullable;
 
+import java.io.IOException;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -65,6 +66,9 @@ public class DatadogReporter implements ScheduledMetricReporter {
     private final List<String> staticTags;
 
     @VisibleForTesting final Map<Metric, MetricInfo> metrics = new ConcurrentHashMap<>();
+
+    /** Whether Datadog has answered the API key check, which only needs to happen once. */
+    private boolean apiKeyChecked;
 
     /** The count of each counter that Datadog has accepted so far. */
     private final Map<Counter, Long> reportedCounts = new ConcurrentHashMap<>();
@@ -131,6 +135,9 @@ public class DatadogReporter implements ScheduledMetricReporter {
 
     @Override
     public void report() {
+        if (!apiKeyChecked) {
+            checkApiKey();
+        }
         long timestampSeconds = System.currentTimeMillis() / 1000;
         List<PendingSeries> pending = new ArrayList<>();
         for (Map.Entry<Metric, MetricInfo> entry : metrics.entrySet()) {
@@ -144,6 +151,25 @@ public class DatadogReporter implements ScheduledMetricReporter {
             send(
                     pending.subList(from, Math.min(from + maxSeriesPerRequest, pending.size())),
                     timestampSeconds);
+        }
+    }
+
+    /**
+     * Logs an error if Datadog rejects the API key. Datadog drops metrics sent with an unknown key
+     * without reporting an error, so this is the only way such a key shows up.
+     */
+    private void checkApiKey() {
+        try {
+            if (!client.isApiKeyValid()) {
+                LOG.error(
+                        "Datadog rejected the configured API key, so it drops every metric this "
+                                + "reporter sends. Check 'metrics.reporter.datadog.api-key' and "
+                                + "'metrics.reporter.datadog.site'.");
+            }
+            apiKeyChecked = true;
+        } catch (IOException e) {
+            LOG.warn(
+                    "Could not check the Datadog API key, will check again on the next report.", e);
         }
     }
 
