@@ -22,6 +22,7 @@ import org.apache.fluss.client.table.scanner.ScanRecord;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.AuthorizationException;
 import org.apache.fluss.exception.FetchException;
+import org.apache.fluss.exception.UnsupportedBoundedEarliestException;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.record.ArrowBatchData;
@@ -424,7 +425,7 @@ class LogFetchCollectorErrorTest {
         // asynchronous remote-download failure is injected immediately before
         // the failed fetch is removed from the buffer.
         assertThatThrownBy(() -> collector.collectFetch(testBuffer))
-                .isInstanceOf(UnsupportedOperationException.class)
+                .isInstanceOf(UnsupportedBoundedEarliestException.class)
                 .hasMessageContaining("resolved_earliest_offset");
 
         // The failed fetch must always be drained.
@@ -476,7 +477,7 @@ class LogFetchCollectorErrorTest {
         AbstractLogFetchCollector<?, ?> collector = collector(false);
         Throwable thrown = catchThrowable(() -> collector.collectFetch(buffer));
         assertThat(thrown)
-                .isInstanceOf(UnsupportedOperationException.class)
+                .isInstanceOf(UnsupportedBoundedEarliestException.class)
                 .hasMessageContaining("resolved_earliest_offset");
         assertThat(thrown.getSuppressed()).containsExactly(cleanupFailure);
         // super.drain() ran before the synthetic cleanup failure.

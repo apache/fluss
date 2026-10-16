@@ -18,6 +18,7 @@
 package org.apache.fluss.client.table.scanner.log;
 
 import org.apache.fluss.annotation.Internal;
+import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.utils.log.FairBucketStatusMap;
 
@@ -177,6 +178,7 @@ public class LogScannerStatus {
         return bucketScanStatus != null && bucketScanStatus.hasReachedStoppingOffset();
     }
 
+    @VisibleForTesting
     synchronized boolean hasPendingFinishedBuckets() {
         return !pendingFinishedBuckets.isEmpty();
     }

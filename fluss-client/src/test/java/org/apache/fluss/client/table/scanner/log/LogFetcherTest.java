@@ -28,6 +28,7 @@ import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.FetchException;
 import org.apache.fluss.exception.NotLeaderOrFollowerException;
+import org.apache.fluss.exception.UnsupportedBoundedEarliestException;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.SchemaInfo;
@@ -218,7 +219,7 @@ public class LogFetcherTest {
 
         if (resolvedOffset == FetchLogResultForBucket.NO_RESOLVED_EARLIEST_OFFSET) {
             assertThatThrownBy(logFetcher::collectFetch)
-                    .isInstanceOf(UnsupportedOperationException.class)
+                    .isInstanceOf(UnsupportedBoundedEarliestException.class)
                     .hasMessageContaining("resolved_earliest_offset");
 
             assertThat(logFetcher.hasAvailableFetches()).isFalse();

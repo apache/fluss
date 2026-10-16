@@ -17,6 +17,7 @@
 
 package org.apache.fluss.client.table.scanner.log;
 
+import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.annotation.PublicEvolving;
 import org.apache.fluss.client.table.scanner.ScanRecord;
 import org.apache.fluss.metadata.TableBucket;
@@ -60,7 +61,17 @@ public class ScanRecords implements Iterable<ScanRecord> {
         this(records, consumedUpToOffsets, Collections.emptySet());
     }
 
-    ScanRecords(
+    /**
+     * Creates scan records with consumed offsets and bounded scan completions.
+     *
+     * <p>A completion event may accompany the final records for the same bucket.
+     *
+     * @param records the records grouped by table bucket
+     * @param consumedUpToOffsets the exclusive consumed offsets for each bucket
+     * @param finishedBuckets the buckets whose bounded subscriptions finished in this poll
+     */
+    @Internal
+    public ScanRecords(
             Map<TableBucket, List<ScanRecord>> records,
             Map<TableBucket, Long> consumedUpToOffsets,
             Set<TableBucket> finishedBuckets) {

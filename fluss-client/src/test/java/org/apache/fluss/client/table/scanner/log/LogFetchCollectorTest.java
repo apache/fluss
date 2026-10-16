@@ -391,7 +391,7 @@ public class LogFetchCollectorTest {
         logFetchBuffer.add(fetch);
 
         assertThatThrownBy(() -> logFetchCollector.collectFetch(logFetchBuffer))
-                .isInstanceOf(UnsupportedOperationException.class)
+                .isInstanceOf(UnsupportedBoundedEarliestException.class)
                 .hasMessageContaining("resolved_earliest_offset");
 
         assertThat(fetch.isConsumed()).isTrue();
