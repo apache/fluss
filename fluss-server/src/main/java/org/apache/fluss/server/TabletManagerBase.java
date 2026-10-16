@@ -33,6 +33,7 @@ import org.apache.fluss.server.zk.data.TableRegistration;
 import org.apache.fluss.utils.FileUtils;
 import org.apache.fluss.utils.FlussPaths;
 import org.apache.fluss.utils.concurrent.ExecutorThreadFactory;
+import org.apache.fluss.utils.function.SupplierWithException;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -196,6 +197,42 @@ public abstract class TabletManagerBase {
                 CompletableFuture.allOf(
                         closingFutures.toArray(new CompletableFuture<?>[closingFutures.size()]));
         return closingFuture.whenComplete((ignored, throwable) -> closingPool.shutdown());
+    }
+
+    /**
+     * Executes an action under the bucket's lock and retires the lock if no tablet remains.
+     *
+     * @param tableBucket bucket to lock
+     * @param tabletLocks concurrent map of bucket locks owned by the manager
+     * @param currentTablets concurrent map of the manager's current tablets
+     * @param action action to execute while holding the lock
+     * @param <T> action result type
+     * @param <E> action exception type
+     * @return the action result
+     * @throws E if the action fails
+     */
+    protected static <T, E extends Exception> T inTabletLock(
+            TableBucket tableBucket,
+            Map<TableBucket, Object> tabletLocks,
+            Map<TableBucket, ?> currentTablets,
+            SupplierWithException<T, E> action)
+            throws E {
+        while (true) {
+            Object lock = tabletLocks.computeIfAbsent(tableBucket, ignored -> new Object());
+            synchronized (lock) {
+                if (tabletLocks.get(tableBucket) != lock) {
+                    continue;
+                }
+                try {
+                    return action.get();
+                } finally {
+                    if (!currentTablets.containsKey(tableBucket)) {
+                        // Waiters on a retired lock must retry with the replacement lock.
+                        tabletLocks.remove(tableBucket, lock);
+                    }
+                }
+            }
+        }
     }
 
     /**

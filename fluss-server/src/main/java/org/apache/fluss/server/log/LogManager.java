@@ -766,22 +766,7 @@ public final class LogManager extends TabletManagerBase implements ServerReconfi
 
     private <T, E extends Exception> T inLogLock(
             TableBucket tableBucket, SupplierWithException<T, E> action) throws E {
-        while (true) {
-            Object lock = logLocks.computeIfAbsent(tableBucket, ignored -> new Object());
-            synchronized (lock) {
-                if (logLocks.get(tableBucket) != lock) {
-                    continue;
-                }
-                try {
-                    return action.get();
-                } finally {
-                    if (!currentLogs.containsKey(tableBucket)) {
-                        // Waiters on a retired lock must retry with the replacement lock.
-                        logLocks.remove(tableBucket, lock);
-                    }
-                }
-            }
-        }
+        return inTabletLock(tableBucket, logLocks, currentLogs, action);
     }
 
     private static final class LogRecoveryTask {

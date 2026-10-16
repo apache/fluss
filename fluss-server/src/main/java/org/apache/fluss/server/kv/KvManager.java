@@ -830,22 +830,6 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
 
     private <T, E extends Exception> T inKvLock(
             TableBucket tableBucket, SupplierWithException<T, E> action) throws E {
-        while (true) {
-            Object lock = kvLocks.computeIfAbsent(tableBucket, ignored -> new Object());
-            synchronized (lock) {
-                if (kvLocks.get(tableBucket) != lock) {
-                    continue;
-                }
-                try {
-                    return action.get();
-                } finally {
-                    if (!currentKvs.containsKey(tableBucket)) {
-                        // Retire the lock only after the action completes, while still holding
-                        // its monitor. Threads waiting on this lock must retry with the new one.
-                        kvLocks.remove(tableBucket, lock);
-                    }
-                }
-            }
-        }
+        return inTabletLock(tableBucket, kvLocks, currentKvs, action);
     }
 }
