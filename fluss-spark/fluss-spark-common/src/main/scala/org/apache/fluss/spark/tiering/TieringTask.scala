@@ -70,6 +70,18 @@ object TieringTask extends Logging {
       // Initialize LakeTieringFactory on executor
       val lakeTieringFactory = createLakeTieringFactory(dataLakeFormat, lakeConfig)
 
+      val partitionBucketCount: java.lang.Integer = if (tableBucket.getPartitionId == null) {
+        null
+      } else {
+        val partitionInfo = connection.getAdmin
+          .listPartitionInfos(tablePath, true)
+          .get()
+          .asScala
+          .find(_.getPartitionId == tableBucket.getPartitionId.longValue())
+          .getOrElse(
+            throw new IllegalStateException(s"Partition for $tableBucket no longer exists"))
+        java.lang.Integer.valueOf(partitionInfo.getBucketCount)
+      }
       val writerInitContext =
         new TieringWriterInitContext(
           tablePath,
@@ -77,7 +89,9 @@ object TieringTask extends Logging {
           partitionName.orNull,
           table.getTableInfo,
           split.getSplitIndex,
-          split.getTieringRoundTimestamp)
+          split.getTieringRoundTimestamp,
+          partitionBucketCount,
+          null)
       lakeWriter = lakeTieringFactory.createLakeWriter(writerInitContext)
 
       if (split.isTieringLogSplit) {
@@ -101,7 +115,7 @@ object TieringTask extends Logging {
     lakeStorage.createLakeTieringFactory().asInstanceOf[LakeTieringFactory[AnyRef, AnyRef]]
   }
 
-  private def processLogSplit(
+  private[tiering] def processLogSplit(
       table: Table,
       lakeWriter: LakeWriter[AnyRef],
       split: TieringLogSplit,
@@ -120,7 +134,6 @@ object TieringTask extends Logging {
 
       val stoppingOffset = split.getStoppingOffset
       val pollTimeout = Duration.ofMillis(pollTimeoutMs)
-      var lastOffset = -1L
       var maxTimestamp = UNKNOWN_BUCKET_TIMESTAMP
       var finished = false
 
@@ -132,7 +145,6 @@ object TieringTask extends Logging {
             record =>
               if (record.logOffset() < stoppingOffset) {
                 lakeWriter.write(record)
-                lastOffset = record.logOffset()
                 if (record.timestamp() > maxTimestamp) {
                   maxTimestamp = record.timestamp()
                 }
@@ -141,6 +153,11 @@ object TieringTask extends Logging {
                 finished = true
               }
           }
+        }
+        // Empty WAL batches can advance offsets without returning any records.
+        val consumedUpToOffset = scanRecords.consumedUpToOffset(tableBucket)
+        if (consumedUpToOffset != null && consumedUpToOffset >= stoppingOffset) {
+          finished = true
         }
       }
 

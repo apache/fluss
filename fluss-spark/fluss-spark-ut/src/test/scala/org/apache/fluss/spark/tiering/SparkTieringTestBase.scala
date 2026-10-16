@@ -17,6 +17,7 @@
 
 package org.apache.fluss.spark.tiering
 
+import org.apache.fluss.client.initializer.BucketOffsetsRetrieverImpl
 import org.apache.fluss.config.Configuration
 import org.apache.fluss.metadata.{DataLakeFormat, TableBucket}
 import org.apache.fluss.spark.FlussSparkTestBase
@@ -48,7 +49,38 @@ abstract class SparkTieringTestBase extends FlussSparkTestBase with Logging {
     val tablePath = createTablePath(tableName)
     val tableInfo = admin.getTableInfo(tablePath).get()
 
+    val offsetsRetriever = new BucketOffsetsRetrieverImpl(admin, tablePath)
+    def bucketOffsets(
+        partitionId: java.lang.Long,
+        partitionName: String,
+        bucketCount: Int): Map[TableBucket, Long] = {
+      offsetsRetriever
+        .latestOffsets(partitionName, (0 until bucketCount).map(Int.box).asJava)
+        .asScala
+        .map {
+          case (bucket, offset) =>
+            new TableBucket(tableInfo.getTableId, partitionId, bucket) -> offset.longValue()
+        }
+        .toMap
+    }
+    val expectedOffsets = if (tableInfo.isPartitioned) {
+      admin
+        .listPartitionInfos(tablePath)
+        .get()
+        .asScala
+        .flatMap {
+          partition =>
+            bucketOffsets(
+              partition.getPartitionId,
+              partition.getPartitionName,
+              partition.getBucketCount)
+        }
+        .toMap
+    } else {
+      bucketOffsets(null, null, tableInfo.getNumBuckets)
+    }
     val flussConfig = flussServer.getClientConfig
+    flussConfig.set(SparkTieringOptions.POLL_TIERING_TABLE_INTERVAL, Duration.ofMillis(100))
     val lakeTieringConfig = new Configuration()
 
     val runner =
@@ -61,29 +93,18 @@ abstract class SparkTieringTestBase extends FlussSparkTestBase with Logging {
 
     try {
       runner.startAsync()
-      waitForLakeSnapshotSync(tableInfo)
+      waitForLakeSnapshotSync(tableInfo, expectedOffsets)
     } finally {
       runner.stop()
     }
 
   }
 
-  /** Polls replicas until all buckets have a non-negative lake snapshot ID. */
-  private def waitForLakeSnapshotSync(tableInfo: org.apache.fluss.metadata.TableInfo): Unit = {
-    val tableId = tableInfo.getTableId
-    val numBuckets = tableInfo.getNumBuckets
-
-    val tableBuckets = if (tableInfo.isPartitioned) {
-      val partitionInfos = admin.listPartitionInfos(tableInfo.getTablePath).get()
-      partitionInfos.asScala.flatMap {
-        partitionInfo =>
-          (0 until numBuckets).map {
-            bucket => new TableBucket(tableId, partitionInfo.getPartitionId, bucket)
-          }
-      }.toSet
-    } else {
-      (0 until numBuckets).map(bucket => new TableBucket(tableId, bucket)).toSet
-    }
+  /** Polls replicas until their lake offsets cover the writes made before this tiering round. */
+  private def waitForLakeSnapshotSync(
+      tableInfo: org.apache.fluss.metadata.TableInfo,
+      expectedOffsets: Map[TableBucket, Long]): Unit = {
+    val tableBuckets = expectedOffsets.filter { case (_, offset) => offset > 0 }.keySet
 
     val deadline = System.currentTimeMillis() + SYNC_TIMEOUT.toMillis
     val syncedBuckets = scala.collection.mutable.Set[TableBucket]()
@@ -94,7 +115,10 @@ abstract class SparkTieringTestBase extends FlussSparkTestBase with Logging {
           if (!syncedBuckets.contains(tableBucket)) {
             try {
               val replica = flussServer.waitAndGetLeaderReplica(tableBucket)
-              if (replica.getLogTablet.getLakeTableSnapshotId >= 0) {
+              if (
+                replica.getLogTablet.getLakeTableSnapshotId >= 0 &&
+                replica.getLogTablet.getLakeLogEndOffset >= expectedOffsets(tableBucket)
+              ) {
                 syncedBuckets.add(tableBucket)
               }
             } catch {
