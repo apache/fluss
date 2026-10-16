@@ -24,6 +24,7 @@ import org.apache.fluss.cluster.rebalance.GoalType;
 import org.apache.fluss.cluster.rebalance.ServerTag;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.config.FlussConfigUtils;
 import org.apache.fluss.config.cluster.AlterConfig;
 import org.apache.fluss.config.cluster.AlterConfigOpType;
 import org.apache.fluss.exception.ApiException;
@@ -314,7 +315,7 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         this.lakeCatalogDynamicLoader = lakeCatalogDynamicLoader;
         this.ioExecutor = ioExecutor;
         this.lakeTableHelper =
-                new LakeTableHelper(zkClient, conf.getString(ConfigOptions.REMOTE_DATA_DIR));
+                new LakeTableHelper(zkClient, FlussConfigUtils.getDefaultRemoteDataDir(conf));
         this.remoteDirDynamicLoader = remoteDirDynamicLoader;
 
         // Initialize and start the producer snapshot manager

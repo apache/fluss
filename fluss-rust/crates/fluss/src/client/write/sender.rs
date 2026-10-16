@@ -779,11 +779,17 @@ impl Sender {
             return Ok(Self::is_invalid_metadata_error(error).then_some(physical_table_path));
         }
 
+        if error == FlussError::InvalidBucketRouting {
+            self.accumulator.invalidate_routing(&physical_table_path);
+        }
+
         // Generic error path. handle_failed_batch will detect remaining
         // OutOfOrderSequence (not already committed) / UnknownWriterId cases and
         // reset all writer state internally (matching Java).
         // For other errors, only adjust sequences if the batch didn't exhaust its retries.
-        let can_adjust = ready_write_batch.write_batch.attempts() < self.retries;
+        // A batch rejected for its routing was never written, so its sequence is always reclaimed.
+        let can_adjust = error == FlussError::InvalidBucketRouting
+            || ready_write_batch.write_batch.attempts() < self.retries;
         self.fail_batch(
             ready_write_batch,
             broadcast::Error::WriteFailed {
@@ -1011,6 +1017,7 @@ impl Sender {
                 | FlussError::UnknownTableOrBucketException
                 | FlussError::LeaderNotAvailableException
                 | FlussError::NetworkException
+                | FlussError::InvalidBucketRouting
         )
     }
 
@@ -1030,6 +1037,8 @@ impl Sender {
                 | FlussError::NotEnoughReplicasException
                 | FlussError::CorruptMessage
                 | FlussError::CorruptRecordException
+                | FlussError::DiskWriteLocked
+                | FlussError::HistoricalPartitionThrottled
         )
     }
 
@@ -1055,11 +1064,15 @@ impl Sender {
     /// - The idle timer is only armed when truly idle (no futures in any pool).
     /// - When writer_id isn't ready, a drain tick is a no-op but the loop stays
     ///   responsive (notified/init/meta can still wake it).
+    /// - A metadata refresh for unknown leaders starts at least the retry backoff
+    ///   after the previous one ended, so a bucket without a leader is not polled
+    ///   as fast as the server answers.
     pub async fn run_with_shutdown(&self, mut shutdown_rx: mpsc::Receiver<()>) -> Result<()> {
         let mut pending: FuturesUnordered<SendFuture<'_>> = FuturesUnordered::new();
         let mut init_futs: FuturesUnordered<SendFuture<'_>> = FuturesUnordered::new();
         let mut meta_futs: FuturesUnordered<SendFuture<'_>> = FuturesUnordered::new();
         let mut pending_unknown: HashSet<Arc<PhysicalTablePath>> = HashSet::new();
+        let mut next_refresh_at = Instant::now();
 
         let mut need_drain = true; // drain on first iteration to pick up any pre-existing batches
         let mut next_delay_ms: u64 = 1;
@@ -1084,9 +1097,12 @@ impl Sender {
                 init_futs.push(Box::pin(self.maybe_wait_for_writer_id()));
             }
 
-            // Spawn metadata refresh if we have accumulated unknown leaders
-            // and no refresh is currently running.
-            if !pending_unknown.is_empty() && meta_futs.is_empty() {
+            // Spawn metadata refresh if we have accumulated unknown leaders,
+            // no refresh is currently running and the backoff has passed.
+            if !pending_unknown.is_empty()
+                && meta_futs.is_empty()
+                && Instant::now() >= next_refresh_at
+            {
                 let leaders = std::mem::take(&mut pending_unknown);
                 meta_futs.push(Box::pin(async move {
                     self.refresh_unknown_leaders(&leaders).await
@@ -1119,6 +1135,8 @@ impl Sender {
             }
 
             let truly_idle = pending.is_empty() && init_futs.is_empty() && meta_futs.is_empty();
+            let refresh_due = !pending_unknown.is_empty() && meta_futs.is_empty();
+            let refresh_at = tokio::time::Instant::from_std(next_refresh_at);
             debug_assert!(next_delay_ms >= 1);
 
             // One select to rule them all.
@@ -1154,8 +1172,12 @@ impl Sender {
                     if let Err(e) = result {
                         warn!("Metadata refresh for unknown leaders failed: {e}");
                     }
+                    next_refresh_at = Instant::now() + Duration::from_millis(self.retry_backoff_ms);
                     need_drain = true;
                 }
+
+                // Unknown leaders wait for the refresh backoff.
+                _ = tokio::time::sleep_until(refresh_at), if refresh_due => {}
 
                 // Idle timer: batch timeout / linger expiry.
                 _ = tokio::time::sleep(Duration::from_millis(next_delay_ms)), if truly_idle => {
@@ -2036,6 +2058,54 @@ mod tests {
             Err(broadcast::Error::WriteFailed { code, .. })
                 if code == FlussError::UnknownWriterIdException.code()
         ));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn invalid_bucket_routing_reclaims_the_batch_sequence() -> Result<()> {
+        let table_path = Arc::new(TablePath::new("db".to_string(), "tbl".to_string()));
+        let cluster = build_cluster_arc(table_path.as_ref(), 1, 1);
+        let metadata = Arc::new(Metadata::new_for_test(cluster.clone()));
+        let idempotence = enabled_idempotence();
+        let accumulator = Arc::new(RecordAccumulator::new(
+            Config::default(),
+            Arc::clone(&idempotence),
+        ));
+        idempotence.set_writer_id(42);
+        // retries=0, so no other error would give the sequence back.
+        let sender = Sender::new(
+            metadata,
+            accumulator.clone(),
+            1024 * 1024,
+            1000,
+            -1,
+            0,
+            100,
+            1000,
+            Arc::clone(&idempotence),
+            Arc::new(crate::metrics::WriterMetrics::new()),
+        );
+
+        let (batch, handle) = build_ready_batch(
+            accumulator.as_ref(),
+            cluster.clone(),
+            Arc::clone(&table_path),
+        )?;
+        assert_eq!(batch.write_batch.batch_sequence(), 0);
+
+        sender.handle_write_batch_error(
+            batch,
+            FlussError::InvalidBucketRouting,
+            "invalid routing".to_string(),
+            &mut Vec::new(),
+        )?;
+        assert!(handle.wait().await?.is_err());
+        assert!(idempotence.has_writer_id());
+
+        // The next batch reuses the sequence, leaving no hole the server would reject.
+        accumulator.ready(&cluster)?;
+        let (next, _) = build_ready_batch(accumulator.as_ref(), cluster, table_path)?;
+        assert_eq!(next.write_batch.batch_sequence(), 0);
         Ok(())
     }
 

@@ -154,6 +154,7 @@ public class FlussTableLakeSnapshotCommitter implements AutoCloseable {
             throws IOException {
         Long earliestSnapshotIDToKeep = lakeCommitResult.getEarliestSnapshotIDToKeep();
         if (lakeCommitResult.committedIsReadable()) {
+            // The committed snapshot is fully readable, so both views use its tiered offset file.
             commit(
                     tableId,
                     lakeCommitResult.getCommittedSnapshotId(),
@@ -166,7 +167,7 @@ public class FlussTableLakeSnapshotCommitter implements AutoCloseable {
             LakeCommitResult.ReadableSnapshot readableSnapshot =
                     lakeCommitResult.getReadableSnapshot();
             if (readableSnapshot == null) {
-                // readable snapshot is unknown
+                // Readable offsets are unknown; register the committed snapshot as tiered-only.
                 commit(
                         tableId,
                         lakeCommitResult.getCommittedSnapshotId(),
@@ -176,43 +177,54 @@ public class FlussTableLakeSnapshotCommitter implements AutoCloseable {
                         logMaxTieredTimestamps,
                         earliestSnapshotIDToKeep);
             } else {
-                // readable snapshot is known, we will first commit a snapshot with readable bucket
-                // offset
-                // These offsets describe the readable snapshot. Do not inherit offsets from a
-                // newer tiered snapshot, including buckets absent from the readable snapshot.
-                String readableSnapshotReadableOffsetsPath =
-                        prepareReadableSnapshotOffsets(
-                                tableId, tablePath, readableSnapshot.getReadableLogEndOffsets());
-
-                // reuse tiered path when readable snapshot is the committed snapshot
-                String readableSnapshotTieredOffsetsPath =
+                // The readable snapshot can be this commit's snapshot or an older one.
+                boolean readableIsCommitted =
                         readableSnapshot.getReadableSnapshotId()
-                                        == lakeCommitResult.getCommittedSnapshotId()
+                                == lakeCommitResult.getCommittedSnapshotId();
+                // The current tiered file can serve as the readable file only when the snapshot
+                // IDs and offset maps both match.
+                String readableSnapshotReadableOffsetsPath =
+                        readableIsCommitted
+                                        && readableSnapshot
+                                                .getReadableLogEndOffsets()
+                                                .equals(readableSnapshot.getTieredLogEndOffsets())
+                                ? lakeBucketTieredOffsetsPath
+                                : prepareReadableSnapshotOffsets(
+                                        tableId,
+                                        tablePath,
+                                        readableSnapshot.getReadableLogEndOffsets());
+                // An older readable snapshot needs its own tiered offsets. It must not inherit
+                // offsets from the newer committed snapshot.
+                String readableSnapshotTieredOffsetsPath =
+                        readableIsCommitted
                                 ? lakeBucketTieredOffsetsPath
                                 : prepareReadableSnapshotOffsets(
                                         tableId,
                                         tablePath,
                                         readableSnapshot.getTieredLogEndOffsets());
-                // commit the readable snapshot
+                // Register the readable snapshot. When it is also the committed snapshot, this
+                // call includes the current log offsets and timestamps.
                 commit(
                         tableId,
                         readableSnapshot.getReadableSnapshotId(),
                         readableSnapshotTieredOffsetsPath,
                         readableSnapshotReadableOffsetsPath,
-                        Collections.emptyMap(),
-                        Collections.emptyMap(),
+                        readableIsCommitted ? logEndOffsets : Collections.emptyMap(),
+                        readableIsCommitted ? logMaxTieredTimestamps : Collections.emptyMap(),
                         earliestSnapshotIDToKeep);
 
-                // commit the tiered snapshot
-                commit(
-                        tableId,
-                        lakeCommitResult.getCommittedSnapshotId(),
-                        lakeBucketTieredOffsetsPath,
-                        // no readable snapshot offset path
-                        null,
-                        logEndOffsets,
-                        logMaxTieredTimestamps,
-                        earliestSnapshotIDToKeep);
+                // Only an older readable snapshot leaves the new committed snapshot unregistered.
+                // Register that new snapshot separately with tiered offsets only.
+                if (!readableIsCommitted) {
+                    commit(
+                            tableId,
+                            lakeCommitResult.getCommittedSnapshotId(),
+                            lakeBucketTieredOffsetsPath,
+                            null,
+                            logEndOffsets,
+                            logMaxTieredTimestamps,
+                            earliestSnapshotIDToKeep);
+                }
             }
         }
     }

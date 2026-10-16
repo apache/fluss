@@ -24,6 +24,7 @@ import org.apache.fluss.exception.InvalidRecordException;
 import org.apache.fluss.exception.OutOfOrderSequenceException;
 import org.apache.fluss.exception.RemoteStorageException;
 import org.apache.fluss.exception.StorageException;
+import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.record.MemoryLogRecords;
@@ -54,6 +55,7 @@ import javax.annotation.concurrent.GuardedBy;
 
 import java.io.File;
 import java.io.IOException;
+import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.StandardCopyOption;
 import java.util.Collections;
@@ -640,7 +642,12 @@ final class ReplicaFetcherThread extends ShutdownableThread {
 
             // 2. download writer id snapshots from remote storage.
             File snapshotFile = FlussPaths.writerSnapshotFile(log.getLogDir(), nextFetchOffset);
-            buildWriterIdSnapshotFile(snapshotFile, remoteLogSegmentWithMaxStartOffset, rlm);
+            buildWriterIdSnapshotFile(
+                    snapshotFile,
+                    FlussPaths.remoteLogDirFromTabletDir(
+                            new FsPath(rlFetchInfo.remoteLogTabletDir()), tb),
+                    remoteLogSegmentWithMaxStartOffset,
+                    rlm);
 
             // 3. Perform a reloadSnapshots after buildWriterIdSnapshotFile() to load the latest
             // downloaded writerId snapshot file into the writerStateManager.
@@ -665,15 +672,18 @@ final class ReplicaFetcherThread extends ShutdownableThread {
     }
 
     private void buildWriterIdSnapshotFile(
-            File snapshotFile, RemoteLogSegment remoteLogSegment, RemoteLogManager rlm)
+            File snapshotFile,
+            FsPath remoteLogDir,
+            RemoteLogSegment remoteLogSegment,
+            RemoteLogManager rlm)
             throws RemoteStorageException, IOException {
         File tmpSnapshotFile = new File(snapshotFile.getAbsolutePath() + ".tmp");
         // Copy it to snapshot file in atomic manner.
-        Files.copy(
+        try (InputStream input =
                 rlm.getRemoteLogStorage()
-                        .fetchIndex(remoteLogSegment, IndexType.WRITER_ID_SNAPSHOT),
-                tmpSnapshotFile.toPath(),
-                StandardCopyOption.REPLACE_EXISTING);
+                        .fetchIndex(remoteLogDir, remoteLogSegment, IndexType.WRITER_ID_SNAPSHOT)) {
+            Files.copy(input, tmpSnapshotFile.toPath(), StandardCopyOption.REPLACE_EXISTING);
+        }
         FileUtils.atomicMoveWithFallback(tmpSnapshotFile.toPath(), snapshotFile.toPath(), false);
     }
 

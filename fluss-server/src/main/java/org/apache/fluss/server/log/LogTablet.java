@@ -68,6 +68,7 @@ import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 
+import static org.apache.fluss.utils.PartitionUtils.HISTORICAL_PARTITION_VALUE;
 import static org.apache.fluss.utils.Preconditions.checkArgument;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
@@ -122,8 +123,8 @@ public final class LogTablet {
     /** The leader end offset snapshot when become leader. */
     private volatile long leaderEndOffsetSnapshot = -1L;
 
-    // The minimum offset that should be retained in the local log. This is used to ensure that,
-    // the offset of kv snapshot should be retained, otherwise, kv recovery will fail.
+    // The minimum offset needed for KV recovery: the KV snapshot offset for ordinary partitions,
+    // or the lake log end offset for historical partitions.
     private final AtomicLong minRetainOffset;
     // tracking the log start offset in remote storage
     private volatile long remoteLogStartOffset = Long.MAX_VALUE;
@@ -742,6 +743,11 @@ public final class LogTablet {
     public void updateLakeLogEndOffset(long lakeLogEndOffset) {
         if (lakeLogEndOffset > this.lakeLogEndOffset) {
             this.lakeLogEndOffset = lakeLogEndOffset;
+            if (HISTORICAL_PARTITION_VALUE.equals(physicalPath.getPartitionName())) {
+                // Historical replicas recover from lake progress and do not create KV snapshots
+                // that would otherwise advance the WAL retention boundary.
+                updateMinRetainOffset(lakeLogEndOffset);
+            }
             // Lake-tiering progress advanced via the end offset; re-estimate the pending start
             // time so the lag is corrected (and cleared once caught up) even when the lake max
             // timestamp is not updated in the same notification.

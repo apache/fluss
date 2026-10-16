@@ -17,12 +17,13 @@
 
 package org.apache.fluss.spark.write
 
-import org.apache.fluss.client.{Connection, ConnectionFactory}
 import org.apache.fluss.client.table.Table
 import org.apache.fluss.client.table.writer.{AppendResult, AppendWriter, TableWriter, UpsertResult, UpsertWriter}
 import org.apache.fluss.config.Configuration
 import org.apache.fluss.metadata.TablePath
 import org.apache.fluss.spark.row.SparkAsFlussRow
+import org.apache.fluss.spark.utils.FlussConnectionCache
+import org.apache.fluss.utils.IOUtils
 
 import org.apache.spark.internal.Logging
 import org.apache.spark.sql.catalyst.InternalRow
@@ -46,9 +47,17 @@ abstract class FlussDataWriter[T](
   extends DataWriter[InternalRow]
   with Logging {
 
-  private lazy val conn: Connection = ConnectionFactory.createConnection(flussConfig)
+  private var connectionLease: FlussConnectionCache.Lease = _
+  private var openedTable: Table = _
+  private var closed = false
+  private var committed = false
 
-  lazy val table: Table = conn.getTable(tablePath)
+  lazy val table: Table = initializeWriter {
+    val (lease, acquiredTable) = FlussConnectionCache.acquireWithTable(flussConfig, tablePath)
+    connectionLease = lease
+    openedTable = acquiredTable
+    openedTable
+  }
 
   val writer: TableWriter
 
@@ -59,38 +68,82 @@ abstract class FlussDataWriter[T](
 
   def writeRow(record: SparkAsFlussRow): CompletableFuture[T]
 
-  override def write(record: InternalRow): Unit = {
+  override def write(record: InternalRow): Unit = withWriteError {
+    committed = false
     checkAsyncException()
 
     writeRow(flussRow.replace(record)).whenComplete {
       (_, exception) =>
-        if (exception != null && asyncWriterException.isEmpty) {
-          asyncWriterException = Some(exception)
+        if (exception != null) {
+          invalidateConnection()
+          if (asyncWriterException.isEmpty) {
+            asyncWriterException = Some(exception)
+          }
         }
     }
+    ()
   }
 
-  override def commit(): WriterCommitMessage = {
+  override def commit(): WriterCommitMessage = withWriteError {
+    checkAsyncException()
     writer.flush()
     checkAsyncException()
-
+    committed = true
     FlussWriterCommitMessage()
   }
 
-  override def abort(): Unit = this.close()
+  override def abort(): Unit = {
+    if (!closed) {
+      invalidateConnection()
+      close()
+    }
+  }
 
   override def close(): Unit = {
-    if (table != null) {
-      table.close()
+    if (!closed) {
+      closed = true
+      if (!committed) {
+        // Pending writes from an aborted task must not leave a reusable connection in the cache.
+        invalidateConnection()
+      }
+      IOUtils.closeAll(openedTable, connectionLease, () => checkAsyncException())
+      logInfo("Finished closing Fluss data write.")
     }
-    if (conn != null) {
-      conn.close()
+  }
+
+  /** Releases an acquired connection if table or writer construction fails. */
+  protected def initializeWriter[U](initialize: => U): U = {
+    try {
+      initialize
+    } catch {
+      case error: Throwable =>
+        invalidateConnection()
+        try {
+          close()
+        } catch {
+          case closeError: Throwable =>
+            if (closeError ne error) {
+              error.addSuppressed(closeError)
+            }
+        }
+        throw error
     }
+  }
 
-    // Rethrow exception for the case in which close is called before write() and commit().
-    checkAsyncException()
+  private def withWriteError[U](operation: => U): U = {
+    try {
+      operation
+    } catch {
+      case error: Throwable =>
+        invalidateConnection()
+        throw error
+    }
+  }
 
-    logInfo("Finished closing Fluss data write.")
+  private def invalidateConnection(): Unit = {
+    if (connectionLease != null) {
+      connectionLease.invalidate()
+    }
   }
 
   @throws[IOException]
@@ -116,7 +169,7 @@ case class FlussAppendDataWriter(
     flussConfig: Configuration)
   extends FlussDataWriter[AppendResult](tablePath, dataSchema, flussConfig) {
 
-  override val writer: AppendWriter = table.newAppend().createWriter()
+  override val writer: AppendWriter = initializeWriter(table.newAppend().createWriter())
 
   override def writeRow(record: SparkAsFlussRow): CompletableFuture[AppendResult] = {
     writer.append(record)
@@ -130,7 +183,7 @@ case class FlussUpsertDataWriter(
     flussConfig: Configuration)
   extends FlussDataWriter[UpsertResult](tablePath, dataSchema, flussConfig) {
 
-  override val writer: UpsertWriter = table.newUpsert().createWriter()
+  override val writer: UpsertWriter = initializeWriter(table.newUpsert().createWriter())
 
   override def writeRow(record: SparkAsFlussRow): CompletableFuture[UpsertResult] = {
     writer.upsert(record)

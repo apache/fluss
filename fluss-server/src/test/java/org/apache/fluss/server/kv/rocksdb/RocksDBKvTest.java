@@ -23,11 +23,11 @@ import org.apache.fluss.metrics.SimpleCounter;
 import org.apache.fluss.metrics.util.TestHistogram;
 import org.apache.fluss.server.kv.KvCloseMode;
 
+import io.github.fluss_contrib.rocksdb.ColumnFamilyOptions;
+import io.github.fluss_contrib.rocksdb.FlushOptions;
+import io.github.fluss_contrib.rocksdb.RocksDBException;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
-import org.rocksdb.ColumnFamilyOptions;
-import org.rocksdb.FlushOptions;
-import org.rocksdb.RocksDBException;
 
 import java.io.File;
 import java.nio.file.Path;
@@ -130,7 +130,7 @@ class RocksDBKvTest {
     }
 
     /**
-     * Verifies that the L0 property is actually readable on frocksdbjni 6.20.3-ververica-2.0.
+     * Verifies that the L0 property is actually readable on fluss-rocksdbjni 11.8.1-fluss-3.
      *
      * <p>This is a regression test: {@code getLongProperty("rocksdb.num-files-at-level0")} throws
      * {@code RocksDBException: NotFound} because the property is parametric (string-type), not an

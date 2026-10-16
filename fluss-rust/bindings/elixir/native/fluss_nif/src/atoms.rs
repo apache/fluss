@@ -100,7 +100,23 @@ rustler::atoms! {
     ineligible_replica_exception,
     invalid_alter_table_exception,
     deletion_disabled_exception,
+    server_not_exist_exception,
+    server_tag_already_exist_exception,
+    server_tag_not_exist_exception,
+    rebalance_failure_exception,
+    no_rebalance_in_progress_exception,
+    invalid_producer_id_exception,
+    config_exception,
+    not_coordinator_leader_exception,
+    scanner_expired,
+    unknown_scanner_id,
+    invalid_scan_request,
+    too_many_scanners,
+    disk_write_locked,
+    insufficient_kv_leader_replica_capacity,
     storage_backpressure_exception,
+    historical_partition_throttled,
+    invalid_bucket_routing,
     client_error,
 }
 
@@ -213,7 +229,25 @@ fn api_error_atom(code: i32) -> Atom {
         FlussError::IneligibleReplicaException => ineligible_replica_exception(),
         FlussError::InvalidAlterTableException => invalid_alter_table_exception(),
         FlussError::DeletionDisabledException => deletion_disabled_exception(),
+        FlussError::ServerNotExistException => server_not_exist_exception(),
+        FlussError::ServerTagAlreadyExistException => server_tag_already_exist_exception(),
+        FlussError::ServerTagNotExistException => server_tag_not_exist_exception(),
+        FlussError::RebalanceFailureException => rebalance_failure_exception(),
+        FlussError::NoRebalanceInProgressException => no_rebalance_in_progress_exception(),
+        FlussError::InvalidProducerIdException => invalid_producer_id_exception(),
+        FlussError::ConfigException => config_exception(),
+        FlussError::NotCoordinatorLeaderException => not_coordinator_leader_exception(),
+        FlussError::ScannerExpired => scanner_expired(),
+        FlussError::UnknownScannerId => unknown_scanner_id(),
+        FlussError::InvalidScanRequest => invalid_scan_request(),
+        FlussError::TooManyScanners => too_many_scanners(),
+        FlussError::DiskWriteLocked => disk_write_locked(),
+        FlussError::InsufficientKvLeaderReplicaCapacity => {
+            insufficient_kv_leader_replica_capacity()
+        }
         FlussError::StorageBackpressureException => storage_backpressure_exception(),
+        FlussError::HistoricalPartitionThrottled => historical_partition_throttled(),
+        FlussError::InvalidBucketRouting => invalid_bucket_routing(),
     }
 }
 

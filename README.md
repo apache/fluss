@@ -66,6 +66,7 @@ Prerequisites for building Apache Fluss:
 - Git
 - Maven (we require version >= 3.8.6)
 - Java 11
+- JDK 17, used as a Maven toolchain for the Iceberg 1.12 lake plugin (see [Building Fluss](https://fluss.apache.org/community/dev/building/))
 
 ```bash
 git clone https://github.com/apache/fluss.git

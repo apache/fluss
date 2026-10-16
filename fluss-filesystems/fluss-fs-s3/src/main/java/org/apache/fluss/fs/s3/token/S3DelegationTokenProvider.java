@@ -94,10 +94,6 @@ public class S3DelegationTokenProvider {
         checkArgument(
                 (accessKey == null) == (secretKey == null),
                 "S3 access key and secret key must both be set or both be unset.");
-        if (hasCredentialProvider && roleArn != null) {
-            throw new IllegalArgumentException(
-                    "AssumeRole and a custom AWS credentials provider cannot be configured together.");
-        }
         if (hasCredentialProvider) {
             checkArgument(
                     !Arrays.asList(conf.getTrimmedStrings(AWS_CREDENTIALS_PROVIDER))
@@ -182,6 +178,12 @@ public class S3DelegationTokenProvider {
     @Nullable
     AwsCredentialsProvider createStsCredentialsProvider() {
         if (credentialProviderList != null) {
+            if (roleArn != null) {
+                // Not the list itself: StsClient.close() would close it, breaking
+                // every later token refresh.
+                LOG.info("Using configured AWS credentials provider as the AssumeRole caller.");
+                return () -> credentialProviderList.resolveCredentials();
+            }
             AwsCredentials credentials = credentialProviderList.resolveCredentials();
             checkArgument(
                     !(credentials instanceof AwsSessionCredentials),

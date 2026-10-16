@@ -27,16 +27,16 @@ import org.apache.fluss.server.utils.ResourceGuard;
 import org.apache.fluss.utils.BytesUtils;
 import org.apache.fluss.utils.IOUtils;
 
-import org.rocksdb.Cache;
-import org.rocksdb.ColumnFamilyHandle;
-import org.rocksdb.ColumnFamilyOptions;
-import org.rocksdb.MutableDBOptions;
-import org.rocksdb.ReadOptions;
-import org.rocksdb.RocksDB;
-import org.rocksdb.RocksDBException;
-import org.rocksdb.RocksIterator;
-import org.rocksdb.Statistics;
-import org.rocksdb.WriteOptions;
+import io.github.fluss_contrib.rocksdb.Cache;
+import io.github.fluss_contrib.rocksdb.ColumnFamilyHandle;
+import io.github.fluss_contrib.rocksdb.ColumnFamilyOptions;
+import io.github.fluss_contrib.rocksdb.MutableDBOptions;
+import io.github.fluss_contrib.rocksdb.ReadOptions;
+import io.github.fluss_contrib.rocksdb.RocksDB;
+import io.github.fluss_contrib.rocksdb.RocksDBException;
+import io.github.fluss_contrib.rocksdb.RocksIterator;
+import io.github.fluss_contrib.rocksdb.Statistics;
+import io.github.fluss_contrib.rocksdb.WriteOptions;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -49,7 +49,7 @@ import java.util.Objects;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 
-/** A wrapper for the operation of {@link org.rocksdb.RocksDB}. */
+/** A wrapper for the operation of {@link io.github.fluss_contrib.rocksdb.RocksDB}. */
 public class RocksDBKv implements AutoCloseable {
 
     private static final Logger LOG = LoggerFactory.getLogger(RocksDBKv.class);

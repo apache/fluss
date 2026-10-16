@@ -140,6 +140,7 @@ public final class FlussClusterExtension
     private final Clock clock;
     private final String[] racks;
     private final List<String> remoteDirNames;
+    private final boolean useRemoteDataDir;
 
     /** Creates a new {@link Builder} for {@link FlussClusterExtension}. */
     public static Builder builder() {
@@ -153,7 +154,8 @@ public final class FlussClusterExtension
             Configuration clusterConf,
             Clock clock,
             String[] racks,
-            List<String> remoteDirNames) {
+            List<String> remoteDirNames,
+            boolean useRemoteDataDir) {
         this.initialNumOfTabletServers = numOfTabletServers;
         this.tabletServers = new HashMap<>(numOfTabletServers);
         this.coordinatorServerListeners = coordinatorServerListeners;
@@ -166,6 +168,7 @@ public final class FlussClusterExtension
                 "racks must be not null and have the same length as numOfTabletServers");
         this.racks = racks;
         this.remoteDirNames = remoteDirNames;
+        this.useRemoteDataDir = useRemoteDataDir;
     }
 
     @Override
@@ -343,6 +346,7 @@ public final class FlussClusterExtension
         }
 
         setRemoteDataDir(tabletServerConf);
+        setRemoteDataDirs(tabletServerConf);
 
         TabletServer tabletServer = new TabletServer(tabletServerConf, clock);
         tabletServer.start();
@@ -381,7 +385,11 @@ public final class FlussClusterExtension
     }
 
     private void setRemoteDataDir(Configuration conf) {
-        conf.set(ConfigOptions.REMOTE_DATA_DIR, getRemoteDataDir());
+        if (useRemoteDataDir) {
+            conf.set(ConfigOptions.REMOTE_DATA_DIR, getRemoteDataDir());
+        } else {
+            conf.removeConfig(ConfigOptions.REMOTE_DATA_DIR);
+        }
     }
 
     private void setRemoteDataDirs(Configuration conf) {
@@ -1015,6 +1023,7 @@ public final class FlussClusterExtension
         private Clock clock = SystemClock.getInstance();
         private String[] racks = new String[] {"rack-0"};
         private List<String> remoteDirNames = Collections.emptyList();
+        private boolean useRemoteDataDir = true;
 
         private final Configuration clusterConf = new Configuration();
 
@@ -1075,6 +1084,12 @@ public final class FlussClusterExtension
             return this;
         }
 
+        /** Controls whether the cluster supplies the remote.data.dir configuration. */
+        public Builder setUseRemoteDataDir(boolean useRemoteDataDir) {
+            this.useRemoteDataDir = useRemoteDataDir;
+            return this;
+        }
+
         public FlussClusterExtension build() {
             if (numOfTabletServers > 1 && racks.length == 1) {
                 String[] racks = new String[numOfTabletServers];
@@ -1091,7 +1106,8 @@ public final class FlussClusterExtension
                     clusterConf,
                     clock,
                     racks,
-                    remoteDirNames);
+                    remoteDirNames,
+                    useRemoteDataDir);
         }
     }
 }

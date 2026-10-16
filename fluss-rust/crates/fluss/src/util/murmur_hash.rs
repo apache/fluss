@@ -91,7 +91,7 @@ fn fluss_hash_bytes_with_seed(data: &[u8], seed: i32) -> Result<i32> {
     let mut h1 = hash_full_chunks(data, seed as u32);
 
     for byte in data.iter().take(length).skip(length_aligned) {
-        let k1 = mix_k1(*byte as u32);
+        let k1 = mix_k1(*byte as i8 as u32);
         h1 = mix_h1(h1, k1);
     }
 
@@ -209,6 +209,21 @@ mod tests {
         let hash = fluss_hash_bytes("The quick brown fox jumps over the lazy dog".as_bytes())
             .expect("Failed to hash");
         assert_eq!(0x1BC6_F880, hash);
+
+        let hash = fluss_hash_bytes(&[0x80, 0x01]).expect("Failed to hash");
+        assert_eq!(0x660F_C139, hash);
+
+        let hash = fluss_hash_bytes(&[0xBF, 0x84, 0x3D]).expect("Failed to hash");
+        assert_eq!(0x5D80_2AB2, hash);
+
+        let hash = fluss_hash_bytes(&[0x00, 0x0A, 0x0A, 0x0A, 0xFF]).expect("Failed to hash");
+        assert_eq!(0x5229_8139, hash);
+
+        let hash = fluss_hash_bytes("caf\u{e9}".as_bytes()).expect("Failed to hash");
+        assert_eq!(0xAEE2_A634u32 as i32, hash);
+
+        let hash = fluss_hash_bytes(&[0xFF, 0xFF, 0xFF, 0xFF]).expect("Failed to hash");
+        assert_eq!(0xA059_0E3Du32 as i32, hash);
 
         let hash = fluss_hash_i32(0);
         assert_eq!(0x2362_F9DE, hash);

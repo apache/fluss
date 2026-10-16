@@ -43,6 +43,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.net.ConnectException;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -52,6 +53,7 @@ import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 
+import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.apache.fluss.utils.NetUtils.getAvailablePort;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -160,7 +162,7 @@ final class NettyClientTest {
                 .rootCause()
                 .isInstanceOf(ConnectException.class)
                 .hasMessageContaining("Connection refused");
-        assertThat(nettyClient.connections().size()).isEqualTo(0);
+        retry(Duration.ofSeconds(10), () -> assertThat(nettyClient.connections()).isEmpty());
 
         // restart the netty server.
         buildNettyServer(1);

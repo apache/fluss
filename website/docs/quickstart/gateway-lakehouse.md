@@ -537,5 +537,5 @@ docker compose down -v
 
 Now that you're up and running with the Fluss Gateway and a real-time
 lakehouse, check out the [Fluss Gateway reference](/docs/gateway/index.md)
-for the full REST API, or the [Streaming Lakehouse](lakehouse.md) guide for
+for the full REST API, or the [Lakestream](lakehouse.md) guide for
 the equivalent all-Flink-SQL workflow.

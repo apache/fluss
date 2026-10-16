@@ -17,11 +17,17 @@
 
 package org.apache.fluss.lake.paimon.tiering;
 
+import org.apache.fluss.client.metadata.LakeSnapshot;
 import org.apache.fluss.client.table.getter.PartitionGetter;
 import org.apache.fluss.config.AutoPartitionTimeUnit;
 import org.apache.fluss.config.ConfigOptions;
+import org.apache.fluss.config.Configuration;
+import org.apache.fluss.exception.LakeTableSnapshotNotExistException;
 import org.apache.fluss.lake.paimon.testutils.FlinkPaimonTieringTestBase;
+import org.apache.fluss.lake.paimon.tiering.markdone.PartitionMarkDoneState;
+import org.apache.fluss.lake.paimon.tiering.markdone.PartitionMarkDoneStateJsonSerde;
 import org.apache.fluss.metadata.PartitionInfo;
+import org.apache.fluss.metadata.PartitionSpec;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableChange;
@@ -34,11 +40,16 @@ import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.row.TimestampNtz;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
+import org.apache.fluss.server.zk.data.lake.LakeTable;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.utils.types.Tuple2;
 
 import org.apache.flink.core.execution.JobClient;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
+import org.apache.flink.table.api.EnvironmentSettings;
+import org.apache.flink.table.api.TableEnvironment;
+import org.apache.paimon.CoreOptions;
+import org.apache.paimon.Snapshot;
 import org.apache.paimon.catalog.Catalog;
 import org.apache.paimon.catalog.Identifier;
 import org.apache.paimon.reader.RecordReader;
@@ -67,9 +78,14 @@ import java.util.List;
 import java.util.Map;
 import java.util.stream.Stream;
 
+import static org.apache.fluss.flink.source.testutils.FlinkRowAssertionsUtils.collectRowsUntilEndWithTimeout;
+import static org.apache.fluss.lake.committer.LakeCommitter.FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY;
 import static org.apache.fluss.lake.paimon.testutils.PaimonTestUtils.adjustToLegacyV1Table;
+import static org.apache.fluss.lake.paimon.tiering.markdone.PaimonPartitionMarkDone.MARK_DONE_STATE_PROPERTY;
 import static org.apache.fluss.testutils.DataTestUtils.row;
+import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** IT case for tiering tables to paimon. */
 class PaimonTieringITCase extends FlinkPaimonTieringTestBase {
@@ -467,13 +483,18 @@ class PaimonTieringITCase extends FlinkPaimonTieringTestBase {
     }
 
     @Test
-    void testTieringToDvEnabledTable() throws Exception {
+    void testTieringCompactsDvTableAndCleansOldSnapshots() throws Exception {
         TablePath t1 = TablePath.of(DEFAULT_DB, "pkTableWithDv");
+        Map<String, String> paimonOptions = new HashMap<>();
+        paimonOptions.put("paimon.deletion-vectors.enabled", "true");
+        // Small test writes do not reliably trigger auto-compaction. Force a COMPACT on each
+        // tiering commit so this test can verify cleanup of the previous Fluss snapshot.
+        paimonOptions.put("paimon." + CoreOptions.COMMIT_FORCE_COMPACT.key(), "true");
         long t1Id =
                 createPkTable(
                         t1,
                         Collections.singletonMap("table.datalake.auto-compaction", "true"),
-                        Collections.singletonMap("paimon.deletion-vectors.enabled", "true"));
+                        paimonOptions);
         // write records
         List<InternalRow> rows = Arrays.asList(row(1, "v1"), row(2, "v2"), row(3, "v3"));
         writeRows(t1, rows, false);
@@ -482,13 +503,70 @@ class PaimonTieringITCase extends FlinkPaimonTieringTestBase {
         // then start tiering job
         JobClient jobClient = buildTieringJob(execEnv);
         try {
+            TableBucket bucket = new TableBucket(t1Id, 0);
             // check the status of replica after synced
-            assertReplicaStatus(new TableBucket(t1Id, 0), 3);
+            assertReplicaStatus(bucket, 3);
             // check data in paimon
             checkDataInPaimonPrimaryKeyTable(t1, rows);
+
+            FileStoreTable paimonTable =
+                    (FileStoreTable)
+                            paimonCatalog.getTable(
+                                    Identifier.create(t1.getDatabaseName(), t1.getTableName()));
+            long previousCompactId =
+                    assertTieringCompactAndSingleZkSnapshot(t1, t1Id, bucket, paimonTable, 3L);
+
+            // Repeated tiering commits must discard the old Fluss snapshot metadata from ZK.
+            for (int round = 2; round <= 3; round++) {
+                rows =
+                        Arrays.asList(
+                                row(1, "v" + round + "1"),
+                                row(2, "v" + round + "2"),
+                                row(3, "v" + round + "3"));
+                writeRows(t1, rows, false);
+                // Each update writes UPDATE_BEFORE and UPDATE_AFTER records.
+                long expectedOffset = 3L + (round - 1) * 6L;
+                assertReplicaStatus(bucket, expectedOffset);
+                checkDataInPaimonPrimaryKeyTable(t1, rows);
+
+                long compactId =
+                        assertTieringCompactAndSingleZkSnapshot(
+                                t1, t1Id, bucket, paimonTable, expectedOffset);
+                // Each new COMPACT must replace the previously registered Fluss snapshot;
+                // otherwise the LakeTable snapshot list in ZK would keep growing.
+                assertThat(compactId).isGreaterThan(previousCompactId);
+                long oldSnapshotId = previousCompactId;
+                assertThatThrownBy(() -> admin.getLakeSnapshot(t1, oldSnapshotId).get())
+                        .rootCause()
+                        .isInstanceOf(LakeTableSnapshotNotExistException.class);
+                previousCompactId = compactId;
+            }
         } finally {
             jobClient.cancel().get();
         }
+    }
+
+    private long assertTieringCompactAndSingleZkSnapshot(
+            TablePath tablePath,
+            long tableId,
+            TableBucket bucket,
+            FileStoreTable paimonTable,
+            long expectedOffset)
+            throws Exception {
+        Snapshot compact = paimonTable.snapshotManager().latestSnapshot();
+        assertThat(compact.commitKind()).isEqualTo(Snapshot.CommitKind.COMPACT);
+        LakeSnapshot readable = admin.getReadableLakeSnapshot(tablePath).get();
+        assertThat(readable.getSnapshotId()).isEqualTo(compact.id());
+        assertThat(readable.getTableBucketsOffset()).containsEntry(bucket, expectedOffset);
+        assertThat(
+                        FLUSS_CLUSTER_EXTENSION
+                                .getZooKeeperClient()
+                                .getLakeTable(tableId)
+                                .get()
+                                .getLakeSnapshotMetadatas())
+                .extracting(LakeTable.LakeSnapshotMetadata::getSnapshotId)
+                .containsExactly(compact.id());
+        return compact.id();
     }
 
     private Tuple2<Long, TableDescriptor> createPartitionedTable(TablePath partitionedTablePath)
@@ -675,5 +753,151 @@ class PaimonTieringITCase extends FlinkPaimonTieringTestBase {
     @Override
     protected FlussClusterExtension getFlussClusterExtension() {
         return FLUSS_CLUSTER_EXTENSION;
+    }
+
+    @Test
+    void testPartitionMarkDone() throws Exception {
+        TablePath tablePath = TablePath.of(DEFAULT_DB, "markDoneTable");
+        Map<String, String> customProperties = new HashMap<>();
+        customProperties.put("paimon.partition.idle-time-to-done", "1 s");
+        customProperties.put("paimon.partition.time-interval", "1 d");
+        customProperties.put("paimon.snapshot.num-retained.min", "1");
+        customProperties.put("paimon.snapshot.num-retained.max", "1");
+        TableDescriptor descriptor =
+                TableDescriptor.builder()
+                        .schema(
+                                Schema.newBuilder()
+                                        .column("a", DataTypes.INT())
+                                        .column("b", DataTypes.STRING())
+                                        .column("c", DataTypes.STRING())
+                                        .build())
+                        .partitionedBy("c")
+                        .distributedBy(1, "a")
+                        .property(ConfigOptions.TABLE_DATALAKE_ENABLED.key(), "true")
+                        .property(ConfigOptions.TABLE_DATALAKE_AUTO_EXPIRE_SNAPSHOT, true)
+                        .property(ConfigOptions.TABLE_DATALAKE_FRESHNESS, Duration.ofMillis(500))
+                        .customProperties(customProperties)
+                        .build();
+        long tableId = createTable(tablePath, descriptor);
+        String partition = "2024-01-01";
+        admin.createPartition(
+                        tablePath,
+                        new PartitionSpec(Collections.singletonMap("c", partition)),
+                        false)
+                .get();
+        long partitionId =
+                waitUntilPartitions(FLUSS_CLUSTER_EXTENSION.getZooKeeperClient(), tablePath, 1)
+                        .keySet()
+                        .iterator()
+                        .next();
+        writeRows(
+                tablePath,
+                Arrays.asList(
+                        row(1, "v1", partition), row(2, "v2", partition), row(3, "v3", partition)),
+                true);
+
+        // mark-done must also be enabled at the job level (disabled by default)
+        Configuration lakeTieringConfig = new Configuration();
+        lakeTieringConfig.set(ConfigOptions.LAKE_TIERING_PARTITION_MARK_DONE_ENABLED, true);
+        JobClient jobClient = buildTieringJob(execEnv, lakeTieringConfig);
+        try {
+            // the partition data is tiered, then the empty tiering round marks the idle
+            // partition done with a properties-only snapshot writing the _SUCCESS file
+            java.io.File successFile =
+                    new java.io.File(
+                            warehousePath,
+                            String.format(
+                                    "%s.db/%s/c=%s/_SUCCESS",
+                                    DEFAULT_DB, tablePath.getTableName(), partition));
+            retry(Duration.ofMinutes(2), () -> assertThat(successFile).exists());
+
+            FileStoreTable table =
+                    (FileStoreTable)
+                            paimonCatalog.getTable(
+                                    Identifier.create(DEFAULT_DB, tablePath.getTableName()));
+            retry(
+                    Duration.ofMinutes(1),
+                    () -> {
+                        Snapshot snapshot = table.snapshotManager().latestSnapshot();
+                        assertThat(snapshot).isNotNull();
+                        Map<String, String> properties = snapshot.properties();
+                        // the properties-only snapshot carries over the bucket offsets and
+                        // holds the mark-done state: initialized and nothing pending
+                        assertThat(properties)
+                                .containsKey(FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY)
+                                .containsKey(MARK_DONE_STATE_PROPERTY);
+                        PartitionMarkDoneState state =
+                                PartitionMarkDoneStateJsonSerde.fromJson(
+                                        properties.get(MARK_DONE_STATE_PROPERTY));
+                        assertThat(state.isInitialized()).isTrue();
+                        assertThat(state.getTrackedPartitionLastUpdateTimes()).isEmpty();
+                        // the properties-only snapshot is committed back to Fluss
+                        assertThat(admin.getLatestLakeSnapshot(tablePath).get().getSnapshotId())
+                                .isEqualTo(snapshot.id());
+                        LakeSnapshot readable = admin.getReadableLakeSnapshot(tablePath).get();
+                        assertThat(readable.getSnapshotId()).isEqualTo(snapshot.id());
+                        assertThat(readable.getTableBucketsOffset())
+                                .containsEntry(new TableBucket(tableId, partitionId, 0), 3L);
+                        assertThat(snapshot.id()).isGreaterThan(1);
+                        assertThat(table.snapshotManager().snapshotExists(snapshot.id() - 1))
+                                .isFalse();
+                    });
+
+            // late data: tiering still works after the properties-only snapshot, and the
+            // partition is re-tracked then marked done again
+            long snapshotBeforeLateData = table.snapshotManager().latestSnapshot().id();
+            assertThat(successFile.delete()).isTrue();
+            writeRows(
+                    tablePath,
+                    Arrays.asList(row(4, "v4", partition), row(5, "v5", partition)),
+                    true);
+            assertReplicaStatus(new TableBucket(tableId, partitionId, 0), 5);
+            retry(
+                    Duration.ofMinutes(2),
+                    () -> {
+                        Snapshot snapshot = table.snapshotManager().latestSnapshot();
+                        assertThat(snapshot).isNotNull();
+                        assertThat(snapshot.id()).isGreaterThan(snapshotBeforeLateData);
+                        assertThat(snapshot.properties()).containsKey(MARK_DONE_STATE_PROPERTY);
+                        PartitionMarkDoneState state =
+                                PartitionMarkDoneStateJsonSerde.fromJson(
+                                        snapshot.properties().get(MARK_DONE_STATE_PROPERTY));
+                        assertThat(state.getTrackedPartitionLastUpdateTimes()).isEmpty();
+                        assertThat(successFile).exists();
+                        assertThat(admin.getLatestLakeSnapshot(tablePath).get().getSnapshotId())
+                                .isEqualTo(snapshot.id());
+                        LakeSnapshot readable = admin.getReadableLakeSnapshot(tablePath).get();
+                        assertThat(readable.getSnapshotId()).isEqualTo(snapshot.id());
+                        assertThat(readable.getTableBucketsOffset())
+                                .containsEntry(new TableBucket(tableId, partitionId, 0), 5L);
+                    });
+        } finally {
+            jobClient.cancel().get();
+        }
+
+        // Keep these rows in Fluss so the query must combine the maintenance snapshot and log.
+        writeRows(tablePath, Arrays.asList(row(6, "v6", partition), row(7, "v7", partition)), true);
+        TableEnvironment tableEnvironment =
+                TableEnvironment.create(EnvironmentSettings.inBatchMode());
+        tableEnvironment.getConfig().set("parallelism.default", "2");
+        tableEnvironment.executeSql(
+                String.format(
+                        "CREATE CATALOG fluss_catalog WITH ('type' = 'fluss', 'bootstrap.servers' = '%s')",
+                        String.join(",", clientConf.get(ConfigOptions.BOOTSTRAP_SERVERS))));
+        tableEnvironment.useCatalog("fluss_catalog");
+        tableEnvironment.useDatabase(DEFAULT_DB);
+        assertThat(
+                        collectRowsUntilEndWithTimeout(
+                                tableEnvironment
+                                        .executeSql("SELECT * FROM " + tablePath.getTableName())
+                                        .collect()))
+                .containsExactlyInAnyOrder(
+                        "+I[1, v1, 2024-01-01]",
+                        "+I[2, v2, 2024-01-01]",
+                        "+I[3, v3, 2024-01-01]",
+                        "+I[4, v4, 2024-01-01]",
+                        "+I[5, v5, 2024-01-01]",
+                        "+I[6, v6, 2024-01-01]",
+                        "+I[7, v7, 2024-01-01]");
     }
 }

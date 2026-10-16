@@ -20,7 +20,9 @@
 Mirrors the Rust integration tests in crates/fluss/tests/integration/kv_table.rs.
 """
 
+import asyncio
 import math
+import time
 from datetime import date, datetime, timezone
 from datetime import time as dt_time
 from decimal import Decimal
@@ -113,6 +115,92 @@ async def test_upsert_delete_and_lookup(connection, admin):
     # Lookup non-existent key
     result = await lookuper.lookup({"id": 999})
     assert result is None, "Non-existent key should return None"
+
+    await admin.drop_table(table_path, ignore_if_not_exists=False)
+
+
+async def single_lookup_seconds(lookuper, key):
+    """Times one lookup, after a warm-up lookup that also fetches metadata."""
+    await lookuper.lookup(key)
+    started = time.monotonic()
+    await lookuper.lookup(key)
+    return time.monotonic() - started
+
+
+async def test_batched_concurrent_lookups(connection, admin):
+    table_path = fluss.TablePath("fluss", "py_test_batched_concurrent_lookups")
+    await admin.drop_table(table_path, ignore_if_not_exists=True)
+
+    schema = fluss.Schema(
+        pa.schema([pa.field("id", pa.int32()), pa.field("name", pa.string())]),
+        primary_keys=["id"],
+    )
+    table_descriptor = fluss.TableDescriptor(schema, bucket_count=3)
+    await admin.create_table(table_path, table_descriptor, ignore_if_exists=False)
+
+    table = await connection.get_table(table_path)
+    upsert_writer = table.new_upsert().create_writer()
+    for id_ in range(0, 128, 2):
+        upsert_writer.upsert({"id": id_, "name": f"name_{id_}"})
+    await upsert_writer.flush()
+
+    lookuper = table.new_lookup().create_lookuper()
+    # If one lookup is fast but the batch below times out, lookups are serialized.
+    single = await single_lookup_seconds(lookuper, {"id": 0})
+    assert single < 1, f"one lookup took {single:.2f} s"
+    ids = [0] * 8 + list(range(128))
+    # Serialized lookups take ~100 ms each and would miss the timeout.
+    results = await asyncio.wait_for(
+        asyncio.gather(*(lookuper.lookup({"id": id_}) for id_ in ids)), timeout=5
+    )
+
+    for id_, result in zip(ids, results):
+        if id_ % 2 == 0:
+            assert result == {"id": id_, "name": f"name_{id_}"}
+        else:
+            assert result is None
+
+    await admin.drop_table(table_path, ignore_if_not_exists=False)
+
+
+async def test_batched_concurrent_prefix_lookups(connection, admin):
+    table_path = fluss.TablePath("fluss", "py_test_batched_concurrent_prefix_lookups")
+    await admin.drop_table(table_path, ignore_if_not_exists=True)
+
+    schema = fluss.Schema(
+        pa.schema(
+            [
+                pa.field("id", pa.int32()),
+                pa.field("seq", pa.int64()),
+                pa.field("name", pa.string()),
+            ]
+        ),
+        primary_keys=["id", "seq"],
+    )
+    table_descriptor = fluss.TableDescriptor(schema, bucket_count=3, bucket_keys=["id"])
+    await admin.create_table(table_path, table_descriptor, ignore_if_exists=False)
+
+    table = await connection.get_table(table_path)
+    upsert_writer = table.new_upsert().create_writer()
+    for id_ in range(64):
+        for seq in range(2):
+            upsert_writer.upsert({"id": id_, "seq": seq, "name": f"{id_}-{seq}"})
+    await upsert_writer.flush()
+
+    prefix_lookuper = table.new_lookup().lookup_by(["id"]).create_lookuper()
+    # If one lookup is fast but the batch below times out, lookups are serialized.
+    single = await single_lookup_seconds(prefix_lookuper, {"id": 0})
+    assert single < 1, f"one prefix lookup took {single:.2f} s"
+    ids = [0] * 8 + list(range(96))
+    # Serialized lookups take ~100 ms each and would miss the timeout.
+    results = await asyncio.wait_for(
+        asyncio.gather(*(prefix_lookuper.lookup({"id": id_}) for id_ in ids)),
+        timeout=5,
+    )
+
+    for id_, rows in zip(ids, results):
+        expected = [(seq, f"{id_}-{seq}") for seq in range(2)] if id_ < 64 else []
+        assert sorted((row["seq"], row["name"]) for row in rows) == expected
 
     await admin.drop_table(table_path, ignore_if_not_exists=False)
 

@@ -73,12 +73,6 @@ In this case, when automatic partitioning occurs (Fluss will periodically operat
 
 Before using historical partition access, make sure the [Paimon server-side setup](../../streaming-lakehouse/datalake-formats/paimon.md#historical-partition-access-setup) is completed.
 
-:::warning
-**After changing `table.datalake.historical-partition.enabled`, restart existing writer and lookup
-jobs that need historical partition access so that their clients load the updated table
-configuration.**
-:::
-
 Auto partitioning eventually removes partitions that fall outside the configured retention window.
 After an original Fluss partition is removed, late records cannot be written to it and primary-key
 lookups cannot find its rows in Fluss, even when the existing data has already been tiered to
@@ -94,6 +88,12 @@ ALTER TABLE my_partitioned_table SET (
 );
 ```
 
+:::warning
+After enabling or disabling `table.datalake.historical-partition.enabled`, restart any existing
+writer and lookup jobs that require historical partition access so that their clients reload the
+updated table configuration.
+:::
+
 When enabled, the Coordinator creates and retains an internal `__historical__` system partition:
 
 - **Writes:** Log tables and primary-key tables route records for expired partitions through the
@@ -101,6 +101,12 @@ When enabled, the Coordinator creates and retains an internal `__historical__` s
   writes the records back to their original Paimon partitions.
 - **Reads:** Primary-key point lookups continue to resolve rows after the original Fluss partition
   no longer exists. Historical reads currently support only primary-key point lookups.
+
+For primary-key tables, `table.datalake.historical-partition.lookup-mode` selects how historical
+partition lookups read Paimon when `table.datalake.historical-partition.enabled` is `true`.
+`SST`, the default, creates and caches local lookup files. `SCAN` applies primary-key filters while
+scanning Paimon and does not create local lookup files. Change the mode with `ALTER TABLE SET`
+or reset it to `SST` with `ALTER TABLE RESET`; subsequent historical lookups use the new mode.
 
 The option is disabled by default and currently has the following requirements and limitations:
 

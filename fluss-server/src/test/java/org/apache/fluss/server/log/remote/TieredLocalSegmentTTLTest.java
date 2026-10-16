@@ -58,10 +58,7 @@ final class TieredLocalSegmentTTLTest extends RemoteLogTestBase {
     @ParameterizedTest
     @ValueSource(booleans = {true, false})
     void testInactiveTieredLocalSegmentRemovedAfterTtl(boolean partitionTable) throws Exception {
-        TableBucket tb =
-                partitionTable
-                        ? new TableBucket(DATA1_TABLE_ID, 0L, 0)
-                        : new TableBucket(DATA1_TABLE_ID, 0);
+        TableBucket tb = makeTableBucket(partitionTable);
         conf.set(ConfigOptions.LOG_RETENTION_ROLL_ACTIVE_SEGMENT_ENABLED, true);
         logManager.reconfigure(conf);
         makeLogTableAsLeader(tb, partitionTable);
@@ -103,10 +100,7 @@ final class TieredLocalSegmentTTLTest extends RemoteLogTestBase {
     @ValueSource(booleans = {true, false})
     void testExpiredLocalSegmentsRetainedWithoutHighestCopiedEndOffset(boolean partitionTable)
             throws Exception {
-        TableBucket tb =
-                partitionTable
-                        ? new TableBucket(DATA1_TABLE_ID, 0L, 0)
-                        : new TableBucket(DATA1_TABLE_ID, 0);
+        TableBucket tb = makeTableBucket(partitionTable);
         makeLogTableAsLeader(tb, partitionTable);
         LogTablet logTablet = replicaManager.getReplicaOrException(tb).getLogTablet();
 
@@ -124,10 +118,7 @@ final class TieredLocalSegmentTTLTest extends RemoteLogTestBase {
     @ParameterizedTest
     @ValueSource(booleans = {true, false})
     void testExpiredActiveSegmentWaitsForHighWatermark(boolean partitionTable) throws Exception {
-        TableBucket tb =
-                partitionTable
-                        ? new TableBucket(DATA1_TABLE_ID, 0L, 0)
-                        : new TableBucket(DATA1_TABLE_ID, 0);
+        TableBucket tb = makeTableBucket(partitionTable);
         conf.set(ConfigOptions.LOG_RETENTION_ROLL_ACTIVE_SEGMENT_ENABLED, true);
         logManager.reconfigure(conf);
         makeLogTableAsLeader(tb, partitionTable);
@@ -158,10 +149,7 @@ final class TieredLocalSegmentTTLTest extends RemoteLogTestBase {
                 DATA1_TABLE_ID,
                 Collections.emptyList(),
                 Collections.singletonMap(ConfigOptions.TABLE_LOG_LOCAL_TTL.key(), "0ms"));
-        TableBucket tb =
-                partitionTable
-                        ? new TableBucket(DATA1_TABLE_ID, 0L, 0)
-                        : new TableBucket(DATA1_TABLE_ID, 0);
+        TableBucket tb = makeTableBucket(partitionTable);
         conf.set(ConfigOptions.LOG_RETENTION_ROLL_ACTIVE_SEGMENT_ENABLED, true);
         logManager.reconfigure(conf);
         makeLogTableAsLeader(tb, partitionTable);
@@ -179,10 +167,7 @@ final class TieredLocalSegmentTTLTest extends RemoteLogTestBase {
     @ParameterizedTest
     @ValueSource(booleans = {true, false})
     void testTtlCleanupBoundedByHighestCopiedEndOffset(boolean partitionTable) throws Exception {
-        TableBucket tb =
-                partitionTable
-                        ? new TableBucket(DATA1_TABLE_ID, 0L, 0)
-                        : new TableBucket(DATA1_TABLE_ID, 0);
+        TableBucket tb = makeTableBucket(partitionTable);
         conf.set(ConfigOptions.LOG_RETENTION_ROLL_ACTIVE_SEGMENT_ENABLED, true);
         logManager.reconfigure(conf);
         makeLogTableAsLeader(tb, partitionTable);

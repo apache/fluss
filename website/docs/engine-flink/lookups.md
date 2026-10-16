@@ -248,7 +248,8 @@ PARTITIONED BY (`dt`)
 WITH (
     'bucket.key' = 'c_custkey',
     'table.auto-partition.enabled' = 'true',
-    'table.auto-partition.time-unit' = 'year'
+    'table.auto-partition.time-unit' = 'year',
+    'table.datalake.historical-partition.lookup-mode' = 'SCAN'
 );
 ```
 

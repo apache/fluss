@@ -24,13 +24,13 @@ import org.apache.fluss.row.encode.KvValueLayout;
 import org.apache.fluss.row.encode.ValueEncoder;
 import org.apache.fluss.server.kv.historical.HistoricalKvTombstone;
 
+import io.github.fluss_contrib.rocksdb.ColumnFamilyOptions;
+import io.github.fluss_contrib.rocksdb.DBOptions;
+import io.github.fluss_contrib.rocksdb.FlushOptions;
+import io.github.fluss_contrib.rocksdb.FlussTtlCompactionFilter;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
-import org.rocksdb.ColumnFamilyOptions;
-import org.rocksdb.DBOptions;
-import org.rocksdb.FlinkCompactionFilter;
-import org.rocksdb.FlushOptions;
 
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
@@ -59,7 +59,7 @@ class HistoricalKvCompactionFilterTest {
         byte[] tombstoneAfterKey = bytes("tombstone-after");
         BinaryRow row = compactedRow(DATA1_ROW_TYPE, new Object[] {1, "a"});
 
-        try (FlinkCompactionFilter.FlinkCompactionFilterFactory filterFactory =
+        try (FlussTtlCompactionFilter.FlussTtlCompactionFilterFactory filterFactory =
                         RowTtlCompactionFilterFactory.create(
                                 KvValueLayout.TAGGED,
                                 retentionOffsetDistance,

@@ -22,6 +22,7 @@ import org.apache.fluss.cluster.Endpoint;
 import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.config.FlussConfigUtils;
 import org.apache.fluss.metadata.DatabaseDescriptor;
 import org.apache.fluss.metrics.registry.MetricRegistry;
 import org.apache.fluss.rpc.RpcClient;
@@ -270,7 +271,7 @@ public class CoordinatorServer extends ServerBase {
                             conf.get(ConfigOptions.KV_SNAPSHOT_LEASE_EXPIRATION_CHECK_INTERVAL)
                                     .toMillis(),
                             zkClient,
-                            conf.getString(ConfigOptions.REMOTE_DATA_DIR),
+                            FlussConfigUtils.getDefaultRemoteDataDir(conf),
                             clock,
                             serverMetricGroup);
             kvSnapshotLeaseManager.start();

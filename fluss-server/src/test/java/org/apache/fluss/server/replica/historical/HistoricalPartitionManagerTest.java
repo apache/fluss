@@ -68,6 +68,8 @@ import org.apache.fluss.server.kv.historical.HistoricalKvKeyEncoder;
 import org.apache.fluss.server.kv.historical.HistoricalKvTombstone;
 import org.apache.fluss.server.log.FetchParams;
 import org.apache.fluss.server.log.LogAppendInfo;
+import org.apache.fluss.server.log.LogSegment;
+import org.apache.fluss.server.log.LogTablet;
 import org.apache.fluss.server.metadata.BucketMetadata;
 import org.apache.fluss.server.metadata.ClusterMetadata;
 import org.apache.fluss.server.metadata.PartitionMetadata;
@@ -76,6 +78,7 @@ import org.apache.fluss.server.metadata.TableMetadata;
 import org.apache.fluss.server.replica.Replica;
 import org.apache.fluss.server.replica.ReplicaTestBase;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
+import org.apache.fluss.server.zk.data.PartitionAssignment;
 import org.apache.fluss.server.zk.data.TableRegistration;
 import org.apache.fluss.server.zk.data.lake.LakeTableHelper;
 import org.apache.fluss.server.zk.data.lake.LakeTableSnapshot;
@@ -88,8 +91,10 @@ import org.apache.fluss.utils.types.Tuple2;
 
 import com.github.benmanes.caffeine.cache.Scheduler;
 import com.github.benmanes.caffeine.cache.Ticker;
+import io.github.fluss_contrib.rocksdb.FlushOptions;
 import org.junit.jupiter.api.Test;
-import org.rocksdb.FlushOptions;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import javax.annotation.Nullable;
 
@@ -101,6 +106,7 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -755,6 +761,49 @@ class HistoricalPartitionManagerTest extends ReplicaTestBase {
         }
     }
 
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void testLakeNotificationsAdvanceLogRetentionOnLeaderAndFollower(boolean leader)
+            throws Exception {
+        TableInfo tableInfo = registerHistoricalTableAndBecomeLeader(ChangelogImage.WAL);
+        Replica replica = replicaManager.getReplicaOrException(TABLE_BUCKET);
+        try (HistoricalPartitionManager historicalPartitionManager =
+                createHistoricalPartitionManager(
+                        new TestingHistoricalLakeLookupManager(lookupConfiguration()))) {
+            writeBatch(
+                    historicalPartitionManager,
+                    replica,
+                    ORIGINAL_PARTITION,
+                    batch(
+                            tableInfo.getRowType(),
+                            upsert(1, "us", ORIGINAL_PARTITION, "v1"),
+                            upsert(2, "eu", ORIGINAL_PARTITION, "v2")));
+        }
+
+        if (!leader) {
+            assertThat(replica.makeFollower(followerState())).isTrue();
+            assertThat(replica.getKvTablet()).isNull();
+        }
+        assertThat(replica.getLogTablet().getMinRetainOffset()).isZero();
+
+        // Followers have no local KV state or snapshot callbacks, but must still advance their
+        // WAL retention boundary. Repeated and stale notifications must not move it backwards.
+        long expectedRetainOffset = 0L;
+        for (long lakeOffset : new long[] {1L, 1L, 0L, 2L}) {
+            CompletableFuture<NotifyLakeTableOffsetResponse> future = new CompletableFuture<>();
+            replicaManager.notifyLakeTableOffset(
+                    new NotifyLakeTableOffsetData(
+                            INITIAL_COORDINATOR_EPOCH,
+                            Collections.singletonMap(
+                                    TABLE_BUCKET,
+                                    new LakeBucketOffset(10L, null, lakeOffset, null))),
+                    future::complete);
+            future.get(10, TimeUnit.SECONDS);
+            expectedRetainOffset = Math.max(expectedRetainOffset, lakeOffset);
+            assertThat(replica.getLogTablet().getMinRetainOffset()).isEqualTo(expectedRetainOffset);
+        }
+    }
+
     @Test
     void testLeaderChangeDuringLakeLookupFencesHistoricalWrite() throws Exception {
         TableInfo tableInfo = registerHistoricalTableAndBecomeLeader();
@@ -801,10 +850,13 @@ class HistoricalPartitionManagerTest extends ReplicaTestBase {
         }
     }
 
-    @Test
-    void testRecoversHistoricalOverlayFromLakeCommitOffset() throws Exception {
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void testRecoversHistoricalOverlayFromLakeCommitOffset(boolean removeCoveredSegments)
+            throws Exception {
         TableInfo tableInfo = registerHistoricalTableAndBecomeLeader();
         Replica replica = replicaManager.getReplicaOrException(TABLE_BUCKET);
+        LogTablet logTablet = replica.getLogTablet();
         TestingHistoricalLakeLookupManager lakeLookupManager =
                 new TestingHistoricalLakeLookupManager(lookupConfiguration());
 
@@ -813,14 +865,24 @@ class HistoricalPartitionManagerTest extends ReplicaTestBase {
 
         try (HistoricalPartitionManager historicalPartitionManager =
                 createHistoricalPartitionManager(lakeLookupManager)) {
-            LogAppendInfo firstAppend =
+            writeBatch(
+                    historicalPartitionManager,
+                    replica,
+                    ORIGINAL_PARTITION,
+                    batch(tableInfo.getRowType(), upsert(1, "us", ORIGINAL_PARTITION, "v1")));
+            LogAppendInfo lakeAppend =
                     writeBatch(
                             historicalPartitionManager,
                             replica,
-                            ORIGINAL_PARTITION,
+                            ANOTHER_ORIGINAL_PARTITION,
                             batch(
                                     tableInfo.getRowType(),
-                                    upsert(1, "us", ORIGINAL_PARTITION, "v1")));
+                                    upsert(1, "us", ANOTHER_ORIGINAL_PARTITION, "another-v1")));
+            long lakeCommitOffset = lakeAppend.lastOffset() + 1;
+            LogSegment coveredSegment = logTablet.activeLogSegment();
+            logTablet.roll(Optional.empty());
+
+            // Keep a newer value and a tombstone in WAL beyond the lake commit boundary.
             LogAppendInfo anotherPartitionAppend =
                     writeBatch(
                             historicalPartitionManager,
@@ -828,7 +890,7 @@ class HistoricalPartitionManagerTest extends ReplicaTestBase {
                             ANOTHER_ORIGINAL_PARTITION,
                             batch(
                                     tableInfo.getRowType(),
-                                    upsert(1, "us", ANOTHER_ORIGINAL_PARTITION, "another")));
+                                    upsert(1, "us", ANOTHER_ORIGINAL_PARTITION, "another-v2")));
             writeBatch(
                     historicalPartitionManager,
                     replica,
@@ -852,10 +914,27 @@ class HistoricalPartitionManagerTest extends ReplicaTestBase {
                             assertThat(replica.getLogHighWatermark())
                                     .isEqualTo(replica.getLocalLogEndOffset()));
 
-            // Persist the exclusive end offset of the first write as the lake recovery point. The
-            // replica has not received this offset locally, so becoming leader must load it before
-            // creating the historical overlay.
-            long lakeCommitOffset = firstAppend.lastOffset() + 1;
+            // The default retention keeps two segments. Rolling again allows the lake-covered
+            // segment to be deleted while retaining the WAL suffix and the empty active segment.
+            logTablet.roll(Optional.empty());
+            assertThat(logTablet.getSegments()).hasSize(3);
+            assertThat(coveredSegment.getFileLogRecords().file()).exists();
+            lakeLookupManager.putLakeValue(
+                    ORIGINAL_PARTITION,
+                    ValueEncoder.encodeValue(
+                            (short) tableInfo.getSchemaId(),
+                            compactedRow(
+                                    tableInfo.getRowType(),
+                                    new Object[] {1, "us", ORIGINAL_PARTITION, "v1"})));
+            lakeLookupManager.putLakeValue(
+                    ANOTHER_ORIGINAL_PARTITION,
+                    ValueEncoder.encodeValue(
+                            (short) tableInfo.getSchemaId(),
+                            compactedRow(
+                                    tableInfo.getRowType(),
+                                    new Object[] {
+                                        1, "us", ANOTHER_ORIGINAL_PARTITION, "another-v1"
+                                    })));
             new LakeTableHelper(zkClient, DEFAULT_REMOTE_DATA_DIR)
                     .registerLakeTableSnapshotV1(
                             TABLE_ID,
@@ -863,10 +942,30 @@ class HistoricalPartitionManagerTest extends ReplicaTestBase {
                                     1L, Collections.singletonMap(TABLE_BUCKET, lakeCommitOffset)));
             assertThat(replica.getLakeLogEndOffset()).isEqualTo(-1L);
 
-            // Dropping and recreating the leader KV tablet forces the overlay to be rebuilt only
-            // from WAL after the lake commit offset. The recovered tombstone must remain
-            // authoritative over lake fallback.
+            // Dropping the leader KV tablet forces promotion to rebuild the historical overlay.
             assertThat(replica.makeFollower(followerState())).isTrue();
+            assertThat(replica.getKvTablet()).isNull();
+            if (removeCoveredSegments) {
+                // Mark the WAL as uploaded, then let lake progress reclaim the covered segment
+                // on the follower before promotion. No remote WAL files are supplied for recovery.
+                long logEndOffset = replica.getLocalLogEndOffset();
+                logTablet.updateRemoteLogOffsets(0L, logEndOffset, logEndOffset);
+                CompletableFuture<NotifyLakeTableOffsetResponse> notifyFuture =
+                        new CompletableFuture<>();
+                replicaManager.notifyLakeTableOffset(
+                        new NotifyLakeTableOffsetData(
+                                INITIAL_COORDINATOR_EPOCH,
+                                Collections.singletonMap(
+                                        TABLE_BUCKET,
+                                        new LakeBucketOffset(1L, null, lakeCommitOffset, null))),
+                        notifyFuture::complete);
+                notifyFuture.get(10, TimeUnit.SECONDS);
+                assertThat(logTablet.localLogStartOffset()).isEqualTo(lakeCommitOffset);
+                assertThat(logTablet.getSegments()).hasSize(2).doesNotContain(coveredSegment);
+                assertThat(coveredSegment.getFileLogRecords().file()).doesNotExist();
+            }
+
+            // Without the notification, promotion must load the recovery point from ZooKeeper.
             CompletableFuture<List<NotifyLeaderAndIsrResultForBucket>> leaderFuture =
                     new CompletableFuture<>();
             replicaManager.becomeLeaderOrFollower(
@@ -887,7 +986,7 @@ class HistoricalPartitionManagerTest extends ReplicaTestBase {
             assertThat(recoveredKvTablet.getFlushedLogOffset())
                     .isEqualTo(replica.getLogHighWatermark());
             assertThat(recoveredKvTablet.getRocksDBKv().limitScan(10)).hasSize(2);
-            // The first record is covered by the lake commit offset and is not replayed locally.
+            // The lake-only value is not replayed locally; newer WAL values and tombstones are.
             assertThat(
                             recoveredKvTablet.lookupHistoricalLocal(
                                     ORIGINAL_PARTITION, tieredPrimaryKey))
@@ -901,7 +1000,7 @@ class HistoricalPartitionManagerTest extends ReplicaTestBase {
                     ANOTHER_ORIGINAL_PARTITION,
                     tieredPrimaryKey,
                     tableInfo,
-                    row(1, "us", ANOTHER_ORIGINAL_PARTITION, "another"));
+                    row(1, "us", ANOTHER_ORIGINAL_PARTITION, "another-v2"));
             assertHistoricalValueTag(
                     recoveredKvTablet,
                     ANOTHER_ORIGINAL_PARTITION,
@@ -912,6 +1011,67 @@ class HistoricalPartitionManagerTest extends ReplicaTestBase {
                     ORIGINAL_PARTITION,
                     deletedPrimaryKey,
                     deleteAppend.lastOffset());
+
+            int lakeLookupsBeforeRecoveryChecks = lakeLookupManager.lookupCount.get();
+            assertHistoricalLookup(
+                    historicalPartitionManager,
+                    replica,
+                    tableInfo,
+                    ORIGINAL_PARTITION,
+                    tieredPrimaryKey,
+                    row(1, "us", ORIGINAL_PARTITION, "v1"));
+            assertHistoricalLookup(
+                    historicalPartitionManager,
+                    replica,
+                    tableInfo,
+                    ANOTHER_ORIGINAL_PARTITION,
+                    tieredPrimaryKey,
+                    row(1, "us", ANOTHER_ORIGINAL_PARTITION, "another-v2"));
+            assertHistoricalLookup(
+                    historicalPartitionManager,
+                    replica,
+                    tableInfo,
+                    ORIGINAL_PARTITION,
+                    deletedPrimaryKey,
+                    null);
+            // Only the lake-only key falls back; replayed values and tombstones take precedence.
+            assertThat(lakeLookupManager.lookupCount).hasValue(lakeLookupsBeforeRecoveryChecks + 1);
+
+            // An update after promotion must resolve the old value from lake and remain readable.
+            LogAppendInfo updateAppend =
+                    writeBatch(
+                            historicalPartitionManager,
+                            replica,
+                            ORIGINAL_PARTITION,
+                            batch(
+                                    tableInfo.getRowType(),
+                                    upsert(1, "us", ORIGINAL_PARTITION, "v2")));
+            flushAndWait(recoveredKvTablet, Long.MAX_VALUE);
+            assertHistoricalLookup(
+                    historicalPartitionManager,
+                    replica,
+                    tableInfo,
+                    ORIGINAL_PARTITION,
+                    tieredPrimaryKey,
+                    row(1, "us", ORIGINAL_PARTITION, "v2"));
+            assertThat(lakeLookupManager.lookupCount).hasValue(lakeLookupsBeforeRecoveryChecks + 2);
+            retry(
+                    Duration.ofSeconds(10),
+                    () ->
+                            assertThat(replica.getLogHighWatermark())
+                                    .isEqualTo(replica.getLocalLogEndOffset()));
+            assertLogRecordsEqualsWithRowKind(
+                    tableInfo.getSchemaId(),
+                    tableInfo.getRowType(),
+                    fetchLog(updateAppend.firstOffset()),
+                    Arrays.asList(
+                            Tuple2.of(
+                                    ChangeType.UPDATE_BEFORE,
+                                    new Object[] {1, "us", ORIGINAL_PARTITION, "v1"}),
+                            Tuple2.of(
+                                    ChangeType.UPDATE_AFTER,
+                                    new Object[] {1, "us", ORIGINAL_PARTITION, "v2"})),
+                    schemaGetter(tableInfo));
         }
     }
 
@@ -1064,6 +1224,14 @@ class HistoricalPartitionManagerTest extends ReplicaTestBase {
                 TABLE_PATH,
                 TableRegistration.newTable(TABLE_ID, DEFAULT_REMOTE_DATA_DIR, descriptor));
         zkClient.registerFirstSchema(TABLE_PATH, schema);
+        zkClient.registerPartitionAssignmentAndMetadata(
+                PARTITION_ID,
+                HISTORICAL_PARTITION,
+                new PartitionAssignment(TABLE_ID, Collections.emptyMap()),
+                DEFAULT_REMOTE_DATA_DIR,
+                TABLE_PATH,
+                TABLE_ID,
+                tableInfo.getNumBuckets());
 
         BucketMetadata bucketMetadata =
                 new BucketMetadata(
@@ -1163,6 +1331,38 @@ class HistoricalPartitionManagerTest extends ReplicaTestBase {
             throws Exception {
         List<Tuple2<Object[], Object[]>> records = Arrays.asList(keyAndValues);
         return genKvRecordBatch(KEY_TYPE, rowType, records);
+    }
+
+    private static void assertHistoricalLookup(
+            HistoricalPartitionManager manager,
+            Replica replica,
+            TableInfo tableInfo,
+            String originalPartition,
+            byte[] primaryKey,
+            @Nullable InternalRow expectedRow)
+            throws Exception {
+        LookupResultForBucket result =
+                manager.lookup(
+                                replica,
+                                new LookupDataForBucket(
+                                        TABLE_BUCKET,
+                                        Collections.singletonList(primaryKey),
+                                        originalPartition),
+                                (lookupTimeNanos, lookupFileDownloaded) -> {})
+                        .get(10, TimeUnit.SECONDS);
+        assertThat(result.failed()).isFalse();
+        assertThat(result.lookupValues()).hasSize(1);
+        if (expectedRow == null) {
+            assertThat(result.lookupValues().get(0)).isNull();
+        } else {
+            BinaryValue value =
+                    new ValueDecoder(
+                                    schemaGetter(tableInfo),
+                                    tableInfo.getTableConfig().getKvFormat(),
+                                    KvValueLayout.PLAIN)
+                            .decodeValue(result.lookupValues().get(0).toByteArray());
+            assertThatRow(value.row).withSchema(tableInfo.getRowType()).isEqualTo(expectedRow);
+        }
     }
 
     private static void assertHistoricalValue(

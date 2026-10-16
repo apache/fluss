@@ -19,6 +19,11 @@
 
 #include <gtest/gtest.h>
 
+#include <chrono>
+#include <string>
+#include <thread>
+#include <vector>
+
 #include <arrow/api.h>
 
 #include "test_utils.h"
@@ -1259,6 +1264,172 @@ TEST_F(KvTableTest, PrefixLookupByBucketKey) {
         fluss::PrefixLookupResult result;
         ASSERT_OK(prefix_lookuper.PrefixLookup(key, result));
         EXPECT_TRUE(result.IsEmpty());
+    }
+
+    ASSERT_OK(adm.DropTable(table_path, false));
+}
+
+TEST_F(KvTableTest, ThreadsShareOneLookuper) {
+    auto& adm = admin();
+    auto& conn = connection();
+
+    fluss::TablePath table_path("fluss", "test_threads_share_lookuper_cpp");
+
+    auto schema = fluss::Schema::NewBuilder()
+                      .AddColumn("id", DataType::Int())
+                      .AddColumn("name", DataType::String())
+                      .SetPrimaryKeys({"id"})
+                      .Build();
+
+    auto table_descriptor = fluss::TableDescriptor::NewBuilder()
+                                .SetSchema(schema)
+                                .SetBucketCount(3)
+                                .SetProperty("table.replication.factor", "1")
+                                .Build();
+
+    fluss_test::CreateTable(adm, table_path, table_descriptor);
+
+    fluss::Table table;
+    ASSERT_OK(conn.GetTable(table_path, table));
+
+    fluss::UpsertWriter upsert_writer;
+    ASSERT_OK(table.NewUpsert().CreateWriter(upsert_writer));
+    for (int32_t id = 0; id < 128; id += 2) {
+        fluss::GenericRow row(2);
+        row.SetInt32(0, id);
+        row.SetString(1, "name_" + std::to_string(id));
+        ASSERT_OK(upsert_writer.Upsert(row));
+    }
+    ASSERT_OK(upsert_writer.Flush());
+
+    fluss::Lookuper lookuper;
+    ASSERT_OK(table.NewLookup().CreateLookuper(lookuper));
+
+    // If one lookup is fast but the threads below are slow, lookups are serialized.
+    // The first lookup also fetches metadata, so time the second.
+    fluss::GenericRow first_key(2);
+    first_key.SetInt32(0, 0);
+    fluss::LookupResult first;
+    ASSERT_OK(lookuper.Lookup(first_key, first));
+    auto started = std::chrono::steady_clock::now();
+    ASSERT_OK(lookuper.Lookup(first_key, first));
+    EXPECT_LT(std::chrono::steady_clock::now() - started, std::chrono::seconds(1));
+
+    // One at a time, 128 lookups take ~13 s, since each waits for a batch.
+    constexpr int kThreads = 16;
+    constexpr int kKeysPerThread = 8;
+    std::vector<std::string> names(kThreads * kKeysPerThread);
+    std::vector<std::thread> threads;
+    started = std::chrono::steady_clock::now();
+    for (int t = 0; t < kThreads; ++t) {
+        threads.emplace_back([&lookuper, &names, t] {
+            for (int k = 0; k < kKeysPerThread; ++k) {
+                int32_t id = t * kKeysPerThread + k;
+                fluss::GenericRow key(2);
+                key.SetInt32(0, id);
+                fluss::LookupResult result;
+                if (!lookuper.Lookup(key, result).Ok()) {
+                    names[id] = "<error>";
+                } else if (result.Found()) {
+                    names[id] = std::string(result.GetString(1));
+                }
+            }
+        });
+    }
+    for (auto& thread : threads) {
+        thread.join();
+    }
+    EXPECT_LT(std::chrono::steady_clock::now() - started, std::chrono::seconds(5));
+
+    for (int32_t id = 0; id < kThreads * kKeysPerThread; ++id) {
+        EXPECT_EQ(names[id], id % 2 == 0 ? "name_" + std::to_string(id) : "") << "id=" << id;
+    }
+
+    ASSERT_OK(adm.DropTable(table_path, false));
+}
+
+TEST_F(KvTableTest, ThreadsShareOnePrefixLookuper) {
+    auto& adm = admin();
+    auto& conn = connection();
+
+    fluss::TablePath table_path("fluss", "test_threads_share_prefix_lookuper_cpp");
+
+    auto schema = fluss::Schema::NewBuilder()
+                      .AddColumn("id", DataType::Int())
+                      .AddColumn("seq", DataType::BigInt())
+                      .AddColumn("name", DataType::String())
+                      .SetPrimaryKeys({"id", "seq"})
+                      .Build();
+
+    auto table_descriptor = fluss::TableDescriptor::NewBuilder()
+                                .SetSchema(schema)
+                                .SetBucketCount(3)
+                                .SetBucketKeys({"id"})
+                                .SetProperty("table.replication.factor", "1")
+                                .Build();
+
+    fluss_test::CreateTable(adm, table_path, table_descriptor);
+
+    fluss::Table table;
+    ASSERT_OK(conn.GetTable(table_path, table));
+
+    fluss::UpsertWriter upsert_writer;
+    ASSERT_OK(table.NewUpsert().CreateWriter(upsert_writer));
+    for (int32_t id = 0; id < 64; ++id) {
+        for (int64_t seq = 0; seq < 2; ++seq) {
+            fluss::GenericRow row(3);
+            row.SetInt32(0, id);
+            row.SetInt64(1, seq);
+            row.SetString(2, std::to_string(id) + "-" + std::to_string(seq));
+            ASSERT_OK(upsert_writer.Upsert(row));
+        }
+    }
+    ASSERT_OK(upsert_writer.Flush());
+
+    fluss::PrefixLookuper prefix_lookuper;
+    ASSERT_OK(table.NewPrefixLookup({"id"}, prefix_lookuper));
+
+    // If one lookup is fast but the threads below are slow, lookups are serialized.
+    // The first lookup also fetches metadata, so time the second.
+    fluss::GenericRow first_key(3);
+    first_key.SetInt32(0, 0);
+    fluss::PrefixLookupResult first;
+    ASSERT_OK(prefix_lookuper.PrefixLookup(first_key, first));
+    auto started = std::chrono::steady_clock::now();
+    ASSERT_OK(prefix_lookuper.PrefixLookup(first_key, first));
+    EXPECT_LT(std::chrono::steady_clock::now() - started, std::chrono::seconds(1));
+
+    // One at a time, 96 lookups take ~10 s, since each waits for a batch.
+    constexpr int kThreads = 16;
+    constexpr int kKeysPerThread = 6;
+    std::vector<std::vector<int64_t>> seqs(kThreads * kKeysPerThread);
+    std::vector<std::thread> threads;
+    started = std::chrono::steady_clock::now();
+    for (int t = 0; t < kThreads; ++t) {
+        threads.emplace_back([&prefix_lookuper, &seqs, t] {
+            for (int k = 0; k < kKeysPerThread; ++k) {
+                int32_t id = t * kKeysPerThread + k;
+                fluss::GenericRow key(3);
+                key.SetInt32(0, id);
+                fluss::PrefixLookupResult result;
+                if (!prefix_lookuper.PrefixLookup(key, result).Ok()) {
+                    seqs[id] = {-1};
+                    continue;
+                }
+                for (size_t i = 0; i < result.Size(); ++i) {
+                    seqs[id].push_back(result.GetRow(i).GetInt64("seq"));
+                }
+            }
+        });
+    }
+    for (auto& thread : threads) {
+        thread.join();
+    }
+    EXPECT_LT(std::chrono::steady_clock::now() - started, std::chrono::seconds(5));
+
+    for (int32_t id = 0; id < kThreads * kKeysPerThread; ++id) {
+        auto expected = id < 64 ? std::vector<int64_t>{0, 1} : std::vector<int64_t>{};
+        EXPECT_EQ(seqs[id], expected) << "id=" << id;
     }
 
     ASSERT_OK(adm.DropTable(table_path, false));

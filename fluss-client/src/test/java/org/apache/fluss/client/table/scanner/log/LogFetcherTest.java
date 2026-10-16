@@ -43,6 +43,7 @@ import org.apache.fluss.rpc.protocol.ApiError;
 import org.apache.fluss.rpc.protocol.FetchLogReadPreference;
 import org.apache.fluss.server.entity.FetchReqInfo;
 import org.apache.fluss.server.tablet.TestTabletServerGateway;
+import org.apache.fluss.utils.FlussPaths;
 import org.apache.fluss.utils.IOUtils;
 
 import org.junit.jupiter.api.AfterEach;
@@ -302,7 +303,11 @@ public class LogFetcherTest {
                                         .build();
                         RemoteLogFetchInfo remoteLogFetchInfo =
                                 new RemoteLogFetchInfo(
-                                        "/tmp/test-tablet-dir",
+                                        FlussPaths.remoteLogTabletDir(
+                                                        new FsPath("/tmp/remote/log"),
+                                                        segment.physicalTablePath(),
+                                                        tableBucket)
+                                                .toString(),
                                         null,
                                         Collections.singletonList(segment),
                                         0);

@@ -7,7 +7,7 @@ sidebar_position: 3
 
 Fluss leverages well-known Lakehouse storage solutions like Apache Paimon, Apache Iceberg, Apache Hudi, and Lance as the tiered storage layer. The Tiering Service continuously tiers Fluss data to Lakehouse storage, where it can be read by Fluss clients in a streaming manner and accessed directly by external systems such as Flink, Spark, StarRocks, and others.
 
-For deployment instructions, see [Deploying Streaming Lakehouse](../../install-deploy/deploying-streaming-lakehouse.md).
+For deployment instructions, see [Deploying Lakestream](../../install-deploy/deploying-streaming-lakehouse.md).
 
 For architecture details, see [Tiering Service](../../streaming-lakehouse/tiering-service.md).
 
@@ -75,6 +75,7 @@ CREATE TABLE my_table (
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `lake.tiering.auto-expire-snapshot` | Boolean | false | Auto-trigger snapshot expiration on commit, even if `table.datalake.auto-expire-snapshot` is false |
+| `lake.tiering.partition.mark-done.enabled` | Boolean | false | Enable [partition mark-done](../../streaming-lakehouse/tiering-service.md#partition-mark-done) using the actual lake table's options |
 | `lake.tiering.io.tmp.dirs` | String | Flink temporary directories | Local directories used for temporary I/O files. If not configured, a `fluss` child directory under each Flink temporary directory is used. Separate multiple directories with commas or the system path separator |
 
 ## Data Retention

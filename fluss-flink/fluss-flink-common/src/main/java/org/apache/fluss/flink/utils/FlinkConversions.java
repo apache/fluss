@@ -589,6 +589,11 @@ public class FlinkConversions {
                         encodeBytesToBase64(newHandlerBytes)));
     }
 
+    /** Returns whether the given Fluss table stores a Flink materialized table. */
+    public static boolean isMaterializedTable(TableInfo tableInfo) {
+        return isMaterializedTable(tableInfo.getCustomProperties().toMap());
+    }
+
     /**
      * Determines if the given options represent a materialized table.
      *

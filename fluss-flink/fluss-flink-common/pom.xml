@@ -71,7 +71,7 @@
             <groupId>org.apache.flink</groupId>
             <artifactId>flink-connector-base</artifactId>
             <version>${flink.minor.version}</version>
-            <scope>provided</scope>
+            <scope>test</scope>
         </dependency>
 
         <!-- Paimon -->
@@ -113,13 +113,6 @@
         <dependency>
             <groupId>org.apache.flink</groupId>
             <artifactId>flink-table-test-utils</artifactId>
-            <version>${flink.minor.version}</version>
-            <scope>test</scope>
-        </dependency>
-
-        <dependency>
-            <groupId>org.apache.flink</groupId>
-            <artifactId>flink-connector-base</artifactId>
             <version>${flink.minor.version}</version>
             <scope>test</scope>
         </dependency>

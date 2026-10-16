@@ -23,6 +23,7 @@ import org.apache.fluss.config.MemorySize;
 import org.apache.fluss.exception.OutOfOrderSequenceException;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.PhysicalTablePath;
+import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.record.LogRecord;
 import org.apache.fluss.record.LogRecordBatch;
 import org.apache.fluss.record.LogRecordReadContext;
@@ -39,6 +40,8 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.io.File;
 import java.io.IOException;
@@ -66,8 +69,10 @@ import static org.apache.fluss.record.TestData.TEST_SCHEMA_GETTER;
 import static org.apache.fluss.testutils.DataTestUtils.genMemoryLogRecordsByObject;
 import static org.apache.fluss.testutils.DataTestUtils.genMemoryLogRecordsWithWriterId;
 import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
+import static org.apache.fluss.utils.FlussPaths.logTabletDir;
 import static org.apache.fluss.utils.FlussPaths.offsetFromFile;
 import static org.apache.fluss.utils.FlussPaths.writerSnapshotFile;
+import static org.apache.fluss.utils.PartitionUtils.HISTORICAL_PARTITION_VALUE;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -184,6 +189,70 @@ final class LogTabletTest extends LogTestBase {
             assertThat(kvLogTablet.getMinRetainOffset()).isEqualTo(updateThreadCount);
         } finally {
             executor.shutdownNow();
+            kvLogTablet.close();
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void testLakeProgressReleasesOnlyHistoricalLogSegments(boolean historicalPartition)
+            throws Exception {
+        PhysicalTablePath physicalPath =
+                PhysicalTablePath.of(
+                        DATA1_TABLE_PATH,
+                        historicalPartition ? HISTORICAL_PARTITION_VALUE : "20240101");
+        File kvLogDir = logTabletDir(tempDir, physicalPath, new TableBucket(DATA1_TABLE_ID, 1L, 0));
+        LogTablet kvLogTablet =
+                LogTablet.create(
+                        tempDir,
+                        physicalPath,
+                        kvLogDir,
+                        conf,
+                        new AtomicBoolean(false),
+                        TestingMetricGroups.TABLET_SERVER_METRICS,
+                        0,
+                        scheduler,
+                        LogFormat.ARROW,
+                        2,
+                        true,
+                        SystemClock.getInstance(),
+                        true);
+        try {
+            for (int i = 0; i < 4; i++) {
+                kvLogTablet.appendAsLeader(genMemoryLogRecordsByObject(DATA1));
+                kvLogTablet.roll(Optional.empty());
+            }
+            kvLogTablet.updateHighWatermark(40L);
+            kvLogTablet.updateRemoteLogOffsets(0L, 20L, 20L);
+            assertThat(kvLogTablet.getSegments()).hasSize(5);
+
+            // Only complete segments covered by lake progress can be released. The segment
+            // starting at 10 still contains records needed for recovery from offset 15.
+            kvLogTablet.updateLakeLogEndOffset(15L);
+            assertThat(kvLogTablet.getMinRetainOffset()).isEqualTo(historicalPartition ? 15L : 0L);
+            assertThat(kvLogTablet.localLogStartOffset()).isEqualTo(historicalPartition ? 10L : 0L);
+
+            // Lake progress cannot release a segment that has not been uploaded to remote log.
+            kvLogTablet.updateLakeLogEndOffset(30L);
+            assertThat(kvLogTablet.localLogStartOffset()).isEqualTo(historicalPartition ? 20L : 0L);
+            kvLogTablet.updateLakeLogEndOffset(30L);
+            kvLogTablet.updateLakeLogEndOffset(10L);
+            assertThat(kvLogTablet.getMinRetainOffset()).isEqualTo(historicalPartition ? 30L : 0L);
+
+            // Once uploads catch up, preserve the configured two most recent local segments.
+            kvLogTablet.updateRemoteLogOffsets(0L, 40L, 40L);
+            assertThat(kvLogTablet.getSegments()).hasSize(historicalPartition ? 2 : 5);
+            assertThat(kvLogTablet.localLogStartOffset()).isEqualTo(historicalPartition ? 30L : 0L);
+            kvLogTablet.updateLakeLogEndOffset(40L);
+            assertThat(kvLogTablet.getSegments()).hasSize(historicalPartition ? 2 : 5);
+
+            // Ordinary KV partitions still require KV snapshot progress to release their WAL.
+            if (!historicalPartition) {
+                kvLogTablet.updateMinRetainOffset(30L);
+                assertThat(kvLogTablet.getSegments()).hasSize(2);
+                assertThat(kvLogTablet.localLogStartOffset()).isEqualTo(30L);
+            }
+        } finally {
             kvLogTablet.close();
         }
     }

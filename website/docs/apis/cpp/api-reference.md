@@ -182,17 +182,19 @@ Complete API reference for the Fluss C++ client.
 
 ## `Lookuper`
 
-| Method                                                        |  Description                |
-|---------------------------------------------------------------|-----------------------------|
-| `Lookup(const GenericRow& pk_row, LookupResult& out) -> Result` | Lookup a row by primary key |
+Performs point lookups by primary key. Obtained from `TableLookup::CreateLookuper()`. Each call blocks until its result arrives. Threads can share one `Lookuper`, and their concurrent lookups go out to the server in the same batches.
+
+| Method                                                              |  Description                |
+|---------------------------------------------------------------------|-----------------------------|
+| `Lookup(const GenericRow& pk_row, LookupResult& out) const -> Result` | Lookup a row by primary key |
 
 ## `PrefixLookuper`
 
-Performs prefix (bucket-key) lookups, returning all rows whose primary key starts with the given prefix. Obtained from `Table::NewPrefixLookup()`. See the [Prefix Lookup example](./example/prefix-lookup.md).
+Performs prefix (bucket-key) lookups, returning all rows whose primary key starts with the given prefix. Obtained from `Table::NewPrefixLookup()`. Like a `Lookuper`, it can be shared by threads. See the [Prefix Lookup example](./example/prefix-lookup.md).
 
-| Method                                                                          |  Description                                  |
-|---------------------------------------------------------------------------------|-----------------------------------------------|
-| `PrefixLookup(const GenericRow& prefix_row, PrefixLookupResult& out) -> Result` | Look up all rows matching the prefix columns  |
+| Method                                                                                |  Description                                  |
+|---------------------------------------------------------------------------------------|-----------------------------------------------|
+| `PrefixLookup(const GenericRow& prefix_row, PrefixLookupResult& out) const -> Result` | Look up all rows matching the prefix columns  |
 
 ## `LogScanner`
 
@@ -447,6 +449,11 @@ Read-only result of a prefix lookup — zero or more matched rows. Each row is a
 | `GetBucketId() -> int32_t`                                     | Bucket ID                            |
 | `GetBaseOffset() -> int64_t`                                   | First record offset                  |
 | `GetLastOffset() -> int64_t`                                   | Last record offset                   |
+| `GetCommitTimestamp() -> int64_t`                              | Commit time in epoch milliseconds    |
+
+`GetCommitTimestamp()` returns `ArrowRecordBatch::NO_COMMIT_TIMESTAMP` (`-1`)
+when the batch carries no single timestamp, which is the case for a limit scan
+because it merges several log batches into one Arrow batch.
 
 ## `ArrowRecordBatches`
 
@@ -668,10 +675,11 @@ Read-only handle for a complex (`ARRAY` / `MAP` / `ROW`) column value, obtained 
 
 ## `PartitionInfo`
 
-| Field            | Type          |  Description   |
-|------------------|---------------|----------------|
-| `partition_id`   | `int64_t`     | Partition ID   |
-| `partition_name` | `std::string` | Partition name |
+| Field            | Type          |  Description           |
+|------------------|---------------|------------------------|
+| `partition_id`   | `int64_t`     | Partition ID           |
+| `partition_name` | `std::string` | Partition name         |
+| `bucket_count`   | `int32_t`     | Partition bucket count |
 
 ## `DatabaseDescriptor`
 

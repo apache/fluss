@@ -26,7 +26,6 @@ import org.apache.fluss.config.TableConfig;
 import org.apache.fluss.config.cluster.ServerReconfigurable;
 import org.apache.fluss.exception.ConfigException;
 import org.apache.fluss.exception.KvStorageException;
-import org.apache.fluss.fs.FileSystem;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.memory.LazyMemorySegmentPool;
 import org.apache.fluss.metadata.KvFormat;
@@ -51,14 +50,16 @@ import org.apache.fluss.utils.FlussPaths;
 import org.apache.fluss.utils.IOUtils;
 import org.apache.fluss.utils.clock.Clock;
 import org.apache.fluss.utils.clock.SystemClock;
+import org.apache.fluss.utils.function.SupplierWithException;
 import org.apache.fluss.utils.types.Tuple2;
 
-import org.rocksdb.Cache;
-import org.rocksdb.LRUCache;
-import org.rocksdb.RateLimiter;
-import org.rocksdb.RateLimiterMode;
-import org.rocksdb.RocksDB;
-import org.rocksdb.WriteBufferManager;
+import io.github.fluss_contrib.rocksdb.Cache;
+import io.github.fluss_contrib.rocksdb.HyperClockCache;
+import io.github.fluss_contrib.rocksdb.LRUCache;
+import io.github.fluss_contrib.rocksdb.RateLimiter;
+import io.github.fluss_contrib.rocksdb.RateLimiterMode;
+import io.github.fluss_contrib.rocksdb.RocksDB;
+import io.github.fluss_contrib.rocksdb.WriteBufferManager;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -85,7 +86,6 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Predicate;
 
 import static org.apache.fluss.utils.Preconditions.checkState;
-import static org.apache.fluss.utils.concurrent.LockUtils.inLock;
 
 /**
  * The entry point to the fluss kv management subsystem. The kv manager is responsible for kv tablet
@@ -140,6 +140,8 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
 
     private final Map<TableBucket, KvTablet> currentKvs = new ConcurrentHashMap<>();
 
+    private final Map<TableBucket, Object> kvLocks = new ConcurrentHashMap<>();
+
     /**
      * For arrow log format. The buffer allocator to allocate memory for arrow write batch of
      * changelog records.
@@ -148,10 +150,6 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
 
     /** The memory segment pool to allocate memorySegment. */
     private final LazyMemorySegmentPool memorySegmentPool;
-
-    private final FsPath remoteKvDir;
-
-    private final FileSystem remoteFileSystem;
 
     /**
      * The shared rate limiter for all RocksDB instances to control flush and compaction write rate.
@@ -191,8 +189,6 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
         this.memorySegmentPool = LazyMemorySegmentPool.createServerBufferPool(conf);
         this.zkClient = zkClient;
         this.clock = clock;
-        this.remoteKvDir = FlussPaths.remoteKvDir(conf);
-        this.remoteFileSystem = remoteKvDir.getFileSystem();
         this.serverMetricGroup = tabletServerMetricGroup;
         this.sharedRocksDBRateLimiter = createSharedRateLimiter(conf);
         this.sharedBlockCache = createSharedBlockCache(conf);
@@ -268,7 +264,8 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
             return null;
         }
         RocksDB.loadLibrary();
-        return new LRUCache(sharedBlockCacheSize);
+        // Let HyperClockCache size its table automatically and choose its default shard count.
+        return new HyperClockCache(sharedBlockCacheSize, 0, -1, false);
     }
 
     public static KvManager create(
@@ -385,46 +382,39 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
     }
 
     private void cleanupStaleKvDirectories() {
-        inLock(
-                tabletCreationOrDeletionLock,
-                () -> {
-                    checkState(!isShutdown, "Cannot clean KV directories after shutdown.");
-                    checkState(
-                            currentKvs.isEmpty(),
-                            "Cannot clean KV directories while KV tablets are open.");
-                    for (File dataDir : dataDirs) {
-                        try {
-                            Path realDataDir = dataDir.toPath().toRealPath();
-                            List<File> staleDirs =
-                                    listTabletsToLoad(
-                                            realDataDir.toFile(), this::listCleanupDirectories);
-                            int deletedDirectories = 0;
-                            for (File tabletDir : staleDirs) {
-                                try {
-                                    deleteStaleKvDirectory(tabletDir.toPath(), realDataDir);
-                                    deletedDirectories++;
-                                } catch (IOException e) {
-                                    LOG.warn(
-                                            "Failed to clean stale KV tablet directory {}. "
-                                                    + "Continuing cleanup of other tablet directories.",
-                                            tabletDir,
-                                            e);
-                                }
-                            }
-                            LOG.info(
-                                    "Cleaned up {} of {} stale KV tablet directories in {}.",
-                                    deletedDirectories,
-                                    staleDirs.size(),
-                                    dataDir);
-                        } catch (IOException e) {
-                            LOG.warn(
-                                    "Failed to clean stale KV directories in {}. Skipping remaining "
-                                            + "cleanup for this data directory; startup will continue.",
-                                    dataDir,
-                                    e);
-                        }
+        checkState(!isShutdown, "Cannot clean KV directories after shutdown.");
+        checkState(currentKvs.isEmpty(), "Cannot clean KV directories while KV tablets are open.");
+        for (File dataDir : dataDirs) {
+            try {
+                Path realDataDir = dataDir.toPath().toRealPath();
+                List<File> staleDirs =
+                        listTabletsToLoad(realDataDir.toFile(), this::listCleanupDirectories);
+                int deletedDirectories = 0;
+                for (File tabletDir : staleDirs) {
+                    try {
+                        deleteStaleKvDirectory(tabletDir.toPath(), realDataDir);
+                        deletedDirectories++;
+                    } catch (IOException e) {
+                        LOG.warn(
+                                "Failed to clean stale KV tablet directory {}. "
+                                        + "Continuing cleanup of other tablet directories.",
+                                tabletDir,
+                                e);
                     }
-                });
+                }
+                LOG.info(
+                        "Cleaned up {} of {} stale KV tablet directories in {}.",
+                        deletedDirectories,
+                        staleDirs.size(),
+                        dataDir);
+            } catch (IOException e) {
+                LOG.warn(
+                        "Failed to clean stale KV directories in {}. Skipping remaining "
+                                + "cleanup for this data directory; startup will continue.",
+                        dataDir,
+                        e);
+            }
+        }
     }
 
     private void deleteStaleKvDirectory(Path tabletDir, Path dataDir) throws IOException {
@@ -551,8 +541,8 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
             ArrowCompressionInfo arrowCompressionInfo,
             @Nullable Runnable flushCompleteListener)
             throws Exception {
-        return inLock(
-                tabletCreationOrDeletionLock,
+        return inKvLock(
+                tableBucket,
                 () -> {
                     if (currentKvs.containsKey(tableBucket)) {
                         return currentKvs.get(tableBucket);
@@ -626,9 +616,16 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
     }
 
     public void dropKv(TableBucket tableBucket) {
-        KvTablet dropKvTablet =
-                inLock(tabletCreationOrDeletionLock, () -> currentKvs.remove(tableBucket));
+        inKvLock(
+                tableBucket,
+                () -> {
+                    doDropKv(tableBucket);
+                    return null;
+                });
+    }
 
+    private void doDropKv(TableBucket tableBucket) {
+        KvTablet dropKvTablet = currentKvs.remove(tableBucket);
         if (dropKvTablet != null) {
             TablePath tablePath = dropKvTablet.getTablePath();
             try {
@@ -665,6 +662,38 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
         Tuple2<PhysicalTablePath, TableBucket> pathAndBucket = FlussPaths.parseTabletDir(tabletDir);
         PhysicalTablePath physicalTablePath = pathAndBucket.f0;
         TableBucket tableBucket = pathAndBucket.f1;
+        return inKvLock(
+                tableBucket,
+                () ->
+                        doLoadKv(
+                                tabletDir,
+                                physicalTablePath,
+                                tableBucket,
+                                schemaGetter,
+                                flushCompleteListener));
+    }
+
+    private KvTablet doLoadKv(
+            File tabletDir,
+            PhysicalTablePath physicalTablePath,
+            TableBucket tableBucket,
+            SchemaGetter schemaGetter,
+            @Nullable Runnable flushCompleteListener)
+            throws Exception {
+        KvTablet currentKv = currentKvs.get(tableBucket);
+        if (currentKv != null) {
+            throw new IllegalStateException(
+                    String.format(
+                            "Duplicate kv tablet directories for bucket %s are found in both %s and %s. "
+                                    + "Recover server from this "
+                                    + "failure by manually deleting one of the two kv directories for this bucket. "
+                                    + "It is recommended to delete the bucket in the kv tablet directory that is "
+                                    + "known to have failed recently.",
+                            tableBucket,
+                            tabletDir.getAbsolutePath(),
+                            currentKv.getKvTabletDir().getAbsolutePath()));
+        }
+
         // get the log tablet for the kv tablet
         LogTablet logTablet =
                 logManager
@@ -714,30 +743,19 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
                         autoIncrementManager,
                         clock,
                         tableConfig);
-        if (this.currentKvs.containsKey(tableBucket)) {
-            throw new IllegalStateException(
-                    String.format(
-                            "Duplicate kv tablet directories for bucket %s are found in both %s and %s. "
-                                    + "Recover server from this "
-                                    + "failure by manually deleting one of the two kv directories for this bucket. "
-                                    + "It is recommended to delete the bucket in the kv tablet directory that is "
-                                    + "known to have failed recently.",
-                            tableBucket,
-                            tabletDir.getAbsolutePath(),
-                            currentKvs.get(tableBucket).getKvTabletDir().getAbsolutePath()));
-        }
-        this.currentKvs.put(tableBucket, kvTablet);
+        currentKvs.put(tableBucket, kvTablet);
 
         return kvTablet;
     }
 
     public void deleteRemoteKvSnapshot(
-            PhysicalTablePath physicalTablePath, TableBucket tableBucket) {
+            String remoteDataDir, PhysicalTablePath physicalTablePath, TableBucket tableBucket) {
         FsPath remoteKvTabletDir =
-                FlussPaths.remoteKvTabletDir(remoteKvDir, physicalTablePath, tableBucket);
+                FlussPaths.remoteKvTabletDir(
+                        FlussPaths.remoteKvDir(remoteDataDir), physicalTablePath, tableBucket);
         try {
-            if (remoteFileSystem.exists(remoteKvTabletDir)) {
-                remoteFileSystem.delete(remoteKvTabletDir, true);
+            if (remoteKvTabletDir.getFileSystem().exists(remoteKvTabletDir)) {
+                remoteKvTabletDir.getFileSystem().delete(remoteKvTabletDir, true);
                 LOG.info("Delete table's remote bucket snapshot dir of {} success.", tableBucket);
             }
         } catch (Exception e) {
@@ -796,6 +814,32 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
             // If setting fails, throw ConfigException to trigger rollback
             throw new ConfigException(
                     "Failed to reconfigure shared RocksDB rate limiter: " + e.getMessage(), e);
+        }
+    }
+
+    @VisibleForTesting
+    boolean hasKvLock(TableBucket tableBucket) {
+        return kvLocks.containsKey(tableBucket);
+    }
+
+    private <T, E extends Exception> T inKvLock(
+            TableBucket tableBucket, SupplierWithException<T, E> action) throws E {
+        while (true) {
+            Object lock = kvLocks.computeIfAbsent(tableBucket, ignored -> new Object());
+            synchronized (lock) {
+                if (kvLocks.get(tableBucket) != lock) {
+                    continue;
+                }
+                try {
+                    return action.get();
+                } finally {
+                    if (!currentKvs.containsKey(tableBucket)) {
+                        // Retire the lock only after the action completes, while still holding
+                        // its monitor. Threads waiting on this lock must retry with the new one.
+                        kvLocks.remove(tableBucket, lock);
+                    }
+                }
+            }
         }
     }
 }

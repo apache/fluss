@@ -21,6 +21,7 @@ import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.config.ConfigOption;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.config.FlussConfigUtils;
 import org.apache.fluss.exception.FlussException;
 import org.apache.fluss.fs.FileSystem;
 import org.apache.fluss.fs.FsPath;
@@ -141,7 +142,7 @@ public abstract class ServerBase implements AutoCloseableAsync, FatalErrorHandle
             FileSystem.initialize(conf, pluginManager);
 
             // get uri for remote data dir
-            String remoteDir = conf.get(ConfigOptions.REMOTE_DATA_DIR);
+            String remoteDir = FlussConfigUtils.getDefaultRemoteDataDir(conf);
             remoteFileSystem = new FsPath(remoteDir).getFileSystem();
 
             startServices();

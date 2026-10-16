@@ -91,7 +91,16 @@ If `s3.aws.credentials.provider`, `s3a.aws.credentials.provider`, or `fs.s3a.aws
 
 Custom credentials providers must now implement `software.amazon.awssdk.auth.credentials.AwsCredentialsProvider` instead of `com.amazonaws.auth.AWSCredentialsProvider`. Implementations should provide credentials through `resolveCredentials()` rather than the SDK v1 `getCredentials()` and `refresh()` methods.
 
-Deployments using static access keys or the default AWS credentials provider chain do not require configuration changes.
+Deployments using static access keys do not require configuration changes.
+
+Deployments on EKS that rely on IRSA do. Hadoop S3A's default provider chain contains no web-identity provider, so the server's own S3 access falls through to the EC2 instance profile instead. Set the provider explicitly, alongside the delegation role:
+
+```yaml
+s3.aws.credentials.provider: software.amazon.awssdk.auth.credentials.WebIdentityTokenFileCredentialsProvider
+s3.assumed.role.arn: <your-delegation-role-arn>
+```
+
+EC2 instance profiles are covered by the default chain and need no change.
 
 ### Active Segment Retention Rollout
 

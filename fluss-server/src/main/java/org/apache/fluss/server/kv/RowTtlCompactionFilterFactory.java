@@ -21,8 +21,8 @@ import org.apache.fluss.row.encode.KvValueLayout;
 import org.apache.fluss.server.utils.RowTtlUtils;
 import org.apache.fluss.utils.clock.Clock;
 
-import org.rocksdb.FlinkCompactionFilter;
-import org.rocksdb.RocksDB;
+import io.github.fluss_contrib.rocksdb.FlussTtlCompactionFilter;
+import io.github.fluss_contrib.rocksdb.RocksDB;
 
 import java.time.Duration;
 import java.util.function.LongSupplier;
@@ -38,7 +38,7 @@ public final class RowTtlCompactionFilterFactory {
     private RowTtlCompactionFilterFactory() {}
 
     /** Creates a configured native compaction filter factory for row TTL cleanup. */
-    public static FlinkCompactionFilter.FlinkCompactionFilterFactory create(
+    public static FlussTtlCompactionFilter.FlussTtlCompactionFilterFactory create(
             KvValueLayout kvValueLayout, Duration ttl, Clock clock) {
         long ttlMillis = RowTtlUtils.validateAndConvertTtlDurationToMillis(ttl);
         checkNotNull(clock, "clock must not be null.");
@@ -46,7 +46,7 @@ public final class RowTtlCompactionFilterFactory {
     }
 
     /** Removes values using the default interval for refreshing the supplied current value. */
-    static FlinkCompactionFilter.FlinkCompactionFilterFactory create(
+    static FlussTtlCompactionFilter.FlussTtlCompactionFilterFactory create(
             KvValueLayout kvValueLayout,
             long expirationDistance,
             LongSupplier currentValueSupplier) {
@@ -58,7 +58,7 @@ public final class RowTtlCompactionFilterFactory {
     }
 
     /** Removes a value when {@code valueTag + expirationDistance <= currentValue}. */
-    static FlinkCompactionFilter.FlinkCompactionFilterFactory create(
+    static FlussTtlCompactionFilter.FlussTtlCompactionFilterFactory create(
             KvValueLayout kvValueLayout,
             long expirationDistance,
             long queryCurrentValueAfterNumEntries,
@@ -72,12 +72,12 @@ public final class RowTtlCompactionFilterFactory {
                 "queryCurrentValueAfterNumEntries must be greater than zero.");
 
         RocksDB.loadLibrary();
-        FlinkCompactionFilter.FlinkCompactionFilterFactory factory =
-                new FlinkCompactionFilter.FlinkCompactionFilterFactory(
+        FlussTtlCompactionFilter.FlussTtlCompactionFilterFactory factory =
+                new FlussTtlCompactionFilter.FlussTtlCompactionFilterFactory(
                         currentValueSupplier::getAsLong);
         factory.configure(
-                FlinkCompactionFilter.Config.createNotList(
-                        FlinkCompactionFilter.StateType.Value,
+                FlussTtlCompactionFilter.Config.createNotList(
+                        FlussTtlCompactionFilter.StateType.Value,
                         kvValueLayout.valueTagOffset(),
                         expirationDistance,
                         queryCurrentValueAfterNumEntries));

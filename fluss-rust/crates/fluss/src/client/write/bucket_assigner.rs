@@ -14,7 +14,6 @@
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
 // under the License.
-
 use crate::BucketId;
 use crate::bucketing::BucketingFunction;
 use crate::cluster::Cluster;
@@ -26,12 +25,18 @@ use rand::Rng;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicI32, Ordering};
 
+/// `bucket_count` can differ from the table's `num_buckets` after `bucket.num` changes.
 pub trait BucketAssigner: Sync + Send {
     fn abort_if_batch_full(&self) -> bool;
 
-    fn on_new_batch(&self, cluster: &Cluster, prev_bucket_id: BucketId);
+    fn on_new_batch(&self, cluster: &Cluster, bucket_count: i32, prev_bucket_id: BucketId);
 
-    fn assign_bucket(&self, bucket_key: Option<&Bytes>, cluster: &Cluster) -> Result<BucketId>;
+    fn assign_bucket(
+        &self,
+        bucket_key: Option<&Bytes>,
+        cluster: &Cluster,
+        bucket_count: i32,
+    ) -> Result<BucketId>;
 }
 
 #[derive(Debug)]
@@ -48,41 +53,51 @@ impl StickyBucketAssigner {
         }
     }
 
-    fn next_bucket(&self, cluster: &Cluster, prev_bucket_id: BucketId) -> BucketId {
+    fn next_bucket(
+        &self,
+        cluster: &Cluster,
+        bucket_count: i32,
+        prev_bucket_id: BucketId,
+    ) -> BucketId {
         let old_bucket = self.current_bucket_id.load(Ordering::Relaxed);
-        let mut new_bucket = old_bucket;
-        if old_bucket < 0 || old_bucket == prev_bucket_id {
+        if old_bucket < 0 || old_bucket >= bucket_count || old_bucket == prev_bucket_id {
             let available_buckets = cluster.get_available_buckets_for_table_path(&self.table_path);
-            if available_buckets.is_empty() {
-                let mut rng = rand::rng();
-                let mut random: i32 = rng.random();
-                random &= i32::MAX;
-                new_bucket = random % cluster.get_bucket_count(self.table_path.get_table_path());
-            } else if available_buckets.len() == 1 {
-                new_bucket = available_buckets[0].table_bucket.bucket_id();
-            } else {
-                let mut rng = rand::rng();
-                while new_bucket < 0 || new_bucket == old_bucket {
-                    let mut random: i32 = rng.random();
-                    random &= i32::MAX;
-                    new_bucket = available_buckets
-                        [(random % available_buckets.len() as i32) as usize]
-                        .bucket_id();
+            let random = rand::rng().random::<i32>() & i32::MAX;
+            let start = match available_buckets.len() {
+                0 => 0,
+                len => random as usize % len,
+            };
+            let (before, from_start) = available_buckets.split_at(start);
+            // Available buckets may lie outside a provisional count.
+            let candidate = from_start
+                .iter()
+                .chain(before)
+                .map(|bucket| bucket.bucket_id())
+                .find(|&bucket| bucket < bucket_count && bucket != old_bucket);
+            let new_bucket = match candidate {
+                Some(bucket) => bucket,
+                None if !available_buckets.is_empty()
+                    && (0..bucket_count).contains(&old_bucket) =>
+                {
+                    old_bucket
                 }
-            }
-        }
+                None => random % bucket_count,
+            };
 
-        if old_bucket < 0 {
-            self.current_bucket_id.store(new_bucket, Ordering::Relaxed);
-        } else {
-            self.current_bucket_id
-                .compare_exchange(
-                    prev_bucket_id,
-                    new_bucket,
-                    Ordering::Relaxed,
-                    Ordering::Relaxed,
-                )
-                .ok();
+            if old_bucket < 0 {
+                self.current_bucket_id.store(new_bucket, Ordering::Relaxed);
+            } else {
+                self.current_bucket_id
+                    .compare_exchange(old_bucket, new_bucket, Ordering::Relaxed, Ordering::Relaxed)
+                    .ok();
+            }
+            // Another producer may have stored a bucket chosen for a larger count.
+            let current = self.current_bucket_id.load(Ordering::Relaxed);
+            return if (0..bucket_count).contains(&current) {
+                current
+            } else {
+                new_bucket
+            };
         }
         self.current_bucket_id.load(Ordering::Relaxed)
     }
@@ -93,14 +108,19 @@ impl BucketAssigner for StickyBucketAssigner {
         true
     }
 
-    fn on_new_batch(&self, cluster: &Cluster, prev_bucket_id: BucketId) {
-        self.next_bucket(cluster, prev_bucket_id);
+    fn on_new_batch(&self, cluster: &Cluster, bucket_count: i32, prev_bucket_id: BucketId) {
+        self.next_bucket(cluster, bucket_count, prev_bucket_id);
     }
 
-    fn assign_bucket(&self, _bucket_key: Option<&Bytes>, cluster: &Cluster) -> Result<BucketId> {
+    fn assign_bucket(
+        &self,
+        _bucket_key: Option<&Bytes>,
+        cluster: &Cluster,
+        bucket_count: i32,
+    ) -> Result<BucketId> {
         let bucket_id = self.current_bucket_id.load(Ordering::Relaxed);
-        if bucket_id < 0 {
-            Ok(self.next_bucket(cluster, bucket_id))
+        if bucket_id < 0 || bucket_id >= bucket_count {
+            Ok(self.next_bucket(cluster, bucket_count, bucket_id))
         } else {
             Ok(bucket_id)
         }
@@ -111,16 +131,14 @@ impl BucketAssigner for StickyBucketAssigner {
 /// in a rotating sequence, providing even data distribution across all buckets.
 pub struct RoundRobinBucketAssigner {
     table_path: Arc<PhysicalTablePath>,
-    num_buckets: i32,
     counter: AtomicI32,
 }
 
 impl RoundRobinBucketAssigner {
-    pub fn new(table_path: Arc<PhysicalTablePath>, num_buckets: i32) -> Self {
+    pub fn new(table_path: Arc<PhysicalTablePath>) -> Self {
         let mut rng = rand::rng();
         Self {
             table_path,
-            num_buckets,
             counter: AtomicI32::new(rng.random()),
         }
     }
@@ -131,43 +149,40 @@ impl BucketAssigner for RoundRobinBucketAssigner {
         false
     }
 
-    fn on_new_batch(&self, _cluster: &Cluster, _prev_bucket_id: BucketId) {}
+    fn on_new_batch(&self, _cluster: &Cluster, _bucket_count: i32, _prev_bucket_id: BucketId) {}
 
-    fn assign_bucket(&self, _bucket_key: Option<&Bytes>, cluster: &Cluster) -> Result<BucketId> {
-        let next_value = self.counter.fetch_add(1, Ordering::Relaxed);
+    fn assign_bucket(
+        &self,
+        _bucket_key: Option<&Bytes>,
+        cluster: &Cluster,
+        bucket_count: i32,
+    ) -> Result<BucketId> {
+        let next_value = self.counter.fetch_add(1, Ordering::Relaxed) & i32::MAX;
         let available_buckets = cluster.get_available_buckets_for_table_path(&self.table_path);
         if available_buckets.is_empty() {
-            Ok((next_value & i32::MAX) % self.num_buckets)
-        } else {
-            let idx = (next_value & i32::MAX) % available_buckets.len() as i32;
-            Ok(available_buckets[idx as usize].bucket_id())
+            return Ok(next_value % bucket_count);
         }
+        let idx = next_value % available_buckets.len() as i32;
+        let bucket_id = available_buckets[idx as usize].bucket_id();
+        // Metadata may already list the final layout while the count is still provisional.
+        Ok(if bucket_id < bucket_count {
+            bucket_id
+        } else {
+            next_value % bucket_count
+        })
     }
 }
 
 /// A [BucketAssigner] which assigns based on a modulo hashing function
 pub struct HashBucketAssigner {
-    num_buckets: i32,
     bucketing_function: Box<dyn BucketingFunction>,
 }
 
-#[allow(dead_code)]
 impl HashBucketAssigner {
     /// Creates a new [HashBucketAssigner] based on the given [BucketingFunction].
     /// See [BucketingFunction.of(Option<&DataLakeFormat>)] for bucketing functions.
-    ///
-    ///
-    /// # Arguments
-    /// * `num_buckets` - The number of buckets
-    /// * `bucketing_function` - The bucketing function
-    ///
-    /// # Returns
-    /// * [HashBucketAssigner] - The hash bucket assigner
-    pub fn new(num_buckets: i32, bucketing_function: Box<dyn BucketingFunction>) -> Self {
-        HashBucketAssigner {
-            num_buckets,
-            bucketing_function,
-        }
+    pub fn new(bucketing_function: Box<dyn BucketingFunction>) -> Self {
+        HashBucketAssigner { bucketing_function }
     }
 }
 
@@ -176,15 +191,20 @@ impl BucketAssigner for HashBucketAssigner {
         false
     }
 
-    fn on_new_batch(&self, _: &Cluster, _: BucketId) {
+    fn on_new_batch(&self, _: &Cluster, _: i32, _: BucketId) {
         // do nothing
     }
 
-    fn assign_bucket(&self, bucket_key: Option<&Bytes>, _: &Cluster) -> Result<BucketId> {
+    fn assign_bucket(
+        &self,
+        bucket_key: Option<&Bytes>,
+        _: &Cluster,
+        bucket_count: i32,
+    ) -> Result<BucketId> {
         let key = bucket_key.ok_or_else(|| IllegalArgument {
             message: "no bucket key provided".to_string(),
         })?;
-        self.bucketing_function.bucketing(key, self.num_buckets)
+        self.bucketing_function.bucketing(key, bucket_count)
     }
 }
 
@@ -192,9 +212,10 @@ impl BucketAssigner for HashBucketAssigner {
 mod tests {
     use super::*;
     use crate::bucketing::BucketingFunction;
-    use crate::cluster::Cluster;
-    use crate::metadata::TablePath;
+    use crate::cluster::{BucketLocation, Cluster, ServerNode, ServerType};
+    use crate::metadata::{TableBucket, TablePath};
     use crate::test_utils::build_cluster;
+    use std::collections::HashMap;
     use std::sync::Arc;
 
     #[test]
@@ -204,11 +225,11 @@ mod tests {
         let assigner = StickyBucketAssigner::new(Arc::new(PhysicalTablePath::of(Arc::new(
             table_path.clone(),
         ))));
-        let bucket = assigner.assign_bucket(None, &cluster).expect("bucket");
+        let bucket = assigner.assign_bucket(None, &cluster, 2).expect("bucket");
         assert!((0..2).contains(&bucket));
 
-        assigner.on_new_batch(&cluster, bucket);
-        let next_bucket = assigner.assign_bucket(None, &cluster).expect("bucket");
+        assigner.on_new_batch(&cluster, 2, bucket);
+        let next_bucket = assigner.assign_bucket(None, &cluster, 2).expect("bucket");
         assert!((0..2).contains(&next_bucket));
     }
 
@@ -218,11 +239,13 @@ mod tests {
         let num_buckets = 3;
         let cluster = build_cluster(&table_path, 1, num_buckets);
         let physical = Arc::new(PhysicalTablePath::of(Arc::new(table_path)));
-        let assigner = RoundRobinBucketAssigner::new(physical, num_buckets);
+        let assigner = RoundRobinBucketAssigner::new(physical);
 
         let mut seen = Vec::new();
         for _ in 0..(num_buckets * 2) {
-            let bucket = assigner.assign_bucket(None, &cluster).expect("bucket");
+            let bucket = assigner
+                .assign_bucket(None, &cluster, num_buckets)
+                .expect("bucket");
             assert!((0..num_buckets).contains(&bucket));
             seen.push(bucket);
         }
@@ -236,25 +259,137 @@ mod tests {
     fn round_robin_assigner_does_not_abort_on_batch_full() {
         let table_path = TablePath::new("db".to_string(), "tbl".to_string());
         let physical = Arc::new(PhysicalTablePath::of(Arc::new(table_path)));
-        let assigner = RoundRobinBucketAssigner::new(physical, 3);
+        let assigner = RoundRobinBucketAssigner::new(physical);
         assert!(!assigner.abort_if_batch_full());
     }
 
     #[test]
     fn hash_bucket_assigner_requires_key() {
-        let assigner = HashBucketAssigner::new(3, <dyn BucketingFunction>::of(None));
+        let assigner = HashBucketAssigner::new(<dyn BucketingFunction>::of(None));
         let cluster = Cluster::default();
-        let err = assigner.assign_bucket(None, &cluster).unwrap_err();
+        let err = assigner.assign_bucket(None, &cluster, 3).unwrap_err();
         assert!(matches!(err, IllegalArgument { .. }));
     }
 
     #[test]
     fn hash_bucket_assigner_hashes_key() {
-        let assigner = HashBucketAssigner::new(4, <dyn BucketingFunction>::of(None));
+        let assigner = HashBucketAssigner::new(<dyn BucketingFunction>::of(None));
         let cluster = Cluster::default();
         let bucket = assigner
-            .assign_bucket(Some(&Bytes::from_static(b"key")), &cluster)
+            .assign_bucket(Some(&Bytes::from_static(b"key")), &cluster, 4)
             .expect("bucket");
         assert!((0..4).contains(&bucket));
+    }
+
+    #[test]
+    fn keyless_assigners_stay_within_a_smaller_routing_count() {
+        let table_path = TablePath::new("db".to_string(), "tbl".to_string());
+        // Metadata lists 8 buckets while the writer routes with 4.
+        let cluster = build_cluster(&table_path, 1, 8);
+        let physical = Arc::new(PhysicalTablePath::of(Arc::new(table_path)));
+
+        let round_robin = RoundRobinBucketAssigner::new(Arc::clone(&physical));
+        let sticky = StickyBucketAssigner::new(physical);
+        for _ in 0..32 {
+            let bucket = round_robin
+                .assign_bucket(None, &cluster, 4)
+                .expect("bucket");
+            assert!((0..4).contains(&bucket));
+            let bucket = sticky.assign_bucket(None, &cluster, 4).expect("bucket");
+            assert!((0..4).contains(&bucket));
+            sticky.on_new_batch(&cluster, 4, bucket);
+        }
+    }
+
+    #[test]
+    fn sticky_assigner_moves_off_a_bucket_outside_the_routing_count() {
+        let table_path = TablePath::new("db".to_string(), "tbl".to_string());
+        let cluster = build_cluster(&table_path, 1, 8);
+        let sticky =
+            StickyBucketAssigner::new(Arc::new(PhysicalTablePath::of(Arc::new(table_path))));
+        sticky.current_bucket_id.store(6, Ordering::Relaxed);
+
+        let bucket = sticky.assign_bucket(None, &cluster, 4).expect("bucket");
+        assert!((0..4).contains(&bucket));
+    }
+
+    #[test]
+    fn sticky_assigner_keeps_the_only_bucket_within_the_routing_count() {
+        let table_path = TablePath::new("db".to_string(), "tbl".to_string());
+        let physical = Arc::new(PhysicalTablePath::of(Arc::new(table_path)));
+        let server = ServerNode::new(1, "127.0.0.1".to_string(), 9000, ServerType::TabletServer);
+        // Bucket 0 has no leader, so bucket 1 is the only available one below 2.
+        let locations: Vec<BucketLocation> = (1..8)
+            .map(|bucket| {
+                BucketLocation::new(
+                    TableBucket::new(1, bucket),
+                    Some(server.clone()),
+                    Arc::clone(&physical),
+                )
+            })
+            .collect();
+        let cluster = Cluster::new(
+            None,
+            HashMap::from([(1, server)]),
+            HashMap::from([(Arc::clone(&physical), locations.clone())]),
+            locations
+                .into_iter()
+                .map(|location| (location.table_bucket.clone(), location))
+                .collect(),
+            HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+        );
+        let sticky = StickyBucketAssigner::new(physical);
+        for _ in 0..16 {
+            sticky.current_bucket_id.store(1, Ordering::Relaxed);
+            sticky.on_new_batch(&cluster, 2, 1);
+            assert_eq!(sticky.assign_bucket(None, &cluster, 2).expect("bucket"), 1);
+        }
+    }
+
+    #[test]
+    fn sticky_assigner_without_available_buckets_stays_within_the_routing_count() {
+        let table_path = TablePath::new("db".to_string(), "tbl".to_string());
+        let sticky =
+            StickyBucketAssigner::new(Arc::new(PhysicalTablePath::of(Arc::new(table_path))));
+        let cluster = Cluster::default();
+        for _ in 0..16 {
+            let bucket = sticky.assign_bucket(None, &cluster, 4).expect("bucket");
+            assert!((0..4).contains(&bucket));
+            sticky.on_new_batch(&cluster, 4, bucket);
+        }
+    }
+
+    #[test]
+    fn sticky_assigner_stays_within_the_count_while_another_producer_uses_a_larger_one() {
+        let table_path = TablePath::new("db".to_string(), "tbl".to_string());
+        let cluster = Arc::new(build_cluster(&table_path, 1, 8));
+        let sticky = Arc::new(StickyBucketAssigner::new(Arc::new(PhysicalTablePath::of(
+            Arc::new(table_path),
+        ))));
+        let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let provisional = {
+            let (cluster, sticky, stop) =
+                (Arc::clone(&cluster), Arc::clone(&sticky), Arc::clone(&stop));
+            std::thread::spawn(move || {
+                while !stop.load(Ordering::Relaxed) {
+                    let bucket = sticky.assign_bucket(None, &cluster, 8).expect("bucket");
+                    sticky.on_new_batch(&cluster, 8, bucket);
+                }
+            })
+        };
+        let mut out_of_range = 0;
+        for _ in 0..200_000 {
+            let bucket = sticky.assign_bucket(None, &cluster, 2).expect("bucket");
+            if !(0..2).contains(&bucket) {
+                out_of_range += 1;
+            }
+            sticky.on_new_batch(&cluster, 2, bucket);
+        }
+        stop.store(true, Ordering::Relaxed);
+        provisional.join().expect("provisional producer");
+        assert_eq!(out_of_range, 0);
     }
 }

@@ -27,6 +27,7 @@ import org.apache.fluss.metadata.SchemaInfo;
 import org.apache.fluss.record.BinaryValue;
 import org.apache.fluss.record.TestingSchemaGetter;
 import org.apache.fluss.row.BinaryRow;
+import org.apache.fluss.row.GenericArray;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.types.RowType;
 
@@ -53,6 +54,14 @@ class AggregateRowMergerTest {
                     .build();
 
     private static final RowType ROW_TYPE_SUM = SCHEMA_SUM.getRowType();
+
+    private static final Schema SCHEMA_LAST_N =
+            Schema.newBuilder()
+                    .column("id", DataTypes.INT())
+                    .column("events", DataTypes.ARRAY(DataTypes.BIGINT()), AggFunctions.LAST_N(2))
+                    .column("count", DataTypes.BIGINT(), AggFunctions.SUM())
+                    .primaryKey("id")
+                    .build();
 
     @Test
     void testBasicAggregation() {
@@ -997,6 +1006,54 @@ class AggregateRowMergerTest {
             // Non-target column should be kept
             assertThat(deleted.row.getString(3).toString()).isEqualTo("keep_me");
         }
+    }
+
+    @Test
+    void testLastNTrimsFirstWrite() {
+        TableConfig tableConfig = new TableConfig(new Configuration());
+        AggregateRowMerger merger = createMerger(SCHEMA_LAST_N, tableConfig);
+        merger.configureTargetColumns(null, SCHEMA_ID, SCHEMA_LAST_N);
+        RowType rowType = SCHEMA_LAST_N.getRowType();
+
+        // first write for the key is trimmed to the last 2 elements, other fields kept as is
+        BinaryValue first =
+                merger.merge(
+                        null,
+                        toBinaryValue(compactedRow(rowType, new Object[] {1, longs(1, 2, 3), 5L})));
+        assertThat(first.schemaId).isEqualTo(SCHEMA_ID);
+        assertThat(first.row.getInt(0)).isEqualTo(1);
+        assertThat(first.row.getArray(1).toLongArray()).containsExactly(2L, 3L);
+        assertThat(first.row.getLong(2)).isEqualTo(5L);
+
+        BinaryValue second =
+                merger.merge(
+                        first,
+                        toBinaryValue(compactedRow(rowType, new Object[] {1, longs(4), 1L})));
+        assertThat(second.row.getArray(1).toLongArray()).containsExactly(3L, 4L);
+        assertThat(second.row.getLong(2)).isEqualTo(6L);
+    }
+
+    @Test
+    void testLastNTrimsFirstWriteWithPartialUpdate() {
+        TableConfig tableConfig = new TableConfig(new Configuration());
+        AggregateRowMerger merger = createMerger(SCHEMA_LAST_N, tableConfig);
+        RowMerger partialMerger =
+                merger.configureTargetColumns(new int[] {0, 1}, SCHEMA_ID, SCHEMA_LAST_N);
+        RowType rowType = SCHEMA_LAST_N.getRowType();
+
+        BinaryValue first =
+                partialMerger.merge(
+                        null,
+                        toBinaryValue(
+                                compactedRow(rowType, new Object[] {1, longs(1, 2, 3), null})));
+        assertThat(first.schemaId).isEqualTo(SCHEMA_ID);
+        assertThat(first.row.getInt(0)).isEqualTo(1);
+        assertThat(first.row.getArray(1).toLongArray()).containsExactly(2L, 3L);
+        assertThat(first.row.isNullAt(2)).isTrue();
+    }
+
+    private static GenericArray longs(long... values) {
+        return new GenericArray(values);
     }
 
     private AggregateRowMerger createMerger(Schema schema, TableConfig tableConfig) {

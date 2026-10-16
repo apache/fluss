@@ -23,6 +23,7 @@ use tokio::sync::oneshot;
 pub struct LookupQuery<T> {
     table_path: TablePath,
     table_bucket: TableBucket,
+    routing_bucket_count: i32,
     key: Bytes,
     retries: i32,
     result_tx: Option<oneshot::Sender<Result<T>>>,
@@ -32,12 +33,14 @@ impl<T> LookupQuery<T> {
     pub fn new(
         table_path: TablePath,
         table_bucket: TableBucket,
+        routing_bucket_count: i32,
         key: Bytes,
         result_tx: oneshot::Sender<Result<T>>,
     ) -> Self {
         Self {
             table_path,
             table_bucket,
+            routing_bucket_count,
             key,
             retries: 0,
             result_tx: Some(result_tx),
@@ -50,6 +53,10 @@ impl<T> LookupQuery<T> {
 
     pub fn table_bucket(&self) -> &TableBucket {
         &self.table_bucket
+    }
+
+    pub fn routing_bucket_count(&self) -> i32 {
+        self.routing_bucket_count
     }
 
     pub fn key(&self) -> &Bytes {

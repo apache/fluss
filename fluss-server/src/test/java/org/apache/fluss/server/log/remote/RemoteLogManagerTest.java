@@ -19,6 +19,8 @@ package org.apache.fluss.server.log.remote;
 
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.exception.NotLeaderOrFollowerException;
+import org.apache.fluss.fs.FSDataOutputStream;
+import org.apache.fluss.fs.FileSystem;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.remote.RemoteLogFetchInfo;
@@ -38,22 +40,27 @@ import org.apache.fluss.server.replica.Replica;
 import org.apache.fluss.server.replica.ReplicaManager;
 import org.apache.fluss.server.testutils.ServerTestTags;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
+import org.apache.fluss.server.zk.data.RemoteLogManifestHandle;
+import org.apache.fluss.utils.FlussPaths;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import java.io.File;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
@@ -514,7 +521,7 @@ class RemoteLogManagerTest extends RemoteLogTestBase {
     @ParameterizedTest
     @ValueSource(booleans = {true, false})
     void testCleanupLocalSegments(boolean partitionTable) throws Exception {
-        TableBucket tb = makeTableBucket(partitionTable);
+        TableBucket tb = makeTableBucket(partitionTable, true);
         // Need to make leader by ReplicaManager.
         makeKvTableAsLeader(tb, DATA1_TABLE_PATH_PK, INITIAL_LEADER_EPOCH, partitionTable);
         LogTablet logTablet = replicaManager.getReplicaOrException(tb).getLogTablet();
@@ -895,8 +902,74 @@ class RemoteLogManagerTest extends RemoteLogTestBase {
                                 .collect(Collectors.toSet()));
     }
 
-    private TableBucket makeTableBucket(boolean partitionTable) {
-        return makeTableBucket(DATA1_TABLE_ID, partitionTable);
+    @ParameterizedTest
+    @CsvSource({"false,false", "true,false", "false,true", "true,true"})
+    void testRegisterReplicaUsesAssignedDirectory(
+            boolean partitionTable, boolean withStaleDirectories) throws Exception {
+        TableBucket tb = makeTableBucket(partitionTable);
+        makeLogTableAsLeader(tb, partitionTable);
+        LogTablet logTablet = replicaManager.getReplicaOrException(tb).getLogTablet();
+        addMultiSegmentsToLogTablet(logTablet, 5);
+
+        remoteLogTaskScheduler.triggerPeriodicScheduledTasks();
+        List<RemoteLogSegment> remoteLogSegmentList =
+                remoteLogManager.relevantRemoteLogSegments(tb, 0L);
+        assertThat(remoteLogSegmentList).hasSize(4);
+
+        // Manifests omit directory assignments. Also accept earlier manifests with stale or
+        // incomplete directory fields, using the replica's assignment for every segment.
+        Optional<RemoteLogManifestHandle> handleOpt = zkClient.getRemoteLogManifestHandle(tb);
+        assertThat(handleOpt).isPresent();
+        FsPath manifestPath = handleOpt.get().getRemoteLogManifestPath();
+        FileSystem fs = manifestPath.getFileSystem();
+
+        RemoteLogManifest currentManifest =
+                remoteLogStorage.readRemoteLogManifestSnapshot(manifestPath);
+        byte[] currentJson = currentManifest.toJsonBytes();
+        assertThat(new String(currentJson, StandardCharsets.UTF_8))
+                .doesNotContain("remote_log_dir");
+        byte[] persistedJson = currentJson;
+        if (withStaleDirectories) {
+            String json = new String(currentJson, StandardCharsets.UTF_8);
+            json = json.replaceFirst("\\{", "{\"remote_log_dir\":\"file:/stale/manifest/log\",");
+            // The first segment has a different directory; the remaining segments omit it.
+            json =
+                    json.replaceFirst(
+                            "\"segment_id\":",
+                            "\"remote_log_dir\":\"file:/stale/segment/log\",\"segment_id\":");
+            persistedJson = json.getBytes(StandardCharsets.UTF_8);
+        }
+
+        // Overwrite with the selected persisted format.
+        fs.delete(manifestPath, false);
+        try (FSDataOutputStream out = fs.create(manifestPath, FileSystem.WriteMode.NO_OVERWRITE)) {
+            out.write(persistedJson);
+        }
+
+        // Persisted directory fields must never supply the runtime directory.
+        assertThat(remoteLogStorage.readRemoteLogManifestSnapshot(manifestPath))
+                .isEqualTo(currentManifest);
+
+        // Rebuild replicaManager to load the manifest with the tablet's assigned directory.
+        replicaManager.shutdown();
+        replicaManager = buildReplicaManager(new TestCoordinatorGateway());
+        makeLogTableAsLeader(tb, partitionTable);
+
+        // The tablet owns the assigned directory independently of manifest metadata.
+        RemoteLogTablet remoteLogTablet = remoteLogManager.remoteLogTablet(tb);
+        assertThat(remoteLogTablet).isNotNull();
+        FsPath expectedRemoteLogDir = FlussPaths.remoteLogDir(conf);
+        assertThat(remoteLogTablet.getRemoteLogDir()).isEqualTo(expectedRemoteLogDir);
+
+        // Loading preserves every segment without attaching directory state.
+        List<RemoteLogSegment> fixedSegments = remoteLogTablet.allRemoteLogSegments();
+        assertThat(fixedSegments).hasSize(4);
+        assertThat(fixedSegments).containsExactlyElementsOf(remoteLogSegmentList);
+
+        // Verify subsequent tiering still works after the fix
+        addMultiSegmentsToLogTablet(replicaManager.getReplicaOrException(tb).getLogTablet(), 3);
+        remoteLogTaskScheduler.triggerPeriodicScheduledTasks();
+        assertThat(remoteLogTablet.allRemoteLogSegments().size()).isGreaterThan(4);
     }
 
     private FetchLogResultForBucket fetch(TableBucket tableBucket, long fetchOffset)
@@ -911,14 +984,6 @@ class RemoteLogManagerTest extends RemoteLogTestBase {
                 null,
                 future::complete);
         return future.get().get(tableBucket);
-    }
-
-    private TableBucket makeTableBucket(long tableId, boolean partitionTable) {
-        if (partitionTable) {
-            return new TableBucket(tableId, 0L, 0);
-        } else {
-            return new TableBucket(tableId, 0);
-        }
     }
 
     private static Stream<Arguments> stopArgs() {

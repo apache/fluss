@@ -23,6 +23,7 @@ import org.apache.fluss.lake.committer.CommittedLakeSnapshot;
 import org.apache.fluss.lake.committer.CommitterInitContext;
 import org.apache.fluss.lake.committer.LakeCommitResult;
 import org.apache.fluss.lake.committer.LakeCommitter;
+import org.apache.fluss.lake.committer.LakeCommitter.CommitContext;
 import org.apache.fluss.lake.lance.LanceConfig;
 import org.apache.fluss.lake.lance.utils.LanceArrowUtils;
 import org.apache.fluss.lake.lance.utils.LanceDatasetAdapter;
@@ -137,8 +138,11 @@ class LanceTieringTest {
                                 .commit(
                                         lakeCommitter.toCommittable(
                                                 Collections.singletonList(lakeWriter.complete())),
-                                        Collections.singletonMap(
-                                                FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY, "offsets"))
+                                        new CommitContext(
+                                                Collections.singletonMap(
+                                                        FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY,
+                                                        "offsets"),
+                                                Collections.emptyMap()))
                                 .getCommittedSnapshotId();
                 assertThat(snapshotId).isEqualTo(3);
             }
@@ -180,8 +184,11 @@ class LanceTieringTest {
                     lakeCommitter
                             .commit(
                                     committable,
-                                    Collections.singletonMap(
-                                            FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY, offsets))
+                                    new CommitContext(
+                                            Collections.singletonMap(
+                                                    FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY,
+                                                    offsets),
+                                            Collections.emptyMap()))
                             .getCommittedSnapshotId();
             assertThat(snapshotId).isEqualTo(expectedSnapshotId);
         }
@@ -276,7 +283,9 @@ class LanceTieringTest {
                     Collections.singletonMap(FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY, "offsets");
             long snapshot =
                     lakeCommitter
-                            .commit(lanceCommittable, snapshotProperties)
+                            .commit(
+                                    lanceCommittable,
+                                    new CommitContext(snapshotProperties, Collections.emptyMap()))
                             .getCommittedSnapshotId();
             // lance dataset version starts from 1
             assertThat(snapshot).isEqualTo(2);
@@ -540,7 +549,9 @@ class LanceTieringTest {
             Map<String, String> snapshotProperties =
                     Collections.singletonMap(FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY, "offsets");
             LakeCommitResult commitResult =
-                    lakeCommitter.commit(lanceCommittable, snapshotProperties);
+                    lakeCommitter.commit(
+                            lanceCommittable,
+                            new CommitContext(snapshotProperties, Collections.emptyMap()));
             // lance dataset version starts from 1
             assertThat(commitResult.getCommittedSnapshotId()).isEqualTo(2);
         }

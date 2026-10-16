@@ -616,9 +616,9 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
       <td>Gauge</td>
     </tr>
     <tr>
-      <td>lookupCacheCapacityEvictions</td>
-      <td>The cumulative number of cached table lookupers evicted because the cache retains at most ten tables.</td>
-      <td>Counter</td>
+      <td>lookupCacheFileCapacityEvictions</td>
+      <td>The cumulative number of lookup files evicted to enforce the shared TabletServer disk budget. Expiration, replacement, and explicit invalidation are excluded.</td>
+      <td>Gauge</td>
     </tr>
     <tr>
       <td rowspan="2">logicalStorage</td>
