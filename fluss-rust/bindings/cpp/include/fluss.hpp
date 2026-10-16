@@ -1396,6 +1396,8 @@ class ArrowRecordBatch {
     // timestamp, which is the case for a limit scan because it merges several
     // log batches into one Arrow batch.
     static constexpr int64_t NO_COMMIT_TIMESTAMP = -1;
+    // No single source schema ID, including results of a limit scan.
+    static constexpr int32_t NO_SCHEMA_ID = -1;
 
     std::shared_ptr<arrow::RecordBatch> GetArrowRecordBatch() const { return batch_; }
 
@@ -1412,13 +1414,16 @@ class ArrowRecordBatch {
     int64_t GetLastOffset() const;
     // Epoch milliseconds, or NO_COMMIT_TIMESTAMP when unavailable.
     int64_t GetCommitTimestamp() const;
+    // Source log batch schema ID, or NO_SCHEMA_ID when unavailable.
+    int32_t GetSchemaId() const;
 
    private:
     friend class LogScanner;
     friend struct detail::ArrowBatchImporter;
     explicit ArrowRecordBatch(std::shared_ptr<arrow::RecordBatch> batch, int64_t table_id,
                               int64_t partition_id, int32_t bucket_id,
-                              int64_t base_offset, int64_t commit_timestamp) noexcept;
+                              int64_t base_offset, int64_t commit_timestamp,
+                              int32_t schema_id) noexcept;
 
     std::shared_ptr<arrow::RecordBatch> batch_{nullptr};
 
@@ -1429,6 +1434,7 @@ class ArrowRecordBatch {
     // Defaults to the sentinel so any future construction path that forgets to
     // set it reports "unknown" rather than an arbitrary value.
     int64_t commit_timestamp_{NO_COMMIT_TIMESTAMP};
+    int32_t schema_id_{NO_SCHEMA_ID};
 };
 
 struct ArrowRecordBatches {

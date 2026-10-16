@@ -326,6 +326,7 @@ for record in scan_records:
 | `.base_offset -> int`      | First record offset               |
 | `.last_offset -> int`      | Last record offset                |
 | `.commit_timestamp -> int` | Commit time in epoch milliseconds |
+| `.schema_id -> int`        | Schema ID from the source log batch |
 
 `.commit_timestamp` is `fluss.NO_COMMIT_TIMESTAMP` (`-1`) when the batch carries
 no single timestamp, which is the case for a limit scan because it merges several

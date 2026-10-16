@@ -1787,6 +1787,9 @@ mod table_test {
         scanner.subscribe(0, 0).await.unwrap();
         let batches = collect_batches(&scanner, 6).await;
         assert_batch_timestamps_match_records(&batches, &timestamps_by_offset);
+        for batch in &batches {
+            assert_eq!(batch.schema_id(), table.get_table_info().get_schema_id());
+        }
 
         // Subscribing mid-batch slices leading rows off the first batch; the
         // slice must keep the timestamp of the log batch it came from.
@@ -1799,6 +1802,9 @@ mod table_test {
             "first batch should start at the subscribed offset"
         );
         assert_batch_timestamps_match_records(&sliced, &timestamps_by_offset);
+        for batch in &sliced {
+            assert_eq!(batch.schema_id(), table.get_table_info().get_schema_id());
+        }
 
         // Projection prunes columns but must not disturb the metadata.
         let projected_scanner = table
@@ -1811,6 +1817,9 @@ mod table_test {
         let projected = collect_batches(&projected_scanner, 6).await;
         assert_eq!(projected[0].batch().num_columns(), 1);
         assert_batch_timestamps_match_records(&projected, &timestamps_by_offset);
+        for batch in &projected {
+            assert_eq!(batch.schema_id(), table.get_table_info().get_schema_id());
+        }
     }
 
     /// Polls a record-batch scanner until it has yielded `expected_rows` rows.
