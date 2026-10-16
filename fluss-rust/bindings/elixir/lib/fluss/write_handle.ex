@@ -19,7 +19,8 @@ defmodule Fluss.WriteHandle do
   @moduledoc """
   Handle for a pending write operation.
 
-  Returned by `Fluss.AppendWriter.append/2`. Drop for fire-and-forget,
+  Returned by `Fluss.AppendWriter.append/2`, `Fluss.UpsertWriter.upsert/2` and
+  `Fluss.UpsertWriter.delete/2`. Drop for fire-and-forget,
   or call `wait/1` for per-record server acknowledgment.
   """
 

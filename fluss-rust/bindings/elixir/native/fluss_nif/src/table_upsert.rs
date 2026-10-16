@@ -59,13 +59,15 @@ fn table_upsert_new(
 #[rustler::nif]
 fn table_upsert_partial_update_by_name<'a>(
     table_upsert: ResourceArc<TableUpsertResource>,
-    column_names: Vec<Term<'a>>,
+    column_names: Term<'a>,
 ) -> Result<ResourceArc<TableUpsertResource>, rustler::Error> {
-    let names: Vec<String> = column_names
-        .iter()
-        .map(|name| row_convert::term_to_column_name(*name))
-        .collect::<Result<_, String>>()
-        .map_err(client_err)?;
+    let names: Vec<String> =
+        row_convert::decode_list(column_names, "expected a list of column names")
+            .map_err(client_err)?
+            .iter()
+            .map(|name| row_convert::term_to_column_name(*name))
+            .collect::<Result<_, String>>()
+            .map_err(client_err)?;
     let name_refs: Vec<&str> = names.iter().map(String::as_str).collect();
 
     // Core validates first (its errors name the table); the names are then resolved again
@@ -96,10 +98,21 @@ fn table_upsert_partial_update_by_name<'a>(
 }
 
 #[rustler::nif]
-fn table_upsert_partial_update_by_index(
+fn table_upsert_partial_update_by_index<'a>(
     table_upsert: ResourceArc<TableUpsertResource>,
-    column_indices: Vec<usize>,
+    column_indices: Term<'a>,
 ) -> Result<ResourceArc<TableUpsertResource>, rustler::Error> {
+    // Decoded here so bad input is an error result; Vec<usize> would raise.
+    let column_indices =
+        row_convert::decode_list(column_indices, "expected a list of column indices")
+            .map_err(client_err)?
+            .iter()
+            .map(|idx| {
+                idx.decode::<usize>()
+                    .map_err(|_| format!("invalid target column index `{idx:?}`"))
+            })
+            .collect::<Result<Vec<usize>, String>>()
+            .map_err(client_err)?;
     let inner = table_upsert
         .inner
         .partial_update(Some(column_indices.clone()))

@@ -35,8 +35,8 @@ defmodule Fluss.UpsertWriter do
   `nil` are both rejected. Primary keys are always `NOT NULL`.
 
   A list is positional — table column order, or the order the targets were named for a
-  partial-update writer — and `nil` means null. Prefer maps: a list in the wrong order
-  writes to the wrong columns without error.
+  partial-update writer — and `nil` means null, rejected in a `NOT NULL` column as in a
+  map. Prefer maps: a list in the wrong order writes to the wrong columns without error.
 
   `delete/2` takes only the primary key, not a full row. As a list, the key values follow
   the order the primary key was declared in, which can differ from table column order:
@@ -47,6 +47,8 @@ defmodule Fluss.UpsertWriter do
 
   Writes are queued and return a `Fluss.WriteHandle` — drop it for fire-and-forget, or
   `Fluss.WriteHandle.wait/1` for a per-record ack. `flush/1` waits for all queued writes.
+  When the write buffer is full, a write waits for room, up to the writer buffer wait
+  timeout in `Fluss.Config` (no limit by default).
   """
 
   alias Fluss.Native
@@ -58,18 +60,12 @@ defmodule Fluss.UpsertWriter do
 
   @spec upsert(t(), values()) :: {:ok, Fluss.WriteHandle.t()} | {:error, Fluss.Error.t()}
   def upsert(writer, values) when is_list(values) or is_map(values) do
-    case Native.upsert_writer_upsert(writer, values) do
-      {:error, _} = err -> err
-      handle -> {:ok, handle}
-    end
+    writer |> Native.upsert_writer_upsert(values) |> Native.await_queued()
   end
 
   @spec delete(t(), values()) :: {:ok, Fluss.WriteHandle.t()} | {:error, Fluss.Error.t()}
   def delete(writer, primary_key) when is_list(primary_key) or is_map(primary_key) do
-    case Native.upsert_writer_delete(writer, primary_key) do
-      {:error, _} = err -> err
-      handle -> {:ok, handle}
-    end
+    writer |> Native.upsert_writer_delete(primary_key) |> Native.await_queued()
   end
 
   @spec flush(t()) :: :ok | {:error, Fluss.Error.t()}

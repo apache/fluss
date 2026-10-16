@@ -254,9 +254,7 @@ pub fn term_to_row<'a>(
     values: Term<'a>,
     columns: &[Column],
 ) -> Result<GenericRow<'static>, String> {
-    let list: Vec<Term<'a>> = values
-        .decode()
-        .map_err(|_| "expected a list of values".to_string())?;
+    let list = decode_list(values, "expected a list of values")?;
     if list.len() != columns.len() {
         return Err(format!(
             "expected {} values, got {}",
@@ -272,6 +270,7 @@ pub fn term_to_row<'a>(
         }
         row.set_field(i, term_to_datum(env, *term, col.data_type())?);
     }
+    check_not_null(&row, columns, 0..columns.len())?;
     Ok(row)
 }
 
@@ -283,9 +282,7 @@ pub fn term_to_sparse_row<'a>(
     columns: &[Column],
     indices: &[usize],
 ) -> Result<GenericRow<'static>, String> {
-    let list: Vec<Term<'a>> = values
-        .decode()
-        .map_err(|_| "expected a list of values".to_string())?;
+    let list = decode_list(values, "expected a list of values")?;
     if list.len() != indices.len() {
         return Err(format!(
             "expected {} values for the target columns, got {}",
@@ -301,6 +298,7 @@ pub fn term_to_sparse_row<'a>(
         }
         row.set_field(idx, term_to_datum(env, *term, columns[idx].data_type())?);
     }
+    check_not_null(&row, columns, indices.iter().copied())?;
     Ok(row)
 }
 
@@ -355,7 +353,17 @@ pub fn map_to_row<'a>(
     }
 
     // Catches both an omitted key and an explicit nil: the row starts all-null.
-    for &idx in targets {
+    check_not_null(&row, columns, targets.iter().copied())?;
+    Ok(row)
+}
+
+/// Core would reject the null later, with a type mismatch that doesn't name the column.
+fn check_not_null(
+    row: &GenericRow<'_>,
+    columns: &[Column],
+    indices: impl IntoIterator<Item = usize>,
+) -> Result<(), String> {
+    for idx in indices {
         if row.values[idx].is_null() && !columns[idx].data_type().is_nullable() {
             return Err(format!(
                 "NOT NULL column `{}` must not be nil or omitted",
@@ -363,7 +371,13 @@ pub fn map_to_row<'a>(
             ));
         }
     }
-    Ok(row)
+    Ok(())
+}
+
+/// Rustler's own list decode panics on an improper list such as `[1 | 2]`.
+pub fn decode_list<'a>(term: Term<'a>, error: &str) -> Result<Vec<Term<'a>>, String> {
+    term.list_length().map_err(|_| error.to_string())?;
+    term.decode().map_err(|_| error.to_string())
 }
 
 fn is_nil(term: Term<'_>) -> bool {
@@ -479,9 +493,7 @@ fn term_to_datum<'a>(
         }
         DataType::Array(at) => {
             let et = at.get_element_type();
-            let list: Vec<Term<'a>> = term
-                .decode()
-                .map_err(|_| "expected a list for array".to_string())?;
+            let list = decode_list(term, "expected a list for array")?;
             let mut writer = FlussArrayWriter::new(list.len(), et);
             for (i, elem) in list.iter().enumerate() {
                 let datum = term_to_datum(env, *elem, et)?;

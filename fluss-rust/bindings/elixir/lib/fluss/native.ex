@@ -112,4 +112,11 @@ defmodule Fluss.Native do
       {^ref, result} -> result
     end
   end
+
+  # With the write buffer full, a write waits for room off the scheduler and its handle
+  # arrives as a message.
+  @doc false
+  def await_queued({:pending, ref}), do: await_nif(ref)
+  def await_queued({:error, _} = err), do: err
+  def await_queued(handle), do: {:ok, handle}
 end

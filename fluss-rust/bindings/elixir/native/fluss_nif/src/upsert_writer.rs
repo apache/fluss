@@ -16,9 +16,9 @@
 // under the License.
 
 use crate::async_nif;
-use crate::atoms::{client_err, to_nif_err};
+use crate::atoms::client_err;
 use crate::row_convert;
-use crate::write_handle::WriteHandleResource;
+use crate::write_handle;
 use fluss::client::UpsertWriter;
 use fluss::metadata::TableInfo;
 use rustler::{Env, ResourceArc, Term, TermType};
@@ -43,7 +43,7 @@ fn upsert_writer_upsert<'a>(
     env: Env<'a>,
     writer: ResourceArc<UpsertWriterResource>,
     values: Term<'a>,
-) -> Result<ResourceArc<WriteHandleResource>, rustler::Error> {
+) -> Result<Term<'a>, rustler::Error> {
     let columns = writer.table_info.schema.columns();
     let row = if values.get_type() == TermType::Map {
         row_convert::map_to_row(env, values, columns, writer.target_indices.as_deref())
@@ -55,8 +55,9 @@ fn upsert_writer_upsert<'a>(
     }
     .map_err(client_err)?;
 
-    let future = writer.inner.upsert(&row).map_err(to_nif_err)?;
-    Ok(ResourceArc::new(WriteHandleResource::new(future)))
+    write_handle::queue_write(env, move |deadline| {
+        writer.inner.upsert_with_deadline(&row, deadline)
+    })
 }
 
 #[rustler::nif]
@@ -64,7 +65,7 @@ fn upsert_writer_delete<'a>(
     env: Env<'a>,
     writer: ResourceArc<UpsertWriterResource>,
     primary_key: Term<'a>,
-) -> Result<ResourceArc<WriteHandleResource>, rustler::Error> {
+) -> Result<Term<'a>, rustler::Error> {
     let schema = &writer.table_info.schema;
     let columns = schema.columns();
     // Core rejects a row that is not full width even though delete only reads the key.
@@ -76,8 +77,9 @@ fn upsert_writer_delete<'a>(
     }
     .map_err(client_err)?;
 
-    let future = writer.inner.delete(&row).map_err(to_nif_err)?;
-    Ok(ResourceArc::new(WriteHandleResource::new(future)))
+    write_handle::queue_write(env, move |deadline| {
+        writer.inner.delete_with_deadline(&row, deadline)
+    })
 }
 
 #[rustler::nif]

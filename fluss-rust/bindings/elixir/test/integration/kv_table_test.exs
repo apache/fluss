@@ -18,6 +18,7 @@
 defmodule Fluss.Integration.KvTableTest do
   use Fluss.Test.IntegrationCase, async: false
 
+  alias Fluss.Native
   alias Fluss.TableUpsert
   alias Fluss.UpsertWriter
 
@@ -55,7 +56,7 @@ defmodule Fluss.Integration.KvTableTest do
              ]
     end
 
-    test "maps and lists produce the same row", ctx do
+    test "map keys may be atoms or strings", ctx do
       table = create_kv_table(ctx, "map_form", id_name_schema())
       writer = table |> TableUpsert.new!() |> TableUpsert.create_writer!()
 
@@ -196,6 +197,46 @@ defmodule Fluss.Integration.KvTableTest do
       assert err.message =~ "duplicate target column `id`"
     end
 
+    test "reports an invalid column index", ctx do
+      builder =
+        ctx |> create_kv_table("partial_bad_index", id_name_schema()) |> TableUpsert.new!()
+
+      for index <- [-1, 2 ** 70, 1.5, :a] do
+        assert {:error, %Fluss.Error{} = err} =
+                 TableUpsert.partial_update_by_index(builder, [index])
+
+        assert err.message =~ "invalid target column index"
+      end
+    end
+
+    test "rejects an improper list of targets", ctx do
+      builder =
+        ctx |> create_kv_table("partial_improper", id_name_schema()) |> TableUpsert.new!()
+
+      assert {:error, %Fluss.Error{} = err} =
+               TableUpsert.partial_update_by_index(builder, [0 | 1])
+
+      assert err.message =~ "expected a list of column indices"
+
+      assert {:error, %Fluss.Error{} = err} =
+               TableUpsert.partial_update_by_name(builder, [:id | :name])
+
+      assert err.message =~ "expected a list of column names"
+    end
+
+    test "rejects a nil primary key in a partial-update list", ctx do
+      table = create_kv_table(ctx, "partial_nil_pk", id_name_email_schema())
+
+      writer =
+        table
+        |> TableUpsert.new!()
+        |> TableUpsert.partial_update_by_name!([:id, :email])
+        |> TableUpsert.create_writer!()
+
+      assert {:error, %Fluss.Error{} = err} = UpsertWriter.upsert(writer, [nil, "a@b.c"])
+      assert err.message =~ "NOT NULL column `id` must not be nil or omitted"
+    end
+
     test "rejects a column name given twice as atom and string", ctx do
       table = create_kv_table(ctx, "partial_dup_name", id_name_schema())
 
@@ -266,6 +307,36 @@ defmodule Fluss.Integration.KvTableTest do
       assert err.message =~ "NOT NULL column `id` must not be nil or omitted"
     end
 
+    test "rejects a nil primary key in a list", %{writer: writer} do
+      assert {:error, %Fluss.Error{} = err} = UpsertWriter.upsert(writer, [nil, "alice"])
+      assert err.message =~ "NOT NULL column `id` must not be nil or omitted"
+
+      assert {:error, %Fluss.Error{} = err} = UpsertWriter.delete(writer, [nil])
+      assert err.message =~ "NOT NULL column `id` must not be nil or omitted"
+    end
+
+    test "rejects an improper list", %{writer: writer} do
+      assert {:error, %Fluss.Error{} = err} = UpsertWriter.upsert(writer, [1 | "alice"])
+      assert err.message =~ "expected a list of values"
+
+      assert {:error, %Fluss.Error{} = err} = UpsertWriter.delete(writer, [1 | 2])
+      assert err.message =~ "expected a list of values"
+    end
+
+    test "rejects nil in a NOT NULL column in a list", ctx do
+      schema =
+        Fluss.Schema.new()
+        |> Fluss.Schema.column("id", :int)
+        |> Fluss.Schema.column("name", {:not_null, :string})
+        |> Fluss.Schema.primary_key(["id"])
+
+      table = create_kv_table(ctx, "not_null_list", schema)
+      writer = table |> TableUpsert.new!() |> TableUpsert.create_writer!()
+
+      assert {:error, %Fluss.Error{} = err} = UpsertWriter.upsert(writer, [1, nil])
+      assert err.message =~ "NOT NULL column `name` must not be nil or omitted"
+    end
+
     test "rejects a delete whose key is not the primary key", %{writer: writer} do
       assert {:error, %Fluss.Error{} = err} = UpsertWriter.delete(writer, %{name: "alice"})
       assert err.message =~ "column `name` is not accepted here; expected one of: id"
@@ -281,6 +352,65 @@ defmodule Fluss.Integration.KvTableTest do
                UpsertWriter.upsert(writer, %{"id" => 1, :id => 2, :name => "alice"})
 
       assert err.message =~ "column `id` given more than once"
+    end
+  end
+
+  describe "full write buffer" do
+    # A buffer of one batch fills every few writes, which then take the waiting path.
+    setup ctx do
+      config =
+        ctx.config
+        |> Fluss.Config.set_writer_dynamic_batch_size_min(1024)
+        |> Fluss.Config.set_writer_batch_size(1024)
+        |> Fluss.Config.set_writer_buffer_memory_size(1024)
+
+      %{config: config}
+    end
+
+    test "writes wait for room instead of failing", ctx do
+      conn = Fluss.Connection.new!(ctx.config)
+      table = create_kv_table(%{ctx | conn: conn}, "full_buffer", id_name_schema())
+      writer = table |> TableUpsert.new!() |> TableUpsert.create_writer!()
+
+      for id <- 1..200 do
+        assert {:ok, _handle} = UpsertWriter.upsert(writer, [id, String.duplicate("x", 50)])
+      end
+
+      assert {:ok, _handle} = UpsertWriter.delete(writer, [1])
+      assert :ok = UpsertWriter.flush(writer)
+      assert length(changelog(table, 201)) == 201
+    end
+
+    test "a write into a full buffer waits off the scheduler", ctx do
+      conn = Fluss.Connection.new!(ctx.config)
+      table = create_kv_table(%{ctx | conn: conn}, "full_buffer_pending", id_name_schema())
+      writer = table |> TableUpsert.new!() |> TableUpsert.create_writer!()
+
+      results =
+        for id <- 1..200,
+            do: Native.upsert_writer_upsert(writer, [id, String.duplicate("x", 50)])
+
+      assert Enum.any?(results, &match?({:pending, _ref}, &1))
+
+      for result <- results do
+        assert {:ok, _handle} = Native.await_queued(result)
+      end
+    end
+
+    # Only the retry can return this error; a full buffer on the first try is retried.
+    test "a write that waits past the timeout returns an error", ctx do
+      conn =
+        ctx.config |> Fluss.Config.set_writer_buffer_wait_timeout_ms(1) |> Fluss.Connection.new!()
+
+      table = create_kv_table(%{ctx | conn: conn}, "buffer_timeout", id_name_schema())
+      writer = table |> TableUpsert.new!() |> TableUpsert.create_writer!()
+
+      results = for id <- 1..200, do: UpsertWriter.upsert(writer, [id, String.duplicate("x", 50)])
+
+      assert Enum.any?(results, fn
+               {:error, %Fluss.Error{message: message}} -> message =~ "buffer exhausted"
+               _ -> false
+             end)
     end
   end
 
@@ -351,6 +481,20 @@ defmodule Fluss.Integration.KvTableTest do
       assert row[:tags] == ["a", "b"]
       assert row[:attrs] == %{"x" => 1}
       assert row[:point] == %{x: 10, y: 20}
+    end
+
+    test "rejects an improper list for an array", ctx do
+      schema =
+        Fluss.Schema.new()
+        |> Fluss.Schema.column("id", :int)
+        |> Fluss.Schema.column("tags", {:array, :string})
+        |> Fluss.Schema.primary_key(["id"])
+
+      table = create_kv_table(ctx, "improper_array", schema)
+      writer = table |> TableUpsert.new!() |> TableUpsert.create_writer!()
+
+      assert {:error, %Fluss.Error{} = err} = UpsertWriter.upsert(writer, [1, ["a" | "b"]])
+      assert err.message =~ "expected a list for array"
     end
   end
 
