@@ -42,6 +42,7 @@ defmodule Fluss.Config do
             lookup_max_retries: nil,
             lookup_queue_size: nil,
             remote_file_download_thread_num: nil,
+            scanner_io_tmp_dir: nil,
             scanner_log_fetch_max_bytes: nil,
             scanner_log_fetch_max_bytes_for_bucket: nil,
             scanner_log_fetch_min_bytes: nil,
@@ -78,6 +79,7 @@ defmodule Fluss.Config do
           lookup_max_retries: non_neg_integer() | nil,
           lookup_queue_size: non_neg_integer() | nil,
           remote_file_download_thread_num: non_neg_integer() | nil,
+          scanner_io_tmp_dir: String.t() | nil,
           scanner_log_fetch_max_bytes: non_neg_integer() | nil,
           scanner_log_fetch_max_bytes_for_bucket: non_neg_integer() | nil,
           scanner_log_fetch_min_bytes: non_neg_integer() | nil,
@@ -148,6 +150,11 @@ defmodule Fluss.Config do
   def set_remote_file_download_thread_num(%__MODULE__{} = config, threads)
       when is_non_neg_integer(threads),
       do: %{config | remote_file_download_thread_num: threads}
+
+  @doc "Sets the parent directory for remote log downloads."
+  @spec set_scanner_io_tmp_dir(t(), String.t()) :: t()
+  def set_scanner_io_tmp_dir(%__MODULE__{} = config, path) when is_binary(path),
+    do: %{config | scanner_io_tmp_dir: path}
 
   @spec set_scanner_log_fetch_max_bytes(t(), non_neg_integer()) :: t()
   def set_scanner_log_fetch_max_bytes(%__MODULE__{} = config, max_bytes)

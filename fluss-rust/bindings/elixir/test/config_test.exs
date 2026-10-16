@@ -79,6 +79,30 @@ defmodule Fluss.ConfigTest do
     assert config.remote_file_download_thread_num == 4
   end
 
+  test "scanner_io_tmp_dir defaults to nil" do
+    assert Fluss.Config.new("localhost:9123").scanner_io_tmp_dir == nil
+    assert Fluss.Config.default().scanner_io_tmp_dir == nil
+  end
+
+  test "set_scanner_io_tmp_dir/2 preserves the configured path" do
+    for path <- ["/tmp/fluss logs", "relative/日志", ""] do
+      config =
+        Fluss.Config.new("localhost:9123")
+        |> Fluss.Config.set_scanner_io_tmp_dir(path)
+
+      assert config.scanner_io_tmp_dir == path
+      assert config.bootstrap_servers == "localhost:9123"
+    end
+  end
+
+  test "set_scanner_io_tmp_dir/2 rejects non-string values" do
+    for path <- [nil, 123, [:tmp]] do
+      assert_raise FunctionClauseError, fn ->
+        Fluss.Config.set_scanner_io_tmp_dir(Fluss.Config.default(), path)
+      end
+    end
+  end
+
   test "set_scanner_log_fetch_max_bytes/2 sets the fetch max bytes" do
     config =
       Fluss.Config.new("localhost:9123")

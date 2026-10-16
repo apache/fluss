@@ -38,6 +38,7 @@ pub struct NifConfig {
     pub lookup_max_retries: Option<i32>,
     pub lookup_queue_size: Option<u64>,
     pub remote_file_download_thread_num: Option<u64>,
+    pub scanner_io_tmp_dir: Option<String>,
     pub scanner_log_fetch_max_bytes: Option<i32>,
     pub scanner_log_fetch_max_bytes_for_bucket: Option<i32>,
     pub scanner_log_fetch_min_bytes: Option<i32>,
@@ -70,6 +71,7 @@ impl NifConfig {
     pub fn into_core(self) -> Config {
         let mut config = Config {
             bootstrap_servers: self.bootstrap_servers,
+            scanner_io_tmp_dir: self.scanner_io_tmp_dir,
             ..Config::default()
         };
         if let Some(timeout) = self.connect_timeout_ms {
@@ -175,5 +177,66 @@ impl NifConfig {
             config.lookup_queue_size = size as usize;
         }
         config
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn default_config() -> NifConfig {
+        NifConfig {
+            bootstrap_servers: "localhost:9123".to_string(),
+            connect_timeout_ms: None,
+            lookup_batch_timeout_ms: None,
+            lookup_max_batch_size: None,
+            lookup_max_inflight_requests: None,
+            lookup_max_retries: None,
+            lookup_queue_size: None,
+            remote_file_download_thread_num: None,
+            scanner_io_tmp_dir: None,
+            scanner_log_fetch_max_bytes: None,
+            scanner_log_fetch_max_bytes_for_bucket: None,
+            scanner_log_fetch_min_bytes: None,
+            scanner_log_fetch_wait_max_time_ms: None,
+            scanner_log_max_poll_records: None,
+            scanner_remote_log_prefetch_num: None,
+            scanner_remote_log_read_concurrency: None,
+            security_protocol: None,
+            security_sasl_mechanism: None,
+            security_sasl_password: None,
+            security_sasl_username: None,
+            writer_acks: None,
+            writer_batch_size: None,
+            writer_batch_timeout_ms: None,
+            writer_bucket_no_key_assigner: None,
+            writer_buffer_memory_size: None,
+            writer_buffer_wait_timeout_ms: None,
+            writer_kv_backpressure_max_throttle_ms: None,
+            writer_dynamic_batch_size_enabled: None,
+            writer_dynamic_batch_size_min: None,
+            writer_enable_idempotence: None,
+            writer_max_inflight_requests_per_bucket: None,
+            writer_request_max_size: None,
+            writer_retries: None,
+            writer_retry_backoff_ms: None,
+            writer_retry_max_backoff_ms: None,
+        }
+    }
+
+    #[test]
+    fn scanner_io_tmp_dir_is_preserved_in_core_config() {
+        for directory in [
+            None,
+            Some("/tmp/fluss logs"),
+            Some("relative/日志"),
+            Some(""),
+        ] {
+            let mut config = default_config();
+            config.scanner_io_tmp_dir = directory.map(str::to_string);
+            let core = config.into_core();
+            assert_eq!(core.scanner_io_tmp_dir.as_deref(), directory);
+            assert_eq!(core.bootstrap_servers, "localhost:9123");
+        }
     }
 }
