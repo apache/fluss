@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-package org.apache.fluss.server.tablet.coordinator.group;
+package org.apache.fluss.server.tablet.consumer.group;
 
 import org.junit.jupiter.api.Test;
 

@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-package org.apache.fluss.server.tablet.coordinator.group;
+package org.apache.fluss.server.tablet.consumer.group;
 
 import org.apache.fluss.bucketing.FlussBucketingFunction;
 import org.apache.fluss.memory.MemorySegment;
@@ -46,6 +46,7 @@ class ConsumerOffsetSchemaTest {
 
     private final FixedSchemaDecoder decoder =
             new FixedSchemaDecoder(KvFormat.COMPACTED, ConsumerOffsetSchema.getTableSchema());
+    private final KeyEncoder offsetKeyEncoder = ConsumerOffsetSchema.createOffsetKeyEncoder();
 
     @Test
     void testSchemaMatchesFip() {
@@ -122,8 +123,10 @@ class ConsumerOffsetSchemaTest {
                         3,
                         new ConsumerOffsetAndMetadata(100L, ""));
 
-        byte[] keyFromRow = ConsumerOffsetSchema.encodeOffsetKey(row);
-        byte[] keyFromFields = ConsumerOffsetSchema.encodeOffsetKey("my-group", 42L, 7L, 3);
+        byte[] keyFromRow = ConsumerOffsetSchema.encodeOffsetKey(offsetKeyEncoder, row);
+        byte[] keyFromFields =
+                ConsumerOffsetSchema.encodeOffsetKey(
+                        offsetKeyEncoder, "my-group", 42L, 7L, 3);
         assertThat(keyFromFields).isEqualTo(keyFromRow);
     }
 
@@ -135,8 +138,12 @@ class ConsumerOffsetSchemaTest {
             byte[] prefix = ConsumerOffsetSchema.encodeGroupPrefix(group);
             assertThat(prefix).isNotEmpty();
 
-            byte[] keyNonPartitioned = ConsumerOffsetSchema.encodeOffsetKey(group, 1L, null, 0);
-            byte[] keyPartitioned = ConsumerOffsetSchema.encodeOffsetKey(group, 2L, 99L, 5);
+            byte[] keyNonPartitioned =
+                    ConsumerOffsetSchema.encodeOffsetKey(
+                            offsetKeyEncoder, group, 1L, null, 0);
+            byte[] keyPartitioned =
+                    ConsumerOffsetSchema.encodeOffsetKey(
+                            offsetKeyEncoder, group, 2L, 99L, 5);
 
             assertThat(isPrefix(prefix, keyNonPartitioned))
                     .as("prefix of group %s must be a byte prefix of its full keys", group)
@@ -148,7 +155,9 @@ class ConsumerOffsetSchemaTest {
     @Test
     void testDifferentGroupsPrefixesDoNotCrossMatch() {
         byte[] prefixA = ConsumerOffsetSchema.encodeGroupPrefix("group-a");
-        byte[] keyB = ConsumerOffsetSchema.encodeOffsetKey("group-b", 1L, null, 0);
+        byte[] keyB =
+                ConsumerOffsetSchema.encodeOffsetKey(
+                        offsetKeyEncoder, "group-b", 1L, null, 0);
         // "group-a" and "group-b" share a common byte prefix ("group-"), but the full encoded
         // group prefixes must diverge before the end — otherwise a prefix scan for group-a
         // would also see group-b's rows.
@@ -216,7 +225,7 @@ class ConsumerOffsetSchemaTest {
     }
 
     @Test
-    void testConcurrentKeyEncodingIsIsolated() throws Exception {
+    void testPerThreadKeyEncoderCanBeReused() throws Exception {
         int threads = 8;
         int iterations = 128;
         ExecutorService executor = Executors.newFixedThreadPool(threads);
@@ -225,7 +234,10 @@ class ConsumerOffsetSchemaTest {
             List<Future<?>> futures = new ArrayList<>();
             for (int i = 0; i < threads; i++) {
                 String groupId = "group-" + i;
-                byte[] expected = ConsumerOffsetSchema.encodeOffsetKey(groupId, 42L, 7L, 3);
+                KeyEncoder keyEncoder = ConsumerOffsetSchema.createOffsetKeyEncoder();
+                byte[] expected =
+                        ConsumerOffsetSchema.encodeOffsetKey(
+                                keyEncoder, groupId, 42L, 7L, 3);
                 futures.add(
                         executor.submit(
                                 () -> {
@@ -233,7 +245,11 @@ class ConsumerOffsetSchemaTest {
                                     for (int j = 0; j < iterations; j++) {
                                         assertThat(
                                                         ConsumerOffsetSchema.encodeOffsetKey(
-                                                                groupId, 42L, 7L, 3))
+                                                                keyEncoder,
+                                                                groupId,
+                                                                42L,
+                                                                7L,
+                                                                3))
                                                 .isEqualTo(expected);
                                     }
                                     return null;

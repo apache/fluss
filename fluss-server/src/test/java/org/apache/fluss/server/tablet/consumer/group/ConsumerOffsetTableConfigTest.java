@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-package org.apache.fluss.server.tablet.coordinator.group;
+package org.apache.fluss.server.tablet.consumer.group;
 
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
@@ -32,25 +32,33 @@ class ConsumerOffsetTableConfigTest {
         ConsumerOffsetTableConfig config = ConsumerOffsetTableConfig.from(new Configuration());
 
         assertThat(config.getMaxMetadataSize())
-                .isEqualTo(ConfigOptions.OFFSET_METADATA_MAX_BYTES.defaultValue());
+                .isEqualTo(
+                        Math.toIntExact(
+                                ConfigOptions.OFFSET_METADATA_MAX_BYTES
+                                        .defaultValue()
+                                        .getBytes()));
         assertThat(config.getOffsetsRetentionMs())
-                .isEqualTo(ConfigOptions.OFFSETS_RETENTION_MS.defaultValue());
+                .isEqualTo(ConfigOptions.OFFSETS_RETENTION_MS.defaultValue().toMillis());
         assertThat(config.getOffsetsTableNumBuckets())
                 .isEqualTo(ConfigOptions.OFFSETS_TABLE_NUM_BUCKETS.defaultValue());
         assertThat(config.getOffsetsTableReplicationFactor())
                 .isEqualTo(ConfigOptions.OFFSETS_TABLE_REPLICATION_FACTOR.defaultValue());
         assertThat(config.getOffsetCommitTimeoutMs())
-                .isEqualTo(ConfigOptions.OFFSET_COMMIT_TIMEOUT_MS.defaultValue());
+                .isEqualTo(
+                        Math.toIntExact(
+                                ConfigOptions.OFFSET_COMMIT_TIMEOUT_MS
+                                        .defaultValue()
+                                        .toMillis()));
     }
 
     @Test
     void testLoadConfiguredValues() {
         Configuration configuration = new Configuration();
-        configuration.set(ConfigOptions.OFFSET_METADATA_MAX_BYTES, 1024);
-        configuration.set(ConfigOptions.OFFSETS_RETENTION_MS, 60_000L);
+        configuration.setString(ConfigOptions.OFFSET_METADATA_MAX_BYTES.key(), "1KB");
+        configuration.setString(ConfigOptions.OFFSETS_RETENTION_MS.key(), "1min");
         configuration.set(ConfigOptions.OFFSETS_TABLE_NUM_BUCKETS, 16);
         configuration.set(ConfigOptions.OFFSETS_TABLE_REPLICATION_FACTOR, 2);
-        configuration.set(ConfigOptions.OFFSET_COMMIT_TIMEOUT_MS, 3000);
+        configuration.setString(ConfigOptions.OFFSET_COMMIT_TIMEOUT_MS.key(), "3s");
 
         ConsumerOffsetTableConfig config = ConsumerOffsetTableConfig.from(configuration);
 

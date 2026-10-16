@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-package org.apache.fluss.server.tablet.coordinator.group;
+package org.apache.fluss.server.tablet.consumer.group;
 
 import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.config.ConfigOptions;
@@ -69,11 +69,13 @@ public final class ConsumerOffsetTableConfig {
     public static ConsumerOffsetTableConfig from(Configuration configuration) {
         checkNotNull(configuration, "configuration must not be null");
         return new ConsumerOffsetTableConfig(
-                configuration.getInt(ConfigOptions.OFFSET_METADATA_MAX_BYTES),
-                configuration.getLong(ConfigOptions.OFFSETS_RETENTION_MS),
+                Math.toIntExact(
+                        configuration.get(ConfigOptions.OFFSET_METADATA_MAX_BYTES).getBytes()),
+                configuration.get(ConfigOptions.OFFSETS_RETENTION_MS).toMillis(),
                 configuration.getInt(ConfigOptions.OFFSETS_TABLE_NUM_BUCKETS),
                 configuration.getInt(ConfigOptions.OFFSETS_TABLE_REPLICATION_FACTOR),
-                configuration.getInt(ConfigOptions.OFFSET_COMMIT_TIMEOUT_MS));
+                Math.toIntExact(
+                        configuration.get(ConfigOptions.OFFSET_COMMIT_TIMEOUT_MS).toMillis()));
     }
 
     /** Returns the maximum number of bytes allowed for offset metadata. */

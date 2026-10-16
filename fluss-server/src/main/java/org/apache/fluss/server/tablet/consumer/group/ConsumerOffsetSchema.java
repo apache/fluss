@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-package org.apache.fluss.server.tablet.coordinator.group;
+package org.apache.fluss.server.tablet.consumer.group;
 
 import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.metadata.Schema;
@@ -74,6 +74,16 @@ public final class ConsumerOffsetSchema {
 
     private ConsumerOffsetSchema() {}
 
+    /**
+     * Creates an encoder for complete consumer-offset primary keys.
+     *
+     * <p>{@link KeyEncoder} implementations may reuse mutable internal writers and are not thread
+     * safe. Each caller should retain and reuse its own encoder rather than sharing one globally.
+     */
+    public static KeyEncoder createOffsetKeyEncoder() {
+        return KeyEncoder.ofBucketKeyEncoder(ROW_TYPE, PRIMARY_KEYS, null);
+    }
+
     /** Returns the schema of the consumer-offset system table. */
     public static Schema getTableSchema() {
         return TABLE_SCHEMA;
@@ -91,16 +101,20 @@ public final class ConsumerOffsetSchema {
 
     /** Encodes the complete primary key of an offset row. */
     public static byte[] encodeOffsetKey(
-            String groupId, long tableId, Long partitionId, int bucketId) {
-        return createFullKeyEncoder()
-                .encodeKey(
-                        encodeOffsetRow(
-                                groupId,
-                                OFFSET_COMMIT_RECORD_TYPE,
-                                tableId,
-                                partitionId,
-                                bucketId,
-                                EMPTY_OFFSET));
+            KeyEncoder keyEncoder,
+            String groupId,
+            long tableId,
+            Long partitionId,
+            int bucketId) {
+        return encodeOffsetKey(
+                keyEncoder,
+                encodeOffsetRow(
+                        groupId,
+                        OFFSET_COMMIT_RECORD_TYPE,
+                        tableId,
+                        partitionId,
+                        bucketId,
+                        EMPTY_OFFSET));
     }
 
     /** Encodes the {@code group_id} prefix used to enumerate all rows belonging to a group. */
@@ -117,18 +131,8 @@ public final class ConsumerOffsetSchema {
     }
 
     /** Encodes the complete primary key of an already materialized offset row. */
-    static byte[] encodeOffsetKey(InternalRow row) {
-        return createFullKeyEncoder().encodeKey(row);
-    }
-
-    /**
-     * Creates a new full-key encoder.
-     *
-     * <p>{@link KeyEncoder} implementations may reuse mutable internal writers, so a new encoder
-     * must be created for each call to keep concurrent key encoding isolated.
-     */
-    private static KeyEncoder createFullKeyEncoder() {
-        return KeyEncoder.ofBucketKeyEncoder(ROW_TYPE, PRIMARY_KEYS, null);
+    static byte[] encodeOffsetKey(KeyEncoder keyEncoder, InternalRow row) {
+        return keyEncoder.encodeKey(row);
     }
 
     /**
