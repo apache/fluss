@@ -169,76 +169,62 @@ class KafkaProduceAppendITCase {
         }
     }
 
-    @Test
-    void testNullAndEmptyValuesPreserveKeysAndOffsets() throws Exception {
+    @ParameterizedTest
+    @ValueSource(strings = {"binary", "string"})
+    void testNullAndEmptyValuesPreserveKeysAndOffsets(String format) throws Exception {
+        TablePath path = TablePath.of(DATABASE, "null_values_" + format);
+        List<byte[]> values = Arrays.asList(null, new byte[0], VALUE);
+        List<byte[]> keys = Arrays.asList(new byte[] {(byte) 0xff}, null, null);
         try (Connection connection = ConnectionFactory.createConnection(CLUSTER.getClientConfig());
                 org.apache.fluss.client.admin.Admin admin = connection.getAdmin()) {
             admin.createDatabase(DATABASE, DatabaseDescriptor.EMPTY, true).get();
-            for (String format : new String[] {"binary", "string"}) {
-                TablePath path = TablePath.of(DATABASE, "null_values_" + format);
-                admin.createTable(path, descriptor(format), false).get();
-                CLUSTER.waitUntilAllGatewayHasSameMetadata();
-                try (KafkaProducer<byte[], byte[]> producer = producer("all", 0)) {
-                    String topic = path.toString();
-                    assertThat(
-                                    producer.send(
-                                                    new ProducerRecord<byte[], byte[]>(
-                                                            topic,
-                                                            0,
-                                                            123L,
-                                                            new byte[] {(byte) 0xff},
-                                                            null))
-                                            .get(30, TimeUnit.SECONDS)
-                                            .offset())
-                            .isZero();
-                    assertThat(
-                                    producer.send(
-                                                    new ProducerRecord<byte[], byte[]>(
-                                                            topic, 0, 123L, null, new byte[0]))
-                                            .get(30, TimeUnit.SECONDS)
-                                            .offset())
-                            .isEqualTo(1L);
-                    assertThat(
-                                    producer.send(
-                                                    new ProducerRecord<byte[], byte[]>(
-                                                            topic, 0, 123L, null, VALUE))
-                                            .get(30, TimeUnit.SECONDS)
-                                            .offset())
-                            .isEqualTo(2L);
-                    try (Table table = connection.getTable(path);
-                            LogScanner scanner = table.newScan().createLogScanner()) {
-                        scanner.subscribeFromBeginning(0);
-                        int count = 0;
-                        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(30);
-                        while (count < 3 && System.nanoTime() < deadline) {
-                            for (ScanRecord record : scanner.poll(Duration.ofSeconds(1))) {
-                                InternalRow row = record.getRow();
-                                if (count == 0) {
-                                    assertThat(row.isNullAt(0)).isTrue();
-                                    assertThat(row.getBytes(3)).isEqualTo(new byte[] {(byte) 0xff});
-                                } else {
-                                    byte[] expected = count == 1 ? new byte[0] : VALUE;
-                                    if (format.equals("binary")) {
-                                        assertThat(row.getBytes(0)).isEqualTo(expected);
-                                    } else {
-                                        assertThat(row.getString(0).toString())
-                                                .isEqualTo(
-                                                        new String(
-                                                                expected, StandardCharsets.UTF_8));
-                                    }
-                                    assertThat(row.isNullAt(3)).isTrue();
-                                }
-                                assertThat(row.getMap(1).size()).isZero();
-                                assertThat(row.isNullAt(2)).isTrue();
-                                assertThat(record.logOffset()).isEqualTo(count);
-                                count++;
-                            }
-                        }
-                        assertThat(count).isEqualTo(3);
-                    }
-                } finally {
-                    admin.dropTable(path, true).get();
+            admin.createTable(path, descriptor(format), false).get();
+            CLUSTER.waitUntilAllGatewayHasSameMetadata();
+            try (KafkaProducer<byte[], byte[]> producer = producer("all", 0)) {
+                for (int i = 0; i < values.size(); i++) {
+                    RecordMetadata metadata =
+                            producer.send(
+                                            new ProducerRecord<>(
+                                                    path.toString(),
+                                                    0,
+                                                    123L,
+                                                    keys.get(i),
+                                                    values.get(i)))
+                                    .get(30, TimeUnit.SECONDS);
+                    assertThat(metadata.offset()).isEqualTo(i);
                 }
+                try (Table table = connection.getTable(path);
+                        LogScanner scanner = table.newScan().createLogScanner()) {
+                    scanner.subscribeFromBeginning(0);
+                    int count = 0;
+                    long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(30);
+                    while (count < values.size() && System.nanoTime() < deadline) {
+                        for (ScanRecord record : scanner.poll(Duration.ofSeconds(1))) {
+                            InternalRow row = record.getRow();
+                            byte[] expected = values.get(count);
+                            if (expected == null) {
+                                assertThat(row.isNullAt(0)).isTrue();
+                            } else if (format.equals("binary")) {
+                                assertThat(row.getBytes(0)).isEqualTo(expected);
+                            } else {
+                                assertThat(row.getString(0).toString())
+                                        .isEqualTo(new String(expected, StandardCharsets.UTF_8));
+                            }
+                            if (keys.get(count) == null) {
+                                assertThat(row.isNullAt(3)).isTrue();
+                            } else {
+                                assertThat(row.getBytes(3)).isEqualTo(keys.get(count));
+                            }
+                            assertThat(row.getMap(1).size()).isZero();
+                            assertThat(row.isNullAt(2)).isTrue();
+                            assertThat(record.logOffset()).isEqualTo(count);
+                            count++;
+                        }
+                    }
+                    assertThat(count).isEqualTo(values.size());
+                }
+            } finally {
+                admin.dropTable(path, true).get();
             }
         }
     }

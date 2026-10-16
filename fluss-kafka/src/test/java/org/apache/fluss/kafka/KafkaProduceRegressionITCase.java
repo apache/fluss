@@ -109,45 +109,6 @@ class KafkaProduceRegressionITCase {
                     .build();
 
     @Test
-    void testAdvertisedListenersAndTopicIdentityLifecycle() throws Exception {
-        TablePath path = TablePath.of(DATABASE, "metadata_lifecycle");
-        String topic = path.toString();
-        try (Connection connection = ConnectionFactory.createConnection(CLUSTER.getClientConfig());
-                Admin admin = connection.getAdmin()) {
-            try {
-                createTable(admin, path, 3);
-                MetadataResponse initial = waitForTopic(topic);
-                Uuid initialId = initial.data().topics().find(topic).topicId();
-                assertThat(initialId).isNotEqualTo(Uuid.ZERO_UUID);
-                assertKafkaListenerEndpoints(initial);
-                assertThat(fetchMetadata(topic).data().topics().find(topic).topicId())
-                        .isEqualTo(initialId);
-
-                admin.dropTable(path, false).get();
-                retry(
-                        Duration.ofMinutes(1),
-                        () ->
-                                assertThat(fetchMetadata(topic).errors())
-                                        .containsEntry(topic, Errors.UNKNOWN_TOPIC_OR_PARTITION));
-
-                createTable(admin, path, 3);
-                retry(
-                        Duration.ofMinutes(1),
-                        () -> {
-                            MetadataResponseTopic recreated =
-                                    fetchMetadata(topic).data().topics().find(topic);
-                            assertThat(recreated.errorCode()).isEqualTo(Errors.NONE.code());
-                            assertThat(recreated.topicId())
-                                    .isNotEqualTo(Uuid.ZERO_UUID)
-                                    .isNotEqualTo(initialId);
-                        });
-            } finally {
-                admin.dropTable(path, true).get();
-            }
-        }
-    }
-
-    @Test
     void testProducerRefreshesMetadataAfterLeaderFailover() throws Exception {
         TablePath path = TablePath.of(DATABASE, "metadata_failover");
         String topic = path.toString();
@@ -323,7 +284,7 @@ class KafkaProduceRegressionITCase {
     }
 
     @Test
-    void testSameProducerAliasesFollowEnablementPropertiesAndRecreation() throws Exception {
+    void testSameProducerAliasesFollowTableLifecycle() throws Exception {
         TablePath path = TablePath.of(DATABASE, "cached_lifecycle");
         String full = path.toString();
         String alias = path.getTableName();
@@ -331,7 +292,11 @@ class KafkaProduceRegressionITCase {
                 Admin admin = connection.getAdmin()) {
             try {
                 createTable(admin, path, 3);
-                Uuid fullId = topicId(full);
+                MetadataResponse initial = waitForTopic(full);
+                assertKafkaListenerEndpoints(initial);
+                Uuid fullId = initial.data().topics().find(full).topicId();
+                assertThat(fullId).isNotEqualTo(Uuid.ZERO_UUID);
+                assertThat(topicId(full)).isEqualTo(fullId);
                 Uuid aliasId = topicId(alias);
                 assertThat(aliasId).isNotEqualTo(Uuid.ZERO_UUID).isNotEqualTo(fullId);
                 try (KafkaProducer<byte[], byte[]> producer = producer("all", true)) {
