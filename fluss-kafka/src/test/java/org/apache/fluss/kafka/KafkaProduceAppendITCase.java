@@ -170,7 +170,7 @@ class KafkaProduceAppendITCase {
     }
 
     @Test
-    void testNullValuesAreSkippedWhileEmptyValuesAndNullKeysSurvive() throws Exception {
+    void testNullAndEmptyValuesPreserveKeysAndOffsets() throws Exception {
         try (Connection connection = ConnectionFactory.createConnection(CLUSTER.getClientConfig());
                 org.apache.fluss.client.admin.Admin admin = connection.getAdmin()) {
             admin.createDatabase(DATABASE, DatabaseDescriptor.EMPTY, true).get();
@@ -190,45 +190,51 @@ class KafkaProduceAppendITCase {
                                                             null))
                                             .get(30, TimeUnit.SECONDS)
                                             .offset())
-                            .isEqualTo(-1L);
+                            .isZero();
                     assertThat(
                                     producer.send(
                                                     new ProducerRecord<byte[], byte[]>(
                                                             topic, 0, 123L, null, new byte[0]))
                                             .get(30, TimeUnit.SECONDS)
                                             .offset())
-                            .isZero();
+                            .isEqualTo(1L);
                     assertThat(
                                     producer.send(
                                                     new ProducerRecord<byte[], byte[]>(
                                                             topic, 0, 123L, null, VALUE))
                                             .get(30, TimeUnit.SECONDS)
                                             .offset())
-                            .isEqualTo(1L);
+                            .isEqualTo(2L);
                     try (Table table = connection.getTable(path);
                             LogScanner scanner = table.newScan().createLogScanner()) {
                         scanner.subscribeFromBeginning(0);
                         int count = 0;
                         long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(30);
-                        while (count < 2 && System.nanoTime() < deadline) {
+                        while (count < 3 && System.nanoTime() < deadline) {
                             for (ScanRecord record : scanner.poll(Duration.ofSeconds(1))) {
                                 InternalRow row = record.getRow();
-                                byte[] expected = count == 0 ? new byte[0] : VALUE;
-                                if (format.equals("binary")) {
-                                    assertThat(row.getBytes(0)).isEqualTo(expected);
+                                if (count == 0) {
+                                    assertThat(row.isNullAt(0)).isTrue();
+                                    assertThat(row.getBytes(3)).isEqualTo(new byte[] {(byte) 0xff});
                                 } else {
-                                    assertThat(row.getString(0).toString())
-                                            .isEqualTo(
-                                                    new String(expected, StandardCharsets.UTF_8));
+                                    byte[] expected = count == 1 ? new byte[0] : VALUE;
+                                    if (format.equals("binary")) {
+                                        assertThat(row.getBytes(0)).isEqualTo(expected);
+                                    } else {
+                                        assertThat(row.getString(0).toString())
+                                                .isEqualTo(
+                                                        new String(
+                                                                expected, StandardCharsets.UTF_8));
+                                    }
+                                    assertThat(row.isNullAt(3)).isTrue();
                                 }
-                                assertThat(row.isNullAt(3)).isTrue();
                                 assertThat(row.getMap(1).size()).isZero();
                                 assertThat(row.isNullAt(2)).isTrue();
                                 assertThat(record.logOffset()).isEqualTo(count);
                                 count++;
                             }
                         }
-                        assertThat(count).isEqualTo(2);
+                        assertThat(count).isEqualTo(3);
                     }
                 } finally {
                     admin.dropTable(path, true).get();
