@@ -25,7 +25,7 @@ import org.apache.fluss.annotation.PublicEvolving;
  * physical offset to which EARLIEST was resolved.
  */
 @PublicEvolving
-public class UnsupportedBoundedEarliestException extends UnsupportedOperationException {
+public class UnsupportedBoundedEarliestException extends FlussRuntimeException {
     private static final long serialVersionUID = 1L;
 
     public UnsupportedBoundedEarliestException(String message) {

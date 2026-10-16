@@ -61,7 +61,17 @@ public class ArrowScanRecords implements Iterable<ArrowBatchData>, AutoCloseable
         this(records, consumedUpToOffsets, Collections.emptySet());
     }
 
-    ArrowScanRecords(
+    /**
+     * Creates Arrow scan records with consumed offsets and bounded scan completions.
+     *
+     * <p>A completion event may accompany the final batches for the same bucket.
+     *
+     * @param records the Arrow batches grouped by table bucket
+     * @param consumedUpToOffsets the exclusive consumed offsets for each bucket
+     * @param finishedBuckets the buckets whose bounded subscriptions finished in this poll
+     */
+    @Internal
+    public ArrowScanRecords(
             Map<TableBucket, List<ArrowBatchData>> records,
             Map<TableBucket, Long> consumedUpToOffsets,
             Set<TableBucket> finishedBuckets) {
