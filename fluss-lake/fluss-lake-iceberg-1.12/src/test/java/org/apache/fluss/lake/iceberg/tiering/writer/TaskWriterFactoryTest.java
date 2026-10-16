@@ -19,6 +19,7 @@
 package org.apache.fluss.lake.iceberg.tiering.writer;
 
 import org.apache.iceberg.CatalogProperties;
+import org.apache.iceberg.DeleteFile;
 import org.apache.iceberg.FileContent;
 import org.apache.iceberg.PartitionSpec;
 import org.apache.iceberg.Schema;
@@ -37,6 +38,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
+import java.util.Arrays;
 import java.util.Collections;
 
 import static org.apache.iceberg.types.Types.NestedField.optional;
@@ -45,6 +47,14 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 /** Test for the Iceberg 1.12 {@link TaskWriterFactory}. */
 class TaskWriterFactoryTest {
+
+    /** A primary key table with a non-key column. */
+    private static final Schema PK_SCHEMA =
+            new Schema(
+                    Arrays.asList(
+                            required(1, "id", Types.IntegerType.get()),
+                            optional(2, "name", Types.StringType.get())),
+                    Collections.singleton(1));
 
     private InMemoryCatalog catalog;
 
@@ -83,32 +93,54 @@ class TaskWriterFactoryTest {
 
     @Test
     void testWritePrimaryKeyTable() throws IOException {
-        Schema schema =
-                new Schema(
-                        Collections.singletonList(required(1, "id", Types.IntegerType.get())),
-                        Collections.singleton(1));
-        Table table = createTable("pk_table", schema);
+        // parquet collects column metrics, which show the columns of the delete file
+        Table table = createTable("pk_table", PK_SCHEMA, "parquet");
 
         try (GenericRecordDeltaWriter writer =
                 (GenericRecordDeltaWriter) TaskWriterFactory.createTaskWriter(table, null, 0)) {
-            writer.write(record(schema, 1));
+            writer.write(record(PK_SCHEMA, 1, "a"));
             // a key that was not written by this writer is deleted with an equality delete
-            writer.delete(record(schema, 2));
+            writer.delete(record(PK_SCHEMA, 2, "b"));
             WriteResult result = writer.complete();
 
             assertThat(result.dataFiles()).hasSize(1);
             assertThat(result.deleteFiles()).hasSize(1);
-            assertThat(result.deleteFiles()[0].content()).isEqualTo(FileContent.EQUALITY_DELETES);
-            assertThat(result.deleteFiles()[0].equalityFieldIds()).containsExactly(1);
+            DeleteFile deleteFile = result.deleteFiles()[0];
+            assertThat(deleteFile.content()).isEqualTo(FileContent.EQUALITY_DELETES);
+            assertThat(deleteFile.equalityFieldIds()).containsExactly(1);
+            // the equality delete file contains the full row, not only the key
+            assertThat(deleteFile.valueCounts()).containsOnlyKeys(1, 2);
+        }
+    }
+
+    @Test
+    void testDeleteRowWrittenBySameWriter() throws IOException {
+        Table table = createTable("pk_table_same_writer", PK_SCHEMA, "parquet");
+
+        try (GenericRecordDeltaWriter writer =
+                (GenericRecordDeltaWriter) TaskWriterFactory.createTaskWriter(table, null, 0)) {
+            writer.write(record(PK_SCHEMA, 1, "a"));
+            // a key written by this writer is deleted with a position delete
+            writer.delete(record(PK_SCHEMA, 1, "a"));
+            WriteResult result = writer.complete();
+
+            assertThat(result.dataFiles()).hasSize(1);
+            assertThat(result.deleteFiles()).hasSize(1);
+            assertThat(result.deleteFiles()[0].content()).isEqualTo(FileContent.POSITION_DELETES);
+            assertThat(result.deleteFiles()[0].recordCount()).isEqualTo(1);
         }
     }
 
     private Table createTable(String name, Schema schema) {
+        return createTable(name, schema, "avro");
+    }
+
+    private Table createTable(String name, Schema schema, String fileFormat) {
         return catalog.createTable(
                 TableIdentifier.of("test_db", name),
                 schema,
                 PartitionSpec.unpartitioned(),
-                Collections.singletonMap(TableProperties.DEFAULT_FILE_FORMAT, "avro"));
+                Collections.singletonMap(TableProperties.DEFAULT_FILE_FORMAT, fileFormat));
     }
 
     private static Record record(Schema schema, Object... values) {

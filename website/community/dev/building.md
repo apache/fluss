@@ -15,7 +15,7 @@ The Iceberg 1.12 lake plugin (`fluss-lake-iceberg-1.12`) also needs a **JDK 17**
 [Maven toolchain](https://maven.apache.org/guides/mini/guide-using-toolchains.html) while Maven itself keeps running on Java 11.
 The JDK 17 is found automatically in `~/.m2/toolchains.xml`, through `JAVA<version>_HOME` environment variables
 (e.g. `JAVA17_HOME`), or in common install locations such as SDKMAN! and `/Library/Java/JavaVirtualMachines`.
-To build without it, exclude the module: `mvn clean install -DskipTests -pl '!fluss-lake/fluss-lake-iceberg-1.12'`.
+To build without it, skip the plugin, which also leaves it out of the binary distribution: `mvn clean install -DskipTests -Dskip.iceberg-1.12`.
 If the build fails with `Non-existing JDK home configuration`, remove the entry for that JDK from `~/.m2/toolchains.xml`.
 
 To clone from git, enter:

@@ -84,9 +84,23 @@
         <module>fluss-lake-paimon</module>
         <module>fluss-lake-iceberg-common</module>
         <module>fluss-lake-iceberg</module>
-        <module>fluss-lake-iceberg-1.12</module>
         <module>fluss-lake-lance</module>
         <module>fluss-lake-hudi</module>
     </modules>
     <packaging>pom</packaging>
+
+    <profiles>
+        <profile>
+            <!-- The Iceberg 1.12 plugin needs a JDK 17 toolchain. Skip it with -Dskip.iceberg-1.12. -->
+            <id>iceberg-1.12</id>
+            <activation>
+                <property>
+                    <name>!skip.iceberg-1.12</name>
+                </property>
+            </activation>
+            <modules>
+                <module>fluss-lake-iceberg-1.12</module>
+            </modules>
+        </profile>
+    </profiles>
 </project>

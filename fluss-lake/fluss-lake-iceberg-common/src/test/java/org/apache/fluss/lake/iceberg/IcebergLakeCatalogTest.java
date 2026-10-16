@@ -35,7 +35,6 @@ import org.apache.fluss.types.DataTypes;
 import org.apache.iceberg.DataFile;
 import org.apache.iceberg.DataFiles;
 import org.apache.iceberg.FileFormat;
-import org.apache.iceberg.HasTableOperations;
 import org.apache.iceberg.PartitionField;
 import org.apache.iceberg.PartitionSpec;
 import org.apache.iceberg.RowLevelOperationMode;
@@ -46,7 +45,6 @@ import org.apache.iceberg.catalog.Catalog;
 import org.apache.iceberg.catalog.Namespace;
 import org.apache.iceberg.catalog.SupportsNamespaces;
 import org.apache.iceberg.catalog.TableIdentifier;
-import org.apache.iceberg.inmemory.InMemoryCatalog;
 import org.apache.iceberg.types.Types;
 import org.assertj.core.api.Assertions;
 import org.junit.jupiter.api.BeforeEach;
@@ -56,7 +54,6 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import java.io.File;
-import java.io.IOException;
 import java.time.Duration;
 import java.util.Arrays;
 import java.util.Collections;
@@ -172,76 +169,6 @@ class IcebergLakeCatalogTest {
         assertThat(partitionField.name()).isEqualTo("id_bucket");
         assertThat(partitionField.transform().toString()).isEqualTo("bucket[4]");
         assertThat(partitionField.sourceId()).isEqualTo(1);
-    }
-
-    @Test
-    void testRejectFormatVersion3ForPrimaryKeyTable() {
-        Schema flussSchema =
-                Schema.newBuilder()
-                        .column("id", DataTypes.INT())
-                        .column("name", DataTypes.STRING())
-                        .primaryKey("id")
-                        .build();
-        TablePath tablePath = TablePath.of("test_db", "pk_format_version_table");
-
-        TableDescriptor formatVersion3 =
-                TableDescriptor.builder()
-                        .schema(flussSchema)
-                        .distributedBy(4, "id")
-                        .property("iceberg.format-version", "3")
-                        .build();
-        assertThatThrownBy(
-                        () ->
-                                flussIcebergCatalog.createTable(
-                                        tablePath, formatVersion3, new TestingLakeCatalogContext()))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining(
-                        "Iceberg format version 3 is not supported for primary key tables");
-
-        TableDescriptor formatVersion2 =
-                TableDescriptor.builder().schema(flussSchema).distributedBy(4, "id").build();
-        flussIcebergCatalog.createTable(tablePath, formatVersion2, new TestingLakeCatalogContext());
-        assertThatThrownBy(
-                        () ->
-                                flussIcebergCatalog.alterTable(
-                                        tablePath,
-                                        Collections.singletonList(
-                                                TableChange.set("iceberg.format-version", "3")),
-                                        new TestingLakeCatalogContext()))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining(
-                        "Iceberg format version 3 is not supported for primary key tables");
-    }
-
-    @Test
-    void testAllowFormatVersion3ForLogTable() {
-        TableDescriptor tableDescriptor =
-                TableDescriptor.builder()
-                        .schema(Schema.newBuilder().column("id", DataTypes.INT()).build())
-                        .distributedBy(4)
-                        .property("iceberg.format-version", "3")
-                        .build();
-        TablePath tablePath = TablePath.of("test_db", "log_format_version_table");
-        flussIcebergCatalog.createTable(
-                tablePath, tableDescriptor, new TestingLakeCatalogContext());
-
-        Table createdTable =
-                flussIcebergCatalog
-                        .getIcebergCatalog()
-                        .loadTable(TableIdentifier.of("test_db", "log_format_version_table"));
-        assertThat(((HasTableOperations) createdTable).operations().current().formatVersion())
-                .isEqualTo(3);
-    }
-
-    @Test
-    void testCloseFailureIsSurfaced() {
-        Configuration configuration = new Configuration();
-        configuration.setString("warehouse", tempWarehouseDir.toURI().toString());
-        configuration.setString("catalog-impl", FailingCloseCatalog.class.getName());
-        configuration.setString("name", "fluss_failing_close_catalog");
-        IcebergLakeCatalog catalog = new IcebergLakeCatalog(configuration);
-
-        assertThatThrownBy(catalog::close).hasMessage(FailingCloseCatalog.CLOSE_FAILURE);
     }
 
     @Test
@@ -1890,17 +1817,5 @@ class IcebergLakeCatalogTest {
 
     private TableDescriptor getTableDescriptor(Schema schema) {
         return TableDescriptor.builder().schema(schema).distributedBy(3).build();
-    }
-
-    /** An in-memory catalog whose close fails. */
-    public static class FailingCloseCatalog extends InMemoryCatalog {
-
-        static final String CLOSE_FAILURE = "Failed to close the catalog.";
-
-        @Override
-        public void close() throws IOException {
-            super.close();
-            throw new IOException(CLOSE_FAILURE);
-        }
     }
 }

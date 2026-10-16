@@ -69,6 +69,8 @@ class GenericRecordDeltaWriter extends BaseTaskWriter<Record> {
     @Override
     public void close() throws IOException {
         deltaWriter.close();
+        // closes the deletion vector writer of BaseTaskWriter, if any
+        super.close();
     }
 
     private class GenericEqualityDeltaWriter extends BaseEqualityDeltaWriter {

@@ -30,9 +30,9 @@ This project bundles the following dependencies under the Apache Software Licens
 - org.apache.httpcomponents.client5:httpclient5:5.6.4
 - org.apache.httpcomponents.core5:httpcore5:5.4.3
 - org.apache.httpcomponents.core5:httpcore5-h2:5.4.3
-- com.fasterxml.jackson.core:jackson-core:2.15.3
-- com.fasterxml.jackson.core:jackson-databind:2.15.3
-- com.fasterxml.jackson.core:jackson-annotations:2.15.3
+- com.fasterxml.jackson.core:jackson-core:2.22.2
+- com.fasterxml.jackson.core:jackson-databind:2.22.2
+- com.fasterxml.jackson.core:jackson-annotations:2.22
 - com.github.ben-manes.caffeine:caffeine:3.2.4
 - org.roaringbitmap:RoaringBitmap:1.6.23
 - io.airlift:aircompressor:2.0.3

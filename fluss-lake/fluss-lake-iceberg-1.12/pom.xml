@@ -43,7 +43,30 @@
 
     <properties>
         <iceberg.version>1.12.0</iceberg.version>
+        <!-- The Jackson version of Iceberg 1.12.0, instead of the root jackson-bom. -->
+        <iceberg.jackson.version>2.22.2</iceberg.jackson.version>
+        <iceberg.jackson-annotations.version>2.22</iceberg.jackson-annotations.version>
     </properties>
+
+    <dependencyManagement>
+        <dependencies>
+            <dependency>
+                <groupId>com.fasterxml.jackson.core</groupId>
+                <artifactId>jackson-core</artifactId>
+                <version>${iceberg.jackson.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.fasterxml.jackson.core</groupId>
+                <artifactId>jackson-databind</artifactId>
+                <version>${iceberg.jackson.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.fasterxml.jackson.core</groupId>
+                <artifactId>jackson-annotations</artifactId>
+                <version>${iceberg.jackson-annotations.version}</version>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
 
     <packaging>jar</packaging>
     <dependencies>

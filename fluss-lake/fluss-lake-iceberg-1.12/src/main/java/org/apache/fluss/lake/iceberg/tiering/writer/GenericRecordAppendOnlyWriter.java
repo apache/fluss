@@ -58,5 +58,7 @@ public class GenericRecordAppendOnlyWriter extends BaseTaskWriter<Record> {
     @Override
     public void close() throws IOException {
         currentWriter.close();
+        // closes the deletion vector writer of BaseTaskWriter, if any
+        super.close();
     }
 }
