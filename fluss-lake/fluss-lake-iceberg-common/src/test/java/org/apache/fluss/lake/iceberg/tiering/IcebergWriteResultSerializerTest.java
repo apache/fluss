@@ -102,7 +102,9 @@ class IcebergWriteResultSerializerTest {
     @Test
     void testDeserializeGoldenFiles() throws Exception {
         IcebergWriteResult expected = goldenWriteResult();
-        for (int version = 1; version <= serializer.getVersion(); version++) {
+        for (int version = TestingGoldenFiles.firstReadableVersion();
+                version <= serializer.getVersion();
+                version++) {
             IcebergWriteResult actual =
                     serializer.deserialize(
                             version, TestingGoldenFiles.read(WRITE_RESULT_DIR, version));
@@ -112,6 +114,10 @@ class IcebergWriteResultSerializerTest {
 
     @Test
     void testCurrentVersionMatchesGoldenFile() throws Exception {
+        // other Iceberg versions write the Iceberg objects in the JSON differently
+        assumeThat(TestingGoldenFiles.isGoldenIcebergVersion())
+                .as("the golden files were written with another Iceberg version")
+                .isTrue();
         // the current format must not change without bumping the version
         assertThat(serializer.serialize(goldenWriteResult()))
                 .isEqualTo(TestingGoldenFiles.read(WRITE_RESULT_DIR, serializer.getVersion()));

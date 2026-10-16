@@ -104,7 +104,9 @@ class IcebergSplitSerializerTest extends IcebergSourceTestBase {
     @Test
     void testDeserializeGoldenFiles() throws Exception {
         IcebergSplit expected = goldenSplit();
-        for (int version = 1; version <= serializer.getVersion(); version++) {
+        for (int version = TestingGoldenFiles.firstReadableVersion();
+                version <= serializer.getVersion();
+                version++) {
             IcebergSplit deserialized =
                     serializer.deserialize(version, TestingGoldenFiles.read(SPLIT_DIR, version));
             assertSplitEquals(deserialized, expected);
@@ -113,6 +115,10 @@ class IcebergSplitSerializerTest extends IcebergSourceTestBase {
 
     @Test
     void testCurrentVersionMatchesGoldenFile() throws Exception {
+        // other Iceberg versions write the Iceberg objects in the JSON differently
+        assumeThat(TestingGoldenFiles.isGoldenIcebergVersion())
+                .as("the golden files were written with another Iceberg version")
+                .isTrue();
         // the current format must not change without bumping the version
         assertThat(serializer.serialize(goldenSplit()))
                 .isEqualTo(TestingGoldenFiles.read(SPLIT_DIR, serializer.getVersion()));

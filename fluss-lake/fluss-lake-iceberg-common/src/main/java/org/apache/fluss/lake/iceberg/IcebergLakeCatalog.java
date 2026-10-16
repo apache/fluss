@@ -30,7 +30,6 @@ import org.apache.fluss.lake.lakestorage.LakeCatalog;
 import org.apache.fluss.metadata.TableChange;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePath;
-import org.apache.fluss.utils.IOUtils;
 
 import org.apache.iceberg.PartitionField;
 import org.apache.iceberg.PartitionSpec;
@@ -113,6 +112,10 @@ public class IcebergLakeCatalog implements LakeCatalog {
         // sort order. (Legacy tables keep ASC(__offset), but those are never created here.)
         SortOrder sortOrder = SortOrder.unsorted();
         Map<String, String> expectedProperties = buildTableProperties(tableDescriptor, isPkTable);
+        if (isPkTable) {
+            checkPrimaryKeyTableFormatVersion(
+                    expectedProperties.get(TableProperties.FORMAT_VERSION));
+        }
         tableBuilder.withProperties(expectedProperties);
         tableBuilder.withPartitionSpec(partitionSpec);
         tableBuilder.withSortOrder(sortOrder);
@@ -195,8 +198,12 @@ public class IcebergLakeCatalog implements LakeCatalog {
                         !RESERVED_PROPERTIES.contains(option.getKey()),
                         "Cannot set table property '%s'",
                         option.getKey());
-                updateProperties.set(
-                        convertFlussPropertyKeyToIceberg(option.getKey()), option.getValue());
+                String icebergKey = convertFlussPropertyKeyToIceberg(option.getKey());
+                if (TableProperties.FORMAT_VERSION.equals(icebergKey)
+                        && !table.schema().identifierFieldIds().isEmpty()) {
+                    checkPrimaryKeyTableFormatVersion(option.getValue());
+                }
+                updateProperties.set(icebergKey, option.getValue());
             } else if (tableChange instanceof TableChange.ResetOption) {
                 TableChange.ResetOption option = (TableChange.ResetOption) tableChange;
                 checkArgument(
@@ -210,6 +217,21 @@ public class IcebergLakeCatalog implements LakeCatalog {
             }
         }
         updateProperties.commit();
+    }
+
+    /**
+     * Primary key tables write position delete files, which Iceberg format version 3 replaces with
+     * deletion vectors, so they only support format version 2 and older.
+     */
+    private static void checkPrimaryKeyTableFormatVersion(@Nullable String formatVersion) {
+        if (formatVersion != null) {
+            checkArgument(
+                    Integer.parseInt(formatVersion.trim()) < 3,
+                    "Iceberg format version %s is not supported for primary key tables, "
+                            + "because they write position delete files. "
+                            + "Use format version 2 or older.",
+                    formatVersion);
+        }
     }
 
     private void applySchemaChanges(Table table, List<TableChange> schemaChanges, Context context) {
@@ -592,7 +614,9 @@ public class IcebergLakeCatalog implements LakeCatalog {
     }
 
     @Override
-    public void close() {
-        IOUtils.closeQuietly((AutoCloseable) icebergCatalog, "fluss-iceberg-catalog");
+    public void close() throws Exception {
+        if (icebergCatalog instanceof AutoCloseable) {
+            ((AutoCloseable) icebergCatalog).close();
+        }
     }
 }

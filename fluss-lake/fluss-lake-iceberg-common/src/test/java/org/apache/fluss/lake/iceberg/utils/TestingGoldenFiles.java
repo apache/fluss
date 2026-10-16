@@ -31,6 +31,7 @@ import org.apache.iceberg.DeleteFile;
 import org.apache.iceberg.FileFormat;
 import org.apache.iceberg.FileMetadata;
 import org.apache.iceberg.FileScanTask;
+import org.apache.iceberg.IcebergBuild;
 import org.apache.iceberg.PartitionSpec;
 import org.apache.iceberg.PartitionSpecParser;
 import org.apache.iceberg.Schema;
@@ -71,6 +72,9 @@ public class TestingGoldenFiles {
 
     private static final String REGENERATE_PROPERTY = "fluss.iceberg.regenerate-golden-files";
 
+    /** The Iceberg version that wrote the golden files. */
+    private static final String GOLDEN_ICEBERG_VERSION = "1.10.";
+
     /** The schema of the golden table: a primary key {@code id} and a partition column. */
     private static final Schema SCHEMA =
             new Schema(
@@ -99,9 +103,26 @@ public class TestingGoldenFiles {
 
     private TestingGoldenFiles() {}
 
-    /** Returns whether the golden files should be regenerated. */
+    /**
+     * Returns whether the golden files should be regenerated. They are only regenerated with the
+     * Iceberg version that wrote them.
+     */
     public static boolean shouldRegenerate() {
-        return Boolean.parseBoolean(System.getProperty(REGENERATE_PROPERTY));
+        return Boolean.parseBoolean(System.getProperty(REGENERATE_PROPERTY))
+                && isGoldenIcebergVersion();
+    }
+
+    /** Returns whether the tests run with the Iceberg version that wrote the golden files. */
+    public static boolean isGoldenIcebergVersion() {
+        return IcebergBuild.version().startsWith(GOLDEN_ICEBERG_VERSION);
+    }
+
+    /**
+     * Returns the first golden file version that the running Iceberg version can read. Version 1 is
+     * Java serialization of the Iceberg classes that wrote it.
+     */
+    public static int firstReadableVersion() {
+        return isGoldenIcebergVersion() ? 1 : 2;
     }
 
     /** Reads the golden file of the given version from the test resources. */

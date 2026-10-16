@@ -57,7 +57,9 @@ class IcebergCommittableSerializerTest {
     @Test
     void testDeserializeGoldenFiles() throws Exception {
         IcebergCommittable expected = goldenCommittable();
-        for (int version = 1; version <= serializer.getVersion(); version++) {
+        for (int version = TestingGoldenFiles.firstReadableVersion();
+                version <= serializer.getVersion();
+                version++) {
             IcebergCommittable actual =
                     serializer.deserialize(
                             version, TestingGoldenFiles.read(COMMITTABLE_DIR, version));
@@ -67,6 +69,10 @@ class IcebergCommittableSerializerTest {
 
     @Test
     void testCurrentVersionMatchesGoldenFile() throws Exception {
+        // other Iceberg versions write the Iceberg objects in the JSON differently
+        assumeThat(TestingGoldenFiles.isGoldenIcebergVersion())
+                .as("the golden files were written with another Iceberg version")
+                .isTrue();
         // the current format must not change without bumping the version
         assertThat(serializer.serialize(goldenCommittable()))
                 .isEqualTo(TestingGoldenFiles.read(COMMITTABLE_DIR, serializer.getVersion()));

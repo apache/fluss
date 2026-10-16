@@ -100,6 +100,13 @@
             <destName>fluss-lake-iceberg-${project.version}.jar</destName>
             <fileMode>0644</fileMode>
         </file>
+        <!-- Not loaded by default: it replaces fluss-lake-iceberg in plugins/iceberg/. -->
+        <file>
+            <source>../fluss-lake/fluss-lake-iceberg-1.12/target/fluss-lake-iceberg-1.12-${project.version}.jar</source>
+            <outputDirectory>opt/iceberg-1.12/</outputDirectory>
+            <destName>fluss-lake-iceberg-1.12-${project.version}.jar</destName>
+            <fileMode>0644</fileMode>
+        </file>
         <file>
             <source>../fluss-lake/fluss-lake-lance/target/fluss-lake-lance-${project.version}.jar</source>
             <outputDirectory>plugins/lance/</outputDirectory>

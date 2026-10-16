@@ -99,6 +99,13 @@
 
         <dependency>
             <groupId>org.apache.fluss</groupId>
+            <artifactId>fluss-lake-iceberg-1.12</artifactId>
+            <version>${project.version}</version>
+            <scope>provided</scope>
+        </dependency>
+
+        <dependency>
+            <groupId>org.apache.fluss</groupId>
             <artifactId>fluss-lake-lance</artifactId>
             <version>${project.version}</version>
             <scope>provided</scope>

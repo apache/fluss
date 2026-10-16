@@ -26,7 +26,6 @@ import org.apache.fluss.lake.writer.LakeWriter;
 import org.apache.fluss.lake.writer.TieringTableValidator;
 import org.apache.fluss.lake.writer.WriterInitContext;
 import org.apache.fluss.metadata.TableInfo;
-import org.apache.fluss.utils.IOUtils;
 
 import org.apache.iceberg.Table;
 import org.apache.iceberg.catalog.Catalog;
@@ -57,14 +56,18 @@ public class IcebergLakeTieringFactory
     @Override
     public void validateTable(TableInfo tableInfo) throws IOException {
         Catalog icebergCatalog = icebergCatalogProvider.get();
-        try {
+        try (AutoCloseable closeCatalog =
+                () -> {
+                    if (icebergCatalog instanceof AutoCloseable) {
+                        ((AutoCloseable) icebergCatalog).close();
+                    }
+                }) {
             Table icebergTable = icebergCatalog.loadTable(toIceberg(tableInfo.getTablePath()));
             IcebergPartitionSpecValidator.validate(icebergTable, tableInfo);
-        } finally {
-            if (icebergCatalog instanceof AutoCloseable) {
-                IOUtils.closeQuietly(
-                        (AutoCloseable) icebergCatalog, "iceberg-catalog-table-validator");
-            }
+        } catch (IOException | RuntimeException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new IOException("Failed to close the Iceberg catalog.", e);
         }
     }
 
