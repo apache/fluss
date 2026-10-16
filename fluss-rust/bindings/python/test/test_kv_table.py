@@ -200,7 +200,7 @@ async def test_batched_concurrent_prefix_lookups(connection, admin):
 
     for id_, rows in zip(ids, results):
         expected = [(seq, f"{id_}-{seq}") for seq in range(2)] if id_ < 64 else []
-        assert sorted((row["seq"], row["name"]) for row in rows) == expected
+        assert [(row["seq"], row["name"]) for row in rows] == expected
 
     await admin.drop_table(table_path, ignore_if_not_exists=False)
 
@@ -279,7 +279,7 @@ async def test_composite_primary_keys(connection, admin):
     # Prefix (US, 1) should match 2 rows (event_id 1 and 2)
     rows = await prefix_lookuper.lookup({"region": "US", "user_id": 1})
     assert len(rows) == 2
-    event_ids = sorted(row["event_id"] for row in rows)
+    event_ids = [row["event_id"] for row in rows]
     assert event_ids == [1, 2]
 
     # Also validate list/tuple prefix input
@@ -824,6 +824,67 @@ async def test_all_supported_datatypes(connection, admin):
     await admin.drop_table(table_path, ignore_if_not_exists=False)
 
 
+async def test_prefix_lookup_partitioned(connection, admin):
+    """Test ordered prefix results and key isolation across populated partitions."""
+    table_path = fluss.TablePath("fluss", "py_test_prefix_lookup_partitioned")
+    await admin.drop_table(table_path, ignore_if_not_exists=True)
+
+    schema = fluss.Schema(
+        pa.schema(
+            [
+                pa.field("region", pa.string()),
+                pa.field("a", pa.int32()),
+                pa.field("b", pa.string()),
+                pa.field("c", pa.int64()),
+                pa.field("d", pa.string()),
+            ]
+        ),
+        primary_keys=["region", "a", "b", "c"],
+    )
+    descriptor = fluss.TableDescriptor(
+        schema,
+        partition_keys=["region"],
+        bucket_count=3,
+        bucket_keys=["a", "b"],
+    )
+    await admin.create_table(table_path, descriptor, ignore_if_exists=False)
+
+    try:
+        for region in ["US", "EU"]:
+            await admin.create_partition(
+                table_path, {"region": region}, ignore_if_exists=False
+            )
+
+        table = await connection.get_table(table_path)
+        writer = table.new_upsert().create_writer()
+        test_data = [
+            ("US", 1, "aaaaaaaaa", 1, "us-1"),
+            ("US", 1, "aaaaaaaaa", 2, "us-2"),
+            ("US", 2, "aaaaaaaaa", 3, "us-3"),
+            ("EU", 1, "aaaaaaaaa", 4, "eu-1"),
+            ("EU", 1, "bbbbbbbbb", 5, "eu-2"),
+        ]
+        rows = [
+            {"region": region, "a": a, "b": b, "c": c, "d": d}
+            for region, a, b, c, d in test_data
+        ]
+        for row in rows:
+            writer.upsert(row)
+        await writer.flush()
+
+        lookuper = table.new_lookup().lookup_by(["region", "a", "b"]).create_lookuper()
+        result = await lookuper.lookup({"region": "US", "a": 1, "b": "aaaaaaaaa"})
+        assert result == rows[:2]
+
+        result = await lookuper.lookup({"region": "EU", "a": 1, "b": "bbbbbbbbb"})
+        assert result == [rows[4]]
+
+        result = await lookuper.lookup({"region": "APAC", "a": 1, "b": "aaaaaaaaa"})
+        assert result == []
+    finally:
+        await admin.drop_table(table_path, ignore_if_not_exists=False)
+
+
 async def test_prefix_lookup_validation_errors(connection, admin):
     """Test that prefix lookup raises errors for invalid column configurations."""
     table_path = fluss.TablePath("fluss", "py_test_prefix_lookup_validation")
@@ -847,8 +908,14 @@ async def test_prefix_lookup_validation_errors(connection, admin):
     table = await connection.get_table(table_path)
 
     # lookup_by with columns equal to full PK should error
-    with pytest.raises(fluss.FlussError, match="prefix lookup"):
+    with pytest.raises(fluss.FlussError, match="prefix lookup") as exc_info:
         table.new_lookup().lookup_by(["a", "b", "c"]).create_lookuper()
+    assert exc_info.value.error_code == fluss.ErrorCode.CLIENT_ERROR
+
+    # Lookup columns must list the bucket keys in order.
+    with pytest.raises(fluss.FlussError, match="bucket keys") as exc_info:
+        table.new_lookup().lookup_by(["b", "a"]).create_lookuper()
+    assert exc_info.value.error_code == fluss.ErrorCode.CLIENT_ERROR
 
     # lookup_by with wrong column names should error
     with pytest.raises(fluss.FlussError, match="bucket keys"):

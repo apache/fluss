@@ -101,7 +101,7 @@ async def _run(conn):
             },
             {
                 "user_id": 2,
-                "session_id": "sess-c",
+                "session_id": "sess-a",
                 "event_seq": 1,
                 "event_data": "open",
             },
@@ -116,7 +116,7 @@ async def _run(conn):
             table.new_lookup().lookup_by(["user_id", "session_id"]).create_lookuper()
         )
         result = await lookuper.lookup({"user_id": 1, "session_id": "sess-a"})
-        assert sorted(result, key=lambda row: row["event_seq"]) == events[:3]
+        assert result == events[:3]
         print(f"Events for user_id=1, session_id=sess-a: {result}")
 
         # List and tuple keys follow the column order supplied to lookup_by().
@@ -124,9 +124,9 @@ async def _run(conn):
         assert result == [events[3]]
         print(f"Events for user_id=1, session_id=sess-b: {result}")
 
-        result = await lookuper.lookup((2, "sess-c"))
+        result = await lookuper.lookup((2, "sess-a"))
         assert result == [events[4]]
-        print(f"Events for user_id=2, session_id=sess-c: {result}")
+        print(f"Events for user_id=2, session_id=sess-a: {result}")
 
         result = await lookuper.lookup({"user_id": 2, "session_id": "sess-missing"})
         assert result == [], "Expected no events for user_id=2, session_id=sess-missing"
