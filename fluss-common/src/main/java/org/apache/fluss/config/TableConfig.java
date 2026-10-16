@@ -54,6 +54,11 @@ public class TableConfig {
         this.config = config;
     }
 
+    /** Whether the table explicitly enables Kafka compatibility. */
+    public boolean isKafkaEnabled() {
+        return config.get(ConfigOptions.TABLE_KAFKA_ENABLED);
+    }
+
     /** Gets the replication factor of the table. */
     public int getReplicationFactor() {
         return config.get(ConfigOptions.TABLE_REPLICATION_FACTOR);
