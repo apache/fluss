@@ -80,9 +80,9 @@ pub(crate) trait CompletedFetch: Send + Sync {
     fn api_error(&self) -> Option<&ApiError>;
     fn fetch_error_context(&self) -> Option<&FetchErrorContext>;
     fn take_error(&mut self) -> Option<Error>;
-    /// Whether a previous batch read failed after returning partial results.
+    /// Whether a previous fetch initialization or batch read failed.
     fn has_pending_error(&self) -> bool;
-    /// Retain a read error for the next poll without discarding earlier results.
+    /// Retain an error for the next poll without discarding earlier results.
     fn defer_error(&mut self, error: Error);
     fn fetch_records(&mut self, max_records: usize) -> Result<FetchResult<Vec<ScanRecord>>>;
     fn fetch_batches(&mut self, max_batches: usize) -> Result<FetchResult<Vec<FetchedBatch>>>;
