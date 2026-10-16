@@ -125,8 +125,7 @@ class ConsumerOffsetSchemaTest {
 
         byte[] keyFromRow = ConsumerOffsetSchema.encodeOffsetKey(offsetKeyEncoder, row);
         byte[] keyFromFields =
-                ConsumerOffsetSchema.encodeOffsetKey(
-                        offsetKeyEncoder, "my-group", 42L, 7L, 3);
+                ConsumerOffsetSchema.encodeOffsetKey(offsetKeyEncoder, "my-group", 42L, 7L, 3);
         assertThat(keyFromFields).isEqualTo(keyFromRow);
     }
 
@@ -139,11 +138,9 @@ class ConsumerOffsetSchemaTest {
             assertThat(prefix).isNotEmpty();
 
             byte[] keyNonPartitioned =
-                    ConsumerOffsetSchema.encodeOffsetKey(
-                            offsetKeyEncoder, group, 1L, null, 0);
+                    ConsumerOffsetSchema.encodeOffsetKey(offsetKeyEncoder, group, 1L, null, 0);
             byte[] keyPartitioned =
-                    ConsumerOffsetSchema.encodeOffsetKey(
-                            offsetKeyEncoder, group, 2L, 99L, 5);
+                    ConsumerOffsetSchema.encodeOffsetKey(offsetKeyEncoder, group, 2L, 99L, 5);
 
             assertThat(isPrefix(prefix, keyNonPartitioned))
                     .as("prefix of group %s must be a byte prefix of its full keys", group)
@@ -156,8 +153,7 @@ class ConsumerOffsetSchemaTest {
     void testDifferentGroupsPrefixesDoNotCrossMatch() {
         byte[] prefixA = ConsumerOffsetSchema.encodeGroupPrefix("group-a");
         byte[] keyB =
-                ConsumerOffsetSchema.encodeOffsetKey(
-                        offsetKeyEncoder, "group-b", 1L, null, 0);
+                ConsumerOffsetSchema.encodeOffsetKey(offsetKeyEncoder, "group-b", 1L, null, 0);
         // "group-a" and "group-b" share a common byte prefix ("group-"), but the full encoded
         // group prefixes must diverge before the end — otherwise a prefix scan for group-a
         // would also see group-b's rows.
@@ -236,8 +232,7 @@ class ConsumerOffsetSchemaTest {
                 String groupId = "group-" + i;
                 KeyEncoder keyEncoder = ConsumerOffsetSchema.createOffsetKeyEncoder();
                 byte[] expected =
-                        ConsumerOffsetSchema.encodeOffsetKey(
-                                keyEncoder, groupId, 42L, 7L, 3);
+                        ConsumerOffsetSchema.encodeOffsetKey(keyEncoder, groupId, 42L, 7L, 3);
                 futures.add(
                         executor.submit(
                                 () -> {
@@ -245,11 +240,7 @@ class ConsumerOffsetSchemaTest {
                                     for (int j = 0; j < iterations; j++) {
                                         assertThat(
                                                         ConsumerOffsetSchema.encodeOffsetKey(
-                                                                keyEncoder,
-                                                                groupId,
-                                                                42L,
-                                                                7L,
-                                                                3))
+                                                                keyEncoder, groupId, 42L, 7L, 3))
                                                 .isEqualTo(expected);
                                     }
                                     return null;

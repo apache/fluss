@@ -20,6 +20,9 @@ package org.apache.fluss.server.tablet.consumer.group;
 import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.config.MemorySize;
+
+import java.time.Duration;
 
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
@@ -45,47 +48,46 @@ public final class ConsumerOffsetTableConfig {
      */
     public static final short OFFSET_COMMIT_REQUIRED_ACKS = -1;
 
-    private final int maxMetadataSize;
-    private final long offsetsRetentionMs;
+    private final MemorySize maxMetadataSize;
+    private final Duration offsetsRetention;
     private final int offsetsTableNumBuckets;
     private final int offsetsTableReplicationFactor;
-    private final int offsetCommitTimeoutMs;
+    private final Duration offsetCommitTimeout;
 
     /** Creates a consumer-offset table configuration. */
     public ConsumerOffsetTableConfig(
-            int maxMetadataSize,
-            long offsetsRetentionMs,
+            MemorySize maxMetadataSize,
+            Duration offsetsRetention,
             int offsetsTableNumBuckets,
             int offsetsTableReplicationFactor,
-            int offsetCommitTimeoutMs) {
-        this.maxMetadataSize = maxMetadataSize;
-        this.offsetsRetentionMs = offsetsRetentionMs;
+            Duration offsetCommitTimeout) {
+        this.maxMetadataSize = checkNotNull(maxMetadataSize, "maxMetadataSize must not be null");
+        this.offsetsRetention = checkNotNull(offsetsRetention, "offsetsRetention must not be null");
         this.offsetsTableNumBuckets = offsetsTableNumBuckets;
         this.offsetsTableReplicationFactor = offsetsTableReplicationFactor;
-        this.offsetCommitTimeoutMs = offsetCommitTimeoutMs;
+        this.offsetCommitTimeout =
+                checkNotNull(offsetCommitTimeout, "offsetCommitTimeout must not be null");
     }
 
     /** Creates the table configuration from the canonical {@link ConfigOptions} definitions. */
     public static ConsumerOffsetTableConfig from(Configuration configuration) {
         checkNotNull(configuration, "configuration must not be null");
         return new ConsumerOffsetTableConfig(
-                Math.toIntExact(
-                        configuration.get(ConfigOptions.OFFSET_METADATA_MAX_BYTES).getBytes()),
-                configuration.get(ConfigOptions.OFFSETS_RETENTION_MS).toMillis(),
+                configuration.get(ConfigOptions.OFFSET_METADATA_MAX_BYTES),
+                configuration.get(ConfigOptions.OFFSETS_RETENTION),
                 configuration.getInt(ConfigOptions.OFFSETS_TABLE_NUM_BUCKETS),
                 configuration.getInt(ConfigOptions.OFFSETS_TABLE_REPLICATION_FACTOR),
-                Math.toIntExact(
-                        configuration.get(ConfigOptions.OFFSET_COMMIT_TIMEOUT_MS).toMillis()));
+                configuration.get(ConfigOptions.OFFSET_COMMIT_TIMEOUT));
     }
 
-    /** Returns the maximum number of bytes allowed for offset metadata. */
-    public int getMaxMetadataSize() {
+    /** Returns the maximum size allowed for offset metadata. */
+    public MemorySize getMaxMetadataSize() {
         return maxMetadataSize;
     }
 
     /** Returns the retention period for inactive committed offsets. */
-    public long getOffsetsRetentionMs() {
-        return offsetsRetentionMs;
+    public Duration getOffsetsRetention() {
+        return offsetsRetention;
     }
 
     /** Returns the number of buckets in the consumer-offset table. */
@@ -99,8 +101,8 @@ public final class ConsumerOffsetTableConfig {
     }
 
     /** Returns the timeout for committing consumer offsets. */
-    public int getOffsetCommitTimeoutMs() {
-        return offsetCommitTimeoutMs;
+    public Duration getOffsetCommitTimeout() {
+        return offsetCommitTimeout;
     }
 
     @Override
@@ -108,14 +110,14 @@ public final class ConsumerOffsetTableConfig {
         return "ConsumerOffsetTableConfig{"
                 + "maxMetadataSize="
                 + maxMetadataSize
-                + ", offsetsRetentionMs="
-                + offsetsRetentionMs
+                + ", offsetsRetention="
+                + offsetsRetention
                 + ", offsetsTableNumBuckets="
                 + offsetsTableNumBuckets
                 + ", offsetsTableReplicationFactor="
                 + offsetsTableReplicationFactor
-                + ", offsetCommitTimeoutMs="
-                + offsetCommitTimeoutMs
+                + ", offsetCommitTimeout="
+                + offsetCommitTimeout
                 + '}';
     }
 }

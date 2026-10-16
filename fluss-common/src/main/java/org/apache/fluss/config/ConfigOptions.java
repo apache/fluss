@@ -2280,7 +2280,7 @@ public class ConfigOptions {
                     .withDescription(
                             "The maximum size for a metadata entry associated with an offset commit.");
 
-    public static final ConfigOption<Duration> OFFSETS_RETENTION_MS =
+    public static final ConfigOption<Duration> OFFSETS_RETENTION =
             key("server.consumer-offsets.ttl")
                     .durationType()
                     .defaultValue(Duration.ofDays(7))
@@ -2304,7 +2304,7 @@ public class ConfigOptions {
                     .withDescription(
                             "The replication factor for the consumer-offset system table. Table creation waits until the cluster has enough tablet servers.");
 
-    public static final ConfigOption<Duration> OFFSET_COMMIT_TIMEOUT_MS =
+    public static final ConfigOption<Duration> OFFSET_COMMIT_TIMEOUT =
             key("server.consumer-offsets.commit-timeout")
                     .durationType()
                     .defaultValue(Duration.ofSeconds(5))

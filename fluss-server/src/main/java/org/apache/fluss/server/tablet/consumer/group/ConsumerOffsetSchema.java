@@ -101,11 +101,7 @@ public final class ConsumerOffsetSchema {
 
     /** Encodes the complete primary key of an offset row. */
     public static byte[] encodeOffsetKey(
-            KeyEncoder keyEncoder,
-            String groupId,
-            long tableId,
-            Long partitionId,
-            int bucketId) {
+            KeyEncoder keyEncoder, String groupId, long tableId, Long partitionId, int bucketId) {
         return encodeOffsetKey(
                 keyEncoder,
                 encodeOffsetRow(

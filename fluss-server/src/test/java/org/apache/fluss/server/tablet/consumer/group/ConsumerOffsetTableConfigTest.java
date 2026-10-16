@@ -19,8 +19,11 @@ package org.apache.fluss.server.tablet.consumer.group;
 
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.config.MemorySize;
 
 import org.junit.jupiter.api.Test;
+
+import java.time.Duration;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -32,40 +35,32 @@ class ConsumerOffsetTableConfigTest {
         ConsumerOffsetTableConfig config = ConsumerOffsetTableConfig.from(new Configuration());
 
         assertThat(config.getMaxMetadataSize())
-                .isEqualTo(
-                        Math.toIntExact(
-                                ConfigOptions.OFFSET_METADATA_MAX_BYTES
-                                        .defaultValue()
-                                        .getBytes()));
-        assertThat(config.getOffsetsRetentionMs())
-                .isEqualTo(ConfigOptions.OFFSETS_RETENTION_MS.defaultValue().toMillis());
+                .isEqualTo(ConfigOptions.OFFSET_METADATA_MAX_BYTES.defaultValue());
+        assertThat(config.getOffsetsRetention())
+                .isEqualTo(ConfigOptions.OFFSETS_RETENTION.defaultValue());
         assertThat(config.getOffsetsTableNumBuckets())
                 .isEqualTo(ConfigOptions.OFFSETS_TABLE_NUM_BUCKETS.defaultValue());
         assertThat(config.getOffsetsTableReplicationFactor())
                 .isEqualTo(ConfigOptions.OFFSETS_TABLE_REPLICATION_FACTOR.defaultValue());
-        assertThat(config.getOffsetCommitTimeoutMs())
-                .isEqualTo(
-                        Math.toIntExact(
-                                ConfigOptions.OFFSET_COMMIT_TIMEOUT_MS
-                                        .defaultValue()
-                                        .toMillis()));
+        assertThat(config.getOffsetCommitTimeout())
+                .isEqualTo(ConfigOptions.OFFSET_COMMIT_TIMEOUT.defaultValue());
     }
 
     @Test
     void testLoadConfiguredValues() {
         Configuration configuration = new Configuration();
         configuration.setString(ConfigOptions.OFFSET_METADATA_MAX_BYTES.key(), "1KB");
-        configuration.setString(ConfigOptions.OFFSETS_RETENTION_MS.key(), "1min");
+        configuration.setString(ConfigOptions.OFFSETS_RETENTION.key(), "1min");
         configuration.set(ConfigOptions.OFFSETS_TABLE_NUM_BUCKETS, 16);
         configuration.set(ConfigOptions.OFFSETS_TABLE_REPLICATION_FACTOR, 2);
-        configuration.setString(ConfigOptions.OFFSET_COMMIT_TIMEOUT_MS.key(), "3s");
+        configuration.setString(ConfigOptions.OFFSET_COMMIT_TIMEOUT.key(), "3s");
 
         ConsumerOffsetTableConfig config = ConsumerOffsetTableConfig.from(configuration);
 
-        assertThat(config.getMaxMetadataSize()).isEqualTo(1024);
-        assertThat(config.getOffsetsRetentionMs()).isEqualTo(60_000L);
+        assertThat(config.getMaxMetadataSize()).isEqualTo(MemorySize.parse("1KB"));
+        assertThat(config.getOffsetsRetention()).isEqualTo(Duration.ofMinutes(1));
         assertThat(config.getOffsetsTableNumBuckets()).isEqualTo(16);
         assertThat(config.getOffsetsTableReplicationFactor()).isEqualTo(2);
-        assertThat(config.getOffsetCommitTimeoutMs()).isEqualTo(3000);
+        assertThat(config.getOffsetCommitTimeout()).isEqualTo(Duration.ofSeconds(3));
     }
 }
