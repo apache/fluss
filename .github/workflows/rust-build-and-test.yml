@@ -110,6 +110,4 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: regenerated-proto
-          path: |
-            fluss-rust/crates/fluss/src/proto/fluss.rs
-            fluss-rust/crates/fluss/proto/FlussApi.proto
+          path: fluss-rust/crates/fluss/src/proto/fluss.rs
