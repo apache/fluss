@@ -12,7 +12,7 @@ Prefix lookup returns all rows whose primary key starts with a given prefix. It'
 - The bucket key cannot equal the full primary key — that's a normal primary-key lookup, use [`Lookuper`](./primary-key-tables.md#upsert-delete-lookup) instead.
 - The `lookup_by` columns passed to the client must equal `partition_keys ++ bucket_key` (in that order, if partitioned).
 
-`new_lookup()` checks that the table has a primary key; `create_lookuper()` validates the prefix rules. Both raise `fluss.FlussError` on mismatch, with a message describing the violation.
+`create_lookuper()` validates the prefix rules and raises `fluss.FlussError` on mismatch, with a message describing the violation.
 
 ## Non-Partitioned Table
 
