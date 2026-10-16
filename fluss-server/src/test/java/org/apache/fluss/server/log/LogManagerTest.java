@@ -475,6 +475,37 @@ final class LogManagerTest extends LogTestBase {
 
     @Test
     @Tag(ServerTestTags.JBOD_MULTI_DIR_TAG)
+    void testRejectDuplicateLogTabletsAcrossDataDirs() throws Exception {
+        File dataDir1 = new File(tempDir, "data-1");
+        File dataDir2 = new File(tempDir, "data-2");
+        initTableBuckets(null);
+        File tabletDir1 = createLog(tablePath1, tableBucket1, dataDir1).getLogDir();
+        File tabletDir2 =
+                FlussPaths.logTabletDir(dataDir2, PhysicalTablePath.of(tablePath1), tableBucket1);
+        logManager.shutdown();
+        logManager = null;
+        Files.createDirectories(tabletDir2.toPath());
+
+        logManager =
+                LogManager.create(
+                        conf,
+                        zkClient,
+                        new FlussScheduler(1),
+                        SystemClock.getInstance(),
+                        TestingMetricGroups.TABLET_SERVER_METRICS,
+                        localDiskManager);
+        assertThatThrownBy(logManager::startup)
+                .isInstanceOf(FlussRuntimeException.class)
+                .hasMessage("Failed to recover logs")
+                .rootCause()
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("Duplicate log tablet directories for bucket " + tableBucket1)
+                .hasMessageContaining(tabletDir1.getAbsolutePath())
+                .hasMessageContaining(tabletDir2.getAbsolutePath());
+    }
+
+    @Test
+    @Tag(ServerTestTags.JBOD_MULTI_DIR_TAG)
     void testCheckpointRecoveryPointsAreWrittenPerDirectory() throws Exception {
         File dataDir1 = new File(tempDir, "data-1");
         File dataDir2 = new File(tempDir, "data-2");
