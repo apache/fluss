@@ -386,6 +386,13 @@ public class TestTabletServerGateway implements TabletServerGateway {
     }
 
     @Override
+    public CompletableFuture<FindConsumerGroupOwnerResponse> findConsumerGroupOwner(
+            FindConsumerGroupOwnerRequest request) {
+        return completedExceptionally(
+                new UnsupportedOperationException("findConsumerGroupOwner is not supported"));
+    }
+
+    @Override
     public CompletableFuture<CommitConsumerOffsetsResponse> commitConsumerOffsets(
             CommitConsumerOffsetsRequest request) {
         return completedExceptionally(
@@ -400,10 +407,10 @@ public class TestTabletServerGateway implements TabletServerGateway {
     }
 
     @Override
-    public CompletableFuture<FindConsumerGroupOwnerResponse> findConsumerGroupOwner(
-            FindConsumerGroupOwnerRequest request) {
+    public CompletableFuture<DeleteConsumerOffsetsResponse> deleteConsumerOffsets(
+            DeleteConsumerOffsetsRequest request) {
         return completedExceptionally(
-                new UnsupportedOperationException("findConsumerGroupOwner is not supported"));
+                new UnsupportedOperationException("deleteConsumerOffsets is not supported"));
     }
 
     @Override
@@ -418,13 +425,6 @@ public class TestTabletServerGateway implements TabletServerGateway {
             DeleteConsumerGroupsRequest request) {
         return completedExceptionally(
                 new UnsupportedOperationException("deleteConsumerGroups is not supported"));
-    }
-
-    @Override
-    public CompletableFuture<DeleteConsumerOffsetsResponse> deleteConsumerOffsets(
-            DeleteConsumerOffsetsRequest request) {
-        return completedExceptionally(
-                new UnsupportedOperationException("deleteConsumerOffsets is not supported"));
     }
 
     @Override

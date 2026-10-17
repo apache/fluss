@@ -197,6 +197,11 @@ public interface TabletServerGateway extends RpcGateway, AdminReadOnlyGateway {
     CompletableFuture<NotifyLakeTableOffsetResponse> notifyLakeTableOffset(
             NotifyLakeTableOffsetRequest request);
 
+    /** Find the tablet server that owns a consumer group. */
+    @RPC(api = ApiKeys.FIND_CONSUMER_GROUP_OWNER)
+    CompletableFuture<FindConsumerGroupOwnerResponse> findConsumerGroupOwner(
+            FindConsumerGroupOwnerRequest request);
+
     /** Commit offsets for a consumer group. */
     @RPC(api = ApiKeys.COMMIT_CONSUMER_OFFSETS)
     CompletableFuture<CommitConsumerOffsetsResponse> commitConsumerOffsets(
@@ -207,10 +212,10 @@ public interface TabletServerGateway extends RpcGateway, AdminReadOnlyGateway {
     CompletableFuture<GetConsumerOffsetsResponse> getConsumerOffsets(
             GetConsumerOffsetsRequest request);
 
-    /** Find the tablet server that owns a consumer group. */
-    @RPC(api = ApiKeys.FIND_CONSUMER_GROUP_OWNER)
-    CompletableFuture<FindConsumerGroupOwnerResponse> findConsumerGroupOwner(
-            FindConsumerGroupOwnerRequest request);
+    /** Delete committed offsets for selected buckets of a consumer group. */
+    @RPC(api = ApiKeys.DELETE_CONSUMER_OFFSETS)
+    CompletableFuture<DeleteConsumerOffsetsResponse> deleteConsumerOffsets(
+            DeleteConsumerOffsetsRequest request);
 
     /**
      * Lists consumer groups currently owned by this tablet server.
@@ -226,11 +231,6 @@ public interface TabletServerGateway extends RpcGateway, AdminReadOnlyGateway {
     @RPC(api = ApiKeys.DELETE_CONSUMER_GROUPS)
     CompletableFuture<DeleteConsumerGroupsResponse> deleteConsumerGroups(
             DeleteConsumerGroupsRequest request);
-
-    /** Delete committed offsets for selected buckets of a consumer group. */
-    @RPC(api = ApiKeys.DELETE_CONSUMER_OFFSETS)
-    CompletableFuture<DeleteConsumerOffsetsResponse> deleteConsumerOffsets(
-            DeleteConsumerOffsetsRequest request);
 
     /**
      * Perform a full KV scan over a primary key table bucket. The first request opens a server-side

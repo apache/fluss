@@ -425,6 +425,16 @@ message ListOffsetsResponse {
   repeated PbListOffsetsRespForBucket buckets_resp = 1;
 }
 
+// Find consumer group owner request and response.
+message FindConsumerGroupOwnerRequest {
+  required string group_id = 1;
+}
+
+// All failures are returned through the RPC ErrorResponse envelope.
+message FindConsumerGroupOwnerResponse {
+  required PbServerNode owner = 1;
+}
+
 // Commit consumer offsets request and response.
 message CommitConsumerOffsetsRequest {
   required string group_id = 1;
@@ -458,14 +468,19 @@ message GetConsumerOffsetsResponse {
   repeated PbGetConsumerOffsetsResponseTable tables = 1;
 }
 
-// Find consumer group owner request and response.
-message FindConsumerGroupOwnerRequest {
+// Delete consumer offsets request and response.
+message DeleteConsumerOffsetsRequest {
   required string group_id = 1;
+  // An empty list, or tables containing no buckets, is a valid no-op and produces an empty
+  // successful response.
+  repeated PbDeleteConsumerOffsetsRequestTable tables = 2;
 }
 
-// All failures are returned through the RPC ErrorResponse envelope.
-message FindConsumerGroupOwnerResponse {
-  required PbServerNode owner = 1;
+// Group-wide or request-level failures are returned through the RPC ErrorResponse envelope.
+// Failures affecting only one requested bucket are reported in the corresponding
+// PbDeleteConsumerOffsetsResponseBucket.
+message DeleteConsumerOffsetsResponse {
+  repeated PbDeleteConsumerOffsetsResponseTable tables = 1;
 }
 
 // Lists consumer groups currently owned by the tablet server receiving this request. This is not
@@ -488,21 +503,6 @@ message DeleteConsumerGroupsRequest {
 // one group is reported in the corresponding PbDeletedGroup.
 message DeleteConsumerGroupsResponse {
   repeated PbDeletedGroup groups = 1;
-}
-
-// Delete consumer offsets request and response.
-message DeleteConsumerOffsetsRequest {
-  required string group_id = 1;
-  // An empty list, or tables containing no buckets, is a valid no-op and produces an empty
-  // successful response.
-  repeated PbDeleteConsumerOffsetsRequestTable tables = 2;
-}
-
-// Group-wide or request-level failures are returned through the RPC ErrorResponse envelope.
-// Failures affecting only one requested bucket are reported in the corresponding
-// PbDeleteConsumerOffsetsResponseBucket.
-message DeleteConsumerOffsetsResponse {
-  repeated PbDeleteConsumerOffsetsResponseTable tables = 1;
 }
 
 // commit kv snapshot request and response
@@ -1552,22 +1552,6 @@ message PbGetConsumerOffsetsResponseBucket {
   optional string error_message = 6;
 }
 
-// ---- ListConsumerGroups ----
-
-message PbListedGroup {
-  required string group_id = 1;
-}
-
-// ---- DeleteConsumerGroups ----
-
-message PbDeletedGroup {
-  required string group_id = 1;
-  // Absent means that the group was deleted successfully.
-  optional int32 error_code = 2;
-  // Set only when error_code is present and additional diagnostic information is available.
-  optional string error_message = 3;
-}
-
 // ---- DeleteConsumerOffsets ----
 
 message PbDeleteConsumerOffsetsRequestTable {
@@ -1592,6 +1576,22 @@ message PbDeleteConsumerOffsetsResponseBucket {
   optional int32 error_code = 3;
   // Set only when error_code is present and additional diagnostic information is available.
   optional string error_message = 4;
+}
+
+// ---- ListConsumerGroups ----
+
+message PbListedGroup {
+  required string group_id = 1;
+}
+
+// ---- DeleteConsumerGroups ----
+
+message PbDeletedGroup {
+  required string group_id = 1;
+  // Absent means that the group was deleted successfully.
+  optional int32 error_code = 2;
+  // Set only when error_code is present and additional diagnostic information is available.
+  optional string error_message = 3;
 }
 
 message PbTableStatsReqForBucket {

@@ -768,6 +768,15 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
     }
 
     @Override
+    public CompletableFuture<FindConsumerGroupOwnerResponse> findConsumerGroupOwner(
+            FindConsumerGroupOwnerRequest request) {
+        CompletableFuture<FindConsumerGroupOwnerResponse> response = new CompletableFuture<>();
+        response.completeExceptionally(
+                new UnsupportedOperationException("findConsumerGroupOwner is not supported yet"));
+        return response;
+    }
+
+    @Override
     public CompletableFuture<CommitConsumerOffsetsResponse> commitConsumerOffsets(
             CommitConsumerOffsetsRequest request) {
         CompletableFuture<CommitConsumerOffsetsResponse> response = new CompletableFuture<>();
@@ -786,11 +795,11 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
     }
 
     @Override
-    public CompletableFuture<FindConsumerGroupOwnerResponse> findConsumerGroupOwner(
-            FindConsumerGroupOwnerRequest request) {
-        CompletableFuture<FindConsumerGroupOwnerResponse> response = new CompletableFuture<>();
+    public CompletableFuture<DeleteConsumerOffsetsResponse> deleteConsumerOffsets(
+            DeleteConsumerOffsetsRequest request) {
+        CompletableFuture<DeleteConsumerOffsetsResponse> response = new CompletableFuture<>();
         response.completeExceptionally(
-                new UnsupportedOperationException("findConsumerGroupOwner is not supported yet"));
+                new UnsupportedOperationException("deleteConsumerOffsets is not supported yet"));
         return response;
     }
 
@@ -809,15 +818,6 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
         CompletableFuture<DeleteConsumerGroupsResponse> response = new CompletableFuture<>();
         response.completeExceptionally(
                 new UnsupportedOperationException("deleteConsumerGroups is not supported yet"));
-        return response;
-    }
-
-    @Override
-    public CompletableFuture<DeleteConsumerOffsetsResponse> deleteConsumerOffsets(
-            DeleteConsumerOffsetsRequest request) {
-        CompletableFuture<DeleteConsumerOffsetsResponse> response = new CompletableFuture<>();
-        response.completeExceptionally(
-                new UnsupportedOperationException("deleteConsumerOffsets is not supported yet"));
         return response;
     }
 

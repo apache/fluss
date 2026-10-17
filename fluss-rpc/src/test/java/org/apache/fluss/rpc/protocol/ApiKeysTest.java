@@ -55,7 +55,7 @@ class ApiKeysTest {
         assertThat(ApiKeys.COMMIT_CONSUMER_OFFSETS.id).isEqualTo((short) 1069);
         assertThat(ApiKeys.GET_CONSUMER_OFFSETS.id).isEqualTo((short) 1070);
         assertThat(ApiKeys.DELETE_CONSUMER_OFFSETS.id).isEqualTo((short) 1071);
-        assertThat(ApiKeys.DELETE_CONSUMER_GROUPS.id).isEqualTo((short) 1072);
-        assertThat(ApiKeys.LIST_CONSUMER_GROUPS.id).isEqualTo((short) 1073);
+        assertThat(ApiKeys.LIST_CONSUMER_GROUPS.id).isEqualTo((short) 1072);
+        assertThat(ApiKeys.DELETE_CONSUMER_GROUPS.id).isEqualTo((short) 1073);
     }
 }
