@@ -15,19 +15,18 @@
  * limitations under the License.
  */
 
-package org.apache.fluss.flink.tiering.source.split;
+package org.apache.fluss.client.tiering;
 
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TablePath;
 
-import org.apache.flink.api.connector.source.SourceSplit;
-
 import javax.annotation.Nullable;
 
+import java.io.Serializable;
 import java.util.Objects;
 
 /** The base table split for tiering service. */
-public abstract class TieringSplit implements SourceSplit {
+public abstract class TieringSplit implements Serializable {
 
     public static final byte TIERING_SNAPSHOT_SPLIT_FLAG = 1;
     public static final byte TIERING_LOG_SPLIT_FLAG = 2;
@@ -91,6 +90,9 @@ public abstract class TieringSplit implements SourceSplit {
         this.tieringRoundTimestamp = tieringRoundTimestamp;
     }
 
+    /** Returns the unique identifier for this split. */
+    public abstract String splitId();
+
     /** Checks whether this split is a primary key table split to tier. */
     public final boolean isTieringSnapshotSplit() {
         return getClass() == TieringSnapshotSplit.class;
@@ -128,7 +130,7 @@ public abstract class TieringSplit implements SourceSplit {
         return (TieringLogSplit) this;
     }
 
-    protected byte splitKind() {
+    public byte splitKind() {
         if (isTieringSnapshotSplit()) {
             return TIERING_SNAPSHOT_SPLIT_FLAG;
         } else if (isTieringLogSplit()) {
