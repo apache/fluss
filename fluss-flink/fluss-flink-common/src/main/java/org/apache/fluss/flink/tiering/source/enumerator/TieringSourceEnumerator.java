@@ -62,6 +62,7 @@ import org.slf4j.LoggerFactory;
 import javax.annotation.Nullable;
 
 import java.io.IOException;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Deque;
@@ -79,6 +80,7 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
+import static org.apache.fluss.flink.tiering.source.TieringSourceOptions.TIERING_FORCE_COMPLETE_FINISH_TIMEOUT;
 import static org.apache.fluss.flink.tiering.source.enumerator.TieringSourceEnumerator.HeartBeatHelper.basicHeartBeat;
 import static org.apache.fluss.flink.tiering.source.enumerator.TieringSourceEnumerator.HeartBeatHelper.failedTableHeartBeat;
 import static org.apache.fluss.flink.tiering.source.enumerator.TieringSourceEnumerator.HeartBeatHelper.heartBeatWithRequestNewTieringTable;
@@ -407,7 +409,43 @@ public class TieringSourceEnumerator
                 LOG.info("Send {} to reader {}", tieringReachMaxDurationEvent, reader);
                 context.sendEventToSourceReader(reader, tieringReachMaxDurationEvent);
             }
+
+            Duration forceCompleteFinishTimeout =
+                    flussConf.get(TIERING_FORCE_COMPLETE_FINISH_TIMEOUT);
+            if (!forceCompleteFinishTimeout.isZero() && !forceCompleteFinishTimeout.isNegative()) {
+                long completionTimeoutThreshold = forceCompleteFinishTimeout.toMillis();
+                timerService.schedule(
+                        () ->
+                                context.runInCoordinatorThread(
+                                        () ->
+                                                failTieringJobIfNotFinished(
+                                                        tablePath,
+                                                        tableId,
+                                                        tieringEpoch,
+                                                        completionTimeoutThreshold)),
+                        completionTimeoutThreshold,
+                        TimeUnit.MILLISECONDS);
+            }
         }
+    }
+
+    @VisibleForTesting
+    void failTieringJobIfNotFinished(
+            TablePath tablePath, long tableId, long tieringEpoch, long completionTimeoutThreshold) {
+        Long currentEpoch = tieringTableEpochs.get(tableId);
+        if (currentEpoch != null && currentEpoch.equals(tieringEpoch)) {
+            throw new FlinkRuntimeException(
+                    String.format(
+                            "Tiering table %s-%d did not finish within %d ms after reaching max duration. "
+                                    + "Failing the tiering job to recover the stuck source readers.",
+                            tablePath, tableId, completionTimeoutThreshold));
+        }
+    }
+
+    @VisibleForTesting
+    @Nullable
+    Long getTieringEpoch(long tableId) {
+        return tieringTableEpochs.get(tableId);
     }
 
     @VisibleForTesting
@@ -546,6 +584,8 @@ public class TieringSourceEnumerator
                 requestTableAndAssign(EMPTY_TABLE_POLL_DELAY_MS);
             } else {
                 pendingSplits.addAll(tieringSplits);
+                long maxTieringDurationMs =
+                        tableInfo.getTableConfig().getDataLakeFreshness().toMillis();
 
                 timerService.schedule(
                         () ->
@@ -557,7 +597,7 @@ public class TieringSourceEnumerator
                                                         tieringTable.f1)),
 
                         // for simplicity, we use the freshness as
-                        tableInfo.getTableConfig().getDataLakeFreshness().toMillis(),
+                        maxTieringDurationMs,
                         TimeUnit.MILLISECONDS);
             }
         } catch (Exception e) {
