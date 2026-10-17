@@ -141,6 +141,20 @@ public class TabletServerMetadataCache implements ServerMetadataCache {
         }
     }
 
+    /**
+     * Returns one bucket of a non-partitioned table from the in-memory snapshot only (no ZK
+     * access). Empty if this server's snapshot does not know the table or bucket yet.
+     */
+    public Optional<BucketMetadata> getCachedBucketMetadata(TablePath tablePath, int bucketId) {
+        ServerMetadataSnapshot snapshot = serverMetadataSnapshot;
+        OptionalLong tableIdOpt = snapshot.getTableId(tablePath);
+        if (!tableIdOpt.isPresent()) {
+            return Optional.empty();
+        }
+        return Optional.ofNullable(
+                snapshot.getBucketMetadataForTable(tableIdOpt.getAsLong()).get(bucketId));
+    }
+
     public SchemaGetter subscribeWithInitialSchema(
             TablePath tablePath, long tableId, int initialSchemaId, Schema initialSchema) {
         return serverSchemaCache.subscribeWithInitialSchema(

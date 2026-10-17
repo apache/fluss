@@ -17,7 +17,12 @@
 
 package org.apache.fluss.server.tablet;
 
+import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.config.ConfigOptions;
+import org.apache.fluss.config.Configuration;
+import org.apache.fluss.config.TableConfig;
+import org.apache.fluss.exception.ConsumerGroupOwnerLoadingException;
+import org.apache.fluss.exception.ConsumerGroupOwnerNotAvailableException;
 import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.exception.InvalidBucketRoutingException;
 import org.apache.fluss.exception.InvalidRequiredAcksException;
@@ -39,6 +44,8 @@ import org.apache.fluss.row.encode.ValueDecoder;
 import org.apache.fluss.row.encode.ValueEncoder;
 import org.apache.fluss.rpc.gateway.TabletServerGateway;
 import org.apache.fluss.rpc.messages.FetchLogResponse;
+import org.apache.fluss.rpc.messages.FindConsumerGroupOwnerRequest;
+import org.apache.fluss.rpc.messages.FindConsumerGroupOwnerResponse;
 import org.apache.fluss.rpc.messages.GetTableStatsRequest;
 import org.apache.fluss.rpc.messages.GetTableStatsResponse;
 import org.apache.fluss.rpc.messages.InitWriterRequest;
@@ -68,9 +75,11 @@ import org.apache.fluss.server.metadata.ServerInfo;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
 import org.apache.fluss.server.utils.ServerRpcMessageUtils;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
+import org.apache.fluss.server.zk.data.TableRegistration;
 import org.apache.fluss.types.DataField;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.types.RowType;
+import org.apache.fluss.utils.ExceptionUtils;
 import org.apache.fluss.utils.types.Tuple2;
 
 import org.junit.jupiter.api.Disabled;
@@ -94,6 +103,7 @@ import java.util.Random;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.ExecutionException;
 
 import static org.apache.fluss.record.LogRecordBatchFormat.LOG_MAGIC_VALUE_V0;
 import static org.apache.fluss.record.LogRecordBatchFormat.LOG_MAGIC_VALUE_V1;
@@ -139,6 +149,51 @@ public class TabletServiceITCase {
     @RegisterExtension
     public static final FlussClusterExtension FLUSS_CLUSTER_EXTENSION =
             FlussClusterExtension.builder().setNumOfTabletServers(3).build();
+
+    @Test
+    void testFindConsumerGroupOwner() throws Exception {
+        ServerNode anyTabletServer =
+                FLUSS_CLUSTER_EXTENSION.getTabletServerNodes().iterator().next();
+        TabletServerGateway gateway =
+                FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(anyTabletServer.id());
+        FindConsumerGroupOwnerRequest request =
+                new FindConsumerGroupOwnerRequest().setGroupId("test-group-owner");
+
+        retry(
+                Duration.ofMinutes(1),
+                () -> {
+                    try {
+                        FindConsumerGroupOwnerResponse response =
+                                gateway.findConsumerGroupOwner(request).get();
+                        assertThat(response.getOwner().getNodeId()).isGreaterThanOrEqualTo(0);
+                        assertThat(response.getOwner().getHost()).isNotEmpty();
+                        assertThat(response.getOwner().getPort()).isPositive();
+                    } catch (ExecutionException e) {
+                        Throwable cause = ExceptionUtils.stripExecutionException(e);
+                        if (cause instanceof ConsumerGroupOwnerNotAvailableException
+                                || cause instanceof ConsumerGroupOwnerLoadingException) {
+                            throw new AssertionError(cause);
+                        }
+                        throw e;
+                    }
+                });
+
+        TableRegistration consumerOffsetsTable =
+                FLUSS_CLUSTER_EXTENSION
+                        .getZooKeeperClient()
+                        .getTable(TablePath.of("sys", "consumer_offsets"))
+                        .get();
+        assertThat(consumerOffsetsTable.remoteDataDir)
+                .isEqualTo(FLUSS_CLUSTER_EXTENSION.getRemoteDataDir());
+        TableConfig consumerOffsetsTableConfig =
+                new TableConfig(Configuration.fromMap(consumerOffsetsTable.properties));
+        assertThat(consumerOffsetsTableConfig.getLogTTLMs())
+                .isEqualTo(ConfigOptions.OFFSETS_RETENTION.defaultValue().toMillis());
+        assertThat(consumerOffsetsTableConfig.getKvTTL())
+                .contains(ConfigOptions.OFFSETS_RETENTION.defaultValue());
+        assertThat(consumerOffsetsTableConfig.getKvValueLayoutVersion())
+                .contains(KvValueLayout.TAGGED.version());
+    }
 
     @ParameterizedTest
     @ValueSource(bytes = {LOG_MAGIC_VALUE_V0, LOG_MAGIC_VALUE_V1})
