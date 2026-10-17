@@ -21,6 +21,7 @@ import io.trino.spi.connector.ConnectorPageSource;
 import io.trino.spi.connector.ConnectorSession;
 import io.trino.spi.connector.DynamicFilter;
 import io.trino.spi.connector.MemoryContext;
+import io.trino.spi.predicate.TupleDomain;
 import org.junit.jupiter.api.Test;
 
 import java.util.Collections;
@@ -35,7 +36,8 @@ final class FlussPageSourceProviderTest {
     @Test
     void testCreatesLazyPageSourceForBothScanTypes() throws Exception {
         FlussClientManager clients = mock(FlussClientManager.class);
-        FlussTableHandle table = new FlussTableHandle("sales", "users", "Sales", "Users", 42, 1);
+        FlussTableHandle table =
+                new FlussTableHandle("sales", "users", "Sales", "Users", 42, 1, TupleDomain.all());
         FlussBucketHandle bucket = new FlussBucketHandle(42, Optional.empty(), 0);
         FlussPageSourceProvider provider = new FlussPageSourceProvider(clients);
         for (FlussSplit split :

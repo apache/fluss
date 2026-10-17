@@ -28,6 +28,7 @@ import org.apache.fluss.utils.concurrent.FutureUtils;
 import io.trino.spi.TrinoException;
 import io.trino.spi.connector.SchemaTableName;
 import io.trino.spi.connector.TableNotFoundException;
+import io.trino.spi.predicate.TupleDomain;
 import org.junit.jupiter.api.Test;
 
 import java.util.Arrays;
@@ -186,7 +187,13 @@ final class FlussMetadataAccessTest {
                         () ->
                                 access.getTableInfo(
                                         new FlussTableHandle(
-                                                "sales", "users", "Sales", "Users", 42, 3)))
+                                                "sales",
+                                                "users",
+                                                "Sales",
+                                                "Users",
+                                                42,
+                                                3,
+                                                TupleDomain.all())))
                 .isInstanceOf(TableNotFoundException.class)
                 .hasCause(failure)
                 .hasMessageContaining("sales.users");
@@ -198,13 +205,26 @@ final class FlussMetadataAccessTest {
         when(admin.getTableInfo(TablePath.of("Sales", "Users"))).thenReturn(completedFuture(info));
         assertThat(
                         access.getTableInfo(
-                                new FlussTableHandle("sales", "users", "Sales", "Users", 42, 3)))
+                                new FlussTableHandle(
+                                        "sales",
+                                        "users",
+                                        "Sales",
+                                        "Users",
+                                        42,
+                                        3,
+                                        TupleDomain.all())))
                 .isSameAs(info);
         assertThatThrownBy(
                         () ->
                                 access.getTableInfo(
                                         new FlussTableHandle(
-                                                "sales", "users", "Sales", "Users", 41, 3)))
+                                                "sales",
+                                                "users",
+                                                "Sales",
+                                                "Users",
+                                                41,
+                                                3,
+                                                TupleDomain.all())))
                 .isInstanceOfSatisfying(
                         TrinoException.class,
                         failure ->
@@ -215,7 +235,13 @@ final class FlussMetadataAccessTest {
                         () ->
                                 access.getTableInfo(
                                         new FlussTableHandle(
-                                                "sales", "users", "Sales", "Users", 42, 2)))
+                                                "sales",
+                                                "users",
+                                                "Sales",
+                                                "Users",
+                                                42,
+                                                2,
+                                                TupleDomain.all())))
                 .isInstanceOf(TrinoException.class)
                 .hasMessageContaining("changed");
     }
@@ -240,7 +266,15 @@ final class FlussMetadataAccessTest {
                                                 Collections.emptyList()))));
         assertThat(
                         access.listScanBuckets(
-                                new FlussTableHandle("sales", "users", "Sales", "Users", 42, 3)))
+                                new FlussTableHandle(
+                                        "sales",
+                                        "users",
+                                        "Sales",
+                                        "Users",
+                                        42,
+                                        3,
+                                        TupleDomain.all()),
+                                Optional.empty()))
                 .singleElement()
                 .satisfies(
                         bucket -> {
@@ -272,7 +306,14 @@ final class FlussMetadataAccessTest {
                         () ->
                                 access.listScanBuckets(
                                         new FlussTableHandle(
-                                                "sales", "users", "Sales", "Users", 42, 3)))
+                                                "sales",
+                                                "users",
+                                                "Sales",
+                                                "Users",
+                                                42,
+                                                3,
+                                                TupleDomain.all()),
+                                        Optional.empty()))
                 .isInstanceOfSatisfying(
                         TrinoException.class,
                         failure ->

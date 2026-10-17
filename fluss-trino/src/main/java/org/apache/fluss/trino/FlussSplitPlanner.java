@@ -19,6 +19,7 @@
 package org.apache.fluss.trino;
 
 import org.apache.fluss.client.admin.OffsetSpec;
+import org.apache.fluss.metadata.PartitionSpec;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.shaded.guava32.com.google.common.collect.ImmutableList;
 
@@ -28,10 +29,12 @@ import io.trino.spi.TrinoException;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 
 import static io.trino.spi.StandardErrorCode.GENERIC_INTERNAL_ERROR;
 import static org.apache.fluss.trino.FlussErrorCode.FLUSS_SPLIT_ERROR;
+import static org.apache.fluss.trino.FlussPartitionPruner.extractPartitionSpec;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
 final class FlussSplitPlanner {
@@ -43,7 +46,9 @@ final class FlussSplitPlanner {
     }
 
     List<FlussSplit> plan(FlussTableHandle table, TableInfo tableInfo) {
-        List<FlussPhysicalBucket> buckets = metadataAccess.listScanBuckets(table);
+        Optional<PartitionSpec> partitionSpec =
+                extractPartitionSpec(tableInfo, table.getConstraint());
+        List<FlussPhysicalBucket> buckets = metadataAccess.listScanBuckets(table, partitionSpec);
 
         validateBucketShape(buckets, tableInfo);
 
@@ -55,7 +60,7 @@ final class FlussSplitPlanner {
             return planKvSplits(buckets);
         }
 
-        return planLogSplits(table, buckets);
+        return planLogSplits(table, buckets, partitionSpec);
     }
 
     private static void validateBucketShape(
@@ -90,7 +95,9 @@ final class FlussSplitPlanner {
     }
 
     private List<FlussSplit> planLogSplits(
-            FlussTableHandle table, List<FlussPhysicalBucket> buckets) {
+            FlussTableHandle table,
+            List<FlussPhysicalBucket> buckets,
+            Optional<PartitionSpec> partitionSpec) {
         Map<FlussBucketHandle, Long> starts =
                 metadataAccess.resolveOffsets(table, buckets, new OffsetSpec.EarliestSpec());
 
@@ -98,7 +105,7 @@ final class FlussSplitPlanner {
                 metadataAccess.resolveOffsets(table, buckets, new OffsetSpec.LatestSpec());
 
         List<FlussPhysicalBucket> remainingBuckets =
-                metadataAccess.retainCurrentBuckets(table, buckets);
+                metadataAccess.retainCurrentBuckets(table, buckets, partitionSpec);
 
         ImmutableList.Builder<FlussSplit> splits = ImmutableList.builder();
 

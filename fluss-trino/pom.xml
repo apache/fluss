@@ -335,7 +335,7 @@
                 <version>${maven.surefire.plugin.version}</version>
                 <configuration>
                     <!-- Explicit instrumentation avoids dynamic agent attachment -->
-                    <argLine>-javaagent:"${settings.localRepository}/org/mockito/mockito-core/${mockito.version}/mockito-core-${mockito.version}.jar"</argLine>
+                    <argLine>--add-modules=jdk.incubator.vector -javaagent:"${settings.localRepository}/org/mockito/mockito-core/${mockito.version}/mockito-core-${mockito.version}.jar"</argLine>
                 </configuration>
             </plugin>
             <plugin>

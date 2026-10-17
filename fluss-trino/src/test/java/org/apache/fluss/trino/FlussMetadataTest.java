@@ -33,9 +33,19 @@ import io.trino.spi.connector.ConnectorSession;
 import io.trino.spi.connector.ConnectorTableHandle;
 import io.trino.spi.connector.ConnectorTableMetadata;
 import io.trino.spi.connector.ConnectorTableVersion;
+import io.trino.spi.connector.Constraint;
+import io.trino.spi.connector.ConstraintApplicationResult;
 import io.trino.spi.connector.RelationColumnsMetadata;
 import io.trino.spi.connector.RelationCommentMetadata;
 import io.trino.spi.connector.SchemaTableName;
+import io.trino.spi.expression.Call;
+import io.trino.spi.expression.ConnectorExpression;
+import io.trino.spi.expression.FunctionName;
+import io.trino.spi.expression.Variable;
+import io.trino.spi.predicate.Domain;
+import io.trino.spi.predicate.Range;
+import io.trino.spi.predicate.TupleDomain;
+import io.trino.spi.predicate.ValueSet;
 import org.junit.jupiter.api.Test;
 
 import java.util.Arrays;
@@ -46,6 +56,7 @@ import java.util.Optional;
 
 import static io.trino.spi.StandardErrorCode.NOT_SUPPORTED;
 import static io.trino.spi.type.BigintType.BIGINT;
+import static io.trino.spi.type.BooleanType.BOOLEAN;
 import static io.trino.spi.type.VarcharType.VARCHAR;
 import static java.util.concurrent.CompletableFuture.completedFuture;
 import static org.apache.fluss.trino.TestingFlussMetadata.metadataAccess;
@@ -56,6 +67,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 /** Tests Trino metadata contracts using real metadata access and a mocked Fluss Admin. */
@@ -68,13 +80,139 @@ final class FlussMetadataTest {
     private final ConnectorSession session = mock(ConnectorSession.class);
 
     @Test
+    void testApplyFilterPreservesSummaryAndExpressionAsResiduals() {
+        FlussTableHandle table = unfilteredTable();
+        TupleDomain<ColumnHandle> summary = idConstraint(Domain.singleValue(BIGINT, 7L));
+        ConnectorExpression expression =
+                new Call(
+                        BOOLEAN,
+                        new FunctionName("custom_predicate"),
+                        Collections.singletonList(new Variable("id", BIGINT)));
+        Constraint constraint =
+                new Constraint(
+                        summary,
+                        expression,
+                        Collections.singletonMap("id", new FlussColumnHandle("id", 0)));
+
+        ConstraintApplicationResult<ConnectorTableHandle> result =
+                metadata.applyFilter(session, table, constraint).get();
+        FlussTableHandle filtered = (FlussTableHandle) result.getHandle();
+        assertThat(filtered.getConstraint()).isEqualTo(summary);
+        assertThat(table.getConstraint().isAll()).isTrue();
+        assertThat(result.getRemainingFilter()).isEqualTo(summary);
+        assertThat(result.getRemainingExpression()).contains(expression);
+        assertThat(result.isPrecalculateStatistics()).isFalse();
+        verifyNoInteractions(admin);
+    }
+
+    @Test
+    void testApplyFilterIntersectsConstraintsAndConverges() {
+        TupleDomain<ColumnHandle> initial =
+                idConstraint(
+                        Domain.create(
+                                ValueSet.ofRanges(Range.greaterThanOrEqual(BIGINT, 3L)), false));
+        FlussTableHandle table =
+                (FlussTableHandle)
+                        metadata.applyFilter(session, unfilteredTable(), new Constraint(initial))
+                                .get()
+                                .getHandle();
+        TupleDomain<ColumnHandle> incoming =
+                idConstraint(Domain.create(ValueSet.ofRanges(Range.lessThan(BIGINT, 10L)), false));
+        ConstraintApplicationResult<ConnectorTableHandle> result =
+                metadata.applyFilter(session, table, new Constraint(incoming)).get();
+        FlussTableHandle filtered = (FlussTableHandle) result.getHandle();
+        assertThat(filtered.getConstraint())
+                .isEqualTo(
+                        idConstraint(
+                                Domain.create(
+                                        ValueSet.ofRanges(
+                                                Range.range(BIGINT, 3L, true, 10L, false)),
+                                        false)));
+        assertThat(result.getRemainingFilter()).isEqualTo(incoming);
+        assertThat(metadata.applyFilter(session, filtered, new Constraint(incoming))).isEmpty();
+        assertThat(metadata.applyFilter(session, filtered, new Constraint(initial))).isEmpty();
+        assertThat(metadata.applyFilter(session, filtered, Constraint.alwaysTrue())).isEmpty();
+        assertThat(metadata.applyFilter(session, unfilteredTable(), Constraint.alwaysTrue()))
+                .isEmpty();
+    }
+
+    @Test
+    void testApplyFilterCombinesDifferentColumns() {
+        TupleDomain<ColumnHandle> ids =
+                idConstraint(Domain.multipleValues(BIGINT, Arrays.asList(1L, 3L)));
+        FlussTableHandle table =
+                (FlussTableHandle)
+                        metadata.applyFilter(session, unfilteredTable(), new Constraint(ids))
+                                .get()
+                                .getHandle();
+        TupleDomain<ColumnHandle> names =
+                TupleDomain.withColumnDomains(
+                        Collections.singletonMap(
+                                new FlussColumnHandle("name", 1), Domain.onlyNull(VARCHAR)));
+        FlussTableHandle filtered =
+                (FlussTableHandle)
+                        metadata.applyFilter(session, table, new Constraint(names))
+                                .get()
+                                .getHandle();
+        assertThat(filtered.getConstraint()).isEqualTo(ids.intersect(names));
+        assertThat(table.getConstraint()).isEqualTo(ids);
+    }
+
+    @Test
+    void testApplyFilterContradictionsAndNone() {
+        TupleDomain<ColumnHandle> nonNull = idConstraint(Domain.notNull(BIGINT));
+        FlussTableHandle table =
+                (FlussTableHandle)
+                        metadata.applyFilter(session, unfilteredTable(), new Constraint(nonNull))
+                                .get()
+                                .getHandle();
+        FlussTableHandle empty =
+                (FlussTableHandle)
+                        metadata.applyFilter(
+                                        session,
+                                        table,
+                                        new Constraint(idConstraint(Domain.onlyNull(BIGINT))))
+                                .get()
+                                .getHandle();
+        assertThat(empty.getConstraint().isNone()).isTrue();
+        assertThat(metadata.applyFilter(session, empty, new Constraint(nonNull))).isEmpty();
+        assertThat(metadata.applyFilter(session, empty, Constraint.alwaysFalse())).isEmpty();
+        assertThat(
+                        metadata.applyFilter(session, unfilteredTable(), Constraint.alwaysFalse())
+                                .get()
+                                .getHandle())
+                .isEqualTo(empty);
+    }
+
+    @Test
+    void testExpressionOnlyFilterDoesNotChangeHandle() {
+        Constraint constraint =
+                new Constraint(
+                        TupleDomain.all(),
+                        new Variable("flag", BOOLEAN),
+                        Collections.singletonMap("flag", new FlussColumnHandle("flag", 2)));
+        assertThat(metadata.applyFilter(session, unfilteredTable(), constraint)).isEmpty();
+    }
+
+    private static FlussTableHandle unfilteredTable() {
+        return new FlussTableHandle("sales", "users", "Sales", "Users", 42, 3, TupleDomain.all());
+    }
+
+    private static TupleDomain<ColumnHandle> idConstraint(Domain domain) {
+        return TupleDomain.withColumnDomains(
+                Collections.singletonMap(new FlussColumnHandle("id", 0), domain));
+    }
+
+    @Test
     void testTableHandlePreservesPhysicalIdentity() {
         givenTables("Users");
         when(admin.getTableInfo(PHYSICAL_USERS)).thenReturn(completedFuture(usersTable()));
         ConnectorTableHandle handle =
                 metadata.getTableHandle(session, USERS, Optional.empty(), Optional.empty());
         assertThat(handle)
-                .isEqualTo(new FlussTableHandle("sales", "users", "Sales", "Users", 42, 3));
+                .isEqualTo(
+                        new FlussTableHandle(
+                                "sales", "users", "Sales", "Users", 42, 3, TupleDomain.all()));
         assertThat(metadata.getTableName(session, handle)).isEqualTo(USERS);
     }
 
@@ -135,7 +273,8 @@ final class FlussMetadataTest {
     @Test
     void testTableMetadataAndColumnHandles() {
         when(admin.getTableInfo(PHYSICAL_USERS)).thenReturn(completedFuture(usersTable()));
-        FlussTableHandle handle = new FlussTableHandle("sales", "users", "Sales", "Users", 42, 3);
+        FlussTableHandle handle =
+                new FlussTableHandle("sales", "users", "Sales", "Users", 42, 3, TupleDomain.all());
         ConnectorTableMetadata table = metadata.getTableMetadata(session, handle);
         assertThat(table.getTable()).isEqualTo(USERS);
         assertThat(table.getComment()).contains("Registered users");
@@ -162,7 +301,8 @@ final class FlussMetadataTest {
     @Test
     void testRejectInvalidColumnHandle() {
         when(admin.getTableInfo(PHYSICAL_USERS)).thenReturn(completedFuture(usersTable()));
-        FlussTableHandle table = new FlussTableHandle("sales", "users", "Sales", "Users", 42, 3);
+        FlussTableHandle table =
+                new FlussTableHandle("sales", "users", "Sales", "Users", 42, 3, TupleDomain.all());
         assertThatThrownBy(
                         () ->
                                 metadata.getColumnMetadata(
@@ -190,7 +330,8 @@ final class FlussMetadataTest {
                                 .distributedBy(1)
                                 .build());
         when(admin.getTableInfo(PHYSICAL_USERS)).thenReturn(completedFuture(info));
-        FlussTableHandle table = new FlussTableHandle("sales", "users", "Sales", "Users", 42, 3);
+        FlussTableHandle table =
+                new FlussTableHandle("sales", "users", "Sales", "Users", 42, 3, TupleDomain.all());
         assertThatThrownBy(() -> metadata.getTableMetadata(session, table))
                 .isInstanceOf(TrinoException.class)
                 .hasMessageContaining("Ambiguous Fluss columns");
