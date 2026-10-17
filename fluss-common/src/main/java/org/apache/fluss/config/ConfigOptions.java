@@ -2649,6 +2649,17 @@ public class ConfigOptions {
                                     + "so that the total memory used by RocksDB is bounded by block cache size. "
                                     + "The default value is `false`.");
 
+    public static final ConfigOption<Boolean> KV_PARTITIONED_INDEX_FILTERS =
+            key("kv.rocksdb.block.partitioned-index-filters")
+                    .booleanType()
+                    .defaultValue(false)
+                    .withDescription(
+                            "Enable partitioned indexes and, when Bloom filters are enabled, partitioned full filters. "
+                                    + "Requires full filters and a positive metadata-blocksize. Only newly generated SSTs "
+                                    + "use this format; existing SSTs remain readable when this option is enabled or disabled. "
+                                    + "Partitions use the block cache even when metadata caching is disabled. "
+                                    + "Takes effect when opening a RocksDB instance.");
+
     public static final ConfigOption<Boolean> KV_CACHE_INDEX_AND_FILTER_BLOCKS_WITH_HIGH_PRIORITY =
             key("kv.rocksdb.block.cache-index-and-filter-blocks-with-high-priority")
                     .booleanType()
