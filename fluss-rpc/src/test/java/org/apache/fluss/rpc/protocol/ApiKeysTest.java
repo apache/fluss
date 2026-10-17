@@ -19,8 +19,10 @@ package org.apache.fluss.rpc.protocol;
 
 import org.junit.jupiter.api.Test;
 
+import java.util.Arrays;
 import java.util.HashSet;
 import java.util.Set;
+import java.util.stream.IntStream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -37,6 +39,13 @@ class ApiKeysTest {
             assertThat(api.lowestSupportedVersion).isGreaterThanOrEqualTo((short) 0);
             assertThat(api.highestSupportedVersion).isGreaterThanOrEqualTo((short) 0);
         }
+    }
+
+    @Test
+    void testApiKeyIdsAreContinuous() {
+        int[] ids = Arrays.stream(ApiKeys.values()).mapToInt(api -> api.id).sorted().toArray();
+        // Reserve 0~999 for Kafka protocol compatibility.
+        assertThat(ids).containsExactly(IntStream.range(1000, 1000 + ids.length).toArray());
     }
 
     @Test
