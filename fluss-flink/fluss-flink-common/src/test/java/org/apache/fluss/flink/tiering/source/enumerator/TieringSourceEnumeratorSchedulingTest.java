@@ -17,6 +17,7 @@
 
 package org.apache.fluss.flink.tiering.source.enumerator;
 
+import org.apache.fluss.client.Connection;
 import org.apache.fluss.client.admin.Admin;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.flink.tiering.TestingLakeTieringFactory;
@@ -28,15 +29,18 @@ import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.rpc.RpcClient;
 import org.apache.fluss.rpc.gateway.CoordinatorGateway;
 import org.apache.fluss.rpc.messages.LakeTieringHeartbeatRequest;
 import org.apache.fluss.rpc.messages.LakeTieringHeartbeatResponse;
 import org.apache.fluss.testutils.common.ManuallyTriggeredScheduledExecutorService;
 import org.apache.fluss.types.DataTypes;
 
+import org.apache.flink.util.FlinkRuntimeException;
 import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
+import java.lang.reflect.Field;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -48,8 +52,11 @@ import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /** Tests for split assignment and table scheduling in {@link TieringSourceEnumerator}. */
@@ -224,6 +231,60 @@ class TieringSourceEnumeratorSchedulingTest {
         }
     }
 
+    @Test
+    void testCloseFlushesFinishedEmptyTable() throws Exception {
+        try (Fixture fixture = new Fixture()) {
+            fixture.addTable(1, true);
+            fixture.requestTable();
+
+            // The empty table is marked finished as soon as it produces no splits, but that
+            // completion is only carried back by the delayed continuation poll, which never runs
+            // once the enumerator is closed. Closing has to flush it explicitly, otherwise the
+            // coordinator never learns about it and the table stays locked in the tiering state
+            // until the tiering service timeout expires.
+            fixture.enumerator.close();
+
+            assertThat(fixture.finishedTableReports())
+                    .singleElement()
+                    .satisfies(
+                            request ->
+                                    assertThat(request.getFinishedTablesList())
+                                            .singleElement()
+                                            .satisfies(
+                                                    table ->
+                                                            assertThat(table.getTableId())
+                                                                    .isEqualTo(1L)));
+        }
+    }
+
+    @Test
+    void testCloseReleasesResourcesWhenHeartbeatFails() throws Exception {
+        try (Fixture fixture = new Fixture()) {
+            fixture.addTable(1, true);
+            fixture.requestTable();
+            RpcClient rpcClient = mock(RpcClient.class);
+            Connection connection = mock(Connection.class);
+            Field rpcClientField = TieringSourceEnumerator.class.getDeclaredField("rpcClient");
+            rpcClientField.setAccessible(true);
+            rpcClientField.set(fixture.enumerator, rpcClient);
+            Field connectionField = TieringSourceEnumerator.class.getDeclaredField("connection");
+            connectionField.setAccessible(true);
+            connectionField.set(fixture.enumerator, connection);
+            IOException failure = new IOException("coordinator unavailable");
+            CompletableFuture<LakeTieringHeartbeatResponse> response = new CompletableFuture<>();
+            response.completeExceptionally(failure);
+            doReturn(response).when(fixture.gateway).lakeTieringHeartbeat(any());
+
+            assertThatThrownBy(fixture.enumerator::close)
+                    .isInstanceOf(FlinkRuntimeException.class)
+                    .hasRootCause(failure);
+
+            verify(rpcClient).close();
+            verify(fixture.admin).close();
+            verify(connection).close();
+        }
+    }
+
     private static TieringSplit splitFor(TableInfo table) {
         return new TieringLogSplit(
                 table.getTablePath(), new TableBucket(table.getTableId(), 0), null, 0, 1);
@@ -234,6 +295,7 @@ class TieringSourceEnumeratorSchedulingTest {
         private final ManuallyTriggeredScheduledExecutorService timer =
                 new ManuallyTriggeredScheduledExecutorService();
         private final Admin admin = mock(Admin.class);
+        private final CoordinatorGateway gateway = mock(CoordinatorGateway.class);
         private final TieringSplitGenerator generator = mock(TieringSplitGenerator.class);
         private final Queue<LakeTieringHeartbeatResponse> tables = new ArrayDeque<>();
         private final List<LakeTieringHeartbeatRequest> requests = new ArrayList<>();
@@ -245,7 +307,6 @@ class TieringSourceEnumeratorSchedulingTest {
 
         private Fixture(int parallelism) {
             this.context = new TestingContext(parallelism);
-            CoordinatorGateway gateway = mock(CoordinatorGateway.class);
             when(gateway.lakeTieringHeartbeat(any()))
                     .thenAnswer(invocation -> respondToHeartbeat(invocation.getArgument(0)));
             enumerator =
@@ -309,6 +370,12 @@ class TieringSourceEnumeratorSchedulingTest {
         private List<LakeTieringHeartbeatRequest> claims() {
             return requests.stream()
                     .filter(request -> request.hasRequestTable() && request.isRequestTable())
+                    .collect(Collectors.toList());
+        }
+
+        private List<LakeTieringHeartbeatRequest> finishedTableReports() {
+            return requests.stream()
+                    .filter(request -> !request.getFinishedTablesList().isEmpty())
                     .collect(Collectors.toList());
         }
 
