@@ -29,7 +29,9 @@ import org.junit.jupiter.api.Test;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -66,6 +68,32 @@ public class MessagesTest {
         assertThatThrownBy(() -> er.setErrorMessage(null))
                 .isInstanceOf(NullPointerException.class)
                 .hasMessage("Field 'error_message' cannot be null");
+    }
+
+    @Test
+    public void testCollectErrorCounts() {
+        Map<Integer, Integer> errorCounts = new HashMap<>();
+        ErrorContainer errorContainer = new ErrorContainer();
+        errorContainer.setOptionalError().setErrorCode(1);
+        errorContainer.addError().setErrorCode(1);
+        errorContainer.addError().setErrorCode(2);
+
+        errorContainer.collectErrorCounts(errorCounts);
+
+        assertThat(errorCounts).containsEntry(1, 2).containsEntry(2, 1);
+
+        errorContainer.clear();
+        errorContainer.addError().setErrorCode(3);
+        errorCounts.clear();
+        errorContainer.collectErrorCounts(errorCounts);
+
+        assertThat(errorCounts).containsOnlyKeys(3).containsEntry(3, 1);
+
+        RecursiveError recursiveError = new RecursiveError().setErrorCode(4);
+        recursiveError.setChild().setErrorCode(5);
+        recursiveError.collectErrorCounts(errorCounts);
+
+        assertThat(errorCounts).containsEntry(3, 1).containsEntry(4, 1).containsEntry(5, 1);
     }
 
     @Test
