@@ -156,6 +156,9 @@ final class NettyClientTest {
 
         // close the netty server.
         nettyServer.close();
+        // Wait for the old connection to be removed before attempting a new connection.
+        retry(Duration.ofSeconds(10), () -> assertThat(nettyClient.connections()).isEmpty());
+
         assertThatThrownBy(
                         () ->
                                 nettyClient
