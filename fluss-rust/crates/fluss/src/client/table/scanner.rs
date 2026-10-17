@@ -3054,6 +3054,7 @@ mod tests {
                     records: None,
                     filtered_end_offset,
                     min_retain_offset: None,
+                    resolved_earliest_offset: None,
                 }],
             }],
         }
@@ -3109,6 +3110,7 @@ mod tests {
                     records: None,
                     filtered_end_offset: None,
                     min_retain_offset: None,
+                    resolved_earliest_offset: None,
                 }],
             }],
         };
@@ -3169,6 +3171,7 @@ mod tests {
                     records: None,
                     filtered_end_offset: None,
                     min_retain_offset: None,
+                    resolved_earliest_offset: None,
                 }],
             }],
         };
@@ -3519,6 +3522,7 @@ mod tests {
                             records: None,
                             filtered_end_offset: None,
                             min_retain_offset: None,
+                            resolved_earliest_offset: None,
                         }],
                     }],
                 };

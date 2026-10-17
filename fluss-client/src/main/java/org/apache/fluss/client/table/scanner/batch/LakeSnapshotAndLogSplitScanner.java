@@ -23,6 +23,7 @@ import org.apache.fluss.client.table.scanner.ScanRecord;
 import org.apache.fluss.client.table.scanner.SortMergeReader;
 import org.apache.fluss.client.table.scanner.log.LogScanner;
 import org.apache.fluss.client.table.scanner.log.ScanRecords;
+import org.apache.fluss.exception.UnsupportedBoundedEarliestException;
 import org.apache.fluss.lake.source.LakeSource;
 import org.apache.fluss.lake.source.LakeSplit;
 import org.apache.fluss.lake.source.RecordReader;
@@ -65,8 +66,12 @@ public class LakeSnapshotAndLogSplitScanner implements BatchScanner {
     private Map<InternalRow, KeyValueRow> logRows;
 
     private final LogScanner logScanner;
+    private final TableBucket tableBucket;
+    private final long startingOffset;
     private final long stoppingOffset;
+
     private boolean logScanFinished;
+    private boolean legacyLogScan;
 
     private SortMergeReader currentSortMergeReader;
 
@@ -81,6 +86,8 @@ public class LakeSnapshotAndLogSplitScanner implements BatchScanner {
         this.pkIndexes = table.getTableInfo().getSchema().getPrimaryKeyIndexes();
         this.lakeSplits = lakeSplits;
         this.lakeSource = lakeSource;
+        this.tableBucket = tableBucket;
+        this.startingOffset = startingOffset;
         this.stoppingOffset = stoppingOffset;
         ProjectionPlan projectionPlan =
                 ProjectionPlan.create(
@@ -97,14 +104,19 @@ public class LakeSnapshotAndLogSplitScanner implements BatchScanner {
                         .mapToObj(field -> new int[] {field})
                         .toArray(int[][]::new));
 
-        if (tableBucket.getPartitionId() != null) {
-            this.logScanner.subscribe(
-                    tableBucket.getPartitionId(), tableBucket.getBucket(), startingOffset);
-        } else {
-            this.logScanner.subscribe(tableBucket.getBucket(), startingOffset);
-        }
-
         this.logScanFinished = startingOffset >= stoppingOffset || stoppingOffset <= 0;
+        if (!logScanFinished) {
+            if (tableBucket.getPartitionId() != null) {
+                this.logScanner.subscribeBounded(
+                        tableBucket.getPartitionId(),
+                        tableBucket.getBucket(),
+                        startingOffset,
+                        stoppingOffset);
+            } else {
+                this.logScanner.subscribeBounded(
+                        tableBucket.getBucket(), startingOffset, stoppingOffset);
+            }
+        }
     }
 
     @Nullable
@@ -177,8 +189,29 @@ public class LakeSnapshotAndLogSplitScanner implements BatchScanner {
     }
 
     private void pollLogRecords(Duration timeout) {
-        ScanRecords scanRecords = logScanner.poll(timeout);
+        ScanRecords scanRecords;
+        try {
+            scanRecords = logScanner.poll(timeout);
+        } catch (UnsupportedBoundedEarliestException e) {
+            if (legacyLogScan || startingOffset != LogScanner.EARLIEST_OFFSET) {
+                throw e;
+            }
+            // An older server cannot report the resolved EARLIEST offset.
+            // Fall back to an unbounded subscription for older servers.
+            // The next poll will use the legacy stopping-offset checks below.
+            subscribeLegacy();
+            legacyLogScan = true;
+            return;
+        }
+
         for (ScanRecord scanRecord : scanRecords) {
+            long logOffset = scanRecord.logOffset();
+            // The legacy scanner does not enforce the exclusive stopping
+            // offset, so records beyond the boundary must be discarded.
+            if (legacyLogScan && logOffset >= stoppingOffset) {
+                logScanFinished = true;
+                break;
+            }
             boolean isDelete =
                     scanRecord.getChangeType() == ChangeType.DELETE
                             || scanRecord.getChangeType() == ChangeType.UPDATE_BEFORE;
@@ -187,11 +220,35 @@ public class LakeSnapshotAndLogSplitScanner implements BatchScanner {
             InternalRow keyRow = keyValueRow.keyRow();
             // upsert the key value row
             logRows.put(keyRow, keyValueRow);
-            if (scanRecord.logOffset() >= stoppingOffset - 1) {
-                // has reached to the end
+            // In legacy mode, reaching the last included record completes
+            // the scan. The stopping offset itself is exclusive.
+            if (legacyLogScan && logOffset >= stoppingOffset - 1) {
                 logScanFinished = true;
                 break;
             }
+        }
+
+        if (legacyLogScan) {
+            // A fetch may advance its consumed position without returning
+            // the final record, for example after filtering.
+            Long consumedUpToOffset = scanRecords.consumedUpToOffset(tableBucket);
+            if (consumedUpToOffset != null && consumedUpToOffset >= stoppingOffset) {
+                logScanFinished = true;
+            }
+        } else {
+            // Completion may accompany the final records or arrive without any records.
+            if (scanRecords.finishedBuckets().contains(tableBucket)) {
+                logScanFinished = true;
+            }
+        }
+    }
+
+    private void subscribeLegacy() {
+        if (tableBucket.getPartitionId() != null) {
+            logScanner.subscribe(
+                    tableBucket.getPartitionId(), tableBucket.getBucket(), startingOffset);
+        } else {
+            logScanner.subscribe(tableBucket.getBucket(), startingOffset);
         }
     }
 
