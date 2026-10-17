@@ -167,3 +167,31 @@ metrics.reporter.influxdb.org: fluss_org
 metrics.reporter.influxdb.token: your-influxdb-token
 metrics.reporter.influxdb.push-interval: 10 SECONDS
 ```
+
+### Datadog
+
+Type: push
+
+The Datadog reporter sends metrics directly to the [Datadog](https://www.datadoghq.com/) HTTP API, so no Datadog Agent is needed on the Fluss servers.
+
+Parameters:
+
+- `metrics.reporter.datadog.api-key` - The Datadog API key used to submit metrics.
+- `metrics.reporter.datadog.site` - (Optional) The [Datadog site](https://docs.datadoghq.com/getting_started/site/) to send metrics to, defaults to `datadoghq.com`. Other values include `datadoghq.eu`, `us3.datadoghq.com`, `us5.datadoghq.com`, `ap1.datadoghq.com` and `ddog-gov.com`.
+- `metrics.reporter.datadog.push-interval` - (Optional) The interval of reporting metrics to Datadog, defaults to 10 SECONDS.
+- `metrics.reporter.datadog.tags` - (Optional) Tags added to every metric, as a comma-separated list of `key:value` pairs, e.g. `env:prod,team:data`.
+- `metrics.reporter.datadog.max-metrics-per-request` - (Optional) The maximum number of series sent in one request, defaults to 2000. Larger reports are split into several requests.
+- `metrics.reporter.datadog.proxy-host` - (Optional) The HTTP proxy host to use when sending to Datadog.
+- `metrics.reporter.datadog.proxy-port` - (Optional) The HTTP proxy port to use when sending to Datadog, defaults to 8080.
+
+Metrics are named `fluss.<scope>.<name>`, and metric variables such as `host`, `table` and `bucket` are sent as `key:value` tags. Counters are sent as Datadog counts holding the increase since the last report, gauges and meters as gauges, and histograms as one gauge per aggregation (`<metric>.count`, `.avg`, `.min`, `.max`, `.median`, `.95percentile`, ...). Gauges that are not numbers or booleans are not reported.
+
+Example configuration:
+
+```yaml
+metrics.reporters: datadog
+metrics.reporter.datadog.api-key: your-datadog-api-key
+metrics.reporter.datadog.site: datadoghq.eu
+metrics.reporter.datadog.tags: env:prod,team:data
+metrics.reporter.datadog.push-interval: 10 SECONDS
+```

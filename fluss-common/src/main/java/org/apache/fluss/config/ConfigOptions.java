@@ -2873,6 +2873,60 @@ public class ConfigOptions {
                     .withDescription("The interval of reporting metrics to InfluxDB.");
 
     // ------------------------------------------------------------------------
+    //  ConfigOptions for datadog reporter
+    // ------------------------------------------------------------------------
+    public static final ConfigOption<Password> METRICS_REPORTER_DATADOG_API_KEY =
+            key("metrics.reporter.datadog.api-key")
+                    .passwordType()
+                    .noDefaultValue()
+                    .withDescription("The Datadog API key used to submit metrics.");
+
+    public static final ConfigOption<String> METRICS_REPORTER_DATADOG_SITE =
+            key("metrics.reporter.datadog.site")
+                    .stringType()
+                    .defaultValue("datadoghq.com")
+                    .withDescription(
+                            "The Datadog site to send metrics to, such as 'datadoghq.com', "
+                                    + "'datadoghq.eu', 'us3.datadoghq.com', 'us5.datadoghq.com', "
+                                    + "'ap1.datadoghq.com' or 'ddog-gov.com'. Metrics are sent to "
+                                    + "'https://api.<site>/api/v2/series'.");
+
+    public static final ConfigOption<Duration> METRICS_REPORTER_DATADOG_PUSH_INTERVAL =
+            key("metrics.reporter.datadog.push-interval")
+                    .durationType()
+                    .defaultValue(Duration.ofSeconds(10))
+                    .withDescription("The interval of reporting metrics to Datadog.");
+
+    public static final ConfigOption<List<String>> METRICS_REPORTER_DATADOG_TAGS =
+            key("metrics.reporter.datadog.tags")
+                    .stringType()
+                    .asList()
+                    .noDefaultValue()
+                    .withDescription(
+                            "Tags added to every metric, as a comma-separated list of "
+                                    + "'key:value' pairs, e.g. 'env:prod,team:data'.");
+
+    public static final ConfigOption<Integer> METRICS_REPORTER_DATADOG_MAX_METRICS_PER_REQUEST =
+            key("metrics.reporter.datadog.max-metrics-per-request")
+                    .intType()
+                    .defaultValue(2000)
+                    .withDescription(
+                            "The maximum number of series sent in one request to Datadog. "
+                                    + "Larger reports are split into several requests.");
+
+    public static final ConfigOption<String> METRICS_REPORTER_DATADOG_PROXY_HOST =
+            key("metrics.reporter.datadog.proxy-host")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription("The HTTP proxy host to use when sending to Datadog.");
+
+    public static final ConfigOption<Integer> METRICS_REPORTER_DATADOG_PROXY_PORT =
+            key("metrics.reporter.datadog.proxy-port")
+                    .intType()
+                    .defaultValue(8080)
+                    .withDescription("The HTTP proxy port to use when sending to Datadog.");
+
+    // ------------------------------------------------------------------------
     //  ConfigOptions for lakehouse storage
     // ------------------------------------------------------------------------
     public static final ConfigOption<Boolean> DATALAKE_ENABLED =
