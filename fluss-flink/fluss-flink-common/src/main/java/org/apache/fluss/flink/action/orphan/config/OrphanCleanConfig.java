@@ -18,6 +18,7 @@
 package org.apache.fluss.flink.action.orphan.config;
 
 import org.apache.fluss.annotation.Internal;
+import org.apache.fluss.flink.action.orphan.audit.ResultAuditLogger;
 import org.apache.fluss.flink.adapter.MultipleParameterToolAdapter;
 import org.apache.fluss.utils.StringUtils;
 
@@ -53,6 +54,12 @@ public final class OrphanCleanConfig implements Serializable {
 
     private static final long DEFAULT_REMOTE_FS_OP_RATE_LIMIT_PER_SECOND = 100L;
 
+    private final ResultAuditLogger resultAudit;
+
+    public ResultAuditLogger resultAudit() {
+        return resultAudit;
+    }
+
     private final String bootstrapServer;
     private final boolean allDatabases;
     private final @Nullable String database;
@@ -79,6 +86,7 @@ public final class OrphanCleanConfig implements Serializable {
             boolean allowCleanOrphanTables,
             boolean allowCleanOrphanPartitions,
             Map<String, String> extraConfigs) {
+        this.resultAudit = new ResultAuditLogger(extraConfigs);
         this.bootstrapServer = bootstrapServer;
         this.allDatabases = allDatabases;
         this.database = database;
