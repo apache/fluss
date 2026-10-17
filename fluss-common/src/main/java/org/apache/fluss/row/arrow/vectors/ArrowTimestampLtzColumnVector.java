@@ -57,10 +57,11 @@ public class ArrowTimestampLtzColumnVector implements TimestampLtzColumnVector {
             return TimestampLtz.fromEpochMillis(((TimeStampMilliVector) valueVector).get(i));
         } else if (valueVector instanceof TimeStampMicroVector) {
             long micros = ((TimeStampMicroVector) valueVector).get(i);
-            return TimestampLtz.fromEpochMillis(micros / 1000, (int) (micros % 1000) * 1000);
+            return TimestampLtz.fromEpochMicros(micros);
         } else {
             long nanos = ((TimeStampNanoVector) valueVector).get(i);
-            return TimestampLtz.fromEpochMillis(nanos / 1_000_000, (int) (nanos % 1_000_000));
+            return TimestampLtz.fromEpochMillis(
+                    Math.floorDiv(nanos, 1_000_000L), (int) Math.floorMod(nanos, 1_000_000L));
         }
     }
 
