@@ -80,6 +80,7 @@ public final class NettyServer implements RpcServer {
     private EventLoopGroup selectorGroup;
 
     private volatile boolean isRunning;
+    private CompletableFuture<Void> closeFuture;
 
     public NettyServer(
             Configuration conf,
@@ -104,7 +105,8 @@ public final class NettyServer implements RpcServer {
     }
 
     @Override
-    public void start() throws IOException {
+    public synchronized void start() throws IOException {
+        checkState(closeFuture == null, "Netty server has already been closed.");
         checkState(bindChannels.isEmpty(), "Netty server has already been initialized.");
         int numNetworkThreads = conf.getInt(ConfigOptions.NETTY_SERVER_NUM_NETWORK_THREADS);
         int numWorkerThreads = conf.getInt(ConfigOptions.NETTY_SERVER_NUM_WORKER_THREADS);
@@ -298,30 +300,40 @@ public final class NettyServer implements RpcServer {
 
     @Override
     public CompletableFuture<Void> closeAsync() {
-        if (!isRunning) {
-            return CompletableFuture.completedFuture(null);
+        synchronized (this) {
+            if (closeFuture != null) {
+                return closeFuture;
+            }
+            isRunning = false;
+
+            CompletableFuture<Void> transportShutdownFuture =
+                    CompletableFuture.allOf(
+                            shutdownGroup(acceptorGroup),
+                            shutdownGroup(selectorGroup),
+                            FutureUtils.completeAll(
+                                    bindChannels.stream()
+                                            .map(NettyUtils::shutdownChannel)
+                                            .collect(Collectors.toList())),
+                            workerPool.closeAsync());
+            closeFuture = closeProtocolsAfter(transportShutdownFuture, protocols);
+            return closeFuture;
         }
+    }
 
-        isRunning = false;
-
-        CompletableFuture<Void> acceptorShutdownFuture = shutdownGroup(acceptorGroup);
-        CompletableFuture<Void> selectorShutdownFuture = shutdownGroup(selectorGroup);
-        CompletableFuture<Void> channelShutdownFuture =
-                FutureUtils.completeAll(
-                        bindChannels.stream()
-                                .map(NettyUtils::shutdownChannel)
-                                .collect(Collectors.toList()));
-        CompletableFuture<Void> workerShutdownFuture;
-        if (workerPool != null) {
-            workerShutdownFuture = workerPool.closeAsync();
-        } else {
-            workerShutdownFuture = CompletableFuture.completedFuture(null);
-        }
-
-        return CompletableFuture.allOf(
-                acceptorShutdownFuture,
-                selectorShutdownFuture,
-                channelShutdownFuture,
-                workerShutdownFuture);
+    static CompletableFuture<Void> closeProtocolsAfter(
+            CompletableFuture<?> shutdownFuture, List<NetworkProtocolPlugin> protocols) {
+        return FutureUtils.composeAfterwards(
+                shutdownFuture,
+                () -> {
+                    List<CompletableFuture<Void>> closeFutures = new ArrayList<>();
+                    for (NetworkProtocolPlugin protocol : protocols) {
+                        try {
+                            closeFutures.add(protocol.closeAsync());
+                        } catch (Throwable failure) {
+                            closeFutures.add(FutureUtils.completedExceptionally(failure));
+                        }
+                    }
+                    return FutureUtils.completeAll(closeFutures);
+                });
     }
 }
