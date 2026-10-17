@@ -59,6 +59,8 @@ import org.apache.fluss.server.entity.ProduceLogDataForBucket;
 import org.apache.fluss.server.entity.PutKvDataForBucket;
 import org.apache.fluss.server.tablet.TestTabletServerGateway;
 import org.apache.fluss.types.DataTypes;
+import org.apache.fluss.utils.clock.Clock;
+import org.apache.fluss.utils.clock.ManualClock;
 import org.apache.fluss.utils.clock.SystemClock;
 
 import org.junit.jupiter.api.AfterEach;
@@ -210,6 +212,7 @@ final class SenderTest {
         sender.runOnce();
         assertThat(future).isNotDone();
         assertThat(idempotenceManager.inflightBatchSize(originalBucket)).isZero();
+        assertThat(metadataUpdater.getCluster().getPartitionId(originalPath)).isNotPresent();
 
         // The retry targets the historical bucket while preserving the original partition name.
         sender.runOnce();
@@ -1599,6 +1602,66 @@ final class SenderTest {
     }
 
     @Test
+    void testHistoricalPartitionThrottleAppliesRetryBackoff() throws Exception {
+        sender.destroyResources();
+        ManualClock clock = new ManualClock(System.currentTimeMillis());
+        TableInfo tableInfo = createHistoricalTableInfo();
+        PhysicalTablePath originalPath = PhysicalTablePath.of(tableInfo.getTablePath(), "20000101");
+        PhysicalTablePath historicalPath =
+                PhysicalTablePath.of(tableInfo.getTablePath(), HISTORICAL_PARTITION_VALUE);
+        TableBucket historicalBucket = new TableBucket(tableInfo.getTableId(), 22L, 0);
+        metadataUpdater =
+                new TestingMetadataUpdater(
+                        Collections.singletonMap(tableInfo.getTablePath(), tableInfo));
+        Cluster cluster =
+                partitionedCluster(
+                        tableInfo, Collections.singletonMap(historicalPath, historicalBucket));
+        metadataUpdater.updateCluster(cluster);
+        IdempotenceManager idempotenceManager = createIdempotenceManager(true);
+        idempotenceManager.setWriterId(0L);
+        sender = setupWithIdempotenceState(idempotenceManager, Integer.MAX_VALUE, 0, clock);
+        accumulator.routeWritesTo(
+                tableInfo, originalPath, historicalPath, historicalBucket.getPartitionId());
+
+        CompletableFuture<Exception> future = appendKvRecord(tableInfo, originalPath, 1, cluster);
+        sender.runOnce();
+
+        TestTabletServerGateway gateway = node1Gateway();
+        gateway.response(
+                0,
+                makePutKvResponse(
+                        Collections.singletonList(
+                                PutKvResultForBucket.historicalFailure(
+                                        historicalBucket,
+                                        Errors.HISTORICAL_PARTITION_THROTTLED.toApiError(),
+                                        originalPath.getPartitionName()))));
+
+        assertThat(accumulator.isThrottled(historicalBucket)).isTrue();
+        assertThat(future).isNotDone();
+
+        clock.advanceTime(2999, TimeUnit.MILLISECONDS);
+        sender.runOnce();
+        assertThat(gateway.pendingRequestSize()).isZero();
+
+        clock.advanceTime(1, TimeUnit.MILLISECONDS);
+        sender.runOnce();
+        assertThat(gateway.pendingRequestSize()).isOne();
+        PutKvRequest retryRequest = (PutKvRequest) gateway.getRequest(0);
+        List<PutKvDataForBucket> retryData = toPutKvDataForBuckets(retryRequest);
+        assertThat(retryData).hasSize(1);
+        assertThat(retryData.get(0).originalPartitionName())
+                .isEqualTo(originalPath.getPartitionName());
+        assertThat(retryData.get(0).records().batchSequence()).isZero();
+        gateway.response(
+                0,
+                makePutKvResponse(
+                        Collections.singletonList(
+                                PutKvResultForBucket.historicalSuccess(
+                                        historicalBucket, 1L, originalPath.getPartitionName()))));
+        assertThat(future.get()).isNull();
+    }
+
+    @Test
     void testPutKvStorageExceptionResponseRetriesInsteadOfFailing() throws Exception {
         // Rolling-upgrade anchor: an old client receives the server-side downgraded
         // KV_STORAGE_EXCEPTION (instead of the unknown error code 72, which would map to the
@@ -1845,6 +1908,10 @@ final class SenderTest {
             @Override
             public boolean checkAndUpdatePartitionMetadata(PhysicalTablePath physicalTablePath) {
                 if (physicalTablePath.equals(missingPath)) {
+                    // A cached ID suppresses the refresh that would detect the deleted partition.
+                    if (getCluster().getPartitionId(physicalTablePath).isPresent()) {
+                        return true;
+                    }
                     throw new PartitionNotExistException("Partition does not exist.");
                 }
                 return getCluster().getPartitionId(physicalTablePath).isPresent();
@@ -2081,6 +2148,12 @@ final class SenderTest {
 
     private Sender setupWithIdempotenceState(
             IdempotenceManager idempotenceManager, int reties, int batchTimeoutMs) {
+        return setupWithIdempotenceState(
+                idempotenceManager, reties, batchTimeoutMs, SystemClock.getInstance());
+    }
+
+    private Sender setupWithIdempotenceState(
+            IdempotenceManager idempotenceManager, int reties, int batchTimeoutMs, Clock clock) {
         Configuration conf = new Configuration();
         conf.set(ConfigOptions.CLIENT_WRITER_BUFFER_MEMORY_SIZE, new MemorySize(TOTAL_MEMORY_SIZE));
         conf.set(ConfigOptions.CLIENT_WRITER_BATCH_SIZE, new MemorySize(BATCH_SIZE));
@@ -2092,7 +2165,7 @@ final class SenderTest {
                         conf,
                         idempotenceManager,
                         writerMetricGroup,
-                        SystemClock.getInstance(),
+                        clock,
                         (tableInfo, path) -> bucketAssigner);
         return new Sender(
                 accumulator,
