@@ -108,6 +108,9 @@ impl Config {
                                 ))
                             })?;
                     }
+                    "scanner.io.tmpdir" => {
+                        config.scanner_io_tmp_dir = Some(value);
+                    }
                     "scanner.log.max-poll-records" => {
                         config.scanner_log_max_poll_records =
                             value.parse::<usize>().map_err(|e| {
@@ -373,6 +376,18 @@ impl Config {
     #[setter]
     fn set_scanner_remote_log_read_concurrency(&mut self, num: usize) {
         self.inner.scanner_remote_log_read_concurrency = num;
+    }
+
+    /// Parent directory for remote log downloads.
+    /// None uses the OS temporary directory plus `/fluss`.
+    #[getter]
+    fn scanner_io_tmp_dir(&self) -> Option<String> {
+        self.inner.scanner_io_tmp_dir.clone()
+    }
+
+    #[setter]
+    fn set_scanner_io_tmp_dir(&mut self, path: Option<String>) {
+        self.inner.scanner_io_tmp_dir = path;
     }
 
     /// Get the scanner log max poll records

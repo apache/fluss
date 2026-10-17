@@ -20,6 +20,18 @@ import pytest
 import fluss
 
 
+def test_remote_log_directory_configuration():
+    config = fluss.Config()
+    assert config.scanner_io_tmp_dir is None
+
+    config = fluss.Config({"scanner.io.tmpdir": "/tmp/fluss logs"})
+    assert config.scanner_io_tmp_dir == "/tmp/fluss logs"
+    config.scanner_io_tmp_dir = "/tmp/remote logs"
+    assert config.scanner_io_tmp_dir == "/tmp/remote logs"
+    config.scanner_io_tmp_dir = None
+    assert config.scanner_io_tmp_dir is None
+
+
 def test_kv_backpressure_configuration():
     config = fluss.Config({"writer.kv-backpressure.max-throttle-ms": "1500"})
     assert config.writer_kv_backpressure_max_throttle_ms == 1500

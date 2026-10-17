@@ -21,6 +21,7 @@ Complete API reference for the Fluss Rust client.
 | `scanner_remote_log_prefetch_num`     | `usize`         | `4`                | Number of remote log segments to prefetch                                            |
 | `remote_file_download_thread_num`     | `usize`         | `3`                | Number of threads for remote log downloads                                           |
 | `scanner_remote_log_read_concurrency` | `usize`         | `4`                | Streaming read concurrency within a remote log file                                  |
+| `scanner_io_tmp_dir`                  | `Option<String>` | `None`            | Parent for remote log downloads; `None` uses the OS temporary directory plus `/fluss`              |
 | `scanner_log_max_poll_records`        | `usize`         | `500`              | Maximum number of records returned in a single poll()                                |
 | `scanner_log_fetch_max_bytes`         | `i32`           | `16777216` (16 MB) | Maximum bytes per fetch response for LogScanner                                      |
 | `scanner_log_fetch_min_bytes`         | `i32`           | `1`                | Minimum bytes the server must accumulate before returning a fetch response           |

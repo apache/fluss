@@ -223,6 +223,7 @@ inline ffi::FfiConfig to_ffi_config(const Configuration& config) {
     ffi_config.scanner_remote_log_prefetch_num = config.scanner_remote_log_prefetch_num;
     ffi_config.remote_file_download_thread_num = config.remote_file_download_thread_num;
     ffi_config.scanner_remote_log_read_concurrency = config.scanner_remote_log_read_concurrency;
+    ffi_config.scanner_io_tmp_dir = rust::String(config.scanner_io_tmp_dir);
     ffi_config.scanner_log_max_poll_records = config.scanner_log_max_poll_records;
     ffi_config.scanner_log_fetch_max_bytes = config.scanner_log_fetch_max_bytes;
     ffi_config.scanner_log_fetch_min_bytes = config.scanner_log_fetch_min_bytes;
