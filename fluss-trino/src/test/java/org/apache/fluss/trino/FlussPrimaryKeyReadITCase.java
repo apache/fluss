@@ -149,6 +149,13 @@ class FlussPrimaryKeyReadITCase {
                         Arrays.asList(4, null));
         assertThat(rows("SELECT name, id FROM current_state WHERE id >= 3 ORDER BY id DESC"))
                 .containsExactly(Arrays.asList(null, 4), Arrays.asList("three", 3));
+        assertThat(rows("SELECT id FROM current_state WHERE id IN (1, 4) ORDER BY id"))
+                .containsExactly(Arrays.asList(1), Arrays.asList(4));
+        assertThat(rows("SELECT id FROM current_state WHERE name IS NULL"))
+                .containsExactly(Arrays.asList(4));
+        assertThat(rows("SELECT id FROM current_state WHERE id >= 3 AND length(name) = 5"))
+                .containsExactly(Arrays.asList(3));
+        assertThat(rows("SELECT id FROM current_state WHERE id > 3 AND id < 3")).isEmpty();
         assertThat(runner.execute("SELECT count(*) FROM current_state").getOnlyValue())
                 .isEqualTo(3L);
         assertThat(rows("SELECT id FROM current_state ORDER BY id LIMIT 1"))

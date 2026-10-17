@@ -37,6 +37,7 @@ import org.apache.fluss.utils.CloseableIterator;
 import io.trino.spi.TrinoException;
 import io.trino.spi.connector.MemoryContext;
 import io.trino.spi.connector.SourcePage;
+import io.trino.spi.predicate.TupleDomain;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -69,7 +70,7 @@ import static org.mockito.Mockito.when;
 /** Verifies shared page assembly, worker validation and resource ownership using a KV reader. */
 final class FlussPageSourceTest {
     private static final FlussTableHandle HANDLE =
-            new FlussTableHandle("sales", "users", "Sales", "Users", 42, 1);
+            new FlussTableHandle("sales", "users", "Sales", "Users", 42, 1, TupleDomain.all());
     private static final TablePath PATH = TablePath.of("Sales", "Users");
     private static final TableBucket BUCKET = new TableBucket(42, 0);
     private static final Duration POLL_TIMEOUT = Duration.ofMillis(100);

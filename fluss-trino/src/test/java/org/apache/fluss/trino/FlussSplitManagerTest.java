@@ -22,6 +22,7 @@ import org.apache.fluss.client.admin.ListOffsetsResult;
 import org.apache.fluss.client.admin.OffsetSpec;
 import org.apache.fluss.exception.PartitionNotExistException;
 import org.apache.fluss.metadata.BucketInfo;
+import org.apache.fluss.metadata.PartitionSpec;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
@@ -36,6 +37,10 @@ import io.trino.spi.connector.ConnectorSplitSource;
 import io.trino.spi.connector.Constraint;
 import io.trino.spi.connector.DynamicFilterSnapshot;
 import io.trino.spi.connector.TableNotFoundException;
+import io.trino.spi.predicate.Domain;
+import io.trino.spi.predicate.Range;
+import io.trino.spi.predicate.TupleDomain;
+import io.trino.spi.predicate.ValueSet;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.InOrder;
@@ -43,6 +48,7 @@ import org.mockito.InOrder;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
@@ -51,8 +57,11 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 
+import static io.airlift.slice.Slices.utf8Slice;
 import static io.trino.spi.StandardErrorCode.GENERIC_INTERNAL_ERROR;
 import static io.trino.spi.StandardErrorCode.UNSUPPORTED_TABLE_TYPE;
+import static io.trino.spi.type.IntegerType.INTEGER;
+import static io.trino.spi.type.VarcharType.VARCHAR;
 import static java.util.concurrent.CompletableFuture.completedFuture;
 import static org.apache.fluss.trino.FlussErrorCode.FLUSS_METADATA_CHANGED;
 import static org.apache.fluss.trino.FlussErrorCode.FLUSS_SPLIT_ERROR;
@@ -68,6 +77,8 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.verifyNoMoreInteractions;
 import static org.mockito.Mockito.when;
 
 /** Tests batch offset planning against the Admin boundary. */
@@ -75,7 +86,7 @@ final class FlussSplitManagerTest {
     private static final TablePath PATH = TablePath.of("Sales", "Users");
     private static final List<Integer> BUCKETS = Arrays.asList(0, 1, 2);
     private static final FlussTableHandle HANDLE =
-            new FlussTableHandle("sales", "users", "Sales", "Users", 42, 3);
+            new FlussTableHandle("sales", "users", "Sales", "Users", 42, 3, TupleDomain.all());
     private final Admin admin = mock(Admin.class);
     private final FlussMetadataAccess access = metadataAccess(admin);
     private final FlussSplitManager manager =
@@ -89,6 +100,12 @@ final class FlussSplitManagerTest {
                 .thenReturn(offsets(5, 8, 12));
         when(admin.listOffsets(eq(PATH), eq(BUCKETS), isA(OffsetSpec.LatestSpec.class)))
                 .thenReturn(offsets(10, 8, 20));
+    }
+
+    @Test
+    void testNoneConstraintSkipsAllMetadataAndScanPlanning() throws Exception {
+        assertThat(planWithHandle(HANDLE.withConstraint(TupleDomain.none()))).isEmpty();
+        verifyNoInteractions(admin);
     }
 
     @Test
@@ -253,8 +270,7 @@ final class FlussSplitManagerTest {
                 .thenReturn(completedFuture(Arrays.asList(bucket, bucket)));
         assertPlanningFailure("Duplicate");
         when(admin.describeBuckets(PATH))
-                .thenReturn(
-                        completedFuture(Collections.singletonList(bucket(42, 7L, "region=7", 0))));
+                .thenReturn(completedFuture(Collections.singletonList(bucket(42, 7L, "7", 0))));
         assertPlanningFailure("partition layout");
     }
 
@@ -280,7 +296,7 @@ final class FlussSplitManagerTest {
 
         when(admin.listOffsets(
                         eq(PATH),
-                        eq("region=20"),
+                        eq("20"),
                         eq(Collections.singletonList(0)),
                         isA(OffsetSpec.EarliestSpec.class)))
                 .thenThrow(new PartitionNotExistException("Partition expired"));
@@ -302,7 +318,7 @@ final class FlussSplitManagerTest {
 
         when(admin.listOffsets(
                         eq(PATH),
-                        eq("region=20"),
+                        eq("20"),
                         eq(Collections.singletonList(0)),
                         isA(OffsetSpec.EarliestSpec.class)))
                 .thenReturn(failedOffsets(new PartitionNotExistException("Partition expired")));
@@ -344,9 +360,9 @@ final class FlussSplitManagerTest {
                         completedFuture(partitionedBuckets()),
                         completedFuture(
                                 Arrays.asList(
-                                        bucket(42, 30L, "region=10", 0),
-                                        bucket(42, 30L, "region=10", 1),
-                                        bucket(42, 20L, "region=20", 0))));
+                                        bucket(42, 30L, "10", 0),
+                                        bucket(42, 30L, "10", 1),
+                                        bucket(42, 20L, "20", 0))));
 
         List<ConnectorSplit> splits = plan();
 
@@ -361,7 +377,7 @@ final class FlussSplitManagerTest {
 
         when(admin.listOffsets(
                         eq(PATH),
-                        eq("region=20"),
+                        eq("20"),
                         eq(Collections.singletonList(0)),
                         isA(OffsetSpec.EarliestSpec.class)))
                 .thenReturn(failedOffsets(new PartitionNotExistException("Partition expired")));
@@ -386,7 +402,7 @@ final class FlussSplitManagerTest {
 
         when(admin.listOffsets(
                         eq(PATH),
-                        eq("region=20"),
+                        eq("20"),
                         eq(Collections.singletonList(0)),
                         isA(OffsetSpec.EarliestSpec.class)))
                 .thenReturn(failedOffsets(failure));
@@ -402,7 +418,7 @@ final class FlussSplitManagerTest {
         verify(admin, never())
                 .listOffsets(
                         eq(PATH),
-                        eq("region=20"),
+                        eq("20"),
                         eq(Collections.singletonList(0)),
                         isA(OffsetSpec.LatestSpec.class));
     }
@@ -415,9 +431,7 @@ final class FlussSplitManagerTest {
                 .thenReturn(
                         completedFuture(partitionedBuckets()),
                         completedFuture(
-                                Arrays.asList(
-                                        bucket(42, 10L, "region=10", 0),
-                                        bucket(42, 20L, "region=20", 0))));
+                                Arrays.asList(bucket(42, 10L, "10", 0), bucket(42, 20L, "20", 0))));
 
         assertThatThrownBy(this::plan)
                 .isInstanceOfSatisfying(
@@ -434,9 +448,7 @@ final class FlussSplitManagerTest {
         when(admin.describeBuckets(PATH))
                 .thenReturn(
                         completedFuture(
-                                Arrays.asList(
-                                        bucket(42, 10L, "region=10", 0),
-                                        bucket(42, 20L, "region=20", 0))));
+                                Arrays.asList(bucket(42, 10L, "10", 0), bucket(42, 20L, "20", 0))));
         List<ConnectorSplit> splits = plan();
         assertThat(splits).hasSize(2);
         assertThat(((FlussSplit) splits.get(0)).getScanType()).isEqualTo(FlussScanType.KV);
@@ -455,6 +467,165 @@ final class FlussSplitManagerTest {
     }
 
     @Test
+    void testPartitionPruningForLogTable() throws Exception {
+        when(admin.getTableInfo(PATH)).thenReturn(completedFuture(stringPartitionedTable(false)));
+
+        PartitionSpec spec = new PartitionSpec(Collections.singletonMap("region", "east"));
+
+        when(admin.describeBuckets(PATH, spec))
+                .thenReturn(
+                        completedFuture(
+                                Arrays.asList(
+                                        bucket(42, 10L, "east", 0), bucket(42, 10L, "east", 1))));
+
+        when(admin.listOffsets(
+                        eq(PATH),
+                        eq("east"),
+                        eq(Arrays.asList(0, 1)),
+                        isA(OffsetSpec.EarliestSpec.class)))
+                .thenReturn(offsets(2, 5));
+
+        when(admin.listOffsets(
+                        eq(PATH),
+                        eq("east"),
+                        eq(Arrays.asList(0, 1)),
+                        isA(OffsetSpec.LatestSpec.class)))
+                .thenReturn(offsets(4, 5));
+
+        List<ConnectorSplit> splits =
+                planWithHandle(
+                        withRegionConstraint(Domain.singleValue(VARCHAR, utf8Slice("east"))));
+
+        assertThat(splits).hasSize(1);
+        assertRange(splits.get(0), 0, 2, 4);
+        assertThat(((FlussSplit) splits.get(0)).getBucket().getPartitionId()).contains(10L);
+
+        verify(admin, times(2)).describeBuckets(PATH, spec);
+        verify(admin, never()).describeBuckets(PATH);
+    }
+
+    @Test
+    void testPartitionPruningForPrimaryKeyTable() throws Exception {
+        TableInfo info =
+                tableInfo(
+                        TableDescriptor.builder()
+                                .schema(
+                                        Schema.newBuilder()
+                                                .column("id", DataTypes.INT())
+                                                .column("region", DataTypes.STRING())
+                                                .column("category", DataTypes.STRING())
+                                                .primaryKey("id", "region", "category")
+                                                .build())
+                                .partitionedBy("region", "category")
+                                .distributedBy(1, "id")
+                                .build());
+
+        when(admin.getTableInfo(PATH)).thenReturn(completedFuture(info));
+
+        PartitionSpec spec = new PartitionSpec(Collections.singletonMap("region", "east"));
+        when(admin.describeBuckets(PATH, spec))
+                .thenReturn(
+                        completedFuture(
+                                Arrays.asList(
+                                        bucket(42, 10L, "east$A", 0),
+                                        bucket(42, 20L, "east$B", 0))));
+
+        Map<FlussColumnHandle, Domain> domains = new LinkedHashMap<>();
+        domains.put(
+                new FlussColumnHandle("region", 1), Domain.singleValue(VARCHAR, utf8Slice("east")));
+        domains.put(
+                new FlussColumnHandle("category", 2),
+                Domain.multipleValues(VARCHAR, Arrays.asList(utf8Slice("A"), utf8Slice("B"))));
+
+        FlussTableHandle handle = HANDLE.withConstraint(TupleDomain.withColumnDomains(domains));
+
+        List<ConnectorSplit> splits = planWithHandle(handle);
+
+        assertThat(splits).hasSize(2);
+        assertThat(splits)
+                .allSatisfy(
+                        split -> {
+                            FlussSplit flussSplit = (FlussSplit) split;
+                            assertThat(flussSplit.getScanType()).isEqualTo(FlussScanType.KV);
+                            assertThat(flussSplit.getBucket().getPartitionId()).isPresent();
+                        });
+
+        verify(admin).describeBuckets(PATH, spec);
+        verify(admin, never()).describeBuckets(PATH);
+    }
+
+    @Test
+    void testUnsupportedPartitionDomainsFallBackToFullScan() throws Exception {
+        when(admin.getTableInfo(PATH)).thenReturn(completedFuture(stringPartitionedTable(true)));
+
+        when(admin.describeBuckets(PATH))
+                .thenReturn(
+                        completedFuture(
+                                Arrays.asList(
+                                        bucket(42, 10L, "east", 0), bucket(42, 20L, "west", 0))));
+
+        List<Domain> domains =
+                Arrays.asList(
+                        Domain.create(
+                                ValueSet.ofRanges(Range.greaterThan(VARCHAR, utf8Slice("east"))),
+                                false),
+                        Domain.multipleValues(
+                                VARCHAR, Arrays.asList(utf8Slice("east"), utf8Slice("west"))),
+                        Domain.onlyNull(VARCHAR),
+                        Domain.singleValue(VARCHAR, utf8Slice("east"), true));
+
+        for (Domain domain : domains) {
+            assertThat(planWithHandle(withRegionConstraint(domain))).hasSize(2);
+        }
+
+        verify(admin, times(domains.size())).describeBuckets(PATH);
+        verify(admin, never()).describeBuckets(eq(PATH), any(PartitionSpec.class));
+    }
+
+    @Test
+    void testNonPartitionColumnDoesNotPrune() throws Exception {
+        when(admin.getTableInfo(PATH)).thenReturn(completedFuture(stringPartitionedTable(true)));
+
+        when(admin.describeBuckets(PATH))
+                .thenReturn(
+                        completedFuture(
+                                Arrays.asList(
+                                        bucket(42, 10L, "east", 0), bucket(42, 20L, "west", 0))));
+
+        TupleDomain<FlussColumnHandle> constraint =
+                TupleDomain.withColumnDomains(
+                        Collections.singletonMap(
+                                new FlussColumnHandle("id", 0), Domain.singleValue(INTEGER, 7L)));
+
+        List<ConnectorSplit> splits = planWithHandle(HANDLE.withConstraint(constraint));
+
+        assertThat(splits).hasSize(2);
+
+        verify(admin).describeBuckets(PATH);
+        verify(admin, never()).describeBuckets(eq(PATH), any(PartitionSpec.class));
+    }
+
+    @Test
+    void testNoMatchingLogPartitionSkipsOffsetPlanning() throws Exception {
+        when(admin.getTableInfo(PATH)).thenReturn(completedFuture(stringPartitionedTable(false)));
+
+        PartitionSpec spec = new PartitionSpec(Collections.singletonMap("region", "missing"));
+
+        when(admin.describeBuckets(PATH, spec))
+                .thenReturn(completedFuture(Collections.emptyList()));
+
+        List<ConnectorSplit> splits =
+                planWithHandle(
+                        withRegionConstraint(Domain.singleValue(VARCHAR, utf8Slice("missing"))));
+
+        assertThat(splits).isEmpty();
+
+        verify(admin).getTableInfo(PATH);
+        verify(admin).describeBuckets(PATH, spec);
+        verifyNoMoreInteractions(admin);
+    }
+
+    @Test
     void testReportsTableDroppedDuringOffsetPlanning() {
         when(admin.listOffsets(eq(PATH), eq(BUCKETS), isA(OffsetSpec.EarliestSpec.class)))
                 .thenThrow(new org.apache.fluss.exception.TableNotExistException("dropped"));
@@ -462,11 +633,15 @@ final class FlussSplitManagerTest {
     }
 
     private List<ConnectorSplit> plan() throws Exception {
+        return planWithHandle(HANDLE);
+    }
+
+    private List<ConnectorSplit> planWithHandle(FlussTableHandle handle) throws Exception {
         try (ConnectorSplitSource source =
                 manager.getSplits(
                         FlussTransactionHandle.INSTANCE,
                         mock(ConnectorSession.class),
-                        HANDLE,
+                        handle,
                         Collections.emptySet(),
                         Constraint.alwaysTrue())) {
             List<ConnectorSplit> splits =
@@ -559,26 +734,26 @@ final class FlussSplitManagerTest {
 
         when(admin.listOffsets(
                         eq(PATH),
-                        eq("region=10"),
+                        eq("10"),
                         eq(Arrays.asList(0, 1)),
                         isA(OffsetSpec.EarliestSpec.class)))
                 .thenReturn(offsets(2, 5));
         when(admin.listOffsets(
                         eq(PATH),
-                        eq("region=10"),
+                        eq("10"),
                         eq(Arrays.asList(0, 1)),
                         isA(OffsetSpec.LatestSpec.class)))
                 .thenReturn(offsets(4, 5));
 
         when(admin.listOffsets(
                         eq(PATH),
-                        eq("region=20"),
+                        eq("20"),
                         eq(Collections.singletonList(0)),
                         isA(OffsetSpec.EarliestSpec.class)))
                 .thenReturn(offsets(8));
         when(admin.listOffsets(
                         eq(PATH),
-                        eq("region=20"),
+                        eq("20"),
                         eq(Collections.singletonList(0)),
                         isA(OffsetSpec.LatestSpec.class)))
                 .thenReturn(offsets(11));
@@ -586,13 +761,11 @@ final class FlussSplitManagerTest {
 
     private static List<BucketInfo> partitionedBuckets() {
         return Arrays.asList(
-                bucket(42, 10L, "region=10", 0),
-                bucket(42, 10L, "region=10", 1),
-                bucket(42, 20L, "region=20", 0));
+                bucket(42, 10L, "10", 0), bucket(42, 10L, "10", 1), bucket(42, 20L, "20", 0));
     }
 
     private static List<BucketInfo> remainingBuckets() {
-        return Arrays.asList(bucket(42, 10L, "region=10", 0), bucket(42, 10L, "region=10", 1));
+        return Arrays.asList(bucket(42, 10L, "10", 0), bucket(42, 10L, "10", 1));
     }
 
     private static TableInfo partitionedTable(boolean primaryKey) {
@@ -638,5 +811,31 @@ final class FlussSplitManagerTest {
                 0,
                 0,
                 epoch);
+    }
+
+    private static TableInfo stringPartitionedTable(boolean primaryKey) {
+        Schema.Builder schema =
+                Schema.newBuilder()
+                        .column("id", DataTypes.INT())
+                        .column("region", DataTypes.STRING());
+
+        if (primaryKey) {
+            schema.primaryKey("id", "region");
+        }
+
+        return tableInfo(
+                TableDescriptor.builder()
+                        .schema(schema.build())
+                        .partitionedBy("region")
+                        .distributedBy(2, "id")
+                        .build());
+    }
+
+    private static FlussTableHandle withRegionConstraint(Domain domain) {
+        TupleDomain<FlussColumnHandle> constraint =
+                TupleDomain.withColumnDomains(
+                        Collections.singletonMap(new FlussColumnHandle("region", 1), domain));
+
+        return HANDLE.withConstraint(constraint);
     }
 }

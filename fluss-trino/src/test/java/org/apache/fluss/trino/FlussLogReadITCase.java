@@ -46,6 +46,9 @@ import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.utils.IOUtils;
 import org.apache.fluss.utils.clock.ManualClock;
 
+import io.trino.Session;
+import io.trino.spi.QueryId;
+import io.trino.spi.type.TimeZoneKey;
 import io.trino.testing.DistributedQueryRunner;
 import io.trino.testing.MaterializedRow;
 import org.junit.jupiter.api.AfterAll;
@@ -58,10 +61,13 @@ import org.junit.jupiter.api.extension.RegisterExtension;
 
 import java.math.BigDecimal;
 import java.time.Duration;
+import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
@@ -140,7 +146,7 @@ class FlussLogReadITCase {
             Future<?> query = executor.submit(() -> runner.execute(sql));
             barrier.awaitReached();
             assertThat(gate.activeSources()).isGreaterThan(0);
-            io.trino.spi.QueryId queryId =
+            QueryId queryId =
                     runner.getCoordinator().getQueryManager().getQueries().stream()
                             .filter(
                                     info ->
@@ -181,6 +187,17 @@ class FlussLogReadITCase {
                         Arrays.asList(1, "one"), Arrays.asList(2, "二"), Arrays.asList(3, null));
         assertThat(rows("SELECT name, id FROM events WHERE id >= 2 ORDER BY id DESC"))
                 .containsExactly(Arrays.asList(null, 3), Arrays.asList("二", 2));
+        assertThat(rows("SELECT id FROM events WHERE id IN (1, 3) ORDER BY id"))
+                .containsExactly(Arrays.asList(1), Arrays.asList(3));
+        assertThat(rows("SELECT id FROM events WHERE name IS NULL"))
+                .containsExactly(Arrays.asList(3));
+        assertThat(rows("SELECT id FROM events WHERE name = '二'"))
+                .containsExactly(Arrays.asList(2));
+        assertThat(rows("SELECT id FROM events WHERE id >= 2 AND length(name) = 1"))
+                .containsExactly(Arrays.asList(2));
+        assertThat(rows("SELECT id FROM events WHERE id = 1 OR name IS NULL ORDER BY id"))
+                .containsExactly(Arrays.asList(1), Arrays.asList(3));
+        assertThat(rows("SELECT id FROM events WHERE id > 2 AND id < 2")).isEmpty();
         assertThat(runner.execute("SELECT count(*) FROM events").getOnlyValue()).isEqualTo(3L);
         assertThat(rows("SELECT id FROM events ORDER BY id LIMIT 1"))
                 .containsExactly(Arrays.asList(1));
@@ -288,10 +305,9 @@ class FlussLogReadITCase {
                 .isEqualTo(1L);
         assertThat(
                         runner.execute(
-                                        io.trino.Session.builder(runner.getDefaultSession())
+                                        Session.builder(runner.getDefaultSession())
                                                 .setTimeZoneKey(
-                                                        io.trino.spi.type.TimeZoneKey
-                                                                .getTimeZoneKey("Asia/Shanghai"))
+                                                        TimeZoneKey.getTimeZoneKey("Asia/Shanghai"))
                                                 .build(),
                                         "SELECT to_unixtime(ltz), CAST(ts AS VARCHAR) FROM all_types")
                                 .getMaterializedRows())
@@ -358,22 +374,27 @@ class FlussLogReadITCase {
         for (boolean primaryKey : new boolean[] {false, true}) {
             String name = primaryKey ? "partitioned_users" : "partitioned_events";
             TablePath path = TablePath.of("fluss", name);
+            int bucketCount = 2;
+
             Schema.Builder schema =
                     Schema.newBuilder()
                             .column("id", DataTypes.INT())
                             .column("region", DataTypes.STRING());
+
             if (primaryKey) {
                 schema.primaryKey("id", "region");
             }
+
             admin.createTable(
                             path,
                             TableDescriptor.builder()
                                     .schema(schema.build())
                                     .partitionedBy("region")
-                                    .distributedBy(2, "id")
+                                    .distributedBy(bucketCount, "id")
                                     .build(),
                             false)
                     .get(30, TimeUnit.SECONDS);
+
             for (String region : Arrays.asList("east", "west", "empty")) {
                 admin.createPartition(
                                 path,
@@ -381,9 +402,19 @@ class FlussLogReadITCase {
                                 false)
                         .get(30, TimeUnit.SECONDS);
             }
+
+            long tableId = admin.getTableInfo(path).get(30, TimeUnit.SECONDS).getTableId();
+
+            for (long partitionId : CLUSTER.waitUntilPartitionsCreated(path, 3).values()) {
+                for (int bucketId = 0; bucketId < bucketCount; bucketId++) {
+                    CLUSTER.waitAndGetLeader(new TableBucket(tableId, partitionId, bucketId));
+                }
+            }
+
             try (Table table = connection.getTable(path)) {
                 GenericRow east = GenericRow.of(1, BinaryString.fromString("east"));
                 GenericRow west = GenericRow.of(1, BinaryString.fromString("west"));
+
                 if (primaryKey) {
                     UpsertWriter writer = table.newUpsert().createWriter();
                     writer.upsert(east).get(30, TimeUnit.SECONDS);
@@ -394,10 +425,209 @@ class FlussLogReadITCase {
                     writer.append(west).get(30, TimeUnit.SECONDS);
                 }
             }
+
             assertThat(rows("SELECT * FROM " + name))
                     .containsExactlyInAnyOrder(Arrays.asList(1, "east"), Arrays.asList(1, "west"));
+
             assertThat(runner.execute("SELECT count(*) FROM " + name).getOnlyValue()).isEqualTo(2L);
+
+            assertThat(rows("SELECT * FROM " + name + " WHERE region = 'east'"))
+                    .containsExactly(Arrays.asList(1, "east"));
+
+            // An unknown partition must not create any page sources.
+            int before = gate.createdSources();
+            assertThat(rows("SELECT * FROM " + name + " WHERE region = 'missing'")).isEmpty();
+            assertThat(gate.createdSources() - before).isZero();
+
+            // The remaining non-partition predicate must still be evaluated by Trino.
+            assertThat(rows("SELECT * FROM " + name + " WHERE region = 'east' AND id > 1"))
+                    .isEmpty();
         }
+    }
+
+    @Test
+    void testMultiKeyPartialPartitionPruning() throws Exception {
+        String name = "multi_partition_events";
+        TablePath path = TablePath.of("fluss", name);
+
+        admin.createTable(
+                        path,
+                        TableDescriptor.builder()
+                                .schema(
+                                        Schema.newBuilder()
+                                                .column("id", DataTypes.INT())
+                                                .column("region", DataTypes.STRING())
+                                                .column("category", DataTypes.INT())
+                                                .column("zone", DataTypes.BIGINT())
+                                                .build())
+                                .partitionedBy("region", "category", "zone")
+                                .distributedBy(1, "id")
+                                .build(),
+                        false)
+                .get(30, TimeUnit.SECONDS);
+
+        for (String[] values :
+                new String[][] {
+                    {"east", "1", "3000000000"},
+                    {"east", "2", "4000000000"},
+                    {"west", "1", "3000000000"}
+                }) {
+            Map<String, String> partitionValues = new LinkedHashMap<>();
+            partitionValues.put("region", values[0]);
+            partitionValues.put("category", values[1]);
+            partitionValues.put("zone", values[2]);
+
+            admin.createPartition(path, new PartitionSpec(partitionValues), false)
+                    .get(30, TimeUnit.SECONDS);
+        }
+
+        long tableId = admin.getTableInfo(path).get(30, TimeUnit.SECONDS).getTableId();
+        for (long partitionId : CLUSTER.waitUntilPartitionsCreated(path, 3).values()) {
+            CLUSTER.waitAndGetLeader(new TableBucket(tableId, partitionId, 0));
+        }
+
+        try (Table table = connection.getTable(path)) {
+            AppendWriter writer = table.newAppend().createWriter();
+
+            writer.append(GenericRow.of(1, BinaryString.fromString("east"), 1, 3_000_000_000L))
+                    .get(30, TimeUnit.SECONDS);
+
+            writer.append(GenericRow.of(2, BinaryString.fromString("east"), 2, 4_000_000_000L))
+                    .get(30, TimeUnit.SECONDS);
+
+            writer.append(GenericRow.of(3, BinaryString.fromString("west"), 1, 3_000_000_000L))
+                    .get(30, TimeUnit.SECONDS);
+        }
+
+        String select = "SELECT id, region, category, zone FROM " + name;
+
+        // STRING partition key.
+        int before = gate.createdSources();
+        assertThat(rows(select + " WHERE region = 'east'"))
+                .containsExactlyInAnyOrder(
+                        Arrays.asList(1, "east", 1, 3_000_000_000L),
+                        Arrays.asList(2, "east", 2, 4_000_000_000L));
+        assertThat(gate.createdSources() - before).isEqualTo(2);
+
+        // INTEGER partition key, without constraining the first key.
+        before = gate.createdSources();
+        assertThat(rows(select + " WHERE category = 1"))
+                .containsExactlyInAnyOrder(
+                        Arrays.asList(1, "east", 1, 3_000_000_000L),
+                        Arrays.asList(3, "west", 1, 3_000_000_000L));
+        assertThat(gate.createdSources() - before).isEqualTo(2);
+
+        // BIGINT partition key beyond the INTEGER range.
+        before = gate.createdSources();
+        assertThat(rows(select + " WHERE zone = BIGINT '3000000000'"))
+                .containsExactlyInAnyOrder(
+                        Arrays.asList(1, "east", 1, 3_000_000_000L),
+                        Arrays.asList(3, "west", 1, 3_000_000_000L));
+        assertThat(gate.createdSources() - before).isEqualTo(2);
+
+        // Complete specification combining all three types.
+        before = gate.createdSources();
+        assertThat(
+                        rows(
+                                select
+                                        + " WHERE region = 'east'"
+                                        + " AND category = 1"
+                                        + " AND zone = BIGINT '3000000000'"))
+                .containsExactly(Arrays.asList(1, "east", 1, 3_000_000_000L));
+        assertThat(gate.createdSources() - before).isEqualTo(1);
+    }
+
+    @Test
+    void testPrimitivePartitionPruning() throws Exception {
+        String name = "primitive_partition_events";
+        TablePath path = TablePath.of("fluss", name);
+
+        admin.createTable(
+                        path,
+                        TableDescriptor.builder()
+                                .schema(
+                                        Schema.newBuilder()
+                                                .column("id", DataTypes.INT())
+                                                .column("flag", DataTypes.BOOLEAN())
+                                                .column("tiny", DataTypes.TINYINT())
+                                                .column("small", DataTypes.SMALLINT())
+                                                .column("dt", DataTypes.DATE())
+                                                .build())
+                                .partitionedBy("flag", "tiny", "small", "dt")
+                                .distributedBy(1, "id")
+                                .build(),
+                        false)
+                .get(30, TimeUnit.SECONDS);
+
+        for (String[] values :
+                new String[][] {
+                    {"true", "-128", "-32768", "2026-10-16"},
+                    {"true", "127", "32767", "2026-10-17"},
+                    {"false", "-128", "-32768", "2026-10-16"}
+                }) {
+            Map<String, String> partitionValues = new LinkedHashMap<>();
+            partitionValues.put("flag", values[0]);
+            partitionValues.put("tiny", values[1]);
+            partitionValues.put("small", values[2]);
+            partitionValues.put("dt", values[3]);
+
+            admin.createPartition(path, new PartitionSpec(partitionValues), false)
+                    .get(30, TimeUnit.SECONDS);
+        }
+
+        long tableId = admin.getTableInfo(path).get(30, TimeUnit.SECONDS).getTableId();
+        for (long partitionId : CLUSTER.waitUntilPartitionsCreated(path, 3).values()) {
+            CLUSTER.waitAndGetLeader(new TableBucket(tableId, partitionId, 0));
+        }
+
+        int firstDay = (int) LocalDate.of(2026, 10, 16).toEpochDay();
+        int secondDay = (int) LocalDate.of(2026, 10, 17).toEpochDay();
+
+        try (Table table = connection.getTable(path)) {
+            AppendWriter writer = table.newAppend().createWriter();
+
+            writer.append(GenericRow.of(1, true, (byte) -128, (short) -32768, firstDay))
+                    .get(30, TimeUnit.SECONDS);
+
+            writer.append(GenericRow.of(2, true, (byte) 127, (short) 32767, secondDay))
+                    .get(30, TimeUnit.SECONDS);
+
+            writer.append(GenericRow.of(3, false, (byte) -128, (short) -32768, firstDay))
+                    .get(30, TimeUnit.SECONDS);
+        }
+
+        String select = "SELECT id FROM " + name;
+
+        int before = gate.createdSources();
+        assertThat(rows(select + " WHERE flag = TRUE"))
+                .containsExactlyInAnyOrder(Arrays.asList(1), Arrays.asList(2));
+        assertThat(gate.createdSources() - before).isEqualTo(2);
+
+        before = gate.createdSources();
+        assertThat(rows(select + " WHERE tiny = TINYINT '-128'"))
+                .containsExactlyInAnyOrder(Arrays.asList(1), Arrays.asList(3));
+        assertThat(gate.createdSources() - before).isEqualTo(2);
+
+        before = gate.createdSources();
+        assertThat(rows(select + " WHERE small = SMALLINT '32767'"))
+                .containsExactly(Arrays.asList(2));
+        assertThat(gate.createdSources() - before).isEqualTo(1);
+
+        before = gate.createdSources();
+        assertThat(rows(select + " WHERE dt = DATE '2026-10-16'"))
+                .containsExactlyInAnyOrder(Arrays.asList(1), Arrays.asList(3));
+        assertThat(gate.createdSources() - before).isEqualTo(2);
+
+        before = gate.createdSources();
+        assertThat(
+                        rows(
+                                select
+                                        + " WHERE flag = TRUE"
+                                        + " AND tiny = TINYINT '-128'"
+                                        + " AND small = SMALLINT '-32768'"
+                                        + " AND dt = DATE '2026-10-16'"))
+                .containsExactly(Arrays.asList(1));
+        assertThat(gate.createdSources() - before).isEqualTo(1);
     }
 
     @Test

@@ -33,14 +33,28 @@ binary.
 | Non-partitioned and partitioned Primary Key Table reads | Supported, using bucket snapshots |
 | Lakehouse table reads | Not supported; metadata remains available |
 | Writes, DDL, lookup and Union Read | Not supported |
-| Predicate, aggregation, limit and partition pruning pushdown | Not implemented |
+| Predicate capture and transport | Supported for Trino column domains; filters remain evaluated by Trino |
+| Partition pruning | Supported for single-value equality constraints on STRING, BOOLEAN, TINYINT, SMALLINT, INTEGER, BIGINT and DATE partition columns |
+| Row filtering, aggregation, limit, range/IN partition pruning, bucket pruning and PK lookup pushdown | Not implemented |
 | Task retries / fault-tolerant execution | Not supported |
 | SASL authentication on JDK 25 | Not supported; configuration properties are retained |
 
 Ordinary `SELECT`, column selection and ordering, `COUNT(*)`, `WHERE`, `ORDER BY`
 and `LIMIT` use Trino's execution engine. Filters and other operations without
-pushdown are evaluated by Trino. Partitioned scans enumerate physical buckets;
-a partition predicate does not currently avoid scanning other partitions.
+pushdown are evaluated by Trino.
+
+The connector captures Trino column-domain constraints in immutable table
+handles and intersects them across optimizer calls.
+For partitioned tables, single-value equality constraints on STRING, BOOLEAN,
+TINYINT, SMALLINT, INTEGER, BIGINT and DATE partition columns are used to
+restrict bucket discovery through Fluss's partition-aware Admin API. Multiple
+partition keys can be constrained independently, including partial partition
+specifications.
+Unsupported predicates and partition types conservatively fall back to scanning
+all relevant buckets. The connector does not enforce row-level predicates, so
+all remaining filters continue to be evaluated by Trino.
+Contradictory constraints produce no splits without additional Fluss metadata
+requests during split planning.
 
 Trino-visible database and table names are normalized to lowercase. When multiple
 Fluss names differ only by case, resolving the ambiguous name fails rather than

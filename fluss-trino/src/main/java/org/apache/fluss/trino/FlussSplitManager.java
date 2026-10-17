@@ -30,6 +30,7 @@ import io.trino.spi.connector.ConnectorTransactionHandle;
 import io.trino.spi.connector.Constraint;
 import io.trino.spi.connector.FixedSplitSource;
 
+import java.util.Collections;
 import java.util.Set;
 
 import static org.apache.fluss.trino.FlussTableScanValidator.validateTable;
@@ -55,6 +56,9 @@ public final class FlussSplitManager implements ConnectorSplitManager {
             Set<ColumnHandle> dynamicFilterColumns,
             Constraint constraint) {
         FlussTableHandle handle = (FlussTableHandle) table;
+        if (handle.getConstraint().isNone()) {
+            return new FixedSplitSource(Collections.emptyList());
+        }
         TableInfo tableInfo = metadataAccess.getTableInfo(handle);
         validateTable(handle, tableInfo);
         return new FixedSplitSource(splitPlanner.plan(handle, tableInfo));

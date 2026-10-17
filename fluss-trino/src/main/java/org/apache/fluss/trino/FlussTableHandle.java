@@ -21,6 +21,7 @@ package org.apache.fluss.trino;
 import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import io.trino.spi.connector.ConnectorTableHandle;
+import io.trino.spi.predicate.TupleDomain;
 
 import java.util.Objects;
 
@@ -40,6 +41,9 @@ public final class FlussTableHandle implements ConnectorTableHandle {
     private final long tableId;
     private final int schemaId;
 
+    // Candidate rows for scan planning; Trino still evaluates the complete filter.
+    private final TupleDomain<FlussColumnHandle> constraint;
+
     @JsonCreator
     public FlussTableHandle(
             @JsonProperty("schemaName") String schemaName,
@@ -47,7 +51,8 @@ public final class FlussTableHandle implements ConnectorTableHandle {
             @JsonProperty("flussDatabaseName") String flussDatabaseName,
             @JsonProperty("flussTableName") String flussTableName,
             @JsonProperty("tableId") long tableId,
-            @JsonProperty("schemaId") int schemaId) {
+            @JsonProperty("schemaId") int schemaId,
+            @JsonProperty("constraint") TupleDomain<FlussColumnHandle> constraint) {
         this.schemaName = checkNotNull(schemaName, "schemaName is null");
         this.tableName = checkNotNull(tableName, "tableName is null");
         this.flussDatabaseName = checkNotNull(flussDatabaseName, "flussDatabaseName is null");
@@ -56,6 +61,7 @@ public final class FlussTableHandle implements ConnectorTableHandle {
         checkArgument(schemaId >= 0, "schemaId must be non-negative");
         this.tableId = tableId;
         this.schemaId = schemaId;
+        this.constraint = checkNotNull(constraint, "constraint is null");
     }
 
     @JsonProperty
@@ -88,6 +94,23 @@ public final class FlussTableHandle implements ConnectorTableHandle {
         return schemaId;
     }
 
+    /** Returns the column constraints available to scan planning, not an enforced row filter. */
+    @JsonProperty
+    public TupleDomain<FlussColumnHandle> getConstraint() {
+        return constraint;
+    }
+
+    FlussTableHandle withConstraint(TupleDomain<FlussColumnHandle> constraint) {
+        return new FlussTableHandle(
+                schemaName,
+                tableName,
+                flussDatabaseName,
+                flussTableName,
+                tableId,
+                schemaId,
+                constraint);
+    }
+
     @Override
     public boolean equals(Object o) {
         if (o == null || getClass() != o.getClass()) {
@@ -99,13 +122,20 @@ public final class FlussTableHandle implements ConnectorTableHandle {
                 && Objects.equals(schemaName, that.schemaName)
                 && Objects.equals(tableName, that.tableName)
                 && Objects.equals(flussDatabaseName, that.flussDatabaseName)
-                && Objects.equals(flussTableName, that.flussTableName);
+                && Objects.equals(flussTableName, that.flussTableName)
+                && Objects.equals(constraint, that.constraint);
     }
 
     @Override
     public int hashCode() {
         return Objects.hash(
-                schemaName, tableName, flussDatabaseName, flussTableName, tableId, schemaId);
+                schemaName,
+                tableName,
+                flussDatabaseName,
+                flussTableName,
+                tableId,
+                schemaId,
+                constraint);
     }
 
     @Override
@@ -127,6 +157,8 @@ public final class FlussTableHandle implements ConnectorTableHandle {
                 + tableId
                 + ", schemaId="
                 + schemaId
+                + ", constraint="
+                + constraint
                 + '}';
     }
 }
