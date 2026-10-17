@@ -425,6 +425,86 @@ message ListOffsetsResponse {
   repeated PbListOffsetsRespForBucket buckets_resp = 1;
 }
 
+// Find consumer group owner request and response.
+message FindConsumerGroupOwnerRequest {
+  required string group_id = 1;
+}
+
+// All failures are returned through the RPC ErrorResponse envelope.
+message FindConsumerGroupOwnerResponse {
+  required PbServerNode owner = 1;
+}
+
+// Commit consumer offsets request and response.
+message CommitConsumerOffsetsRequest {
+  required string group_id = 1;
+  // An empty list, or tables containing no buckets, is a valid no-op and produces an empty
+  // successful response.
+  repeated PbCommitConsumerOffsetsRequestTable tables = 2;
+}
+
+// Request-level failures, such as authentication, authorization, malformed requests, or an
+// unexpected server failure, are returned through the RPC ErrorResponse envelope. Logical commit
+// failures, including group validation, ownership, and bucket write failures, are reported in each
+// PbCommitConsumerOffsetsResponseBucket.
+message CommitConsumerOffsetsResponse {
+  repeated PbCommitConsumerOffsetsResponseTable tables = 1;
+}
+
+// Get consumer offsets request and response.
+message GetConsumerOffsetsRequest {
+  required string group_id = 1;
+  // When true, tables must be empty and the server returns all committed offsets of the group.
+  // When false, only requested buckets are returned; an empty list, or tables containing no
+  // buckets, is a valid no-op and produces an empty successful response.
+  optional bool all_offsets = 2;
+  repeated PbGetConsumerOffsetsRequestTable tables = 3;
+}
+
+// Group-wide or request-level failures are returned through the RPC ErrorResponse envelope.
+// Failures affecting only one requested bucket are reported in the corresponding
+// PbGetConsumerOffsetsResponseBucket.
+message GetConsumerOffsetsResponse {
+  repeated PbGetConsumerOffsetsResponseTable tables = 1;
+}
+
+// Delete consumer offsets request and response.
+message DeleteConsumerOffsetsRequest {
+  required string group_id = 1;
+  // An empty list, or tables containing no buckets, is a valid no-op and produces an empty
+  // successful response.
+  repeated PbDeleteConsumerOffsetsRequestTable tables = 2;
+}
+
+// Group-wide or request-level failures are returned through the RPC ErrorResponse envelope.
+// Failures affecting only one requested bucket are reported in the corresponding
+// PbDeleteConsumerOffsetsResponseBucket.
+message DeleteConsumerOffsetsResponse {
+  repeated PbDeleteConsumerOffsetsResponseTable tables = 1;
+}
+
+// Lists consumer groups currently owned by the tablet server receiving this request. This is not
+// a cluster-wide listing; callers that need a cluster-wide view must query every tablet server and
+// merge the responses.
+message ListConsumerGroupsRequest {}
+
+// All failures are returned through the RPC ErrorResponse envelope.
+message ListConsumerGroupsResponse {
+  repeated PbListedGroup groups = 1;
+}
+
+// Delete consumer groups request and response.
+message DeleteConsumerGroupsRequest {
+  // An empty list is a valid no-op and produces an empty successful response.
+  repeated string groups = 1;
+}
+
+// Request-level failures are returned through the RPC ErrorResponse envelope. A failure affecting
+// one group is reported in the corresponding PbDeletedGroup.
+message DeleteConsumerGroupsResponse {
+  repeated PbDeletedGroup groups = 1;
+}
+
 // commit kv snapshot request and response
 message CommitKvSnapshotRequest {
   required bytes completed_snapshot = 1;
@@ -1412,6 +1492,106 @@ message PbKvSnapshotLeaseForBucket {
   optional int64 partition_id = 1;
   required int32 bucket_id = 2;
   required int64 snapshot_id = 3;
+}
+
+// ---- CommitConsumerOffsets ----
+
+message PbCommitConsumerOffsetsRequestTable {
+  required int64 table_id = 1;
+  repeated PbCommitConsumerOffsetsRequestBucket buckets = 2;
+}
+
+message PbCommitConsumerOffsetsRequestBucket {
+  optional int64 partition_id = 1;
+  required int32 bucket_id = 2;
+  required int64 offset = 3;
+  optional string metadata = 4;
+}
+
+message PbCommitConsumerOffsetsResponseTable {
+  required int64 table_id = 1;
+  repeated PbCommitConsumerOffsetsResponseBucket buckets = 2;
+}
+
+message PbCommitConsumerOffsetsResponseBucket {
+  optional int64 partition_id = 1;
+  required int32 bucket_id = 2;
+  // Absent means that the commit succeeded for this bucket.
+  optional int32 error_code = 3;
+  // Set only when error_code is present and additional diagnostic information is available.
+  optional string error_message = 4;
+}
+
+// ---- GetConsumerOffsets ----
+
+message PbGetConsumerOffsetsRequestTable {
+  required int64 table_id = 1;
+  repeated PbGetConsumerOffsetsRequestBucket buckets = 2;
+}
+
+message PbGetConsumerOffsetsRequestBucket {
+  optional int64 partition_id = 1;
+  required int32 bucket_id = 2;
+}
+
+message PbGetConsumerOffsetsResponseTable {
+  required int64 table_id = 1;
+  repeated PbGetConsumerOffsetsResponseBucket buckets = 2;
+}
+
+message PbGetConsumerOffsetsResponseBucket {
+  optional int64 partition_id = 1;
+  required int32 bucket_id = 2;
+  // Absent with no error means not committed.
+  optional int64 offset = 3;
+  // Absent means that no user metadata was committed.
+  optional string metadata = 4;
+  // Absent means that the fetch succeeded for this bucket.
+  optional int32 error_code = 5;
+  // Set only when error_code is present and additional diagnostic information is available.
+  optional string error_message = 6;
+}
+
+// ---- DeleteConsumerOffsets ----
+
+message PbDeleteConsumerOffsetsRequestTable {
+  required int64 table_id = 1;
+  repeated PbDeleteConsumerOffsetsRequestBucket buckets = 2;
+}
+
+message PbDeleteConsumerOffsetsRequestBucket {
+  optional int64 partition_id = 1;
+  required int32 bucket_id = 2;
+}
+
+message PbDeleteConsumerOffsetsResponseTable {
+  required int64 table_id = 1;
+  repeated PbDeleteConsumerOffsetsResponseBucket buckets = 2;
+}
+
+message PbDeleteConsumerOffsetsResponseBucket {
+  optional int64 partition_id = 1;
+  required int32 bucket_id = 2;
+  // Absent means that the delete succeeded for this bucket.
+  optional int32 error_code = 3;
+  // Set only when error_code is present and additional diagnostic information is available.
+  optional string error_message = 4;
+}
+
+// ---- ListConsumerGroups ----
+
+message PbListedGroup {
+  required string group_id = 1;
+}
+
+// ---- DeleteConsumerGroups ----
+
+message PbDeletedGroup {
+  required string group_id = 1;
+  // Absent means that the group was deleted successfully.
+  optional int32 error_code = 2;
+  // Set only when error_code is present and additional diagnostic information is available.
+  optional string error_message = 3;
 }
 
 message PbTableStatsReqForBucket {
