@@ -521,7 +521,7 @@ async fn run_write(
     if !state.backend.has_cluster(cluster_id.as_str()) {
         return Err(unknown_cluster(cluster));
     }
-    let ctx = request_context(cluster_id, &request);
+    let ctx = request_context(cluster_id, &request)?;
 
     let body = collect_body(request).await?;
     state.write_rate.admit(body.len())?;
