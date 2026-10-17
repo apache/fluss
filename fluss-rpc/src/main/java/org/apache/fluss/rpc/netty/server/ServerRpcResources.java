@@ -22,6 +22,7 @@ import org.apache.fluss.config.Configuration;
 import org.apache.fluss.rpc.RpcGatewayService;
 import org.apache.fluss.rpc.netty.NettyUtils;
 import org.apache.fluss.shaded.netty4.io.netty.channel.EventLoopGroup;
+import org.apache.fluss.utils.concurrent.FutureUtils;
 
 import java.util.concurrent.CompletableFuture;
 
@@ -74,7 +75,8 @@ final class ServerRpcResources {
     }
 
     CompletableFuture<Void> closeAsync() {
-        return CompletableFuture.allOf(
-                workerPool.closeAsync(), NettyUtils.shutdownGroup(selectorGroup));
+        // Draining a worker may still enqueue responses on its selector.
+        return FutureUtils.composeAfterwards(
+                workerPool.closeAsync(), () -> NettyUtils.shutdownGroup(selectorGroup));
     }
 }
