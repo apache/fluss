@@ -215,11 +215,19 @@ message MetadataRequest {
   repeated int64 partitions_id = 3 [packed = true];
 }
 
+message PbCoordinatorServerInfo{
+    required int32 id = 1;
+    required PbServerNode coordinator_server = 2;
+    required int32 role = 3;
+    required bool isAlive = 4;
+}
+
 message MetadataResponse {
   optional PbServerNode coordinator_server = 1;
   repeated PbServerNode tablet_servers = 2;
   repeated PbTableMetadata table_metadata = 3;
   repeated PbPartitionMetadata partition_metadata = 4;
+    repeated  PbCoordinatorServerInfo coordinator_servers = 5;
 }
 
 // update metadata request and response, only send between server.

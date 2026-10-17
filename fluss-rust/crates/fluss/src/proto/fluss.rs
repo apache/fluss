@@ -257,6 +257,17 @@ pub struct MetadataRequest {
     #[prost(int64, repeated, tag = "3")]
     pub partitions_id: ::prost::alloc::vec::Vec<i64>,
 }
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct PbCoordinatorServerInfo {
+    #[prost(int32, required, tag = "1")]
+    pub id: i32,
+    #[prost(message, required, tag = "2")]
+    pub coordinator_server: PbServerNode,
+    #[prost(int32, required, tag = "3")]
+    pub role: i32,
+    #[prost(bool, required, tag = "4")]
+    pub is_alive: bool,
+}
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct MetadataResponse {
     #[prost(message, optional, tag = "1")]
@@ -267,6 +278,8 @@ pub struct MetadataResponse {
     pub table_metadata: ::prost::alloc::vec::Vec<PbTableMetadata>,
     #[prost(message, repeated, tag = "4")]
     pub partition_metadata: ::prost::alloc::vec::Vec<PbPartitionMetadata>,
+    #[prost(message, repeated, tag = "5")]
+    pub coordinator_servers: ::prost::alloc::vec::Vec<PbCoordinatorServerInfo>,
 }
 /// update metadata request and response, only send between server.
 #[derive(Clone, PartialEq, ::prost::Message)]

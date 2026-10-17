@@ -110,6 +110,7 @@ import org.slf4j.LoggerFactory;
 import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
 
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
@@ -252,6 +253,13 @@ public class ZooKeeperClient implements AutoCloseable {
         LOG.info("Registered Coordinator server {} at path {}.", coordinatorAddress, path);
     }
 
+    /** Get the registered coordinator server information for the given coordinator id. */
+    public Optional<CoordinatorAddress> getCoordinatorServer(String coordinatorId)
+            throws Exception {
+        Optional<byte[]> bytes = getOrEmpty(ZkData.CoordinatorIdZNode.path(coordinatorId));
+        return bytes.map(ZkData.CoordinatorIdZNode::decode);
+    }
+
     /**
      * Become coordinator leader. This method is a step after electCoordinatorLeader() and before
      * registerCoordinatorLeader(). This is to ensure the coordinator get and update the coordinator
@@ -334,6 +342,38 @@ public class ZooKeeperClient implements AutoCloseable {
     /** Gets the list of coordinator server Ids. */
     public List<String> getCoordinatorServerList() throws Exception {
         return getChildren(ZkData.CoordinatorIdsZNode.path());
+    }
+
+    /**
+     * Gets the registered coordinator server information for all coordinator ids stored in
+     * ZooKeeper.
+     */
+    public List<CoordinatorAddress> getCoordinatorServers() throws Exception {
+        List<CoordinatorAddress> coordinatorServers = new ArrayList<>();
+        for (String coordinatorId : getCoordinatorServerList()) {
+            Optional<CoordinatorAddress> coordinatorServer = getCoordinatorServer(coordinatorId);
+            coordinatorServer.ifPresent(coordinatorServers::add);
+        }
+        return coordinatorServers;
+    }
+
+    /** Gets the coordinator ids currently participating in the election group. */
+    public List<String> getAliveCoordinatorServerList() throws Exception {
+        List<String> aliveCoordinatorServerIds = new ArrayList<>();
+        for (String childName : getChildren(ZkData.CoordinatorElectionZNode.path())) {
+            String childPath = ZkData.CoordinatorElectionZNode.path() + "/" + childName;
+            Optional<byte[]> bytes = getOrEmpty(childPath);
+            if (bytes.isPresent() && bytes.get().length > 0) {
+                aliveCoordinatorServerIds.add(new String(bytes.get(), StandardCharsets.UTF_8));
+            }
+        }
+        Collections.sort(aliveCoordinatorServerIds);
+        return aliveCoordinatorServerIds;
+    }
+
+    /** Gets the ids of all coordinator servers that are currently alive. */
+    public Set<String> getAliveCoordinatorServerIds() throws Exception {
+        return new HashSet<>(getAliveCoordinatorServerList());
     }
 
     /** Ensure epoch znode exists. */
