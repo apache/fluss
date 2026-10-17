@@ -69,6 +69,7 @@ class CommitRemoteLogManifestITCase {
         TabletServerGateway leaderGateWay =
                 FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(leader);
         // produce many records to trigger remote log copy.
+        long expectedRemoteLogEndOffset = 0L;
         for (int i = 0; i < 3; i++) {
             assertProduceLogResponse(
                     leaderGateWay
@@ -77,7 +78,8 @@ class CommitRemoteLogManifestITCase {
                                             tableId, 0, -1, genMemoryLogRecordsByObject(DATA1)))
                             .get(),
                     0,
-                    i * 10L);
+                    expectedRemoteLogEndOffset);
+            expectedRemoteLogEndOffset += DATA1.size();
         }
 
         // stop replicas to mock followers are out of sync
@@ -106,7 +108,7 @@ class CommitRemoteLogManifestITCase {
                         .set(
                                 ConfigOptions.REMOTE_LOG_TASK_INTERVAL_DURATION,
                                 Duration.ofMillis(1)));
-        FLUSS_CLUSTER_EXTENSION.waitUntilSomeLogSegmentsCopyToRemote(tb);
+        FLUSS_CLUSTER_EXTENSION.waitUntilRemoteLogEndOffset(tb, expectedRemoteLogEndOffset);
 
         // check only has two remote log segments for the stopped replicas
         for (int stopFollower : stopFollowers) {
