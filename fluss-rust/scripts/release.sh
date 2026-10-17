@@ -44,6 +44,12 @@ TARBALL="${PREFIX}.tgz"
 echo "Creating ASF source release for fluss-rust ${VERSION}"
 mkdir -p "$DIST_DIR"
 
+# --add-file reads the proto from the working tree, not from HEAD.
+if ! git diff --quiet HEAD -- ../fluss-rpc/src/main/proto/FlussApi.proto; then
+  echo "Error: fluss-rpc/src/main/proto/FlussApi.proto has uncommitted changes"
+  exit 1
+fi
+
 echo "Creating source archive: ${TARBALL}"
 git archive --format=tar.gz \
   --prefix="${PREFIX}/crates/fluss/proto/" --add-file=../fluss-rpc/src/main/proto/FlussApi.proto \
