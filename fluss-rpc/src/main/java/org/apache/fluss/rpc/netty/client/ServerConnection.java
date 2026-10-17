@@ -48,6 +48,7 @@ import org.apache.fluss.shaded.netty4.io.netty.channel.Channel;
 import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelFuture;
 import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelFutureListener;
 import org.apache.fluss.utils.ExponentialBackoff;
+import org.apache.fluss.utils.concurrent.FutureUtils;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -85,6 +86,7 @@ final class ServerConnection {
     private final CompletableFuture<Void> closeFuture = new CompletableFuture<>();
     private final ConnectionMetrics connectionMetrics;
     private final ClientAuthenticator authenticator;
+    private final long requestTimeoutMs;
     private final ExponentialBackoff backoff;
     private final Object lock = new Object();
 
@@ -114,11 +116,13 @@ final class ServerConnection {
             ServerNode node,
             ClientMetricGroup clientMetricGroup,
             ClientAuthenticator authenticator,
+            long requestTimeoutMs,
             BiConsumer<ServerConnection, Throwable> closeCallback) {
         this.node = node;
         this.state = ConnectionState.CONNECTING;
         this.connectionMetrics = clientMetricGroup.createConnectionMetricGroup(node.uid());
         this.authenticator = authenticator;
+        this.requestTimeoutMs = requestTimeoutMs;
         this.backoff = new ExponentialBackoff(100L, 2, 5000L, 0.2);
         whenClose(closeCallback);
 
@@ -360,23 +364,41 @@ final class ServerConnection {
                 return responseFuture;
             }
 
+            FutureUtils.orTimeout(
+                    inflight.responseFuture,
+                    requestTimeoutMs,
+                    TimeUnit.MILLISECONDS,
+                    String.format(
+                            "Timed out waiting for response from node %s after %d ms.",
+                            node, requestTimeoutMs));
+            inflight.responseFuture.whenComplete(
+                    (ignored, throwable) -> {
+                        if (inflightRequests.remove(inflight.requestId, inflight)) {
+                            connectionMetrics.updateMetricsAfterGetResponse(
+                                    apiKey, inflight.requestStartTime, 0);
+                        }
+                    });
+
             channel.writeAndFlush(byteBuf)
                     .addListener(
                             (ChannelFutureListener)
                                     future -> {
                                         if (!future.isSuccess()) {
-                                            connectionMetrics.updateMetricsAfterGetResponse(
-                                                    apiKey, inflight.requestStartTime, 0);
-                                            Throwable cause = future.cause();
-                                            if (cause instanceof IOException) {
-                                                // when server close the channel, the cause will be
-                                                // IOException, if the cause is IOException, we wrap
-                                                // it as retryable NetworkException to retry to
-                                                // connect
-                                                cause = new NetworkException(cause);
+                                            if (inflightRequests.remove(
+                                                    inflight.requestId, inflight)) {
+                                                connectionMetrics.updateMetricsAfterGetResponse(
+                                                        apiKey, inflight.requestStartTime, 0);
+                                                Throwable cause = future.cause();
+                                                if (cause instanceof IOException) {
+                                                    // when server close the channel, the cause will
+                                                    // be IOException, if the cause is IOException,
+                                                    // we wrap it as retryable NetworkException to
+                                                    // retry to connect
+                                                    cause = new NetworkException(cause);
+                                                }
+                                                inflight.responseFuture.completeExceptionally(
+                                                        cause);
                                             }
-                                            inflight.responseFuture.completeExceptionally(cause);
-                                            inflightRequests.remove(inflight.requestId);
                                         }
                                     });
             return inflight.responseFuture;

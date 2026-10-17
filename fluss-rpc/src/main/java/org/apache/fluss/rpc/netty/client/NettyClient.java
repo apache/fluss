@@ -76,6 +76,8 @@ public final class NettyClient implements RpcClient {
 
     private final Supplier<ClientAuthenticator> authenticatorSupplier;
 
+    private final long requestTimeoutMs;
+
     private volatile boolean isClosed = false;
 
     public NettyClient(Configuration conf, ClientMetricGroup clientMetricGroup) {
@@ -87,6 +89,7 @@ public final class NettyClient implements RpcClient {
                         conf.getInt(ConfigOptions.NETTY_CLIENT_NUM_NETWORK_THREADS),
                         "fluss-netty-client");
         int connectTimeoutMs = (int) conf.get(ConfigOptions.CLIENT_CONNECT_TIMEOUT).toMillis();
+        this.requestTimeoutMs = conf.get(ConfigOptions.CLIENT_REQUEST_TIMEOUT).toMillis();
         int connectionMaxIdle =
                 (int) conf.get(ConfigOptions.NETTY_CONNECTION_MAX_IDLE_TIME).getSeconds();
         boolean preferHeap =
@@ -191,6 +194,7 @@ public final class NettyClient implements RpcClient {
                             node,
                             clientMetricGroup,
                             authenticatorSupplier.get(),
+                            requestTimeoutMs,
                             (con, ignore) -> connections.remove(serverId, con));
                 });
     }
