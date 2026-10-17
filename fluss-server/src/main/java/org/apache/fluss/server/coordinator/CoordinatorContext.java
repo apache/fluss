@@ -30,10 +30,6 @@ import org.apache.fluss.server.coordinator.statemachine.ReplicaState;
 import org.apache.fluss.server.metadata.ServerInfo;
 import org.apache.fluss.server.zk.ZkEpoch;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
-import org.apache.fluss.utils.types.Tuple2;
-
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 import javax.annotation.Nullable;
 import javax.annotation.concurrent.NotThreadSafe;
@@ -53,21 +49,10 @@ import java.util.stream.Collectors;
 @NotThreadSafe
 public class CoordinatorContext {
 
-    private static final Logger LOG = LoggerFactory.getLogger(CoordinatorContext.class);
-
     public static final int INITIAL_COORDINATOR_EPOCH = 0;
     public static final int INITIAL_COORDINATOR_EPOCH_ZK_VERSION = 0;
 
-    // for simplicity, we just use retry time, may consider make it a configurable value
-    // and use combine retry times and retry delay
-    public static final int DELETE_TRY_TIMES = 5;
-
     private int offlineBucketCount = 0;
-
-    // a map from the tablet replica to the delete fail number,
-    // once the delete fail number is greater than DELETE_TRY_TIMES, we consider it as
-    // a success deletion.
-    private final Map<TableBucketReplica, Integer> failDeleteNumbers = new HashMap<>();
 
     private final Set<String> liveCoordinatorServers = new HashSet<>();
     private final Map<Integer, ServerInfo> liveTabletServers = new HashMap<>();
@@ -577,46 +562,6 @@ public class CoordinatorContext {
                             }
                         });
         return allReplicas;
-    }
-
-    /**
-     * Pick up the replicas that should retry delete and replicas that considered as success delete.
-     *
-     * @return A tuple of retry delete replicas and success delete replicas
-     */
-    public Tuple2<Set<TableBucketReplica>, Set<TableBucketReplica>>
-            retryDeleteAndSuccessDeleteReplicas(Collection<TableBucketReplica> failDeleteReplicas) {
-        Set<TableBucketReplica> retryDeleteReplicas = new HashSet<>();
-        Set<TableBucketReplica> successDeleteReplicas = new HashSet<>();
-        for (TableBucketReplica tableBucketReplica : failDeleteReplicas) {
-            if (failDeleteNumbers.getOrDefault(tableBucketReplica, 0) >= DELETE_TRY_TIMES) {
-                // if the current fail number is greater or equal than the threshold, we will
-                // consider it as success delete
-                LOG.warn(
-                        "Delete replica {} failed, retry times is equal to the max retry times {},"
-                                + " just mark it as a successful replica deletion directly.",
-                        tableBucketReplica,
-                        DELETE_TRY_TIMES);
-                failDeleteNumbers.remove(tableBucketReplica);
-                successDeleteReplicas.add(tableBucketReplica);
-            } else {
-                // increment the fail number
-                failDeleteNumbers.merge(tableBucketReplica, 1, Integer::sum);
-                LOG.warn(
-                        "Delete replica {} failed, retry times = {}.",
-                        tableBucketReplica,
-                        failDeleteNumbers.get(tableBucketReplica));
-                retryDeleteReplicas.add(tableBucketReplica);
-            }
-        }
-        return Tuple2.of(retryDeleteReplicas, successDeleteReplicas);
-    }
-
-    /** Clear fail delete number for the given replicas. */
-    public void clearFailDeleteNumbers(Collection<TableBucketReplica> replicas) {
-        for (TableBucketReplica tableBucketReplica : replicas) {
-            failDeleteNumbers.remove(tableBucketReplica);
-        }
     }
 
     @VisibleForTesting
