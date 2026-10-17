@@ -471,6 +471,129 @@ defmodule Fluss.Integration.LogTableTest do
     end
   end
 
+  describe "invalid rows" do
+    test "rejects nil in a NOT NULL column", ctx do
+      schema =
+        Fluss.Schema.new()
+        |> Fluss.Schema.column("id", :int)
+        |> Fluss.Schema.column("name", {:not_null, :string})
+
+      writer = ctx |> create_log_table("not_null", schema) |> Fluss.AppendWriter.new!()
+
+      assert {:error, %Fluss.Error{} = err} = Fluss.AppendWriter.append(writer, [1, nil])
+      assert err.message =~ "NOT NULL column `name` must not be nil or omitted"
+    end
+
+    test "rejects an improper list", ctx do
+      writer =
+        ctx
+        |> create_log_table("improper", id_name_schema())
+        |> Fluss.AppendWriter.new!()
+
+      assert {:error, %Fluss.Error{} = err} = Fluss.AppendWriter.append(writer, [1 | "a"])
+      assert err.message =~ "expected a list of values"
+    end
+  end
+
+  describe "write handle" do
+    test "a second wait returns an error", ctx do
+      writer =
+        ctx
+        |> create_log_table("wait_twice", id_name_schema())
+        |> Fluss.AppendWriter.new!()
+
+      {:ok, handle} = Fluss.AppendWriter.append(writer, [1, "a"])
+
+      assert :ok = Fluss.WriteHandle.wait(handle)
+      assert {:error, %Fluss.Error{} = err} = Fluss.WriteHandle.wait(handle)
+      assert err.message =~ "WriteHandle already consumed"
+    end
+  end
+
+  describe "full write buffer" do
+    # A buffer of one batch fills every few writes, which then take the waiting path.
+    setup ctx do
+      config =
+        ctx.config
+        |> Fluss.Config.set_writer_dynamic_batch_size_min(1024)
+        |> Fluss.Config.set_writer_batch_size(1024)
+        |> Fluss.Config.set_writer_buffer_memory_size(1024)
+
+      %{config: config}
+    end
+
+    test "writes wait for room instead of failing", ctx do
+      conn = Fluss.Connection.new!(ctx.config)
+      table = create_log_table(%{ctx | conn: conn}, "full_buffer", id_name_schema())
+      writer = Fluss.AppendWriter.new!(table)
+
+      for id <- 1..200 do
+        assert {:ok, _handle} = Fluss.AppendWriter.append(writer, [id, String.duplicate("x", 50)])
+      end
+
+      assert :ok = Fluss.AppendWriter.flush(writer)
+      assert length(scan_all(table, 200)) == 200
+    end
+
+    test "a write into a full buffer waits off the scheduler", ctx do
+      conn = Fluss.Connection.new!(ctx.config)
+      table = create_log_table(%{ctx | conn: conn}, "full_buffer_pending", id_name_schema())
+      writer = Fluss.AppendWriter.new!(table)
+
+      results =
+        for id <- 1..200,
+            do: Fluss.Native.append_writer_append(writer, [id, String.duplicate("x", 50)])
+
+      assert Enum.any?(results, &match?({:pending, _ref}, &1))
+
+      for result <- results do
+        assert {:ok, _handle} = Fluss.Native.await_queued(result)
+      end
+    end
+
+    # Only the retry can return this error; a full buffer on the first try is retried.
+    test "a write that waits past the timeout returns an error", ctx do
+      conn =
+        ctx.config |> Fluss.Config.set_writer_buffer_wait_timeout_ms(1) |> Fluss.Connection.new!()
+
+      table = create_log_table(%{ctx | conn: conn}, "buffer_timeout", id_name_schema())
+      writer = Fluss.AppendWriter.new!(table)
+
+      results =
+        for id <- 1..200,
+            do: Fluss.AppendWriter.append(writer, [id, String.duplicate("x", 50)])
+
+      assert Enum.any?(results, fn
+               {:error, %Fluss.Error{message: message}} -> message =~ "buffer exhausted"
+               _ -> false
+             end)
+    end
+  end
+
+  defp create_log_table(%{conn: conn, admin: admin}, label, schema) do
+    table_name = "ex_test_log_#{label}_#{:rand.uniform(100_000)}"
+    cleanup_table(admin, table_name)
+    on_exit(fn -> cleanup_table(admin, table_name) end)
+
+    # One bucket so scan_all can read everything from bucket 0.
+    descriptor = Fluss.TableDescriptor.new!(schema, bucket_count: 1)
+    :ok = Fluss.Admin.create_table(admin, @database, table_name, descriptor, false)
+
+    Fluss.Table.get!(conn, @database, table_name)
+  end
+
+  defp id_name_schema do
+    Fluss.Schema.new()
+    |> Fluss.Schema.column("id", :int)
+    |> Fluss.Schema.column("name", :string)
+  end
+
+  defp scan_all(table, expected_count) do
+    scanner = Fluss.LogScanner.new!(table)
+    :ok = Fluss.LogScanner.subscribe(scanner, 0, Fluss.earliest_offset())
+    poll_records(scanner, expected_count)
+  end
+
   defp poll_records(scanner, expected_count, timeout_ms \\ 10_000) do
     deadline = System.monotonic_time(:millisecond) + timeout_ms
     do_poll(scanner, expected_count, deadline, [])

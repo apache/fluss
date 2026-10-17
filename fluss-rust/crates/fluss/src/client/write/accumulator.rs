@@ -115,7 +115,7 @@ impl MemoryLimiter {
                 return Err(Error::BufferExhausted {
                     message: format!(
                         "Failed to allocate {} bytes for write batch within the buffer wait budget. \
-                         {} of {} bytes in use, {} threads waiting.",
+                         {} of {} bytes in use, {} threads waiting",
                         size,
                         *used,
                         self.max_memory,

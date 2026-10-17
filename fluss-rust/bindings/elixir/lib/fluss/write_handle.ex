@@ -30,9 +30,10 @@ defmodule Fluss.WriteHandle do
 
   @spec wait(t()) :: :ok | {:error, Fluss.Error.t()}
   def wait(handle) do
-    handle
-    |> Native.write_handle_wait()
-    |> Native.await_nif()
+    case Native.write_handle_wait(handle) do
+      {:error, _} = err -> err
+      ref -> Native.await_nif(ref)
+    end
   end
 
   @spec wait!(t()) :: :ok

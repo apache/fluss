@@ -17,7 +17,7 @@
 
 use crate::RUNTIME;
 use crate::async_nif;
-use crate::atoms::{self, to_nif_err};
+use crate::atoms::{self, client_err, to_nif_err};
 use fluss::client::WriteResultFuture;
 use fluss::error::Error as CoreError;
 use rustler::{Encoder, Env, ResourceArc, Term};
@@ -66,10 +66,13 @@ where
 }
 
 #[rustler::nif]
-fn write_handle_wait<'a>(env: Env<'a>, handle: ResourceArc<WriteHandleResource>) -> Term<'a> {
+fn write_handle_wait<'a>(
+    env: Env<'a>,
+    handle: ResourceArc<WriteHandleResource>,
+) -> Result<Term<'a>, rustler::Error> {
     let future = handle.inner.lock().unwrap().take();
     match future {
-        Some(f) => async_nif::spawn_task(env, f),
-        None => async_nif::send_client_error(env, "WriteHandle already consumed"),
+        Some(f) => Ok(async_nif::spawn_task(env, f)),
+        None => Err(client_err("WriteHandle already consumed")),
     }
 }
