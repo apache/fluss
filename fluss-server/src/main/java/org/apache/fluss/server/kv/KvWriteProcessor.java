@@ -20,6 +20,7 @@ package org.apache.fluss.server.kv;
 import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.compression.ArrowCompressionInfo;
 import org.apache.fluss.exception.DeletionDisabledException;
+import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.exception.SchemaNotExistException;
 import org.apache.fluss.memory.MemorySegmentPool;
 import org.apache.fluss.metadata.ChangelogImage;
@@ -111,6 +112,7 @@ public final class KvWriteProcessor {
     private final ValueDecoder lakeValueDecoder;
     @Nullable private final RowTtlTimestampProvider rowTtlTimestampProvider;
     private final Clock clock;
+    private final boolean skipUnchangedUpsert;
 
     /** Creates a KV write processor. */
     public KvWriteProcessor(
@@ -127,7 +129,8 @@ public final class KvWriteProcessor {
             KvStateValueEncoder stateValueEncoder,
             ValueDecoder valueDecoder,
             @Nullable RowTtlTimestampProvider rowTtlTimestampProvider,
-            Clock clock) {
+            Clock clock,
+            boolean skipUnchangedUpsert) {
         this.tableBucket = tableBucket;
         this.logTablet = logTablet;
         this.arrowWriterProvider = arrowWriterProvider;
@@ -147,6 +150,7 @@ public final class KvWriteProcessor {
         this.lakeValueDecoder = new ValueDecoder(schemaGetter, kvFormat, KvValueLayout.PLAIN);
         this.rowTtlTimestampProvider = rowTtlTimestampProvider;
         this.clock = clock;
+        this.skipUnchangedUpsert = skipUnchangedUpsert;
     }
 
     /** Processes a KV batch against the supplied state and appends its WAL. */
@@ -177,6 +181,7 @@ public final class KvWriteProcessor {
                     kvRecords,
                     kvRecords.schemaId(),
                     writeContext.rowMerger,
+                    writeContext.rowEqualizer,
                     writeContext.autoIncrementUpdater,
                     walBuilder,
                     latestSchemaRow,
@@ -267,6 +272,11 @@ public final class KvWriteProcessor {
 
     private WriteContext createWriteContext(
             KvRecordBatch kvRecords, @Nullable int[] targetColumns, MergeMode mergeMode) {
+        if (skipUnchangedUpsert && mergeMode == MergeMode.OVERWRITE) {
+            throw new InvalidTableException(
+                    "MergeMode.OVERWRITE cannot be used with table.upsert.skip-unchanged enabled.");
+        }
+
         SchemaInfo schemaInfo = schemaGetter.getLatestSchemaInfo();
         Schema latestSchema = schemaInfo.getSchema();
         short latestSchemaId = (short) schemaInfo.getSchemaId();
@@ -283,8 +293,14 @@ public final class KvWriteProcessor {
                                 targetColumns, latestSchemaId, latestSchema)
                         : rowMerger.configureTargetColumns(
                                 targetColumns, latestSchemaId, latestSchema);
+        LogicalRowEqualizer rowEqualizer =
+                skipUnchangedUpsert ? new LogicalRowEqualizer(schemaGetter, latestSchema) : null;
         return new WriteContext(
-                latestSchema, latestSchemaId, autoIncrementUpdater, configuredRowMerger);
+                latestSchema,
+                latestSchemaId,
+                autoIncrementUpdater,
+                configuredRowMerger,
+                rowEqualizer);
     }
 
     private void validateSchemaId(short schemaIdOfNewData, short latestSchemaId) {
@@ -301,6 +317,7 @@ public final class KvWriteProcessor {
             KvRecordBatch kvRecords,
             short schemaIdOfNewData,
             RowMerger currentMerger,
+            @Nullable LogicalRowEqualizer rowEqualizer,
             AutoIncrementUpdater autoIncrementUpdater,
             WalBuilder walBuilder,
             PaddingRow latestSchemaRow,
@@ -326,6 +343,7 @@ public final class KvWriteProcessor {
                         processDeletion(
                                 key,
                                 currentMerger,
+                                rowEqualizer,
                                 walBuilder,
                                 latestSchemaRow,
                                 logOffset,
@@ -338,6 +356,7 @@ public final class KvWriteProcessor {
                                 key,
                                 currentValue,
                                 currentMerger,
+                                rowEqualizer,
                                 autoIncrementUpdater,
                                 walBuilder,
                                 latestSchemaRow,
@@ -352,6 +371,7 @@ public final class KvWriteProcessor {
     private long processDeletion(
             KvPreWriteBuffer.Key key,
             RowMerger currentMerger,
+            @Nullable LogicalRowEqualizer rowEqualizer,
             WalBuilder walBuilder,
             PaddingRow latestSchemaRow,
             long logOffset,
@@ -374,6 +394,12 @@ public final class KvWriteProcessor {
 
         BinaryValue newValue = currentMerger.delete(oldValue);
 
+        boolean skipWrite =
+                rowEqualizer != null && newValue != null && rowEqualizer.equals(oldValue, newValue);
+        if (skipWrite) {
+            return logOffset;
+        }
+
         // if newValue is null, it means the row should be deleted
         if (newValue == null) {
             return applyDelete(
@@ -388,6 +414,7 @@ public final class KvWriteProcessor {
             KvPreWriteBuffer.Key key,
             BinaryValue currentValue,
             RowMerger currentMerger,
+            @Nullable LogicalRowEqualizer rowEqualizer,
             AutoIncrementUpdater autoIncrementUpdater,
             WalBuilder walBuilder,
             PaddingRow latestSchemaRow,
@@ -417,7 +444,11 @@ public final class KvWriteProcessor {
 
         BinaryValue newValue = currentMerger.merge(oldValue, currentValue);
 
-        if (newValue == oldValue) {
+        boolean skipWrite =
+                rowEqualizer != null
+                        ? rowEqualizer.equals(oldValue, newValue)
+                        : newValue == oldValue;
+        if (skipWrite) {
             // no actual change, skip this record
             return logOffset;
         }
@@ -563,16 +594,19 @@ public final class KvWriteProcessor {
         private final short latestSchemaId;
         private final AutoIncrementUpdater autoIncrementUpdater;
         private final RowMerger rowMerger;
+        @Nullable private final LogicalRowEqualizer rowEqualizer;
 
         private WriteContext(
                 Schema latestSchema,
                 short latestSchemaId,
                 AutoIncrementUpdater autoIncrementUpdater,
-                RowMerger rowMerger) {
+                RowMerger rowMerger,
+                @Nullable LogicalRowEqualizer rowEqualizer) {
             this.latestSchema = latestSchema;
             this.latestSchemaId = latestSchemaId;
             this.autoIncrementUpdater = autoIncrementUpdater;
             this.rowMerger = rowMerger;
+            this.rowEqualizer = rowEqualizer;
         }
     }
 }

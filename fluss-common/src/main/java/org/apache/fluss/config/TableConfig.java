@@ -171,6 +171,11 @@ public class TableConfig {
         return config.getOptional(ConfigOptions.TABLE_MERGE_ENGINE);
     }
 
+    /** Whether an unchanged upsert should skip the state write and changelog. */
+    public boolean isUpsertSkipUnchanged() {
+        return config.get(ConfigOptions.TABLE_UPSERT_SKIP_UNCHANGED);
+    }
+
     /**
      * Gets the optional {@link MergeEngineType#VERSIONED} merge engine version column of the table.
      */
