@@ -119,6 +119,76 @@ abstract class BaseProcedure(tableCatalog: TableCatalog) extends Procedure {
   }
 
   /**
+   * Validates that a required, non-null argument has been provided for the given parameter.
+   *
+   * @param parameter
+   *   the procedure parameter that is being validated
+   * @param isProvided
+   *   whether the argument was provided by the caller
+   */
+  protected def checkRequiredArgument(parameter: ProcedureParameter, isProvided: Boolean): Unit = {
+    if (parameter.isRequired && !isProvided) {
+      throw new IllegalArgumentException(s"Required parameter '${parameter.name}' is missing.")
+    }
+  }
+
+  /**
+   * Validates that a provided argument can be safely interpreted as the declared parameter type and
+   * produces a user-friendly error message when it cannot.
+   *
+   * This is intended for procedures whose parameters are resolved as loosely typed Spark values
+   * (e.g. via the generic CALL framework). It should be called from a procedure's `call` method
+   * before the argument is used.
+   *
+   * @param parameter
+   *   the procedure parameter describing the expected type
+   * @param argument
+   *   the argument value provided by the caller (may be null)
+   * @throws IllegalArgumentException
+   *   if the argument is present but not assignable to the parameter's declared type
+   */
+  protected def checkArgumentType(parameter: ProcedureParameter, argument: Any): Unit = {
+    if (argument == null) {
+      return
+    }
+    val expectedType = parameter.dataType
+    val actualType = argument.getClass
+    val typeName = sparkTypeName(expectedType)
+    if (!isAssignable(expectedType, argument)) {
+      throw new IllegalArgumentException(
+        s"Expected $typeName for parameter '${parameter.name}', but got " +
+          s"${actualType.getSimpleName}.")
+    }
+  }
+
+  private def isAssignable(
+      expectedType: org.apache.spark.sql.types.DataType,
+      argument: Any): Boolean = {
+    expectedType match {
+      case org.apache.spark.sql.types.StringType => argument.isInstanceOf[String]
+      case org.apache.spark.sql.types.BooleanType => argument.isInstanceOf[java.lang.Boolean]
+      case org.apache.spark.sql.types.IntegerType =>
+        argument.isInstanceOf[java.lang.Integer]
+      case org.apache.spark.sql.types.LongType => argument.isInstanceOf[java.lang.Long]
+      case org.apache.spark.sql.types.DoubleType => argument.isInstanceOf[java.lang.Double]
+      case org.apache.spark.sql.types.FloatType => argument.isInstanceOf[java.lang.Float]
+      case _ => true
+    }
+  }
+
+  private def sparkTypeName(dataType: org.apache.spark.sql.types.DataType): String = {
+    dataType match {
+      case org.apache.spark.sql.types.StringType => "STRING"
+      case org.apache.spark.sql.types.BooleanType => "BOOLEAN"
+      case org.apache.spark.sql.types.IntegerType => "INT"
+      case org.apache.spark.sql.types.LongType => "BIGINT"
+      case org.apache.spark.sql.types.DoubleType => "DOUBLE"
+      case org.apache.spark.sql.types.FloatType => "FLOAT"
+      case other => other.simpleString
+    }
+  }
+
+  /**
    * Converts a Spark Identifier to a Fluss TablePath.
    *
    * @param ident

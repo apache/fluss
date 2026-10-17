@@ -20,6 +20,8 @@ package org.apache.fluss.spark.procedure
 import org.apache.fluss.config.ConfigOptions
 import org.apache.fluss.spark.FlussSparkTestBase
 
+import org.apache.spark.sql.AnalysisException
+
 class GetClusterConfigsProcedureTest extends FlussSparkTestBase {
 
   test("get_cluster_configs: get all configurations") {
@@ -110,5 +112,14 @@ class GetClusterConfigsProcedureTest extends FlussSparkTestBase {
       sql(s"CALL $DEFAULT_CATALOG.sys.get_cluster_configs(config_keys => array())").collect()
 
     assert(result.length > 0)
+  }
+
+  test("get_cluster_configs: rejects wrong argument type for config_keys") {
+    val testKey = ConfigOptions.KV_SNAPSHOT_INTERVAL.key()
+
+    // Passing a scalar STRING where an ARRAY is expected must fail before execution.
+    intercept[AnalysisException] {
+      sql(s"CALL $DEFAULT_CATALOG.sys.get_cluster_configs(config_keys => '$testKey')").collect()
+    }
   }
 }
