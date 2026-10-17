@@ -37,6 +37,8 @@ import org.apache.fluss.rpc.messages.CreateDatabaseRequest;
 import org.apache.fluss.rpc.messages.CreateDatabaseResponse;
 import org.apache.fluss.rpc.messages.CreatePartitionRequest;
 import org.apache.fluss.rpc.messages.CreatePartitionResponse;
+import org.apache.fluss.rpc.messages.CreateTableFromLakeRequest;
+import org.apache.fluss.rpc.messages.CreateTableFromLakeResponse;
 import org.apache.fluss.rpc.messages.CreateTableRequest;
 import org.apache.fluss.rpc.messages.CreateTableResponse;
 import org.apache.fluss.rpc.messages.DeleteProducerOffsetsRequest;
@@ -107,6 +109,15 @@ public interface AdminGateway extends AdminReadOnlyGateway {
      */
     @RPC(api = ApiKeys.CREATE_TABLE)
     CompletableFuture<CreateTableResponse> createTable(CreateTableRequest request);
+
+    /**
+     * Creates a Fluss table from an existing lake table.
+     *
+     * @param request the request to create a Fluss table from a lake table
+     */
+    @RPC(api = ApiKeys.CREATE_TABLE_FROM_LAKE)
+    CompletableFuture<CreateTableFromLakeResponse> createTableFromLake(
+            CreateTableFromLakeRequest request);
 
     /**
      * Alter a table.

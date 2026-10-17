@@ -58,6 +58,7 @@ import org.apache.fluss.server.zk.data.PartitionAssignment;
 import org.apache.fluss.server.zk.data.PartitionRegistration;
 import org.apache.fluss.server.zk.data.TableAssignment;
 import org.apache.fluss.server.zk.data.TableRegistration;
+import org.apache.fluss.server.zk.data.lake.LakeTableSnapshot;
 import org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.KeeperException;
 import org.apache.fluss.utils.function.RunnableWithException;
 import org.apache.fluss.utils.function.ThrowingRunnable;
@@ -860,7 +861,7 @@ public class MetadataManager {
             // enable datalake for the table. NOTE: this may have external (lake catalog) side
             // effects and is therefore NOT safe to auto-retry.
             preAlterTableProperties(
-                    tablePath, tableDescriptor, newDescriptor, tableChanges, flussPrincipal);
+                    tablePath, tableInfo, newDescriptor, tableChanges, flussPrincipal);
 
             TableRegistration updatedTableRegistration =
                     tableReg.newProperties(
@@ -945,24 +946,27 @@ public class MetadataManager {
 
     private void preAlterTableProperties(
             TablePath tablePath,
-            TableDescriptor tableDescriptor,
+            TableInfo tableInfo,
             TableDescriptor newDescriptor,
             List<TableChange> tableChanges,
             FlussPrincipal flussPrincipal) {
+        TableDescriptor tableDescriptor = tableInfo.toTableDescriptor();
         TablePath currentLakeTablePath =
                 LakeTableUtil.resolveLakeTablePath(
                         tablePath, Configuration.fromMap(tableDescriptor.getProperties()));
-        LakeCatalog.Context lakeCatalogContext =
-                new CoordinatorService.DefaultLakeCatalogContext(
-                        false,
-                        currentLakeTablePath,
-                        flussPrincipal,
-                        tableDescriptor,
-                        newDescriptor);
         LakeCatalog lakeCatalog =
                 lakeCatalogDynamicLoader.getLakeCatalogContainer().getLakeCatalog();
         boolean enablingDataLake =
                 isDataLakeEnabled(newDescriptor) && !isDataLakeEnabled(tableDescriptor);
+        Long currentLakeSnapshotId = enablingDataLake ? getCurrentLakeSnapshotId(tableInfo) : null;
+        LakeCatalog.Context lakeCatalogContext =
+                new CoordinatorService.DefaultLakeCatalogContext(
+                        false,
+                        currentLakeTablePath,
+                        currentLakeSnapshotId,
+                        flussPrincipal,
+                        tableDescriptor,
+                        newDescriptor);
         TablePath lakeTablePath = currentLakeTablePath;
         List<TableChange> lakeTableChanges = tableChanges;
 
@@ -1018,6 +1022,21 @@ public class MetadataManager {
                             e);
                 }
             }
+        }
+    }
+
+    @Nullable
+    private Long getCurrentLakeSnapshotId(TableInfo tableInfo) {
+        try {
+            return zookeeperClient
+                    .getLakeTableSnapshot(tableInfo.getTableId(), null)
+                    .map(LakeTableSnapshot::getSnapshotId)
+                    .orElse(null);
+        } catch (Exception e) {
+            throw new FlussRuntimeException(
+                    "Failed to read the registered lake snapshot for table "
+                            + tableInfo.getTablePath(),
+                    e);
         }
     }
 

@@ -32,6 +32,7 @@ import org.apache.fluss.utils.WrappingProxy;
 import javax.annotation.Nullable;
 
 import java.util.List;
+import java.util.Optional;
 
 /**
  * A wrapper around {@link LakeStoragePlugin} that ensures the plugin classloader is used for all
@@ -75,6 +76,22 @@ public class PluginLakeStorageWrapper implements LakeStoragePlugin {
         private ClassLoaderFixingLakeCatalog(final LakeCatalog inner, final ClassLoader loader) {
             this.inner = inner;
             this.loader = loader;
+        }
+
+        @Override
+        public TableDescriptor getTableDescriptor(TablePath tablePath)
+                throws TableNotExistException {
+            try (TemporaryClassLoaderContext ignored = TemporaryClassLoaderContext.of(loader)) {
+                return inner.getTableDescriptor(tablePath);
+            }
+        }
+
+        @Override
+        public Optional<Long> getLatestDataChangeSnapshotId(TablePath tablePath)
+                throws TableNotExistException {
+            try (TemporaryClassLoaderContext ignored = TemporaryClassLoaderContext.of(loader)) {
+                return inner.getLatestDataChangeSnapshotId(tablePath);
+            }
         }
 
         @Override

@@ -152,13 +152,12 @@ public class PaimonTableValidation {
 
     private static boolean equalPaimonOptions(
             Map<String, String> existingOptions, Map<String, String> newOptions) {
-        if (!Objects.equals(
-                existingOptions.get(PARTITION_GENERATE_LEGACY_NAME_OPTION_KEY),
-                Boolean.FALSE.toString())) {
-            return false;
-        }
-
         for (String option : PAIMON_UNSETTABLE_OPTIONS) {
+            if (PARTITION_GENERATE_LEGACY_NAME_OPTION_KEY.equals(option)) {
+                // Existing Paimon tables keep their partition path encoding. Fluss addresses
+                // partitions through logical values and Paimon APIs rather than the directory name.
+                continue;
+            }
             if (!Objects.equals(existingOptions.get(option), newOptions.get(option))) {
                 return false;
             }

@@ -54,6 +54,8 @@ import org.apache.fluss.rpc.messages.CreateDatabaseRequest;
 import org.apache.fluss.rpc.messages.CreateDatabaseResponse;
 import org.apache.fluss.rpc.messages.CreatePartitionRequest;
 import org.apache.fluss.rpc.messages.CreatePartitionResponse;
+import org.apache.fluss.rpc.messages.CreateTableFromLakeRequest;
+import org.apache.fluss.rpc.messages.CreateTableFromLakeResponse;
 import org.apache.fluss.rpc.messages.CreateTableRequest;
 import org.apache.fluss.rpc.messages.CreateTableResponse;
 import org.apache.fluss.rpc.messages.DatabaseExistsRequest;
@@ -188,6 +190,12 @@ public class TestCoordinatorGateway implements CoordinatorGateway {
 
     @Override
     public CompletableFuture<CreateTableResponse> createTable(CreateTableRequest request) {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public CompletableFuture<CreateTableFromLakeResponse> createTableFromLake(
+            CreateTableFromLakeRequest request) {
         throw new UnsupportedOperationException();
     }
 

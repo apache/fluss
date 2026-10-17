@@ -24,6 +24,7 @@ import org.apache.fluss.cluster.rebalance.GoalType;
 import org.apache.fluss.cluster.rebalance.ServerTag;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.config.ConfigurationUtils;
 import org.apache.fluss.config.FlussConfigUtils;
 import org.apache.fluss.config.cluster.AlterConfig;
 import org.apache.fluss.config.cluster.AlterConfigOpType;
@@ -93,6 +94,8 @@ import org.apache.fluss.rpc.messages.CreateDatabaseRequest;
 import org.apache.fluss.rpc.messages.CreateDatabaseResponse;
 import org.apache.fluss.rpc.messages.CreatePartitionRequest;
 import org.apache.fluss.rpc.messages.CreatePartitionResponse;
+import org.apache.fluss.rpc.messages.CreateTableFromLakeRequest;
+import org.apache.fluss.rpc.messages.CreateTableFromLakeResponse;
 import org.apache.fluss.rpc.messages.CreateTableRequest;
 import org.apache.fluss.rpc.messages.CreateTableResponse;
 import org.apache.fluss.rpc.messages.DeleteProducerOffsetsRequest;
@@ -124,11 +127,13 @@ import org.apache.fluss.rpc.messages.MetadataResponse;
 import org.apache.fluss.rpc.messages.PbAlterConfig;
 import org.apache.fluss.rpc.messages.PbHeartbeatReqForTable;
 import org.apache.fluss.rpc.messages.PbHeartbeatRespForTable;
+import org.apache.fluss.rpc.messages.PbKeyValue;
 import org.apache.fluss.rpc.messages.PbKvSnapshotLeaseForTable;
 import org.apache.fluss.rpc.messages.PbLakeTieringStats;
 import org.apache.fluss.rpc.messages.PbPrepareLakeTableRespForTable;
 import org.apache.fluss.rpc.messages.PbProducerTableOffsets;
 import org.apache.fluss.rpc.messages.PbTableBucket;
+import org.apache.fluss.rpc.messages.PbTableInfo;
 import org.apache.fluss.rpc.messages.PbTableOffsets;
 import org.apache.fluss.rpc.messages.PrepareLakeTableSnapshotRequest;
 import org.apache.fluss.rpc.messages.PrepareLakeTableSnapshotResponse;
@@ -253,7 +258,16 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
 
     private static final Logger LOG = LoggerFactory.getLogger(CoordinatorService.class);
     private static final String SECURITY_CONFIG_KEY_PREFIX = "security.";
-
+    private static final String BUCKET_NUM_PROPERTY = "bucket.num";
+    // The Paimon table path comes from the request. Lake reads are enabled separately after
+    // creating the Fluss table metadata.
+    private static final Set<String> CREATE_TABLE_FROM_LAKE_RESERVED_OPTIONS =
+            Collections.unmodifiableSet(
+                    new HashSet<>(
+                            Arrays.asList(
+                                    ConfigOptions.TABLE_DATALAKE_ENABLED.key(),
+                                    ConfigOptions.TABLE_DATALAKE_DATABASE_NAME.key(),
+                                    ConfigOptions.TABLE_DATALAKE_TABLE_NAME.key())));
     private final int defaultBucketNumber;
     private final int defaultReplicationFactor;
     private final boolean logTableAllowCreation;
@@ -499,6 +513,76 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         LakeCatalogDynamicLoader.LakeCatalogContainer lakeCatalogContainer =
                 lakeCatalogDynamicLoader.getLakeCatalogContainer();
 
+        createTableInternal(
+                tablePath, tableDescriptor, request.isIgnoreIfExists(), true, lakeCatalogContainer);
+
+        return CompletableFuture.completedFuture(new CreateTableResponse());
+    }
+
+    @Override
+    public CompletableFuture<CreateTableFromLakeResponse> createTableFromLake(
+            CreateTableFromLakeRequest request) {
+        TablePath tablePath = toTablePath(request.getTablePath());
+        tablePath.validate();
+        String databaseName = tablePath.getDatabaseName();
+
+        boolean databaseExists = metadataManager.databaseExists(databaseName);
+        if (databaseExists) {
+            authorizeDatabase(OperationType.CREATE, databaseName);
+        } else if (authorizer != null) {
+            authorizer.authorize(currentSession(), OperationType.CREATE, Resource.cluster());
+        }
+        LakeCatalogDynamicLoader.LakeCatalogContainer lakeCatalogContainer =
+                lakeCatalogDynamicLoader.getLakeCatalogContainer();
+        if (!lakeCatalogContainer.isClusterDataLakeTableEnabled()
+                || lakeCatalogContainer.getDataLakeFormat() != DataLakeFormat.PAIMON
+                || lakeCatalogContainer.getLakeCatalog() == null) {
+            throw new InvalidTableException(
+                    "Creating a Fluss table on an existing lake table requires the cluster to "
+                            + "enable Paimon Lake Storage.");
+        }
+
+        TableDescriptor tableDescriptor =
+                lakeCatalogContainer.getLakeCatalog().getTableDescriptor(tablePath);
+        tableDescriptor =
+                mergeCreateTableFromLakeOptions(
+                        tablePath, tableDescriptor, request.getOptionsList());
+
+        if (databaseExists && metadataManager.tableExists(tablePath)) {
+            validateExistingTableFromLake(
+                    tablePath, metadataManager.getTable(tablePath), tableDescriptor);
+            throw new TableAlreadyExistException("Table " + tablePath + " already exists.");
+        }
+
+        if (!databaseExists) {
+            metadataManager.createDatabase(
+                    databaseName, DatabaseDescriptor.builder().build(), true);
+        }
+        createTableInternal(tablePath, tableDescriptor, false, false, lakeCatalogContainer);
+
+        TableInfo tableInfo = metadataManager.getTable(tablePath);
+        PbTableInfo pbTableInfo =
+                new PbTableInfo()
+                        .setTableId(tableInfo.getTableId())
+                        .setSchemaId(tableInfo.getSchemaId())
+                        .setTableJson(tableInfo.toTableDescriptor().toJsonBytes())
+                        .setCreatedTime(tableInfo.getCreatedTime())
+                        .setModifiedTime(tableInfo.getModifiedTime())
+                        .setBucketCountEpoch(tableInfo.getBucketCountEpoch());
+        if (tableInfo.getRemoteDataDir() != null) {
+            pbTableInfo.setRemoteDataDir(tableInfo.getRemoteDataDir());
+        }
+        return CompletableFuture.completedFuture(
+                new CreateTableFromLakeResponse().setTableInfo(pbTableInfo));
+    }
+
+    private void createTableInternal(
+            TablePath tablePath,
+            TableDescriptor tableDescriptor,
+            boolean ignoreIfExists,
+            boolean createLakeTable,
+            LakeCatalogDynamicLoader.LakeCatalogContainer lakeCatalogContainer) {
+
         // Check table creation permissions based on table type
         validateTableCreationPermission(tableDescriptor, tablePath);
 
@@ -524,14 +608,14 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
             tableAssignment = generateAssignment(bucketCount, replicaFactor, servers);
         }
 
-        if (request.isIgnoreIfExists() && metadataManager.tableExists(tablePath)) {
-            return CompletableFuture.completedFuture(new CreateTableResponse());
+        if (ignoreIfExists && metadataManager.tableExists(tablePath)) {
+            return;
         }
 
         replicaCapacityController.checkCanCreateKvLeaderReplicas(newKvLeaderReplicaCount);
 
         // before create table in fluss, we may create in lake
-        if (isDataLakeEnabled(tableDescriptor)) {
+        if (createLakeTable && isDataLakeEnabled(tableDescriptor)) {
             TablePath lakeTablePath =
                     LakeTableUtil.resolveLakeTablePath(
                             tablePath, Configuration.fromMap(tableDescriptor.getProperties()));
@@ -559,11 +643,7 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         // then create table;
         long tableId =
                 metadataManager.createTable(
-                        tablePath,
-                        remoteDataDir,
-                        tableDescriptor,
-                        tableAssignment,
-                        request.isIgnoreIfExists());
+                        tablePath, remoteDataDir, tableDescriptor, tableAssignment, ignoreIfExists);
         if (tableId >= 0 && isHistoricalPartitionEnabled(tableDescriptor)) {
             try {
                 createHistoricalPartition(tablePath, tableId, tableDescriptor);
@@ -571,8 +651,131 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                 throw historicalPartitionCreateTableException(tablePath, e);
             }
         }
+    }
 
-        return CompletableFuture.completedFuture(new CreateTableResponse());
+    private TableDescriptor mergeCreateTableFromLakeOptions(
+            TablePath tablePath,
+            TableDescriptor tableDescriptor,
+            List<PbKeyValue> requestedOptions) {
+        Map<String, String> properties = new HashMap<>(tableDescriptor.getProperties());
+        Integer requestedBucketCount = null;
+
+        for (PbKeyValue option : requestedOptions) {
+            String key = option.getKey();
+            String value = option.getValue();
+            if (BUCKET_NUM_PROPERTY.equals(key)) {
+                requestedBucketCount = parseBucketCount(tablePath, value);
+                continue;
+            }
+            if (CREATE_TABLE_FROM_LAKE_RESERVED_OPTIONS.contains(key)) {
+                throw new InvalidTableException(
+                        String.format(
+                                "Option '%s' is managed by Fluss when creating a table from Paimon and "
+                                        + "cannot be specified for table %s.",
+                                key, tablePath));
+            }
+            if (tableDescriptor.getProperties().containsKey(key)) {
+                String derivedValue = tableDescriptor.getProperties().get(key);
+                if (!value.equals(derivedValue)) {
+                    throw new InvalidTableException(
+                            String.format(
+                                    "Option '%s' for Paimon table %s is derived as '%s' and "
+                                            + "cannot be set to '%s'.",
+                                    key, tablePath, derivedValue, value));
+                }
+                continue;
+            }
+            properties.put(key, value);
+        }
+
+        TableDescriptor mergedDescriptor = tableDescriptor.withProperties(properties);
+        Optional<Integer> sourceBucketCount =
+                tableDescriptor
+                        .getTableDistribution()
+                        .flatMap(TableDescriptor.TableDistribution::getBucketCount);
+        if (sourceBucketCount.isPresent()) {
+            if (requestedBucketCount != null
+                    && requestedBucketCount.intValue() != sourceBucketCount.get()) {
+                throw new InvalidTableException(
+                        String.format(
+                                "Paimon table %s uses %d buckets, but '%s' is set to %d.",
+                                tablePath,
+                                sourceBucketCount.get(),
+                                BUCKET_NUM_PROPERTY,
+                                requestedBucketCount));
+            }
+        } else if (requestedBucketCount != null) {
+            mergedDescriptor = mergedDescriptor.withBucketCount(requestedBucketCount);
+        }
+        return mergedDescriptor;
+    }
+
+    private static void validateExistingTableFromLake(
+            TablePath paimonTablePath,
+            TableInfo existingFlussTableInfo,
+            TableDescriptor paimonDerivedFlussDescriptor) {
+        if (existingFlussTableInfo.getTableConfig().getDataLakeFormat().orElse(null)
+                        != DataLakeFormat.PAIMON
+                || !existingFlussTableInfo.getLakeTablePath().equals(paimonTablePath)) {
+            throw incompatibleExistingTableFromLake(
+                    paimonTablePath, "it is not mapped to this Paimon table");
+        }
+        TableDescriptor existingFlussDescriptor = existingFlussTableInfo.toTableDescriptor();
+        int expectedBucketCount =
+                paimonDerivedFlussDescriptor
+                        .getTableDistribution()
+                        .flatMap(TableDescriptor.TableDistribution::getBucketCount)
+                        .orElse(existingFlussTableInfo.getNumBuckets());
+
+        // Keep existing options omitted by the request, including the datalake enabled state.
+        TableDescriptor expectedFlussDescriptor =
+                TableDescriptor.builder(existingFlussDescriptor)
+                        .schema(paimonDerivedFlussDescriptor.getSchema())
+                        .partitionedBy(paimonDerivedFlussDescriptor.getPartitionKeys())
+                        .distributedBy(
+                                expectedBucketCount, paimonDerivedFlussDescriptor.getBucketKeys())
+                        .properties(paimonDerivedFlussDescriptor.getProperties())
+                        .build();
+        if (!existingFlussDescriptor.equals(expectedFlussDescriptor)) {
+            throw incompatibleExistingTableFromLake(
+                    paimonTablePath,
+                    String.format(
+                            "its definition does not match the Paimon table and requested options"
+                                    + " (existing Fluss definition: %s; expected Fluss definition: %s)",
+                            redactTableDescriptor(existingFlussDescriptor),
+                            redactTableDescriptor(expectedFlussDescriptor)));
+        }
+    }
+
+    private static TableDescriptor redactTableDescriptor(TableDescriptor descriptor) {
+        return descriptor.withProperties(
+                ConfigurationUtils.hideSensitiveValues(descriptor.getProperties()),
+                ConfigurationUtils.hideSensitiveValues(descriptor.getCustomProperties()));
+    }
+
+    private static InvalidTableException incompatibleExistingTableFromLake(
+            TablePath tablePath, String reason) {
+        return new InvalidTableException(
+                "Table "
+                        + tablePath
+                        + " already exists, but "
+                        + reason
+                        + ". If the existing Fluss table can be discarded, drop it and retry "
+                        + "enabling Fluss on the Paimon table.");
+    }
+
+    private static int parseBucketCount(TablePath tablePath, String value) {
+        final int bucketCount;
+        try {
+            bucketCount = Integer.parseInt(value);
+        } catch (NumberFormatException e) {
+            throw new InvalidTableException(
+                    String.format(
+                            "Invalid '%s' value '%s' for table %s. The value must be an integer.",
+                            BUCKET_NUM_PROPERTY, value, tablePath),
+                    e);
+        }
+        return bucketCount;
     }
 
     private long getNewKvLeaderReplicaCount(TableDescriptor tableDescriptor) {
@@ -1783,6 +1986,7 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
 
         private final boolean isCreatingFlussTable;
         @Nullable private final TablePath currentLakeTablePath;
+        @Nullable private final Long currentLakeSnapshotId;
         private final FlussPrincipal flussPrincipal;
         @Nullable private final TableDescriptor currentTable;
         private final TableDescriptor expectedTable;
@@ -1793,8 +1997,25 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                 FlussPrincipal flussPrincipal,
                 @Nullable TableDescriptor currentTable,
                 TableDescriptor expectedTable) {
+            this(
+                    isCreatingFlussTable,
+                    currentLakeTablePath,
+                    null,
+                    flussPrincipal,
+                    currentTable,
+                    expectedTable);
+        }
+
+        public DefaultLakeCatalogContext(
+                boolean isCreatingFlussTable,
+                @Nullable TablePath currentLakeTablePath,
+                @Nullable Long currentLakeSnapshotId,
+                FlussPrincipal flussPrincipal,
+                @Nullable TableDescriptor currentTable,
+                TableDescriptor expectedTable) {
             this.isCreatingFlussTable = isCreatingFlussTable;
             this.currentLakeTablePath = currentLakeTablePath;
+            this.currentLakeSnapshotId = currentLakeSnapshotId;
             this.flussPrincipal = flussPrincipal;
             if (!isCreatingFlussTable) {
                 checkNotNull(
@@ -1824,6 +2045,11 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         @Override
         public TablePath getCurrentLakeTablePath() {
             return currentLakeTablePath;
+        }
+
+        @Override
+        public Optional<Long> getCurrentLakeSnapshotId() {
+            return Optional.ofNullable(currentLakeSnapshotId);
         }
 
         @Override

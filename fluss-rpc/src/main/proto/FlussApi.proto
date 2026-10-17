@@ -129,6 +129,25 @@ message CreateTableRequest {
 message CreateTableResponse {
 }
 
+message CreateTableFromLakeRequest {
+  required PbTablePath table_path = 1;
+  repeated PbKeyValue options = 2;
+}
+
+message CreateTableFromLakeResponse {
+  required PbTableInfo table_info = 1;
+}
+
+message PbTableInfo {
+  required int64 table_id = 1;
+  required int32 schema_id = 2;
+  required bytes table_json = 3;
+  required int64 created_time = 4;
+  required int64 modified_time = 5;
+  optional string remote_data_dir = 6;
+  optional int64 bucket_count_epoch = 7;
+}
+
 // alter table request and response
 message AlterTableRequest {
   required PbTablePath table_path = 1;

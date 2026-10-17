@@ -38,6 +38,7 @@ import org.apache.fluss.flink.functions.bitmap.RbToArrayFunction;
 import org.apache.fluss.flink.functions.bitmap.RbXorAggFunction;
 import org.apache.fluss.flink.functions.bitmap.RbXorFunction;
 import org.apache.fluss.flink.lake.LakeFlinkCatalog;
+import org.apache.fluss.flink.procedure.FlussProcedureContext;
 import org.apache.fluss.flink.procedure.ProcedureManager;
 import org.apache.fluss.flink.utils.CatalogExceptionUtils;
 import org.apache.fluss.flink.utils.FlinkConversions;
@@ -216,11 +217,7 @@ public class FlinkCatalog extends AbstractCatalog {
 
     @Override
     public void open() throws CatalogException {
-        Map<String, String> flussConfigs = new HashMap<>();
-        flussConfigs.put(ConfigOptions.BOOTSTRAP_SERVERS.key(), bootstrapServers);
-        flussConfigs.putAll(securityConfigs);
-
-        connection = ConnectionFactory.createConnection(Configuration.fromMap(flussConfigs));
+        connection = ConnectionFactory.createConnection(getFlussConfiguration());
         admin = connection.getAdmin();
         if (!databaseExists(defaultDatabase)) {
             throw new CatalogException(
@@ -1009,7 +1006,15 @@ public class FlinkCatalog extends AbstractCatalog {
     @Override
     public Procedure getProcedure(ObjectPath procedurePath)
             throws ProcedureNotExistException, CatalogException {
-        Optional<Procedure> procedure = ProcedureManager.getProcedure(admin, procedurePath);
+        FlussProcedureContext procedureContext =
+                new FlussProcedureContext(
+                        admin,
+                        defaultDatabase,
+                        getFlussConfiguration(),
+                        getLakeCatalogProperties(),
+                        classLoader);
+        Optional<Procedure> procedure =
+                ProcedureManager.getProcedure(procedureContext, procedurePath);
         if (procedure.isPresent()) {
             return procedure.get();
         } else {
@@ -1032,6 +1037,13 @@ public class FlinkCatalog extends AbstractCatalog {
             }
         }
         return lakeCatalogProperties;
+    }
+
+    private Configuration getFlussConfiguration() {
+        Map<String, String> flussConfigs = new HashMap<>();
+        flussConfigs.put(ConfigOptions.BOOTSTRAP_SERVERS.key(), bootstrapServers);
+        flussConfigs.putAll(securityConfigs);
+        return Configuration.fromMap(flussConfigs);
     }
 
     private CatalogTable wrapWithIndexes(CatalogTable table, TableInfo tableInfo) {

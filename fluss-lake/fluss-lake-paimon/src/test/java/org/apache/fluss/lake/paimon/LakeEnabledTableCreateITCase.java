@@ -768,13 +768,23 @@ class LakeEnabledTableCreateITCase {
         // verify LogTablet datalake status is disabled again
         verifyLogTabletDataLakeEnabled(tableId, false);
 
-        // try to enable lake table again, the snapshot should not change
+        // The Paimon table now has a snapshot that Fluss has not registered. Re-enabling the lake
+        // table must reject this mismatch.
         changes = Collections.singletonList(enableLake);
-        admin.alterTable(logTablePath, changes, false).get();
+        List<TableChange> finalChanges = changes;
+        assertThatThrownBy(() -> admin.alterTable(logTablePath, finalChanges, false).get())
+                .cause()
+                .isInstanceOf(InvalidAlterTableException.class)
+                .hasMessageContaining(
+                        "snapshot registered by Fluss does not match the latest Paimon data-change snapshot")
+                .hasMessageContaining("Fluss snapshot: none")
+                .hasMessageContaining("Paimon data-change snapshot: " + snapshot.get().id());
         assertThat(paimonCatalog.getTable(paimonTablePath).latestSnapshot()).isEqualTo(snapshot);
 
-        // verify LogTablet datalake status is enabled
-        verifyLogTabletDataLakeEnabled(tableId, true);
+        // The failed alter must leave the Fluss table and its tablets lake-disabled.
+        assertThat(admin.getTableInfo(logTablePath).get().getTableConfig().isDataLakeEnabled())
+                .isFalse();
+        verifyLogTabletDataLakeEnabled(tableId, false);
     }
 
     @Test

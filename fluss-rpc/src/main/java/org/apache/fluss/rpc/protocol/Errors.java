@@ -34,6 +34,7 @@ import org.apache.fluss.exception.FencedTieringEpochException;
 import org.apache.fluss.exception.HistoricalPartitionThrottledException;
 import org.apache.fluss.exception.IneligibleReplicaException;
 import org.apache.fluss.exception.InsufficientKvLeaderReplicaCapacityException;
+import org.apache.fluss.exception.InsufficientLakeSnapshotHistoryException;
 import org.apache.fluss.exception.InvalidAlterTableException;
 import org.apache.fluss.exception.InvalidBucketRoutingException;
 import org.apache.fluss.exception.InvalidColumnProjectionException;
@@ -291,7 +292,11 @@ public enum Errors {
             74,
             "The request's bucket routing information is missing or invalid. The client should "
                     + "refresh partition metadata and rebuild the request.",
-            InvalidBucketRoutingException::new);
+            InvalidBucketRoutingException::new),
+    INSUFFICIENT_LAKE_SNAPSHOT_HISTORY(
+            75,
+            "The available lake snapshot history is insufficient for this operation.",
+            InsufficientLakeSnapshotHistoryException::new);
 
     private static final Logger LOG = LoggerFactory.getLogger(Errors.class);
 

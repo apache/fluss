@@ -17,8 +17,6 @@
 
 package org.apache.fluss.flink.procedure;
 
-import org.apache.fluss.client.admin.Admin;
-
 import org.apache.flink.table.catalog.ObjectPath;
 import org.apache.flink.table.procedures.Procedure;
 import org.slf4j.Logger;
@@ -42,7 +40,8 @@ public class ProcedureManager {
         return new ArrayList<>(PROCEDURE_MAP.keySet());
     }
 
-    public static Optional<Procedure> getProcedure(Admin admin, ObjectPath procedurePath) {
+    public static Optional<Procedure> getProcedure(
+            FlussProcedureContext context, ObjectPath procedurePath) {
         try {
             Class<? extends ProcedureBase> procedureClass =
                     PROCEDURE_MAP.get(procedurePath.getFullName().toLowerCase());
@@ -50,7 +49,7 @@ public class ProcedureManager {
                 return Optional.empty();
             }
             ProcedureBase instance = procedureClass.getDeclaredConstructor().newInstance();
-            instance.withAdmin(admin);
+            instance.withContext(context);
             return Optional.of(instance);
         } catch (Exception e) {
             LOG.error("Failed to instantiate procedure: {}", procedurePath, e);
@@ -85,7 +84,9 @@ public class ProcedureManager {
         CANCEL_REBALANCE("sys.cancel_rebalance", CancelRebalanceProcedure.class),
         LIST_REBALANCE_PROGRESS("sys.list_rebalance", ListRebalanceProcessProcedure.class),
         LIST_PARTITION_INFOS("sys.list_partition_infos", ListPartitionInfosProcedure.class),
-        DROP_KV_SNAPSHOT_LEASE("sys.drop_kv_snapshot_lease", DropKvSnapshotLeaseProcedure.class);
+        DROP_KV_SNAPSHOT_LEASE("sys.drop_kv_snapshot_lease", DropKvSnapshotLeaseProcedure.class),
+        ENABLE_FLUSS_ON_LAKE_TABLE(
+                "sys.enable_fluss_on_lake_table", EnableFlussOnLakeTableProcedure.class);
 
         private final String path;
         private final Class<? extends ProcedureBase> procedureClass;

@@ -55,6 +55,26 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class TableDescriptorValidationTest {
 
     @Test
+    void testRejectNonPositiveBucketCount() {
+        for (int bucketCount : new int[] {0, -1}) {
+            TableDescriptor tableDescriptor =
+                    TableDescriptor.builder()
+                            .schema(TestData.DATA1_SCHEMA)
+                            .distributedBy(bucketCount)
+                            .build()
+                            .withReplicationFactor(3);
+
+            assertThatThrownBy(
+                            () ->
+                                    TableDescriptorValidation.validateTableDescriptor(
+                                            tableDescriptor, 100, null))
+                    .isInstanceOf(InvalidTableException.class)
+                    .hasMessageContaining("Bucket count must be greater than 0")
+                    .hasMessageContaining(String.valueOf(bucketCount));
+        }
+    }
+
+    @Test
     void testCreateLogTableWithKvTTLFails() {
         assertThatThrownBy(
                         () ->
@@ -329,6 +349,22 @@ class TableDescriptorValidationTest {
                 .property(ConfigOptions.TABLE_REPLICATION_FACTOR, 1)
                 .property(ConfigOptions.TABLE_MERGE_ENGINE, MergeEngineType.AGGREGATION)
                 .build();
+    }
+
+    @Test
+    void testLakeFormatMustMatchClusterWhenLakeIsDisabled() {
+        TableDescriptor tableDescriptor =
+                TableDescriptor.builder()
+                        .schema(TestData.DATA1_SCHEMA)
+                        .distributedBy(1)
+                        .property(ConfigOptions.TABLE_REPLICATION_FACTOR, 1)
+                        .property(ConfigOptions.TABLE_DATALAKE_FORMAT, DataLakeFormat.ICEBERG)
+                        .build();
+
+        assertThatThrownBy(() -> validate(tableDescriptor, DataLakeFormat.PAIMON))
+                .isInstanceOf(InvalidConfigException.class)
+                .hasMessageContaining(ConfigOptions.TABLE_DATALAKE_FORMAT.key())
+                .hasMessageContaining("must match");
     }
 
     private static Stream<Arguments> supportedKvTTLTimeColumnTypes() {

@@ -157,7 +157,8 @@ public abstract class FlinkProcedureITCase {
                             "+I[sys.cancel_rebalance]",
                             "+I[sys.list_rebalance]",
                             "+I[sys.list_partition_infos]",
-                            "+I[sys.drop_kv_snapshot_lease]");
+                            "+I[sys.drop_kv_snapshot_lease]",
+                            "+I[sys.enable_fluss_on_lake_table]");
             // make sure no more results is unread.
             assertResultsIgnoreOrder(showProceduresIterator, expectedShowProceduresResult, true);
         }
