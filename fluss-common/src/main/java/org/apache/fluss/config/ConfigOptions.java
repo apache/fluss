@@ -2269,6 +2269,38 @@ public class ConfigOptions {
                                     + "Downstream consumers must be upgraded to Fluss v1.0+ before enabling this option, "
                                     + "as older versions cannot parse the extended batch format.");
 
+    public static final ConfigOption<Boolean> TABLE_KAFKA_ENABLED =
+            key("table.kafka.enabled")
+                    .booleanType()
+                    .defaultValue(false)
+                    .withDescription(
+                            "Whether the table is exposed as a Kafka topic. Enabling validates the "
+                                    + "existing schema and conversion options without adding columns or defaults.");
+
+    public static final ConfigOption<String> TABLE_KAFKA_CONVERT_VALUE_TYPE =
+            key("table.kafka.convert.value.type")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "Required when Kafka compatibility is enabled: binary, string, or parse_json. "
+                                    + "Binary and string target the declared _kafka_value column.");
+
+    public static final ConfigOption<String> TABLE_KAFKA_CONVERT_VALUE_LAYOUT =
+            key("table.kafka.convert.value.layout")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "JSON layout: flat (the read-time default for parse_json) or nested. "
+                                    + "Nested targets _kafka_value ROW. Not allowed for binary or string.");
+
+    public static final ConfigOption<String> TABLE_KAFKA_CONVERT_KEY_TYPE =
+            key("table.kafka.convert.key.type")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "Optional Kafka key conversion type. Only binary is supported and requires "
+                                    + "_kafka_key BYTES. Declaring that column implies binary without persisting a default.");
+
     // ------------------------------------------------------------------------
     //  ConfigOptions for Consumer Offsets
     // ------------------------------------------------------------------------
@@ -2947,12 +2979,15 @@ public class ConfigOptions {
                     .withDescription(
                             "The listener names for Kafka wire protocol communication. Support multiple listener names, separated by comma.");
 
-    public static final ConfigOption<String> KAFKA_DATABASE =
-            key("kafka.database")
+    public static final ConfigOption<String> KAFKA_DEFAULT_DATABASE =
+            key("kafka.default.database")
                     .stringType()
-                    .defaultValue("kafka")
+                    .defaultValue("fluss")
                     .withDescription(
-                            "The database for fluss kafka. The default database is `kafka`.");
+                            "Default database for unqualified Kafka topic names. Fully qualified names may "
+                                    + "access other databases. When Kafka is enabled, a configured database other "
+                                    + "than 'fluss' is created if missing. The native 'fluss' database is created "
+                                    + "only when the cluster has no databases.");
 
     /**
      * Compaction style for Fluss's kv, which is same to rocksdb's, but help use avoid including

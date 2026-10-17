@@ -259,7 +259,50 @@ Kafka protocol compatibility is still in development.
 |--------------------------------|----------|---------|--------------------------------------------------------------------------------------------------------------------|
 | kafka.enabled                  | Boolean  | false   | Whether enable Fluss Kafka. Disabled by default. When this option is set to true, the Fluss Kafka will be enabled. |
 | kafka.listener.names           | String   | KAFKA   | The listener names for Kafka wire protocol communication. Support multiple listener names, separated by comma.     |
-| kafka.database                 | String   | kafka   | The database for Fluss Kafka. The default database is `kafka`.                                                     |
+| kafka.default.database         | String   | fluss   | Database used for unqualified Kafka topic names. Fully qualified names can access other databases. When Kafka is enabled, a configured database other than `fluss` is created if missing. The native `fluss` database is created only when the cluster has no databases. |
 
 Kafka listeners share `netty.connection.max-idle-time` with native Fluss RPC listeners (see [Netty](#netty)).
 The default is `10min`; connections close when neither reads nor writes occur for the configured duration.
+
+Kafka topics map to Fluss tables using `<database>.<table>`. Topic names without a database prefix
+map to the same-named table in the database configured by `kafka.default.database` (default: `fluss`).
+Kafka clients can access a topic only after its corresponding table has been created in Fluss.
+
+### Kafka table properties
+
+| Option | Type | Default | Description |
+|---|---|---|---|
+| table.kafka.enabled | Boolean | false | Explicitly expose a non-partitioned Arrow log table as a Kafka topic. CREATE and ALTER validate the contract before persisting it. |
+| table.kafka.convert.value.type | String | (None) | Required when enabled: `binary`, `string`, or `parse_json`. |
+| table.kafka.convert.value.layout | String | (None) | JSON uses `flat` when omitted; `nested` targets `_kafka_value ROW<...>`. Setting this property for binary/string is invalid. |
+| table.kafka.convert.key.type | String | (None) | Only `binary` is supported, and requires `_kafka_key BYTES`. Declaring that column implies binary without adding a property. |
+
+Binary and string values require a user-declared `_kafka_value BYTES` or `_kafka_value STRING`
+column respectively. Flat JSON targets business columns at the table level; nested JSON targets
+the fields of `_kafka_value ROW<...>`. Both exclude reserved system names from business matching.
+JSON business schemas support nested ROW, ARRAY and MAP values. Every MAP key must be STRING,
+including maps inside other containers. CREATE and ALTER reject unsupported types or a nesting
+depth above 64, counted from each top-level JSON business field at depth zero; ROW fields,
+ARRAY elements and MAP values each add one level. The JSON root and the physical nested
+`_kafka_value ROW` container add no level, so equivalent flat/nested schemas have the same limit.
+Scalar value and nullability checks apply when decoding records.
+Optional `_kafka_key BYTES` and `_kafka_headers MAP<STRING, BYTES>` columns retain keys and headers.
+Duplicate header names use the last value. Optional `_kafka_rescue STRING` must be nullable and
+collects unknown or reserved JSON members; it requires no mapping property. Binary/string
+conversion writes null to a declared rescue column.
+
+Enabling Kafka compatibility does not add columns or persist default Kafka properties. When
+disabled, ordinary Fluss tables are not subject to Kafka-specific schema validation. Prototype
+`kafka.key.*`, `kafka.value.*`, `kafka.metadata.*`, and `fluss.*` conversion properties are not
+accepted on enabled tables.
+
+The `_kafka_metadata` contract is
+`ROW<timestamp TIMESTAMP_LTZ(3), timestamp_type INT, partition INT>`.
+This optional physical column stores the input Kafka record timestamp, the batch timestamp type
+(`-1` for no timestamp, `0` for CreateTime, `1` for LogAppendTime), and the requested partition.
+Without a timestamp, the timestamp field is null; declared NOT NULL constraints still apply
+when converting records. These values are available before Arrow encoding. Log offsets remain
+native log metadata and are not part of this ROW, so enabling the column requires no append-time
+offset backfill. CREATE and ALTER reject extra fields, including the former offset field, and
+incorrect field names, ordering or types.
+These DDL contracts do not by themselves advertise Kafka Metadata or Produce API support.

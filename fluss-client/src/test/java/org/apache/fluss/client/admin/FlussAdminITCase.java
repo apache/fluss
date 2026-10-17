@@ -2831,6 +2831,7 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
         TableDescriptor logTableDescriptor =
                 TableDescriptor.builder().schema(logSchema).distributedBy(3).build();
         long tableId = createTable(logTablePath, logTableDescriptor, true);
+        FLUSS_CLUSTER_EXTENSION.waitUntilTableReady(tableId);
 
         // Create a KvSnapshotLease
         KvSnapshotLease lease = admin.createKvSnapshotLease("test-lease-log", 60000);
