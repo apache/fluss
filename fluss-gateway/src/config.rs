@@ -216,6 +216,12 @@ const INSTANCE_ID_KEY: &str = "gateway.instance-id";
 const GATEWAY_ID_KEY: &str = "gateway.id";
 const HOST_KEY: &str = "gateway.host";
 const REST_LISTEN_KEY: &str = "gateway.rest.listen";
+const REST_TLS_PROFILE_KEY: &str = "gateway.rest.tls.profile";
+const TLS_PROFILES_KEY: &str = "gateway.tls.profiles";
+const TLS_PROFILE_KEY_PREFIX: &str = "gateway.tls.profile.";
+const TLS_CERTIFICATE_FILE_KEY: &str = "certificate-file";
+const TLS_PRIVATE_KEY_FILE_KEY: &str = "private-key-file";
+const TLS_HANDSHAKE_TIMEOUT_KEY: &str = "handshake-timeout";
 const REST_HEADER_READ_TIMEOUT_KEY: &str = "gateway.rest.header-read-timeout";
 const REST_REQUEST_TIMEOUT_KEY: &str = "gateway.rest.request-timeout";
 const REST_MAX_REQUEST_BYTES_KEY: &str = "gateway.rest.write.max-request-bytes";
@@ -251,6 +257,7 @@ const REST_PREFIX_LOOKUP_MAX_CONCURRENT_REQUESTS_KEY: &str =
 const DEFAULT_REST_LISTEN: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 8080);
 const DEFAULT_REST_HEADER_READ_TIMEOUT: ConfigDuration = ConfigDuration::from_secs(10);
 const DEFAULT_REST_REQUEST_TIMEOUT: ConfigDuration = ConfigDuration::from_secs(30);
+const DEFAULT_TLS_HANDSHAKE_TIMEOUT: ConfigDuration = ConfigDuration::from_secs(5);
 const DEFAULT_REST_METADATA_MAX_CONCURRENT_REQUESTS: u32 = 16;
 
 /// Time reserved for encoding and sending an HTTP response after the handler deadline.
@@ -433,6 +440,7 @@ const CONFIG_ENTRIES: &[GatewayConfigEntry] = &[
     typed_entry!(GatewayConfigEntry, INSTANCE_ID_KEY, optional server.instance_id),
     typed_entry!(GatewayConfigEntry, GATEWAY_ID_KEY, optional server.gateway_id),
     typed_entry!(GatewayConfigEntry, HOST_KEY, optional server.host),
+    typed_entry!(GatewayConfigEntry, REST_TLS_PROFILE_KEY, optional server.rest.tls_profile),
     typed_entry!(
         GatewayConfigEntry,
         REST_LISTEN_KEY,
@@ -543,6 +551,26 @@ const CONFIG_ENTRIES: &[GatewayConfigEntry] = &[
     typed_entry!(GatewayConfigEntry, SECURITY_TRUSTED_HEADER_NAME_KEY, optional security.trusted_header_name),
 ];
 
+type TlsProfileConfigEntry = ConfigEntry<TlsProfileConfig>;
+
+const TLS_PROFILE_ENTRIES: &[TlsProfileConfigEntry] = &[
+    typed_entry!(
+        TlsProfileConfigEntry,
+        TLS_CERTIFICATE_FILE_KEY,
+        certificate_file
+    ),
+    typed_entry!(
+        TlsProfileConfigEntry,
+        TLS_PRIVATE_KEY_FILE_KEY,
+        private_key_file
+    ),
+    typed_entry!(
+        TlsProfileConfigEntry,
+        TLS_HANDSHAKE_TIMEOUT_KEY,
+        handshake_timeout
+    ),
+];
+
 // TODO: Expose `request-timeout` after fluss-rust independently bounds a complete bootstrap
 // attempt (TCP connect, API version negotiation, SASL, and metadata), matching the Java client,
 // and provides a general per-RPC timeout. `connect-timeout` must remain TCP-connect-only.
@@ -592,6 +620,8 @@ pub struct ServerConfig {
 pub struct RestServerConfig {
     /// Loopback by default because the gateway has no transport security.
     pub bind_address: SocketAddr,
+    /// Shared transport profile; omitted for plaintext HTTP.
+    pub tls_profile: Option<String>,
     /// Deadline for receiving a complete request head.
     pub header_read_timeout: ConfigDuration,
     /// Per-request server-side deadline. Exceeding it yields 504.
@@ -606,10 +636,30 @@ impl Default for RestServerConfig {
     fn default() -> Self {
         Self {
             bind_address: DEFAULT_REST_LISTEN,
+            tls_profile: None,
             header_read_timeout: DEFAULT_REST_HEADER_READ_TIMEOUT,
             request_timeout: DEFAULT_REST_REQUEST_TIMEOUT,
             max_body_bytes: DEFAULT_REST_MAX_REQUEST_BYTES,
             metadata_max_concurrent_requests: DEFAULT_REST_METADATA_MAX_CONCURRENT_REQUESTS,
+        }
+    }
+}
+
+/// A named TLS identity and handshake budget reusable by protocol listeners.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct TlsProfileConfig {
+    pub certificate_file: String,
+    pub private_key_file: String,
+    pub handshake_timeout: ConfigDuration,
+}
+
+impl Default for TlsProfileConfig {
+    fn default() -> Self {
+        Self {
+            certificate_file: String::new(),
+            private_key_file: String::new(),
+            handshake_timeout: DEFAULT_TLS_HANDSHAKE_TIMEOUT,
         }
     }
 }
@@ -904,6 +954,8 @@ pub struct GatewayConfig {
     pub server: ServerConfig,
     /// Every declared Fluss cluster, keyed by the ID used in REST paths.
     pub clusters: BTreeMap<String, ClusterConfig>,
+    /// Named TLS profiles shared across protocol frontends.
+    pub tls_profiles: BTreeMap<String, TlsProfileConfig>,
     pub security: SecurityConfig,
     pub request_limits: RequestLimitsConfig,
     pub shutdown: ShutdownConfig,
@@ -915,6 +967,7 @@ impl Default for GatewayConfig {
         Self {
             server: ServerConfig::default(),
             clusters: BTreeMap::from([(DEFAULT_CLUSTER_ID.to_string(), ClusterConfig::default())]),
+            tls_profiles: BTreeMap::new(),
             security: SecurityConfig::default(),
             request_limits: RequestLimitsConfig::default(),
             shutdown: ShutdownConfig::default(),
@@ -929,6 +982,7 @@ impl GatewayConfig {
         self.server.rest.validate(&mut problems);
         self.shutdown.validate(&mut problems);
         self.validate_identity(&mut problems);
+        self.validate_tls(&mut problems);
         self.validate_clusters(&mut problems);
         self.validate_security(&mut problems);
         self.request_limits.validate(&mut problems);
@@ -936,6 +990,37 @@ impl GatewayConfig {
             Ok(())
         } else {
             Err(ConfigError::Invalid(problems))
+        }
+    }
+
+    fn validate_tls(&self, problems: &mut Vec<String>) {
+        if let Some(name) = &self.server.rest.tls_profile
+            && !self.tls_profiles.contains_key(name)
+        {
+            problems.push(format!(
+                "{REST_TLS_PROFILE_KEY} references undeclared TLS profile {name:?}"
+            ));
+        }
+        for (name, profile) in &self.tls_profiles {
+            if !valid_cluster_id(name) {
+                problems.push(format!("invalid TLS profile ID {name:?}"));
+            }
+            for (field, value) in [
+                (TLS_CERTIFICATE_FILE_KEY, &profile.certificate_file),
+                (TLS_PRIVATE_KEY_FILE_KEY, &profile.private_key_file),
+            ] {
+                if value.trim().is_empty() || value.chars().any(char::is_control) {
+                    problems.push(format!(
+                        "{} must name a non-empty file without control characters",
+                        tls_profile_key(name, field)
+                    ));
+                }
+            }
+            validate_duration(
+                &tls_profile_key(name, TLS_HANDSHAKE_TIMEOUT_KEY),
+                profile.handshake_timeout.get(),
+                problems,
+            );
         }
     }
 
@@ -1118,15 +1203,21 @@ impl GatewayConfig {
     pub fn warnings(&self) -> Vec<String> {
         let mut warnings = Vec::new();
         if !self.server.rest.bind_address.ip().is_loopback() {
-            let risk = if self.security.authentication == AuthenticationMode::Trust {
-                "accepts unauthenticated requests and has no TLS"
-            } else {
-                "has no TLS"
+            let risk = match (
+                self.security.authentication == AuthenticationMode::Trust,
+                self.server.rest.tls_profile.is_some(),
+            ) {
+                (true, false) => Some("accepts unauthenticated requests and has no TLS"),
+                (true, true) => Some("accepts unauthenticated requests"),
+                (false, false) => Some("has no TLS"),
+                (false, true) => None,
             };
-            warnings.push(format!(
-                "{} {} is not loopback. The REST listener {risk}",
-                REST_LISTEN_KEY, self.server.rest.bind_address
-            ));
+            if let Some(risk) = risk {
+                warnings.push(format!(
+                    "{} {} is not loopback. The REST listener {risk}",
+                    REST_LISTEN_KEY, self.server.rest.bind_address
+                ));
+            }
         }
         if self.server.metrics.enabled && !self.server.metrics.bind_address.ip().is_loopback() {
             warnings.push(format!(
@@ -1294,10 +1385,15 @@ fn environment_entry(variable: &str) -> Option<&'static GatewayConfigEntry> {
 
 enum ResolvedKey {
     ClusterDeclaration,
+    TlsDeclaration,
     Fixed(&'static GatewayConfigEntry),
     Cluster {
         id: String,
         entry: &'static ClusterConfigEntry,
+    },
+    TlsProfile {
+        id: String,
+        entry: &'static TlsProfileConfigEntry,
     },
     UnsupportedClientOption {
         id: String,
@@ -1310,8 +1406,29 @@ fn resolve_key(key: &str) -> Result<ResolvedKey, ConfigError> {
     if key == CLUSTERS_KEY {
         return Ok(ResolvedKey::ClusterDeclaration);
     }
+    if key == TLS_PROFILES_KEY {
+        return Ok(ResolvedKey::TlsDeclaration);
+    }
     if let Some(entry) = config_entry(key) {
         return Ok(ResolvedKey::Fixed(entry));
+    }
+    if let Some((id, suffix)) = key
+        .strip_prefix(TLS_PROFILE_KEY_PREFIX)
+        .and_then(|rest| rest.split_once('.'))
+    {
+        if !valid_cluster_id(id) {
+            return Err(ConfigError::Parse(format!(
+                "invalid TLS profile ID in configuration key: {key}"
+            )));
+        }
+        return TLS_PROFILE_ENTRIES
+            .iter()
+            .find(|entry| entry.key == suffix)
+            .map(|entry| ResolvedKey::TlsProfile {
+                id: id.to_string(),
+                entry,
+            })
+            .ok_or_else(unknown);
     }
     let Some((id, suffix)) = key
         .strip_prefix(CLUSTER_KEY_PREFIX)
@@ -1351,8 +1468,25 @@ fn resolve_environment_variable(variable: &str) -> Result<ResolvedKey, ConfigErr
     if suffix == environment_suffix("clusters") {
         return Ok(ResolvedKey::ClusterDeclaration);
     }
+    if suffix == environment_suffix("tls.profiles") {
+        return Ok(ResolvedKey::TlsDeclaration);
+    }
     if let Some(entry) = environment_entry(variable) {
         return Ok(ResolvedKey::Fixed(entry));
+    }
+    if let Some((id, rest)) = suffix
+        .strip_prefix("TLS__PROFILE__")
+        .and_then(|rest| rest.split_once("__"))
+    {
+        let id = id.to_ascii_lowercase();
+        if !valid_cluster_id(&id) {
+            return Err(unknown());
+        }
+        return TLS_PROFILE_ENTRIES
+            .iter()
+            .find(|entry| environment_suffix(entry.key) == rest)
+            .map(|entry| ResolvedKey::TlsProfile { id, entry })
+            .ok_or_else(unknown);
     }
     let Some((id, rest)) = suffix
         .strip_prefix("CLUSTER__")
@@ -1380,6 +1514,10 @@ fn resolve_environment_variable(variable: &str) -> Result<ResolvedKey, ConfigErr
 
 fn cluster_key(id: &str, key: &str) -> String {
     format!("{CLUSTER_KEY_PREFIX}{id}.{key}")
+}
+
+fn tls_profile_key(id: &str, key: &str) -> String {
+    format!("{TLS_PROFILE_KEY_PREFIX}{id}.{key}")
 }
 
 fn parse_user_table(raw: &str) -> Result<usize, String> {
@@ -1495,6 +1633,39 @@ fn declared_cluster_ids(value: &Value) -> Result<Vec<String>, ConfigError> {
     Ok(ids)
 }
 
+fn declared_tls_profile_ids(value: &Value) -> Result<Vec<String>, ConfigError> {
+    let ids: Vec<String> = match value {
+        Value::String(csv) => csv.split(',').map(|id| id.trim().to_string()).collect(),
+        Value::Sequence(items) => items
+            .iter()
+            .map(|item| {
+                item.as_str().map(str::to_string).ok_or_else(|| {
+                    ConfigError::Parse(format!("{TLS_PROFILES_KEY}: entries must be strings"))
+                })
+            })
+            .collect::<Result<_, _>>()?,
+        _ => {
+            return Err(ConfigError::Parse(format!(
+                "{TLS_PROFILES_KEY}: expected a comma-separated string or a list"
+            )));
+        }
+    };
+    let mut unique = std::collections::BTreeSet::new();
+    for id in &ids {
+        if !valid_cluster_id(id) {
+            return Err(ConfigError::Parse(format!(
+                "invalid TLS profile ID in {TLS_PROFILES_KEY}: {id:?}"
+            )));
+        }
+        if !unique.insert(id) {
+            return Err(ConfigError::Parse(format!(
+                "duplicate TLS profile ID in {TLS_PROFILES_KEY}: {id:?}"
+            )));
+        }
+    }
+    Ok(ids)
+}
+
 #[derive(Clone)]
 struct Assignment {
     value: Value,
@@ -1505,6 +1676,8 @@ struct Assignment {
 struct PendingConfig {
     fixed: BTreeMap<&'static str, (&'static GatewayConfigEntry, Assignment)>,
     clusters: BTreeMap<(String, &'static str), (&'static ClusterConfigEntry, Assignment)>,
+    tls_declared: Option<Vec<String>>,
+    tls_profiles: BTreeMap<(String, &'static str), (&'static TlsProfileConfigEntry, Assignment)>,
 }
 
 fn assignment_error(key: &str, assignment: &Assignment, reason: String) -> ConfigError {
@@ -1557,6 +1730,9 @@ fn read_config_file(
         let reason = |reason: String| ConfigError::Parse(format!("{key}: {reason}"));
         match resolve_key(key)? {
             ResolvedKey::ClusterDeclaration => declared = Some(declared_cluster_ids(value)?),
+            ResolvedKey::TlsDeclaration => {
+                pending.tls_declared = Some(declared_tls_profile_ids(value)?);
+            }
             ResolvedKey::Fixed(entry) => {
                 scalar(value).map_err(reason)?;
                 pending.fixed.insert(
@@ -1573,6 +1749,19 @@ fn read_config_file(
             ResolvedKey::Cluster { id, entry } => {
                 scalar(value).map_err(reason)?;
                 pending.clusters.insert(
+                    (id, entry.key),
+                    (
+                        entry,
+                        Assignment {
+                            value: value.clone(),
+                            origin: None,
+                        },
+                    ),
+                );
+            }
+            ResolvedKey::TlsProfile { id, entry } => {
+                scalar(value).map_err(reason)?;
+                pending.tls_profiles.insert(
                     (id, entry.key),
                     (
                         entry,
@@ -1604,6 +1793,13 @@ fn apply_pending(
             .iter()
             .map(|id| (id.clone(), ClusterConfig::default()))
             .collect(),
+        tls_profiles: pending
+            .tls_declared
+            .as_ref()
+            .into_iter()
+            .flatten()
+            .map(|id| (id.clone(), TlsProfileConfig::default()))
+            .collect(),
         ..GatewayConfig::default()
     };
 
@@ -1619,6 +1815,16 @@ fn apply_pending(
             ))
         })?;
         (entry.apply)(cluster, &assignment.value)
+            .map_err(|reason| assignment_error(&public_key, &assignment, reason))?;
+    }
+    for ((id, _), (entry, assignment)) in pending.tls_profiles {
+        let public_key = tls_profile_key(&id, entry.key);
+        let profile = config.tls_profiles.get_mut(&id).ok_or_else(|| {
+            ConfigError::Parse(format!(
+                "{TLS_PROFILE_KEY_PREFIX}{id}.* is configured but {id} is not declared in {TLS_PROFILES_KEY}"
+            ))
+        })?;
+        (entry.apply)(profile, &assignment.value)
             .map_err(|reason| assignment_error(&public_key, &assignment, reason))?;
     }
     Ok(config)
@@ -1647,6 +1853,9 @@ pub fn load(
             ResolvedKey::ClusterDeclaration => {
                 declared = Some(declared_cluster_ids(&value)?);
             }
+            ResolvedKey::TlsDeclaration => {
+                pending.tls_declared = Some(declared_tls_profile_ids(&value)?);
+            }
             ResolvedKey::Fixed(entry) => {
                 pending.fixed.insert(
                     entry.key,
@@ -1661,6 +1870,18 @@ pub fn load(
             }
             ResolvedKey::Cluster { id, entry } => {
                 pending.clusters.insert(
+                    (id, entry.key),
+                    (
+                        entry,
+                        Assignment {
+                            value,
+                            origin: Some(variable.clone()),
+                        },
+                    ),
+                );
+            }
+            ResolvedKey::TlsProfile { id, entry } => {
+                pending.tls_profiles.insert(
                     (id, entry.key),
                     (
                         entry,
@@ -1770,6 +1991,74 @@ mod tests {
         assert_eq!(config.security.authentication, AuthenticationMode::Trust);
         assert_eq!(config.request_limits, RequestLimitsConfig::default());
         assert!(config.warnings().is_empty());
+    }
+
+    #[test]
+    fn tls_profiles_load_from_file_and_can_be_shared() {
+        let config = load_file(
+            "gateway.tls.profiles: public,internal\n\
+             gateway.tls.profile.public.certificate-file: /certs/public.pem\n\
+             gateway.tls.profile.public.private-key-file: /certs/public.key\n\
+             gateway.tls.profile.public.handshake-timeout: 3s\n\
+             gateway.tls.profile.internal.certificate-file: /certs/internal.pem\n\
+             gateway.tls.profile.internal.private-key-file: /certs/internal.key\n\
+             gateway.rest.tls.profile: public\n",
+        )
+        .expect("load TLS profiles");
+        assert_eq!(config.server.rest.tls_profile.as_deref(), Some("public"));
+        assert_eq!(config.tls_profiles.len(), 2);
+        assert_eq!(
+            config.tls_profiles["public"].handshake_timeout.get(),
+            Duration::from_secs(3)
+        );
+    }
+
+    #[test]
+    fn tls_profile_declarations_and_references_are_validated() {
+        for (contents, expected) in [
+            (
+                "gateway.rest.tls.profile: missing\n",
+                "references undeclared TLS profile",
+            ),
+            (
+                "gateway.tls.profiles: public\n",
+                "gateway.tls.profile.public.certificate-file",
+            ),
+            (
+                "gateway.tls.profile.public.certificate-file: cert.pem\n",
+                "not declared in gateway.tls.profiles",
+            ),
+            (
+                "gateway.tls.profiles: public,public\n",
+                "duplicate TLS profile ID",
+            ),
+            ("gateway.tls.profiles: Bad-Name\n", "invalid TLS profile ID"),
+        ] {
+            let error = load_file(contents).expect_err("invalid TLS configuration");
+            assert!(error.to_string().contains(expected), "{error}");
+        }
+    }
+
+    #[test]
+    fn tls_does_not_hide_the_unauthenticated_listener_warning() {
+        let mut config = GatewayConfig::default();
+        config.server.rest.bind_address = "0.0.0.0:8080".parse().unwrap();
+        config.server.rest.tls_profile = Some("public".to_string());
+        config.tls_profiles.insert(
+            "public".to_string(),
+            TlsProfileConfig {
+                certificate_file: "server.pem".to_string(),
+                private_key_file: "server.key".to_string(),
+                ..TlsProfileConfig::default()
+            },
+        );
+        config.validate().unwrap();
+        let warnings = config.warnings().join(" ");
+        assert!(
+            warnings.contains("accepts unauthenticated requests"),
+            "{warnings}"
+        );
+        assert!(!warnings.contains("has no TLS"), "{warnings}");
     }
 
     // conf/gateway.yaml ships in the binary distribution and the container image, so it is
@@ -2921,6 +3210,47 @@ mod tests {
                     .unwrap_or_else(|error| panic!("{}: {error}", entry.key));
                 let only_env = load(None, &env, &CliOverrides::default())
                     .unwrap_or_else(|error| panic!("{}: {error}", entry.key));
+                assert_eq!(from_env, only_env);
+                continue;
+            }
+            if entry.key == REST_TLS_PROFILE_KEY {
+                let profile_values = [
+                    ("FLUSS_GATEWAY__TLS__PROFILES", "first,second"),
+                    (
+                        "FLUSS_GATEWAY__TLS__PROFILE__FIRST__CERTIFICATE_FILE",
+                        "first.pem",
+                    ),
+                    (
+                        "FLUSS_GATEWAY__TLS__PROFILE__FIRST__PRIVATE_KEY_FILE",
+                        "first.key",
+                    ),
+                    (
+                        "FLUSS_GATEWAY__TLS__PROFILE__SECOND__CERTIFICATE_FILE",
+                        "second.pem",
+                    ),
+                    (
+                        "FLUSS_GATEWAY__TLS__PROFILE__SECOND__PRIVATE_KEY_FILE",
+                        "second.key",
+                    ),
+                ];
+                let mut env = profile_values
+                    .into_iter()
+                    .map(|(key, value)| (key.to_string(), value.to_string()))
+                    .collect::<BTreeMap<_, _>>();
+                let file = write_temp_config(
+                    "gateway.tls.profiles: first,second\n\
+                     gateway.tls.profile.first.certificate-file: first.pem\n\
+                     gateway.tls.profile.first.private-key-file: first.key\n\
+                     gateway.tls.profile.second.certificate-file: second.pem\n\
+                     gateway.tls.profile.second.private-key-file: second.key\n\
+                     gateway.rest.tls.profile: first\n",
+                );
+                let from_file =
+                    load(Some(file.path()), &no_env(), &CliOverrides::default()).unwrap();
+                env.insert(environment_variable(entry.key), "second".to_string());
+                let from_env = load(Some(file.path()), &env, &CliOverrides::default()).unwrap();
+                let only_env = load(None, &env, &CliOverrides::default()).unwrap();
+                assert_ne!(from_file, from_env);
                 assert_eq!(from_env, only_env);
                 continue;
             }

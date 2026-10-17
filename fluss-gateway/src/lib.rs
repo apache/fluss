@@ -34,3 +34,4 @@ pub mod error;
 pub mod lifecycle;
 pub mod observability;
 pub mod protocol;
+pub mod tls;

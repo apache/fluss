@@ -187,6 +187,7 @@ ring@0.17.14	X							X
 rustc_version@0.4.1	X									X
 rustix@1.1.4	X	X								X
 rustls@0.23.43	X							X		X
+rustls-pemfile@2.2.0	X							X		X
 rustls-pki-types@1.15.1	X									X
 rustls-webpki@0.103.14								X
 rustversion@1.0.23	X									X
