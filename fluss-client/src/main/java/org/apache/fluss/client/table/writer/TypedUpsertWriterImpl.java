@@ -53,7 +53,7 @@ class TypedUpsertWriterImpl<T> implements TypedUpsertWriter<T> {
         this.targetColumns = targetColumns;
 
         // Precompute projections
-        this.pkProjection = this.tableSchema.project(tableInfo.getPhysicalPrimaryKeys());
+        this.pkProjection = this.tableSchema.project(tableInfo.getPrimaryKeys());
         this.targetProjection =
                 (targetColumns == null) ? null : this.tableSchema.project(targetColumns);
 
@@ -111,7 +111,7 @@ class TypedUpsertWriterImpl<T> implements TypedUpsertWriter<T> {
         GenericRow full = new GenericRow(tableSchema.getFieldCount());
         if (forDelete) {
             // set PK fields, others null
-            for (String pk : tableInfo.getPhysicalPrimaryKeys()) {
+            for (String pk : tableInfo.getPrimaryKeys()) {
                 int projIndex = projection.getFieldIndex(pk);
 
                 // TODO: this can be optimized by pre-computing
