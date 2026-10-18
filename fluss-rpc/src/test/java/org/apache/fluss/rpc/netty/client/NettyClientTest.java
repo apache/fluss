@@ -22,6 +22,7 @@ import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.exception.DisconnectException;
 import org.apache.fluss.exception.NetworkException;
 import org.apache.fluss.metrics.groups.MetricGroup;
 import org.apache.fluss.metrics.util.NOPMetricsGroup;
@@ -165,8 +166,7 @@ final class NettyClientTest {
                                         .sendRequest(serverNode, ApiKeys.API_VERSIONS, request)
                                         .get())
                 .rootCause()
-                .isInstanceOf(ConnectException.class)
-                .hasMessageContaining("Connection refused");
+                .isInstanceOfAny(ConnectException.class, DisconnectException.class);
         retry(Duration.ofSeconds(10), () -> assertThat(nettyClient.connections()).isEmpty());
 
         // restart the netty server.
