@@ -81,7 +81,6 @@ import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
 import static org.apache.fluss.flink.tiering.source.enumerator.TieringSourceEnumerator.HeartBeatHelper.basicHeartBeat;
-import static org.apache.fluss.flink.tiering.source.enumerator.TieringSourceEnumerator.HeartBeatHelper.failedTableHeartBeat;
 import static org.apache.fluss.flink.tiering.source.enumerator.TieringSourceEnumerator.HeartBeatHelper.heartBeatWithRequestNewTieringTable;
 import static org.apache.fluss.flink.tiering.source.enumerator.TieringSourceEnumerator.HeartBeatHelper.tieringTableHeartBeat;
 import static org.apache.fluss.flink.tiering.source.enumerator.TieringSourceEnumerator.HeartBeatHelper.waitHeartbeatResponse;
@@ -621,57 +620,58 @@ public class TieringSourceEnumerator
     public void close() throws IOException {
         closed = true;
         timerService.shutdownNow();
-        if (rpcClient != null) {
-            failedTableEpochs.putAll(tieringTableEpochs);
-            tieringTableEpochs.clear();
-            if (!failedTableEpochs.isEmpty()) {
-                reportFailedTable(basicHeartBeat(), failedTableEpochs);
+
+        try {
+            if (rpcClient != null) {
+                failedTableEpochs.putAll(tieringTableEpochs);
+                tieringTableEpochs.clear();
+                if (!failedTableEpochs.isEmpty() || !finishedTables.isEmpty()) {
+                    reportTieringResults();
+                }
+            }
+        } finally {
+            if (rpcClient != null) {
+                try {
+                    LOG.info(
+                            "Closing Tiering Source Enumerator of at {}.",
+                            System.currentTimeMillis());
+                    rpcClient.close();
+                } catch (Exception e) {
+                    LOG.error("Failed to close Tiering Source enumerator.", e);
+                }
             }
             try {
-                LOG.info("Closing Tiering Source Enumerator of at {}.", System.currentTimeMillis());
-                rpcClient.close();
+                if (flussAdmin != null) {
+                    LOG.info("Closing Fluss Admin client...");
+                    flussAdmin.close();
+                }
             } catch (Exception e) {
-                LOG.error("Failed to close Tiering Source enumerator.", e);
+                LOG.error("Failed to close Fluss Admin client.", e);
             }
-        }
-        try {
-            if (flussAdmin != null) {
-                LOG.info("Closing Fluss Admin client...");
-                flussAdmin.close();
+            try {
+                if (connection != null) {
+                    LOG.info("Closing Fluss connection...");
+                    connection.close();
+                }
+            } catch (Exception e) {
+                LOG.error("Failed to close Fluss connection.", e);
             }
-        } catch (Exception e) {
-            LOG.error("Failed to close Fluss Admin client.", e);
-        }
-        try {
-            if (connection != null) {
-                LOG.info("Closing Fluss connection...");
-                connection.close();
-            }
-        } catch (Exception e) {
-            LOG.error("Failed to close Fluss connection.", e);
         }
     }
 
     /**
-     * Report failed table to Fluss coordinator via HeartBeat, this method should be called when
-     * {@link TieringSourceEnumerator} is closed or receives failed table from downstream lake
-     * committer.
+     * Reports pending finished and failed tiering tables to the Fluss coordinator via heartbeat.
      */
-    private void reportFailedTable(
-            LakeTieringHeartbeatRequest heartbeatRequest, Map<Long, Long> failedTableEpochs)
-            throws FlinkRuntimeException {
-        try {
-            waitHeartbeatResponse(
-                    coordinatorGateway.lakeTieringHeartbeat(
-                            failedTableHeartBeat(
-                                    heartbeatRequest, failedTableEpochs, flussCoordinatorEpoch)));
-            LOG.info("Report failed table to Fluss Coordinator success");
-
-        } catch (Exception e) {
-            LOG.error("Errors happens when report failed table to Fluss cluster.", e);
-            throw new FlinkRuntimeException(
-                    "Errors happens when report failed table to Fluss cluster.", e);
-        }
+    private void reportTieringResults() {
+        LakeTieringHeartbeatRequest heartbeatRequest =
+                tieringTableHeartBeat(
+                        basicHeartBeat(),
+                        Collections.emptyMap(),
+                        new HashMap<>(finishedTables),
+                        new HashMap<>(failedTableEpochs),
+                        flussCoordinatorEpoch);
+        waitHeartbeatResponse(coordinatorGateway.lakeTieringHeartbeat(heartbeatRequest));
+        LOG.info("Received response to pending tiering results heartbeat during shutdown.");
     }
 
     /** A helper class to build heartbeat request. */

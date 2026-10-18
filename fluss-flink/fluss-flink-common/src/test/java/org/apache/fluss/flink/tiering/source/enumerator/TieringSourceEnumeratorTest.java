@@ -17,6 +17,8 @@
 
 package org.apache.fluss.flink.tiering.source.enumerator;
 
+import org.apache.fluss.client.Connection;
+import org.apache.fluss.client.admin.Admin;
 import org.apache.fluss.client.tiering.TieringLogSplit;
 import org.apache.fluss.client.tiering.TieringSnapshotSplit;
 import org.apache.fluss.client.tiering.TieringSplit;
@@ -36,7 +38,12 @@ import org.apache.fluss.metadata.TableChange;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.rpc.RpcClient;
+import org.apache.fluss.rpc.gateway.CoordinatorGateway;
 import org.apache.fluss.rpc.messages.CommitLakeTableSnapshotRequest;
+import org.apache.fluss.rpc.messages.LakeTieringHeartbeatRequest;
+import org.apache.fluss.rpc.messages.LakeTieringHeartbeatResponse;
+import org.apache.fluss.rpc.messages.PbHeartbeatReqForTable;
 import org.apache.fluss.rpc.messages.PbLakeTableOffsetForBucket;
 import org.apache.fluss.rpc.messages.PbLakeTableSnapshotInfo;
 
@@ -50,16 +57,20 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
+import org.mockito.ArgumentCaptor;
+import org.mockito.InOrder;
 
 import javax.annotation.Nullable;
 
 import java.io.IOException;
+import java.lang.reflect.Field;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
@@ -69,6 +80,8 @@ import static org.apache.fluss.config.ConfigOptions.TABLE_AUTO_PARTITION_NUM_PRE
 import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoMoreInteractions;
@@ -696,6 +709,109 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
         }
     }
 
+    @Test
+    void testCloseReportsFinishedAndRunningTablesBeforePendingHeartbeat() throws Exception {
+        long tableId = 123L;
+        long tieringEpoch = 7L;
+        long runningTableId = 456L;
+        long runningTieringEpoch = 8L;
+
+        CoordinatorGateway coordinatorGateway = mock(CoordinatorGateway.class);
+        RpcClient rpcClient = mock(RpcClient.class);
+
+        when(coordinatorGateway.lakeTieringHeartbeat(any(LakeTieringHeartbeatRequest.class)))
+                .thenReturn(CompletableFuture.completedFuture(new LakeTieringHeartbeatResponse()));
+
+        try (FlussMockSplitEnumeratorContext<FlinkTieringSplit> context =
+                new FlussMockSplitEnumeratorContext<>(1)) {
+            TieringSourceEnumerator enumerator = createTieringSourceEnumerator(flussConf, context);
+            setPrivateField(enumerator, "rpcClient", rpcClient);
+            setPrivateField(enumerator, "coordinatorGateway", coordinatorGateway);
+            Field epochsField =
+                    TieringSourceEnumerator.class.getDeclaredField("tieringTableEpochs");
+            epochsField.setAccessible(true);
+            Map<Long, Long> tieringTableEpochs = (Map<Long, Long>) epochsField.get(enumerator);
+            tieringTableEpochs.put(tableId, tieringEpoch);
+            // Handle the completion event without executing the pending heartbeat.
+            enumerator.handleSourceEvent(0, new FinishedTieringEvent(tableId));
+            // The table should have moved from tieringTableEpochs to finishedTables.
+            assertThat(tieringTableEpochs).doesNotContainKey(tableId);
+
+            Field finishedTablesField =
+                    TieringSourceEnumerator.class.getDeclaredField("finishedTables");
+            finishedTablesField.setAccessible(true);
+            Map<?, ?> finishedTables = (Map<?, ?>) finishedTablesField.get(enumerator);
+
+            assertThat(finishedTables.containsKey(tableId)).isTrue();
+
+            // The completion event schedules a heartbeat, but it has not run yet.
+            assertThat(context.getOneTimeCallables()).hasSize(1);
+
+            tieringTableEpochs.put(runningTableId, runningTieringEpoch);
+            enumerator.close();
+
+            ArgumentCaptor<LakeTieringHeartbeatRequest> heartbeatCaptor =
+                    ArgumentCaptor.forClass(LakeTieringHeartbeatRequest.class);
+
+            InOrder inOrder = inOrder(coordinatorGateway, rpcClient);
+            inOrder.verify(coordinatorGateway).lakeTieringHeartbeat(heartbeatCaptor.capture());
+            inOrder.verify(rpcClient).close();
+
+            LakeTieringHeartbeatRequest heartbeat = heartbeatCaptor.getValue();
+            assertThat(heartbeat.getFinishedTablesList()).hasSize(1);
+
+            PbHeartbeatReqForTable finishedTable = heartbeat.getFinishedTablesList().get(0);
+            assertThat(finishedTable.getTableId()).isEqualTo(tableId);
+            assertThat(finishedTable.getTieringEpoch()).isEqualTo(tieringEpoch);
+            assertThat(heartbeat.getFailedTablesList()).hasSize(1);
+
+            PbHeartbeatReqForTable failedTable = heartbeat.getFailedTablesList().get(0);
+            assertThat(failedTable.getTableId()).isEqualTo(runningTableId);
+            assertThat(failedTable.getTieringEpoch()).isEqualTo(runningTieringEpoch);
+            assertThat(heartbeat.getTieringTablesList()).isEmpty();
+        }
+    }
+
+    @Test
+    void testClosePropagatesHeartbeatFailureAndReleasesResources() throws Exception {
+        CoordinatorGateway coordinatorGateway = mock(CoordinatorGateway.class);
+        RpcClient rpcClient = mock(RpcClient.class);
+        Admin flussAdmin = mock(Admin.class);
+        Connection connection = mock(Connection.class);
+
+        CompletableFuture<LakeTieringHeartbeatResponse> failedFuture = new CompletableFuture<>();
+        failedFuture.completeExceptionally(new RuntimeException("Heartbeat failed"));
+
+        when(coordinatorGateway.lakeTieringHeartbeat(any(LakeTieringHeartbeatRequest.class)))
+                .thenReturn(failedFuture);
+
+        try (FlussMockSplitEnumeratorContext<FlinkTieringSplit> context =
+                new FlussMockSplitEnumeratorContext<>(1)) {
+            TieringSourceEnumerator enumerator = createTieringSourceEnumerator(flussConf, context);
+
+            setPrivateField(enumerator, "rpcClient", rpcClient);
+            setPrivateField(enumerator, "coordinatorGateway", coordinatorGateway);
+            setPrivateField(enumerator, "flussAdmin", flussAdmin);
+            setPrivateField(enumerator, "connection", connection);
+
+            Field epochsField =
+                    TieringSourceEnumerator.class.getDeclaredField("tieringTableEpochs");
+            epochsField.setAccessible(true);
+            Map<Long, Long> tieringTableEpochs = (Map<Long, Long>) epochsField.get(enumerator);
+
+            tieringTableEpochs.put(123L, 7L);
+
+            assertThatThrownBy(enumerator::close)
+                    .isInstanceOf(FlinkRuntimeException.class)
+                    .hasMessageContaining("Failed to wait heartbeat response");
+
+            verify(coordinatorGateway).lakeTieringHeartbeat(any(LakeTieringHeartbeatRequest.class));
+            verify(rpcClient).close();
+            verify(flussAdmin).close();
+            verify(connection).close();
+        }
+    }
+
     private static CommitLakeTableSnapshotRequest genCommitLakeTableSnapshotRequest(
             long tableId,
             @Nullable Long partitionId,
@@ -717,6 +833,13 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
             lakeTableOffsetForBucket.setLogEndOffset(bucketLogEndOffset.getValue());
         }
         return commitLakeTableSnapshotRequest;
+    }
+
+    private static void setPrivateField(Object target, String name, Object value)
+            throws ReflectiveOperationException {
+        Field field = target.getClass().getDeclaredField(name);
+        field.setAccessible(true);
+        field.set(target, value);
     }
 
     // --------------------- Test Utils ---------------------
