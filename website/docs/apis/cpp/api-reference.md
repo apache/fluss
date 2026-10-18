@@ -213,8 +213,8 @@ A lookup started by `Lookuper::Lookup(pk_row, PendingLookup&)`. Move-only. Destr
 | Method | Description |
 |---|---|
 | `Wait(LookupResult& out) -> Result` | Block until the row arrives |
-| `Wait(LookupResult& out, int64_t timeout_ms) -> Result` | Block for at most `timeout_ms`. After the retriable `REQUEST_TIME_OUT` the lookup keeps running, and `Wait` can be called again |
-| `Available() const -> bool` | Whether `Wait` can still be called |
+| `Wait(LookupResult& out, int64_t timeout_ms) -> Result` | Block for at most `timeout_ms`. If the wait runs out, it returns `REQUEST_TIME_OUT` and the lookup keeps running. The lookup itself can also fail with `REQUEST_TIME_OUT`, which ends it, so check `Available()` before waiting again |
+| `Available() const -> bool` | True while the lookup is running. False once `Wait` has returned its outcome, which can be an error with any code, `REQUEST_TIME_OUT` included |
 
 ## `PrefixLookuper`
 

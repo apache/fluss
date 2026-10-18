@@ -2098,14 +2098,16 @@ class PendingLookup {
     PendingLookup(PendingLookup&& other) noexcept;
     PendingLookup& operator=(PendingLookup&& other) noexcept;
 
-    /// False once Wait() has returned anything but a timeout.
+    /// True while the lookup is running. False once Wait() has returned its outcome, which can
+    /// be an error with any code, REQUEST_TIME_OUT included.
     bool Available() const;
 
     /// Blocks until the row arrives.
     Result Wait(LookupResult& out);
 
-    /// Blocks for at most `timeout_ms`. On REQUEST_TIME_OUT the lookup keeps running, and
-    /// Wait() may be called again.
+    /// Blocks for at most `timeout_ms`. If the wait runs out, it returns REQUEST_TIME_OUT and
+    /// the lookup keeps running. The lookup itself can also fail with REQUEST_TIME_OUT, which
+    /// ends it, so check Available() before waiting again.
     Result Wait(LookupResult& out, int64_t timeout_ms);
 
    private:
@@ -2129,7 +2131,7 @@ class PendingPrefixLookup {
     PendingPrefixLookup(PendingPrefixLookup&& other) noexcept;
     PendingPrefixLookup& operator=(PendingPrefixLookup&& other) noexcept;
 
-    /// False once Wait() has returned anything but a timeout.
+    /// True while the lookup is running, like PendingLookup::Available.
     bool Available() const;
 
     /// Blocks until the rows arrive.
