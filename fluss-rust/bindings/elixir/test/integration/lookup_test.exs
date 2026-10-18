@@ -156,6 +156,7 @@ defmodule Fluss.Integration.LookupTest do
     end
 
     # Hangs: core retries an unknown bucket leader forever instead of failing.
+    # TODO: https://github.com/apache/fluss/issues/4706
     @tag :skip
     test "returns an error after the table is dropped", %{conn: conn, admin: admin} do
       table_name = unique("lookup_dropped_table")
