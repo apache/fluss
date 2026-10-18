@@ -27,7 +27,6 @@ import org.apache.fluss.cluster.rebalance.RebalanceStatus;
 import org.apache.fluss.cluster.rebalance.ServerTag;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
-import org.apache.fluss.config.FlussConfigUtils;
 import org.apache.fluss.exception.FencedLeaderEpochException;
 import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.exception.IneligibleReplicaException;
@@ -290,9 +289,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
         }
         this.scheduler = scheduler;
         this.ioExecutor = ioExecutor;
-        this.lakeTableHelper =
-                new LakeTableHelper(
-                        zooKeeperClient, FlussConfigUtils.getDefaultRemoteDataDir(conf));
+        this.lakeTableHelper = new LakeTableHelper(zooKeeperClient);
     }
 
     public CoordinatorEventManager getCoordinatorEventManager() {

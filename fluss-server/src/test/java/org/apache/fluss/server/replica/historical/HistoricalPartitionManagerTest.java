@@ -935,7 +935,7 @@ class HistoricalPartitionManagerTest extends ReplicaTestBase {
                                     new Object[] {
                                         1, "us", ANOTHER_ORIGINAL_PARTITION, "another-v1"
                                     })));
-            new LakeTableHelper(zkClient, DEFAULT_REMOTE_DATA_DIR)
+            new LakeTableHelper(zkClient)
                     .registerLakeTableSnapshotV1(
                             TABLE_ID,
                             new LakeTableSnapshot(
