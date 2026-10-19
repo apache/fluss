@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-package org.apache.fluss.flink.tiering.committer;
+package org.apache.fluss.client.tiering;
 
 import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.client.metadata.MetadataUpdater;
@@ -229,7 +229,7 @@ public class FlussTableLakeSnapshotCommitter implements AutoCloseable {
         }
     }
 
-    void commit(
+    public void commit(
             long tableId,
             long snapshotId,
             String lakeBucketTieredOffsetsPath,
@@ -335,7 +335,7 @@ public class FlussTableLakeSnapshotCommitter implements AutoCloseable {
                 commitLakeTableSnapshotRequest.addLakeTableSnapshotMetadata();
         pbLakeTableSnapshotMetadata.setSnapshotId(snapshotId);
         pbLakeTableSnapshotMetadata.setTableId(tableId);
-        // tiered snapshot file path is equal to readable snapshot currently
+        // Keep the tiered offsets path separate from the optional readable offsets path.
         pbLakeTableSnapshotMetadata.setTieredBucketOffsetsFilePath(tieredBucketOffsetsPath);
         if (readableBucketTieredOffsetsPath != null) {
             pbLakeTableSnapshotMetadata.setReadableBucketOffsetsFilePath(
@@ -360,7 +360,7 @@ public class FlussTableLakeSnapshotCommitter implements AutoCloseable {
     }
 
     @VisibleForTesting
-    protected CommitLakeTableSnapshotRequest addLogEndOffsets(
+    public CommitLakeTableSnapshotRequest addLogEndOffsets(
             CommitLakeTableSnapshotRequest commitLakeTableSnapshotRequest,
             long tableId,
             long snapshotId,
@@ -390,7 +390,7 @@ public class FlussTableLakeSnapshotCommitter implements AutoCloseable {
     }
 
     @VisibleForTesting
-    CoordinatorGateway getCoordinatorGateway() {
+    public CoordinatorGateway getCoordinatorGateway() {
         return coordinatorGateway;
     }
 
