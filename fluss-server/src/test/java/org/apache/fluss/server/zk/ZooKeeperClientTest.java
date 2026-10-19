@@ -480,6 +480,21 @@ class ZooKeeperClientTest {
     }
 
     @Test
+    void testTableRegistrationNotYetInitialized() throws Exception {
+        TablePath tablePath = TablePath.of("db", "uninitialized-table");
+        Schema schema = Schema.newBuilder().column("id", DataTypes.INT()).build();
+
+        // Registering the first schema creates the table parent node,
+        // but its registration data has not been written yet.
+        zookeeperClient.registerFirstSchema(tablePath, schema);
+
+        assertThat(zookeeperClient.tableExist(tablePath)).isFalse();
+        assertThat(zookeeperClient.getTable(tablePath)).isEmpty();
+        assertThat(zookeeperClient.getTableWithVersion(tablePath)).isEmpty();
+        assertThat(zookeeperClient.getTables(Collections.singletonList(tablePath))).isEmpty();
+    }
+
+    @Test
     void testSchema() throws Exception {
         int schemaId = 1;
         TablePath tablePath = TablePath.of("db", "tb");
