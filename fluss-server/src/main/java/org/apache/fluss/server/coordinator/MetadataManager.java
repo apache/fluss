@@ -1149,6 +1149,8 @@ public class MetadataManager {
                                         .getLakeCatalogContainer()
                                         .getDefaultTableLakeOptions()));
             }
+        } catch (TableNotExistException e) {
+            throw e;
         } catch (Exception e) {
             throw new FlussRuntimeException(
                     String.format("Failed to get tables '%s'.", tablePaths), e);
