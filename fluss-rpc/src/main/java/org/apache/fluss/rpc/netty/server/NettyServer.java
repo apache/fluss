@@ -80,6 +80,7 @@ public final class NettyServer implements RpcServer {
     private EventLoopGroup selectorGroup;
 
     private volatile boolean isRunning;
+    private CompletableFuture<Void> closeFuture;
 
     public NettyServer(
             Configuration conf,
@@ -104,7 +105,8 @@ public final class NettyServer implements RpcServer {
     }
 
     @Override
-    public void start() throws IOException {
+    public synchronized void start() throws IOException {
+        checkState(closeFuture == null, "Netty server has already been closed.");
         checkState(bindChannels.isEmpty(), "Netty server has already been initialized.");
         int numNetworkThreads = conf.getInt(ConfigOptions.NETTY_SERVER_NUM_NETWORK_THREADS);
         int numWorkerThreads = conf.getInt(ConfigOptions.NETTY_SERVER_NUM_WORKER_THREADS);
@@ -298,34 +300,50 @@ public final class NettyServer implements RpcServer {
 
     @Override
     public CompletableFuture<Void> closeAsync() {
-        if (!isRunning) {
-            return CompletableFuture.completedFuture(null);
-        }
+        synchronized (this) {
+            if (closeFuture != null) {
+                return closeFuture;
+            }
+            isRunning = false;
 
-        isRunning = false;
-
-        // Stop accepting new connections.
-        CompletableFuture<Void> channelShutdownFuture =
-                FutureUtils.completeAll(
-                        bindChannels.stream()
-                                .map(NettyUtils::shutdownChannel)
-                                .collect(Collectors.toList()));
-        // Drain the requests that were already accepted.
-        CompletableFuture<Void> workerShutdownFuture;
-        if (workerPool != null) {
-            workerShutdownFuture = workerPool.closeAsync();
-        } else {
-            workerShutdownFuture = CompletableFuture.completedFuture(null);
+            CompletableFuture<Void> channelShutdownFuture =
+                    FutureUtils.completeAll(
+                            bindChannels.stream()
+                                    .map(NettyUtils::shutdownChannel)
+                                    .collect(Collectors.toList()));
+            CompletableFuture<Void> workerShutdownFuture =
+                    workerPool == null
+                            ? CompletableFuture.completedFuture(null)
+                            : workerPool.closeAsync();
+            // Event loops must remain active while accepted requests drain: their responses and
+            // backpressure updates still use those loops. Close the loops only after both the
+            // listening channels and request workers have stopped.
+            CompletableFuture<Void> transportShutdownFuture =
+                    FutureUtils.composeAfterwards(
+                            CompletableFuture.allOf(channelShutdownFuture, workerShutdownFuture),
+                            () ->
+                                    CompletableFuture.allOf(
+                                            shutdownGroup(acceptorGroup),
+                                            shutdownGroup(selectorGroup)));
+            closeFuture = closeProtocolsAfter(transportShutdownFuture, protocols);
+            return closeFuture;
         }
-        // Shut down the event loops only after both of the above completed. The event loops
-        // terminate without a quiet period, so they must outlive the tasks still submitted to
-        // them: the bind channel close listeners, and the responses (and backpressure updates)
-        // of the requests drained by the worker pool. Shutting the event loops down closes the
-        // remaining client connections.
+    }
+
+    static CompletableFuture<Void> closeProtocolsAfter(
+            CompletableFuture<?> shutdownFuture, List<NetworkProtocolPlugin> protocols) {
         return FutureUtils.composeAfterwards(
-                CompletableFuture.allOf(channelShutdownFuture, workerShutdownFuture),
-                () ->
-                        CompletableFuture.allOf(
-                                shutdownGroup(acceptorGroup), shutdownGroup(selectorGroup)));
+                shutdownFuture,
+                () -> {
+                    List<CompletableFuture<Void>> closeFutures = new ArrayList<>();
+                    for (NetworkProtocolPlugin protocol : protocols) {
+                        try {
+                            closeFutures.add(protocol.closeAsync());
+                        } catch (Throwable failure) {
+                            closeFutures.add(FutureUtils.completedExceptionally(failure));
+                        }
+                    }
+                    return FutureUtils.completeAll(closeFutures);
+                });
     }
 }
