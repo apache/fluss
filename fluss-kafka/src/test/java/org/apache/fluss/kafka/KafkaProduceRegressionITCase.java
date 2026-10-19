@@ -30,6 +30,7 @@ import org.apache.fluss.cluster.rebalance.RebalanceProgress;
 import org.apache.fluss.cluster.rebalance.RebalanceStatus;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.config.KafkaValueConversionType;
 import org.apache.fluss.config.cluster.AlterConfig;
 import org.apache.fluss.config.cluster.AlterConfigOpType;
 import org.apache.fluss.metadata.DatabaseDescriptor;
@@ -435,7 +436,7 @@ class KafkaProduceRegressionITCase {
                                         .logFormat(LogFormat.ARROW)
                                         .property(
                                                 ConfigOptions.TABLE_KAFKA_CONVERT_VALUE_TYPE,
-                                                "binary")
+                                                KafkaValueConversionType.BINARY)
                                         .build(),
                                 false)
                         .get();
@@ -475,7 +476,7 @@ class KafkaProduceRegressionITCase {
                                         .property(ConfigOptions.TABLE_KAFKA_ENABLED, true)
                                         .property(
                                                 ConfigOptions.TABLE_KAFKA_CONVERT_VALUE_TYPE,
-                                                "binary")
+                                                KafkaValueConversionType.BINARY)
                                         .build(),
                                 false)
                         .get();
@@ -708,7 +709,9 @@ class KafkaProduceRegressionITCase {
                                 .logFormat(LogFormat.ARROW)
                                 .property(ConfigOptions.TABLE_REPLICATION_FACTOR, replicas)
                                 .property(ConfigOptions.TABLE_KAFKA_ENABLED, true)
-                                .property(ConfigOptions.TABLE_KAFKA_CONVERT_VALUE_TYPE, "binary")
+                                .property(
+                                        ConfigOptions.TABLE_KAFKA_CONVERT_VALUE_TYPE,
+                                        KafkaValueConversionType.BINARY)
                                 .build(),
                         false)
                 .get();
