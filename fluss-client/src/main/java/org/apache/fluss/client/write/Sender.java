@@ -22,6 +22,7 @@ import org.apache.fluss.client.metadata.MetadataUpdater;
 import org.apache.fluss.client.metrics.WriterMetricGroup;
 import org.apache.fluss.client.write.RecordAccumulator.ReadyCheckResult;
 import org.apache.fluss.cluster.Cluster;
+import org.apache.fluss.exception.InvalidBucketRoutingException;
 import org.apache.fluss.exception.InvalidMetadataException;
 import org.apache.fluss.exception.LeaderNotAvailableException;
 import org.apache.fluss.exception.OutOfOrderSequenceException;
@@ -249,6 +250,19 @@ public class Sender implements Runnable {
 
         // get the list of buckets with data ready to send.
         ReadyCheckResult readyCheckResult = accumulator.ready(clusterSnapshot);
+
+        if (!readyCheckResult.nonexistentBuckets.isEmpty()) {
+            recordFatalError(
+                    new InvalidBucketRoutingException(
+                            String.format(
+                                    "Write batches were routed to buckets %s that do not exist in "
+                                            + "the latest metadata. The bucket count may have "
+                                            + "been stale, e.g. because the table was dropped "
+                                            + "and re-created. Recreate the writer to use the "
+                                            + "current bucket count.",
+                                    readyCheckResult.nonexistentBuckets)));
+            return;
+        }
 
         // if there are any buckets whose leaders are not known yet, force metadata update
         if (!readyCheckResult.unknownLeaderTables.isEmpty()) {
