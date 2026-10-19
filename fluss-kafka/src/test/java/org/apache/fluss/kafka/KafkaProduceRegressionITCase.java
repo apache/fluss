@@ -33,6 +33,7 @@ import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.KafkaValueConversionType;
 import org.apache.fluss.config.cluster.AlterConfig;
 import org.apache.fluss.config.cluster.AlterConfigOpType;
+import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.metadata.DatabaseDescriptor;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.Schema;
@@ -454,84 +455,30 @@ class KafkaProduceRegressionITCase {
     }
 
     @Test
-    void testInvalidRecordRejectsWholePartitionBeforeNativeAppend() throws Exception {
+    void testNotNullKeySchemaIsRejectedWhenCreatingKafkaTable() throws Exception {
         TablePath path = TablePath.of(DATABASE, "atomic_conversion");
-        byte[] key = new byte[] {1};
         try (Connection connection = ConnectionFactory.createConnection(CLUSTER.getClientConfig());
                 Admin admin = connection.getAdmin()) {
             try {
                 admin.createDatabase(DATABASE, DatabaseDescriptor.EMPTY, true).get();
-                admin.createTable(
-                                path,
-                                TableDescriptor.builder()
-                                        .schema(
-                                                Schema.newBuilder()
-                                                        .column("_kafka_value", DataTypes.BYTES())
-                                                        .column(
-                                                                "_kafka_key",
-                                                                DataTypes.BYTES().copy(false))
-                                                        .build())
-                                        .distributedBy(1)
-                                        .logFormat(LogFormat.ARROW)
-                                        .property(ConfigOptions.TABLE_KAFKA_ENABLED, true)
-                                        .property(
-                                                ConfigOptions.TABLE_KAFKA_CONVERT_VALUE_TYPE,
-                                                KafkaValueConversionType.BINARY)
-                                        .build(),
-                                false)
-                        .get();
-                CLUSTER.waitUntilTableReady(admin.getTableInfo(path).get().getTableId());
-                try (KafkaProducer<byte[], byte[]> producer = producer("all", true)) {
-                    int leader = producer.partitionsFor(path.toString()).get(0).leader().id();
-                    ServerNode node =
-                            CLUSTER.getTabletServerNodes("KAFKA").stream()
-                                    .filter(n -> n.id() == leader)
-                                    .findFirst()
-                                    .get();
-                    try (Socket socket = connect(node)) {
-                        ProduceResponse rejected =
-                                (ProduceResponse)
-                                        sendRequest(
-                                                socket,
-                                                produceRequest(
-                                                        path.toString(),
-                                                        new SimpleRecord(
-                                                                key,
-                                                                "valid_prefix"
-                                                                        .getBytes(
-                                                                                StandardCharsets
-                                                                                        .UTF_8)),
-                                                        new SimpleRecord(
-                                                                null,
-                                                                "invalid_key"
-                                                                        .getBytes(
-                                                                                StandardCharsets
-                                                                                        .UTF_8))));
-                        assertThat(rejected.errorCounts()).containsEntry(Errors.INVALID_RECORD, 1);
-                        assertThat(
-                                        rejected.data()
-                                                .responses()
-                                                .find(path.toString())
-                                                .partitionResponses()
-                                                .get(0)
-                                                .baseOffset())
-                                .isEqualTo(-1L);
-                    }
-                    assertThat(
-                                    producer.send(
-                                                    new ProducerRecord<>(
-                                                            path.toString(),
-                                                            0,
-                                                            key,
-                                                            "accepted"
-                                                                    .getBytes(
-                                                                            StandardCharsets
-                                                                                    .UTF_8)))
-                                            .get(30, TimeUnit.SECONDS)
-                                            .offset())
-                            .isZero();
-                    assertValues(connection, path, "accepted");
-                }
+                TableDescriptor descriptor =
+                        TableDescriptor.builder()
+                                .schema(
+                                        Schema.newBuilder()
+                                                .column("_kafka_value", DataTypes.BYTES())
+                                                .column("_kafka_key", DataTypes.BYTES().copy(false))
+                                                .build())
+                                .distributedBy(1)
+                                .logFormat(LogFormat.ARROW)
+                                .property(ConfigOptions.TABLE_KAFKA_ENABLED, true)
+                                .property(
+                                        ConfigOptions.TABLE_KAFKA_CONVERT_VALUE_TYPE,
+                                        KafkaValueConversionType.BINARY)
+                                .build();
+                assertThatThrownBy(() -> admin.createTable(path, descriptor, false).get())
+                        .hasCauseInstanceOf(InvalidTableException.class)
+                        .rootCause()
+                        .hasMessageContaining("Kafka requires nullable fields");
             } finally {
                 admin.dropTable(path, true).get();
             }
