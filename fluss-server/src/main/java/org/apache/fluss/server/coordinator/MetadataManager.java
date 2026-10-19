@@ -42,6 +42,7 @@ import org.apache.fluss.metadata.DatabaseSummary;
 import org.apache.fluss.metadata.KafkaTableSchema;
 import org.apache.fluss.metadata.LakeTableUtil;
 import org.apache.fluss.metadata.MergeEngineType;
+import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.ResolvedPartitionSpec;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.SchemaInfo;
@@ -1150,6 +1151,26 @@ public class MetadataManager {
             throw new TableNotExistException("Table '" + tablePath + "' does not exist.");
         }
         return optionalTable.get();
+    }
+
+    /**
+     * Returns whether the partition registered in ZK under the given path belongs to the given
+     * table id and has the given partition id.
+     */
+    public boolean isPartitionRegistered(
+            PhysicalTablePath partitionPath, long tableId, long partitionId) {
+        Optional<PartitionRegistration> registration;
+        try {
+            registration =
+                    zookeeperClient.getPartition(
+                            partitionPath.getTablePath(), partitionPath.getPartitionName());
+        } catch (Exception e) {
+            throw new FlussRuntimeException(
+                    String.format("Failed to get partition '%s'.", partitionPath), e);
+        }
+        return registration.isPresent()
+                && registration.get().getTableId() == tableId
+                && registration.get().getPartitionId() == partitionId;
     }
 
     /**
