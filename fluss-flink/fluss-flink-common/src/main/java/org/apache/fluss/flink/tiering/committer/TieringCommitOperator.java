@@ -76,7 +76,7 @@ public class TieringCommitOperator<WriteResult, Committable>
     private final Configuration lakeTieringConfig;
     private final LakeTieringFactory<WriteResult, Committable> lakeTieringFactory;
     private final FlussTableLakeSnapshotCommitter flussTableLakeSnapshotCommitter;
-    private transient TieringCommitter<WriteResult, Committable> tieringCommitter;
+    private TieringCommitter<WriteResult, Committable> tieringCommitter;
     private Connection connection;
     private Admin admin;
 
