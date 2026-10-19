@@ -360,8 +360,24 @@ impl LookupDispatcher {
             // Re-group with fresh cluster state; dispatch what resolved, re-enqueue the rest.
             let retry = self.group_by_leader(unknowns);
             groups.merge_batches(retry.groups);
-            for item in retry.unknowns {
-                self.re_enqueue_lookup(item);
+            // The leader of a dropped or recreated table will never be found, so check the
+            // tables that still have no leader.
+            let mut gone_tables: HashMap<(TablePath, TableId), Option<String>> = HashMap::new();
+            for mut item in retry.unknowns {
+                let key = (item.table_path().clone(), item.table_bucket().table_id());
+                if !gone_tables.contains_key(&key) {
+                    let reason = self.check_table_gone(&key.0, key.1).await;
+                    gone_tables.insert(key.clone(), reason);
+                }
+                match &gone_tables[&key] {
+                    Some(reason) => item.complete_with_error(Error::FlussAPIError {
+                        api_error: ApiError {
+                            code: FlussError::TableNotExist.code(),
+                            message: reason.clone(),
+                        },
+                    }),
+                    None => self.re_enqueue_lookup(item),
+                }
             }
 
             // Nothing to dispatch even after refresh — back off to avoid a tight RPC loop.
@@ -385,6 +401,28 @@ impl LookupDispatcher {
         }
 
         Ok(())
+    }
+
+    /// Returns why `table_path` no longer resolves to `expected_table_id`, or `None` if it still
+    /// does or the check failed.
+    async fn check_table_gone(
+        &self,
+        table_path: &TablePath,
+        expected_table_id: TableId,
+    ) -> Option<String> {
+        match self.metadata.fetch_table_id(table_path).await {
+            Ok(None) => Some(format!(
+                "Table {table_path} (table_id={expected_table_id}) no longer exists."
+            )),
+            Ok(Some(table_id)) if table_id == expected_table_id => None,
+            Ok(Some(new_table_id)) => Some(format!(
+                "Table {table_path} (table_id={expected_table_id}) was dropped and recreated with table_id={new_table_id}."
+            )),
+            Err(e) => {
+                warn!("Table identity check for {table_path} failed during lookup: {e:?}");
+                None
+            }
+        }
     }
 
     fn group_by_leader(&self, lookups: Vec<QueuedLookup>) -> GroupingResult {

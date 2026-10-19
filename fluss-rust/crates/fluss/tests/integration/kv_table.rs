@@ -24,6 +24,7 @@ mod kv_table_test {
         make_string_array, map_dt_basics_columns, row_dt_basics_columns, scalar_dt_columns,
     };
     use fluss::client::TableUpsert;
+    use fluss::error::FlussError;
     use fluss::metadata::{DataField, DataTypes, Schema, TableDescriptor, TablePath};
     use fluss::row::binary_array::FlussArrayWriter;
     use fluss::row::binary_map::FlussMapWriter;
@@ -32,6 +33,7 @@ mod kv_table_test {
         TimestampLtz, TimestampNtz,
     };
     use futures::stream::{FuturesUnordered, StreamExt};
+    use std::time::Duration;
 
     fn make_key(id: i32) -> GenericRow<'static> {
         make_key_with_field_count(id, 3)
@@ -181,6 +183,88 @@ mod kv_table_test {
             .drop_table(&table_path, false)
             .await
             .expect("Failed to drop table");
+    }
+
+    #[tokio::test]
+    async fn lookup_after_table_dropped() {
+        assert_lookup_fails_after_drop("test_lookup_after_table_dropped", false).await;
+    }
+
+    #[tokio::test]
+    async fn lookup_after_table_recreated() {
+        assert_lookup_fails_after_drop("test_lookup_after_table_recreated", true).await;
+    }
+
+    async fn assert_lookup_fails_after_drop(table_name: &str, recreate: bool) {
+        let cluster = get_shared_cluster();
+        let connection = cluster.get_fluss_connection().await;
+
+        let admin = connection.get_admin().unwrap();
+
+        let table_path = TablePath::new("fluss", table_name);
+
+        let table_descriptor = TableDescriptor::builder()
+            .schema(
+                Schema::builder()
+                    .column("id", DataTypes::int())
+                    .column("name", DataTypes::string())
+                    .primary_key(vec!["id"])
+                    .unwrap()
+                    .build()
+                    .expect("Failed to build schema"),
+            )
+            .build()
+            .expect("Failed to build table");
+
+        create_table(&admin, &table_path, &table_descriptor).await;
+
+        let table = connection.get_table(&table_path).await.unwrap();
+        let upsert_writer = table
+            .new_upsert()
+            .expect("Failed to create upsert")
+            .create_writer()
+            .expect("Failed to create writer");
+        let mut row = GenericRow::new(2);
+        row.set_field(0, 1);
+        row.set_field(1, "Verso");
+        upsert_writer
+            .upsert(&row)
+            .expect("Failed to upsert row")
+            .await
+            .expect("Failed to wait for upsert acknowledgment");
+
+        let lookuper = table
+            .new_lookup()
+            .expect("Failed to create lookup")
+            .create_lookuper()
+            .expect("Failed to create lookuper");
+        let result = lookuper
+            .lookup(&make_key_with_field_count(1, 2))
+            .await
+            .expect("Failed to lookup");
+        assert!(result.get_single_row().unwrap().is_some());
+
+        admin
+            .drop_table(&table_path, false)
+            .await
+            .expect("Failed to drop table");
+        if recreate {
+            create_table(&admin, &table_path, &table_descriptor).await;
+        }
+
+        let error = tokio::time::timeout(Duration::from_secs(60), async {
+            loop {
+                // The tablet servers delete the replicas asynchronously, so a lookup can still
+                // succeed right after the drop.
+                if let Err(e) = lookuper.lookup(&make_key_with_field_count(1, 2)).await {
+                    return e;
+                }
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+        })
+        .await
+        .expect("Lookup on a dropped table should fail");
+        assert_eq!(error.api_error(), Some(FlussError::TableNotExist));
     }
 
     #[tokio::test]
