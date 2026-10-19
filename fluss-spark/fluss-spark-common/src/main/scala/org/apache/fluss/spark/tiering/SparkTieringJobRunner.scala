@@ -134,6 +134,12 @@ class SparkTieringJobRunner(
       connection = connectionFactory(flussConfig)
       admin = connection.getAdmin
 
+      val tieringCommitter = new TieringCommitter[AnyRef, AnyRef](
+        admin,
+        flussConfig,
+        lakeTieringConfig,
+        lakeTieringFactory,
+        snapshotCommitter)
       val splitGenerator = splitGeneratorFactory(admin)
       val consecutiveHeartbeatFailures = new AtomicInteger(0)
 
@@ -159,7 +165,7 @@ class SparkTieringJobRunner(
               processTieringTable(
                 sc,
                 coordinator,
-                snapshotCommitter,
+                tieringCommitter,
                 admin,
                 splitGenerator,
                 consecutiveHeartbeatFailures,
@@ -205,7 +211,7 @@ class SparkTieringJobRunner(
   private def processTieringTable(
       sc: SparkContext,
       coordinator: TieringCoordinator,
-      snapshotCommitter: FlussTableLakeSnapshotCommitter,
+      tieringCommitter: TieringCommitter[AnyRef, AnyRef],
       admin: Admin,
       splitGenerator: TieringSplitGenerator,
       consecutiveHeartbeatFailures: AtomicInteger,
@@ -250,16 +256,8 @@ class SparkTieringJobRunner(
       }
 
       // Commit results
-      val tieringCommitter = new TieringCommitter[AnyRef, AnyRef]()
-      val commitResult = tieringCommitter.commitWriteResults(
-        admin,
-        tableId,
-        tablePath,
-        flussConfig,
-        lakeTieringConfig,
-        lakeTieringFactory,
-        snapshotCommitter,
-        results.asJava)
+      val commitResult =
+        tieringCommitter.commitWriteResults(tableId, tablePath, results.asJava)
 
       val stats = Option(commitResult.getStats).getOrElse(TieringStats.UNKNOWN)
       logInfo(s"Tiering completed for table $tablePath, stats=$stats")
