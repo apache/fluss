@@ -85,6 +85,7 @@ import org.apache.fluss.server.metadata.TableMetadata;
 import org.apache.fluss.server.testutils.KvTestUtils;
 import org.apache.fluss.server.testutils.ServerTestTags;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
+import org.apache.fluss.server.zk.data.PartitionAssignment;
 import org.apache.fluss.server.zk.data.TableRegistration;
 import org.apache.fluss.server.zk.data.lake.LakeTable;
 import org.apache.fluss.testutils.DataTestUtils;
@@ -2340,6 +2341,18 @@ class ReplicaManagerTest extends ReplicaTestBase {
                         DATA1_PARTITIONED_TABLE_DESCRIPTOR));
         zkClient.registerFirstSchema(
                 partitionTablePath, DATA1_PARTITIONED_TABLE_DESCRIPTOR.getSchema());
+        // register partitions to zk.
+        for (PartitionMetadata partitionMetadata :
+                Arrays.asList(partitionMetadata1, partitionMetadata2)) {
+            zkClient.registerPartitionAssignmentAndMetadata(
+                    partitionMetadata.getPartitionId(),
+                    partitionMetadata.getPartitionName(),
+                    new PartitionAssignment(partitionTableId, Collections.emptyMap()),
+                    DEFAULT_REMOTE_DATA_DIR,
+                    partitionTablePath,
+                    partitionTableId,
+                    0);
+        }
 
         expectedCoordinatorServer.put(
                 "INTERNAL", new ServerNode(0, "localhost", 1235, ServerType.COORDINATOR));
