@@ -17,33 +17,16 @@
 
 package org.apache.fluss.flink.source;
 
-import org.apache.fluss.client.Connection;
-import org.apache.fluss.client.ConnectionFactory;
-import org.apache.fluss.client.admin.Admin;
 import org.apache.fluss.config.Configuration;
-import org.apache.fluss.exception.FlussRuntimeException;
-import org.apache.fluss.metadata.BucketInfo;
 import org.apache.fluss.metadata.TablePath;
-import org.apache.fluss.utils.ExceptionUtils;
 
 import org.apache.flink.api.common.typeinfo.TypeInformation;
-import org.apache.flink.streaming.api.datastream.DataStream;
-import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.apache.flink.table.connector.ChangelogMode;
-import org.apache.flink.table.connector.ProviderContext;
-import org.apache.flink.table.connector.source.DataStreamScanProvider;
 import org.apache.flink.table.connector.source.DynamicTableSource;
 import org.apache.flink.table.connector.source.ScanTableSource;
-import org.apache.flink.table.data.GenericArrayData;
-import org.apache.flink.table.data.GenericRowData;
+import org.apache.flink.table.connector.source.SourceProvider;
 import org.apache.flink.table.data.RowData;
-import org.apache.flink.table.data.StringData;
 import org.apache.flink.table.types.logical.RowType;
-
-import java.util.List;
-import java.util.OptionalInt;
-import java.util.OptionalLong;
-import java.util.stream.Collectors;
 
 /** A bounded Flink table source for the read-only {@code $buckets} virtual table. */
 public class BucketsFlinkTableSource implements ScanTableSource {
@@ -69,57 +52,7 @@ public class BucketsFlinkTableSource implements ScanTableSource {
     public ScanRuntimeProvider getScanRuntimeProvider(ScanContext scanContext) {
         TypeInformation<RowData> resultTypeInfo =
                 scanContext.createTypeInformation(producedDataType);
-        return new DataStreamScanProvider() {
-            @Override
-            public DataStream<RowData> produceDataStream(
-                    ProviderContext providerContext, StreamExecutionEnvironment execEnv) {
-                return execEnv.fromCollection(loadBucketRows(), resultTypeInfo)
-                        .name("FlussBuckets-" + tablePath)
-                        .setParallelism(1);
-            }
-
-            @Override
-            public boolean isBounded() {
-                return true;
-            }
-        };
-    }
-
-    private List<RowData> loadBucketRows() {
-        try (Connection connection = ConnectionFactory.createConnection(flussConfig);
-                Admin admin = connection.getAdmin()) {
-            return admin.describeBuckets(tablePath).get().stream()
-                    .map(BucketsFlinkTableSource::toRowData)
-                    .collect(Collectors.toList());
-        } catch (Exception e) {
-            throw new FlussRuntimeException(
-                    String.format("Failed to describe buckets for table %s.", tablePath),
-                    ExceptionUtils.stripExecutionException(e));
-        }
-    }
-
-    static RowData toRowData(BucketInfo bucketInfo) {
-        return GenericRowData.of(
-                StringData.fromString(bucketInfo.getTablePath().toString()),
-                bucketInfo.getTableId(),
-                optionalLong(bucketInfo.getPartitionId()),
-                bucketInfo.getPartitionName() == null
-                        ? null
-                        : StringData.fromString(bucketInfo.getPartitionName()),
-                bucketInfo.getBucketId(),
-                optionalInt(bucketInfo.getLeaderId()),
-                optionalInt(bucketInfo.getLeaderEpoch()),
-                optionalInt(bucketInfo.getBucketEpoch()),
-                new GenericArrayData(bucketInfo.getReplicas().toArray(new Integer[0])),
-                new GenericArrayData(bucketInfo.getIsr().toArray(new Integer[0])));
-    }
-
-    private static Long optionalLong(OptionalLong value) {
-        return value.isPresent() ? value.getAsLong() : null;
-    }
-
-    private static Integer optionalInt(OptionalInt value) {
-        return value.isPresent() ? value.getAsInt() : null;
+        return SourceProvider.of(new BucketsSource(tablePath, flussConfig, resultTypeInfo));
     }
 
     @Override
