@@ -1259,9 +1259,50 @@ pub struct TableConfig {
     pub properties: HashMap<String, String>,
 }
 
+/// Merge engine configured for a primary-key table.
+///
+/// The absence of `table.merge-engine` is the ordinary deduplicate/upsert
+/// behavior. These explicit engines require semantics different from the
+/// deduplicate current-view reconciliation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, EnumString)]
+#[strum(ascii_case_insensitive)]
+pub enum MergeEngineType {
+    #[strum(serialize = "first_row")]
+    FirstRow,
+    #[strum(serialize = "versioned")]
+    Versioned,
+    #[strum(serialize = "aggregation")]
+    Aggregation,
+}
+
+impl Display for MergeEngineType {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::FirstRow => "first_row",
+            Self::Versioned => "versioned",
+            Self::Aggregation => "aggregation",
+        })
+    }
+}
+
 impl TableConfig {
     pub fn from_properties(properties: HashMap<String, String>) -> Self {
         TableConfig { properties }
+    }
+
+    /// Returns whether lake storage is enabled for the table.
+    ///
+    /// A table may preconfigure `table.datalake.format` while leaving lake
+    /// storage disabled, so callers must not infer enablement from the format.
+    pub fn is_datalake_enabled(&self) -> Result<bool> {
+        match self.properties.get("table.datalake.enabled") {
+            None => Ok(false),
+            Some(value) if value.eq_ignore_ascii_case("true") => Ok(true),
+            Some(value) if value.eq_ignore_ascii_case("false") => Ok(false),
+            Some(value) => Err(Error::invalid_table(format!(
+                "Invalid table.datalake.enabled {value:?}: expected true or false"
+            ))),
+        }
     }
 
     pub fn get_arrow_compression_info(&self) -> Result<ArrowCompressionInfo> {
@@ -1309,6 +1350,20 @@ impl TableConfig {
             .map(String::as_str)
             .unwrap_or(DEFAULT_LOG_FORMAT);
         LogFormat::parse(log_format)
+    }
+
+    /// Returns the explicitly configured primary-key merge engine.
+    ///
+    /// `None` is the default deduplicate/upsert behavior.
+    pub fn get_merge_engine_type(&self) -> Result<Option<MergeEngineType>> {
+        self.properties
+            .get("table.merge-engine")
+            .map(|value| {
+                value.parse().map_err(|error| {
+                    Error::invalid_table(format!("Invalid table.merge-engine {value:?}: {error}"))
+                })
+            })
+            .transpose()
     }
 
     pub fn get_auto_partition_strategy(&self) -> AutoPartitionStrategy {
@@ -1807,6 +1862,63 @@ mod tests {
                 .contains("Field names must be unique. Found duplicates:"),
             "unexpected error: {err}"
         );
+    }
+
+    #[test]
+    fn table_config_parses_explicit_merge_engines_and_keeps_default_deduplicate() {
+        let default = TableConfig::from_properties(HashMap::new());
+        assert_eq!(default.get_merge_engine_type().unwrap(), None);
+
+        for (value, expected) in [
+            ("first_row", MergeEngineType::FirstRow),
+            ("VERSIONED", MergeEngineType::Versioned),
+            ("aggregation", MergeEngineType::Aggregation),
+        ] {
+            let config = TableConfig::from_properties(HashMap::from([(
+                "table.merge-engine".to_string(),
+                value.to_string(),
+            )]));
+            assert_eq!(config.get_merge_engine_type().unwrap(), Some(expected));
+        }
+    }
+
+    #[test]
+    fn table_config_rejects_unknown_merge_engine() {
+        let config = TableConfig::from_properties(HashMap::from([(
+            "table.merge-engine".to_string(),
+            "deduplicate".to_string(),
+        )]));
+
+        assert!(config.get_merge_engine_type().is_err());
+    }
+
+    #[test]
+    fn table_config_distinguishes_lake_format_from_lake_enablement() {
+        let format_only = TableConfig::from_properties(HashMap::from([(
+            "table.datalake.format".to_string(),
+            "paimon".to_string(),
+        )]));
+        assert!(!format_only.is_datalake_enabled().unwrap());
+        assert_eq!(
+            format_only.get_datalake_format().unwrap(),
+            Some(DataLakeFormat::Paimon)
+        );
+
+        let enabled = TableConfig::from_properties(HashMap::from([
+            ("table.datalake.enabled".to_string(), "TRUE".to_string()),
+            ("table.datalake.format".to_string(), "paimon".to_string()),
+        ]));
+        assert!(enabled.is_datalake_enabled().unwrap());
+    }
+
+    #[test]
+    fn table_config_rejects_invalid_lake_enablement() {
+        let config = TableConfig::from_properties(HashMap::from([(
+            "table.datalake.enabled".to_string(),
+            "yes".to_string(),
+        )]));
+
+        assert!(config.is_datalake_enabled().is_err());
     }
 
     #[test]
