@@ -76,7 +76,7 @@ public class TieringCommitOperator<WriteResult, Committable>
     private final Configuration lakeTieringConfig;
     private final LakeTieringFactory<WriteResult, Committable> lakeTieringFactory;
     private final FlussTableLakeSnapshotCommitter flussTableLakeSnapshotCommitter;
-    private final TieringCommitter<WriteResult, Committable> tieringCommitter;
+    private transient TieringCommitter<WriteResult, Committable> tieringCommitter;
     private Connection connection;
     private Admin admin;
 
@@ -86,10 +86,7 @@ public class TieringCommitOperator<WriteResult, Committable>
     // Table ID -> accumulator for the current tiering round.
     private final Map<Long, TableWriteResultAccumulator<WriteResult>> tableWriteResultAccumulators;
 
-    /**
-     * The result of one table's commit round is now represented by {@link TieringCommitResult} from
-     * fluss-client.
-     */
+    /** Creates an operator that collects and commits table tiering rounds. */
     public TieringCommitOperator(
             StreamOperatorParameters<CommittableMessage<Committable>> parameters,
             Configuration flussConf,
@@ -97,7 +94,6 @@ public class TieringCommitOperator<WriteResult, Committable>
             LakeTieringFactory<WriteResult, Committable> lakeTieringFactory) {
         this.lakeTieringFactory = lakeTieringFactory;
         this.flussTableLakeSnapshotCommitter = new FlussTableLakeSnapshotCommitter(flussConf);
-        this.tieringCommitter = new TieringCommitter<>();
         this.tableWriteResultAccumulators = new HashMap<>();
         this.flussConfig = flussConf;
         this.lakeTieringConfig = lakeTieringConfig;
@@ -116,6 +112,13 @@ public class TieringCommitOperator<WriteResult, Committable>
         flussTableLakeSnapshotCommitter.open();
         connection = ConnectionFactory.createConnection(flussConfig);
         admin = connection.getAdmin();
+        tieringCommitter =
+                new TieringCommitter<>(
+                        admin,
+                        flussConfig,
+                        lakeTieringConfig,
+                        lakeTieringFactory,
+                        flussTableLakeSnapshotCommitter);
     }
 
     @Override
@@ -136,13 +139,8 @@ public class TieringCommitOperator<WriteResult, Committable>
             try {
                 TieringCommitResult<Committable> commitResult =
                         tieringCommitter.commitWriteResults(
-                                admin,
                                 tableId,
                                 tableBucketWriteResult.tablePath(),
-                                flussConfig,
-                                lakeTieringConfig,
-                                lakeTieringFactory,
-                                flussTableLakeSnapshotCommitter,
                                 accumulator.bucketWriteResults);
                 // only emit downstream when actual data was written
                 if (commitResult.getCommittable() != null) {

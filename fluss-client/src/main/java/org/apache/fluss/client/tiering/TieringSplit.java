@@ -28,6 +28,8 @@ import java.util.Objects;
 /** The base table split for tiering service. */
 public abstract class TieringSplit implements Serializable {
 
+    private static final long serialVersionUID = 1L;
+
     public static final byte TIERING_SNAPSHOT_SPLIT_FLAG = 1;
     public static final byte TIERING_LOG_SPLIT_FLAG = 2;
     public static final int UNKNOWN_SPLIT_INDEX = -1;

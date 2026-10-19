@@ -41,10 +41,10 @@ class TieringSplitStateTest {
                         tablePath, tableBucket, "partition1", 0L, 200L, 10, 0, 1000L);
         tieringSnapshotSplit.skipCurrentRound();
         FlinkTieringSplit flinkSplit = new FlinkTieringSplit(tieringSnapshotSplit);
-        TieringSplitState tieringSnapshotSplitState = new TieringSplitState(flinkSplit);
+        TieringSplitState tieringSnapshotSplitState = new TieringSplitState(flinkSplit.unwrap());
         FlinkTieringSplit restoredFlinkSplit = tieringSnapshotSplitState.toSourceSplit();
-        TieringSnapshotSplit restoredSplit = restoredFlinkSplit.asTieringSnapshotSplit();
-        assertThat(restoredSplit).isEqualTo(tieringSnapshotSplit);
+        TieringSnapshotSplit restoredSplit = restoredFlinkSplit.unwrap().asTieringSnapshotSplit();
+        assertThat(restoredSplit).isEqualTo(tieringSnapshotSplit).isNotSameAs(tieringSnapshotSplit);
         assertThat(restoredSplit.shouldSkipCurrentRound()).isTrue();
         assertThat(restoredSplit.getSplitIndex()).isZero();
         assertThat(restoredSplit.getTieringRoundTimestamp()).isEqualTo(1000L);
@@ -60,10 +60,10 @@ class TieringSplitStateTest {
                 new TieringLogSplit(tablePath, tableBucket, "partition1", 100L, 200L, 20, 1, 2000L);
         tieringLogSplit.skipCurrentRound();
         FlinkTieringSplit flinkSplit = new FlinkTieringSplit(tieringLogSplit);
-        TieringSplitState tieringLogSplitState = new TieringSplitState(flinkSplit);
+        TieringSplitState tieringLogSplitState = new TieringSplitState(flinkSplit.unwrap());
         FlinkTieringSplit restoredFlinkSplit = tieringLogSplitState.toSourceSplit();
-        TieringLogSplit restoredSplit = restoredFlinkSplit.asTieringLogSplit();
-        assertThat(restoredSplit).isEqualTo(tieringLogSplit);
+        TieringLogSplit restoredSplit = restoredFlinkSplit.unwrap().asTieringLogSplit();
+        assertThat(restoredSplit).isEqualTo(tieringLogSplit).isNotSameAs(tieringLogSplit);
         assertThat(restoredSplit.shouldSkipCurrentRound()).isTrue();
         assertThat(restoredSplit.getSplitIndex()).isEqualTo(1);
         assertThat(restoredSplit.getTieringRoundTimestamp()).isEqualTo(2000L);

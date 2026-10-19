@@ -17,8 +17,6 @@
 
 package org.apache.fluss.flink.tiering.source.state;
 
-import org.apache.fluss.client.tiering.TieringLogSplit;
-import org.apache.fluss.client.tiering.TieringSnapshotSplit;
 import org.apache.fluss.client.tiering.TieringSplit;
 import org.apache.fluss.flink.tiering.source.split.FlinkTieringSplit;
 
@@ -31,40 +29,15 @@ import org.apache.fluss.flink.tiering.source.split.FlinkTieringSplit;
  */
 public class TieringSplitState {
 
-    protected final FlinkTieringSplit flinkTieringSplit;
+    protected final TieringSplit tieringSplit;
 
-    public TieringSplitState(FlinkTieringSplit flinkTieringSplit) {
-        this.flinkTieringSplit = flinkTieringSplit;
+    /** Creates state for the engine-agnostic split. */
+    public TieringSplitState(TieringSplit tieringSplit) {
+        this.tieringSplit = tieringSplit;
     }
 
+    /** Returns a copy of the split wrapped for the Flink source framework. */
     public FlinkTieringSplit toSourceSplit() {
-        TieringSplit tieringSplit = flinkTieringSplit.unwrap();
-        if (tieringSplit.isTieringSnapshotSplit()) {
-            final TieringSnapshotSplit split = tieringSplit.asTieringSnapshotSplit();
-            return new FlinkTieringSplit(
-                    new TieringSnapshotSplit(
-                            split.getTablePath(),
-                            split.getTableBucket(),
-                            split.getPartitionName(),
-                            split.getSnapshotId(),
-                            split.getLogOffsetOfSnapshot(),
-                            split.getNumberOfSplits(),
-                            split.shouldSkipCurrentRound(),
-                            split.getSplitIndex(),
-                            split.getTieringRoundTimestamp()));
-        } else {
-            final TieringLogSplit split = tieringSplit.asTieringLogSplit();
-            return new FlinkTieringSplit(
-                    new TieringLogSplit(
-                            split.getTablePath(),
-                            split.getTableBucket(),
-                            split.getPartitionName(),
-                            split.getStartingOffset(),
-                            split.getStoppingOffset(),
-                            split.getNumberOfSplits(),
-                            split.shouldSkipCurrentRound(),
-                            split.getSplitIndex(),
-                            split.getTieringRoundTimestamp()));
-        }
+        return new FlinkTieringSplit(tieringSplit.copy(tieringSplit.getNumberOfSplits()));
     }
 }

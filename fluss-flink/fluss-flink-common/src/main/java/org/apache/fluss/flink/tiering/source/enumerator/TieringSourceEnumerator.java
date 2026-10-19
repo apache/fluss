@@ -116,7 +116,7 @@ public class TieringSourceEnumerator
     private final SplitEnumeratorMetricGroup enumeratorMetricGroup;
     private final long pollTieringTableIntervalMs;
     // Also inspected by asynchronous heartbeat requests.
-    private final Deque<FlinkTieringSplit> pendingSplits;
+    private final Deque<TieringSplit> pendingSplits;
     private final Set<Integer> readersAwaitingSplit;
 
     private final Map<Long, Long> tieringTableEpochs;
@@ -267,7 +267,7 @@ public class TieringSourceEnumerator
     @Override
     public void addSplitsBack(List<FlinkTieringSplit> splits, int subtaskId) {
         readersAwaitingSplit.add(subtaskId);
-        pendingSplits.addAll(splits);
+        splits.forEach(split -> pendingSplits.addLast(split.unwrap()));
         assignSplits();
     }
 
@@ -391,7 +391,7 @@ public class TieringSourceEnumerator
             LOG.info("Table {}-{} reached max duration. Force completing.", tablePath, tableId);
             tieringReachMaxDurationsTables.add(tableId);
 
-            for (FlinkTieringSplit tieringSplit : pendingSplits) {
+            for (TieringSplit tieringSplit : pendingSplits) {
                 if (tieringSplit.getTableBucket().getTableId() == tableId) {
                     // mark this tiering split to skip the current round since the tiering for
                     // this table has timed out, so the tiering source reader can skip them directly
@@ -435,9 +435,9 @@ public class TieringSourceEnumerator
                     readersAwaitingSplit.remove(nextAwaitingReader);
                     continue;
                 }
-                FlinkTieringSplit tieringSplit = pendingSplits.pollFirst();
+                TieringSplit tieringSplit = pendingSplits.pollFirst();
                 if (tieringSplit != null) {
-                    context.assignSplit(tieringSplit, nextAwaitingReader);
+                    context.assignSplit(new FlinkTieringSplit(tieringSplit), nextAwaitingReader);
                     LOG.info("Assigning split {} to readers {}", tieringSplit, nextAwaitingReader);
                     readersAwaitingSplit.remove(nextAwaitingReader);
                 }
@@ -531,13 +531,13 @@ public class TieringSourceEnumerator
             // shuffle tiering split to avoid splits tiering skew
             // after introduce tiering max duration
             Collections.shuffle(tieringSplits);
-            List<FlinkTieringSplit> flinkSplits = populateTieringRoundMetadata(tieringSplits);
+            List<TieringSplit> splitsWithMetadata = populateTieringRoundMetadata(tieringSplits);
             LOG.info(
                     "Generate Tiering {} splits for table {} with cost {}ms.",
-                    flinkSplits.size(),
+                    splitsWithMetadata.size(),
                     tieringTable.f2,
                     System.currentTimeMillis() - start);
-            if (flinkSplits.isEmpty()) {
+            if (splitsWithMetadata.isEmpty()) {
                 LOG.info(
                         "Generate Tiering splits for table {} is empty, no need to tier data.",
                         tieringTable.f2.getTableName());
@@ -546,7 +546,7 @@ public class TieringSourceEnumerator
                 // An empty round has no split or completion event to drive the next table.
                 requestTableAndAssign(EMPTY_TABLE_POLL_DELAY_MS);
             } else {
-                pendingSplits.addAll(flinkSplits);
+                pendingSplits.addAll(splitsWithMetadata);
 
                 timerService.schedule(
                         () ->
@@ -595,19 +595,18 @@ public class TieringSourceEnumerator
                 TimeUnit.MILLISECONDS);
     }
 
-    private List<FlinkTieringSplit> populateTieringRoundMetadata(List<TieringSplit> tieringSplits) {
+    private List<TieringSplit> populateTieringRoundMetadata(List<TieringSplit> tieringSplits) {
         int numberOfSplits = tieringSplits.size();
         if (numberOfSplits == 0) {
             return Collections.emptyList();
         }
         long tieringRoundTimestamp = System.currentTimeMillis();
-        List<FlinkTieringSplit> splitsWithMetadata = new ArrayList<>(numberOfSplits);
+        List<TieringSplit> splitsWithMetadata = new ArrayList<>(numberOfSplits);
         for (int splitIndex = 0; splitIndex < numberOfSplits; splitIndex++) {
             splitsWithMetadata.add(
-                    new FlinkTieringSplit(
-                            tieringSplits
-                                    .get(splitIndex)
-                                    .copy(numberOfSplits, splitIndex, tieringRoundTimestamp)));
+                    tieringSplits
+                            .get(splitIndex)
+                            .copy(numberOfSplits, splitIndex, tieringRoundTimestamp));
         }
         return splitsWithMetadata;
     }

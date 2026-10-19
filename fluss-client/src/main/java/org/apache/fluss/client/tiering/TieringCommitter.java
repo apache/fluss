@@ -59,6 +59,31 @@ public class TieringCommitter<WriteResult, Committable> {
 
     private static final Logger LOG = LoggerFactory.getLogger(TieringCommitter.class);
 
+    private final Admin admin;
+    private final Configuration flussConf;
+    private final Configuration lakeTieringConfig;
+    private final LakeTieringFactory<WriteResult, Committable> lakeTieringFactory;
+    private final FlussTableLakeSnapshotCommitter flussTableLakeSnapshotCommitter;
+
+    /**
+     * Creates a committer with dependencies shared by all table commit rounds.
+     *
+     * <p>The caller owns and closes the admin and snapshot committer. A lake committer is created
+     * and closed for each call to {@link #commitWriteResults}.
+     */
+    public TieringCommitter(
+            Admin admin,
+            Configuration flussConf,
+            Configuration lakeTieringConfig,
+            LakeTieringFactory<WriteResult, Committable> lakeTieringFactory,
+            FlussTableLakeSnapshotCommitter flussTableLakeSnapshotCommitter) {
+        this.admin = admin;
+        this.flussConf = flussConf;
+        this.lakeTieringConfig = lakeTieringConfig;
+        this.lakeTieringFactory = lakeTieringFactory;
+        this.flussTableLakeSnapshotCommitter = flussTableLakeSnapshotCommitter;
+    }
+
     /**
      * Commits the collected write results for one table to the lake and Fluss. When buckets
      * advanced their tiered offsets without writing any data (e.g. splits only covering empty WAL
@@ -68,13 +93,8 @@ public class TieringCommitter<WriteResult, Committable> {
      * {@link TieringCommitResult#getCommittable()} is {@code null} and stats are {@code null}.
      */
     public TieringCommitResult<Committable> commitWriteResults(
-            Admin admin,
             long tableId,
             TablePath tablePath,
-            Configuration flussConf,
-            Configuration lakeTieringConfig,
-            LakeTieringFactory<WriteResult, Committable> lakeTieringFactory,
-            FlussTableLakeSnapshotCommitter flussTableLakeSnapshotCommitter,
             List<TableBucketWriteResult<WriteResult>> committableWriteResults)
             throws Exception {
         // filter down to buckets that actually produced data
@@ -115,7 +135,7 @@ public class TieringCommitter<WriteResult, Committable> {
                     logEndOffsets.keySet());
         }
 
-        TableInfo currentTableInfo = getAndValidateTableInfo(admin, tablePath, tableId);
+        TableInfo currentTableInfo = getAndValidateTableInfo(tablePath, tableId);
         try (LakeCommitter<WriteResult, Committable> lakeCommitter =
                 lakeTieringFactory.createLakeCommitter(
                         new TieringCommitterInitContext(
@@ -127,14 +147,13 @@ public class TieringCommitter<WriteResult, Committable> {
             // to committable
             Committable committable = lakeCommitter.toCommittable(writeResults);
             // before commit to lake, check fluss not missing any lake snapshot committed by fluss
-            LakeSnapshot flussCurrentLakeSnapshot = getLatestLakeSnapshot(admin, tablePath);
+            LakeSnapshot flussCurrentLakeSnapshot = getLatestLakeSnapshot(tablePath);
             Long knownSnapshotId =
                     flussCurrentLakeSnapshot == null
                             ? null
                             : flussCurrentLakeSnapshot.getSnapshotId();
             CommittedLakeSnapshot recoveredSnapshot =
                     checkMissingLakeSnapshotAndRecover(
-                            flussTableLakeSnapshotCommitter,
                             tablePath,
                             tableId,
                             lakeCommitter,
@@ -150,8 +169,7 @@ public class TieringCommitter<WriteResult, Committable> {
             boolean markDoneStateChanged =
                     markDoneSupported
                             && (hasTieringProgress || hasLakeSnapshot)
-                            && preparePartitionMarkDone(
-                                    lakeTieringFactory, lakeCommitter, committable);
+                            && preparePartitionMarkDone(lakeCommitter, committable);
             if (!hasTieringProgress && !markDoneStateChanged) {
                 // Nothing was written, no tiered offset advanced, and no partition mark-done
                 // state changed, so there is nothing to commit.
@@ -193,8 +211,7 @@ public class TieringCommitter<WriteResult, Committable> {
         }
     }
 
-    private TableInfo getAndValidateTableInfo(Admin admin, TablePath tablePath, long tableId)
-            throws Exception {
+    private TableInfo getAndValidateTableInfo(TablePath tablePath, long tableId) throws Exception {
         // Check if the table was dropped and recreated during tiering.
         // If the current table id differs from the committable's table id, fail this commit
         // to avoid dirty commit to a newly created table.
@@ -212,9 +229,7 @@ public class TieringCommitter<WriteResult, Committable> {
 
     @SuppressWarnings("unchecked")
     private boolean preparePartitionMarkDone(
-            LakeTieringFactory<WriteResult, Committable> lakeTieringFactory,
-            LakeCommitter<WriteResult, Committable> lakeCommitter,
-            Committable committable)
+            LakeCommitter<WriteResult, Committable> lakeCommitter, Committable committable)
             throws IOException {
         checkState(
                 lakeCommitter instanceof PartitionMarkDoneCommitter,
@@ -225,7 +240,7 @@ public class TieringCommitter<WriteResult, Committable> {
     }
 
     @Nullable
-    private LakeSnapshot getLatestLakeSnapshot(Admin admin, TablePath tablePath) throws Exception {
+    private LakeSnapshot getLatestLakeSnapshot(TablePath tablePath) throws Exception {
         LakeSnapshot flussCurrentLakeSnapshot;
         try {
             flussCurrentLakeSnapshot = admin.getLatestLakeSnapshot(tablePath).get();
@@ -243,7 +258,6 @@ public class TieringCommitter<WriteResult, Committable> {
 
     @Nullable
     private CommittedLakeSnapshot checkMissingLakeSnapshotAndRecover(
-            FlussTableLakeSnapshotCommitter flussTableLakeSnapshotCommitter,
             TablePath tablePath,
             long tableId,
             LakeCommitter<WriteResult, Committable> lakeCommitter,

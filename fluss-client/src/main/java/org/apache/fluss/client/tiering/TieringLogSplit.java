@@ -27,6 +27,8 @@ import java.util.Objects;
 /** The table split for tiering service. It's used to describe the log data of a table bucket. */
 public class TieringLogSplit extends TieringSplit {
 
+    private static final long serialVersionUID = 1L;
+
     private static final String TIERING_LOG_SPLIT_PREFIX = "tiering-log-split-";
 
     private final long startingOffset;

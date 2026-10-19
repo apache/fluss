@@ -30,6 +30,8 @@ import java.util.Objects;
  */
 public class TieringSnapshotSplit extends TieringSplit {
 
+    private static final long serialVersionUID = 1L;
+
     private static final String TIERING_SNAPSHOT_SPLIT_PREFIX = "tiering-snapshot-split-";
 
     /** The snapshot id. It's used to identify the snapshot for a primary key table bucket. */

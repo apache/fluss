@@ -128,7 +128,10 @@ class TieringSourceEnumeratorSchedulingTest {
                             assignment ->
                                     assertThat(assignment.assignment().get(0))
                                             .extracting(
-                                                    split -> split.getTableBucket().getTableId())
+                                                    split ->
+                                                            split.unwrap()
+                                                                    .getTableBucket()
+                                                                    .getTableId())
                                             .containsExactly(4L));
             assertThat(fixture.context.getOneTimeCallables()).isEmpty();
         }
@@ -157,7 +160,10 @@ class TieringSourceEnumeratorSchedulingTest {
                             assignment ->
                                     assertThat(assignment.assignment().get(0))
                                             .extracting(
-                                                    split -> split.getTableBucket().getTableId())
+                                                    split ->
+                                                            split.unwrap()
+                                                                    .getTableBucket()
+                                                                    .getTableId())
                                             .containsExactly(2L));
         }
     }

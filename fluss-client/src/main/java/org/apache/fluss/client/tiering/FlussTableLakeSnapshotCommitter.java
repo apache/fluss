@@ -229,6 +229,21 @@ public class FlussTableLakeSnapshotCommitter implements AutoCloseable {
         }
     }
 
+    /**
+     * Registers a lake snapshot and its bucket offsets in Fluss.
+     *
+     * @param tableId the Fluss table ID
+     * @param snapshotId the lake snapshot ID
+     * @param lakeBucketTieredOffsetsPath the file containing tiered bucket offsets
+     * @param readableLakeBucketTieredOffsetsPath the file containing readable bucket offsets, or
+     *     {@code null} if the snapshot is not readable
+     * @param logEndOffsets the tiered log end offsets used for metrics reporting
+     * @param logMaxTieredTimestamps the maximum tiered timestamps used for metrics reporting
+     * @param earliestSnapshotIDToKeep the earliest snapshot ID to retain; {@code null} retains only
+     *     the latest snapshot, and {@link LakeCommitResult#KEEP_ALL_PREVIOUS} retains all previous
+     *     snapshots
+     * @throws IOException if the snapshot cannot be committed to Fluss
+     */
     public void commit(
             long tableId,
             long snapshotId,
@@ -360,7 +375,7 @@ public class FlussTableLakeSnapshotCommitter implements AutoCloseable {
     }
 
     @VisibleForTesting
-    public CommitLakeTableSnapshotRequest addLogEndOffsets(
+    CommitLakeTableSnapshotRequest addLogEndOffsets(
             CommitLakeTableSnapshotRequest commitLakeTableSnapshotRequest,
             long tableId,
             long snapshotId,
@@ -390,7 +405,7 @@ public class FlussTableLakeSnapshotCommitter implements AutoCloseable {
     }
 
     @VisibleForTesting
-    public CoordinatorGateway getCoordinatorGateway() {
+    CoordinatorGateway getCoordinatorGateway() {
         return coordinatorGateway;
     }
 

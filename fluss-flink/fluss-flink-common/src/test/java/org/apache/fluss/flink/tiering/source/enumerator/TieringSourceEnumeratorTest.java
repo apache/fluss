@@ -388,8 +388,9 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
                     .singleElement()
                     .satisfies(
                             split -> {
-                                assertThat(split.getTableBucket().getTableId()).isEqualTo(tableId);
-                                assertThat(split.shouldSkipCurrentRound()).isTrue();
+                                assertThat(split.unwrap().getTableBucket().getTableId())
+                                        .isEqualTo(tableId);
+                                assertThat(split.unwrap().shouldSkipCurrentRound()).isTrue();
                             });
             assertValidTieringRound(maintenanceSplits);
             verify(factory).supportsPartitionMarkDone();
@@ -665,7 +666,7 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
             assertThat(context.getSplitsAssignmentSequence())
                     .flatExtracting(assignment -> assignment.assignment().values())
                     .flatExtracting(splits -> splits)
-                    .extracting(FlinkTieringSplit::getNumberOfSplits)
+                    .extracting(split -> split.unwrap().getNumberOfSplits())
                     .containsOnly(4);
 
             // clean assignment
@@ -751,20 +752,21 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
      */
     private static void assertValidTieringRound(List<FlinkTieringSplit> tieringSplits) {
         assertThat(tieringSplits).isNotEmpty();
-        assertThat(tieringSplits).filteredOn(FlinkTieringSplit::isFirstSplit).hasSize(1);
+        assertThat(tieringSplits).filteredOn(split -> split.unwrap().isFirstSplit()).hasSize(1);
         assertThat(tieringSplits)
-                .extracting(FlinkTieringSplit::getSplitIndex)
+                .extracting(split -> split.unwrap().getSplitIndex())
                 .containsExactlyInAnyOrderElementsOf(
                         IntStream.range(0, tieringSplits.size())
                                 .boxed()
                                 .collect(Collectors.toList()));
-        long tieringRoundTimestamp = tieringSplits.get(0).getTieringRoundTimestamp();
+        long tieringRoundTimestamp = tieringSplits.get(0).unwrap().getTieringRoundTimestamp();
         assertThat(tieringRoundTimestamp).isPositive();
         assertThat(tieringSplits)
                 .allSatisfy(
                         split -> {
-                            assertThat(split.getNumberOfSplits()).isEqualTo(tieringSplits.size());
-                            assertThat(split.getTieringRoundTimestamp())
+                            assertThat(split.unwrap().getNumberOfSplits())
+                                    .isEqualTo(tieringSplits.size());
+                            assertThat(split.unwrap().getTieringRoundTimestamp())
                                     .isEqualTo(tieringRoundTimestamp);
                         });
     }
@@ -821,7 +823,9 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
                         .collect(Collectors.toList());
         assertThat(allTieringSplits).hasSize(expectedSplitSize);
         assertThat(allTieringSplits)
-                .allMatch(tieringSplit -> tieringSplit.getTablePath().equals(expectedTablePath));
+                .allMatch(
+                        tieringSplit ->
+                                tieringSplit.unwrap().getTablePath().equals(expectedTablePath));
     }
 
     private TieringSourceEnumerator createTieringSourceEnumerator(
@@ -931,7 +935,7 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
             context.getSplitsAssignmentSequence()
                     .forEach(a -> a.assignment().values().forEach(assignedSplits::addAll));
             assertThat(assignedSplits).hasSize(1);
-            assertThat(assignedSplits.get(0).shouldSkipCurrentRound()).isTrue();
+            assertThat(assignedSplits.get(0).unwrap().shouldSkipCurrentRound()).isTrue();
 
             // alter table freshness to 10 min to make sure we won't assign in
             // normal finish
@@ -981,8 +985,8 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
             assertThat(reassignedSplits)
                     .allMatch(
                             split ->
-                                    split.getTableBucket().getTableId() == tableId
-                                            && !split.shouldSkipCurrentRound());
+                                    split.unwrap().getTableBucket().getTableId() == tableId
+                                            && !split.unwrap().shouldSkipCurrentRound());
         }
     }
 }

@@ -17,15 +17,9 @@
 
 package org.apache.fluss.flink.tiering.source.split;
 
-import org.apache.fluss.client.tiering.TieringLogSplit;
-import org.apache.fluss.client.tiering.TieringSnapshotSplit;
 import org.apache.fluss.client.tiering.TieringSplit;
-import org.apache.fluss.metadata.TableBucket;
-import org.apache.fluss.metadata.TablePath;
 
 import org.apache.flink.api.connector.source.SourceSplit;
-
-import javax.annotation.Nullable;
 
 import java.util.Objects;
 
@@ -36,8 +30,11 @@ import java.util.Objects;
  */
 public class FlinkTieringSplit implements SourceSplit {
 
+    private static final long serialVersionUID = 1L;
+
     private final TieringSplit tieringSplit;
 
+    /** Wraps an engine-agnostic split for the Flink source framework. */
     public FlinkTieringSplit(TieringSplit tieringSplit) {
         this.tieringSplit = tieringSplit;
     }
@@ -50,85 +47,6 @@ public class FlinkTieringSplit implements SourceSplit {
     /** Returns the underlying engine-agnostic {@link TieringSplit}. */
     public TieringSplit unwrap() {
         return tieringSplit;
-    }
-
-    /** Checks whether this split is a primary key table split to tier. */
-    public boolean isTieringSnapshotSplit() {
-        return tieringSplit.isTieringSnapshotSplit();
-    }
-
-    /** Checks whether this split is a log split to tier. */
-    public boolean isTieringLogSplit() {
-        return tieringSplit.isTieringLogSplit();
-    }
-
-    /** Casts the underlying split into a {@link TieringSnapshotSplit}. */
-    public TieringSnapshotSplit asTieringSnapshotSplit() {
-        return tieringSplit.asTieringSnapshotSplit();
-    }
-
-    /** Casts the underlying split into a {@link TieringLogSplit}. */
-    public TieringLogSplit asTieringLogSplit() {
-        return tieringSplit.asTieringLogSplit();
-    }
-
-    /**
-     * Marks this split to skip reading data in the current round. Once called, the split will not
-     * be processed and data reading will be skipped.
-     */
-    public void skipCurrentRound() {
-        tieringSplit.skipCurrentRound();
-    }
-
-    /**
-     * Returns whether this split should skip tiering data in the current round of tiering.
-     *
-     * @return true if the split should skip tiering data, false otherwise
-     */
-    public boolean shouldSkipCurrentRound() {
-        return tieringSplit.shouldSkipCurrentRound();
-    }
-
-    public byte splitKind() {
-        return tieringSplit.splitKind();
-    }
-
-    public int getNumberOfSplits() {
-        return tieringSplit.getNumberOfSplits();
-    }
-
-    public int getSplitIndex() {
-        return tieringSplit.getSplitIndex();
-    }
-
-    public boolean isFirstSplit() {
-        return tieringSplit.isFirstSplit();
-    }
-
-    public long getTieringRoundTimestamp() {
-        return tieringSplit.getTieringRoundTimestamp();
-    }
-
-    public TablePath getTablePath() {
-        return tieringSplit.getTablePath();
-    }
-
-    public TableBucket getTableBucket() {
-        return tieringSplit.getTableBucket();
-    }
-
-    @Nullable
-    public String getPartitionName() {
-        return tieringSplit.getPartitionName();
-    }
-
-    public FlinkTieringSplit copy(int numberOfSplits) {
-        return new FlinkTieringSplit(tieringSplit.copy(numberOfSplits));
-    }
-
-    public FlinkTieringSplit copy(int numberOfSplits, int splitIndex, long tieringRoundTimestamp) {
-        return new FlinkTieringSplit(
-                tieringSplit.copy(numberOfSplits, splitIndex, tieringRoundTimestamp));
     }
 
     @Override
