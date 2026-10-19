@@ -50,7 +50,7 @@ defmodule Fluss.Integration.LookupTest do
       assert Lookuper.lookup(lookuper, [404]) == {:ok, nil}
     end
 
-    test "lookup!/2 returns the row or raises Fluss.NoResultsError", %{lookuper: lookuper} do
+    test "lookup!/3 returns the row or raises Fluss.NoResultsError", %{lookuper: lookuper} do
       assert Lookuper.lookup!(lookuper, [1])[:name] == "alice"
 
       error = assert_raise Fluss.NoResultsError, fn -> Lookuper.lookup!(lookuper, [404]) end
@@ -114,6 +114,12 @@ defmodule Fluss.Integration.LookupTest do
         assert err.message =~ "NOT NULL column `id` must not be nil or omitted"
       end
     end
+
+    test "rejects an invalid timeout option", %{lookuper: lookuper} do
+      for opts <- [[timeout: -1], [timeout: 2 ** 32], [timeout: "1"], [nope: 1]] do
+        assert_raise ArgumentError, fn -> Lookuper.lookup(lookuper, [1], opts) end
+      end
+    end
   end
 
   describe "composite primary key" do
@@ -155,8 +161,7 @@ defmodule Fluss.Integration.LookupTest do
       assert err.message =~ "Lookup is only supported for primary key tables"
     end
 
-    # Hangs: core retries an unknown bucket leader forever instead of failing.
-    # TODO: https://github.com/apache/fluss/issues/4706
+    # Core retries an unknown bucket leader forever: https://github.com/apache/fluss/issues/4706
     @tag :skip
     test "returns an error after the table is dropped", %{conn: conn, admin: admin} do
       table_name = unique("lookup_dropped_table")
@@ -187,6 +192,63 @@ defmodule Fluss.Integration.LookupTest do
       table |> writer!() |> upsert!(row)
 
       assert Lookuper.lookup(Lookuper.new!(table), [1]) == {:ok, row}
+    end
+  end
+
+  describe "timeout" do
+    # A 2 s batch timeout makes every lone lookup take ~2 s.
+    setup ctx do
+      conn =
+        ctx.config |> Fluss.Config.set_lookup_batch_timeout_ms(2_000) |> Fluss.Connection.new!()
+
+      schema =
+        Fluss.Schema.new()
+        |> Fluss.Schema.column("tenant_id", :int)
+        |> Fluss.Schema.column("id", :int)
+        |> Fluss.Schema.primary_key(["tenant_id", "id"])
+
+      table =
+        create_kv_table(%{ctx | conn: conn}, "lookup_slow", schema, bucket_keys: ["tenant_id"])
+
+      upsert!(writer!(table), [7, 1])
+      %{table: table, lookuper: Lookuper.new!(table)}
+    end
+
+    test "returns request_time_out and the cancelled lookup never replies", %{lookuper: lookuper} do
+      assert {:error, %Fluss.Error{code: :request_time_out}} =
+               Lookuper.lookup(lookuper, [7, 1], timeout: 200)
+
+      refute_receive _, 3_000
+    end
+
+    test "waits for the reply with :infinity", %{lookuper: lookuper} do
+      assert Lookuper.lookup(lookuper, [7, 1], timeout: :infinity) ==
+               {:ok, %{tenant_id: 7, id: 1}}
+    end
+
+    test "lookup!/3 raises on timeout", %{lookuper: lookuper} do
+      assert_raise Fluss.Error, ~r/no reply within 100 ms/, fn ->
+        Lookuper.lookup!(lookuper, [7, 1], timeout: 100)
+      end
+    end
+
+    test "applies to prefix lookups", %{table: table} do
+      lookuper = PrefixLookuper.new!(table, [:tenant_id])
+
+      assert {:error, %Fluss.Error{code: :request_time_out}} =
+               PrefixLookuper.lookup(lookuper, [7], timeout: 100)
+
+      refute_receive _, 3_000
+    end
+
+    test "a caller that exits doesn't affect other lookups", %{lookuper: lookuper} do
+      caller = spawn(fn -> Lookuper.lookup(lookuper, [7, 1], timeout: :infinity) end)
+      other = Task.async(fn -> Lookuper.lookup(lookuper, [7, 1]) end)
+      # Let both lookups reach the same batch before the caller dies.
+      Process.sleep(100)
+      Process.exit(caller, :kill)
+
+      assert Task.await(other, 5_000) == {:ok, %{tenant_id: 7, id: 1}}
     end
   end
 
@@ -249,7 +311,7 @@ defmodule Fluss.Integration.LookupTest do
                {:ok, [%{tenant_id: 8, id: 1, name: "c"}]}
     end
 
-    test "returns an empty list for no match, from lookup!/2 too", %{table: table} do
+    test "returns an empty list for no match, from lookup!/3 too", %{table: table} do
       lookuper = PrefixLookuper.new!(table, ["tenant_id"])
 
       assert PrefixLookuper.lookup(lookuper, [9]) == {:ok, []}

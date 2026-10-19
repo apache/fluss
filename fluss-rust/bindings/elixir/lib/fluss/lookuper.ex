@@ -29,12 +29,17 @@ defmodule Fluss.Lookuper do
   declaration order, as in `Fluss.UpsertWriter.delete/2`. `nil` and non-key map keys are errors.
 
   Rows are maps keyed by column-name atoms, with the columns `table` had when it was fetched
-  with `Fluss.Table.get/3`. `lookup!/2` returns the row or raises `Fluss.NoResultsError`,
+  with `Fluss.Table.get/3`. `lookup!/3` returns the row or raises `Fluss.NoResultsError`,
   like `Repo.get!/2`.
 
   Share one lookuper per table across processes. Lookups are batched, so a lone one waits up
   to the lookup batch timeout in `Fluss.Config` (100 ms by default). On a partitioned table
   the key includes the partition columns; a missing partition returns `{:ok, nil}`.
+
+  `lookup/3` waits up to `timeout:` ms (default `5_000`, or `:infinity`), like `Task.await/2`.
+  On this client-side timeout the lookup is cancelled and
+  `{:error, %Fluss.Error{code: :request_time_out}}` returned; a lookup whose caller exits is
+  cancelled too.
   """
 
   alias Fluss.Native
@@ -63,17 +68,15 @@ defmodule Fluss.Lookuper do
     end
   end
 
-  @spec lookup(t(), key()) :: {:ok, row() | nil} | {:error, Fluss.Error.t()}
-  def lookup(lookuper, key) when is_list(key) or is_map(key) do
-    case Native.lookuper_lookup(lookuper, key) do
-      {:error, _} = err -> err
-      ref -> Native.await_nif(ref)
-    end
+  @spec lookup(t(), key(), keyword()) :: {:ok, row() | nil} | {:error, Fluss.Error.t()}
+  def lookup(lookuper, key, opts \\ []) when is_list(key) or is_map(key) do
+    timeout = Native.validate_timeout!(opts)
+    lookuper |> Native.lookuper_lookup(key) |> Native.await_task(timeout)
   end
 
-  @spec lookup!(t(), key()) :: row()
-  def lookup!(lookuper, key) do
-    case lookup(lookuper, key) do
+  @spec lookup!(t(), key(), keyword()) :: row()
+  def lookup!(lookuper, key, opts \\ []) do
+    case lookup(lookuper, key, opts) do
       {:ok, nil} -> raise Fluss.NoResultsError, key: key
       {:ok, row} -> row
       {:error, %Fluss.Error{} = err} -> raise err

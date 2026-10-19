@@ -111,6 +111,9 @@ defmodule Fluss.Native do
   # WriteHandle
   def write_handle_wait(_handle), do: :erlang.nif_error(:nif_not_loaded)
 
+  # Cancellable tasks
+  def task_cancel(_task), do: :erlang.nif_error(:nif_not_loaded)
+
   # Constants
   def earliest_offset, do: :erlang.nif_error(:nif_not_loaded)
 
@@ -127,4 +130,46 @@ defmodule Fluss.Native do
   def await_queued({:pending, ref}), do: await_nif(ref)
   def await_queued({:error, _} = err), do: err
   def await_queued(handle), do: {:ok, handle}
+
+  # Waits for a cancellable task's reply. On timeout it cancels the task, but a reply that
+  # raced in still wins, as with `Task.shutdown/1`.
+  @doc false
+  def await_task({:error, _} = err, _timeout), do: err
+
+  def await_task({ref, task}, timeout) do
+    receive do
+      {^ref, result} -> result
+    after
+      timeout ->
+        case task_cancel(task) do
+          :cancelled ->
+            {:error, timeout_error(timeout)}
+
+          :replying ->
+            await_nif(ref)
+        end
+    end
+  end
+
+  @doc false
+  def validate_timeout!(opts) do
+    # `receive ... after` accepts at most 2^32 - 1 ms.
+    case Keyword.validate!(opts, timeout: 5_000)[:timeout] do
+      t when t in 0..0xFFFFFFFF or t == :infinity ->
+        t
+
+      t ->
+        raise ArgumentError,
+              "expected :timeout to be 0..4294967295 ms or :infinity, got: #{inspect(t)}"
+    end
+  end
+
+  # 25 is core's RequestTimeOut code.
+  defp timeout_error(timeout) do
+    %Fluss.Error{
+      code: :request_time_out,
+      error_code: 25,
+      message: "no reply within #{timeout} ms"
+    }
+  end
 end

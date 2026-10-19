@@ -127,7 +127,8 @@ fn lookuper_lookup<'a>(
             Some(row) => Ok(reply.key.encode_rows(env, &[row])?[0]),
             None => Ok(atoms::nil().encode(env)),
         },
-    ))
+    )
+    .encode(env))
 }
 
 #[rustler::nif]
@@ -183,5 +184,6 @@ fn prefix_lookuper_lookup<'a>(
             let rows = result.get_rows().map_err(|e| e.to_string())?;
             Ok(reply.key.encode_rows(env, &rows)?.encode(env))
         },
-    ))
+    )
+    .encode(env))
 }

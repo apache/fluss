@@ -17,9 +17,9 @@
 
 defmodule Fluss.NoResultsError do
   @moduledoc """
-  Raised by `Fluss.Lookuper.lookup!/2` when no row has the given primary key.
+  Raised by `Fluss.Lookuper.lookup!/3` when no row has the given primary key.
 
-  Mirrors `Ecto.NoResultsError` from `Repo.get!/2`. The non-bang `Fluss.Lookuper.lookup/2`
+  Mirrors `Ecto.NoResultsError` from `Repo.get!/2`. The non-bang `Fluss.Lookuper.lookup/3`
   returns `{:ok, nil}` instead.
   """
 

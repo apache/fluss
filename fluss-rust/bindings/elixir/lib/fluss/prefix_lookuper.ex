@@ -30,7 +30,8 @@ defmodule Fluss.PrefixLookuper do
   it; `new/2` returns an error otherwise. The prefix is a map, or a list in `new/2` order;
   `nil` is an error.
 
-  Rows and batching are as in `Fluss.Lookuper`; no match is `[]`, from `lookup!/2` too.
+  Rows, batching and timeouts are as in `Fluss.Lookuper`; no match is `[]`, from `lookup!/3`
+  too.
   """
 
   alias Fluss.Native
@@ -58,17 +59,16 @@ defmodule Fluss.PrefixLookuper do
     end
   end
 
-  @spec lookup(t(), prefix()) :: {:ok, [Fluss.Lookuper.row()]} | {:error, Fluss.Error.t()}
-  def lookup(lookuper, prefix) when is_list(prefix) or is_map(prefix) do
-    case Native.prefix_lookuper_lookup(lookuper, prefix) do
-      {:error, _} = err -> err
-      ref -> Native.await_nif(ref)
-    end
+  @spec lookup(t(), prefix(), keyword()) ::
+          {:ok, [Fluss.Lookuper.row()]} | {:error, Fluss.Error.t()}
+  def lookup(lookuper, prefix, opts \\ []) when is_list(prefix) or is_map(prefix) do
+    timeout = Native.validate_timeout!(opts)
+    lookuper |> Native.prefix_lookuper_lookup(prefix) |> Native.await_task(timeout)
   end
 
-  @spec lookup!(t(), prefix()) :: [Fluss.Lookuper.row()]
-  def lookup!(lookuper, prefix) do
-    case lookup(lookuper, prefix) do
+  @spec lookup!(t(), prefix(), keyword()) :: [Fluss.Lookuper.row()]
+  def lookup!(lookuper, prefix, opts \\ []) do
+    case lookup(lookuper, prefix, opts) do
       {:ok, rows} -> rows
       {:error, %Fluss.Error{} = err} -> raise err
     end
