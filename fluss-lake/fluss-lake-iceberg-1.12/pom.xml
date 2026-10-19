@@ -44,7 +44,7 @@
     <properties>
         <iceberg.version>1.12.0</iceberg.version>
         <!-- The Jackson version of Iceberg 1.12.0, instead of the root jackson-bom. -->
-        <iceberg.jackson.version>2.22.2</iceberg.jackson.version>
+        <iceberg.jackson.version>2.22.3</iceberg.jackson.version>
         <iceberg.jackson-annotations.version>2.22</iceberg.jackson-annotations.version>
     </properties>
 
