@@ -42,11 +42,17 @@ impl LimitScanRequest {
             partition_id,
             bucket_id,
             limit,
+            routing_bucket_count: None,
         };
 
         Self {
             inner_request: request,
         }
+    }
+
+    pub fn with_routing_bucket_count(mut self, routing_bucket_count: Option<i32>) -> Self {
+        self.inner_request.routing_bucket_count = routing_bucket_count;
+        self
     }
 }
 

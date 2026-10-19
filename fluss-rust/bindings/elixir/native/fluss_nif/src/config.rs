@@ -57,6 +57,8 @@ pub struct NifConfig {
     pub writer_max_inflight_requests_per_bucket: Option<u64>,
     pub writer_request_max_size: Option<i32>,
     pub writer_retries: Option<i32>,
+    pub writer_retry_backoff_ms: Option<u64>,
+    pub writer_retry_max_backoff_ms: Option<u64>,
 }
 
 impl NifConfig {
@@ -145,6 +147,12 @@ impl NifConfig {
         }
         if let Some(retries) = self.writer_retries {
             config.writer_retries = retries;
+        }
+        if let Some(backoff) = self.writer_retry_backoff_ms {
+            config.writer_retry_backoff_ms = backoff;
+        }
+        if let Some(backoff) = self.writer_retry_max_backoff_ms {
+            config.writer_retry_max_backoff_ms = backoff;
         }
         config
     }

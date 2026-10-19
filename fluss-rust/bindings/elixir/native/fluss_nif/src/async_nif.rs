@@ -75,19 +75,3 @@ where
 
     ref_term
 }
-
-pub fn send_client_error<'a>(env: Env<'a>, msg: &str) -> Term<'a> {
-    let pid = env.pid();
-    let ref_term: Term<'a> = *env.make_ref();
-    let mut task_env = OwnedEnv::new();
-    let saved_ref = task_env.save(ref_term);
-    let message = msg.to_string();
-
-    let _ = task_env.send_and_clear(&pid, |env| {
-        let r = saved_ref.load(env);
-        let err = NifFlussError::client(message);
-        (r, (atoms::error(), err)).encode(env)
-    });
-
-    ref_term
-}

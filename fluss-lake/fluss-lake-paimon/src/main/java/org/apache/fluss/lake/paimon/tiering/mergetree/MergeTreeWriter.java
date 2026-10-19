@@ -23,6 +23,7 @@ import org.apache.fluss.record.LogRecord;
 import org.apache.fluss.types.RowType;
 
 import org.apache.paimon.KeyValue;
+import org.apache.paimon.data.BinaryRow;
 import org.apache.paimon.disk.IOManager;
 import org.apache.paimon.table.FileStoreTable;
 import org.apache.paimon.table.sink.RowKeyExtractor;
@@ -50,25 +51,9 @@ public class MergeTreeWriter extends RecordWriter<KeyValue> {
             @Nullable String partition,
             List<String> partitionKeys,
             RowType flussRowType,
-            boolean paimonIncludingSystemColumns) {
-        this(
-                fileStoreTable,
-                tableBucket,
-                partition,
-                partitionKeys,
-                flussRowType,
-                (String[]) null,
-                paimonIncludingSystemColumns);
-    }
-
-    public MergeTreeWriter(
-            FileStoreTable fileStoreTable,
-            TableBucket tableBucket,
-            @Nullable String partition,
-            List<String> partitionKeys,
-            RowType flussRowType,
             @Nullable String[] ioTmpDirs,
-            boolean paimonIncludingSystemColumns) {
+            boolean paimonIncludingSystemColumns,
+            boolean historicalPartition) {
         this(
                 fileStoreTable,
                 createIOManager(ioTmpDirs),
@@ -76,7 +61,8 @@ public class MergeTreeWriter extends RecordWriter<KeyValue> {
                 partition,
                 partitionKeys,
                 flussRowType,
-                paimonIncludingSystemColumns);
+                paimonIncludingSystemColumns,
+                historicalPartition);
     }
 
     MergeTreeWriter(
@@ -86,7 +72,8 @@ public class MergeTreeWriter extends RecordWriter<KeyValue> {
             @Nullable String partition,
             List<String> partitionKeys,
             RowType flussRowType,
-            boolean paimonIncludingSystemColumns) {
+            boolean paimonIncludingSystemColumns,
+            boolean historicalPartition) {
         super(
                 createTableWrite(fileStoreTable, ioManager),
                 fileStoreTable.rowType(),
@@ -94,7 +81,8 @@ public class MergeTreeWriter extends RecordWriter<KeyValue> {
                 partition,
                 partitionKeys,
                 flussRowType,
-                paimonIncludingSystemColumns);
+                paimonIncludingSystemColumns,
+                historicalPartition);
         this.rowKeyExtractor = fileStoreTable.createRowKeyExtractor();
         this.ioManager = ioManager;
     }
@@ -128,7 +116,7 @@ public class MergeTreeWriter extends RecordWriter<KeyValue> {
 
     @Override
     public void write(LogRecord record) throws Exception {
-        flussRecordAsPaimonRow.setFlussRecord(record);
+        BinaryRow targetPartition = prepareRecordAndGetPartition(record);
 
         rowKeyExtractor.setRecord(flussRecordAsPaimonRow);
         keyValue.replace(
@@ -139,6 +127,6 @@ public class MergeTreeWriter extends RecordWriter<KeyValue> {
         // hacky, call internal method tableWrite.getWrite() to support
         // to write to given partition, otherwise, it'll always extract a partition from Paimon row
         // which may be costly
-        tableWrite.getWrite().write(partition, bucket, keyValue);
+        tableWrite.getWrite().write(targetPartition, bucket, keyValue);
     }
 }

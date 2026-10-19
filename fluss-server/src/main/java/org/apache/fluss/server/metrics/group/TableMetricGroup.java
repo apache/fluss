@@ -169,6 +169,15 @@ public class TableMetricGroup extends AbstractMetricGroup {
         return logMetrics.remoteLogDeleteErrors;
     }
 
+    /** Returns the successful KV snapshot upload byte counter, or a no-op for log tables. */
+    public Counter remoteKvCopyBytes() {
+        if (kvMetrics == null) {
+            return NoOpCounter.INSTANCE;
+        } else {
+            return kvMetrics.remoteKvCopyBytes;
+        }
+    }
+
     public void incKvMessageIn(long n) {
         if (kvMetrics == null) {
             NoOpCounter.INSTANCE.inc(n);
@@ -592,6 +601,8 @@ public class TableMetricGroup extends AbstractMetricGroup {
 
         private static final String LOOKUP_FILE_DOWNLOADED = "lookup_file_downloaded";
 
+        private final Counter remoteKvCopyBytes;
+
         private final Counter totalLookupRequests;
         private final Counter failedLookupRequests;
         private final Counter totalHistoricalLookupRequests;
@@ -609,6 +620,10 @@ public class TableMetricGroup extends AbstractMetricGroup {
 
         public KvMetricGroup(TableMetricGroup tableMetricGroup) {
             super(tableMetricGroup, TabletType.KV);
+
+            // for kv snapshot upload
+            remoteKvCopyBytes = new ThreadSafeSimpleCounter();
+            meter(MetricNames.REMOTE_KV_COPY_BYTES_RATE, new MeterView(remoteKvCopyBytes));
 
             // for lookup request
             totalLookupRequests = new ThreadSafeSimpleCounter();

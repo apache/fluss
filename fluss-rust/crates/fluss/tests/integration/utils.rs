@@ -500,7 +500,7 @@ impl ColumnPlan {
             sb = sb.column(*n, dt.clone());
         }
         if let Some(keys) = pk {
-            sb = sb.primary_key(keys.iter().copied());
+            sb = sb.primary_key(keys.iter().copied()).expect("primary key");
         }
         sb.build().expect("schema build")
     }

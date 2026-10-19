@@ -55,7 +55,14 @@ docker run \
 
 ### Start Fluss CoordinatorServer
 
-Start Fluss CoordinatorServer in daemon and connect to Zookeeper.
+You can start one or more coordinator servers based on your needs. For a production environment,
+ensure that you have multiple coordinator servers for high availability (HA).
+
+#### Start with One CoordinatorServer
+
+If you just want to start a sample test, you can start only one CoordinatorServer in daemon and connect to Zookeeper.
+The command is as follows:
+
 ```bash
 docker run \
     --name coordinator-server \
@@ -68,6 +75,30 @@ internal.listener.name: INTERNAL
     -p 9123:9123 \
     -d apache/fluss:$FLUSS_DOCKER_VERSION$ coordinatorServer
 ```
+
+#### Start with CoordinatorServer HA
+
+To enable CoordinatorServer HA, start a second CoordinatorServer in daemon and connect to the same Zookeeper.
+The CoordinatorServers participate in leader election via Zookeeper: exactly one is elected as the leader,
+and the other runs as standby. The command is as follows:
+
+```bash
+docker run \
+    --name coordinator-server-1 \
+    --network=fluss-demo \
+    --env FLUSS_PROPERTIES="zookeeper.address: zookeeper:2181
+bind.listeners: INTERNAL://coordinator-server-1:0, CLIENT://coordinator-server-1:9123
+advertised.listeners: CLIENT://localhost:9127
+internal.listener.name: INTERNAL
+" \
+    -p 9127:9123 \
+    -d apache/fluss:$FLUSS_DOCKER_VERSION$ coordinatorServer
+```
+
+When CoordinatorServer HA is enabled, list the addresses of all CoordinatorServer instances in `bootstrap.servers`
+so that clients can connect to a surviving coordinator even if one goes down, e.g.,
+`'bootstrap.servers' = 'localhost:9123,localhost:9127'`.
+
 
 ### Start Fluss TabletServer
 
@@ -221,13 +252,13 @@ volumes:
       device: "tmpfs"
 ```
 
-#### Compose file to start Fluss cluster with multi TabletServer
+#### Compose file to start Fluss cluster with multi CoordinatorServer and TabletServer
 
-You can use the following `docker-compose.yml` file to start a Fluss cluster with one `CoordinatorServer` and three `TabletServers`.
+You can use the following `docker-compose.yml` file to start a Fluss cluster with two `CoordinatorServers` (HA) and three `TabletServers`.
 
 ```yaml
 services:
-  coordinator-server:
+  coordinator-server-0:
     image: apache/fluss:$FLUSS_DOCKER_VERSION$
     command: coordinatorServer
     depends_on:
@@ -236,17 +267,32 @@ services:
       - |
         FLUSS_PROPERTIES=
         zookeeper.address: zookeeper:2181
-        bind.listeners: INTERNAL://coordinator-server:0, CLIENT://coordinator-server:9123
+        bind.listeners: INTERNAL://coordinator-server-0:0, CLIENT://coordinator-server-0:9123
         advertised.listeners: CLIENT://localhost:9123
         internal.listener.name: INTERNAL
         remote.data.dir: /tmp/fluss/remote-data
     ports:
       - "9123:9123"
+  coordinator-server-1:
+    image: apache/fluss:$FLUSS_DOCKER_VERSION$
+    command: coordinatorServer
+    depends_on:
+      - zookeeper
+    environment:
+      - |
+        FLUSS_PROPERTIES=
+        zookeeper.address: zookeeper:2181
+        bind.listeners: INTERNAL://coordinator-server-1:0, CLIENT://coordinator-server-1:9123
+        advertised.listeners: CLIENT://localhost:9127
+        internal.listener.name: INTERNAL
+        remote.data.dir: /tmp/fluss/remote-data
+    ports:
+      - "9127:9123"
   tablet-server-0:
     image: apache/fluss:$FLUSS_DOCKER_VERSION$
     command: tabletServer
     depends_on:
-      - coordinator-server
+      - coordinator-server-0
     environment:
       - |
         FLUSS_PROPERTIES=
@@ -266,7 +312,7 @@ services:
     image: apache/fluss:$FLUSS_DOCKER_VERSION$
     command: tabletServer
     depends_on:
-      - coordinator-server
+      - coordinator-server-0
     environment:
       - |
         FLUSS_PROPERTIES=
@@ -286,7 +332,7 @@ services:
     image: apache/fluss:$FLUSS_DOCKER_VERSION$
     command: tabletServer
     depends_on:
-      - coordinator-server
+      - coordinator-server-0
     environment:
       - |
         FLUSS_PROPERTIES=
@@ -349,12 +395,25 @@ bin/sql-client.sh
 ### Create Fluss Catalog
 
 Use the following SQL to create a Fluss catalog:
+
+- Single CoordinatorServer:
+
 ```sql title="Flink SQL"
 CREATE CATALOG fluss_catalog WITH (
     'type' = 'fluss',
     'bootstrap.servers' = 'localhost:9123'
 );
 ```
+
+- CoordinatorServer HA:
+
+```sql title="Flink SQL"
+CREATE CATALOG fluss_catalog WITH (
+  'type' = 'fluss',
+  'bootstrap.servers' = 'localhost:9123,localhost:9127'
+);
+```
+
 
 ```sql title="Flink SQL"
 USE CATALOG fluss_catalog;

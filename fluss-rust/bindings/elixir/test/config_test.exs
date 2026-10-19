@@ -222,6 +222,16 @@ defmodule Fluss.ConfigTest do
     assert config.writer_retries == 5
   end
 
+  test "set_writer_retry_backoff_ms/2 sets the retry backoff" do
+    config =
+      Fluss.Config.new("localhost:9123")
+      |> Fluss.Config.set_writer_retry_backoff_ms(250)
+      |> Fluss.Config.set_writer_retry_max_backoff_ms(5_000)
+
+    assert config.writer_retry_backoff_ms == 250
+    assert config.writer_retry_max_backoff_ms == 5_000
+  end
+
   test "set_writer_batch_size/2 rejects negative integers" do
     config = Fluss.Config.new("h:9123")
 

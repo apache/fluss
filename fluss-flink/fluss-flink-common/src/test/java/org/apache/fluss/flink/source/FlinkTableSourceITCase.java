@@ -25,6 +25,8 @@ import org.apache.fluss.client.table.writer.UpsertWriter;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.InvalidConfigException;
+import org.apache.fluss.flink.source.lookup.FlussLookupInputPartitioner;
+import org.apache.fluss.flink.source.lookup.LookupNormalizer;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.row.InternalRow;
@@ -34,6 +36,7 @@ import org.apache.fluss.testutils.common.MultiVersionTest;
 import org.apache.fluss.utils.clock.ManualClock;
 
 import org.apache.commons.lang3.RandomUtils;
+import org.apache.flink.api.common.functions.RichMapFunction;
 import org.apache.flink.api.common.typeinfo.TypeInformation;
 import org.apache.flink.api.common.typeinfo.Types;
 import org.apache.flink.api.java.typeutils.RowTypeInfo;
@@ -44,6 +47,10 @@ import org.apache.flink.table.api.EnvironmentSettings;
 import org.apache.flink.table.api.Schema;
 import org.apache.flink.table.api.bridge.java.StreamTableEnvironment;
 import org.apache.flink.table.api.config.ExecutionConfigOptions;
+import org.apache.flink.table.data.GenericRowData;
+import org.apache.flink.table.types.logical.IntType;
+import org.apache.flink.table.types.logical.LogicalType;
+import org.apache.flink.table.types.logical.RowType;
 import org.apache.flink.test.util.AbstractTestBase;
 import org.apache.flink.types.Row;
 import org.apache.flink.util.CloseableIterator;
@@ -67,9 +74,12 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -85,6 +95,7 @@ import static org.apache.fluss.testutils.DataTestUtils.row;
 import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assumptions.assumeThat;
 
 /** IT case for using flink sql to read fluss table. */
 abstract class FlinkTableSourceITCase extends AbstractTestBase {
@@ -850,6 +861,121 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
         assertResultsIgnoreOrder(collected, expected, true);
     }
 
+    @ParameterizedTest(name = "bucket.num={0}")
+    @MultiVersionTest
+    @ValueSource(ints = {1, 3, 8, 10})
+    void testLookupCustomShuffle(int numBuckets) throws Exception {
+        assumeThat(supportsLookupCustomShuffle()).isTrue();
+
+        int parallelism = 4;
+        int numLookupKeys = 100;
+        String dim = "lookup_shuffle_" + numBuckets + "_" + RandomUtils.nextInt();
+        tEnv.executeSql(
+                String.format(
+                        "CREATE TABLE %s ("
+                                + " id INT NOT NULL,"
+                                + " name STRING,"
+                                + " PRIMARY KEY (id) NOT ENFORCED"
+                                + ") WITH ("
+                                + " 'bucket.num' = '%d',"
+                                + " 'bucket.key' = 'id',"
+                                + " 'lookup.async' = 'false')",
+                        dim, numBuckets));
+        try (Table dimTable = conn.getTable(TablePath.of(DEFAULT_DB, dim))) {
+            UpsertWriter writer = dimTable.newUpsert().createWriter();
+            for (int id = 0; id < numLookupKeys; id++) {
+                writer.upsert(row(id, "name" + id));
+            }
+            writer.flush();
+        }
+
+        int numProbeRows = numLookupKeys * 2;
+        RowTypeInfo probeType =
+                new RowTypeInfo(
+                        new TypeInformation[] {Types.INT, Types.INT},
+                        new String[] {"id", "occurrence"});
+        DataStream<Row> probeStream =
+                execEnv.fromSequence(0, numProbeRows - 1)
+                        .setParallelism(parallelism)
+                        .map(value -> Row.of((int) (value / 2), (int) (value % 2)))
+                        .returns(probeType)
+                        .setParallelism(parallelism);
+        Schema probeSchema =
+                Schema.newBuilder()
+                        .column("id", DataTypes.INT())
+                        .column("occurrence", DataTypes.INT())
+                        .columnByExpression("proc", "PROCTIME()")
+                        .build();
+        tEnv.createTemporaryView(
+                "lookup_shuffle_src", tEnv.fromDataStream(probeStream, probeSchema));
+
+        String query =
+                String.format(
+                        "SELECT /*+ LOOKUP('table' = 'h', 'shuffle' = 'true') */ "
+                                + "src.id, src.occurrence, h.name "
+                                + "FROM lookup_shuffle_src AS src JOIN %s "
+                                + "FOR SYSTEM_TIME AS OF src.proc AS h ON src.id = h.id",
+                        dim);
+
+        assertThat(tEnv.explainSql(query)).contains("shuffle=[true]");
+        RowTypeInfo taggedType =
+                new RowTypeInfo(
+                        new TypeInformation[] {Types.INT, Types.INT, Types.STRING, Types.INT},
+                        new String[] {"id", "occurrence", "name", "subtask"});
+        DataStream<Row> taggedResults =
+                tEnv.toChangelogStream(tEnv.sqlQuery(query))
+                        .forward()
+                        .map(new LookupSubtaskTagger())
+                        .returns(taggedType)
+                        .setParallelism(parallelism);
+
+        FlussLookupInputPartitioner expectedPartitioner = createLookupInputPartitioner(numBuckets);
+        Map<Integer, Integer> subtaskByLookupKey = new HashMap<>();
+        Map<Integer, Integer> subtaskByBucket = new HashMap<>();
+        Set<Integer> usedSubtasks = new HashSet<>();
+        int resultCount = 0;
+        try (CloseableIterator<Row> collected = taggedResults.executeAndCollect()) {
+            while (collected.hasNext()) {
+                Row result = collected.next();
+                int id = (Integer) result.getField(0);
+                int actualSubtask = (Integer) result.getField(3);
+                int expectedSubtask =
+                        expectedPartitioner.partition(GenericRowData.of(id), parallelism);
+
+                assertThat(result.getField(2)).isEqualTo("name" + id);
+                assertThat(actualSubtask)
+                        .as("id=%d, bucket.num=%d", id, numBuckets)
+                        .isEqualTo(expectedSubtask);
+                Integer previousSubtask = subtaskByLookupKey.putIfAbsent(id, actualSubtask);
+                if (previousSubtask != null) {
+                    assertThat(actualSubtask)
+                            .as("the same lookup key must remain on one subtask")
+                            .isEqualTo(previousSubtask);
+                }
+
+                if (numBuckets >= parallelism && numBuckets % parallelism == 0) {
+                    int bucketId = expectedPartitioner.partition(GenericRowData.of(id), numBuckets);
+                    Integer previousBucketSubtask =
+                            subtaskByBucket.putIfAbsent(bucketId, actualSubtask);
+                    if (previousBucketSubtask != null) {
+                        assertThat(actualSubtask)
+                                .as("all lookup keys in bucket %d must share a subtask", bucketId)
+                                .isEqualTo(previousBucketSubtask);
+                    }
+                    assertThat(actualSubtask).isEqualTo(bucketId % parallelism);
+                }
+
+                usedSubtasks.add(actualSubtask);
+                resultCount++;
+            }
+        }
+
+        assertThat(resultCount).isEqualTo(numProbeRows);
+        assertThat(usedSubtasks)
+                .as("bucket.num=%d should make all lookup subtasks usable", numBuckets)
+                .containsExactlyInAnyOrder(0, 1, 2, 3);
+    }
+
     @ParameterizedTest
     @MethodSource("lookupArgs")
     void testLookupWithProjection(Caching caching, boolean async) throws Exception {
@@ -1318,13 +1444,17 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
                         + "and p_time=TIME '12:55:00' and p_ts_ntz=TIMESTAMP '2025-10-12 12:55:00.001' "
                         + "and p_ts_ltz=TO_TIMESTAMP_LTZ(4001, 3)";
         String plan = tEnv.explainSql(query);
-        assertThat(plan)
+        assertThat(withLowerCaseAnd(plan))
                 .contains(
                         "TableSourceScan(table=[[testcatalog, defaultdb, all_type_partitioned_table, "
                                 + "filter=[and(and(and(and(and(and(and(and(and(and(<(p_int, 11), "
                                 + "=(p_bigint, 99999:BIGINT)), =(p_bytes, X'4869':VARBINARY(2147483647))), "
                                 + "=(p_string, _UTF-16LE'hello':VARCHAR(2147483647) CHARACTER SET \"UTF-16LE\")), "
-                                + "=(p_float, 1.25E1:FLOAT)), =(p_double, 7.88E0:DOUBLE)), =(p_date, 2025-10-12)), "
+                                + "=(p_float, ")
+                // the FLOAT literal is printed as 1.25E1 before Flink 2.4 and as 12.5E0 since.
+                // TODO: assert the literal again when no longer support Flink versions before 2.4.
+                .contains(
+                        ":FLOAT)), =(p_double, 7.88E0:DOUBLE)), =(p_date, 2025-10-12)), "
                                 + "=(p_time, 12:55:00)), =(p_ts_ntz, 2025-10-12 12:55:00.001:TIMESTAMP(6))), "
                                 + "=(p_ts_ltz, 1970-01-01 00:00:04.001:TIMESTAMP_WITH_LOCAL_TIME_ZONE(6))), NOT(p_bool))]]], "
                                 + "fields=[id, p_bool, p_int, p_bigint, p_bytes, p_string, p_float, p_double, p_date, p_time, p_ts_ntz, p_ts_ltz])")
@@ -1389,7 +1519,7 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
 
         String plan2 =
                 tEnv.explainSql("select * from multi_partitioned_table where c ='2025' and d ='3'");
-        assertThat(plan2)
+        assertThat(withLowerCaseAnd(plan2))
                 .contains(
                         "TableSourceScan(table=[[testcatalog, defaultdb, multi_partitioned_table, "
                                 + "filter=[and(=(c, _UTF-16LE'2025':VARCHAR(2147483647) CHARACTER SET \"UTF-16LE\"), "
@@ -1520,7 +1650,7 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
                         "select a,c,d from combined_filters_table where c ='2025' and d > 200");
 
         // assert both partition filter and record batch filter are pushed down
-        assertThat(plan)
+        assertThat(withLowerCaseAnd(plan))
                 .contains(
                         "TableSourceScan(table=[[testcatalog, defaultdb, combined_filters_table, "
                                 + "filter=[and(=(c, _UTF-16LE'2025':VARCHAR(2147483647) CHARACTER SET \"UTF-16LE\"), >(d, 200))], "
@@ -1739,7 +1869,7 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
                 "select id, amount, region from alter_stats_test "
                         + "where amount >= 1000 and region = 'Beijing'";
         String plan3b = tEnv.explainSql(query3b);
-        assertThat(plan3b)
+        assertThat(withLowerCaseAnd(plan3b))
                 .contains(
                         "filter=[and(>=(amount, 1000), "
                                 + "=(region, _UTF-16LE'Beijing':VARCHAR(2147483647) CHARACTER SET \"UTF-16LE\"))]");
@@ -1763,7 +1893,8 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
                 "select id, amount from alter_stats_test "
                         + "where amount >= 500 and amount < 1500";
         String plan4 = tEnv.explainSql(query4);
-        assertThat(plan4).contains("filter=[and(>=(amount, 500), <(amount, 1500))]");
+        assertThat(withLowerCaseAnd(plan4))
+                .contains("filter=[and(>=(amount, 500), <(amount, 1500))]");
 
         List<String> expected4 = new ArrayList<>();
         // Phase 1 rows: amount in {500, 600, 700, 800, 900}
@@ -1861,7 +1992,7 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
 
         String query1 = "select * from partitioned_table_in where c in ('2025','2026')";
         String plan = tEnv.explainSql(query1);
-        assertThat(plan)
+        assertThat(withoutStringLiteralTypes(plan))
                 .contains(
                         "TableSourceScan(table=[[testcatalog, defaultdb, partitioned_table_in, filter=[OR(=(c, _UTF-16LE'2025'), =(c, _UTF-16LE'2026'))]]], fields=[a, b, c])");
 
@@ -1913,7 +2044,7 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
         String query1 =
                 "select a,c,d from combined_filters_table_in where c in ('2025','2026') and d % 200 = 0";
         String plan = tEnv.explainSql(query1);
-        assertThat(plan)
+        assertThat(withoutStringLiteralTypes(plan))
                 .contains(
                         "TableSourceScan(table=[[testcatalog, defaultdb, combined_filters_table_in, filter=[OR(=(c, _UTF-16LE'2025'), =(c, _UTF-16LE'2026'))], project=[a, c, d]]], fields=[a, c, d])");
 
@@ -2007,7 +2138,7 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
                         + "    and (c in ('2026')  or d like '%1%') "
                         + "    and     b like '%v3%'";
         String plan = tEnv.explainSql(query);
-        assertThat(plan)
+        assertThat(withoutStringLiteralTypes(plan))
                 .contains(
                         "Calc(select=[3 AS a, b, c, d], where=[((a = 3) AND ((c = '2026') OR LIKE(d, '%1%')) AND LIKE(b, '%v3%'))])\n"
                                 + "+- TableSourceScan(table=[[testcatalog, defaultdb, partitioned_table_complex, filter=[OR(=(c, _UTF-16LE'2026'), LIKE(d, _UTF-16LE'%1%'))]]], fields=[a, b, c, d])");
@@ -2020,6 +2151,33 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
     private enum Caching {
         ENABLE_CACHE,
         DISABLE_CACHE
+    }
+
+    protected boolean supportsLookupCustomShuffle() {
+        return false;
+    }
+
+    private static FlussLookupInputPartitioner createLookupInputPartitioner(int numBuckets) {
+        RowType lookupKeyType =
+                RowType.of(new LogicalType[] {new IntType(false)}, new String[] {"id"});
+        LookupNormalizer normalizer =
+                LookupNormalizer.createPrimaryKeyLookupNormalizer(new int[] {0}, lookupKeyType);
+        return new FlussLookupInputPartitioner(
+                normalizer, lookupKeyType, Collections.singletonList("id"), null, numBuckets);
+    }
+
+    private static class LookupSubtaskTagger extends RichMapFunction<Row, Row> {
+
+        private static final long serialVersionUID = 1L;
+
+        @Override
+        public Row map(Row value) {
+            return Row.of(
+                    value.getField(0),
+                    value.getField(1),
+                    value.getField(2),
+                    getRuntimeContext().getTaskInfo().getIndexOfThisSubtask());
+        }
     }
 
     /**
@@ -2205,5 +2363,24 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
             newValues[values.length] = partition;
             return row(newValues);
         }
+    }
+
+    /**
+     * Since Flink 2.4 (FLINK-40021), the conjunction of pushed-down filters is upper case.
+     *
+     * <p>TODO: remove this method when no longer support Flink versions before 2.4.
+     */
+    static String withLowerCaseAnd(String plan) {
+        return plan.replace("AND(", "and(");
+    }
+
+    /**
+     * Since Flink 2.4 (FLINK-36602), string literals of an IN list are printed with their type in
+     * the pushed-down filter; earlier versions print them without.
+     *
+     * <p>TODO: remove this method when no longer support Flink versions before 2.4.
+     */
+    private static String withoutStringLiteralTypes(String plan) {
+        return plan.replace(":VARCHAR(2147483647) CHARACTER SET \"UTF-16LE\"", "");
     }
 }

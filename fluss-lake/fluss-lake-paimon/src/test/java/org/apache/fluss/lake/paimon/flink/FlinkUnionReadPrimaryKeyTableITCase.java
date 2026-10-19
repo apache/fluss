@@ -45,6 +45,7 @@ import org.apache.flink.types.Row;
 import org.apache.flink.types.RowKind;
 import org.apache.flink.util.CloseableIterator;
 import org.apache.flink.util.CollectionUtil;
+import org.apache.paimon.catalog.Identifier;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -1053,6 +1054,50 @@ class FlinkUnionReadPrimaryKeyTableITCase extends FlinkUnionReadTestBase {
     }
 
     @Test
+    void testUnionReadWithCustomLakeTablePath() throws Exception {
+        String tableName = "pk_table_custom_lake_mapping";
+        TablePath tablePath = TablePath.of(DEFAULT_DB, tableName);
+        TablePath lakeTablePath = TablePath.of("custom_db", "pk_table_custom_lake_mapping_target");
+        Map<String, String> tableProperties = new HashMap<>();
+        tableProperties.put(
+                ConfigOptions.TABLE_DATALAKE_DATABASE_NAME.key(), lakeTablePath.getDatabaseName());
+        tableProperties.put(
+                ConfigOptions.TABLE_DATALAKE_TABLE_NAME.key(), lakeTablePath.getTableName());
+
+        long tableId = createPkTable(tablePath, tableProperties, Collections.emptyMap());
+        TableBucket tableBucket = new TableBucket(tableId, 0);
+
+        List<InternalRow> initialRows = Arrays.asList(row(1, "v1"), row(2, "v2"));
+        writeRows(tablePath, initialRows, false);
+
+        JobClient jobClient = buildTieringJob(execEnv);
+        try {
+            assertReplicaStatus(tableBucket, 2);
+            paimonCatalog.getTable(
+                    Identifier.create(
+                            lakeTablePath.getDatabaseName(), lakeTablePath.getTableName()));
+
+            List<String> lakeRows =
+                    toSortedRows(batchTEnv.executeSql("select a, b from " + tableName + "$lake"));
+            assertThat(lakeRows.toString().replace("+U", "+I")).isEqualTo("[+I[1, v1], +I[2, v2]]");
+
+            List<String> snapshotRows =
+                    toSortedRows(
+                            batchTEnv.executeSql("select * from " + tableName + "$lake$snapshots"));
+            assertThat(snapshotRows).isNotEmpty();
+
+            writeRows(tablePath, Collections.singletonList(row(3, "v3")), false);
+
+            List<String> unionRows =
+                    toSortedRows(batchTEnv.executeSql("select * from " + tableName));
+            assertThat(unionRows.toString().replace("+U", "+I"))
+                    .isEqualTo("[+I[1, v1], +I[2, v2], +I[3, v3]]");
+        } finally {
+            jobClient.cancel().get();
+        }
+    }
+
+    @Test
     void testUnionReadWithAddColumn() throws Exception {
         TablePath tablePath = TablePath.of(DEFAULT_DB, "unionReadAddColumnPKTable");
 
@@ -1082,6 +1127,7 @@ class FlinkUnionReadPrimaryKeyTableITCase extends FlinkUnionReadTestBase {
         // 3. Start tiering job
         JobClient jobClient = buildTieringJob(execEnv);
 
+        boolean tieringCancelled = false;
         try {
             // 4. Wait for data to snapshot to Paimon
             assertReplicaStatus(tableBucket, 2);
@@ -1119,7 +1165,9 @@ class FlinkUnionReadPrimaryKeyTableITCase extends FlinkUnionReadTestBase {
             // 9. Add Column "c4" (Schema V3)
             // Verify union read reconciles tiered data (V1) with a fluss log
             // containing multiple schema versions (V2 and V3).
+            // The per-job MiniCluster shuts down with the job, so cancel exactly once.
             jobClient.cancel().get();
+            tieringCancelled = true;
             addColumnChanges =
                     Collections.singletonList(
                             TableChange.addColumn(
@@ -1147,7 +1195,10 @@ class FlinkUnionReadPrimaryKeyTableITCase extends FlinkUnionReadTestBase {
                             "+I[2, v2_updated_again, 20, 30]",
                             "+I[3, v3_update, 30, 40]");
         } finally {
-            jobClient.cancel().get();
+            // only cancel here if the test failed before the intended cancel above
+            if (!tieringCancelled) {
+                jobClient.cancel().get();
+            }
         }
     }
 

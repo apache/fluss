@@ -25,11 +25,15 @@ import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.exception.InvalidServerTypeException;
 import org.apache.fluss.exception.NetworkException;
 import org.apache.fluss.exception.RetriableAuthenticationException;
+import org.apache.fluss.exception.UnsupportedVersionException;
+import org.apache.fluss.rpc.messages.AlterTableRequest;
 import org.apache.fluss.rpc.messages.ApiMessage;
 import org.apache.fluss.rpc.messages.ApiVersionsRequest;
 import org.apache.fluss.rpc.messages.ApiVersionsResponse;
 import org.apache.fluss.rpc.messages.AuthenticateRequest;
 import org.apache.fluss.rpc.messages.AuthenticateResponse;
+import org.apache.fluss.rpc.messages.ProduceLogRequest;
+import org.apache.fluss.rpc.messages.PutKvRequest;
 import org.apache.fluss.rpc.metrics.ClientMetricGroup;
 import org.apache.fluss.rpc.metrics.ConnectionMetrics;
 import org.apache.fluss.rpc.protocol.ApiKeys;
@@ -62,12 +66,17 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.function.BiConsumer;
 
+import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.hasHistoricalProduce;
+import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.hasHistoricalPut;
 import static org.apache.fluss.utils.IOUtils.closeQuietly;
 
 /** Connection to a Netty server used by the {@link NettyClient}. */
 @ThreadSafe
 final class ServerConnection {
     private static final Logger LOG = LoggerFactory.getLogger(ServerConnection.class);
+    private static final short HISTORICAL_PRODUCE_LOG_MIN_VERSION = 1;
+    private static final short HISTORICAL_PUT_KV_MIN_VERSION = 3;
+    private static final short ALTER_BUCKET_COUNT_MIN_VERSION = 1;
 
     private final ServerNode node;
 
@@ -309,6 +318,7 @@ final class ServerConnection {
             if (serverApiVersions != null) {
                 try {
                     version = serverApiVersions.highestAvailableVersion(apiKey);
+                    validateVersionCompatibility(apiKey, version, rawRequest);
                 } catch (Exception e) {
                     responseFuture.completeExceptionally(e);
                     return responseFuture;
@@ -321,22 +331,34 @@ final class ServerConnection {
             inflightRequests.put(inflight.requestId, inflight);
 
             // TODO: maybe we need to add timeout for the inflight requests
-            ByteBuf byteBuf;
+            ByteBuf byteBuf = null;
             try {
                 byteBuf = inflight.toByteBuf(channel.alloc());
-            } catch (Exception e) {
-                LOG.error("Failed to encode request for '{}'.", ApiKeys.forId(inflight.apiKey), e);
+                connectionMetrics.updateMetricsBeforeSendRequest(apiKey, rawRequest.totalSize());
+            } catch (Throwable t) {
+                LOG.error("Failed to encode request for '{}'.", ApiKeys.forId(inflight.apiKey), t);
+                if (byteBuf != null) {
+                    try {
+                        byteBuf.release();
+                    } catch (Throwable releaseFailure) {
+                        if (releaseFailure != t) {
+                            t.addSuppressed(releaseFailure);
+                        }
+                    }
+                }
                 inflightRequests.remove(inflight.requestId);
+                if (t instanceof Error) {
+                    responseFuture.completeExceptionally(t);
+                    return responseFuture;
+                }
                 responseFuture.completeExceptionally(
                         new FlussRuntimeException(
                                 String.format(
                                         "Failed to encode request for '%s'",
                                         ApiKeys.forId(inflight.apiKey)),
-                                e));
+                                t));
                 return responseFuture;
             }
-
-            connectionMetrics.updateMetricsBeforeSendRequest(apiKey, rawRequest.totalSize());
 
             channel.writeAndFlush(byteBuf)
                     .addListener(
@@ -358,6 +380,51 @@ final class ServerConnection {
                                         }
                                     });
             return inflight.responseFuture;
+        }
+    }
+
+    @VisibleForTesting
+    void validateVersionCompatibility(ApiKeys apiKey, short version, ApiMessage rawRequest) {
+        if (apiKey == ApiKeys.PRODUCE_LOG && version < HISTORICAL_PRODUCE_LOG_MIN_VERSION) {
+            ProduceLogRequest produceLogRequest = (ProduceLogRequest) rawRequest;
+            if (hasHistoricalProduce(produceLogRequest)) {
+                throw new UnsupportedVersionException(
+                        "Historical partition writes require PRODUCE_LOG version "
+                                + HISTORICAL_PRODUCE_LOG_MIN_VERSION
+                                + " or newer, but server "
+                                + node
+                                + " negotiated version "
+                                + version
+                                + '.');
+            }
+        }
+
+        if (apiKey == ApiKeys.PUT_KV && version < HISTORICAL_PUT_KV_MIN_VERSION) {
+            PutKvRequest putKvRequest = (PutKvRequest) rawRequest;
+            if (hasHistoricalPut(putKvRequest)) {
+                throw new UnsupportedVersionException(
+                        "Historical partition writes require PUT_KV version "
+                                + HISTORICAL_PUT_KV_MIN_VERSION
+                                + " or newer, but server "
+                                + node
+                                + " negotiated version "
+                                + version
+                                + '.');
+            }
+        }
+
+        if (apiKey == ApiKeys.ALTER_TABLE && version < ALTER_BUCKET_COUNT_MIN_VERSION) {
+            AlterTableRequest alterTableRequest = (AlterTableRequest) rawRequest;
+            if (alterTableRequest.hasModifyBucketCount()) {
+                throw new UnsupportedVersionException(
+                        "Modifying the bucket count requires ALTER_TABLE version "
+                                + ALTER_BUCKET_COUNT_MIN_VERSION
+                                + " or newer, but server "
+                                + node
+                                + " negotiated version "
+                                + version
+                                + '.');
+            }
         }
     }
 
@@ -585,5 +652,10 @@ final class ServerConnection {
     @VisibleForTesting
     ConnectionState getConnectionState() {
         return state;
+    }
+
+    @VisibleForTesting
+    int numInflightRequests() {
+        return inflightRequests.size();
     }
 }

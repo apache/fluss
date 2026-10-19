@@ -39,7 +39,7 @@ pub async fn main() -> Result<()> {
                 .column("uid", DataTypes::string())
                 .column("region", DataTypes::string())
                 .column("uid_int", DataTypes::bigint())
-                .primary_key(vec!["uid"])
+                .primary_key(vec!["uid"])?
                 .enable_auto_increment("uid_int")?
                 .build()?,
         )
@@ -82,7 +82,7 @@ pub async fn main() -> Result<()> {
     }
     upsert_writer.flush().await?;
 
-    let mut lookuper = table.new_lookup()?.create_lookuper()?;
+    let lookuper = table.new_lookup()?.create_lookuper()?;
     let mut assigned = Vec::new();
     for uid in ["alice", "bob", "carol"] {
         let mut key = GenericRow::new(1);

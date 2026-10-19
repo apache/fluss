@@ -47,25 +47,17 @@ fn main() -> Result<(), Box<dyn Error>> {
         .parent()
         .ok_or("the gen crate must live inside crates/fluss")?;
 
-    // The canonical proto in fluss-rpc is the source of truth whenever it is reachable, and
-    // regeneration refreshes the copy vendored under proto/. A source release carries only that
-    // copy, so fall back to it there.
-    let vendored_dir = fluss_dir.join("proto");
-    let canonical_dir = fluss_dir.join("../../../fluss-rpc/src/main/proto");
-    let include_dir = if canonical_dir.join("FlussApi.proto").exists() {
-        canonical_dir
-    } else if vendored_dir.join("FlussApi.proto").exists() {
-        vendored_dir.clone()
+    // Source releases carry the proto under proto/ instead of the fluss-rpc module.
+    let canonical_proto_dir = fluss_dir.join("../../../fluss-rpc/src/main/proto");
+    let release_proto_dir = fluss_dir.join("proto");
+    let include_dir = if canonical_proto_dir.join("FlussApi.proto").exists() {
+        canonical_proto_dir
+    } else if release_proto_dir.join("FlussApi.proto").exists() {
+        release_proto_dir
     } else {
         return Err("no FlussApi.proto found in fluss-rpc or proto/".into());
     };
     let proto = include_dir.join("FlussApi.proto");
-
-    let vendored = vendored_dir.join("FlussApi.proto");
-    if proto != vendored {
-        fs::create_dir_all(&vendored_dir)?;
-        fs::copy(&proto, &vendored)?;
-    }
 
     let mut config = prost_build::Config::new();
     config.bytes([

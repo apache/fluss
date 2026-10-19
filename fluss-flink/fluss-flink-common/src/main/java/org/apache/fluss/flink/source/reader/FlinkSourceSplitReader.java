@@ -40,6 +40,8 @@ import org.apache.fluss.lake.source.LakeSource;
 import org.apache.fluss.lake.source.LakeSplit;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.metrics.Gauge;
+import org.apache.fluss.metrics.MetricNames;
 import org.apache.fluss.predicate.Predicate;
 import org.apache.fluss.types.RowType;
 import org.apache.fluss.utils.CloseableIterator;
@@ -95,6 +97,7 @@ public class FlinkSourceSplitReader implements SplitReader<RecordAndPos, SourceS
     @Nullable private final int[] projectedFields;
 
     private final FlinkSourceReaderMetrics flinkSourceReaderMetrics;
+    private final Gauge<Long> recordsLagMetric;
 
     @Nullable private BoundedSplitReader currentBoundedSplitReader;
     @Nullable private SourceSplitBase currentBoundedSplit;
@@ -127,7 +130,9 @@ public class FlinkSourceSplitReader implements SplitReader<RecordAndPos, SourceS
             @Nullable LakeSource<LakeSplit> lakeSource,
             FlinkSourceReaderMetrics flinkSourceReaderMetrics) {
         this.flinkMetricRegistry =
-                new FlinkMetricRegistry(flinkSourceReaderMetrics.getSourceReaderMetricGroup());
+                new FlinkMetricRegistry(
+                        flinkSourceReaderMetrics.getSourceReaderMetricGroup(),
+                        Collections.singleton(MetricNames.SCANNER_RECORDS_LAG));
         this.connection = ConnectionFactory.createConnection(flussConf, flinkMetricRegistry);
         this.table = connection.getTable(tablePath);
         this.tableId = table.getTableInfo().getTableId();
@@ -146,6 +151,16 @@ public class FlinkSourceSplitReader implements SplitReader<RecordAndPos, SourceS
         this.stoppingOffsets = new HashMap<>();
         this.emptyLogSplits = new HashSet<>();
         this.lakeSource = lakeSource;
+
+        @SuppressWarnings("unchecked")
+        Gauge<Long> recordsLagMetric =
+                (Gauge<Long>)
+                        checkNotNull(
+                                flinkMetricRegistry.getFlussMetric(MetricNames.SCANNER_RECORDS_LAG),
+                                "The gauge %s should have been registered by the log scanner.",
+                                MetricNames.SCANNER_RECORDS_LAG);
+        this.recordsLagMetric = recordsLagMetric;
+        flinkSourceReaderMetrics.maybeAddRecordsLagMetric(recordsLagMetric);
     }
 
     @Override
@@ -630,6 +645,7 @@ public class FlinkSourceSplitReader implements SplitReader<RecordAndPos, SourceS
 
     @Override
     public void close() throws Exception {
+        flinkSourceReaderMetrics.removeRecordsLagMetric(recordsLagMetric);
         if (currentBoundedSplitReader != null) {
             currentBoundedSplitReader.close();
         }

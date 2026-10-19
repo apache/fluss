@@ -90,6 +90,21 @@ CREATE TABLE my_log_table (
 );
 ```
 
+### Bucketing with DISTRIBUTED BY
+
+On Flink 1.20 and later, you can declare the bucket key and the bucket count with the `DISTRIBUTED BY` clause instead of the `bucket.key` and `bucket.num` options. On Flink 2.2 and later, this also works for materialized tables.
+
+```sql title="Flink SQL"
+CREATE TABLE my_distributed_table (
+  shop_id BIGINT,
+  user_id BIGINT,
+  num_orders INT,
+  PRIMARY KEY (shop_id, user_id) NOT ENFORCED
+) DISTRIBUTED BY HASH(shop_id) INTO 4 BUCKETS;
+```
+
+`DISTRIBUTED INTO 4 BUCKETS` sets only the bucket count and keeps the default bucket key. Fluss supports hash distribution only, so `DISTRIBUTED BY RANGE` is rejected. A table can't combine `DISTRIBUTED BY` with the `bucket.key` or `bucket.num` options.
+
 ### Partitioned (Primary Key/Log) Table
 
 :::note
@@ -180,6 +195,14 @@ CREATE TABLE my_auto_part_log_table (
 
 For more details about Auto Partitioned (Primary Key/Log) Table, refer to [Auto Partitioning](table-design/data-distribution/partitioning.md#auto-partitioning).
 
+
+### Nested NOT NULL Constraints
+
+`NOT NULL` constraints on top-level columns are always preserved. `NOT NULL` constraints on fields nested inside a nullable `ROW` (for example `ROW<name STRING NOT NULL>` or `ARRAY<ROW<name STRING NOT NULL>>`) are only preserved on Flink 2.2 and later. Flink 2.1 and earlier drop nested `NOT NULL` constraints while resolving the DDL statement (see [FLINK-20539](https://issues.apache.org/jira/browse/FLINK-20539)), so the table is silently created with those fields nullable.
+
+On Flink 2.1 and earlier, a nested `NOT NULL` constraint survives only if every enclosing `ROW` on its path is itself `NOT NULL`. Declare the enclosing `ROW` column as `NOT NULL`, for example `address ROW<city STRING NOT NULL, zip STRING> NOT NULL`. For `ARRAY` and `MAP` values, declare the element `ROW` as `NOT NULL`, for example `headers ARRAY<ROW<name STRING NOT NULL> NOT NULL>`.
+
+On Flink 2.2 and later, keep `table.legacy-nested-row-nullability` at its default value of `false`, otherwise nested constraints are dropped again. Fluss does not enforce nested `NOT NULL` constraints on write, and Flink's `table.exec.sink.nested-constraint-enforcer` defaults to `IGNORE`, so a null written into a nested `NOT NULL` field is accepted and later fails every read of that record. Set `table.exec.sink.nested-constraint-enforcer` to `ROWS_AND_COLLECTIONS` to reject such writes.
 
 ### Options
 
@@ -290,20 +313,29 @@ When using SET to modify [Storage Options](engine-flink/options.md#storage-optio
 
 **Supported Options to modify**
 - All [Read Options](engine-flink/options.md#read-options), [Write Options](engine-flink/options.md#write-options), [Lookup Options](engine-flink/options.md#lookup-options) and [Other Options](engine-flink/options.md#other-options) except `bootstrap.servers`.
+- `bucket.num`: Set the target number of buckets. For partitioned tables, the new value applies to newly created partitions; existing partitions retain their original bucket count. Not supported on non-partitioned tables, tables using the aggregation merge engine, or tables with the historical partition enabled, and among lake-enabled tables only Paimon is supported. See [Rescaling Bucket Count for Future Partitions](../table-design/data-distribution/bucketing.md#rescaling-bucket-count-for-future-partitions) for the full semantics, examples, and operational guidance.
 - The following [Storage Options](engine-flink/options.md#storage-options):
   - `table.datalake.enabled`: Enable or disable lakehouse storage for the table.
-  - `table.datalake.historical-partition.enabled`: Enable or disable historical partition lookup.
+  - `table.datalake.historical-partition.enabled`: Enable or disable
+    [historical partition access](../table-design/data-distribution/partitioning.md#historical-partition-access).
+  - `table.datalake.historical-partition.lookup-mode`: Switch historical partition lookups between `SST` and `SCAN`.
   - `table.datalake.freshness`: Set the data freshness for lakehouse storage.
   - `table.log.tiered.local-segments`: Set the number of log segments to retain locally when tiered storage is enabled.
   - `table.auto-partition.num-retention`: Set the number of historical partitions to retain for auto partitioning.
   - `table.auto-partition.num-precreate`: Set the number of future partitions to pre-create for auto partitioning.
 
 ```sql title="Flink SQL"
+-- Change the bucket count for a partitioned table (applies to new partitions only)
+ALTER TABLE my_table SET ('bucket.num' = '8');
+
 -- Enable lakehouse storage for the table
 ALTER TABLE my_table SET ('table.datalake.enabled' = 'true');
 
 -- Set the freshness to 5 minutes for lakehouse storage
 ALTER TABLE my_table SET ('table.datalake.freshness' = '5min');
+
+-- Switch historical partition lookups to scan mode
+ALTER TABLE my_table SET ('table.datalake.historical-partition.lookup-mode' = 'SCAN');
 
 -- Set the number of local segments to retain to 5
 ALTER TABLE my_table SET ('table.log.tiered.local-segments' = '5');
@@ -311,7 +343,6 @@ ALTER TABLE my_table SET ('table.log.tiered.local-segments' = '5');
 
 **Limits**
 - If lakehouse storage (`table.datalake.enabled`) is already enabled for a table, options with lakehouse format prefixes (e.g., `paimon.*`) cannot be modified again.
-- After changing `table.datalake.historical-partition.enabled`, restart existing lookup jobs that need to look up historical partition data so that their clients load the updated table configuration.
 
 
 ### RESET properties

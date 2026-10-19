@@ -28,7 +28,7 @@ let table_descriptor = TableDescriptor::builder()
             .column("session_id", DataTypes::string())
             .column("event_seq", DataTypes::bigint())
             .column("event_data", DataTypes::string())
-            .primary_key(vec!["user_id", "session_id", "event_seq"])
+            .primary_key(vec!["user_id", "session_id", "event_seq"])?
             .build()?,
     )
     // Bucket key (user_id, session_id) is a prefix of the primary key.
@@ -41,7 +41,7 @@ Create the lookuper with `lookup_by(columns)` naming the prefix columns, then ca
 ```rust
 use fluss::row::{GenericRow, InternalRow};
 
-let mut prefix_lookuper = table
+let prefix_lookuper = table
     .new_lookup()?
     .lookup_by(vec!["user_id".to_string(), "session_id".to_string()])
     .create_lookuper()?;
@@ -75,7 +75,7 @@ let table_descriptor = TableDescriptor::builder()
             .column("session_id", DataTypes::string())
             .column("event_seq", DataTypes::bigint())
             .column("event_data", DataTypes::string())
-            .primary_key(vec!["region", "user_id", "session_id", "event_seq"])
+            .primary_key(vec!["region", "user_id", "session_id", "event_seq"])?
             .build()?,
     )
     .partitioned_by(vec!["region"])
@@ -85,7 +85,7 @@ let table_descriptor = TableDescriptor::builder()
 ```
 
 ```rust
-let mut prefix_lookuper = table
+let prefix_lookuper = table
     .new_lookup()?
     .lookup_by(vec![
         "region".to_string(),

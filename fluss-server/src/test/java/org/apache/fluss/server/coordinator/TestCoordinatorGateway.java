@@ -24,6 +24,8 @@ import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.rpc.gateway.CoordinatorGateway;
 import org.apache.fluss.rpc.messages.AcquireKvSnapshotLeaseRequest;
 import org.apache.fluss.rpc.messages.AcquireKvSnapshotLeaseResponse;
+import org.apache.fluss.rpc.messages.AddServerTagByRackRequest;
+import org.apache.fluss.rpc.messages.AddServerTagByRackResponse;
 import org.apache.fluss.rpc.messages.AddServerTagRequest;
 import org.apache.fluss.rpc.messages.AddServerTagResponse;
 import org.apache.fluss.rpc.messages.AdjustIsrRequest;
@@ -58,6 +60,8 @@ import org.apache.fluss.rpc.messages.DatabaseExistsRequest;
 import org.apache.fluss.rpc.messages.DatabaseExistsResponse;
 import org.apache.fluss.rpc.messages.DeleteProducerOffsetsRequest;
 import org.apache.fluss.rpc.messages.DeleteProducerOffsetsResponse;
+import org.apache.fluss.rpc.messages.DescribeBucketsRequest;
+import org.apache.fluss.rpc.messages.DescribeBucketsResponse;
 import org.apache.fluss.rpc.messages.DescribeClusterConfigsRequest;
 import org.apache.fluss.rpc.messages.DescribeClusterConfigsResponse;
 import org.apache.fluss.rpc.messages.DropAclsRequest;
@@ -114,6 +118,8 @@ import org.apache.fluss.rpc.messages.RegisterProducerOffsetsRequest;
 import org.apache.fluss.rpc.messages.RegisterProducerOffsetsResponse;
 import org.apache.fluss.rpc.messages.ReleaseKvSnapshotLeaseRequest;
 import org.apache.fluss.rpc.messages.ReleaseKvSnapshotLeaseResponse;
+import org.apache.fluss.rpc.messages.RemoveServerTagByRackRequest;
+import org.apache.fluss.rpc.messages.RemoveServerTagByRackResponse;
 import org.apache.fluss.rpc.messages.RemoveServerTagRequest;
 import org.apache.fluss.rpc.messages.RemoveServerTagResponse;
 import org.apache.fluss.rpc.messages.TableExistsRequest;
@@ -229,6 +235,12 @@ public class TestCoordinatorGateway implements CoordinatorGateway {
 
     @Override
     public CompletableFuture<GetTableInfoResponse> getTableInfo(GetTableInfoRequest request) {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public CompletableFuture<DescribeBucketsResponse> describeBuckets(
+            DescribeBucketsRequest request) {
         throw new UnsupportedOperationException();
     }
 
@@ -406,8 +418,20 @@ public class TestCoordinatorGateway implements CoordinatorGateway {
     }
 
     @Override
+    public CompletableFuture<AddServerTagByRackResponse> addServerTagByRack(
+            AddServerTagByRackRequest request) {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
     public CompletableFuture<RemoveServerTagResponse> removeServerTag(
             RemoveServerTagRequest request) {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public CompletableFuture<RemoveServerTagByRackResponse> removeServerTagByRack(
+            RemoveServerTagByRackRequest request) {
         throw new UnsupportedOperationException();
     }
 

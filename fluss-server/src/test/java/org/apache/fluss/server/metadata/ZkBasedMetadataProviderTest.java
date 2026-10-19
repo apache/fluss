@@ -100,6 +100,7 @@ class ZkBasedMetadataProviderTest {
                 TableAssignment.builder()
                         .add(0, BucketAssignment.of(1, 2, 3))
                         .add(1, BucketAssignment.of(2, 3, 4))
+                        .add(2, BucketAssignment.of(3, 4, 5))
                         .build();
         metadataManager.createDatabase("test_db", DatabaseDescriptor.EMPTY, true);
         long tableId =
@@ -132,7 +133,7 @@ class ZkBasedMetadataProviderTest {
         assertThat(tableInfo.getSchema()).isEqualTo(desc.getSchema());
 
         List<BucketMetadata> bucketMetadataList = tableMetadata.getBucketMetadataList();
-        assertThat(bucketMetadataList).hasSize(2);
+        assertThat(bucketMetadataList).hasSize(3);
 
         // Verify bucket metadata
         Map<Integer, BucketMetadata> bucketMap =
@@ -142,10 +143,22 @@ class ZkBasedMetadataProviderTest {
         BucketMetadata bucket0Metadata = bucketMap.get(0);
         assertThat(extractLeaderFromBucketMetadata(bucket0Metadata)).isEqualTo(1);
         assertThat(bucket0Metadata.getReplicas()).containsExactly(1, 2, 3);
+        assertThat(bucket0Metadata.getIsr()).containsExactly(1, 2, 3);
+        assertThat(bucket0Metadata.getBucketEpoch()).isEqualTo(1000);
 
         BucketMetadata bucket1Metadata = bucketMap.get(1);
         assertThat(extractLeaderFromBucketMetadata(bucket1Metadata)).isEqualTo(2);
         assertThat(bucket1Metadata.getReplicas()).containsExactly(2, 3, 4);
+        assertThat(bucket1Metadata.getIsr()).containsExactly(2, 3, 4);
+        assertThat(bucket1Metadata.getBucketEpoch()).isEqualTo(2000);
+
+        BucketMetadata bucket2Metadata = bucketMap.get(2);
+        assertThat(bucket2Metadata.getLeaderId()).isEmpty();
+        assertThat(bucket2Metadata.getLeaderEpoch()).isEmpty();
+        assertThat(bucket2Metadata.getReplicas()).containsExactly(3, 4, 5);
+        assertThat(bucket2Metadata.getIsr()).isEmpty();
+        assertThat(bucket2Metadata.getBucketEpoch())
+                .isEqualTo(BucketMetadata.NO_LEADER_ISR_STATE_EPOCH);
     }
 
     @Test
@@ -174,7 +187,8 @@ class ZkBasedMetadataProviderTest {
                 partitionAssignment,
                 DEFAULT_REMOTE_DATA_DIR,
                 tablePath,
-                tableId);
+                tableId,
+                partitionAssignment.getBucketAssignments().size());
 
         // Create leader and isr for partition buckets
         TableBucket partitionBucket0 = new TableBucket(tableId, partitionId, 0);
@@ -213,10 +227,14 @@ class ZkBasedMetadataProviderTest {
         BucketMetadata bucket0Metadata = bucketMap.get(0);
         assertThat(extractLeaderFromBucketMetadata(bucket0Metadata)).isEqualTo(1);
         assertThat(bucket0Metadata.getReplicas()).containsExactly(1, 2);
+        assertThat(bucket0Metadata.getIsr()).containsExactly(1, 2);
+        assertThat(bucket0Metadata.getBucketEpoch()).isEqualTo(1000);
 
         BucketMetadata bucket1Metadata = bucketMap.get(1);
         assertThat(extractLeaderFromBucketMetadata(bucket1Metadata)).isEqualTo(2);
         assertThat(bucket1Metadata.getReplicas()).containsExactly(2, 3);
+        assertThat(bucket1Metadata.getIsr()).containsExactly(2, 3);
+        assertThat(bucket1Metadata.getBucketEpoch()).isEqualTo(2000);
     }
 
     @Test
@@ -255,14 +273,16 @@ class ZkBasedMetadataProviderTest {
                 partitionAssignment1,
                 DEFAULT_REMOTE_DATA_DIR,
                 tablePath1,
-                tableId1);
+                tableId1,
+                partitionAssignment1.getBucketAssignments().size());
         zookeeperClient.registerPartitionAssignmentAndMetadata(
                 partitionId2,
                 partitionName2,
                 partitionAssignment2,
                 DEFAULT_REMOTE_DATA_DIR,
                 tablePath1,
-                tableId1);
+                tableId1,
+                partitionAssignment2.getBucketAssignments().size());
 
         // Create partition for table2
         long partitionId3 = 21L;
@@ -278,7 +298,8 @@ class ZkBasedMetadataProviderTest {
                 partitionAssignment3,
                 DEFAULT_REMOTE_DATA_DIR,
                 tablePath2,
-                tableId2);
+                tableId2,
+                partitionAssignment3.getBucketAssignments().size());
 
         // Create leader and isr for all partition buckets
         TableBucket bucket1 = new TableBucket(tableId1, partitionId1, 0);

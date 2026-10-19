@@ -21,6 +21,7 @@
 
 #include <chrono>
 #include <cstdint>
+#include <functional>
 #include <limits>
 #include <memory>
 #include <optional>
@@ -47,12 +48,16 @@ struct Admin;
 struct Table;
 struct AppendWriter;
 struct WriteResult;
+class WriteCallback;
+class WriteCallbackCapacity;
 struct LogScanner;
 struct RecordBatchLogReader;
 struct BatchScanner;
 struct UpsertWriter;
 struct Lookuper;
 struct PrefixLookuper;
+struct PendingLookup;
+struct PendingPrefixLookup;
 struct ScanResultInner;
 struct GenericRowInner;
 struct LookupResultInner;
@@ -192,8 +197,40 @@ struct ErrorCode {
     static constexpr int INVALID_ALTER_TABLE_EXCEPTION = 56;
     /// Deletion operations are disabled on this table.
     static constexpr int DELETION_DISABLED_EXCEPTION = 57;
+    /// The server does not exist.
+    static constexpr int SERVER_NOT_EXIST_EXCEPTION = 58;
+    /// The server tag already exists.
+    static constexpr int SERVER_TAG_ALREADY_EXIST_EXCEPTION = 59;
+    /// The server tag does not exist.
+    static constexpr int SERVER_TAG_NOT_EXIST_EXCEPTION = 60;
+    /// The rebalance task failed.
+    static constexpr int REBALANCE_FAILURE_EXCEPTION = 61;
+    /// No rebalance task is in progress.
+    static constexpr int NO_REBALANCE_IN_PROGRESS_EXCEPTION = 62;
+    /// The client used an invalid producer ID.
+    static constexpr int INVALID_PRODUCER_ID_EXCEPTION = 63;
+    /// A configuration error occurred.
+    static constexpr int CONFIG_EXCEPTION = 64;
+    /// The coordinator is not the leader and cannot process the request.
+    static constexpr int NOT_COORDINATOR_LEADER_EXCEPTION = 65;
+    /// The scanner session expired due to inactivity.
+    static constexpr int SCANNER_EXPIRED = 66;
+    /// The server does not recognize the scanner id.
+    static constexpr int UNKNOWN_SCANNER_ID = 67;
+    /// The scan request is invalid.
+    static constexpr int INVALID_SCAN_REQUEST = 68;
+    /// The per-bucket or per-server scanner session limit has been reached.
+    static constexpr int TOO_MANY_SCANNERS = 69;
+    /// The tablet server rejected writes because its data disk reached the write-limit ratio.
+    static constexpr int DISK_WRITE_LOCKED = 70;
+    /// The cluster does not have enough KV leader replica capacity.
+    static constexpr int INSUFFICIENT_KV_LEADER_REPLICA_CAPACITY = 71;
     /// The server rejected a write due to storage backpressure.
     static constexpr int STORAGE_BACKPRESSURE_EXCEPTION = 72;
+    /// The historical partition request was throttled because too many are in flight.
+    static constexpr int HISTORICAL_PARTITION_THROTTLED = 73;
+    /// The request's bucket routing is missing or stale; refresh metadata and rebuild it.
+    static constexpr int INVALID_BUCKET_ROUTING = 74;
 
     /// Returns true if retrying the request may succeed. Mirrors Java's RetriableException hierarchy.
     static constexpr bool IsRetriable(int32_t code) {
@@ -205,7 +242,8 @@ struct ErrorCode {
                code == STORAGE_EXCEPTION ||
                code == NOT_ENOUGH_REPLICAS_AFTER_APPEND_EXCEPTION ||
                code == NOT_ENOUGH_REPLICAS_EXCEPTION || code == LEADER_NOT_AVAILABLE_EXCEPTION ||
-               code == STORAGE_BACKPRESSURE_EXCEPTION;
+               code == STORAGE_BACKPRESSURE_EXCEPTION || code == DISK_WRITE_LOCKED ||
+               code == HISTORICAL_PARTITION_THROTTLED;
     }
 };
 
@@ -527,9 +565,61 @@ struct Result {
 
     bool Ok() const { return error_code == 0; }
 
-    /// Returns true if retrying the request may succeed. Client-side errors always return false.
+    /// Returns true if retrying the request may succeed. Does not guarantee that a failed
+    /// write had no effect or that application resubmission is duplicate-safe.
+    /// Client-side errors always return false.
     bool IsRetriable() const { return ErrorCode::IsRetriable(error_code); }
 };
+
+/// Write-specific completion metadata. The reference passed to a callback is valid
+/// only for that invocation; copy the result when retaining it for later work.
+struct WriteCompletion {
+    Result result;
+};
+
+/// Per-writer admission control for callback operations, independent of buffer bytes.
+struct WriteCallbackOptions {
+    // Includes accepted writes awaiting completion and callbacks queued or executing.
+    // Must be greater than zero. This is not a byte limit on callback captures.
+    size_t max_pending_operations{262144};
+};
+
+/// Receives the final outcome of an accepted write. Function pointers and lambdas
+/// are supported. An empty callback is rejected before submitting the write.
+///
+/// During normal operation, the SDK owns the callback until completion and invokes
+/// it exactly once on a shared SDK worker; no caller polling or waiting thread
+/// is needed. Process exit or a crash can prevent delivery. Callbacks never run
+/// inline in the submitting call, but may start before the call returns.
+/// Keep callbacks short and synchronize access to shared state, including writers.
+/// Callback overloads do not make writers safe for concurrent access. Captured
+/// references must remain valid until the callback finishes; capturing shared
+/// ownership is recommended. Keep the connection alive until completion.
+///
+/// Success follows the configured acknowledgment policy. Errors are reported after
+/// internal retry handling, but do not guarantee that no data was written.
+/// Application resubmission is a new operation and can produce duplicates even
+/// with SDK idempotence enabled. Retain input identifiers and recovery state as
+/// needed; one callback invocation is not an exactly-once delivery guarantee.
+///
+/// Callbacks run serially in dispatch order on a single shared worker. There is
+/// no cross-bucket submission-order guarantee; late registrations are queued
+/// when registered. Do not wait for another callback from a callback: it stalls that
+/// worker. Synchronous SDK calls require exclusive writer access. Callback
+/// submissions to a full writer fail immediately when called from a callback,
+/// instead of blocking the worker. Each writer bounds its outstanding callback
+/// operations using WriteCallbackOptions, independently of the write buffer size.
+/// Hand off retries or expensive work without blocking; bound application queues
+/// and handle overflow without silently discarding failed operations.
+///
+/// Exceptions thrown by callbacks are caught and reported to stderr; they do not
+/// change the write outcome or retry the callback. Stop submissions before Flush().
+/// After a successful Rust write flush, Flush() blocks until pending callbacks finish,
+/// acting as a barrier, so a callback that never returns hangs it. On error, referenced
+/// state may still be in use.
+/// Flush() called inside any write callback returns a client error without flushing.
+/// Flush() does not wait for work handed to application workers or retry queues.
+using WriteCallback = std::function<void(const WriteCompletion&)>;
 
 struct TablePath {
     std::string database_name;
@@ -1162,6 +1252,9 @@ class PrefixLookupResult {
 
    private:
     friend class PrefixLookuper;
+    friend class PendingPrefixLookup;
+    /// Takes ownership of `inner`, or returns its error.
+    Result Adopt(ffi::PrefixLookupResultInner* inner);
     std::shared_ptr<const detail::PrefixData> data_;
 };
 
@@ -1304,6 +1397,11 @@ struct ArrowBatchImporter;
 
 class ArrowRecordBatch {
    public:
+    // Reported by GetCommitTimestamp() when the batch carries no single commit
+    // timestamp, which is the case for a limit scan because it merges several
+    // log batches into one Arrow batch.
+    static constexpr int64_t NO_COMMIT_TIMESTAMP = -1;
+
     std::shared_ptr<arrow::RecordBatch> GetArrowRecordBatch() const { return batch_; }
 
     bool Available() const;
@@ -1317,13 +1415,15 @@ class ArrowRecordBatch {
     int32_t GetBucketId() const;
     int64_t GetBaseOffset() const;
     int64_t GetLastOffset() const;
+    // Epoch milliseconds, or NO_COMMIT_TIMESTAMP when unavailable.
+    int64_t GetCommitTimestamp() const;
 
    private:
     friend class LogScanner;
     friend struct detail::ArrowBatchImporter;
     explicit ArrowRecordBatch(std::shared_ptr<arrow::RecordBatch> batch, int64_t table_id,
                               int64_t partition_id, int32_t bucket_id,
-                              int64_t base_offset) noexcept;
+                              int64_t base_offset, int64_t commit_timestamp) noexcept;
 
     std::shared_ptr<arrow::RecordBatch> batch_{nullptr};
 
@@ -1331,6 +1431,9 @@ class ArrowRecordBatch {
     int64_t partition_id_;
     int32_t bucket_id_;
     int64_t base_offset_;
+    // Defaults to the sentinel so any future construction path that forgets to
+    // set it reports "unknown" rather than an arbitrary value.
+    int64_t commit_timestamp_{NO_COMMIT_TIMESTAMP};
 };
 
 struct ArrowRecordBatches {
@@ -1410,6 +1513,7 @@ struct LakeSnapshot {
 struct PartitionInfo {
     int64_t partition_id;
     std::string partition_name;
+    int32_t bucket_count{0};
 };
 
 struct ServerNode {
@@ -1487,12 +1591,15 @@ class LookupResult : public detail::NamedGetters<LookupResult> {
 
    private:
     friend class Lookuper;
+    friend class PendingLookup;
     size_t Resolve(const std::string& name) const {
         if (!column_map_) {
             BuildColumnMap();
         }
         return detail::ResolveColumn(*column_map_, name);
     }
+    /// Takes ownership of `inner`, or returns its error.
+    Result Adopt(ffi::LookupResultInner* inner);
     void Destroy() noexcept;
     void BuildColumnMap() const;
     ffi::LookupResultInner* inner_{nullptr};
@@ -1553,14 +1660,21 @@ struct Configuration {
     bool writer_enable_idempotence{true};
     // Maximum number of in-flight requests per bucket for idempotent writes
     size_t writer_max_inflight_requests_per_bucket{5};
-    // Total memory available for buffering write batches (default 64MB)
+    // Shared write-batch memory budget per Connection, across its tables and writers
+    // (default 64 MiB). Not a process RSS limit or a callback-capture memory budget.
     size_t writer_buffer_memory_size{64 * 1024 * 1024};
-    // Maximum time in milliseconds to block waiting for buffer memory
+    // Shared wait budget in milliseconds for buffer memory and callback capacity.
+    // Does not bound data conversion, scheduling, ACKs, or callback execution.
+    // UINT64_MAX waits indefinitely; zero fails fast when capacity or memory is unavailable.
     uint64_t writer_buffer_wait_timeout_ms{std::numeric_limits<uint64_t>::max()};
     // Maximum KV backpressure throttle in milliseconds
     uint64_t writer_kv_backpressure_max_throttle_ms{3000};
+    // Base delay (ms) before resending a batch the server rejected with a retriable error
+    uint64_t writer_retry_backoff_ms{100};
+    // Maximum writer retry backoff (ms) after exponential growth
+    uint64_t writer_retry_max_backoff_ms{1000};
     // Connect timeout in milliseconds for TCP transport connect
-    uint64_t connect_timeout_ms{120000};
+    uint64_t connect_timeout_ms{15000};
     // Security protocol: "PLAINTEXT" (default, no auth) or "sasl" (SASL auth)
     std::string security_protocol{"PLAINTEXT"};
     // SASL mechanism (only "PLAIN" is supported)
@@ -1736,6 +1850,8 @@ class TableAppend {
     TableAppend& operator=(TableAppend&&) noexcept = default;
 
     Result CreateWriter(AppendWriter& out);
+    /// Create a writer with an independent, positive callback operation limit.
+    Result CreateWriter(AppendWriter& out, const WriteCallbackOptions& options);
 
    private:
     friend class Table;
@@ -1755,6 +1871,8 @@ class TableUpsert {
     TableUpsert& PartialUpdateByName(std::vector<std::string> column_names);
 
     Result CreateWriter(UpsertWriter& out);
+    /// Create a writer sharing one callback operation limit across upserts and deletes.
+    Result CreateWriter(UpsertWriter& out, const WriteCallbackOptions& options);
 
    private:
     friend class Table;
@@ -1873,6 +1991,7 @@ class WriteResult {
     friend class UpsertWriter;
     WriteResult(ffi::WriteResult* inner) noexcept;
 
+    Result Notify(std::unique_ptr<ffi::WriteCallback> callback);
     void Destroy() noexcept;
     ffi::WriteResult* inner_{nullptr};
 };
@@ -1891,17 +2010,37 @@ class AppendWriter {
 
     Result Append(const GenericRow& row);
     Result Append(const GenericRow& row, WriteResult& out);
+    /// Submit a row and notify callback of its final outcome without waiting for
+    /// acknowledgment. Callback capacity and buffer waits share the budget from
+    /// client.writer.buffer.wait-timeout. Ok means the write was accepted and the
+    /// callback fires exactly once during normal operation; an error means
+    /// submission failed and no callback runs. A zero timeout makes admission
+    /// fail fast when callback capacity or buffer memory is unavailable.
+    Result Append(const GenericRow& row, WriteCallback callback);
     Result AppendArrowBatch(const std::shared_ptr<arrow::RecordBatch>& batch);
     Result AppendArrowBatch(const std::shared_ptr<arrow::RecordBatch>& batch, WriteResult& out);
+    /// Like the callback Append overload, but notifies once for the entire batch.
+    Result AppendArrowBatch(const std::shared_ptr<arrow::RecordBatch>& batch,
+                            WriteCallback callback);
     Result Flush();
 
    private:
     friend class Table;
     friend class TableAppend;
-    AppendWriter(ffi::AppendWriter* writer) noexcept;
+    AppendWriter(ffi::AppendWriter* writer,
+                 std::shared_ptr<ffi::WriteCallbackCapacity> callback_capacity) noexcept;
+
+    // Submit through FFI bounding the buffer-backpressure wait by submit_budget_ms
+    // (Kafka max.block.ms style): negative uses the writer's configured buffer wait
+    // timeout, >= 0 caps the wait at that many ms (0 = fail fast when the buffer is
+    // full). Only the callback path passes a budget; the public overloads pass -1.
+    Result AppendWithBudget(const GenericRow& row, WriteResult& out, int64_t submit_budget_ms);
+    Result AppendArrowBatchWithBudget(const std::shared_ptr<arrow::RecordBatch>& batch,
+                                      WriteResult& out, int64_t submit_budget_ms);
 
     void Destroy() noexcept;
     ffi::AppendWriter* writer_{nullptr};
+    std::shared_ptr<ffi::WriteCallbackCapacity> callback_capacity_;
 };
 
 class UpsertWriter {
@@ -1918,16 +2057,96 @@ class UpsertWriter {
 
     Result Upsert(const GenericRow& row);
     Result Upsert(const GenericRow& row, WriteResult& out);
+    /// Submit an upsert and notify callback of its final outcome without waiting
+    /// for acknowledgment. Callback capacity and buffer waits share the budget from
+    /// client.writer.buffer.wait-timeout. Ok means the write was accepted and the
+    /// callback fires exactly once during normal operation; an error means
+    /// submission failed and no callback runs. A zero timeout makes admission
+    /// fail fast when callback capacity or buffer memory is unavailable.
+    Result Upsert(const GenericRow& row, WriteCallback callback);
     Result Delete(const GenericRow& row);
     Result Delete(const GenericRow& row, WriteResult& out);
+    /// Like the callback Upsert overload, but deletes a row by primary key.
+    Result Delete(const GenericRow& row, WriteCallback callback);
     Result Flush();
 
    private:
     friend class Table;
     friend class TableUpsert;
-    UpsertWriter(ffi::UpsertWriter* writer) noexcept;
+    UpsertWriter(ffi::UpsertWriter* writer,
+                 std::shared_ptr<ffi::WriteCallbackCapacity> callback_capacity) noexcept;
+
+    // See AppendWriter::AppendWithBudget for submit_budget_ms semantics. Only the
+    // callback path passes a budget; the public overloads pass -1.
+    Result UpsertWithBudget(const GenericRow& row, WriteResult& out, int64_t submit_budget_ms);
+    Result DeleteWithBudget(const GenericRow& row, WriteResult& out, int64_t submit_budget_ms);
+
     void Destroy() noexcept;
     ffi::UpsertWriter* writer_{nullptr};
+    std::shared_ptr<ffi::WriteCallbackCapacity> callback_capacity_;
+};
+
+/// A lookup started by Lookuper::Lookup(pk_row, PendingLookup&). Move-only. Destroying it
+/// before Wait() returns abandons the lookup.
+class PendingLookup {
+   public:
+    PendingLookup() noexcept;
+    ~PendingLookup() noexcept;
+
+    PendingLookup(const PendingLookup&) = delete;
+    PendingLookup& operator=(const PendingLookup&) = delete;
+    PendingLookup(PendingLookup&& other) noexcept;
+    PendingLookup& operator=(PendingLookup&& other) noexcept;
+
+    /// True while the lookup is running. False once Wait() has returned its outcome, which can
+    /// be an error with any code, REQUEST_TIME_OUT included.
+    bool Available() const;
+
+    /// Blocks until the row arrives.
+    Result Wait(LookupResult& out);
+
+    /// Blocks for at most `timeout_ms`. If the wait runs out, it returns REQUEST_TIME_OUT and
+    /// the lookup keeps running. The lookup itself can also fail with REQUEST_TIME_OUT, which
+    /// ends it, so check Available() before waiting again.
+    Result Wait(LookupResult& out, int64_t timeout_ms);
+
+   private:
+    friend class Lookuper;
+    explicit PendingLookup(ffi::PendingLookup* pending) noexcept;
+    // A negative timeout_ms waits without limit.
+    Result DoWait(LookupResult& out, int64_t timeout_ms);
+    void Destroy() noexcept;
+    ffi::PendingLookup* pending_{nullptr};
+};
+
+/// A prefix lookup started by PrefixLookuper::PrefixLookup(prefix_row, PendingPrefixLookup&).
+/// Behaves like PendingLookup.
+class PendingPrefixLookup {
+   public:
+    PendingPrefixLookup() noexcept;
+    ~PendingPrefixLookup() noexcept;
+
+    PendingPrefixLookup(const PendingPrefixLookup&) = delete;
+    PendingPrefixLookup& operator=(const PendingPrefixLookup&) = delete;
+    PendingPrefixLookup(PendingPrefixLookup&& other) noexcept;
+    PendingPrefixLookup& operator=(PendingPrefixLookup&& other) noexcept;
+
+    /// True while the lookup is running, like PendingLookup::Available.
+    bool Available() const;
+
+    /// Blocks until the rows arrive.
+    Result Wait(PrefixLookupResult& out);
+
+    /// Blocks for at most `timeout_ms`, like PendingLookup::Wait.
+    Result Wait(PrefixLookupResult& out, int64_t timeout_ms);
+
+   private:
+    friend class PrefixLookuper;
+    explicit PendingPrefixLookup(ffi::PendingPrefixLookup* pending) noexcept;
+    // A negative timeout_ms waits without limit.
+    Result DoWait(PrefixLookupResult& out, int64_t timeout_ms);
+    void Destroy() noexcept;
+    ffi::PendingPrefixLookup* pending_{nullptr};
 };
 
 class Lookuper {
@@ -1942,7 +2161,14 @@ class Lookuper {
 
     bool Available() const;
 
-    Result Lookup(const GenericRow& pk_row, LookupResult& out);
+    /// Looks up the row with the primary key set on `pk_row`, blocking until the result
+    /// arrives. Thread-safe: threads may share one Lookuper, and their concurrent lookups
+    /// go out in the same batches.
+    Result Lookup(const GenericRow& pk_row, LookupResult& out) const;
+
+    /// Starts the lookup without blocking; `out` waits for its row. Lookups started this way
+    /// share batches too, so one thread can keep many in flight.
+    Result Lookup(const GenericRow& pk_row, PendingLookup& out) const;
 
    private:
     friend class Table;
@@ -1965,8 +2191,12 @@ class PrefixLookuper {
 
     bool Available() const;
 
-    /// Looks up all rows matching the prefix columns set on `prefix_row`.
-    Result PrefixLookup(const GenericRow& prefix_row, PrefixLookupResult& out);
+    /// Looks up all rows matching the prefix columns set on `prefix_row`, blocking until the
+    /// result arrives. Thread-safe, like Lookuper::Lookup.
+    Result PrefixLookup(const GenericRow& prefix_row, PrefixLookupResult& out) const;
+
+    /// Starts the lookup without blocking, like Lookuper::Lookup(pk_row, PendingLookup&).
+    Result PrefixLookup(const GenericRow& prefix_row, PendingPrefixLookup& out) const;
 
    private:
     friend class Table;

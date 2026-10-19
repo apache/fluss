@@ -53,10 +53,16 @@ public class ServerSchemaCache {
     private final Cache<TableSchemaKey, Schema> schemaCache;
 
     public ServerSchemaCache(MetadataManager metadataManager) {
+        this(metadataManager, new ConcurrentHashMap<>());
+    }
+
+    @VisibleForTesting
+    ServerSchemaCache(
+            MetadataManager metadataManager, Map<Long, SchemaInfo> latestSchemaByTableId) {
         this.metadataManager = metadataManager;
         // thread safe is guaranteed by subscriberCounters.
         this.subscriberCounters = new ConcurrentHashMap<>();
-        this.latestSchemaByTableId = new ConcurrentHashMap<>();
+        this.latestSchemaByTableId = latestSchemaByTableId;
         this.schemaCache = CacheBuilder.newBuilder().maximumSize(100).build();
     }
 
@@ -104,7 +110,7 @@ public class ServerSchemaCache {
                 () -> {
                     SchemaInfo schemaInfo = latestSchemaByTableId.get(tableId);
                     if (schemaInfo != null && schemaInfo.getSchemaId() == schemaId) {
-                        return latestSchemaByTableId.get(tableId).getSchema();
+                        return schemaInfo.getSchema();
                     } else {
                         return metadataManager.getSchemaById(tablePath, schemaId).getSchema();
                     }

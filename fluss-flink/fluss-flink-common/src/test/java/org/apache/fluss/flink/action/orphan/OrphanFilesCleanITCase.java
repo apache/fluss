@@ -1004,6 +1004,9 @@ abstract class OrphanFilesCleanITCase extends AbstractTestBase {
 
     private void upsertManifest(TableBucket tableBucket, FsPath manifestPath, long endOffset)
             throws Exception {
+        // Wait for replica initialization before injecting the manifest, otherwise the remote
+        // log manager can load these synthetic segments and expire them in the background.
+        FLUSS_CLUSTER_EXTENSION.waitUntilAllReplicaReady(tableBucket);
         FLUSS_CLUSTER_EXTENSION
                 .getZooKeeperClient()
                 .upsertRemoteLogManifestHandle(

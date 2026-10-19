@@ -20,7 +20,7 @@ use pyo3::types::PyDict;
 use std::collections::HashMap;
 
 /// Represents the type of change for a record in a log
-#[pyclass(eq, eq_int, from_py_object)]
+#[pyclass(eq, eq_int, skip_from_py_object)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ChangeType {
     /// Append-only operation
@@ -176,7 +176,9 @@ impl Schema {
 
         if let Some(pk_columns) = primary_keys {
             if !pk_columns.is_empty() {
-                builder = builder.primary_key(pk_columns);
+                builder = builder
+                    .primary_key(pk_columns)
+                    .map_err(|e| FlussError::new_err(format!("Failed to build schema: {e}")))?;
             }
         }
 

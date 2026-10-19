@@ -34,6 +34,7 @@ import org.apache.fluss.server.coordinator.TestCoordinatorChannelManager;
 import org.apache.fluss.server.coordinator.event.CoordinatorEvent;
 import org.apache.fluss.server.coordinator.event.EventManager;
 import org.apache.fluss.server.coordinator.event.RebalanceTaskTimeoutEvent;
+import org.apache.fluss.server.coordinator.event.RecoverRebalanceEvent;
 import org.apache.fluss.server.coordinator.lease.KvSnapshotLeaseManager;
 import org.apache.fluss.server.coordinator.remote.RemoteDirDynamicLoader;
 import org.apache.fluss.server.metadata.CoordinatorMetadataCache;
@@ -89,6 +90,7 @@ public class RebalanceManagerTest {
     private RebalanceManager rebalanceManager;
     private KvSnapshotLeaseManager kvSnapshotLeaseManager;
     private Scheduler scheduler;
+    private Configuration conf;
 
     @BeforeAll
     static void baseBeforeAll() throws Exception {
@@ -104,7 +106,7 @@ public class RebalanceManagerTest {
         serverMetadataCache = new CoordinatorMetadataCache();
         testCoordinatorChannelManager = new TestCoordinatorChannelManager();
         String remoteDataDir = "/tmp/fluss/remote-data";
-        Configuration conf = new Configuration();
+        conf = new Configuration();
         conf.set(ConfigOptions.REMOTE_DATA_DIR, remoteDataDir);
 
         kvSnapshotLeaseManager =
@@ -131,7 +133,7 @@ public class RebalanceManagerTest {
                         replicaCapacityController);
         lakeTableTieringManager =
                 new LakeTableTieringManager(TestingMetricGroups.LAKE_TIERING_METRICS);
-        CoordinatorEventProcessor eventProcessor = buildCoordinatorEventProcessor(conf);
+        CoordinatorEventProcessor eventProcessor = buildCoordinatorEventProcessor();
         RecordingEventManager recordingEventManager = new RecordingEventManager();
         rebalanceManager =
                 new RebalanceManager(
@@ -178,12 +180,51 @@ public class RebalanceManagerTest {
     }
 
     @Test
+    void testStartupQueuesRecoverRebalanceEvent() throws Exception {
+        ManualClock clock = new ManualClock(0L);
+        RecordingEventManager eventManager = new RecordingEventManager();
+        NoOpScheduledExecutor executor = new NoOpScheduledExecutor();
+        CoordinatorEventProcessor eventProcessor = buildCoordinatorEventProcessor();
+
+        Map<TableBucket, RebalancePlanForBucket> plan = createRebalancePlan(2);
+        RebalanceTask rebalanceTask = new RebalanceTask("recover-test", NOT_STARTED, plan);
+        zookeeperClient.registerRebalanceTask(rebalanceTask);
+
+        RebalanceManager manager =
+                new RebalanceManager(
+                        eventProcessor, zookeeperClient, eventManager, clock, executor);
+        // If startup() finds a pending rebalance task in ZooKeeper, it should enqueue a
+        // RecoverRebalanceEvent to be processed by the coordinator event thread, instead of
+        // calling registerRebalance() directly on the startup thread.
+        manager.startup();
+
+        assertThat(eventManager.events).hasSize(1);
+        assertThat(eventManager.events.get(0)).isInstanceOf(RecoverRebalanceEvent.class);
+
+        RecoverRebalanceEvent recoverEvent = (RecoverRebalanceEvent) eventManager.events.get(0);
+        assertThat(recoverEvent.getRebalanceTask()).isEqualTo(rebalanceTask);
+
+        manager.close();
+    }
+
+    private Map<TableBucket, RebalancePlanForBucket> createRebalancePlan(int taskCount) {
+        Map<TableBucket, RebalancePlanForBucket> plan = new HashMap<>();
+        for (int i = 0; i < taskCount; i++) {
+            TableBucket tb = new TableBucket(1L, i);
+            plan.put(
+                    tb,
+                    new RebalancePlanForBucket(
+                            tb, 0, 0, Arrays.asList(0, 1, 2), Arrays.asList(0, 1, 2)));
+        }
+        return plan;
+    }
+
+    @Test
     void testTimeoutEnqueuesEvent() throws Exception {
         ManualClock clock = new ManualClock(0L);
         RecordingEventManager eventManager = new RecordingEventManager();
         NoOpScheduledExecutor executor = new NoOpScheduledExecutor();
-        CoordinatorEventProcessor eventProcessor =
-                buildCoordinatorEventProcessor(new Configuration());
+        CoordinatorEventProcessor eventProcessor = buildCoordinatorEventProcessor();
 
         RebalanceManager manager =
                 new RebalanceManager(
@@ -234,8 +275,7 @@ public class RebalanceManagerTest {
         ManualClock clock = new ManualClock(0L);
         RecordingEventManager eventManager = new RecordingEventManager();
         NoOpScheduledExecutor executor = new NoOpScheduledExecutor();
-        CoordinatorEventProcessor eventProcessor =
-                buildCoordinatorEventProcessor(new Configuration());
+        CoordinatorEventProcessor eventProcessor = buildCoordinatorEventProcessor();
 
         RebalanceManager manager =
                 new RebalanceManager(
@@ -271,8 +311,7 @@ public class RebalanceManagerTest {
         ManualClock clock = new ManualClock(0L);
         RecordingEventManager eventManager = new RecordingEventManager();
         NoOpScheduledExecutor executor = new NoOpScheduledExecutor();
-        CoordinatorEventProcessor eventProcessor =
-                buildCoordinatorEventProcessor(new Configuration());
+        CoordinatorEventProcessor eventProcessor = buildCoordinatorEventProcessor();
 
         RebalanceManager manager =
                 new RebalanceManager(
@@ -314,7 +353,7 @@ public class RebalanceManagerTest {
         manager.close();
     }
 
-    private CoordinatorEventProcessor buildCoordinatorEventProcessor(Configuration conf) {
+    private CoordinatorEventProcessor buildCoordinatorEventProcessor() {
         return new CoordinatorEventProcessor(
                 zookeeperClient,
                 serverMetadataCache,

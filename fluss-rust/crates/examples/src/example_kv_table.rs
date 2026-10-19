@@ -36,7 +36,7 @@ pub async fn main() -> Result<()> {
                 .column("id", DataTypes::int())
                 .column("name", DataTypes::string())
                 .column("age", DataTypes::bigint())
-                .primary_key(vec!["id"])
+                .primary_key(vec!["id"])?
                 .build()?,
         )
         .build()?;
@@ -68,7 +68,7 @@ pub async fn main() -> Result<()> {
     upsert_writer.flush().await?;
 
     println!("\n=== Looking up ===");
-    let mut lookuper = table.new_lookup()?.create_lookuper()?;
+    let lookuper = table.new_lookup()?.create_lookuper()?;
 
     for id in 1..=3 {
         let result = lookuper.lookup(&make_key(id)).await?;

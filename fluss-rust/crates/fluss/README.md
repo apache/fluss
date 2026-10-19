@@ -27,11 +27,11 @@ async fn main() -> Result<()> {
 
     // ---- Primary key (KV) table: upsert and lookup ----
     let kv_path = TablePath::new("fluss", "users");
-    let mut kv_schema = Schema::builder()
+    let kv_schema = Schema::builder()
         .column("id", DataTypes::int())
         .column("name", DataTypes::string())
         .column("age", DataTypes::bigint())
-        .primary_key(vec!["id"]);
+        .primary_key(vec!["id"])?;
     let kv_descriptor = TableDescriptor::builder()
         .schema(kv_schema.build()?)
         .build()?;
@@ -46,7 +46,7 @@ async fn main() -> Result<()> {
     upsert_writer.upsert(&row)?;
     upsert_writer.flush().await?;
 
-    let mut lookuper = kv_table.new_lookup()?.create_lookuper()?;
+    let lookuper = kv_table.new_lookup()?.create_lookuper()?;
     let mut key = GenericRow::new(1);
     key.set_field(0, 1i32);
     let result = lookuper.lookup(&key).await?;

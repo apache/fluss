@@ -37,6 +37,7 @@ import org.apache.fluss.cluster.rebalance.RebalanceProgress;
 import org.apache.fluss.cluster.rebalance.ServerTag;
 import org.apache.fluss.config.cluster.AlterConfig;
 import org.apache.fluss.config.cluster.ConfigEntry;
+import org.apache.fluss.metadata.BucketInfo;
 import org.apache.fluss.metadata.DatabaseChange;
 import org.apache.fluss.metadata.DatabaseDescriptor;
 import org.apache.fluss.metadata.DatabaseInfo;
@@ -148,6 +149,17 @@ public class TestAdminAdapter implements Admin {
     }
 
     @Override
+    public CompletableFuture<List<BucketInfo>> describeBuckets(TablePath tablePath) {
+        throw new UnsupportedOperationException("Not implemented in TestAdminAdapter");
+    }
+
+    @Override
+    public CompletableFuture<List<BucketInfo>> describeBuckets(
+            TablePath tablePath, PartitionSpec partitionSpec) {
+        throw new UnsupportedOperationException("Not implemented in TestAdminAdapter");
+    }
+
+    @Override
     public CompletableFuture<Void> dropTable(TablePath tablePath, boolean ignoreIfNotExists) {
         throw new UnsupportedOperationException("Not implemented in TestAdminAdapter");
     }
@@ -170,6 +182,12 @@ public class TestAdminAdapter implements Admin {
 
     @Override
     public CompletableFuture<List<PartitionInfo>> listPartitionInfos(TablePath tablePath) {
+        throw new UnsupportedOperationException("Not implemented in TestAdminAdapter");
+    }
+
+    @Override
+    public CompletableFuture<List<PartitionInfo>> listPartitionInfos(
+            TablePath tablePath, boolean includeSystemPartitions) {
         throw new UnsupportedOperationException("Not implemented in TestAdminAdapter");
     }
 
@@ -269,8 +287,18 @@ public class TestAdminAdapter implements Admin {
     }
 
     @Override
+    public CompletableFuture<Void> addServerTagByRack(List<String> racks, ServerTag serverTag) {
+        throw new UnsupportedOperationException("Not implemented in TestAdminAdapter");
+    }
+
+    @Override
     public CompletableFuture<Void> removeServerTag(
             List<Integer> tabletServers, ServerTag serverTag) {
+        throw new UnsupportedOperationException("Not implemented in TestAdminAdapter");
+    }
+
+    @Override
+    public CompletableFuture<Void> removeServerTagByRack(List<String> racks, ServerTag serverTag) {
         throw new UnsupportedOperationException("Not implemented in TestAdminAdapter");
     }
 

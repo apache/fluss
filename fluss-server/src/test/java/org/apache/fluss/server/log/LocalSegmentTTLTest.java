@@ -54,13 +54,8 @@ final class LocalSegmentTTLTest extends ReplicaTestBase {
 
     @ParameterizedTest
     @ValueSource(booleans = {true, false})
-    void testExpiredActiveSegmentCleaned(boolean partitionTable) throws Exception {
-        TableBucket tb =
-                partitionTable
-                        ? new TableBucket(DATA1_TABLE_ID, 0L, 0)
-                        : new TableBucket(DATA1_TABLE_ID, 0);
-        conf.set(ConfigOptions.LOG_RETENTION_ROLL_ACTIVE_SEGMENT_ENABLED, true);
-        logManager.reconfigure(conf);
+    void testExpiredActiveSegmentCleanedByDefault(boolean partitionTable) throws Exception {
+        TableBucket tb = makeTableBucket(partitionTable);
         makeLogTableAsLeader(tb, partitionTable);
         LogTablet logTablet = replicaManager.getReplicaOrException(tb).getLogTablet();
 
@@ -89,11 +84,10 @@ final class LocalSegmentTTLTest extends ReplicaTestBase {
 
     @ParameterizedTest
     @ValueSource(booleans = {true, false})
-    void testExpiredActiveSegmentNotRolledByDefault(boolean partitionTable) throws Exception {
-        TableBucket tb =
-                partitionTable
-                        ? new TableBucket(DATA1_TABLE_ID, 0L, 0)
-                        : new TableBucket(DATA1_TABLE_ID, 0);
+    void testExpiredActiveSegmentNotRolledWhenDisabled(boolean partitionTable) throws Exception {
+        TableBucket tb = makeTableBucket(partitionTable);
+        conf.set(ConfigOptions.LOG_RETENTION_ROLL_ACTIVE_SEGMENT_ENABLED, false);
+        logManager.reconfigure(conf);
         makeLogTableAsLeader(tb, partitionTable);
         LogTablet logTablet = replicaManager.getReplicaOrException(tb).getLogTablet();
 
@@ -117,8 +111,9 @@ final class LocalSegmentTTLTest extends ReplicaTestBase {
         manualClock.advanceTime(Duration.ofMinutes(90));
         logManager.cleanupExpiredLocalLogSegments();
 
-        assertThat(logTablet.getSegments()).hasSize(1);
+        assertThat(logTablet.getSegments()).hasSize(2);
         assertThat(logTablet.localLogStartOffset()).isEqualTo(40L);
+        assertThat(logTablet.activeLogSegment().getBaseOffset()).isEqualTo(50L);
     }
 
     @Test
@@ -139,12 +134,7 @@ final class LocalSegmentTTLTest extends ReplicaTestBase {
     @ParameterizedTest
     @ValueSource(booleans = {true, false})
     void testUpdateLogTtlMsAffectsLocalSegmentCleanup(boolean partitionTable) throws Exception {
-        TableBucket tb =
-                partitionTable
-                        ? new TableBucket(DATA1_TABLE_ID, 0L, 0)
-                        : new TableBucket(DATA1_TABLE_ID, 0);
-        conf.set(ConfigOptions.LOG_RETENTION_ROLL_ACTIVE_SEGMENT_ENABLED, true);
-        logManager.reconfigure(conf);
+        TableBucket tb = makeTableBucket(partitionTable);
         makeLogTableAsLeader(tb, partitionTable);
 
         Replica replica = replicaManager.getReplicaOrException(tb);

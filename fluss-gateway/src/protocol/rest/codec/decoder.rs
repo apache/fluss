@@ -1272,6 +1272,15 @@ fn finish_map(
     value_type: &DataType,
     entries: Vec<(Datum<'static>, Datum<'static>)>,
 ) -> DecodeResult<Datum<'static>> {
+    let mut seen = HashSet::with_capacity(entries.len());
+    for (index, (key, _)) in entries.iter().enumerate() {
+        if !seen.insert(key) {
+            return Err(path
+                .map_part(index, "key")
+                .invalid("duplicates an earlier MAP key"));
+        }
+    }
+
     let mut writer = FlussMapWriter::new(entries.len(), key_type, value_type);
     for (key, value) in entries {
         if let Err(error) = writer.write_entry(key, value) {
@@ -1973,6 +1982,33 @@ mod tests {
         )
         .unwrap_err();
         assert!(duplicate.message().contains("duplicate key `a`"));
+    }
+
+    #[test]
+    fn rejects_duplicate_keys_in_map_entry_arrays() {
+        for (map_type, json, duplicate_path) in [
+            (
+                DataType::Map(MapType::new(
+                    DataType::String(StringType::new()),
+                    DataType::Int(IntType::new()),
+                )),
+                r#"[{"key":"role","value":1},{"key":"region","value":2},{"key":"role","value":3}]"#,
+                "v[2].key",
+            ),
+            (
+                DataType::Map(MapType::new(
+                    DataType::Int(IntType::new()),
+                    DataType::String(StringType::new()),
+                )),
+                r#"[{"key":7,"value":"first"},{"key":"7","value":"second"}]"#,
+                "v[1].key",
+            ),
+        ] {
+            let error = decode_one(map_type, json).unwrap_err();
+            assert!(!error.is_schema_mismatch(), "{json}");
+            assert!(error.message().contains(duplicate_path), "{json}");
+            assert!(error.message().contains("duplicate"), "{json}");
+        }
     }
 
     #[test]

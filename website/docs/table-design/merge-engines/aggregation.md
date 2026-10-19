@@ -16,6 +16,8 @@ Each field not part of the primary keys can be assigned an aggregate function. T
 
 If no function is specified for a field, it will use `last_value_ignore_nulls` aggregation as the default behavior.
 
+When using `aggregation` merge engine, `UPDATE` and `DELETE` SQL statements are not supported.
+
 This merge engine is useful for real-time aggregation scenarios such as:
 - Computing running totals and statistics
 - Maintaining counters and metrics
@@ -1083,6 +1085,70 @@ TableDescriptor.builder()
 
 // Input: (1, false), (1, false), (1, true)
 // Result: (1, true) -- At least one value is true
+```
+
+</TabItem>
+</Tabs>
+
+### last_n
+
+Appends input arrays to the stored array and keeps the last `size` elements.
+
+- **Supported Data Types**: `ARRAY` of any element type
+- **Behavior**: Appends the input elements, then drops the oldest elements beyond `size`. The first write for a key is trimmed as well
+- **Ordering**: Elements are kept in the order writes reach the server. With the default `'sink.distribution-mode'`, Flink writes for the same key go through a single sink task, so the order follows the input. Independent clients writing to the same key may interleave
+- **Null Handling**: A null input leaves the column unchanged
+- **Size**: Required, a positive integer. Creating a table without it fails
+
+:::note
+Every update rewrites the whole stored array. With the default `'table.changelog.image' = 'full'`, both the old and the new array are also written to the changelog on every update. Keep `size` small.
+:::
+
+**Example:**
+<Tabs>
+<TabItem value="flink-sql" label="Flink SQL" default>
+
+```sql
+CREATE TABLE test_last_n (
+    user_id BIGINT,
+    recent_events ARRAY<STRING>,
+    PRIMARY KEY (user_id) NOT ENFORCED
+) WITH (
+    'table.merge-engine' = 'aggregation',
+    'fields.recent_events.agg' = 'last_n',
+    'fields.recent_events.last_n.size' = '3'
+);
+
+INSERT INTO test_last_n VALUES
+    (1, ARRAY['login']),
+    (1, ARRAY['search']),
+    (1, ARRAY['view', 'add_to_cart']);
+
+SELECT * FROM test_last_n WHERE user_id = 1;
++------------+----------------------------------+
+| user_id    | recent_events                    |
++------------+----------------------------------+
+|          1 | [search, view, add_to_cart]      |
++------------+----------------------------------+
+```
+
+</TabItem>
+<TabItem value="java-client" label="Java Client">
+
+```java
+Schema schema = Schema.newBuilder()
+    .column("user_id", DataTypes.BIGINT())
+    .column("recent_events", DataTypes.ARRAY(DataTypes.STRING()), AggFunctions.LAST_N(3))
+    .primaryKey("user_id")
+    .build();
+
+TableDescriptor.builder()
+    .schema(schema)
+    .property("table.merge-engine", "aggregation")
+    .build();
+
+// Input: (1, ['login']), (1, ['search']), (1, ['view', 'add_to_cart'])
+// Result: (1, ['search', 'view', 'add_to_cart'])
 ```
 
 </TabItem>

@@ -35,6 +35,7 @@ on:
       - 'fluss-rust/rustfmt.toml'
       - 'fluss-rust/rust-toolchain.toml'
       - 'fluss-rpc/src/main/proto/**'
+      - 'tools/releasing/*rust_license.py'
       - '.github/workflows/rust-license-and-format.yml'
   pull_request:
     branches:
@@ -53,6 +54,7 @@ on:
       - 'fluss-rust/rustfmt.toml'
       - 'fluss-rust/rust-toolchain.toml'
       - 'fluss-rpc/src/main/proto/**'
+      - 'tools/releasing/*rust_license.py'
       - '.github/workflows/rust-license-and-format.yml'
   workflow_dispatch:
 
@@ -89,12 +91,18 @@ jobs:
           cargo fetch --locked
           python3 scripts/dependencies.py verify
 
+      - name: Python binary license tests and drift check
+        run: |
+          python3 -m unittest discover -s ../tools/releasing -p 'test_generate_rust_license.py'
+          python3 bindings/python/generate_binary_license.py --check
+
       # release.sh archives this subtree and nothing else inspects the result;
       # the crate is covered by rust-release.yml before it publishes.
       - name: Source release contents
         run: |
-          git archive --prefix=t/ HEAD | tar -t > "${RUNNER_TEMP}/tarball.txt"
-          for f in LICENSE NOTICE DEPENDENCIES.rust.tsv; do
+          git archive --prefix=t/crates/fluss/proto/ --add-file=../fluss-rpc/src/main/proto/FlussApi.proto \
+            --prefix=t/ HEAD | tar -t > "${RUNNER_TEMP}/tarball.txt"
+          for f in LICENSE NOTICE DEPENDENCIES.rust.tsv crates/fluss/proto/FlussApi.proto; do
             grep -qxF "t/$f" "${RUNNER_TEMP}/tarball.txt" || {
               echo "::error::source release is missing $f"
               exit 1

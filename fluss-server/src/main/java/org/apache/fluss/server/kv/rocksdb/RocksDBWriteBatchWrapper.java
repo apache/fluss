@@ -24,11 +24,11 @@ import org.apache.fluss.metrics.Histogram;
 import org.apache.fluss.server.kv.KvBatchWriter;
 import org.apache.fluss.utils.IOUtils;
 
-import org.rocksdb.RocksDB;
-import org.rocksdb.RocksDBException;
-import org.rocksdb.Status;
-import org.rocksdb.WriteBatch;
-import org.rocksdb.WriteOptions;
+import io.github.fluss_contrib.rocksdb.RocksDB;
+import io.github.fluss_contrib.rocksdb.RocksDBException;
+import io.github.fluss_contrib.rocksdb.Status;
+import io.github.fluss_contrib.rocksdb.WriteBatch;
+import io.github.fluss_contrib.rocksdb.WriteOptions;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 

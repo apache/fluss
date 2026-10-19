@@ -28,8 +28,8 @@ The gateway is an executable, not a library on crates.io, and it is its own
 Cargo workspace so its dependencies never touch the `fluss-rust` workspace's
 lock file or its generated dependency inventories.
 
-For the 1.0 preview scope, known limitations, and deployment security model,
-see the [Fluss Gateway documentation](../website/docs/gateway/index.md).
+For the 1.0 preview scope and known limitations, see the
+[Fluss Gateway documentation](../website/docs/gateway/index.md).
 
 ## Status
 
@@ -63,71 +63,20 @@ identity propagation remain follow-up work.
 
 ## Distribution and container
 
-The Linux convenience distribution uses the same layout as the Java Fluss
-distribution:
-
-```text
-fluss-gateway-<version>-bin-linux-<arch>/
-├── bin/
-├── conf/
-├── openapi.yaml
-├── DEPENDENCIES.rust.tsv
-├── LICENSE
-└── NOTICE
-```
-
-Create it from the repository `tools/` directory:
-
-```bash
-RELEASE_VERSION=1.0.0 SKIP_GPG=true releasing/create_gateway_release.sh
-```
-
-The release script uses `docker/fluss-gateway/Dockerfile.build` to pin Rust
-1.88 and Debian Bookworm as the Linux build environment. It builds the host
-architecture by default; set `GATEWAY_ARCH=amd64` or
-`GATEWAY_ARCH=arm64` only when the selected buildx node is native for that
-platform.
-
-After extracting the archive, edit `conf/gateway.yaml` and start the foreground
-process:
-
-```bash
-bin/fluss-gateway.sh
-```
-
-The wrapper resolves `FLUSS_HOME` from its own location, uses
-`conf/gateway.yaml` by default, and forwards additional CLI options to the
-binary. The convenience distribution follows the Java distribution and binds
-listeners to loopback by default. Set `RUST_LOG=debug` when temporary diagnostic
-logging, including per-request access logs, is needed.
-
-The container image also installs into `/opt/fluss`, uses the `fluss` user with
-UID/GID 9999, and reads `/opt/fluss/conf/gateway.yaml`. The image is assembled
-from the prepared binary distribution, matching the Java image's
-`build-target` flow. Typed environment defaults bind its REST and Prometheus
-listeners to `0.0.0.0` without modifying the packaged configuration.
-
-Build and run the local image:
+Build the host-architecture Linux binary distribution and local container
+image:
 
 ```bash
 just image
-docker run --rm \
-  --read-only \
-  --cap-drop ALL \
-  --security-opt no-new-privileges \
-  --stop-timeout 35 \
-  -p 127.0.0.1:8080:8080 \
-  -p 127.0.0.1:9095:9095 \
-  -e FLUSS_GATEWAY__CLUSTER__DEFAULT__BOOTSTRAP__SERVERS=host.docker.internal:9123 \
-  fluss-gateway:dev
 ```
 
-The REST health and readiness endpoints are available at `/health` and
-`/ready`; Prometheus metrics are served on port `9095`. Use a cluster DNS name
-or container-network alias instead of `host.docker.internal` on Linux when that
-hostname is unavailable. Production deployments should terminate TLS at a
-trusted ingress and must not expose `trust` authentication outside a protected
-network boundary.
+The recipe derives the Gateway version from `Cargo.toml`, uses
+`docker/fluss-gateway/Dockerfile.build` to build the binary, and assembles the
+image from that distribution. Set `GATEWAY_ARCH=amd64` or
+`GATEWAY_ARCH=arm64` only when the selected buildx node is native for that
+platform. See the
+[deployment guide](../website/docs/install-deploy/deploying-gateway.md) for the
+distribution layout, runtime configuration, and deployment examples.
 
 ## Prerequisites
 

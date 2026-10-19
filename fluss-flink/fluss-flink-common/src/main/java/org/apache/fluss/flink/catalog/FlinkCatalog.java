@@ -92,6 +92,8 @@ import org.apache.flink.table.factories.Factory;
 import org.apache.flink.table.procedures.Procedure;
 import org.apache.flink.table.types.AbstractDataType;
 
+import javax.annotation.Nullable;
+
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
@@ -101,6 +103,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
 
@@ -389,6 +392,44 @@ public class FlinkCatalog extends AbstractCatalog {
         return Collections.emptyList();
     }
 
+    /**
+     * Lists the names of all materialized tables in the given database.
+     *
+     * <p>Flink 2.2 added this method to {@code Catalog} for {@code SHOW MATERIALIZED TABLES}. It is
+     * declared without {@code @Override} so that the class still compiles against older Flink
+     * versions, which never call it.
+     *
+     * @throws DatabaseNotExistException if the database does not exist
+     */
+    public List<String> listMaterializedTables(String databaseName)
+            throws DatabaseNotExistException, CatalogException {
+        List<String> tableNames = listTables(databaseName);
+        List<CompletableFuture<TableInfo>> tableInfoFutures = new ArrayList<>(tableNames.size());
+        for (String tableName : tableNames) {
+            tableInfoFutures.add(admin.getTableInfo(TablePath.of(databaseName, tableName)));
+        }
+
+        List<String> materializedTables = new ArrayList<>();
+        for (int i = 0; i < tableNames.size(); i++) {
+            try {
+                if (FlinkConversions.isMaterializedTable(tableInfoFutures.get(i).get())) {
+                    materializedTables.add(tableNames.get(i));
+                }
+            } catch (Exception e) {
+                Throwable t = ExceptionUtils.stripExecutionException(e);
+                // the table may have been dropped after it was listed
+                if (!isTableNotExist(t)) {
+                    throw new CatalogException(
+                            String.format(
+                                    "Failed to list materialized tables in database %s in %s",
+                                    databaseName, getName()),
+                            t);
+                }
+            }
+        }
+        return materializedTables;
+    }
+
     @Override
     public CatalogBaseTable getTable(ObjectPath objectPath)
             throws TableNotExistException, CatalogException {
@@ -424,10 +465,13 @@ public class FlinkCatalog extends AbstractCatalog {
                                             objectPath.getDatabaseName(),
                                             tableName.split("\\" + LAKE_TABLE_SPLITTER)[0])));
                 }
+                TablePath lakeTablePath = tableInfo.getLakeTablePath();
+                String lakeObjectName =
+                        resolveToLakeObjectName(lakeTablePath.getTableName(), tableName);
 
                 return getLakeTable(
-                        objectPath.getDatabaseName(),
-                        tableName,
+                        lakeTablePath.getDatabaseName(),
+                        lakeObjectName,
                         tableInfo.getProperties(),
                         getLakeCatalogProperties());
             } else {
@@ -474,24 +518,39 @@ public class FlinkCatalog extends AbstractCatalog {
         }
     }
 
+    /**
+     * Resolves the physical lake object name from a Flink {@code $lake} table name. When no mapped
+     * lake table name is provided, the Fluss table name before {@code $lake} is used.
+     */
+    static String resolveToLakeObjectName(
+            @Nullable String mappedLakeTableName, String flinkObjectName) {
+        int splitterIndex = flinkObjectName.indexOf(LAKE_TABLE_SPLITTER);
+        if (splitterIndex < 0) {
+            // Already a physical lake object name, such as "orders" or "orders$snapshots".
+            return flinkObjectName;
+        }
+
+        // "orders$lake" uses "orders" by default, or the configured lake table name when mapped.
+        String resolvedLakeTableName =
+                mappedLakeTableName == null
+                        ? flinkObjectName.substring(0, splitterIndex)
+                        : mappedLakeTableName;
+
+        // Keep everything after "$lake": "orders$lake$snapshots" becomes "orders$snapshots".
+        String suffixAfterLakeSplitter =
+                flinkObjectName.substring(splitterIndex + LAKE_TABLE_SPLITTER.length());
+        return resolvedLakeTableName + suffixAfterLakeSplitter;
+    }
+
     protected CatalogBaseTable getLakeTable(
-            String databaseName,
-            String tableName,
+            String lakeDatabaseName,
+            String lakeObjectName,
             Configuration properties,
             Map<String, String> lakeCatalogProperties)
             throws TableNotExistException, CatalogException {
-        String[] tableComponents = tableName.split("\\" + LAKE_TABLE_SPLITTER);
-        if (tableComponents.length == 1) {
-            // should be pattern like table_name$lake
-            tableName = tableComponents[0];
-        } else {
-            // pattern is table_name$lake$snapshots
-            // Need to reconstruct: table_name + $snapshots
-            tableName = String.join("", tableComponents);
-        }
         return lakeFlinkCatalog
                 .getLakeCatalog(properties, lakeCatalogProperties)
-                .getTable(new ObjectPath(databaseName, tableName));
+                .getTable(new ObjectPath(lakeDatabaseName, lakeObjectName));
     }
 
     @Override

@@ -32,6 +32,8 @@ import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.metrics.Gauge;
+import org.apache.fluss.metrics.MetricNames;
 import org.apache.fluss.record.ChangeType;
 import org.apache.fluss.record.DefaultKvRecord;
 import org.apache.fluss.record.IndexedLogRecord;
@@ -65,6 +67,7 @@ import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
@@ -94,12 +97,14 @@ class RecordAccumulatorTest {
                     1,
                     TableDescriptor.builder()
                             .schema(DATA1_SCHEMA)
-                            .distributedBy(3)
+                            .distributedBy(10)
                             .property(ConfigOptions.TABLE_LOG_ARROW_COMPRESSION_TYPE.key(), "zstd")
                             .build(),
                     DEFAULT_REMOTE_DATA_DIR,
                     System.currentTimeMillis(),
                     System.currentTimeMillis());
+
+    private final int numBuckets = DATA1_TABLE_INFO.getNumBuckets();
 
     ServerNode node1 = new ServerNode(1, "localhost", 90, ServerType.TABLET_SERVER, "rack1");
     ServerNode node2 = new ServerNode(2, "localhost", 91, ServerType.TABLET_SERVER, "rack2");
@@ -129,6 +134,7 @@ class RecordAccumulatorTest {
                 }
             };
     private final ManualClock clock = new ManualClock(System.currentTimeMillis());
+    private final TestingBucketAssigner bucketAssigner = new TestingBucketAssigner();
     private Configuration conf;
     private Cluster cluster;
     private SchemaGetter schemaGetter;
@@ -145,6 +151,60 @@ class RecordAccumulatorTest {
     //  nextBatchExpiryTimeMs if we introduced.
 
     @Test
+    void testAccumulatorMemoryMetrics() throws Exception {
+        int batchSize = 1024;
+        TestingWriterMetricGroup metrics = TestingWriterMetricGroup.newInstance();
+        RecordAccumulator accum =
+                createTestRecordAccumulator(
+                        5000, batchSize, 256, 10L * batchSize, bucketAssigner, metrics);
+
+        try {
+            assertThat(metrics.getMetrics())
+                    .containsKeys(
+                            MetricNames.WRITER_ACCUMULATOR_HEAP_MEMORY_USED_BYTES,
+                            MetricNames.WRITER_ACCUMULATOR_ARROW_MEMORY_USED_BYTES,
+                            MetricNames.WRITER_ACCUMULATOR_DIRECT_MEMORY_ALLOCATED_BYTES);
+
+            Gauge<?> heapMemoryUsed =
+                    (Gauge<?>)
+                            metrics.getMetrics()
+                                    .get(MetricNames.WRITER_ACCUMULATOR_HEAP_MEMORY_USED_BYTES);
+            Gauge<?> arrowMemoryUsed =
+                    (Gauge<?>)
+                            metrics.getMetrics()
+                                    .get(MetricNames.WRITER_ACCUMULATOR_ARROW_MEMORY_USED_BYTES);
+            Gauge<?> directMemoryAllocatedBytes =
+                    (Gauge<?>)
+                            metrics.getMetrics()
+                                    .get(
+                                            MetricNames
+                                                    .WRITER_ACCUMULATOR_DIRECT_MEMORY_ALLOCATED_BYTES);
+
+            assertThat(((Number) heapMemoryUsed.getValue()).longValue()).isZero();
+            assertThat(((Number) arrowMemoryUsed.getValue()).longValue()).isZero();
+            assertThat(((Number) directMemoryAllocatedBytes.getValue()).longValue()).isZero();
+
+            bucketAssigner.setBucketId(0);
+            accum.append(
+                    WriteRecord.forArrowAppend(
+                            DATA1_TABLE_INFO, DATA1_PHYSICAL_TABLE_PATH, row(1, "a"), null),
+                    (bucket, offset, exception) -> {},
+                    cluster);
+
+            long heapMemory = ((Number) heapMemoryUsed.getValue()).longValue();
+            long arrowMemory = ((Number) arrowMemoryUsed.getValue()).longValue();
+            long directMemory = ((Number) directMemoryAllocatedBytes.getValue()).longValue();
+            assertThat(heapMemory).isPositive();
+            assertThat(arrowMemory).isPositive();
+            assertThat(directMemory).isGreaterThanOrEqualTo(arrowMemory);
+        } finally {
+            accum.close();
+            accum.abortAllBatches(new RuntimeException("test cleanup"));
+            accum.destroyResources();
+        }
+    }
+
+    @Test
     void testDrainBatches() throws Exception {
         // test case: node1(tb1, tb2), node2(tb3).
         IndexedRow row = indexedRow(DATA1_ROW_TYPE, new Object[] {1, "a"});
@@ -154,9 +214,12 @@ class RecordAccumulatorTest {
         // add bucket into cluster.
         cluster = updateCluster(Arrays.asList(bucket1, bucket2, bucket3, bucket4));
 
+        TableInfo tableInfo = withBucketCount(4);
+
         // initial data.
         for (int i = 0; i < 4; i++) {
-            accum.append(createRecord(row), writeCallback, cluster, i, false);
+            bucketAssigner.setBucketId(i);
+            accum.append(createRecord(row, tableInfo), writeCallback, cluster);
         }
 
         // drain batches from 2 nodes: node1 => tb1, node2 => tb3, because the max request size is
@@ -169,8 +232,10 @@ class RecordAccumulatorTest {
         verifyTableBucketInBatches(batches1, tb1, tb3);
 
         // add record for tb1, tb3
-        accum.append(createRecord(row), writeCallback, cluster, 0, false);
-        accum.append(createRecord(row), writeCallback, cluster, 2, false);
+        bucketAssigner.setBucketId(0);
+        accum.append(createRecord(row, tableInfo), writeCallback, cluster);
+        bucketAssigner.setBucketId(2);
+        accum.append(createRecord(row, tableInfo), writeCallback, cluster);
 
         // drain batches from 2 nodes: node1 => tb2, node2 => tb4, because the max request size is
         // full after the first batch drained. The drain index should start from next table bucket,
@@ -194,7 +259,7 @@ class RecordAccumulatorTest {
     @Test
     void testDrainCompressedBatches() throws Exception {
         int batchSize = 10 * 1024;
-        int bucketNum = 10;
+        int bucketNum = ZSTD_TABLE_INFO.getNumBuckets();
         RecordAccumulator accum =
                 createTestRecordAccumulator(
                         Integer.MAX_VALUE, batchSize, batchSize, Integer.MAX_VALUE);
@@ -213,7 +278,7 @@ class RecordAccumulatorTest {
             appendUntilBatchFull(accum, i);
         }
 
-        // all 3 buckets are located in node1
+        // All buckets are located in node1.
         Map<Integer, List<ReadyWriteBatch>> batches =
                 accum.drain(cluster, Collections.singleton(node1.id()), batchSize * bucketNum);
         // the compression ratio is smaller than 1.0,
@@ -250,7 +315,8 @@ class RecordAccumulatorTest {
             PhysicalTablePath tablePath = PhysicalTablePath.of(ZSTD_TABLE_INFO.getTablePath());
             WriteRecord record = WriteRecord.forArrowAppend(ZSTD_TABLE_INFO, tablePath, row, null);
             // append until the batch is full
-            if (accum.append(record, writeCallback, cluster, bucketId, false).batchIsFull) {
+            bucketAssigner.setBucketId(bucketId);
+            if (accum.append(record, writeCallback, cluster).batchIsFull) {
                 break;
             }
         }
@@ -266,7 +332,8 @@ class RecordAccumulatorTest {
         int appends = expectedNumAppends(row, batchSize);
         for (int i = 0; i < appends; i++) {
             // append to the first batch
-            accum.append(createRecord(row), writeCallback, cluster, 0, false);
+            bucketAssigner.setBucketId(0);
+            accum.append(createRecord(row), writeCallback, cluster);
             Deque<WriteBatch> writeBatches =
                     accum.getReadyDeque(DATA1_PHYSICAL_TABLE_PATH, tb1.getBucket());
             assertThat(writeBatches).hasSize(1);
@@ -279,7 +346,8 @@ class RecordAccumulatorTest {
 
         // this appends doesn't fit in the first batch, so a new batch is created and the first
         // batch is closed.
-        accum.append(createRecord(row), writeCallback, cluster, 0, false);
+        bucketAssigner.setBucketId(0);
+        accum.append(createRecord(row), writeCallback, cluster);
         Deque<WriteBatch> writeBatches =
                 accum.getReadyDeque(DATA1_PHYSICAL_TABLE_PATH, tb1.getBucket());
         assertThat(writeBatches).hasSize(2);
@@ -310,6 +378,25 @@ class RecordAccumulatorTest {
     }
 
     @Test
+    void testAppendKeepsResolvedBucketCount() throws Exception {
+        int batchSize = 1024;
+        IndexedRow row = indexedRow(DATA1_ROW_TYPE, new Object[] {1, "a"});
+        RecordAccumulator accum = createTestRecordAccumulator(batchSize, 10L * batchSize);
+
+        accum.append(createRecord(row), writeCallback, cluster);
+        // A newer table default must not override a context's resolved layout.
+        accum.append(createRecord(row, withBucketCount(numBuckets + 1)), writeCallback, cluster);
+
+        Deque<WriteBatch> writeBatches =
+                accum.getReadyDeque(DATA1_PHYSICAL_TABLE_PATH, tb1.getBucket());
+        assertThat(writeBatches).hasSize(1);
+        WriteBatch batch = writeBatches.getFirst();
+        assertThat(batch.isClosed()).isFalse();
+        assertThat(batch.getBucketCount()).isEqualTo(numBuckets);
+        assertThat(batch.getRecordCount()).isEqualTo(2);
+    }
+
+    @Test
     void testAppendRollsNewBatchWhenSchemaIdChanges() throws Exception {
         int batchSize = 1024;
         IndexedRow row = indexedRow(DATA1_ROW_TYPE, new Object[] {1, "a"});
@@ -317,10 +404,11 @@ class RecordAccumulatorTest {
         int oldSchemaId = DATA1_TABLE_INFO.getSchemaId();
         int newSchemaId = oldSchemaId + 1;
 
-        accum.append(createRecord(row), writeCallback, cluster, 0, false);
+        bucketAssigner.setBucketId(0);
+        accum.append(createRecord(row), writeCallback, cluster);
         // a record with a bumped schema id closes the old-schema batch and rolls a new one.
-        accum.append(
-                createRecord(row, withSchemaId(newSchemaId)), writeCallback, cluster, 0, false);
+        bucketAssigner.setBucketId(0);
+        accum.append(createRecord(row, withSchemaId(newSchemaId)), writeCallback, cluster);
 
         Deque<WriteBatch> writeBatches =
                 accum.getReadyDeque(DATA1_PHYSICAL_TABLE_PATH, tb1.getBucket());
@@ -346,7 +434,8 @@ class RecordAccumulatorTest {
         IndexedRow row1 =
                 indexedRow(DATA1_ROW_TYPE, new Object[] {100000000, new String(new char[2 * 100])});
         // row size > 10;
-        accum.append(createRecord(row1), writeCallback, cluster, 0, false);
+        bucketAssigner.setBucketId(0);
+        accum.append(createRecord(row1), writeCallback, cluster);
         // bucket's leader should be ready for bucket0.
         assertThat(accum.ready(cluster).readyNodes).isEqualTo(Collections.singleton(node1.id()));
 
@@ -372,73 +461,56 @@ class RecordAccumulatorTest {
 
     @Test
     void testAppendWithStickyBucketAssigner() throws Exception {
-        // Test case assumes that the records do not fill the batch completely
+        // The next record after expectedAppends must overflow the current batch.
         int batchSize = 100;
         IndexedRow row = indexedRow(DATA1_ROW_TYPE, new Object[] {1, "a"});
-
-        StickyBucketAssigner bucketAssigner =
-                new StickyBucketAssigner(DATA1_PHYSICAL_TABLE_PATH, 3);
+        StickyBucketAssigner assigner = new StickyBucketAssigner(DATA1_PHYSICAL_TABLE_PATH);
         RecordAccumulator accum =
                 createTestRecordAccumulator(
                         (int) Duration.ofMinutes(1).toMillis(),
                         batchSize,
                         batchSize,
-                        10L * batchSize);
+                        10L * batchSize,
+                        assigner);
         int expectedAppends = expectedNumAppends(row, batchSize);
 
-        // Create first batch.
-        int bucketId = bucketAssigner.assignBucket(cluster);
-        accum.append(createRecord(row), writeCallback, cluster, bucketId, false);
-        int appends = 1;
+        for (int i = 0; i < expectedAppends; i++) {
+            accum.append(createRecord(row), writeCallback, cluster);
+            assertThat(getBatchNumInAccum(accum)).isOne();
+            assertThat(accum.ready(cluster).readyNodes).isEmpty();
+        }
+        int firstBucket = assigner.assignBucket(cluster, numBuckets);
+        WriteBatch firstBatch =
+                accum.getReadyDeque(DATA1_PHYSICAL_TABLE_PATH, firstBucket).getFirst();
 
-        boolean switchBucket = false;
-        while (!switchBucket) {
-            // Append to the first batch.
-            bucketId = bucketAssigner.assignBucket(cluster);
-            RecordAccumulator.RecordAppendResult result =
-                    accum.append(createRecord(row), writeCallback, cluster, bucketId, true);
-            int numBatches = getBatchNumInAccum(accum);
-            // Only one batch is created because the bucket is sticky.
-            assertThat(numBatches).isEqualTo(1);
-
-            switchBucket = result.abortRecordForNewBatch;
-            // We only appended if we do not retry.
-            if (!switchBucket) {
-                appends++;
-                assertThat(accum.ready(cluster).readyNodes.size()).isEqualTo(0);
-            }
+        // Overflow automatically switches buckets and appends the triggering record.
+        assertThat(accum.append(createRecord(row), writeCallback, cluster).newBatchCreated)
+                .isTrue();
+        int secondBucket = assigner.assignBucket(cluster, numBuckets);
+        assertThat(secondBucket).isNotEqualTo(firstBucket);
+        assertThat(firstBatch.isClosed()).isTrue();
+        assertThat(firstBatch.getRecordCount()).isEqualTo(expectedAppends);
+        WriteBatch secondBatch =
+                accum.getReadyDeque(DATA1_PHYSICAL_TABLE_PATH, secondBucket).getFirst();
+        assertThat(secondBatch.getRecordCount()).isOne();
+        for (int i = 1; i < expectedAppends; i++) {
+            accum.append(createRecord(row), writeCallback, cluster);
+            assertThat(assigner.assignBucket(cluster, numBuckets)).isEqualTo(secondBucket);
+            assertThat(getBatchNumInAccum(accum)).isEqualTo(2);
         }
 
-        // Batch should be full.
-        assertThat(accum.ready(cluster).readyNodes.size()).isEqualTo(1);
-        assertThat(appends).isEqualTo(expectedAppends);
-        switchBucket = false;
-
-        // Writer would call this method in this case, make second batch.
-        bucketAssigner.onNewBatch(cluster, bucketId);
-        bucketId = bucketAssigner.assignBucket(cluster);
-        accum.append(createRecord(row), writeCallback, cluster, bucketId, false);
-        appends++;
-
-        // These append operations all go into the second batch.
-        while (!switchBucket) {
-            // Append to the first batch.
-            bucketId = bucketAssigner.assignBucket(cluster);
-            RecordAccumulator.RecordAppendResult result =
-                    accum.append(createRecord(row), writeCallback, cluster, bucketId, true);
-            int numBatches = getBatchNumInAccum(accum);
-            // Only one batch is created because the bucket is sticky.
-            assertThat(numBatches).isEqualTo(2);
-
-            switchBucket = result.abortRecordForNewBatch;
-            // We only appended if we do not retry.
-            if (!switchBucket) {
-                appends++;
-            }
-        }
-
-        // There should be two full batches now.
-        assertThat(appends).isEqualTo(2 * expectedAppends);
+        assertThat(accum.append(createRecord(row), writeCallback, cluster).newBatchCreated)
+                .isTrue();
+        int thirdBucket = assigner.assignBucket(cluster, numBuckets);
+        assertThat(thirdBucket).isNotEqualTo(secondBucket);
+        assertThat(secondBatch.isClosed()).isTrue();
+        assertThat(secondBatch.getRecordCount()).isEqualTo(expectedAppends);
+        assertThat(getBatchNumInAccum(accum)).isEqualTo(3);
+        assertThat(
+                        accum.getReadyDeque(DATA1_PHYSICAL_TABLE_PATH, thirdBucket)
+                                .getLast()
+                                .getRecordCount())
+                .isOne();
     }
 
     @Test
@@ -449,7 +521,8 @@ class RecordAccumulatorTest {
         List<TableBucket> buckets = Arrays.asList(tb1, tb2);
         for (TableBucket tb : buckets) {
             for (int i = 0; i < appends; i++) {
-                accum.append(createRecord(row), writeCallback, cluster, tb.getBucket(), false);
+                bucketAssigner.setBucketId(tb.getBucket());
+                accum.append(createRecord(row), writeCallback, cluster);
             }
         }
 
@@ -466,7 +539,8 @@ class RecordAccumulatorTest {
         RecordAccumulator accum = createTestRecordAccumulator(4 * 1024, 64 * 1024);
 
         for (int i = 0; i < 100; i++) {
-            accum.append(createRecord(row), writeCallback, cluster, i % 3, false);
+            bucketAssigner.setBucketId(i % 3);
+            accum.append(createRecord(row), writeCallback, cluster);
             assertThat(accum.hasIncomplete()).isTrue();
         }
 
@@ -491,6 +565,57 @@ class RecordAccumulatorTest {
     }
 
     @Test
+    void testAbortAllBatchesHandlesConcurrentCompletion() throws Exception {
+        IndexedRow row = indexedRow(DATA1_ROW_TYPE, new Object[] {1, "a"});
+        RecordAccumulator accum = createTestRecordAccumulator(1024, 10L * 1024);
+        CompletableFuture<Exception> completedFuture = new CompletableFuture<>();
+        CompletableFuture<Exception> abortedFuture = new CompletableFuture<>();
+
+        try {
+            cluster = updateCluster(Arrays.asList(bucket1, bucket2));
+            bucketAssigner.setBucketId(tb1.getBucket());
+            accum.append(
+                    createRecord(row),
+                    (bucket, offset, exception) -> completedFuture.complete(exception),
+                    cluster);
+            bucketAssigner.setBucketId(tb2.getBucket());
+            accum.append(
+                    createRecord(row),
+                    (bucket, offset, exception) -> abortedFuture.complete(exception),
+                    cluster);
+
+            List<ReadyWriteBatch> batches =
+                    accum.drain(cluster, Collections.singleton(node1.id()), Integer.MAX_VALUE)
+                            .get(node1.id());
+            ReadyWriteBatch completedBatch =
+                    batches.stream()
+                            .filter(batch -> batch.tableBucket().equals(tb1))
+                            .findFirst()
+                            .get();
+            ReadyWriteBatch abortedBatch =
+                    batches.stream()
+                            .filter(batch -> batch.tableBucket().equals(tb2))
+                            .findFirst()
+                            .get();
+
+            assertThat(completedBatch.writeBatch().complete()).isTrue();
+            RuntimeException abortReason = new RuntimeException("fatal write failure");
+            accum.abortAllBatches(abortReason);
+
+            // A late response may still try to deallocate the batch after fatal cleanup.
+            accum.deallocate(completedBatch.writeBatch());
+            assertThat(accum.reEnqueue(abortedBatch)).isFalse();
+
+            assertThat(completedFuture.get()).isNull();
+            assertThat(abortedFuture.get()).isSameAs(abortReason);
+            assertThat(accum.hasUnDrained()).isFalse();
+            assertThat(accum.hasIncomplete()).isFalse();
+        } finally {
+            accum.destroyResources();
+        }
+    }
+
+    @Test
     void testTableWithUnknownLeader() throws Exception {
         int batchSize = 100;
         // set batch timeout as 0 to make sure batch are always ready.
@@ -502,7 +627,8 @@ class RecordAccumulatorTest {
         // add bucket1 which leader is unknown into cluster.
         cluster = updateCluster(Collections.singletonList(bucket1));
 
-        accum.append(createRecord(row), writeCallback, cluster, 0, false);
+        bucketAssigner.setBucketId(0);
+        accum.append(createRecord(row), writeCallback, cluster);
         RecordAccumulator.ReadyCheckResult readyCheckResult = accum.ready(cluster);
         assertThat(readyCheckResult.unknownLeaderTables)
                 .isEqualTo(Collections.singleton(DATA1_PHYSICAL_TABLE_PATH));
@@ -523,7 +649,8 @@ class RecordAccumulatorTest {
     void testAwaitFlushComplete() throws Exception {
         IndexedRow row = indexedRow(DATA1_ROW_TYPE, new Object[] {1, "a"});
         RecordAccumulator accum = createTestRecordAccumulator(4 * 1024, 64 * 1024);
-        accum.append(createRecord(row), writeCallback, cluster, 0, false);
+        bucketAssigner.setBucketId(0);
+        accum.append(createRecord(row), writeCallback, cluster);
 
         accum.beginFlush();
         assertThat(accum.flushInProgress()).isTrue();
@@ -544,7 +671,8 @@ class RecordAccumulatorTest {
 
         // Add data for bucket 1
         for (int i = 0; i < appends; i++) {
-            accum.append(createRecord(row), writeCallback, cluster, bucket1.getBucketId(), false);
+            bucketAssigner.setBucketId(bucket1.getBucketId());
+            accum.append(createRecord(row), writeCallback, cluster);
         }
         RecordAccumulator.ReadyCheckResult result = accum.ready(cluster);
         assertThat(result.readyNodes).isEmpty();
@@ -554,14 +682,16 @@ class RecordAccumulatorTest {
 
         // Add data for bucket 3
         for (int i = 0; i < appends; i++) {
-            accum.append(createRecord(row), writeCallback, cluster, bucket3.getBucketId(), false);
+            bucketAssigner.setBucketId(bucket3.getBucketId());
+            accum.append(createRecord(row), writeCallback, cluster);
         }
         result = accum.ready(cluster);
         assertThat(result.readyNodes).hasSize(0);
         assertThat(result.nextReadyCheckDelayMs).isEqualTo(batchTimeout / 2);
 
         // Append one more data for bucket1 should make the batch full and sendable immediately
-        accum.append(createRecord(row), writeCallback, cluster, bucket1.getBucketId(), false);
+        bucketAssigner.setBucketId(bucket1.getBucketId());
+        accum.append(createRecord(row), writeCallback, cluster);
 
         result = accum.ready(cluster);
         // server for bucket1 should be ready now
@@ -585,6 +715,14 @@ class RecordAccumulatorTest {
     }
 
     private TableInfo withSchemaId(int schemaId) {
+        return withTableMetadata(schemaId, numBuckets);
+    }
+
+    private TableInfo withBucketCount(int bucketCount) {
+        return withTableMetadata(DATA1_TABLE_INFO.getSchemaId(), bucketCount);
+    }
+
+    private TableInfo withTableMetadata(int schemaId, int bucketCount) {
         return new TableInfo(
                 DATA1_TABLE_INFO.getTablePath(),
                 DATA1_TABLE_INFO.getTableId(),
@@ -592,7 +730,7 @@ class RecordAccumulatorTest {
                 DATA1_TABLE_INFO.getSchema(),
                 DATA1_TABLE_INFO.getBucketKeys(),
                 DATA1_TABLE_INFO.getPartitionKeys(),
-                DATA1_TABLE_INFO.getNumBuckets(),
+                bucketCount,
                 DATA1_TABLE_INFO.getProperties(),
                 DATA1_TABLE_INFO.getCustomProperties(),
                 DATA1_TABLE_INFO.getRemoteDataDir(),
@@ -619,6 +757,7 @@ class RecordAccumulatorTest {
                 new ServerNode(0, "localhost", 89, ServerType.COORDINATOR),
                 bucketsByPath,
                 tableIdByPath,
+                Collections.emptyMap(),
                 Collections.emptyMap());
     }
 
@@ -664,14 +803,20 @@ class RecordAccumulatorTest {
 
         RecordAccumulator accum =
                 new RecordAccumulator(
-                        conf, idempotenceManager, TestingWriterMetricGroup.newInstance(), clock);
+                        conf,
+                        idempotenceManager,
+                        TestingWriterMetricGroup.newInstance(),
+                        clock,
+                        (tableInfo, path) -> bucketAssigner);
 
         cluster = updateCluster(Arrays.asList(bucket1, bucket2));
         IndexedRow row = indexedRow(DATA1_ROW_TYPE, new Object[] {1, "a"});
 
         // Drain both buckets so each has 1 in-flight batch.
-        accum.append(createRecord(row), writeCallback, cluster, tb1.getBucket(), false);
-        accum.append(createRecord(row), writeCallback, cluster, tb2.getBucket(), false);
+        bucketAssigner.setBucketId(tb1.getBucket());
+        accum.append(createRecord(row), writeCallback, cluster);
+        bucketAssigner.setBucketId(tb2.getBucket());
+        accum.append(createRecord(row), writeCallback, cluster);
 
         Map<Integer, List<ReadyWriteBatch>> firstDrain =
                 accum.drain(cluster, Collections.singleton(node1.id()), Integer.MAX_VALUE);
@@ -684,8 +829,10 @@ class RecordAccumulatorTest {
         idempotenceManager.handleCompletedBatch(tb2Batch);
 
         // Append again to both. On drain, tb1 should be skipped but tb2 should still be drained.
-        accum.append(createRecord(row), writeCallback, cluster, tb1.getBucket(), false);
-        accum.append(createRecord(row), writeCallback, cluster, tb2.getBucket(), false);
+        bucketAssigner.setBucketId(tb1.getBucket());
+        accum.append(createRecord(row), writeCallback, cluster);
+        bucketAssigner.setBucketId(tb2.getBucket());
+        accum.append(createRecord(row), writeCallback, cluster);
 
         Map<Integer, List<ReadyWriteBatch>> secondDrain =
                 accum.drain(cluster, Collections.singleton(node1.id()), Integer.MAX_VALUE);
@@ -714,6 +861,32 @@ class RecordAccumulatorTest {
 
     private RecordAccumulator createTestRecordAccumulator(
             int batchTimeoutMs, int batchSize, int pageSize, long totalSize) {
+        return createTestRecordAccumulator(
+                batchTimeoutMs, batchSize, pageSize, totalSize, bucketAssigner);
+    }
+
+    private RecordAccumulator createTestRecordAccumulator(
+            int batchTimeoutMs,
+            int batchSize,
+            int pageSize,
+            long totalSize,
+            BucketAssigner assigner) {
+        return createTestRecordAccumulator(
+                batchTimeoutMs,
+                batchSize,
+                pageSize,
+                totalSize,
+                assigner,
+                TestingWriterMetricGroup.newInstance());
+    }
+
+    private RecordAccumulator createTestRecordAccumulator(
+            int batchTimeoutMs,
+            int batchSize,
+            int pageSize,
+            long totalSize,
+            BucketAssigner assigner,
+            TestingWriterMetricGroup metrics) {
         conf.set(ConfigOptions.CLIENT_WRITER_BATCH_TIMEOUT, Duration.ofMillis(batchTimeoutMs));
         // TODO client writer buffer maybe removed.
         conf.set(ConfigOptions.CLIENT_WRITER_BUFFER_MEMORY_SIZE, new MemorySize(totalSize));
@@ -731,8 +904,9 @@ class RecordAccumulatorTest {
                                 RpcClient.create(conf, TestingClientMetricGroup.newInstance()),
                                 TabletServerGateway.class),
                         null),
-                TestingWriterMetricGroup.newInstance(),
-                clock);
+                metrics,
+                clock,
+                (tableInfo, path) -> assigner);
     }
 
     private long getTestBatchSize(BinaryRow row) {
@@ -824,8 +998,10 @@ class RecordAccumulatorTest {
 
         // Append records to tb1 and tb2. Both tb1 and tb2 lead on node1, so draining node1
         // should only return tb2 when tb1 is throttled.
-        accum.append(createRecord(row), writeCallback, cluster, 0, false);
-        accum.append(createRecord(row), writeCallback, cluster, 1, false);
+        bucketAssigner.setBucketId(0);
+        accum.append(createRecord(row), writeCallback, cluster);
+        bucketAssigner.setBucketId(1);
+        accum.append(createRecord(row), writeCallback, cluster);
 
         // Throttle tb1
         accum.updateThrottle(tb1, 0.5f);

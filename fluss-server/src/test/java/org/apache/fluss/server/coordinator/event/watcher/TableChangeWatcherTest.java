@@ -46,6 +46,7 @@ import org.apache.fluss.server.zk.ZooKeeperExtension;
 import org.apache.fluss.server.zk.data.PartitionAssignment;
 import org.apache.fluss.server.zk.data.TableAssignment;
 import org.apache.fluss.server.zk.data.TableRegistration;
+import org.apache.fluss.server.zk.data.ZkVersion;
 import org.apache.fluss.testutils.common.AllCallbackWrapper;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.utils.clock.SystemClock;
@@ -252,9 +253,21 @@ class TableChangeWatcherTest {
                                 .getBucketAssignments());
         // register assignment and metadata
         zookeeperClient.registerPartitionAssignmentAndMetadata(
-                1L, "2011", partitionAssignment, remoteDataDir, tablePath, tableId);
+                1L,
+                "2011",
+                partitionAssignment,
+                remoteDataDir,
+                tablePath,
+                tableId,
+                partitionAssignment.getBucketAssignments().size());
         zookeeperClient.registerPartitionAssignmentAndMetadata(
-                2L, "2022", partitionAssignment, remoteDataDir, tablePath, tableId);
+                2L,
+                "2022",
+                partitionAssignment,
+                remoteDataDir,
+                tablePath,
+                tableId,
+                partitionAssignment.getBucketAssignments().size());
 
         // create partitions events
         expectedEvents.add(
@@ -415,7 +428,8 @@ class TableChangeWatcherTest {
                 false,
                 null,
                 (currentTable, updatedTable) -> {},
-                (currentTable, updatedTable) -> {});
+                (currentTable, updatedTable) -> {},
+                ZkVersion.MATCH_ANY_VERSION.getVersion());
 
         // get the updated table registration
         TableRegistration updatedTableRegistration =

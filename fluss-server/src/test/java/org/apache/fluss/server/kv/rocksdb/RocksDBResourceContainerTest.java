@@ -21,21 +21,24 @@ import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.server.kv.KvManager;
 
+import io.github.fluss_contrib.rocksdb.BlockBasedTableConfig;
+import io.github.fluss_contrib.rocksdb.BloomFilter;
+import io.github.fluss_contrib.rocksdb.Cache;
+import io.github.fluss_contrib.rocksdb.ColumnFamilyOptions;
+import io.github.fluss_contrib.rocksdb.CompactionStyle;
+import io.github.fluss_contrib.rocksdb.CompressionType;
+import io.github.fluss_contrib.rocksdb.DBOptions;
+import io.github.fluss_contrib.rocksdb.FlushOptions;
+import io.github.fluss_contrib.rocksdb.HyperClockCache;
+import io.github.fluss_contrib.rocksdb.InfoLogLevel;
+import io.github.fluss_contrib.rocksdb.LRUCache;
+import io.github.fluss_contrib.rocksdb.RateLimiter;
+import io.github.fluss_contrib.rocksdb.ReadOptions;
+import io.github.fluss_contrib.rocksdb.WriteBufferManager;
+import io.github.fluss_contrib.rocksdb.WriteOptions;
+import io.github.fluss_contrib.rocksdb.util.SizeUnit;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
-import org.rocksdb.BlockBasedTableConfig;
-import org.rocksdb.BloomFilter;
-import org.rocksdb.Cache;
-import org.rocksdb.ColumnFamilyOptions;
-import org.rocksdb.CompactionStyle;
-import org.rocksdb.CompressionType;
-import org.rocksdb.DBOptions;
-import org.rocksdb.FlushOptions;
-import org.rocksdb.InfoLogLevel;
-import org.rocksdb.LRUCache;
-import org.rocksdb.ReadOptions;
-import org.rocksdb.WriteOptions;
-import org.rocksdb.util.SizeUnit;
 
 import java.io.File;
 import java.nio.file.Path;
@@ -149,6 +152,8 @@ class RocksDBResourceContainerTest {
         configuration.setString(ConfigOptions.KV_TARGET_FILE_SIZE_BASE.key(), "8 mb");
         configuration.setString(ConfigOptions.KV_MAX_SIZE_LEVEL_BASE.key(), "128MB");
         configuration.setString(ConfigOptions.KV_MAX_BACKGROUND_THREADS.key(), "4");
+        configuration.set(ConfigOptions.KV_USE_DIRECT_READS, true);
+        configuration.set(ConfigOptions.KV_USE_DIRECT_IO_FOR_FLUSH_AND_COMPACTION, true);
         configuration.setString(ConfigOptions.KV_MAX_WRITE_BUFFER_NUMBER.key(), "4");
         configuration.setString(ConfigOptions.KV_MIN_WRITE_BUFFER_NUMBER_TO_MERGE.key(), "2");
         configuration.setString(ConfigOptions.KV_WRITE_BUFFER_SIZE.key(), "64 MB");
@@ -168,6 +173,8 @@ class RocksDBResourceContainerTest {
 
             DBOptions dbOptions = optionsContainer.getDbOptions();
             assertThat(dbOptions.maxOpenFiles()).isEqualTo(-1);
+            assertThat(dbOptions.useDirectReads()).isTrue();
+            assertThat(dbOptions.useDirectIoForFlushAndCompaction()).isTrue();
             assertThat(dbOptions.infoLogLevel()).isEqualTo(InfoLogLevel.DEBUG_LEVEL);
             assertThat(dbOptions.dbLogDir()).isEqualTo("/tmp/rocksdb-logs/");
             assertThat(dbOptions.keepLogFileNum()).isEqualTo(10);
@@ -247,7 +254,7 @@ class RocksDBResourceContainerTest {
         byte[] secondKey = new byte[] {2};
         byte[] secondValue = new byte[4096];
 
-        try (Cache sharedCache = new LRUCache(64 * SizeUnit.MB);
+        try (Cache sharedCache = new HyperClockCache(64 * SizeUnit.MB, 0, -1, false);
                 RocksDBKv firstKv =
                         buildRocksDBKvWithSharedCache(
                                 tempDir.resolve("first").toFile(), sharedCache);
@@ -275,6 +282,35 @@ class RocksDBResourceContainerTest {
     }
 
     @Test
+    void testTwoRocksDBInstancesShareWriteBufferManager(@TempDir Path tempDir) throws Exception {
+        byte[] value = new byte[(int) (512 * SizeUnit.KB)];
+        RateLimiter rateLimiter = KvManager.getDefaultRateLimiter();
+
+        try (Cache accountingCache = new LRUCache(4 * SizeUnit.MB);
+                WriteBufferManager writeBufferManager =
+                        new WriteBufferManager(4 * SizeUnit.MB, accountingCache);
+                RocksDBKv firstKv =
+                        buildRocksDBKvWithSharedWriteBufferManager(
+                                tempDir.resolve("first").toFile(),
+                                rateLimiter,
+                                writeBufferManager);
+                RocksDBKv secondKv =
+                        buildRocksDBKvWithSharedWriteBufferManager(
+                                tempDir.resolve("second").toFile(),
+                                rateLimiter,
+                                writeBufferManager)) {
+            firstKv.put(new byte[] {1}, value);
+            secondKv.put(new byte[] {2}, value);
+            assertThat(accountingCache.getUsage()).isPositive();
+
+            firstKv.close();
+            assertThat(writeBufferManager.isOwningHandle()).isTrue();
+            secondKv.put(new byte[] {3}, value);
+            assertThat(secondKv.get(new byte[] {2})).isEqualTo(value);
+        }
+    }
+
+    @Test
     void testIndependentCacheClosedOnContainerClose() throws Exception {
         // When no shared cache, the independent cache should be closed with the container
         RocksDBResourceContainer container = new RocksDBResourceContainer();
@@ -295,6 +331,20 @@ class RocksDBResourceContainerTest {
                         false,
                         KvManager.getDefaultRateLimiter(),
                         sharedCache);
+        return new RocksDBKvBuilder(directory, container, container.getColumnOptions()).build();
+    }
+
+    private RocksDBKv buildRocksDBKvWithSharedWriteBufferManager(
+            File directory, RateLimiter rateLimiter, WriteBufferManager writeBufferManager)
+            throws Exception {
+        RocksDBResourceContainer container =
+                new RocksDBResourceContainer(
+                        new Configuration(),
+                        directory,
+                        false,
+                        rateLimiter,
+                        null,
+                        writeBufferManager);
         return new RocksDBKvBuilder(directory, container, container.getColumnOptions()).build();
     }
 }

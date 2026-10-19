@@ -176,6 +176,10 @@ impl ScanRecords {
     }
 }
 
+/// Reported by [`ScanBatch::commit_timestamp`] when the batch carries no single
+/// commit timestamp, mirroring the `-1` sentinel of [`ScanRecord::timestamp`].
+pub const NO_COMMIT_TIMESTAMP: i64 = -1;
+
 /// A batch of records with metadata about bucket and offsets.
 ///
 /// This is the batch-level equivalent of [`ScanRecord`], providing efficient
@@ -189,6 +193,9 @@ pub struct ScanBatch {
     batch: RecordBatch,
     /// Offset of the first record in this batch
     base_offset: i64,
+    /// Server-side commit timestamp in milliseconds since epoch, or
+    /// [`NO_COMMIT_TIMESTAMP`] when unavailable.
+    commit_timestamp: i64,
 }
 
 impl ScanBatch {
@@ -197,7 +204,15 @@ impl ScanBatch {
             bucket,
             batch,
             base_offset,
+            commit_timestamp: NO_COMMIT_TIMESTAMP,
         }
+    }
+
+    /// Attaches the commit timestamp of the log batch this Arrow batch was
+    /// decoded from. Without it a batch reports [`NO_COMMIT_TIMESTAMP`].
+    pub fn with_commit_timestamp(mut self, commit_timestamp: i64) -> Self {
+        self.commit_timestamp = commit_timestamp;
+        self
     }
 
     pub fn bucket(&self) -> &TableBucket {
@@ -214,6 +229,14 @@ impl ScanBatch {
 
     pub fn base_offset(&self) -> i64 {
         self.base_offset
+    }
+
+    /// Returns the server-side commit timestamp in milliseconds since epoch.
+    /// Returns [`NO_COMMIT_TIMESTAMP`] when the batch carries no single
+    /// timestamp, which is the case for a bounded limit scan because it may
+    /// combine several log batches into one Arrow batch.
+    pub fn commit_timestamp(&self) -> i64 {
+        self.commit_timestamp
     }
 
     pub fn num_records(&self) -> usize {
@@ -322,6 +345,11 @@ mod tests {
         let scan_batch = ScanBatch::new(bucket.clone(), batch, 100);
         assert_eq!(scan_batch.num_records(), 3);
         assert_eq!(scan_batch.last_offset(), 102);
+        assert_eq!(scan_batch.commit_timestamp(), NO_COMMIT_TIMESTAMP);
+
+        let timestamped = ScanBatch::new(bucket.clone(), scan_batch.batch().clone(), 100)
+            .with_commit_timestamp(1234);
+        assert_eq!(timestamped.commit_timestamp(), 1234);
 
         // Empty batch -> last_offset = base_offset - 1
         let empty_batch = RecordBatch::new_empty(schema);

@@ -17,9 +17,11 @@
 
 package org.apache.fluss.flink.catalog;
 
+import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.flink.FlinkConnectorOptions;
 import org.apache.fluss.flink.adapter.CatalogTableAdapter;
 import org.apache.fluss.flink.sink.FlinkTableSink;
+import org.apache.fluss.flink.sink.shuffle.DistributionMode;
 import org.apache.fluss.flink.source.BinlogFlinkTableSource;
 import org.apache.fluss.flink.source.ChangelogFlinkTableSource;
 import org.apache.fluss.flink.source.FlinkTableSource;
@@ -82,6 +84,42 @@ abstract class FlinkTableFactoryTest {
 
     public static final ObjectIdentifier BINLOG_TABLE_IDENTIFIER =
             ObjectIdentifier.of("default", "default", "t1" + FlinkCatalog.BINLOG_TABLE_SUFFIX);
+
+    @Test
+    void testResolveToLakeObjectName() {
+        assertThat(FlinkCatalog.resolveToLakeObjectName(null, "fluss_table$lake"))
+                .isEqualTo("fluss_table");
+        assertThat(FlinkCatalog.resolveToLakeObjectName(null, "fluss_table$lake$snapshots"))
+                .isEqualTo("fluss_table$snapshots");
+        assertThat(FlinkCatalog.resolveToLakeObjectName("custom_lake_table", "fluss_table$lake"))
+                .isEqualTo("custom_lake_table");
+        assertThat(
+                        FlinkCatalog.resolveToLakeObjectName(
+                                "custom_lake_table", "fluss_table$lake$snapshots"))
+                .isEqualTo("custom_lake_table$snapshots");
+        assertThat(FlinkCatalog.resolveToLakeObjectName("custom_lake_table", "fluss_table"))
+                .isEqualTo("fluss_table");
+    }
+
+    @Test
+    void testResolveToLakeIdentifier() {
+        Map<String, String> lakeTableOptions = new HashMap<>();
+        lakeTableOptions.put(
+                "fluss." + ConfigOptions.TABLE_DATALAKE_DATABASE_NAME.key(), "custom_lake_db");
+        lakeTableOptions.put(
+                "fluss." + ConfigOptions.TABLE_DATALAKE_TABLE_NAME.key(), "custom_lake_table");
+
+        ObjectIdentifier flinkIdentifier =
+                ObjectIdentifier.of("catalog", "fluss_db", "fluss_table$lake$snapshots");
+        assertThat(
+                        FlinkTableFactory.resolveToLakeIdentifier(
+                                flinkIdentifier, Collections.emptyMap()))
+                .isEqualTo(ObjectIdentifier.of("catalog", "fluss_db", "fluss_table$snapshots"));
+        assertThat(FlinkTableFactory.resolveToLakeIdentifier(flinkIdentifier, lakeTableOptions))
+                .isEqualTo(
+                        ObjectIdentifier.of(
+                                "catalog", "custom_lake_db", "custom_lake_table$snapshots"));
+    }
 
     @Test
     void testTableSourceOptions() {
@@ -207,6 +245,20 @@ abstract class FlinkTableFactoryTest {
     }
 
     @Test
+    void testLookupCustomShuffleEligibilityUsesBucketKeys() {
+        ResolvedSchema schema = createBasicSchema();
+        FlinkTableSource hashDistributedSource =
+                (FlinkTableSource) createTableSource(schema, getBasicOptionsWithBucketKey());
+        hashDistributedSource.getLookupRuntimeProvider(createLookupContext(new int[][] {{0}, {2}}));
+        assertThat(hashDistributedSource.getPartitionerAdapter()).isPresent();
+
+        FlinkTableSource randomlyDistributedSource =
+                (FlinkTableSource) createTableSource(schema, getBasicOptions());
+        assertThat(randomlyDistributedSource.getBucketKeyIndexes()).isEmpty();
+        assertThat(randomlyDistributedSource.getPartitionerAdapter()).isEmpty();
+    }
+
+    @Test
     void testVirtualLogTableSourceSupportsBatchMode() {
         ResolvedSchema schema = createBasicSchema();
         Map<String, String> properties = getBasicOptions();
@@ -270,6 +322,60 @@ abstract class FlinkTableFactoryTest {
         createTableSink(schema, properties);
     }
 
+    @Test
+    void testSinkDistributionModeForMergeEngine() {
+        ResolvedSchema schema = createBasicSchema();
+
+        // keyed modes are accepted for every merge engine
+        for (String mergeEngine : new String[] {"first_row", "versioned", "aggregation"}) {
+            for (String mode : new String[] {"auto", "bucket"}) {
+                Map<String, String> properties = getBasicOptionsWithBucketKey();
+                properties.put(ConfigOptions.TABLE_MERGE_ENGINE.key(), mergeEngine);
+                properties.put(FlinkConnectorOptions.SINK_DISTRIBUTION_MODE.key(), mode);
+                createTableSink(schema, properties);
+            }
+        }
+
+        // unkeyed modes are rejected for every merge engine
+        for (String mergeEngine : new String[] {"first_row", "versioned", "aggregation"}) {
+            for (String mode : new String[] {"none", "partition_dynamic"}) {
+                Map<String, String> properties = getBasicOptionsWithBucketKey();
+                properties.put(ConfigOptions.TABLE_MERGE_ENGINE.key(), mergeEngine);
+                properties.put(FlinkConnectorOptions.SINK_DISTRIBUTION_MODE.key(), mode);
+                assertThatThrownBy(() -> createTableSink(schema, properties))
+                        .isInstanceOf(IllegalArgumentException.class)
+                        .hasMessageContaining(
+                                "'sink.distribution-mode' must be 'bucket', 'bucket_balance' or 'auto'");
+            }
+        }
+
+        // bucket_balance is accepted for merge engines without Undo Recovery ...
+        for (String mergeEngine : new String[] {"first_row", "versioned"}) {
+            Map<String, String> properties = getBasicOptionsWithBucketKey();
+            properties.put(ConfigOptions.TABLE_MERGE_ENGINE.key(), mergeEngine);
+            properties.put(FlinkConnectorOptions.SINK_DISTRIBUTION_MODE.key(), "bucket_balance");
+            createTableSink(schema, properties);
+        }
+
+        // ... but rejected for aggregation, whose Undo Recovery assumes one writer per bucket
+        Map<String, String> aggregationProperties = getBasicOptionsWithBucketKey();
+        aggregationProperties.put(ConfigOptions.TABLE_MERGE_ENGINE.key(), "aggregation");
+        aggregationProperties.put(
+                FlinkConnectorOptions.SINK_DISTRIBUTION_MODE.key(), "bucket_balance");
+        assertThatThrownBy(() -> createTableSink(schema, aggregationProperties))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("is not supported when Undo Recovery is enabled")
+                .hasMessageContaining("BUCKET_BALANCE")
+                .hasMessageContaining("Please use 'bucket' or 'auto'");
+
+        // without a merge engine, all modes stay accepted (no Undo Recovery is involved)
+        for (DistributionMode mode : DistributionMode.values()) {
+            Map<String, String> properties = getBasicOptionsWithBucketKey();
+            properties.put(FlinkConnectorOptions.SINK_DISTRIBUTION_MODE.key(), mode.name());
+            createTableSink(schema, properties);
+        }
+    }
+
     private ResolvedSchema createBasicSchema() {
         return new ResolvedSchema(
                 Arrays.asList(
@@ -325,6 +431,7 @@ abstract class FlinkTableFactoryTest {
     private static Map<String, String> getBasicOptionsWithBucketKey() {
         Map<String, String> basicOptions = getBasicOptions();
         basicOptions.put(BUCKET_KEY.key(), "first");
+        basicOptions.put(BUCKET_NUMBER.key(), "1");
         return basicOptions;
     }
 

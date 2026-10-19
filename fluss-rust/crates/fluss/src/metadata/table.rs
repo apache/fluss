@@ -253,6 +253,7 @@ pub struct SchemaBuilder {
     columns: Vec<Column>,
     primary_key: Option<PrimaryKey>,
     auto_increment_col_names: Vec<String>,
+    highest_field_id: Option<i32>,
 }
 
 impl SchemaBuilder {
@@ -291,7 +292,7 @@ impl SchemaBuilder {
         self
     }
 
-    pub fn primary_key<I, S>(self, column_names: I) -> Self
+    pub fn primary_key<I, S>(self, column_names: I) -> Result<Self>
     where
         I: IntoIterator<Item = S>,
         S: Into<String>,
@@ -307,12 +308,18 @@ impl SchemaBuilder {
         mut self,
         constraint_name: N,
         column_names: Vec<P>,
-    ) -> Self {
+    ) -> Result<Self> {
+        if self.primary_key.is_some() {
+            return Err(IllegalArgument {
+                message: "Multiple primary keys are not supported.".to_string(),
+            });
+        }
+
         self.primary_key = Some(PrimaryKey::new(
             constraint_name.into(),
             column_names.into_iter().map(|s| s.into()).collect(),
         ));
-        self
+        Ok(self)
     }
 
     /// Declares a column to be auto-incremented. With an auto-increment column in the table,
@@ -330,9 +337,18 @@ impl SchemaBuilder {
         Ok(self)
     }
 
+    pub(crate) fn highest_field_id(mut self, highest_field_id: i32) -> Self {
+        self.highest_field_id = Some(highest_field_id);
+        self
+    }
+
     pub fn build(&self) -> Result<Schema> {
         let columns = Self::normalize_columns(&self.columns, self.primary_key.as_ref())?;
-        let (columns_with_ids, highest_field_id) = Self::assign_all_field_ids(columns)?;
+        let (columns_with_ids, maximum_field_id) = Self::assign_all_field_ids(columns)?;
+        let highest_field_id = self
+            .highest_field_id
+            .unwrap_or(maximum_field_id)
+            .max(maximum_field_id);
 
         if !self.auto_increment_col_names.is_empty() && self.primary_key.is_none() {
             return Err(IllegalArgument {
@@ -521,15 +537,42 @@ impl SchemaBuilder {
         primary_key: Option<&PrimaryKey>,
     ) -> Result<Vec<Column>> {
         let names: Vec<_> = columns.iter().map(|c| &c.name).collect();
+        if names.iter().any(|name| name.trim().is_empty()) {
+            return Err(Error::invalid_table(
+                "Field names must contain at least one non-whitespace character.",
+            ));
+        }
         if let Some(duplicates) = Self::find_duplicates(&names) {
             return Err(Error::invalid_table(format!(
                 "Duplicate column names found: {duplicates:?}"
             )));
         }
+        for column in columns {
+            column
+                .data_type()
+                .validate_row_field_names()
+                .map_err(|error| match error {
+                    IllegalArgument { message } => Error::invalid_table(message),
+                    other => other,
+                })?;
+        }
 
         let Some(pk) = primary_key else {
             return Ok(columns.to_vec());
         };
+
+        if pk.column_names.is_empty() {
+            return Err(Error::invalid_table(
+                "Primary key constraint must be defined for at least a single column.",
+            ));
+        }
+
+        let primary_key_names: Vec<_> = pk.column_names.iter().collect();
+        if let Some(duplicates) = Self::find_duplicates(&primary_key_names) {
+            return Err(Error::invalid_table(format!(
+                "Primary key constraint must not contain duplicate columns. Found: {duplicates:?}"
+            )));
+        }
 
         let pk_set: HashSet<_> = pk.column_names.iter().collect();
         let all_columns: HashSet<_> = columns.iter().map(|c| &c.name).collect();
@@ -1133,6 +1176,7 @@ pub struct TableInfo {
     /// Resolved once at construction. The failure is held rather than raised so
     /// that a malformed property only breaks writers, not metadata loading.
     stats_index_mapping: std::result::Result<Vec<usize>, String>,
+    bucket_count_epoch: i64,
 }
 
 impl TableInfo {
@@ -1388,7 +1432,13 @@ impl TableInfo {
             created_time,
             modified_time,
             stats_index_mapping,
+            bucket_count_epoch: 0,
         }
+    }
+
+    pub fn with_bucket_count_epoch(mut self, bucket_count_epoch: i64) -> Self {
+        self.bucket_count_epoch = bucket_count_epoch;
+        self
     }
 
     pub fn get_table_path(&self) -> &TablePath {
@@ -1457,6 +1507,11 @@ impl TableInfo {
 
     pub fn get_num_buckets(&self) -> i32 {
         self.num_buckets
+    }
+
+    /// Above 0, `bucket.num` has changed and partitions may differ from `num_buckets`.
+    pub fn get_bucket_count_epoch(&self) -> i64 {
+        self.bucket_count_epoch
     }
 
     pub fn get_properties(&self) -> &HashMap<String, String> {
@@ -1550,6 +1605,23 @@ impl Display for TableInfo {
     }
 }
 
+/// The owner of a bucket layout: a non-partitioned table, or one partition of a partitioned table.
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
+pub enum TableOrPartition {
+    Table(TableId),
+    Partition(PartitionId),
+}
+
+impl TableOrPartition {
+    /// Returns the partition when `partition_id` is set, otherwise the table.
+    pub fn of(table_id: TableId, partition_id: Option<PartitionId>) -> Self {
+        match partition_id {
+            Some(partition_id) => TableOrPartition::Partition(partition_id),
+            None => TableOrPartition::Table(table_id),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Hash, PartialEq, Eq)]
 pub struct TableBucket {
     table_id: TableId,
@@ -1588,6 +1660,10 @@ impl TableBucket {
 
     pub fn partition_id(&self) -> Option<PartitionId> {
         self.partition_id
+    }
+
+    pub fn table_or_partition(&self) -> TableOrPartition {
+        TableOrPartition::of(self.table_id, self.partition_id)
     }
 
     pub fn to_pb(&self) -> crate::proto::PbTableBucket {
@@ -1655,6 +1731,85 @@ mod tests {
     use crate::metadata::DataTypes;
 
     #[test]
+    fn invalid_primary_keys_are_rejected() {
+        for (primary_keys, expected_message) in [
+            (
+                Vec::<&str>::new(),
+                "Primary key constraint must be defined for at least a single column.",
+            ),
+            (
+                vec!["id", "id"],
+                "Primary key constraint must not contain duplicate columns.",
+            ),
+        ] {
+            let err = Schema::builder()
+                .column("id", DataTypes::int())
+                .primary_key(primary_keys)
+                .unwrap()
+                .build()
+                .unwrap_err();
+
+            assert!(
+                err.to_string().contains(expected_message),
+                "unexpected error: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn blank_column_names_are_rejected() {
+        let err = Schema::builder()
+            .column(" \t", DataTypes::int())
+            .build()
+            .unwrap_err();
+
+        assert!(
+            err.to_string()
+                .contains("Field names must contain at least one non-whitespace character."),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn multiple_primary_keys_are_rejected() {
+        let err = Schema::builder()
+            .column("id", DataTypes::int())
+            .primary_key(["id"])
+            .unwrap()
+            .primary_key_named("another_pk", vec!["id"])
+            .unwrap_err();
+
+        assert!(
+            err.to_string()
+                .contains("Multiple primary keys are not supported."),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn invalid_nested_row_field_names_are_rejected() {
+        let err = Schema::builder()
+            .column(
+                "payload",
+                DataTypes::array(DataTypes::map(
+                    DataTypes::string(),
+                    DataTypes::row(vec![
+                        DataTypes::field("value", DataTypes::int()),
+                        DataTypes::field("value", DataTypes::bigint()),
+                    ]),
+                )),
+            )
+            .build()
+            .unwrap_err();
+
+        assert!(
+            err.to_string()
+                .contains("Field names must be unique. Found duplicates:"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
     fn auto_increment_column_requires_a_primary_key_table() {
         let err = Schema::builder()
             .column("id", DataTypes::int())
@@ -1676,6 +1831,7 @@ mod tests {
             .column("id", DataTypes::bigint())
             .column("name", DataTypes::string())
             .primary_key(["id"])
+            .unwrap()
             .enable_auto_increment("id")
             .unwrap()
             .build()
@@ -1693,6 +1849,7 @@ mod tests {
             .column("id", DataTypes::int())
             .column("seq", DataTypes::string())
             .primary_key(["id"])
+            .unwrap()
             .enable_auto_increment("seq")
             .unwrap()
             .build()
@@ -1708,6 +1865,7 @@ mod tests {
                 .column("id", DataTypes::int())
                 .column("seq", accepted)
                 .primary_key(["id"])
+                .unwrap()
                 .enable_auto_increment("seq")
                 .unwrap()
                 .build()
@@ -1773,6 +1931,7 @@ mod tests {
             .column("id", DataTypes::int())
             .column("name", DataTypes::string())
             .primary_key(vec!["id".to_string()])
+            .unwrap()
             .build()
             .unwrap();
 

@@ -309,7 +309,8 @@ public class LogTieringTask implements Runnable {
                             .segmentSizeInBytes(sizeInBytes)
                             .build();
             try {
-                remoteLogStorage.copyLogSegmentFiles(copyRemoteLogSegment, logSegmentFiles);
+                remoteLogStorage.copyLogSegmentFiles(
+                        remoteLog.getRemoteLogDir(), copyRemoteLogSegment, logSegmentFiles);
             } catch (RemoteStorageException e) {
                 metricGroup.remoteLogCopyErrors().inc();
                 LOG.warn(
@@ -354,7 +355,8 @@ public class LogTieringTask implements Runnable {
         try {
             // 1. upload the remote log manifest file to remote storage.
             remoteLogManifestPath =
-                    remoteLogStorage.writeRemoteLogManifestSnapshot(newRemoteLogManifest);
+                    remoteLogStorage.writeRemoteLogManifestSnapshot(
+                            remoteLog.getRemoteLogDir(), newRemoteLogManifest);
         } catch (Exception e) {
             LOG.error(
                     "Write remote log manifest file to remote storage failed for bucket {}.",
@@ -400,11 +402,11 @@ public class LogTieringTask implements Runnable {
                     // TODO: commit with version to avoid the manifest has been updated
                     remoteLogTablet.loadRemoteLogManifest(newRemoteLogManifest);
                     LogTablet logTablet = replica.getLogTablet();
-                    logTablet.updateRemoteLogStartOffset(newRemoteLogStartOffset);
-                    logTablet.updateHighestCopiedEndOffset(
+
+                    logTablet.updateRemoteLogOffsets(
+                            newRemoteLogStartOffset,
+                            newRemoteLogEndOffset,
                             newRemoteLogManifest.getHighestCopiedEndOffset());
-                    // make the local log cleaner clean log segments that are committed to remote.
-                    logTablet.updateRemoteLogEndOffset(newRemoteLogEndOffset);
                     logTablet.updateRemoteLogSize(newRemoteLogSize);
                     return true;
                 }
@@ -537,7 +539,8 @@ public class LogTieringTask implements Runnable {
             List<RemoteLogSegment> remoteLogSegmentList, TableMetricGroup metricGroup) {
         for (RemoteLogSegment remoteLogSegment : remoteLogSegmentList) {
             try {
-                remoteLogStorage.deleteLogSegmentFiles(remoteLogSegment);
+                remoteLogStorage.deleteLogSegmentFiles(
+                        remoteLog.getRemoteLogDir(), remoteLogSegment);
                 metricGroup.remoteLogDeleteRequests().inc();
             } catch (Exception e) {
                 LOG.error(

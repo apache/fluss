@@ -248,7 +248,8 @@ PARTITIONED BY (`dt`)
 WITH (
     'bucket.key' = 'c_custkey',
     'table.auto-partition.enabled' = 'true',
-    'table.auto-partition.time-unit' = 'year'
+    'table.auto-partition.time-unit' = 'year',
+    'table.datalake.historical-partition.lookup-mode' = 'SCAN'
 );
 ```
 
@@ -268,31 +269,34 @@ ON `o`.`o_custkey` = `c`.`c_custkey` AND  `o`.`o_dt` = `c`.`dt`;
 
 For more details about Fluss partitioned table, see [Partitioned Tables](table-design/data-distribution/partitioning.md).
 
-## Historical Partition Lookup
+## Lookup Shuffle
 
-Auto-partitioning removes expired Fluss partitions according to the configured retention policy.
-After a partition is removed, a lookup join that references that partition can no longer find its
-rows in Fluss, even if the data has already been tiered to Paimon.
-
-Historical partition lookup addresses this problem by letting primary-key lookups fall back to
-Paimon when the original Fluss partition no longer exists. Enable this behavior on the dimension
-table:
+For Flink 2.2, lookup custom shuffle can be enabled with the standard Flink lookup hint:
 
 ```sql title="Flink SQL"
-ALTER TABLE customer_partitioned_with_bucket_key SET (
-  'table.datalake.historical-partition.enabled' = 'true'
-);
+SELECT /*+ LOOKUP('table' = 'c', 'shuffle' = 'true') */ *
+FROM Orders AS o
+JOIN Customers FOR SYSTEM_TIME AS OF o.proc_time AS c
+ON o.customer_id = c.id;
 ```
 
-This option is disabled by default and currently supports only Paimon primary-key tables with auto
-partitioning enabled and exactly one partition key. When enabled, the Coordinator creates and
-retains the `__historical__` system partition used to route lookups to Paimon. Disabling the option
-removes that system partition.
+Fluss then partitions the lookup probe stream consistently with its bucket routing. This improves
+lookup-cache locality and reduces RPC fan-out compared with distributing lookup keys independently
+of Fluss tablets.
 
-Lookup clients use the table configuration captured when the lookuper is created to decide whether
-to fall back after an original partition is missing. After changing
-`table.datalake.historical-partition.enabled`, restart existing lookup jobs that need to look up
-historical partition data so that their clients load the updated table configuration.
+- When the bucket and lookup-subtask counts evenly divide each other, Fluss preserves direct bucket
+  affinity: each bucket maps to one subtask, or to an equal-size disjoint subtask subset.
+- Otherwise, Fluss uses weighted logical slots. The complete normalized lookup key selects a slot
+  within its bucket, and logical slots are evenly assigned to subtasks. This keeps routing
+  deterministic and bucket fan-out bounded while balancing the expected load across subtasks.
+- Partitioned and non-partitioned tables use the same strategy. Partition keys are included in the
+  normalized lookup key, so the same lookup key is routed consistently. A `(partition, bucket)`
+  tablet may be accessed by multiple subtasks when there are fewer buckets than subtasks or when
+  weighted logical slots are used.
+
+Bucket custom shuffle applies to hash-distributed tables with bucket keys. Tables without bucket
+keys use Flink's default lookup distribution. Fluss Catalog tables expose the resolved `bucket.num`
+automatically, including when `bucket.num` is omitted from the table DDL.
 
 ## Insert If Not Exists
 

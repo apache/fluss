@@ -21,6 +21,7 @@ import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.exception.InvalidConfigException;
 import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.lake.paimon.source.FlussRowAsPaimonRow;
+import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.ResolvedPartitionSpec;
 import org.apache.fluss.metadata.TableChange;
 import org.apache.fluss.metadata.TableDescriptor;
@@ -28,6 +29,8 @@ import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.record.ChangeType;
 import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.row.InternalRow;
+import org.apache.fluss.row.encode.RowEncoder;
+import org.apache.fluss.row.encode.ValueEncoder;
 import org.apache.fluss.types.DataTypeRoot;
 import org.apache.fluss.utils.PartitionUtils;
 
@@ -139,6 +142,29 @@ public class PaimonConversions {
                     field.name(), field.type().accept(PaimonDataTypeToFlussDataType.INSTANCE));
         }
         return builder.build();
+    }
+
+    /**
+     * Encodes a Paimon row as a Fluss KV value.
+     *
+     * @throws RuntimeException if encoding or closing the encoder fails
+     */
+    public static byte[] toFlussValue(
+            org.apache.paimon.data.InternalRow paimonRow,
+            short schemaId,
+            org.apache.fluss.types.RowType valueRowType,
+            KvFormat kvFormat) {
+        PaimonRowAsFlussRow flussRow = new PaimonRowAsFlussRow(paimonRow);
+        InternalRow.FieldGetter[] fieldGetters = InternalRow.createFieldGetters(valueRowType);
+        try (RowEncoder rowEncoder = RowEncoder.create(kvFormat, valueRowType)) {
+            rowEncoder.startNewRow();
+            for (int i = 0; i < fieldGetters.length; i++) {
+                rowEncoder.encodeField(i, fieldGetters[i].getFieldOrNull(flussRow));
+            }
+            return ValueEncoder.encodeValue(schemaId, rowEncoder.finishRow());
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to encode Paimon lookup row as Fluss value.", e);
+        }
     }
 
     /**
@@ -425,6 +451,8 @@ public class PaimonConversions {
         if (key.startsWith(PAIMON_CONF_PREFIX)) {
             options.set(key.substring(PAIMON_CONF_PREFIX.length()), value);
         } else if (!key.startsWith(TABLE_DATALAKE_PAIMON_PREFIX)) {
+            // This persisted prefix is an integration contract: the Flink lake table factory uses
+            // the custom lake database and table-name options to resolve the physical identifier.
             options.set(FLUSS_CONF_PREFIX + key, value);
         }
     }

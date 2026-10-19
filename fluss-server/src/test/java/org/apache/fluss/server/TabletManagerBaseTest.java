@@ -23,8 +23,12 @@ import org.apache.fluss.utils.FlussPaths;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 
 import java.io.File;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
@@ -55,6 +59,47 @@ final class TabletManagerBaseTest {
         TestingTabletManager tabletManager = new TestingTabletManager(tempDir);
 
         assertThat(tabletManager.tabletsToLoad(tempDir)).isEmpty();
+    }
+
+    @ParameterizedTest
+    @EnumSource(TabletManagerBase.TabletType.class)
+    void testListsTabletLayoutAndExcludesCaches(TabletManagerBase.TabletType tabletType)
+            throws Exception {
+        for (String path :
+                Arrays.asList(
+                        "db/table-1/kv-0",
+                        "db/table-1/log-0",
+                        "db/table-2/partition-p2/kv-1",
+                        "db/table-2/partition-p2/log-1",
+                        "db/table-1/backup",
+                        FlussPaths.HISTORICAL_LOOKUP_CACHE_DIR_NAME + "/table-1/kv-0",
+                        FlussPaths.HISTORICAL_LOOKUP_CACHE_DIR_NAME + "/table-1/log-0",
+                        FlussPaths.REMOTE_LOG_INDEX_LOCAL_CACHE + "/table-1/kv-0",
+                        FlussPaths.REMOTE_LOG_INDEX_LOCAL_CACHE + "/table-1/log-0")) {
+            Files.createDirectories(tempDir.toPath().resolve(path));
+        }
+        String prefix =
+                tabletType == TabletManagerBase.TabletType.KV
+                        ? FlussPaths.KV_TABLET_DIR_PREFIX
+                        : FlussPaths.LOG_TABLET_DIR_PREFIX;
+        TestingTabletManager tabletManager = new TestingTabletManager(tempDir, tabletType);
+
+        assertThat(tabletManager.tabletsToLoad(tempDir))
+                .containsExactlyInAnyOrder(
+                        new File(tempDir, "db/table-1/" + prefix + "0"),
+                        new File(tempDir, "db/table-2/partition-p2/" + prefix + "1"));
+    }
+
+    @Test
+    void testLogLoadingStillFollowsSymbolicDatabaseDirectory(@TempDir Path outsideDir)
+            throws Exception {
+        Files.createDirectories(outsideDir.resolve("table-1/log-0"));
+        Path dbLink = Files.createSymbolicLink(tempDir.toPath().resolve("db"), outsideDir);
+        TestingTabletManager tabletManager =
+                new TestingTabletManager(tempDir, TabletManagerBase.TabletType.LOG);
+
+        assertThat(tabletManager.tabletsToLoad(tempDir))
+                .containsExactly(dbLink.resolve("table-1/log-0").toFile());
     }
 
     @Test
@@ -111,7 +156,11 @@ final class TabletManagerBaseTest {
         }
 
         private TestingTabletManager(File dataDir) {
-            super(TabletType.KV, Collections.singletonList(dataDir), new Configuration(), 1);
+            this(dataDir, TabletType.KV);
+        }
+
+        private TestingTabletManager(File dataDir, TabletType tabletType) {
+            super(tabletType, Collections.singletonList(dataDir), new Configuration(), 1);
         }
 
         private List<File> tabletsToLoad(File dataDir) {

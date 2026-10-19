@@ -755,6 +755,7 @@ mod tests {
                 DataType::String(fluss::metadata::StringType::with_nullable(false)),
             )
             .primary_key(["id"])
+            .unwrap()
             .build()
             .unwrap();
         let descriptor = TableDescriptor::builder()
@@ -787,6 +788,7 @@ mod tests {
                 DataType::BigInt(fluss::metadata::BigIntType::with_nullable(true)),
             )
             .primary_key(["uid"])
+            .unwrap()
             .enable_auto_increment("uid_int")
             .unwrap()
             .build()

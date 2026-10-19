@@ -26,6 +26,7 @@ import javax.annotation.Nullable;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 /** An adapter for {@link CatalogMaterializedTable#newBuilder()} constructor for flink2.2. */
 public class CatalogMaterializedTableAdapter {
@@ -128,5 +129,9 @@ public class CatalogMaterializedTableAdapter {
 
     public static String getOriginalQuery(CatalogMaterializedTable mt) {
         return null;
+    }
+
+    public static Optional<TableDistribution> getDistribution(CatalogMaterializedTable mt) {
+        return mt.getDistribution();
     }
 }

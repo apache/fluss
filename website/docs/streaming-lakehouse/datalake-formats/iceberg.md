@@ -8,7 +8,7 @@ sidebar_position: 2
 ## Introduction
 
 [Apache Iceberg](https://iceberg.apache.org/) is an open table format for huge analytic datasets. It provides ACID transactions, schema evolution, and efficient data organization for data lakes.
-To integrate Fluss with Iceberg, you must enable lakehouse storage and configure Iceberg as the lakehouse storage. For more details, see [Deploying Streaming Lakehouse](../../install-deploy/deploying-streaming-lakehouse.md).
+To integrate Fluss with Iceberg, you must enable lakehouse storage and configure Iceberg as the lakehouse storage. For more details, see [Deploying Lakestream](../../install-deploy/deploying-streaming-lakehouse.md).
 
 > **NOTE**: Iceberg requires JDK11 or later. Please ensure that both your Fluss deployment and the Flink cluster used for tiering services are running on JDK11+.
 
@@ -115,15 +115,21 @@ Fluss only bundles catalog implementations included in the `iceberg-core` module
 
 The Iceberg version that Fluss bundles is based on `1.10.1`. Please ensure the JARs you add are compatible with `Iceberg-1.10.1`.
 
+##### 4. Iceberg 1.12
+
+Fluss also provides an Iceberg plugin based on Iceberg `1.12.0`. It requires Java 17 or later in every process that loads it: the CoordinatorServer, and the Flink or Spark clusters that tier data to Iceberg or read Iceberg-backed tables. TabletServers don't load it. To use it, replace `FLUSS_HOME/plugins/iceberg/fluss-lake-iceberg-$FLUSS_VERSION$.jar` with `FLUSS_HOME/opt/iceberg-1.12/fluss-lake-iceberg-1.12-$FLUSS_VERSION$.jar`. Only one Iceberg plugin can be in `FLUSS_HOME/plugins/`. The JARs you add must then be compatible with `Iceberg-1.12.0`.
+
+A Flink job with state written by a Fluss version older than $FLUSS_VERSION$ must first be restored with the Iceberg `1.10.1` plugin of Fluss $FLUSS_VERSION$, and a savepoint taken, before it can be restored with the Iceberg `1.12.0` plugin. A job restored with the Iceberg `1.12.0` plugin cannot be restored with the Iceberg `1.10.1` plugin again.
+
 #### Important Notes
 
-- Ensure all JAR files are compatible with Iceberg 1.10.1
+- Ensure all JAR files are compatible with the Iceberg version of the plugin: `1.10.1` by default, or `1.12.0`
 - If using an existing Hadoop environment, it's recommended to use the `HADOOP_CLASSPATH` environment variable
 - Configuration changes take effect after restarting the Fluss service
 
 ### Start Tiering Service to Iceberg
 
-To tier Fluss's data to Iceberg, you must start the datalake tiering service. For guidance, you can refer to [Deploying Streaming Lakehouse](../../install-deploy/deploying-streaming-lakehouse.md). Although the example uses Paimon, the process is also applicable to Iceberg.
+To tier Fluss's data to Iceberg, you must start the datalake tiering service. For guidance, you can refer to [Deploying Lakestream](../../install-deploy/deploying-streaming-lakehouse.md). Although the example uses Paimon, the process is also applicable to Iceberg.
 
 #### Prerequisites: Hadoop Dependencies
 
@@ -180,6 +186,7 @@ If you are using remote storage, download the corresponding Fluss filesystem JAR
 
 ##### 3. Iceberg Lake Connector
 - **Fluss Lake Iceberg**: Put [fluss-lake-iceberg-$FLUSS_VERSION$.jar]($FLUSS_MAVEN_REPO_URL$/org/apache/fluss/fluss-lake-iceberg/$FLUSS_VERSION$/fluss-lake-iceberg-$FLUSS_VERSION$.jar) into `${FLINK_HOME}/lib`
+- For Iceberg 1.12, put [fluss-lake-iceberg-1.12-$FLUSS_VERSION$.jar]($FLUSS_MAVEN_REPO_URL$/org/apache/fluss/fluss-lake-iceberg-1.12/$FLUSS_VERSION$/fluss-lake-iceberg-1.12-$FLUSS_VERSION$.jar) into `${FLINK_HOME}/lib` instead, and run the Flink cluster on Java 17 or later. Any Iceberg JARs you add, such as `iceberg-flink-runtime` or `iceberg-aws`, must then also be version `1.12.0`.
 
 ##### 4. Iceberg Catalog Dependencies
 Put the JARs required by your Iceberg Catalog into `${FLINK_HOME}/lib`.
@@ -209,7 +216,7 @@ Use Iceberg-specific configurations as parameters when starting the Flink tierin
 
 #### Important Notes
 
-- Ensure all JAR files are compatible with Iceberg 1.10.1
+- Ensure all JAR files are compatible with the Iceberg version of the plugin: `1.10.1` by default, or `1.12.0`
 - Verify that all required dependencies are in the `${FLINK_HOME}/lib` directory
 - Check the Flink job logs for any missing dependency errors
 - Restart the Flink cluster after adding new JAR files

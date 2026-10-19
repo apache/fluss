@@ -182,17 +182,48 @@ Complete API reference for the Fluss C++ client.
 
 ## `Lookuper`
 
-| Method                                                        |  Description                |
-|---------------------------------------------------------------|-----------------------------|
-| `Lookup(const GenericRow& pk_row, LookupResult& out) -> Result` | Lookup a row by primary key |
+Performs point lookups by primary key. Obtained from `TableLookup::CreateLookuper()`. Each call blocks until its result arrives. Threads can share one `Lookuper`, and their concurrent lookups go out to the server in the same batches.
+
+| Method                                                              |  Description                |
+|---------------------------------------------------------------------|-----------------------------|
+| `Lookup(const GenericRow& pk_row, LookupResult& out) const -> Result` | Lookup a row by primary key |
+| `Lookup(const GenericRow& pk_row, PendingLookup& out) const -> Result` | Start a lookup without blocking; `out` waits for its row |
+
+Each blocking lookup waits for its batch, up to `lookup_batch_timeout_ms`. To look up many keys from one thread, start them all, then wait for each:
+
+```cpp
+std::vector<fluss::PendingLookup> pending(keys.size());
+for (size_t i = 0; i < keys.size(); ++i) {
+    if (!lookuper.Lookup(keys[i], pending[i]).Ok()) {
+        // This lookup did not start.
+    }
+}
+for (auto& lookup : pending) {
+    fluss::LookupResult result;
+    if (lookup.Available() && lookup.Wait(result).Ok() && result.Found()) {
+        // Use result.
+    }
+}
+```
+
+## `PendingLookup`
+
+A lookup started by `Lookuper::Lookup(pk_row, PendingLookup&)`. Move-only. Destroying it before `Wait` returns abandons the lookup.
+
+| Method | Description |
+|---|---|
+| `Wait(LookupResult& out) -> Result` | Block until the row arrives |
+| `Wait(LookupResult& out, int64_t timeout_ms) -> Result` | Block for at most `timeout_ms`. If the wait runs out, it returns `REQUEST_TIME_OUT` and the lookup keeps running. The lookup itself can also fail with `REQUEST_TIME_OUT`, which ends it, so check `Available()` before waiting again |
+| `Available() const -> bool` | True while the lookup is running. False once `Wait` has returned its outcome, which can be an error with any code, `REQUEST_TIME_OUT` included |
 
 ## `PrefixLookuper`
 
-Performs prefix (bucket-key) lookups, returning all rows whose primary key starts with the given prefix. Obtained from `Table::NewPrefixLookup()`. See the [Prefix Lookup example](./example/prefix-lookup.md).
+Performs prefix (bucket-key) lookups, returning all rows whose primary key starts with the given prefix. Obtained from `Table::NewPrefixLookup()`. Like a `Lookuper`, it can be shared by threads, and it can start a lookup without blocking. `PendingPrefixLookup` has the same methods as `PendingLookup`. See the [Prefix Lookup example](./example/prefix-lookup.md).
 
-| Method                                                                          |  Description                                  |
-|---------------------------------------------------------------------------------|-----------------------------------------------|
-| `PrefixLookup(const GenericRow& prefix_row, PrefixLookupResult& out) -> Result` | Look up all rows matching the prefix columns  |
+| Method                                                                                |  Description                                  |
+|---------------------------------------------------------------------------------------|-----------------------------------------------|
+| `PrefixLookup(const GenericRow& prefix_row, PrefixLookupResult& out) const -> Result` | Look up all rows matching the prefix columns  |
+| `PrefixLookup(const GenericRow& prefix_row, PendingPrefixLookup& out) const -> Result` | Start a lookup without blocking; `out` waits for its rows |
 
 ## `LogScanner`
 
@@ -447,6 +478,11 @@ Read-only result of a prefix lookup — zero or more matched rows. Each row is a
 | `GetBucketId() -> int32_t`                                     | Bucket ID                            |
 | `GetBaseOffset() -> int64_t`                                   | First record offset                  |
 | `GetLastOffset() -> int64_t`                                   | Last record offset                   |
+| `GetCommitTimestamp() -> int64_t`                              | Commit time in epoch milliseconds    |
+
+`GetCommitTimestamp()` returns `ArrowRecordBatch::NO_COMMIT_TIMESTAMP` (`-1`)
+when the batch carries no single timestamp, which is the case for a limit scan
+because it merges several log batches into one Arrow batch.
 
 ## `ArrowRecordBatches`
 
@@ -668,10 +704,11 @@ Read-only handle for a complex (`ARRAY` / `MAP` / `ROW`) column value, obtained 
 
 ## `PartitionInfo`
 
-| Field            | Type          |  Description   |
-|------------------|---------------|----------------|
-| `partition_id`   | `int64_t`     | Partition ID   |
-| `partition_name` | `std::string` | Partition name |
+| Field            | Type          |  Description           |
+|------------------|---------------|------------------------|
+| `partition_id`   | `int64_t`     | Partition ID           |
+| `partition_name` | `std::string` | Partition name         |
+| `bucket_count`   | `int32_t`     | Partition bucket count |
 
 ## `DatabaseDescriptor`
 

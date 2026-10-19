@@ -22,10 +22,17 @@ import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.FlussRuntimeException;
+import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.record.MemoryLogRecords;
+import org.apache.fluss.remote.RemoteLogFetchInfo;
+import org.apache.fluss.remote.RemoteLogSegment;
 import org.apache.fluss.rpc.RpcClient;
+import org.apache.fluss.rpc.entity.FetchLogResultForBucket;
 import org.apache.fluss.rpc.entity.ProduceLogResultForBucket;
+import org.apache.fluss.rpc.messages.FetchLogResponse;
 import org.apache.fluss.rpc.metrics.TestingClientMetricGroup;
 import org.apache.fluss.server.coordinator.LakeCatalogDynamicLoader;
 import org.apache.fluss.server.coordinator.MetadataManager;
@@ -36,6 +43,9 @@ import org.apache.fluss.server.kv.KvManager;
 import org.apache.fluss.server.kv.scan.ScannerManager;
 import org.apache.fluss.server.kv.snapshot.TestingCompletedKvSnapshotCommitter;
 import org.apache.fluss.server.log.LogManager;
+import org.apache.fluss.server.log.LogTablet;
+import org.apache.fluss.server.log.WriterStateEntry;
+import org.apache.fluss.server.log.remote.RemoteLogStorage.IndexType;
 import org.apache.fluss.server.metadata.TabletServerMetadataCache;
 import org.apache.fluss.server.metrics.group.TabletServerMetricGroup;
 import org.apache.fluss.server.metrics.group.TestingMetricGroups;
@@ -45,10 +55,13 @@ import org.apache.fluss.server.storage.LocalDiskManager;
 import org.apache.fluss.server.zk.NOPErrorHandler;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.ZooKeeperExtension;
+import org.apache.fluss.server.zk.data.BucketAssignment;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
+import org.apache.fluss.server.zk.data.PartitionAssignment;
 import org.apache.fluss.server.zk.data.TableRegistration;
 import org.apache.fluss.shaded.netty4.io.netty.buffer.ByteBuf;
 import org.apache.fluss.testutils.common.AllCallbackWrapper;
+import org.apache.fluss.utils.FlussPaths;
 import org.apache.fluss.utils.clock.Clock;
 import org.apache.fluss.utils.clock.ManualClock;
 import org.apache.fluss.utils.concurrent.FlussScheduler;
@@ -60,14 +73,20 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.io.File;
 import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.time.Duration;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
+import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -75,10 +94,15 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.function.Consumer;
 
 import static org.apache.fluss.record.TestData.DATA1;
+import static org.apache.fluss.record.TestData.DATA1_PARTITIONED_TABLE_DESCRIPTOR;
 import static org.apache.fluss.record.TestData.DATA1_SCHEMA;
+import static org.apache.fluss.record.TestData.DATA1_SCHEMA_PK;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_DESCRIPTOR;
+import static org.apache.fluss.record.TestData.DATA1_TABLE_DESCRIPTOR_PK;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_ID;
+import static org.apache.fluss.record.TestData.DATA1_TABLE_ID_PK;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_PATH;
+import static org.apache.fluss.record.TestData.DATA1_TABLE_PATH_PK;
 import static org.apache.fluss.record.TestData.DEFAULT_REMOTE_DATA_DIR;
 import static org.apache.fluss.server.coordinator.CoordinatorContext.INITIAL_COORDINATOR_EPOCH;
 import static org.apache.fluss.server.metrics.group.TestingMetricGroups.USER_METRICS;
@@ -105,9 +129,12 @@ public class ReplicaFetcherThreadTest {
     private ServerNode leader;
     private ReplicaManager followerRM;
     private ReplicaFetcherThread followerFetcher;
+    private TestingLeaderEndpoint leaderEndpoint;
     private ExecutorService ioExecutor;
     private LocalDiskManager leaderLocalDiskManager;
     private LocalDiskManager followerLocalDiskManager;
+    private KvManager leaderKvManager;
+    private KvManager followerKvManager;
 
     @BeforeAll
     static void baseBeforeAll() {
@@ -122,6 +149,7 @@ public class ReplicaFetcherThreadTest {
         ZOO_KEEPER_EXTENSION_WRAPPER.getCustomExtension().cleanupRoot();
         manualClock = new ManualClock(System.currentTimeMillis());
         Configuration conf = new Configuration();
+        conf.set(ConfigOptions.LOG_REPLICA_FETCH_WAIT_MAX_TIME, Duration.ofSeconds(5));
         tb = new TableBucket(DATA1_TABLE_ID, 0);
         ioExecutor = Executors.newSingleThreadExecutor();
         leaderLocalDiskManager = createLocalDiskManager(leaderServerId);
@@ -135,12 +163,9 @@ public class ReplicaFetcherThreadTest {
         ServerNode follower =
                 new ServerNode(
                         followerServerId, "localhost", 10001, ServerType.TABLET_SERVER, "rack2");
+        leaderEndpoint = new TestingLeaderEndpoint(conf, leaderRM, follower);
         followerFetcher =
-                new ReplicaFetcherThread(
-                        "test-fetcher-thread",
-                        followerRM,
-                        new TestingLeaderEndpoint(conf, leaderRM, follower),
-                        1000);
+                new ReplicaFetcherThread("test-fetcher-thread", followerRM, leaderEndpoint, 1000);
 
         registerTableInZkClient();
         // make the tb(table, 0) to be leader in leaderRM and to be follower in followerRM.
@@ -149,6 +174,21 @@ public class ReplicaFetcherThreadTest {
 
     @AfterEach
     public void tearDown() throws Exception {
+        if (followerFetcher != null && followerFetcher.isAlive()) {
+            followerFetcher.shutdown();
+        }
+        if (leaderRM != null) {
+            leaderRM.getDelayedFetchLogManager().shutdown();
+        }
+        if (followerRM != null) {
+            followerRM.getDelayedFetchLogManager().shutdown();
+        }
+        if (leaderKvManager != null) {
+            leaderKvManager.shutdown();
+        }
+        if (followerKvManager != null) {
+            followerKvManager.shutdown();
+        }
         if (leaderLocalDiskManager != null) {
             leaderLocalDiskManager.close();
         }
@@ -200,6 +240,59 @@ public class ReplicaFetcherThreadTest {
                 () ->
                         assertThat(followerRM.getReplicaOrException(tb).getLocalLogEndOffset())
                                 .isEqualTo(20L));
+    }
+
+    @Test
+    void testRestoreKvMinRetainOffsetFromDelayedEmptyFetchResponse() throws Exception {
+        leaderEndpoint.enableLongPolling();
+        TableBucket pkTableBucket = new TableBucket(DATA1_TABLE_ID_PK, 0);
+        zkClient.registerTable(
+                DATA1_TABLE_PATH_PK,
+                TableRegistration.newTable(
+                        DATA1_TABLE_ID_PK, DEFAULT_REMOTE_DATA_DIR, DATA1_TABLE_DESCRIPTOR_PK));
+        zkClient.registerFirstSchema(DATA1_TABLE_PATH_PK, DATA1_SCHEMA_PK);
+        makeLeaderAndFollower(PhysicalTablePath.of(DATA1_TABLE_PATH_PK), pkTableBucket);
+
+        Replica leaderReplica = leaderRM.getReplicaOrException(pkTableBucket);
+        Replica followerReplica = followerRM.getReplicaOrException(pkTableBucket);
+        for (int i = 0; i < 3; i++) {
+            MemoryLogRecords records = genMemoryLogRecordsWithWriterId(DATA1, 100L + i, 0, i * 10L);
+            leaderReplica.appendRecordsToFollower(records);
+            followerReplica.appendRecordsToFollower(records);
+            if (i < 2) {
+                leaderReplica.getLogTablet().roll(Optional.empty());
+                followerReplica.getLogTablet().roll(Optional.empty());
+            }
+        }
+        leaderReplica.getLogTablet().updateHighWatermark(30L);
+        followerReplica.getLogTablet().updateHighWatermark(30L);
+        leaderReplica.getLogTablet().updateMinRetainOffset(30L);
+        followerReplica.getLogTablet().updateRemoteLogOffsets(Long.MAX_VALUE, -1L, 30L);
+
+        assertThat(leaderReplica.getLocalLogEndOffset()).isEqualTo(30L);
+        assertThat(followerReplica.getLocalLogEndOffset()).isEqualTo(30L);
+        assertThat(followerReplica.getLogTablet().getMinRetainOffset()).isZero();
+        assertThat(followerReplica.getLogTablet().getSegments()).hasSize(3);
+
+        followerFetcher.addBuckets(
+                Collections.singletonMap(
+                        pkTableBucket,
+                        new InitialFetchStatus(
+                                DATA1_TABLE_ID_PK, DATA1_TABLE_PATH_PK, leader.id(), 30L)));
+        followerFetcher.start();
+
+        retry(
+                Duration.ofSeconds(20),
+                () -> assertThat(leaderRM.getDelayedFetchLogManager().numDelayed()).isPositive());
+        assertThat(followerReplica.getLogTablet().getMinRetainOffset()).isZero();
+        assertThat(followerReplica.getLogTablet().getSegments()).hasSize(3);
+
+        retry(
+                Duration.ofSeconds(20),
+                () -> {
+                    assertThat(followerReplica.getLogTablet().getMinRetainOffset()).isEqualTo(30L);
+                    assertThat(followerReplica.getLogTablet().getSegments()).hasSize(2);
+                });
     }
 
     @Test
@@ -468,6 +561,113 @@ public class ReplicaFetcherThreadTest {
         }
     }
 
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void testRestoreWriterSnapshotFromNonDefaultRemoteDirectory(boolean partitioned)
+            throws Exception {
+        long tableId = 100L;
+        TablePath tablePath = TablePath.of("test_db", "remote_writer_recovery");
+        String partitionName = partitioned ? "p1" : null;
+        TableBucket bucket = new TableBucket(tableId, partitioned ? 1L : null, 0);
+        PhysicalTablePath physicalTablePath = PhysicalTablePath.of(tablePath, partitionName);
+        String remoteDataDir = new File(tempDir, "dir2").toURI().toString();
+        zkClient.registerTable(
+                tablePath,
+                TableRegistration.newTable(
+                        tableId,
+                        remoteDataDir,
+                        partitioned ? DATA1_PARTITIONED_TABLE_DESCRIPTOR : DATA1_TABLE_DESCRIPTOR));
+        zkClient.registerFirstSchema(tablePath, DATA1_SCHEMA);
+        if (partitioned) {
+            zkClient.registerPartitionAssignmentAndMetadata(
+                    1L,
+                    partitionName,
+                    new PartitionAssignment(
+                            tableId,
+                            Collections.singletonMap(
+                                    0, BucketAssignment.of(leaderServerId, followerServerId))),
+                    remoteDataDir,
+                    tablePath,
+                    tableId,
+                    1);
+        }
+        makeLeaderAndFollower(physicalTablePath, bucket);
+        Replica leaderReplica = leaderRM.getReplicaOrException(bucket);
+        Replica followerReplica = followerRM.getReplicaOrException(bucket);
+        long nextFetchOffset = DATA1.size();
+        leaderReplica.appendRecordsToFollower(genMemoryLogRecordsWithWriterId(DATA1, 123L, 0, 0L));
+        LogTablet leaderLog = leaderReplica.getLogTablet();
+        leaderLog.writerStateManager().takeSnapshot();
+        // Stale local writer state must be replaced, not merged with the remote snapshot.
+        followerReplica.appendRecordsToFollower(
+                genMemoryLogRecordsWithWriterId(DATA1, 456L, 0, 0L));
+
+        RemoteLogSegment segment =
+                RemoteLogSegment.Builder.builder()
+                        .physicalTablePath(physicalTablePath)
+                        .tableBucket(bucket)
+                        .remoteLogSegmentId(UUID.randomUUID())
+                        .remoteLogStartOffset(0L)
+                        .remoteLogEndOffset(nextFetchOffset)
+                        .build();
+        FsPath remoteLogDir = FlussPaths.remoteLogDir(remoteDataDir);
+        RemoteLogFetchInfo fetchInfo =
+                new RemoteLogFetchInfo(
+                        FlussPaths.remoteLogTabletDir(remoteLogDir, physicalTablePath, bucket)
+                                .toString(),
+                        partitionName,
+                        Collections.singletonList(segment),
+                        0);
+        Path remoteSnapshot =
+                Paths.get(
+                        FlussPaths.remoteWriterSnapshotFile(
+                                        remoteLogDir,
+                                        segment,
+                                        IndexType.getFileSuffix(IndexType.WRITER_ID_SNAPSHOT))
+                                .toUri());
+        Files.createDirectories(remoteSnapshot.getParent());
+        Files.copy(
+                FlussPaths.writerSnapshotFile(leaderLog.getLogDir(), nextFetchOffset).toPath(),
+                remoteSnapshot);
+        TestingLeaderEndpoint endpoint =
+                new TestingLeaderEndpoint(
+                        new Configuration(),
+                        leaderRM,
+                        new ServerNode(
+                                followerServerId,
+                                "localhost",
+                                10001,
+                                ServerType.TABLET_SERVER,
+                                "rack2")) {
+                    @Override
+                    public CompletableFuture<FetchData> fetchLog(FetchLogContext context) {
+                        return CompletableFuture.completedFuture(
+                                new FetchData(
+                                        new FetchLogResponse(),
+                                        Collections.singletonMap(
+                                                bucket,
+                                                FetchLogResultForBucket.remote(
+                                                        bucket, fetchInfo, nextFetchOffset))));
+                    }
+                };
+        ReplicaFetcherThread fetcher =
+                new ReplicaFetcherThread("remote-snapshot-test", followerRM, endpoint, 0);
+        fetcher.addBuckets(
+                Collections.singletonMap(
+                        bucket, new InitialFetchStatus(tableId, tablePath, leaderServerId, 0L)));
+
+        fetcher.doWork();
+
+        assertThat(fetcher.fetchStatus(bucket).get().fetchOffset()).isEqualTo(nextFetchOffset);
+        LogTablet followerLog = followerReplica.getLogTablet();
+        assertThat(followerLog.writerStateManager().activeWriters()).containsOnlyKeys(123L);
+        WriterStateEntry writer = followerLog.writerStateManager().activeWriters().get(123L);
+        assertThat(writer.writerId()).isEqualTo(123L);
+        assertThat(writer.lastBatchSequence()).isZero();
+        assertThat(writer.lastDataOffset()).isEqualTo(nextFetchOffset - 1);
+        assertThat(followerLog.localLogEndOffset()).isEqualTo(nextFetchOffset);
+    }
+
     private void registerTableInZkClient() throws Exception {
         ZOO_KEEPER_EXTENSION_WRAPPER.getCustomExtension().cleanupRoot();
         zkClient.registerTable(
@@ -478,12 +678,17 @@ public class ReplicaFetcherThreadTest {
     }
 
     private void makeLeaderAndFollower() {
+        makeLeaderAndFollower(PhysicalTablePath.of(DATA1_TABLE_PATH), tb);
+    }
+
+    private void makeLeaderAndFollower(
+            PhysicalTablePath physicalTablePath, TableBucket tableBucket) {
         leaderRM.becomeLeaderOrFollower(
                 INITIAL_COORDINATOR_EPOCH,
                 Collections.singletonList(
                         new NotifyLeaderAndIsrData(
-                                PhysicalTablePath.of(DATA1_TABLE_PATH),
-                                tb,
+                                physicalTablePath,
+                                tableBucket,
                                 Arrays.asList(leaderServerId, followerServerId),
                                 new LeaderAndIsr(
                                         leaderServerId,
@@ -491,14 +696,16 @@ public class ReplicaFetcherThreadTest {
                                         Arrays.asList(leaderServerId, followerServerId),
                                         Collections.emptyList(),
                                         INITIAL_COORDINATOR_EPOCH,
-                                        INITIAL_BUCKET_EPOCH))),
+                                        INITIAL_BUCKET_EPOCH),
+                                3,
+                                0L)),
                 result -> {});
         followerRM.becomeLeaderOrFollower(
                 INITIAL_COORDINATOR_EPOCH,
                 Collections.singletonList(
                         new NotifyLeaderAndIsrData(
-                                PhysicalTablePath.of(DATA1_TABLE_PATH),
-                                tb,
+                                physicalTablePath,
+                                tableBucket,
                                 Arrays.asList(leaderServerId, followerServerId),
                                 new LeaderAndIsr(
                                         leaderServerId,
@@ -506,7 +713,9 @@ public class ReplicaFetcherThreadTest {
                                         Arrays.asList(leaderServerId, followerServerId),
                                         Collections.emptyList(),
                                         INITIAL_COORDINATOR_EPOCH,
-                                        INITIAL_BUCKET_EPOCH))),
+                                        INITIAL_BUCKET_EPOCH),
+                                3,
+                                0L)),
                 result -> {});
     }
 
@@ -535,12 +744,27 @@ public class ReplicaFetcherThreadTest {
                         TestingMetricGroups.TABLET_SERVER_METRICS,
                         localDiskManager);
         logManager.startup();
+        KvManager kvManager =
+                KvManager.create(
+                        conf,
+                        zkClient,
+                        logManager,
+                        TestingMetricGroups.TABLET_SERVER_METRICS,
+                        localDiskManager,
+                        null,
+                        manualClock);
+        kvManager.startup();
+        if (serverId == leaderServerId) {
+            leaderKvManager = kvManager;
+        } else {
+            followerKvManager = kvManager;
+        }
         ReplicaManager replicaManager =
                 new TestingReplicaManager(
                         conf,
                         scheduler,
                         logManager,
-                        null,
+                        kvManager,
                         zkClient,
                         serverId,
                         new TabletServerMetadataCache(

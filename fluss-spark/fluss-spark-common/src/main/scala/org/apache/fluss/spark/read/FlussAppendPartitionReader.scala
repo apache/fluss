@@ -38,8 +38,9 @@ class FlussAppendPartitionReader(
   private val tableBucket: TableBucket = flussPartition.tableBucket
   private val partitionId = tableBucket.getPartitionId
   private val bucketId = tableBucket.getBucket
-  private val logScanner =
+  private val logScanner = initializeResources {
     table.newScan().project(projection).filter(pushedPredicate.orNull).createLogScanner()
+  }
 
   // Iterator for current batch of records
   private var currentRecords: java.util.Iterator[ScanRecord] = java.util.Collections.emptyIterator()
@@ -54,7 +55,7 @@ class FlussAppendPartitionReader(
   private var reachedWindowEnd = false
 
   // initialize log scanner
-  initialize()
+  initializeResources(initialize())
 
   private def pollMoreRecords(): Unit = {
     val scanRecords = logScanner.poll(POLL_TIMEOUT)

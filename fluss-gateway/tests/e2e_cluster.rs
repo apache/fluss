@@ -515,6 +515,7 @@ async fn assert_schema_recreation(api: &Api, connection: &FlussConnection) {
                     .column(columns[0], DataTypes::string())
                     .column(columns[1], DataTypes::string())
                     .primary_key(["id"])
+                    .unwrap()
                     .build()
                     .unwrap(),
             )
@@ -550,7 +551,7 @@ async fn assert_schema_recreation(api: &Api, connection: &FlussConnection) {
     let table = connection.get_table(&path).await.unwrap();
     assert_eq!(table.get_table_info().schema_id, original.schema_id);
     assert_ne!(table.get_table_info().table_id, original.table_id);
-    let mut lookuper = table.new_lookup().unwrap().create_lookuper().unwrap();
+    let lookuper = table.new_lookup().unwrap().create_lookuper().unwrap();
     let mut key = GenericRow::new(1);
     key.set_field(0, 1);
     assert!(
@@ -608,7 +609,7 @@ async fn assert_kv_rows_reached_fluss(connection: &FlussConnection) {
         .get_table(&path)
         .await
         .expect("open the KV table");
-    let mut lookuper = table
+    let lookuper = table
         .new_lookup()
         .expect("prepare the lookup")
         .create_lookuper()
@@ -726,6 +727,7 @@ async fn metadata_apis_support_plaintext_and_sasl_fluss_clusters() {
                 .column("name", DataTypes::string())
                 .column("note", DataTypes::string())
                 .primary_key(["id"])
+                .unwrap()
                 .build()
                 .expect("build the KV schema"),
         )

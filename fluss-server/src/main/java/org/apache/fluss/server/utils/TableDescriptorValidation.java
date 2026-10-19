@@ -32,12 +32,14 @@ import org.apache.fluss.metadata.AggFunction;
 import org.apache.fluss.metadata.ChangelogImage;
 import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.DeleteBehavior;
+import org.apache.fluss.metadata.KafkaTableSchema;
 import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.MergeEngineType;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
+import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.row.encode.KvValueLayout;
 import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.DataTypeRoot;
@@ -121,6 +123,8 @@ public class TableDescriptorValidation {
             }
         }
 
+        KafkaTableSchema.validate(tableDescriptor);
+
         // check distribution
         checkDistribution(tableDescriptor, maxBucketNum);
         checkPrimaryKey(tableDescriptor);
@@ -139,6 +143,7 @@ public class TableDescriptorValidation {
         checkSystemColumns(schema.getRowType());
         validateStatisticsConfig(tableDescriptor);
         checkTableLakeFormatMatchesCluster(tableConf, clusterDataLakeFormat);
+        checkCustomLakePathSupported(tableConf, clusterDataLakeFormat);
     }
 
     /** Validates the schema after altering table columns. */
@@ -153,6 +158,10 @@ public class TableDescriptorValidation {
         } else {
             validateNoAggregationFunctions(newSchema);
         }
+        TableDescriptor updated =
+                TableDescriptor.builder(table.toTableDescriptor()).schema(newSchema).build();
+        KafkaTableSchema.validate(updated);
+        KafkaTableSchema.validateTablePath(table.getTablePath(), updated);
     }
 
     private static void checkTableLakeFormatMatchesCluster(
@@ -214,10 +223,6 @@ public class TableDescriptorValidation {
                             DataLakeFormat.PAIMON,
                             dataLakeFormat.get()));
         }
-        if (!tableDescriptor.hasPrimaryKey()) {
-            unmetRequirements.add("the table must define a primary key");
-        }
-
         int partitionKeyCount = tableDescriptor.getPartitionKeys().size();
         if (partitionKeyCount != 1) {
             unmetRequirements.add(
@@ -232,6 +237,32 @@ public class TableDescriptorValidation {
                             "'%s' has unmet requirements: %s.",
                             ConfigOptions.TABLE_DATALAKE_HISTORICAL_PARTITION_ENABLED.key(),
                             String.join("; ", unmetRequirements)));
+        }
+    }
+
+    private static void checkCustomLakePathSupported(
+            Configuration tableConf, @Nullable DataLakeFormat clusterDataLakeFormat) {
+        boolean hasLakePathOption =
+                tableConf.contains(ConfigOptions.TABLE_DATALAKE_DATABASE_NAME)
+                        || tableConf.contains(ConfigOptions.TABLE_DATALAKE_TABLE_NAME);
+        if (!hasLakePathOption) {
+            return;
+        }
+
+        tableConf
+                .getOptional(ConfigOptions.TABLE_DATALAKE_DATABASE_NAME)
+                .ifPresent(TablePath::validateDatabaseName);
+        tableConf
+                .getOptional(ConfigOptions.TABLE_DATALAKE_TABLE_NAME)
+                .ifPresent(TablePath::validateTableName);
+
+        DataLakeFormat dataLakeFormat =
+                tableConf
+                        .getOptional(ConfigOptions.TABLE_DATALAKE_FORMAT)
+                        .orElse(clusterDataLakeFormat);
+        if (dataLakeFormat != DataLakeFormat.PAIMON) {
+            throw new InvalidConfigException(
+                    "Custom lake table path is only supported for Paimon.");
         }
     }
 

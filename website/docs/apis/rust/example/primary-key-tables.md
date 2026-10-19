@@ -16,7 +16,7 @@ let table_descriptor = TableDescriptor::builder()
             .column("id", DataTypes::int())
             .column("name", DataTypes::string())
             .column("age", DataTypes::bigint())
-            .primary_key(vec!["id"])
+            .primary_key(vec!["id"])?
             .build()?,
     )
     .build()?;
@@ -94,7 +94,7 @@ let partial_writer = partial_upsert.create_writer()?;
 ## Looking Up Records
 
 ```rust
-let mut lookuper = table.new_lookup()?.create_lookuper()?;
+let lookuper = table.new_lookup()?.create_lookuper()?;
 
 let mut key = GenericRow::new(1);
 key.set_field(0, 1);  // id to lookup

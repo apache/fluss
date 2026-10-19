@@ -26,21 +26,23 @@ import org.apache.fluss.server.kv.KvManager;
 import org.apache.fluss.utils.FileUtils;
 import org.apache.fluss.utils.IOUtils;
 
-import org.rocksdb.BlockBasedTableConfig;
-import org.rocksdb.BloomFilter;
-import org.rocksdb.Cache;
-import org.rocksdb.ColumnFamilyOptions;
-import org.rocksdb.CompactionStyle;
-import org.rocksdb.CompressionType;
-import org.rocksdb.DBOptions;
-import org.rocksdb.InfoLogLevel;
-import org.rocksdb.LRUCache;
-import org.rocksdb.PlainTableConfig;
-import org.rocksdb.RateLimiter;
-import org.rocksdb.ReadOptions;
-import org.rocksdb.Statistics;
-import org.rocksdb.TableFormatConfig;
-import org.rocksdb.WriteOptions;
+import io.github.fluss_contrib.rocksdb.BlockBasedTableConfig;
+import io.github.fluss_contrib.rocksdb.BloomFilter;
+import io.github.fluss_contrib.rocksdb.Cache;
+import io.github.fluss_contrib.rocksdb.ChecksumType;
+import io.github.fluss_contrib.rocksdb.ColumnFamilyOptions;
+import io.github.fluss_contrib.rocksdb.CompactionStyle;
+import io.github.fluss_contrib.rocksdb.CompressionType;
+import io.github.fluss_contrib.rocksdb.DBOptions;
+import io.github.fluss_contrib.rocksdb.InfoLogLevel;
+import io.github.fluss_contrib.rocksdb.LRUCache;
+import io.github.fluss_contrib.rocksdb.PlainTableConfig;
+import io.github.fluss_contrib.rocksdb.RateLimiter;
+import io.github.fluss_contrib.rocksdb.ReadOptions;
+import io.github.fluss_contrib.rocksdb.Statistics;
+import io.github.fluss_contrib.rocksdb.TableFormatConfig;
+import io.github.fluss_contrib.rocksdb.WriteBufferManager;
+import io.github.fluss_contrib.rocksdb.WriteOptions;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -72,6 +74,8 @@ public class RocksDBResourceContainer implements AutoCloseable {
     // the filename length limit is 255 on most operating systems
     private static final int INSTANCE_PATH_LENGTH_LIMIT = 255 - "_LOG".length();
 
+    private static final int FROCKSDB_COMPATIBLE_FORMAT_VERSION = 5;
+
     @Nullable private final File instanceRocksDBPath;
 
     /** The configurations from file. */
@@ -85,6 +89,9 @@ public class RocksDBResourceContainer implements AutoCloseable {
     /** The shared block cache from KvManager, null if not using shared cache. */
     @Nullable private final Cache sharedBlockCache;
 
+    /** The TabletServer-scoped shared write buffer manager, null for standalone containers. */
+    @Nullable private final WriteBufferManager sharedWriteBufferManager;
+
     /** The statistics object for RocksDB, null if statistics is disabled. */
     @Nullable private Statistics statistics;
 
@@ -96,11 +103,11 @@ public class RocksDBResourceContainer implements AutoCloseable {
 
     @VisibleForTesting
     RocksDBResourceContainer() {
-        this(new Configuration(), null, false, KvManager.getDefaultRateLimiter(), null);
+        this(new Configuration(), null, false, KvManager.getDefaultRateLimiter(), null, null);
     }
 
     public RocksDBResourceContainer(ReadableConfig configuration, @Nullable File instanceBasePath) {
-        this(configuration, instanceBasePath, false, KvManager.getDefaultRateLimiter(), null);
+        this(configuration, instanceBasePath, false, KvManager.getDefaultRateLimiter(), null, null);
     }
 
     public RocksDBResourceContainer(
@@ -112,6 +119,7 @@ public class RocksDBResourceContainer implements AutoCloseable {
                 instanceBasePath,
                 enableStatistics,
                 KvManager.getDefaultRateLimiter(),
+                null,
                 null);
     }
 
@@ -120,7 +128,7 @@ public class RocksDBResourceContainer implements AutoCloseable {
             @Nullable File instanceBasePath,
             boolean enableStatistics,
             RateLimiter sharedRateLimiter) {
-        this(configuration, instanceBasePath, enableStatistics, sharedRateLimiter, null);
+        this(configuration, instanceBasePath, enableStatistics, sharedRateLimiter, null, null);
     }
 
     public RocksDBResourceContainer(
@@ -129,6 +137,28 @@ public class RocksDBResourceContainer implements AutoCloseable {
             boolean enableStatistics,
             RateLimiter sharedRateLimiter,
             @Nullable Cache sharedBlockCache) {
+        this(
+                configuration,
+                instanceBasePath,
+                enableStatistics,
+                sharedRateLimiter,
+                sharedBlockCache,
+                null);
+    }
+
+    /**
+     * Creates a resource container that borrows TabletServer-scoped RocksDB resources.
+     *
+     * <p>The caller owns the shared rate limiter, block cache, and write buffer manager and must
+     * keep them alive until this container is closed.
+     */
+    public RocksDBResourceContainer(
+            ReadableConfig configuration,
+            @Nullable File instanceBasePath,
+            boolean enableStatistics,
+            RateLimiter sharedRateLimiter,
+            @Nullable Cache sharedBlockCache,
+            @Nullable WriteBufferManager sharedWriteBufferManager) {
         this.configuration = configuration;
 
         this.instanceRocksDBPath =
@@ -139,6 +169,7 @@ public class RocksDBResourceContainer implements AutoCloseable {
         this.sharedRateLimiter =
                 checkNotNull(sharedRateLimiter, "sharedRateLimiter must not be null");
         this.sharedBlockCache = sharedBlockCache;
+        this.sharedWriteBufferManager = sharedWriteBufferManager;
 
         this.handlesToClose = new ArrayList<>();
     }
@@ -155,13 +186,14 @@ public class RocksDBResourceContainer implements AutoCloseable {
         // todo: maybe we can allow user define options factory and some predefined options
         //  just like Flink
 
-        // todo: introduce WriteBufferManager for controllable memory consume in FLUSS-54164814
-
         // add necessary default options
         opt = opt.setCreateIfMissing(true);
 
         // set shared rate limiter
         opt.setRateLimiter(sharedRateLimiter);
+        if (sharedWriteBufferManager != null) {
+            opt.setWriteBufferManager(sharedWriteBufferManager);
+        }
 
         if (enableStatistics) {
             statistics = new Statistics();
@@ -246,6 +278,11 @@ public class RocksDBResourceContainer implements AutoCloseable {
 
         currentOptions.setMaxOpenFiles(internalGetOption(ConfigOptions.KV_MAX_OPEN_FILES));
 
+        currentOptions.setUseDirectReads(internalGetOption(ConfigOptions.KV_USE_DIRECT_READS));
+
+        currentOptions.setUseDirectIoForFlushAndCompaction(
+                internalGetOption(ConfigOptions.KV_USE_DIRECT_IO_FOR_FLUSH_AND_COMPACTION));
+
         currentOptions.setInfoLogLevel(
                 toRocksDbInfoLogLevel(internalGetOption(ConfigOptions.KV_LOG_LEVEL)));
 
@@ -317,6 +354,12 @@ public class RocksDBResourceContainer implements AutoCloseable {
                 blockBasedTableConfig = (BlockBasedTableConfig) tableFormatConfig;
             }
         }
+
+        // Keep snapshots readable by FRocksDB 6.20.3.
+        blockBasedTableConfig
+                .setFormatVersion(FROCKSDB_COMPATIBLE_FORMAT_VERSION)
+                .setChecksumType(ChecksumType.kCRC32c)
+                .setUniformCvThreshold(-1);
 
         blockBasedTableConfig.setBlockSize(
                 internalGetOption(ConfigOptions.KV_BLOCK_SIZE).getBytes());

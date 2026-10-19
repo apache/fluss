@@ -122,14 +122,6 @@ public class CompletedSnapshotStoreManager {
                 .reduce(0L, Long::sum);
     }
 
-    private long getNumSnapshots(TableBucket tableBucket) {
-        return bucketCompletedSnapshotStores.get(tableBucket).getNumSnapshots();
-    }
-
-    private long getAllSnapshotSize(TableBucket tableBucket) {
-        return bucketCompletedSnapshotStores.get(tableBucket).getPhysicalStorageRemoteKvSize();
-    }
-
     public CompletedSnapshotStore getOrCreateCompletedSnapshotStore(
             TablePath tablePath, TableBucket tableBucket) {
         return bucketCompletedSnapshotStores.computeIfAbsent(
@@ -152,10 +144,10 @@ public class CompletedSnapshotStoreManager {
                         if (bucketMetricGroup != null) {
                             LOG.info("Add bucketMetricGroup for tableBucket {}.", bucket);
                             bucketMetricGroup.gauge(
-                                    MetricNames.KV_NUM_SNAPSHOTS, () -> getNumSnapshots(bucket));
+                                    MetricNames.KV_NUM_SNAPSHOTS, snapshotStore::getNumSnapshots);
                             bucketMetricGroup.gauge(
                                     MetricNames.KV_ALL_SNAPSHOT_SIZE,
-                                    () -> getAllSnapshotSize(bucket));
+                                    snapshotStore::getPhysicalStorageRemoteKvSize);
                         } else {
                             LOG.warn(
                                     "Failed to add bucketMetricGroup for tableBucket {} when creating completed snapshot.",

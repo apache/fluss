@@ -77,7 +77,7 @@ public class FlinkSourceFetcherManager
     public void removePartitions(
             Map<Long, String> removedPartitions,
             Consumer<Set<TableBucket>> unsubscribeTableBucketsCallback) {
-        SplitFetcher<RecordAndPos, SourceSplitBase> splitFetcher = fetchers.get(0);
+        SplitFetcher<RecordAndPos, SourceSplitBase> splitFetcher = getRunningFetcher();
         if (splitFetcher != null) {
             // The fetcher thread is still running. This should be the majority of the cases.
             enqueuePartitionsRemovedTask(

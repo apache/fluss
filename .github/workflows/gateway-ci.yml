@@ -36,6 +36,7 @@ on:
       - '.dockerignore'
       - 'tools/releasing/create_gateway_release.sh'
       - 'tools/releasing/update_branch_version.sh'
+      - 'tools/releasing/*rust_license.py'
       - '.github/workflows/gateway-ci.yml'
   pull_request:
     branches:
@@ -52,6 +53,7 @@ on:
       - '.dockerignore'
       - 'tools/releasing/create_gateway_release.sh'
       - 'tools/releasing/update_branch_version.sh'
+      - 'tools/releasing/*rust_license.py'
       - '.github/workflows/gateway-ci.yml'
   workflow_dispatch:
 
@@ -149,7 +151,9 @@ jobs:
           git diff --exit-code DEPENDENCIES.rust.tsv
 
       - name: Binary LICENSE and NOTICE drift check
-        run: python3 scripts/generate_binary_license.py --check
+        run: |
+          python3 -m unittest discover -s scripts -p 'test_generate_binary_license.py'
+          python3 scripts/generate_binary_license.py --check
 
       - name: Rust Cache
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
