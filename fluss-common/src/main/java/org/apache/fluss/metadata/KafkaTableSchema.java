@@ -25,7 +25,6 @@ import org.apache.fluss.config.KafkaValueConversionType;
 import org.apache.fluss.config.TableConfig;
 import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.types.ArrayType;
-import org.apache.fluss.types.BytesType;
 import org.apache.fluss.types.DataField;
 import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.DataTypes;
@@ -43,6 +42,8 @@ import java.util.List;
 import java.util.Objects;
 import java.util.Set;
 
+import static org.apache.fluss.types.DataTypeChecks.equalsIgnoreFieldDescriptionsAndIds;
+
 /**
  * Immutable Kafka record mapping, shared by native DDL validation and Kafka request handling.
  * Resolving a contract never changes the schema or materializes configuration defaults.
@@ -58,6 +59,18 @@ public final class KafkaTableSchema {
 
     /** Maximum recursive depth below each top-level JSON business field. */
     public static final int MAX_JSON_SCHEMA_NESTING_DEPTH = 64;
+
+    private static final DataType KEY_TYPE = DataTypes.BYTES();
+    private static final DataType HEADERS_TYPE =
+            DataTypes.MAP(DataTypes.STRING(), DataTypes.BYTES());
+    private static final RowType METADATA_TYPE =
+            DataTypes.ROW(
+                    DataTypes.FIELD("timestamp", DataTypes.TIMESTAMP_LTZ(3)),
+                    DataTypes.FIELD("timestamp_type", DataTypes.INT()),
+                    DataTypes.FIELD("partition", DataTypes.INT()));
+    private static final DataType RESCUE_TYPE = DataTypes.STRING();
+    private static final DataType BINARY_VALUE_TYPE = DataTypes.BYTES();
+    private static final DataType STRING_VALUE_TYPE = DataTypes.STRING();
 
     private static final Set<String> RESERVED_NAMES =
             Collections.unmodifiableSet(
@@ -167,33 +180,14 @@ public final class KafkaTableSchema {
                         : null;
 
         RowType rowType = table.getSchema().getRowType();
-        int keyPosition = rowType.getFieldIndex(KEY_COLUMN);
-        if (keyPosition >= 0 && !(rowType.getTypeAt(keyPosition) instanceof BytesType)) {
-            throw invalid("_kafka_key must be BYTES.");
-        }
+        int keyPosition = validateSystemColumnType(rowType, KEY_COLUMN, KEY_TYPE);
         if (options.getOptional(ConfigOptions.TABLE_KAFKA_CONVERT_KEY_TYPE).isPresent()
                 && keyPosition < 0) {
             throw invalid("table.kafka.convert.key.type requires _kafka_key BYTES.");
         }
-        int headersPosition = rowType.getFieldIndex(HEADERS_COLUMN);
-        if (headersPosition >= 0) {
-            DataType headers = rowType.getTypeAt(headersPosition);
-            if (!(headers instanceof MapType)
-                    || !(((MapType) headers).getKeyType() instanceof StringType)
-                    || !(((MapType) headers).getValueType() instanceof BytesType)) {
-                throw invalid("_kafka_headers must be MAP<STRING, BYTES>.");
-            }
-        }
-        int rescuePosition = rowType.getFieldIndex(RESCUE_COLUMN);
-        if (rescuePosition >= 0
-                && (!(rowType.getTypeAt(rescuePosition) instanceof StringType)
-                        || !rowType.getTypeAt(rescuePosition).isNullable())) {
-            throw invalid("_kafka_rescue must be nullable STRING.");
-        }
-        int metadataPosition = rowType.getFieldIndex(METADATA_COLUMN);
-        if (metadataPosition >= 0) {
-            validateMetadataType(rowType.getTypeAt(metadataPosition));
-        }
+        int headersPosition = validateSystemColumnType(rowType, HEADERS_COLUMN, HEADERS_TYPE);
+        int rescuePosition = validateSystemColumnType(rowType, RESCUE_COLUMN, RESCUE_TYPE);
+        int metadataPosition = validateSystemColumnType(rowType, METADATA_COLUMN, METADATA_TYPE);
 
         List<Integer> valuePositions = new ArrayList<>();
         if (valueConversionLayout == KafkaValueConversionLayout.FLAT) {
@@ -215,9 +209,9 @@ public final class KafkaTableSchema {
             DataType type = rowType.getTypeAt(valuePosition);
             boolean valid =
                     valueConversionType == KafkaValueConversionType.BINARY
-                            ? type instanceof BytesType
+                            ? equalsIgnoreFieldDescriptionsAndIds(BINARY_VALUE_TYPE, type)
                             : valueConversionType == KafkaValueConversionType.STRING
-                                    ? type instanceof StringType
+                                    ? equalsIgnoreFieldDescriptionsAndIds(STRING_VALUE_TYPE, type)
                                     : type instanceof RowType;
             if (!valid) {
                 throw invalid(
@@ -229,6 +223,8 @@ public final class KafkaTableSchema {
                                                 : "ROW")
                                 + " for "
                                 + valueConversionType
+                                + ", but was "
+                                + type.asSummaryString()
                                 + ".");
             }
             for (String name : rowType.getFieldNames()) {
@@ -349,20 +345,22 @@ public final class KafkaTableSchema {
         }
     }
 
-    private static void validateMetadataType(DataType type) {
-        String message =
-                "_kafka_metadata must be ROW<timestamp TIMESTAMP_LTZ(3), "
-                        + "timestamp_type INT, partition INT>.";
-        if (!(type instanceof RowType)) {
-            throw invalid(message);
+    private static int validateSystemColumnType(
+            RowType rowType, String columnName, DataType expectedType) {
+        int position = rowType.getFieldIndex(columnName);
+        if (position >= 0) {
+            DataType type = rowType.getTypeAt(position);
+            if (!equalsIgnoreFieldDescriptionsAndIds(expectedType, type)) {
+                throw invalid(
+                        columnName
+                                + " must be "
+                                + expectedType.asSummaryString()
+                                + ", but was "
+                                + type.asSummaryString()
+                                + ".");
+            }
         }
-        RowType row = (RowType) type;
-        if (!row.getFieldNames().equals(Arrays.asList("timestamp", "timestamp_type", "partition"))
-                || !row.getTypeAt(0).copy(true).equals(DataTypes.TIMESTAMP_LTZ(3))
-                || !row.getTypeAt(1).copy(true).equals(DataTypes.INT())
-                || !row.getTypeAt(2).copy(true).equals(DataTypes.INT())) {
-            throw invalid(message);
-        }
+        return position;
     }
 
     /** Returns the unchanged physical schema, including declared nullability. */
