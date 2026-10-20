@@ -56,6 +56,7 @@ public class FlussConfigUtils {
                         ConfigOptions.TABLE_DATALAKE_HISTORICAL_PARTITION_LOOKUP_MODE.key(),
                         ConfigOptions.TABLE_DATALAKE_DATABASE_NAME.key(),
                         ConfigOptions.TABLE_DATALAKE_TABLE_NAME.key(),
+                        ConfigOptions.TABLE_DATALAKE_TIERING_GROUP.key(),
                         ConfigOptions.TABLE_DATALAKE_FRESHNESS.key(),
                         ConfigOptions.TABLE_DATALAKE_AUTO_COMPACTION.key(),
                         ConfigOptions.TABLE_LOG_TTL.key(),
@@ -74,6 +75,14 @@ public class FlussConfigUtils {
 
     public static boolean isAlterableTableOption(String key) {
         return ALTERABLE_TABLE_OPTIONS.contains(key);
+    }
+
+    /** Validates a tiering group shared by table configuration and tiering service heartbeats. */
+    public static void validateTieringGroup(String group) {
+        if (group == null || group.isEmpty() || !group.equals(group.trim())) {
+            throw new IllegalConfigurationException(
+                    "Tiering group must not be empty or have leading or trailing whitespace.");
+        }
     }
 
     /**

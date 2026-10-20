@@ -18,6 +18,7 @@
 package org.apache.fluss.flink.tiering.source;
 
 import org.apache.fluss.config.ConfigOption;
+import org.apache.fluss.config.ConfigOptions;
 
 import java.time.Duration;
 
@@ -27,6 +28,13 @@ import static org.apache.fluss.config.ConfigBuilder.key;
 public class TieringSourceOptions {
 
     public static final String DATA_LAKE_CONFIG_PREFIX = "datalake.";
+
+    public static final ConfigOption<String> TIERING_GROUP =
+            key("tiering.group")
+                    .stringType()
+                    .defaultValue(ConfigOptions.TABLE_DATALAKE_TIERING_GROUP.defaultValue())
+                    .withDescription(
+                            "The tiering group of tables handled by this tiering service.");
 
     public static final ConfigOption<Duration> POLL_TIERING_TABLE_INTERVAL =
             key("tiering.poll.table.interval")
