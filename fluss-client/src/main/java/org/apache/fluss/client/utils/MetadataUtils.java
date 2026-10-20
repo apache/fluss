@@ -60,6 +60,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.function.Predicate;
 import java.util.function.Supplier;
 
 /** Utils for metadata for client. */
@@ -386,18 +387,35 @@ public class MetadataUtils {
 
     public static @Nullable ServerNode getOneAvailableTabletServerNode(
             Cluster cluster, Set<Integer> unavailableTabletServerIds) {
+        return getOneAvailableTabletServerNode(cluster, unavailableTabletServerIds, node -> false);
+    }
+
+    /** Selects a nonexcluded node, preferring endpoints that are not backing off. */
+    public static @Nullable ServerNode getOneAvailableTabletServerNode(
+            Cluster cluster,
+            Set<Integer> unavailableTabletServerIds,
+            Predicate<ServerNode> isBackingOff) {
         List<ServerNode> aliveTabletServers = new ArrayList<>(cluster.getAliveTabletServerList());
         if (!unavailableTabletServerIds.isEmpty()) {
             aliveTabletServers.removeIf(
                     serverNode -> unavailableTabletServerIds.contains(serverNode.id()));
         }
 
-        if (aliveTabletServers.isEmpty()) {
+        return getOneAvailableTabletServerNode(aliveTabletServers, isBackingOff);
+    }
+
+    /** Selects a random candidate, preferring endpoints outside reconnect backoff. */
+    public static @Nullable ServerNode getOneAvailableTabletServerNode(
+            List<ServerNode> candidates, Predicate<ServerNode> isBackingOff) {
+        if (candidates.isEmpty()) {
             return null;
         }
-        // just pick one random server node
-        int offset = randOffset.nextInt(aliveTabletServers.size());
-        return aliveTabletServers.get(offset);
+        List<ServerNode> selectable = new ArrayList<>(candidates);
+        selectable.removeIf(isBackingOff);
+        if (selectable.isEmpty()) {
+            selectable = candidates;
+        }
+        return selectable.get(randOffset.nextInt(selectable.size()));
     }
 
     @Nullable

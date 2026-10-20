@@ -63,8 +63,11 @@ import java.util.ArrayDeque;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.function.BiConsumer;
+import java.util.function.Consumer;
 
 import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.hasHistoricalProduce;
 import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.hasHistoricalPut;
@@ -86,6 +89,15 @@ final class ServerConnection {
     private final ConnectionMetrics connectionMetrics;
     private final ClientAuthenticator authenticator;
     private final ExponentialBackoff backoff;
+    private final BiConsumer<ServerConnection, Boolean> disconnectCallback;
+    private final Consumer<ServerConnection> readyCallback;
+
+    @GuardedBy("lock")
+    private boolean connectStarted;
+
+    @GuardedBy("lock")
+    private ScheduledFuture<?> scheduledConnect;
+
     private final Object lock = new Object();
 
     @GuardedBy("lock")
@@ -115,18 +127,65 @@ final class ServerConnection {
             ClientMetricGroup clientMetricGroup,
             ClientAuthenticator authenticator,
             BiConsumer<ServerConnection, Throwable> closeCallback) {
+        this(node, clientMetricGroup, authenticator, (connection, failure) -> {}, connection -> {});
+        whenClose(closeCallback);
+        connect(bootstrap, 0);
+    }
+
+    ServerConnection(
+            ServerNode node,
+            ClientMetricGroup clientMetricGroup,
+            ClientAuthenticator authenticator,
+            BiConsumer<ServerConnection, Boolean> disconnectCallback,
+            Consumer<ServerConnection> readyCallback) {
+        this.disconnectCallback = disconnectCallback;
+        this.readyCallback = readyCallback;
         this.node = node;
         this.state = ConnectionState.CONNECTING;
         this.connectionMetrics = clientMetricGroup.createConnectionMetricGroup(node.uid());
         this.authenticator = authenticator;
         this.backoff = new ExponentialBackoff(100L, 2, 5000L, 0.2);
-        whenClose(closeCallback);
+    }
 
-        // connect and handle should be last in case of other variables are nullable and close
-        // callback is not registered when connection established.
-        bootstrap
-                .connect(node.host(), node.port())
-                .addListener(future -> establishConnection((ChannelFuture) future));
+    void connect(Bootstrap bootstrap, long delayNanos) {
+        synchronized (lock) {
+            if (connectStarted || state.isDisconnected()) {
+                return;
+            }
+            connectStarted = true;
+            try {
+                if (delayNanos > 0) {
+                    scheduledConnect =
+                            bootstrap
+                                    .config()
+                                    .group()
+                                    .next()
+                                    .schedule(
+                                            () -> connectNow(bootstrap),
+                                            delayNanos,
+                                            TimeUnit.NANOSECONDS);
+                } else {
+                    connectNow(bootstrap);
+                }
+            } catch (Exception e) {
+                close(e);
+            }
+        }
+    }
+
+    private void connectNow(Bootstrap bootstrap) {
+        synchronized (lock) {
+            if (state.isDisconnected()) {
+                return;
+            }
+            try {
+                bootstrap
+                        .connect(node.host(), node.port())
+                        .addListener(future -> establishConnection((ChannelFuture) future));
+            } catch (Exception e) {
+                close(e);
+            }
+        }
     }
 
     public ServerNode getServerNode() {
@@ -155,6 +214,14 @@ final class ServerConnection {
     }
 
     private CompletableFuture<Void> close(Throwable cause) {
+        return close(cause, false);
+    }
+
+    private CompletableFuture<Void> close(Throwable cause, boolean transportFailure) {
+        if (cause instanceof RejectedExecutionException) {
+            cause = new NetworkException("Connection execution rejected for node " + node, cause);
+            transportFailure = false;
+        }
         synchronized (lock) {
             if (state.isDisconnected()) {
                 // the connection has been closed/closing.
@@ -162,6 +229,12 @@ final class ServerConnection {
             }
 
             switchState(ConnectionState.DISCONNECTED);
+            if (scheduledConnect != null) {
+                scheduledConnect.cancel(false);
+            }
+            connectionMetrics.close();
+            // Publish failure/removal before completing futures: callbacks may synchronously retry.
+            disconnectCallback.accept(this, transportFailure);
 
             // when the remote server shutdowns, the exception may be
             // AnnotatedConnectException/ClosedChannelException/
@@ -200,8 +273,6 @@ final class ServerConnection {
             } else {
                 closeFuture.completeExceptionally(cause);
             }
-
-            connectionMetrics.close();
         }
 
         closeQuietly(authenticator);
@@ -215,7 +286,8 @@ final class ServerConnection {
      *
      * @see NettyClientHandler
      */
-    private final class ResponseCallback implements ClientHandlerCallback {
+    @VisibleForTesting
+    final class ResponseCallback implements ClientHandlerCallback {
 
         @Override
         public ApiMethod getRequestApiMethod(int requestId) {
@@ -251,7 +323,12 @@ final class ServerConnection {
 
         @Override
         public void onFailure(Throwable cause) {
-            close(cause);
+            close(cause, cause instanceof IOException || cause instanceof NetworkException);
+        }
+
+        @Override
+        public void onIdle() {
+            close();
         }
     }
 
@@ -281,7 +358,7 @@ final class ServerConnection {
                         .whenComplete(this::handleApiVersionsResponse);
             } else {
                 LOG.error("Failed to establish connection to server {}.", node, future.cause());
-                close(future.cause());
+                close(future.cause(), true);
             }
         }
     }
@@ -368,12 +445,10 @@ final class ServerConnection {
                                             connectionMetrics.updateMetricsAfterGetResponse(
                                                     apiKey, inflight.requestStartTime, 0);
                                             Throwable cause = future.cause();
-                                            if (cause instanceof IOException) {
-                                                // when server close the channel, the cause will be
-                                                // IOException, if the cause is IOException, we wrap
-                                                // it as retryable NetworkException to retry to
-                                                // connect
-                                                cause = new NetworkException(cause);
+                                            if (cause instanceof IOException
+                                                    || cause instanceof NetworkException) {
+                                                close(cause, true);
+                                                return;
                                             }
                                             inflight.responseFuture.completeExceptionally(cause);
                                             inflightRequests.remove(inflight.requestId);
@@ -468,16 +543,21 @@ final class ServerConnection {
     }
 
     private void sendInitialToken() {
-        try {
-            authenticator.initialize(new DefaultAuthenticateContext());
-        } catch (Exception e) {
-            LOG.error("Failed to initialize authenticator", e);
-            close(e);
-            return;
-        }
+        synchronized (lock) {
+            if (state.isDisconnected()) {
+                return;
+            }
+            try {
+                authenticator.initialize(new DefaultAuthenticateContext());
+            } catch (Exception e) {
+                LOG.error("Failed to initialize authenticator", e);
+                close(e);
+                return;
+            }
 
-        LOG.debug("Begin to authenticate with protocol {}", authenticator.protocol());
-        sendAuthenticateRequest(new byte[0], true);
+            LOG.debug("Begin to authenticate with protocol {}", authenticator.protocol());
+            sendAuthenticateRequest(new byte[0], true);
+        }
     }
 
     private void sendAuthenticateRequest(byte[] challenge, boolean initialToken) {
@@ -515,11 +595,15 @@ final class ServerConnection {
             if (cause != null) {
                 if (cause instanceof RetriableAuthenticationException) {
                     LOG.warn("Authentication failed, retrying {} times", retryAuthCount, cause);
-                    channel.eventLoop()
-                            .schedule(
-                                    this::sendInitialToken,
-                                    backoff.backoff(retryAuthCount++),
-                                    TimeUnit.MILLISECONDS);
+                    try {
+                        channel.eventLoop()
+                                .schedule(
+                                        this::sendInitialToken,
+                                        backoff.backoff(retryAuthCount++),
+                                        TimeUnit.MILLISECONDS);
+                    } catch (Exception e) {
+                        close(e);
+                    }
                 } else {
                     close(cause);
                 }
@@ -548,7 +632,8 @@ final class ServerConnection {
             LOG.debug("switch state form {} to {}", state, targetState);
             state = targetState;
         }
-        if (targetState == ConnectionState.READY) {
+        if (state == ConnectionState.READY && targetState == ConnectionState.READY) {
+            readyCallback.accept(this);
             // process pending requests
             PendingRequest pending;
             while ((pending = pendingRequests.pollFirst()) != null) {

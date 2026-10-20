@@ -70,6 +70,14 @@ public interface RpcClient extends AutoCloseable {
     boolean isReady(String serverUid);
 
     /**
+     * Returns whether reconnecting to this endpoint is backing off, without opening a connection or
+     * changing its state. Callers may prefer another endpoint while this returns true.
+     */
+    default boolean isBackingOff(ServerNode node) {
+        return false;
+    }
+
+    /**
      * Send an RPC request to the given server and return a future for the response. If the
      * requested node is not connected yet, it will try to {@link #connect(ServerNode)} the node
      * first.
