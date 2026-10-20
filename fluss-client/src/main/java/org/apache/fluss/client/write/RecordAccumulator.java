@@ -70,6 +70,7 @@ import static org.apache.fluss.record.LogRecordBatchFormat.NO_BATCH_SEQUENCE;
 import static org.apache.fluss.record.LogRecordBatchFormat.NO_WRITER_ID;
 import static org.apache.fluss.shaded.arrow.org.apache.arrow.memory.BufferAllocatorUtil.createBufferAllocator;
 import static org.apache.fluss.utils.PartitionUtils.HISTORICAL_PARTITION_VALUE;
+import static org.apache.fluss.utils.Preconditions.checkArgument;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
 /* This file is based on source code of Apache Kafka Project (https://kafka.apache.org/), licensed by the Apache
@@ -226,6 +227,19 @@ public final class RecordAccumulator {
                 writeBatches.computeIfAbsent(
                         path, k -> createBucketAndWriteBatches(tableInfo, path, cluster));
         checkAndCacheHistoricalPartitionEnabled(tableInfo);
+        if (record.getBucketId() != null && context.bucketCount == null) {
+            Long partitionId = cluster.getPartitionId(context.targetPath).orElse(null);
+            Integer bucketCount =
+                    partitionId == null
+                            ? null
+                            : cluster.getBucketCount(TableOrPartition.ofPartition(partitionId))
+                                    .orElse(null);
+            if (bucketCount != null) {
+                // Automatic writes may have created a tentative context before the explicit write
+                // resolved metadata. Publish the actual layout before validating its bucket.
+                applyNewBucketCount(context, partitionId, bucketCount);
+            }
+        }
         RecordAppendResult appendResult;
         if (context.bucketCount == null) {
             synchronized (context) {
@@ -914,8 +928,7 @@ public final class RecordAccumulator {
             BucketAndWriteBatches context)
             throws Exception {
         int bucketCount = context.routingBucketCount();
-        int bucketId =
-                context.bucketAssigner.assignBucket(record.getBucketKey(), cluster, bucketCount);
+        int bucketId = assignBucket(record, cluster, context, bucketCount);
         Deque<WriteBatch> deque =
                 context.batches.computeIfAbsent(bucketId, k -> new ArrayDeque<>());
         synchronized (deque) {
@@ -924,13 +937,39 @@ public final class RecordAccumulator {
                 return result;
             }
         }
-        if (context.bucketAssigner.abortIfBatchFull()) {
+        if (record.getBucketId() == null && context.bucketAssigner.abortIfBatchFull()) {
             context.bucketAssigner.onNewBatch(cluster, bucketCount, bucketId);
             bucketId =
                     context.bucketAssigner.assignBucket(
                             record.getBucketKey(), cluster, bucketCount);
         }
         return new RecordAppendResult(new BucketAssignment(bucketId, bucketCount));
+    }
+
+    private int assignBucket(
+            WriteRecord record, Cluster cluster, BucketAndWriteBatches context, int bucketCount) {
+        Integer bucketId = record.getBucketId();
+        if (bucketId == null) {
+            return context.bucketAssigner.assignBucket(record.getBucketKey(), cluster, bucketCount);
+        }
+        checkArgument(
+                bucketId >= 0 && bucketId < bucketCount,
+                "Bucket id %s is out of range for %s with %s buckets.",
+                bucketId,
+                context.targetPath,
+                bucketCount);
+        if (record.getBucketKey() != null) {
+            int assignedBucket =
+                    context.bucketAssigner.assignBucket(
+                            record.getBucketKey(), cluster, bucketCount);
+            checkArgument(
+                    bucketId == assignedBucket,
+                    "Bucket id %s does not match bucket %s determined by the bucket key for %s.",
+                    bucketId,
+                    assignedBucket,
+                    context.targetPath);
+        }
+        return bucketId;
     }
 
     private RecordAppendResult appendWithAllocatedMemory(
@@ -967,9 +1006,7 @@ public final class RecordAccumulator {
         int currentBucketCount = context.routingBucketCount();
         if (bucketCount != currentBucketCount) {
             bucketCount = currentBucketCount;
-            bucketId =
-                    context.bucketAssigner.assignBucket(
-                            writeRecord.getBucketKey(), cluster, bucketCount);
+            bucketId = assignBucket(writeRecord, cluster, context, bucketCount);
         }
         Deque<WriteBatch> deque =
                 context.batches.computeIfAbsent(bucketId, k -> new ArrayDeque<>());

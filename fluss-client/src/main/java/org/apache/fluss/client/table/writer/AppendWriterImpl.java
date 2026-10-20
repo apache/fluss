@@ -79,6 +79,15 @@ class AppendWriterImpl extends AbstractTableWriter implements AppendWriter {
      * @return A {@link CompletableFuture} that always returns null when complete normally.
      */
     public CompletableFuture<AppendResult> append(InternalRow row) {
+        return append(row, null);
+    }
+
+    @Override
+    public CompletableFuture<AppendResult> append(InternalRow row, int bucketId) {
+        return append(row, Integer.valueOf(bucketId));
+    }
+
+    private CompletableFuture<AppendResult> append(InternalRow row, @Nullable Integer bucketId) {
         checkFieldCount(row);
 
         PhysicalTablePath physicalPath = getPhysicalPath(row);
@@ -97,7 +106,8 @@ class AppendWriterImpl extends AbstractTableWriter implements AppendWriter {
             // ARROW format supports general internal row
             record = WriteRecord.forArrowAppend(tableInfo, physicalPath, row, bucketKey);
         }
-        return send(record).thenApply(ignored -> APPEND_SUCCESS);
+        return send(bucketId == null ? record : record.withBucket(bucketId))
+                .thenApply(ignored -> APPEND_SUCCESS);
     }
 
     private CompactedRow encodeCompactedRow(InternalRow row) {

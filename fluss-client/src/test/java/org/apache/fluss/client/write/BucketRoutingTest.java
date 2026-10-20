@@ -622,6 +622,257 @@ class BucketRoutingTest {
     }
 
     @ParameterizedTest
+    @EnumSource(ConfigOptions.NoKeyAssigner.class)
+    void testExplicitBucketSurvivesBatchRolloverAndReenqueue(ConfigOptions.NoKeyAssigner strategy)
+            throws Exception {
+        TableInfo table = tableInfo(2, false, false);
+        RecordAccumulator accumulator = accumulator(strategy);
+        Cluster resolved = cluster(2, true);
+        try {
+            accumulator.append(
+                    record(table, WriteFormat.COMPACTED_LOG, 0, 1).withBucket(1),
+                    (bucket, offset, error) -> {},
+                    resolved);
+            Deque<WriteBatch> selected = accumulator.getDequeOrThrow(PATH, 1);
+            assertThat(selected).hasSize(1);
+            WriteBatch first = selected.getFirst();
+            first.close();
+
+            ReadyWriteBatch drained =
+                    accumulator
+                            .drain(resolved, Collections.singleton(1), Integer.MAX_VALUE)
+                            .get(1)
+                            .get(0);
+            assertThat(drained.writeBatch()).isSameAs(first);
+            assertThat(drained.tableBucket().getBucket()).isEqualTo(1);
+            assertThat(accumulator.reEnqueue(drained)).isTrue();
+
+            accumulator.append(
+                    record(table, WriteFormat.COMPACTED_LOG, 0, 2).withBucket(1),
+                    (bucket, offset, error) -> {},
+                    resolved);
+            assertThat(selected).hasSize(2);
+            assertThat(selected).allSatisfy(batch -> assertThat(batch.bucketId()).isEqualTo(1));
+            assertThat(accumulator.getDequeOrThrow(PATH, 0)).isNull();
+            for (WriteBatch batch : selected) {
+                batch.close();
+                assertThat(readRows(batch, table, WriteFormat.COMPACTED_LOG))
+                        .extracting(row -> row.getInt(1))
+                        .containsExactly(batch == first ? 1 : 2);
+            }
+        } finally {
+            accumulator.close();
+            accumulator.abortAllBatches(new RuntimeException("test cleanup"));
+            accumulator.destroyResources();
+        }
+    }
+
+    @Test
+    void testExplicitBucketRejectsInvalidRouting() throws Exception {
+        TableInfo noKeyTable = tableInfo(2, false, false);
+        TableInfo keyedTable = tableInfo(2, true, false);
+        RecordAccumulator accumulator = accumulator(ConfigOptions.NoKeyAssigner.STICKY);
+        RecordAccumulator keyedAccumulator = accumulator(ConfigOptions.NoKeyAssigner.STICKY);
+        Cluster resolved = cluster(2, true);
+        try {
+            assertThatThrownBy(
+                            () ->
+                                    accumulator.append(
+                                            record(noKeyTable, WriteFormat.COMPACTED_LOG, 0, 1)
+                                                    .withBucket(-1),
+                                            (bucket, offset, error) -> {},
+                                            resolved))
+                    .isInstanceOf(IllegalArgumentException.class);
+            assertThatThrownBy(
+                            () ->
+                                    accumulator.append(
+                                            record(noKeyTable, WriteFormat.COMPACTED_LOG, 0, 1)
+                                                    .withBucket(2),
+                                            (bucket, offset, error) -> {},
+                                            resolved))
+                    .isInstanceOf(IllegalArgumentException.class);
+            int assigned = new HashBucketAssigner().assignBucket(new byte[] {0}, 2);
+            assertThatThrownBy(
+                            () ->
+                                    keyedAccumulator.append(
+                                            record(keyedTable, WriteFormat.COMPACTED_LOG, 0, 1)
+                                                    .withBucket(1 - assigned),
+                                            (bucket, offset, error) -> {},
+                                            resolved))
+                    .isInstanceOf(IllegalArgumentException.class);
+            assertThat(accumulator.hasUnDrained()).isFalse();
+        } finally {
+            accumulator.close();
+            accumulator.abortAllBatches(new RuntimeException("test cleanup"));
+            accumulator.destroyResources();
+            keyedAccumulator.close();
+            keyedAccumulator.abortAllBatches(new RuntimeException("test cleanup"));
+            keyedAccumulator.destroyResources();
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(ints = {2, 4})
+    void testExplicitBucketWithDeferredPartitionLayout(int resolvedCount) throws Exception {
+        TableInfo table = tableInfo(3, false, false);
+        RecordAccumulator accumulator = accumulator(ConfigOptions.NoKeyAssigner.STICKY);
+        CompletableFuture<Exception> completion = new CompletableFuture<>();
+        try {
+            accumulator.append(
+                    record(table, WriteFormat.COMPACTED_LOG, 0, 1).withBucket(2),
+                    (bucket, offset, error) -> completion.complete(error),
+                    Cluster.empty());
+            WriteBatch tentative = accumulator.getDequeOrThrow(PATH, 2).getFirst();
+            assertThat(tentative.getBucketCount()).isEqualTo(3);
+
+            Cluster resolved = cluster(resolvedCount, true);
+            accumulator.beginFlush();
+            accumulator.ready(resolved);
+            if (resolvedCount == 2) {
+                assertThat(completion.get(10, TimeUnit.SECONDS))
+                        .isInstanceOf(BucketRescaleException.class);
+                assertThat(accumulator.hasUnDrained()).isFalse();
+            } else {
+                assertThat(completion).isNotDone();
+                ReadyWriteBatch ready =
+                        accumulator
+                                .drain(resolved, Collections.singleton(1), Integer.MAX_VALUE)
+                                .get(1)
+                                .get(0);
+                assertThat(ready.writeBatch()).isSameAs(tentative);
+                assertThat(ready.tableBucket().getBucket()).isEqualTo(2);
+                assertThat(tentative.getBucketCount()).isEqualTo(4);
+                tentative.complete();
+                accumulator.deallocate(tentative);
+                assertThat(completion.get(10, TimeUnit.SECONDS)).isNull();
+            }
+            accumulator.awaitFlushCompletion();
+        } finally {
+            accumulator.close();
+            accumulator.abortAllBatches(new RuntimeException("test cleanup"));
+            accumulator.destroyResources();
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void testExplicitBucketResolvesExistingTentativeContext(boolean keyed) throws Exception {
+        TableInfo table = tableInfo(2, keyed, false);
+        WriteFormat format = WriteFormat.COMPACTED_LOG;
+        RecordAccumulator accumulator = accumulator(ConfigOptions.NoKeyAssigner.STICKY);
+        CompletableFuture<Exception> firstCompletion = new CompletableFuture<>();
+        try {
+            accumulator.append(
+                    record(table, format, 0, 1),
+                    (bucket, offset, error) -> firstCompletion.complete(error),
+                    Cluster.empty());
+            assertThat(accumulator.getReadyDeque(PATH, 0)).isNull();
+            assertThat(accumulator.getReadyDeque(PATH, 1)).isNull();
+            assertThat(firstCompletion).isNotDone();
+
+            int key = 0;
+            if (keyed) {
+                HashBucketAssigner assigner = new HashBucketAssigner();
+                while (key < 256 && assigner.assignBucket(new byte[] {(byte) key}, 4) != 3) {
+                    key++;
+                }
+                assertThat(key).isLessThan(256);
+            }
+            accumulator.append(
+                    record(table, format, key, 2).withBucket(3),
+                    (bucket, offset, error) -> {},
+                    cluster(4, true));
+
+            Deque<WriteBatch> explicit = accumulator.getReadyDeque(PATH, 3);
+            assertThat(explicit).hasSize(1);
+            assertThat(explicit.getFirst().getBucketCount()).isEqualTo(4);
+            assertThat(explicit.getFirst().bucketId()).isEqualTo(3);
+            if (keyed) {
+                assertThat(firstCompletion.get(10, TimeUnit.SECONDS))
+                        .isInstanceOf(BucketRescaleException.class);
+            } else {
+                assertThat(firstCompletion).isNotDone();
+            }
+        } finally {
+            accumulator.close();
+            accumulator.abortAllBatches(new RuntimeException("test cleanup"));
+            accumulator.destroyResources();
+        }
+    }
+
+    @Test
+    void testExplicitBucketSurvivesCountResolutionDuringMemoryAllocation() throws Exception {
+        TestingWriterMetricGroup metrics = TestingWriterMetricGroup.newInstance();
+        RecordAccumulator accumulator =
+                new RecordAccumulator(
+                        configuration(ConfigOptions.NoKeyAssigner.STICKY, 512),
+                        new IdempotenceManager(false, 5, null, null),
+                        metrics,
+                        SystemClock.getInstance(),
+                        (ignored, path) ->
+                                new StickyBucketAssigner(path) {
+                                    @Override
+                                    public int assignBucket(Cluster cluster, int bucketCount) {
+                                        // Automatic routing must differ from the explicit bucket.
+                                        return 0;
+                                    }
+                                });
+        TableInfo table = tableInfo(2, false, false);
+        Cluster resolved = cluster(3, true);
+        try {
+            for (int version = 1; version <= 2; version++) {
+                accumulator.append(
+                        record(table, WriteFormat.COMPACTED_LOG, 0, version).withBucket(1),
+                        (bucket, offset, error) -> {},
+                        Cluster.empty());
+                accumulator.getDequeOrThrow(PATH, 1).peekLast().close();
+            }
+            CompletableFuture<Void> append =
+                    CompletableFuture.runAsync(
+                            () -> {
+                                try {
+                                    accumulator.append(
+                                            record(table, WriteFormat.COMPACTED_LOG, 0, 3)
+                                                    .withBucket(1),
+                                            (bucket, offset, error) -> {},
+                                            Cluster.empty());
+                                } catch (Exception e) {
+                                    throw new RuntimeException(e);
+                                }
+                            });
+            Gauge<?> waiting =
+                    (Gauge<?>) metrics.getMetrics().get(MetricNames.WRITER_BUFFER_WAITING_THREADS);
+            retry(Duration.ofSeconds(10), () -> assertThat(waiting.getValue()).isEqualTo(1));
+
+            accumulator.ready(resolved);
+            ReadyWriteBatch first =
+                    accumulator
+                            .drain(resolved, Collections.singleton(1), Integer.MAX_VALUE)
+                            .get(1)
+                            .get(0);
+            assertThat(first.tableBucket().getBucket()).isEqualTo(1);
+            first.writeBatch().complete();
+            accumulator.deallocate(first.writeBatch());
+            append.get(10, TimeUnit.SECONDS);
+
+            Deque<WriteBatch> selected = accumulator.getDequeOrThrow(PATH, 1);
+            assertThat(selected).hasSize(2);
+            assertThat(selected)
+                    .allSatisfy(
+                            batch -> {
+                                assertThat(batch.bucketId()).isEqualTo(1);
+                                assertThat(batch.getBucketCount()).isEqualTo(3);
+                            });
+            assertThat(accumulator.getDequeOrThrow(PATH, 0)).isNull();
+            assertThat(accumulator.getDequeOrThrow(PATH, 2)).isNull();
+        } finally {
+            accumulator.close();
+            accumulator.abortAllBatches(new RuntimeException("test cleanup"));
+            accumulator.destroyResources();
+        }
+    }
+
+    @ParameterizedTest
     @ValueSource(ints = {1, 4})
     void testResolveWhileAppendWaitsForExhaustedBuffer(int newCount) throws Exception {
         TestingWriterMetricGroup metrics = TestingWriterMetricGroup.newInstance();
