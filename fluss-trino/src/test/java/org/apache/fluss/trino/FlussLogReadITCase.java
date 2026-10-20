@@ -25,12 +25,15 @@ import org.apache.fluss.client.table.writer.AppendWriter;
 import org.apache.fluss.client.table.writer.UpsertWriter;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.LogFormat;
+import org.apache.fluss.metadata.PartitionInfo;
 import org.apache.fluss.metadata.PartitionSpec;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableChange;
 import org.apache.fluss.metadata.TableDescriptor;
+import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.row.BinaryString;
 import org.apache.fluss.row.Decimal;
@@ -396,6 +399,13 @@ class FlussLogReadITCase {
                     .get(30, TimeUnit.SECONDS);
 
             for (String region : Arrays.asList("east", "west", "empty")) {
+                if (region.equals("west")) {
+                    admin.alterTable(
+                                    path,
+                                    Collections.singletonList(TableChange.modifyBucketCount(4)),
+                                    false)
+                            .get(30, TimeUnit.SECONDS);
+                }
                 admin.createPartition(
                                 path,
                                 new PartitionSpec(Collections.singletonMap("region", region)),
@@ -405,9 +415,14 @@ class FlussLogReadITCase {
 
             long tableId = admin.getTableInfo(path).get(30, TimeUnit.SECONDS).getTableId();
 
-            for (long partitionId : CLUSTER.waitUntilPartitionsCreated(path, 3).values()) {
-                for (int bucketId = 0; bucketId < bucketCount; bucketId++) {
-                    CLUSTER.waitAndGetLeader(new TableBucket(tableId, partitionId, bucketId));
+            CLUSTER.waitUntilPartitionsCreated(path, 3);
+            for (PartitionInfo partition :
+                    admin.listPartitionInfos(path).get(30, TimeUnit.SECONDS)) {
+                assertThat(partition.getBucketCount())
+                        .isEqualTo(partition.getPartitionName().equals("east") ? 2 : 4);
+                for (int bucketId = 0; bucketId < partition.getBucketCount(); bucketId++) {
+                    CLUSTER.waitAndGetLeader(
+                            new TableBucket(tableId, partition.getPartitionId(), bucketId));
                 }
             }
 
@@ -434,8 +449,17 @@ class FlussLogReadITCase {
             assertThat(rows("SELECT * FROM " + name + " WHERE region = 'east'"))
                     .containsExactly(Arrays.asList(1, "east"));
 
-            // An unknown partition must not create any page sources.
             int before = gate.createdSources();
+            assertThat(rows("SELECT * FROM " + name + " WHERE id = 1"))
+                    .containsExactlyInAnyOrder(Arrays.asList(1, "east"), Arrays.asList(1, "west"));
+            assertThat(gate.createdSources() - before).isEqualTo(primaryKey ? 3 : 2);
+            before = gate.createdSources();
+            assertThat(rows("SELECT * FROM " + name + " WHERE id = 1 AND region = 'east'"))
+                    .containsExactly(Arrays.asList(1, "east"));
+            assertThat(gate.createdSources() - before).isEqualTo(1);
+
+            // An unknown partition must not create any page sources.
+            before = gate.createdSources();
             assertThat(rows("SELECT * FROM " + name + " WHERE region = 'missing'")).isEmpty();
             assertThat(gate.createdSources() - before).isZero();
 
@@ -443,6 +467,168 @@ class FlussLogReadITCase {
             assertThat(rows("SELECT * FROM " + name + " WHERE region = 'east' AND id > 1"))
                     .isEmpty();
         }
+    }
+
+    @Test
+    void testBucketPruningAcrossSupportedKeyTypes() throws Exception {
+        for (boolean primaryKey : new boolean[] {false, true}) {
+            String name = primaryKey ? "bucket_types_pk" : "bucket_types_log";
+            TablePath path = TablePath.of("fluss", name);
+            Schema.Builder schema =
+                    Schema.newBuilder()
+                            .column("id", DataTypes.INT())
+                            .column("s", DataTypes.STRING())
+                            .column("b", DataTypes.BYTES())
+                            .column("flag", DataTypes.BOOLEAN())
+                            .column("tiny", DataTypes.TINYINT())
+                            .column("small", DataTypes.SMALLINT())
+                            .column("dt", DataTypes.DATE())
+                            .column("big", DataTypes.BIGINT())
+                            .column("payload", DataTypes.STRING());
+            String[] keys = {"s", "id", "b", "flag", "tiny", "small", "dt", "big"};
+            if (primaryKey) {
+                schema.primaryKey(keys);
+            }
+            admin.createTable(
+                            path,
+                            TableDescriptor.builder()
+                                    .schema(schema.build())
+                                    .distributedBy(8, keys)
+                                    .build(),
+                            false)
+                    .get(30, TimeUnit.SECONDS);
+            CLUSTER.waitUntilTableReady(
+                    admin.getTableInfo(path).get(30, TimeUnit.SECONDS).getTableId());
+            try (Table table = connection.getTable(path)) {
+                AppendWriter append = primaryKey ? null : table.newAppend().createWriter();
+                UpsertWriter upsert = primaryKey ? table.newUpsert().createWriter() : null;
+                for (int id = 0; id < 32; id++) {
+                    GenericRow row =
+                            GenericRow.of(
+                                    id,
+                                    BinaryString.fromString("北京 😀 "),
+                                    new byte[] {0, -1, 127},
+                                    true,
+                                    (byte) -128,
+                                    (short) 32767,
+                                    (int) LocalDate.of(2026, 10, 20).toEpochDay(),
+                                    Long.MIN_VALUE,
+                                    BinaryString.fromString("value-" + id));
+                    (primaryKey ? upsert.upsert(row) : append.append(row))
+                            .get(30, TimeUnit.SECONDS);
+                }
+            }
+            String keyFilter =
+                    "s = '北京 😀 ' AND b = X'00FF7F' AND flag = TRUE"
+                            + " AND tiny = TINYINT '-128' AND small = SMALLINT '32767'"
+                            + " AND dt = DATE '2026-10-20' AND big = BIGINT '-9223372036854775808'";
+            int before = gate.createdSources();
+            assertThat(rows("SELECT id, payload FROM " + name + " WHERE id = 7 AND " + keyFilter))
+                    .containsExactly(Arrays.asList(7, "value-7"));
+            assertThat(gate.createdSources() - before).isEqualTo(1);
+            assertThat(
+                            rows(
+                                    "SELECT id FROM "
+                                            + name
+                                            + " WHERE id = 7 AND "
+                                            + keyFilter
+                                            + " AND length(payload) > 100"))
+                    .isEmpty();
+            before = gate.createdSources();
+            assertThat(
+                            rows(
+                                    "SELECT id FROM "
+                                            + name
+                                            + " WHERE id IN (7, 8) AND "
+                                            + keyFilter
+                                            + " ORDER BY id"))
+                    .containsExactly(Collections.singletonList(7), Collections.singletonList(8));
+            assertThat(gate.createdSources() - before).isGreaterThan(1);
+        }
+    }
+
+    @Test
+    void testHudiRejectedPredicateFallsBackThroughSql() throws Exception {
+        String name = "hudi_bucket_predicate";
+        TablePath path = TablePath.of("fluss", name);
+        admin.createTable(
+                        path,
+                        TableDescriptor.builder()
+                                .schema(
+                                        Schema.newBuilder()
+                                                .column("k1", DataTypes.STRING())
+                                                .column("k2", DataTypes.STRING())
+                                                .column("payload", DataTypes.INT())
+                                                .primaryKey("k1", "k2")
+                                                .build())
+                                .property(ConfigOptions.TABLE_DATALAKE_FORMAT, DataLakeFormat.HUDI)
+                                .distributedBy(4)
+                                .build(),
+                        false)
+                .get(30, TimeUnit.SECONDS);
+
+        CLUSTER.waitUntilTableReady(
+                admin.getTableInfo(path).get(30, TimeUnit.SECONDS).getTableId());
+        try (Table table = connection.getTable(path)) {
+            table.newUpsert()
+                    .createWriter()
+                    .upsert(
+                            GenericRow.of(
+                                    BinaryString.fromString("valid"),
+                                    BinaryString.fromString("x"),
+                                    1))
+                    .get(30, TimeUnit.SECONDS);
+        }
+
+        int before = gate.createdSources();
+        assertThat(rows("SELECT payload FROM " + name + " WHERE k1 = 'valid'" + " AND k2 = 'x'"))
+                .containsExactly(Collections.singletonList(1));
+        assertThat(gate.createdSources() - before).isEqualTo(4);
+
+        for (String value : Arrays.asList("a,b", "__null__", "__empty__")) {
+            before = gate.createdSources();
+            assertThat(rows("SELECT * FROM " + name + " WHERE k1 = '" + value + "' AND k2 = 'x'"))
+                    .isEmpty();
+            assertThat(gate.createdSources() - before).isEqualTo(4);
+        }
+    }
+
+    @Test
+    void testIcebergCompositeBucketKeyFallsBackThroughSql() throws Exception {
+        String name = "iceberg_composite_bucket";
+        TablePath path = TablePath.of("fluss", name);
+        admin.createTable(
+                        path,
+                        TableDescriptor.builder()
+                                .schema(
+                                        Schema.newBuilder()
+                                                .column("a", DataTypes.INT())
+                                                .column("b", DataTypes.INT())
+                                                .build())
+                                .distributedBy(4, "a", "b")
+                                .property(
+                                        ConfigOptions.TABLE_DATALAKE_FORMAT, DataLakeFormat.ICEBERG)
+                                .property(ConfigOptions.TABLE_DATALAKE_ENABLED, false)
+                                .build(),
+                        false)
+                .get(30, TimeUnit.SECONDS);
+
+        TableInfo tableInfo = admin.getTableInfo(path).get(30, TimeUnit.SECONDS);
+
+        assertThat(tableInfo.getTableConfig().isDataLakeEnabled()).isFalse();
+        assertThat(tableInfo.getTableConfig().getDataLakeFormat()).contains(DataLakeFormat.ICEBERG);
+        assertThat(tableInfo.getBucketKeys()).containsExactly("a", "b");
+
+        CLUSTER.waitUntilTableReady(tableInfo.getTableId());
+        assertThat(admin.describeBuckets(path).get(30, TimeUnit.SECONDS)).hasSize(4);
+
+        // This table can be scanned without bucket pruning.
+        assertThat(rows("SELECT a, b FROM " + name)).isEmpty();
+        // An incomplete bucket-key predicate must also fall back.
+        assertThat(rows("SELECT a, b FROM " + name + " WHERE a = 1")).isEmpty();
+        // A complete predicate must not invoke the unsupported
+        // Iceberg composite-key encoder and fail the query.
+        assertThat(rows("SELECT a, b FROM " + name + " WHERE a = 1 AND b = 2")).isEmpty();
     }
 
     @Test
