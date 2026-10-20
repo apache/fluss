@@ -149,6 +149,7 @@ import static org.apache.fluss.server.coordinator.CoordinatorContext.INITIAL_COO
 import static org.apache.fluss.server.kv.KvTabletTestUtils.flushAndWait;
 import static org.apache.fluss.server.metadata.PartitionMetadata.DELETED_PARTITION_ID;
 import static org.apache.fluss.server.metadata.TableMetadata.DELETED_TABLE_ID;
+import static org.apache.fluss.server.metadata.TableMetadata.DELETED_TABLE_PATH;
 import static org.apache.fluss.server.replica.ReplicaManager.HIGH_WATERMARK_CHECKPOINT_FILE_NAME;
 import static org.apache.fluss.server.testutils.PartitionMetadataAssert.assertPartitionMetadata;
 import static org.apache.fluss.server.testutils.TableMetadataAssert.assertTableMetadata;
@@ -2888,9 +2889,7 @@ class ReplicaManagerTest extends ReplicaTestBase {
         Replica replica2 = replicaManager.getReplicaOrException(new TableBucket(DATA1_TABLE_ID, 1));
         replica1.appendRecordsToLeader(genMemoryLogRecordsByObject(DATA1), 1);
         replica2.appendRecordsToLeader(genMemoryLogRecordsByObject(DATA1), 1);
-
         replicaManager.checkpointHighWatermarks();
-
         Map<TableBucket, Long> checkpoint1 =
                 new OffsetCheckpointFile(new File(dataDir1, HIGH_WATERMARK_CHECKPOINT_FILE_NAME))
                         .read();
@@ -2920,10 +2919,8 @@ class ReplicaManagerTest extends ReplicaTestBase {
         Path tableDir = logManager.getTabletParentDir(dataDir, physicalTablePath, tb);
         assertThat(logDir).exists();
         assertThat(tableDir).exists();
-
         // Verify the bucket is NoneReplica (not in allReplicas).
         assertThat(replicaManager.getReplica(tb)).isInstanceOf(ReplicaManager.NoneReplica.class);
-
         // Send stopReplicas with deleteLocal=true. This should hit the NoneReplica
         // branch and invoke sweepOrphanTabletDirs to clean up the orphan log.
         CompletableFuture<List<StopReplicaResultForBucket>> future = new CompletableFuture<>();
@@ -2939,5 +2936,62 @@ class ReplicaManagerTest extends ReplicaTestBase {
         assertThat(tableDir).doesNotExist();
         // LogManager should no longer hold the log.
         assertThat(logManager.getLog(tb)).isNotPresent();
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void testTableDeletionMetadataDoesNotUpdateReplica(boolean idBasedDeletion) throws Exception {
+        TableBucket tableBucket = new TableBucket(DATA1_TABLE_ID, 0);
+        makeLogTableAsLeader(tableBucket.getBucket());
+        Replica replica = replicaManager.getReplicaOrException(tableBucket);
+        TableInfo originalTableInfo = replica.getTableInfo();
+        TableInfo deletion =
+                TableInfo.of(
+                        idBasedDeletion ? DELETED_TABLE_PATH : DATA1_TABLE_PATH,
+                        idBasedDeletion ? DATA1_TABLE_ID : DELETED_TABLE_ID,
+                        0,
+                        DATA1_TABLE_DESCRIPTOR,
+                        DEFAULT_REMOTE_DATA_DIR,
+                        -1L,
+                        -1L);
+        replicaManager.maybeUpdateMetadataCache(
+                INITIAL_COORDINATOR_EPOCH,
+                buildClusterMetadata(
+                        null,
+                        Collections.emptySet(),
+                        Collections.singletonList(
+                                new TableMetadata(deletion, Collections.emptyList())),
+                        Collections.emptyList()));
+        // A deletion notification must not replace the live replica's table info.
+        assertThat(replica.getTableInfo()).isSameAs(originalTableInfo);
+        assertThat(replica.getTableInfo().getTablePath()).isEqualTo(DATA1_TABLE_PATH);
+        assertThat(replica.getTableInfo().getTableId()).isEqualTo(DATA1_TABLE_ID);
+    }
+
+    @Test
+    void testNormalTableMetadataStillUpdatesReplica() throws Exception {
+        TableBucket tableBucket = new TableBucket(DATA1_TABLE_ID, 0);
+        makeLogTableAsLeader(tableBucket.getBucket());
+        Replica replica = replicaManager.getReplicaOrException(tableBucket);
+        TableInfo originalTableInfo = replica.getTableInfo();
+        TableInfo updatedTableInfo =
+                TableInfo.of(
+                        DATA1_TABLE_PATH,
+                        DATA1_TABLE_ID,
+                        originalTableInfo.getSchemaId(),
+                        DATA1_TABLE_DESCRIPTOR,
+                        DEFAULT_REMOTE_DATA_DIR,
+                        100L,
+                        200L);
+        replicaManager.maybeUpdateMetadataCache(
+                INITIAL_COORDINATOR_EPOCH,
+                buildClusterMetadata(
+                        null,
+                        Collections.emptySet(),
+                        Collections.singletonList(
+                                new TableMetadata(updatedTableInfo, Collections.emptyList())),
+                        Collections.emptyList()));
+        assertThat(replica.getTableInfo()).isSameAs(updatedTableInfo);
+        assertThat(replica.getTableInfo().getTableId()).isEqualTo(DATA1_TABLE_ID);
     }
 }
