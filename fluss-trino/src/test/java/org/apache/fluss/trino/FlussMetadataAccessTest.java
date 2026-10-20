@@ -19,8 +19,11 @@ package org.apache.fluss.trino;
 
 import org.apache.fluss.client.admin.Admin;
 import org.apache.fluss.exception.DatabaseNotExistException;
+import org.apache.fluss.exception.PartitionNotExistException;
 import org.apache.fluss.exception.TableNotExistException;
-import org.apache.fluss.metadata.BucketInfo;
+import org.apache.fluss.metadata.PartitionInfo;
+import org.apache.fluss.metadata.PartitionSpec;
+import org.apache.fluss.metadata.ResolvedPartitionSpec;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.utils.concurrent.FutureUtils;
@@ -31,8 +34,10 @@ import io.trino.spi.connector.TableNotFoundException;
 import io.trino.spi.predicate.TupleDomain;
 import org.junit.jupiter.api.Test;
 
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.List;
 import java.util.Optional;
 
 import static io.trino.spi.StandardErrorCode.NOT_SUPPORTED;
@@ -47,6 +52,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoMoreInteractions;
 import static org.mockito.Mockito.when;
 
 /** Tests physical name resolution and catalog failure translation at the Admin boundary. */
@@ -247,79 +253,142 @@ final class FlussMetadataAccessTest {
     }
 
     @Test
-    void testDescribeBucketsPreservesPhysicalPartitionIdentity() {
+    void testListScanPartitionsPreservesPhysicalIdentityAndCounts() {
         TablePath path = TablePath.of("Sales", "Users");
-        when(admin.describeBuckets(path))
-                .thenReturn(
-                        completedFuture(
-                                Collections.singletonList(
-                                        new BucketInfo(
-                                                path,
-                                                42,
-                                                17L,
-                                                "region=west",
-                                                2,
-                                                null,
-                                                null,
-                                                null,
-                                                Collections.emptyList(),
-                                                Collections.emptyList()))));
-        assertThat(
-                        access.listScanBuckets(
-                                new FlussTableHandle(
-                                        "sales",
-                                        "users",
-                                        "Sales",
-                                        "Users",
-                                        42,
-                                        3,
-                                        TupleDomain.all()),
-                                Optional.empty()))
-                .singleElement()
-                .satisfies(
-                        bucket -> {
-                            assertThat(bucket.getBucket())
-                                    .isEqualTo(new FlussBucketHandle(42, Optional.of(17L), 2));
-                            assertThat(bucket.getRequiredPartitionName()).isEqualTo("region=west");
-                        });
+        List<PartitionInfo> infos =
+                new ArrayList<>(
+                        Arrays.asList(partitionInfo(0, "east", 2), partitionInfo(20, "west", 4)));
+        when(admin.listPartitionInfos(path)).thenReturn(completedFuture(infos));
+
+        List<PartitionInfo> partitions = access.listScanPartitions(scanHandle(), Optional.empty());
+
+        assertThat(partitions).containsExactlyElementsOf(infos);
+        assertThatThrownBy(() -> partitions.add(partitionInfo(30, "north", 8)))
+                .isInstanceOf(UnsupportedOperationException.class);
+        infos.clear();
+        assertThat(partitions).hasSize(2);
+        verify(admin).listPartitionInfos(path);
+        verifyNoMoreInteractions(admin);
     }
 
     @Test
-    void testDescribeBucketsRejectsRecreatedTable() {
+    void testListScanPartitionsUsesPartitionSpec() {
         TablePath path = TablePath.of("Sales", "Users");
-        when(admin.describeBuckets(path))
+        PartitionSpec spec = new PartitionSpec(Collections.singletonMap("region", "east"));
+        PartitionInfo info = partitionInfo(10, "east", 2);
+        when(admin.listPartitionInfos(path, spec))
+                .thenReturn(completedFuture(Collections.singletonList(info)));
+
+        assertThat(access.listScanPartitions(scanHandle(), Optional.of(spec)))
+                .containsExactly(info);
+        verify(admin).listPartitionInfos(path, spec);
+        verifyNoMoreInteractions(admin);
+    }
+
+    @Test
+    void testListScanPartitionsRejectsDuplicateIdentities() {
+        TablePath path = TablePath.of("Sales", "Users");
+        List<List<PartitionInfo>> responses =
+                Arrays.asList(
+                        Arrays.asList(partitionInfo(10, "east", 2), partitionInfo(10, "west", 4)),
+                        Arrays.asList(partitionInfo(10, "east", 2), partitionInfo(20, "east", 4)));
+        for (List<PartitionInfo> response : responses) {
+            when(admin.listPartitionInfos(path)).thenReturn(completedFuture(response));
+            assertThatThrownBy(() -> access.listScanPartitions(scanHandle(), Optional.empty()))
+                    .isInstanceOfSatisfying(
+                            TrinoException.class,
+                            e ->
+                                    assertThat(e.getErrorCode())
+                                            .isEqualTo(FLUSS_SPLIT_ERROR.toErrorCode()))
+                    .hasMessageContaining("Duplicate Fluss partition");
+        }
+    }
+
+    @Test
+    void testListScanPartitionsRejectsInvalidCount() {
+        TablePath path = TablePath.of("Sales", "Users");
+        for (int count : new int[] {0, -1}) {
+            when(admin.listPartitionInfos(path))
+                    .thenReturn(
+                            completedFuture(
+                                    Collections.singletonList(partitionInfo(10, "east", count))));
+            assertThatThrownBy(() -> access.listScanPartitions(scanHandle(), Optional.empty()))
+                    .isInstanceOfSatisfying(
+                            TrinoException.class,
+                            e ->
+                                    assertThat(e.getErrorCode())
+                                            .isEqualTo(FLUSS_SPLIT_ERROR.toErrorCode()))
+                    .hasMessageContaining("Invalid bucket count");
+        }
+    }
+
+    @Test
+    void testListScanPartitionsRejectsNegativePartitionId() {
+        TablePath path = TablePath.of("Sales", "Users");
+        when(admin.listPartitionInfos(path))
                 .thenReturn(
-                        completedFuture(
-                                Collections.singletonList(
-                                        new BucketInfo(
-                                                path,
-                                                43,
-                                                null,
-                                                null,
-                                                0,
-                                                null,
-                                                null,
-                                                null,
-                                                Collections.emptyList(),
-                                                Collections.emptyList()))));
-        assertThatThrownBy(
-                        () ->
-                                access.listScanBuckets(
-                                        new FlussTableHandle(
-                                                "sales",
-                                                "users",
-                                                "Sales",
-                                                "Users",
-                                                42,
-                                                3,
-                                                TupleDomain.all()),
-                                        Optional.empty()))
+                        completedFuture(Collections.singletonList(partitionInfo(-1, "east", 2))));
+
+        assertThatThrownBy(() -> access.listScanPartitions(scanHandle(), Optional.empty()))
                 .isInstanceOfSatisfying(
                         TrinoException.class,
-                        failure ->
-                                assertThat(failure.getErrorCode())
+                        e ->
+                                assertThat(e.getErrorCode())
                                         .isEqualTo(FLUSS_SPLIT_ERROR.toErrorCode()))
-                .hasMessageContaining("unexpected table ID");
+                .hasMessageContaining("Invalid Fluss partition ID");
+    }
+
+    @Test
+    void testListScanPartitionsRpcFailureTranslation() {
+        TablePath path = TablePath.of("Sales", "Users");
+        PartitionNotExistException expired = new PartitionNotExistException("expired");
+        when(admin.listPartitionInfos(path))
+                .thenReturn(FutureUtils.completedExceptionally(expired));
+        assertThatThrownBy(() -> access.listScanPartitions(scanHandle(), Optional.empty()))
+                .isInstanceOfSatisfying(
+                        TrinoException.class,
+                        e ->
+                                assertThat(e.getErrorCode())
+                                        .isEqualTo(FLUSS_SPLIT_ERROR.toErrorCode()))
+                .hasCause(expired);
+        when(admin.listPartitionInfos(path))
+                .thenReturn(
+                        FutureUtils.completedExceptionally(new TableNotExistException("dropped")),
+                        FutureUtils.completedExceptionally(
+                                new DatabaseNotExistException("dropped")));
+        assertThatThrownBy(() -> access.listScanPartitions(scanHandle(), Optional.empty()))
+                .isInstanceOf(TableNotFoundException.class);
+        assertThatThrownBy(() -> access.listScanPartitions(scanHandle(), Optional.empty()))
+                .isInstanceOf(TableNotFoundException.class);
+        RuntimeException failure = new RuntimeException("RPC failed");
+        when(admin.listPartitionInfos(path))
+                .thenReturn(FutureUtils.completedExceptionally(failure));
+        assertThatThrownBy(() -> access.listScanPartitions(scanHandle(), Optional.empty()))
+                .isInstanceOfSatisfying(
+                        TrinoException.class,
+                        e ->
+                                assertThat(e.getErrorCode())
+                                        .isEqualTo(FLUSS_SPLIT_ERROR.toErrorCode()))
+                .hasCause(failure);
+    }
+
+    @Test
+    void testListScanPartitionsReturnsEmptyList() {
+        TablePath path = TablePath.of("Sales", "Users");
+        when(admin.listPartitionInfos(path)).thenReturn(completedFuture(Collections.emptyList()));
+
+        assertThat(access.listScanPartitions(scanHandle(), Optional.empty())).isEmpty();
+        verify(admin).listPartitionInfos(path);
+        verifyNoMoreInteractions(admin);
+    }
+
+    private static FlussTableHandle scanHandle() {
+        return new FlussTableHandle("sales", "users", "Sales", "Users", 42, 3, TupleDomain.all());
+    }
+
+    private static PartitionInfo partitionInfo(long id, String name, int count) {
+        return new PartitionInfo(
+                id, ResolvedPartitionSpec.fromPartitionValue("region", name), null, count);
     }
 
     @Test

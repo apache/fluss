@@ -19,6 +19,7 @@
 package org.apache.fluss.trino;
 
 import org.apache.fluss.client.admin.OffsetSpec;
+import org.apache.fluss.metadata.PartitionInfo;
 import org.apache.fluss.metadata.PartitionSpec;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.shaded.guava32.com.google.common.collect.ImmutableList;
@@ -26,13 +27,10 @@ import org.apache.fluss.shaded.guava32.com.google.common.collect.ImmutableList;
 import com.google.inject.Inject;
 import io.trino.spi.TrinoException;
 
-import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-import java.util.Set;
 
-import static io.trino.spi.StandardErrorCode.GENERIC_INTERNAL_ERROR;
 import static org.apache.fluss.trino.FlussErrorCode.FLUSS_SPLIT_ERROR;
 import static org.apache.fluss.trino.FlussPartitionPruner.extractPartitionSpec;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
@@ -48,42 +46,52 @@ final class FlussSplitPlanner {
     List<FlussSplit> plan(FlussTableHandle table, TableInfo tableInfo) {
         Optional<PartitionSpec> partitionSpec =
                 extractPartitionSpec(tableInfo, table.getConstraint());
-        List<FlussPhysicalBucket> buckets = metadataAccess.listScanBuckets(table, partitionSpec);
-
-        validateBucketShape(buckets, tableInfo);
-
-        if (buckets.isEmpty()) {
-            return ImmutableList.of();
+        Optional<FlussBucketPruner> pruner =
+                FlussBucketPruner.create(tableInfo, table.getConstraint());
+        ImmutableList.Builder<FlussPhysicalBucket> buckets = ImmutableList.builder();
+        if (tableInfo.isPartitioned()) {
+            for (PartitionInfo partition :
+                    metadataAccess.listScanPartitions(table, partitionSpec)) {
+                addBuckets(
+                        buckets,
+                        tableInfo.getTableId(),
+                        Optional.of(partition.getPartitionId()),
+                        Optional.of(partition.getPartitionName()),
+                        partition.getBucketCount(),
+                        pruner);
+            }
+        } else {
+            addBuckets(
+                    buckets,
+                    tableInfo.getTableId(),
+                    Optional.empty(),
+                    Optional.empty(),
+                    tableInfo.getNumBuckets(),
+                    pruner);
         }
-
+        List<FlussPhysicalBucket> selected = buckets.build();
         if (tableInfo.hasPrimaryKey()) {
-            return planKvSplits(buckets);
+            return planKvSplits(selected);
         }
-
-        return planLogSplits(table, buckets, partitionSpec);
+        return planLogSplits(table, selected);
     }
 
-    private static void validateBucketShape(
-            List<FlussPhysicalBucket> buckets, TableInfo tableInfo) {
-        Set<FlussBucketHandle> seen = new HashSet<>();
-
-        for (FlussPhysicalBucket physicalBucket : buckets) {
-            FlussBucketHandle bucket = physicalBucket.getBucket();
-
-            if (bucket.isPartitioned() != tableInfo.isPartitioned()) {
-                throw new TrinoException(
-                        GENERIC_INTERNAL_ERROR,
-                        "Fluss bucket partition layout does not match table metadata: "
-                                + bucket
-                                + ", tablePartitioned="
-                                + tableInfo.isPartitioned());
-            }
-
-            if (!seen.add(bucket)) {
-                throw new TrinoException(
-                        GENERIC_INTERNAL_ERROR,
-                        "Duplicate Fluss bucket in scan planning: " + bucket);
-            }
+    private static void addBuckets(
+            ImmutableList.Builder<FlussPhysicalBucket> buckets,
+            long tableId,
+            Optional<Long> partitionId,
+            Optional<String> partitionName,
+            int bucketCount,
+            Optional<FlussBucketPruner> pruner) {
+        if (bucketCount <= 0) {
+            throw new TrinoException(FLUSS_SPLIT_ERROR, "Invalid bucket count: " + bucketCount);
+        }
+        int first = pruner.map(value -> value.getBucketId(bucketCount)).orElse(0);
+        int end = pruner.isPresent() ? first + 1 : bucketCount;
+        for (int bucketId = first; bucketId < end; bucketId++) {
+            buckets.add(
+                    new FlussPhysicalBucket(
+                            new FlussBucketHandle(tableId, partitionId, bucketId), partitionName));
         }
     }
 
@@ -95,17 +103,16 @@ final class FlussSplitPlanner {
     }
 
     private List<FlussSplit> planLogSplits(
-            FlussTableHandle table,
-            List<FlussPhysicalBucket> buckets,
-            Optional<PartitionSpec> partitionSpec) {
+            FlussTableHandle table, List<FlussPhysicalBucket> buckets) {
         Map<FlussBucketHandle, Long> starts =
                 metadataAccess.resolveOffsets(table, buckets, new OffsetSpec.EarliestSpec());
 
-        Map<FlussBucketHandle, Long> stops =
-                metadataAccess.resolveOffsets(table, buckets, new OffsetSpec.LatestSpec());
-
         List<FlussPhysicalBucket> remainingBuckets =
-                metadataAccess.retainCurrentBuckets(table, buckets, partitionSpec);
+                buckets.stream()
+                        .filter(bucket -> starts.containsKey(bucket.getBucket()))
+                        .collect(ImmutableList.toImmutableList());
+        Map<FlussBucketHandle, Long> stops =
+                metadataAccess.resolveOffsets(table, remainingBuckets, new OffsetSpec.LatestSpec());
 
         ImmutableList.Builder<FlussSplit> splits = ImmutableList.builder();
 
@@ -115,9 +122,9 @@ final class FlussSplitPlanner {
             Long start = starts.get(bucket);
             Long stop = stops.get(bucket);
 
-            if (start == null || stop == null) {
-                throw new TrinoException(
-                        FLUSS_SPLIT_ERROR, "Missing Fluss log offsets for " + bucket);
+            if (stop == null) {
+                // The partition disappeared during the latest offset lookup.
+                continue;
             }
 
             if (start > stop) {
