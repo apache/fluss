@@ -131,11 +131,6 @@ public class LakeTableTieringManager implements AutoCloseable {
     // table_id -> configured tiering group
     private final Map<Long, String> tableTieringGroups;
 
-    // table_id -> group that owns the current tiering round
-    private final Map<Long, String> runningTieringGroups;
-
-    private final Map<String, MetricGroup> groupMetrics;
-
     // table_id -> freshness (tiering interval)
     private final Map<Long, Long> tableLakeFreshness;
 
@@ -190,8 +185,6 @@ public class LakeTableTieringManager implements AutoCloseable {
         this.liveTieringTableIds = new HashMap<>();
         this.tablePaths = new HashMap<>();
         this.tableTieringGroups = new HashMap<>();
-        this.runningTieringGroups = new HashMap<>();
-        this.groupMetrics = new HashMap<>();
         this.tableLakeFreshness = new HashMap<>();
         this.expirationReaper = new LakeTieringExpiredOperationReaper();
         expirationReaper.start();
@@ -214,37 +207,6 @@ public class LakeTableTieringManager implements AutoCloseable {
         tieringMetricGroup.gauge(
                 MetricNames.LAKE_TIERING_RUNNING_TABLES_COUNT,
                 () -> inReadLock(lock, liveTieringTableIds::size));
-    }
-
-    @GuardedBy("lock")
-    private void registerGroupMetrics(String group) {
-        groupMetrics.computeIfAbsent(
-                group,
-                name -> {
-                    MetricGroup metricGroup = tieringMetricGroup.addGroup("tieringGroup", name);
-                    metricGroup.gauge(
-                            MetricNames.LAKE_TIERING_PENDING_TABLES_COUNT,
-                            () -> getPendingTablesCount(name));
-                    metricGroup.gauge(
-                            MetricNames.LAKE_TIERING_RUNNING_TABLES_COUNT,
-                            () -> getRunningTablesCount(name));
-                    metricGroup.gauge(
-                            MetricNames.LAKE_TIERING_TABLE_PENDING_TIME,
-                            () -> getOldestPendingTime(name));
-                    return metricGroup;
-                });
-    }
-
-    @GuardedBy("lock")
-    private void removeUnusedGroupMetrics(@Nullable String group) {
-        if (group != null
-                && !tableTieringGroups.containsValue(group)
-                && !runningTieringGroups.containsValue(group)) {
-            MetricGroup metricGroup = groupMetrics.remove(group);
-            if (metricGroup != null) {
-                metricGroup.close();
-            }
-        }
     }
 
     public void initWithLakeTables(List<Tuple2<TableInfo, Long>> tableInfoWithTieredTime) {
@@ -278,9 +240,7 @@ public class LakeTableTieringManager implements AutoCloseable {
     private void registerLakeTable(TableInfo tableInfo, long lastTieredTime) {
         long tableId = tableInfo.getTableId();
         tablePaths.put(tableId, tableInfo.getTablePath());
-        String group = tableInfo.getTableConfig().getDataLakeTieringGroup();
-        tableTieringGroups.put(tableId, group);
-        registerGroupMetrics(group);
+        tableTieringGroups.put(tableId, tableInfo.getTableConfig().getDataLakeTieringGroup());
         tableLakeFreshness.put(
                 tableId, tableInfo.getTableConfig().getDataLakeFreshness().toMillis());
         lastTieringResult.put(tableId, LastTieringResult.initial(lastTieredTime));
@@ -380,10 +340,7 @@ public class LakeTableTieringManager implements AutoCloseable {
                 lock,
                 () -> {
                     tablePaths.remove(tableId);
-                    String group = tableTieringGroups.remove(tableId);
-                    String runningGroup = runningTieringGroups.remove(tableId);
-                    removeUnusedGroupMetrics(group);
-                    removeUnusedGroupMetrics(runningGroup);
+                    tableTieringGroups.remove(tableId);
                     tableLakeFreshness.remove(tableId);
                     lastTieringResult.remove(tableId);
                     currentTieringStartTime.remove(tableId);
@@ -412,8 +369,6 @@ public class LakeTableTieringManager implements AutoCloseable {
                         return;
                     }
                     tableTieringGroups.put(tableId, group);
-                    registerGroupMetrics(group);
-                    removeUnusedGroupMetrics(previousGroup);
                     LOG.info(
                             "Updated tiering group for table {} from {} to {}.",
                             tableId,
@@ -515,7 +470,6 @@ public class LakeTableTieringManager implements AutoCloseable {
                         }
                         iterator.remove();
                         doHandleStateChange(tableId, TieringState.Tiering);
-                        runningTieringGroups.put(tableId, group);
                         long tieringEpoch = tableTierEpoch.get(tableId);
                         return new LakeTieringTableInfo(tableId, tablePath, tieringEpoch);
                     }
@@ -703,12 +657,10 @@ public class LakeTableTieringManager implements AutoCloseable {
                 pendingEnterTime.remove(tableId);
                 break;
             case Tiered:
-                removeUnusedGroupMetrics(runningTieringGroups.remove(tableId));
                 liveTieringTableIds.remove(tableId);
                 currentTieringStartTime.remove(tableId);
                 break;
             case Failed:
-                removeUnusedGroupMetrics(runningTieringGroups.remove(tableId));
                 Counter counter = tableFailureCounters.get(tableId);
                 if (counter != null) {
                     counter.inc();
@@ -914,37 +866,6 @@ public class LakeTableTieringManager implements AutoCloseable {
     @VisibleForTesting
     int getRunningTablesCount() {
         return inReadLock(lock, liveTieringTableIds::size);
-    }
-
-    @VisibleForTesting
-    long getPendingTablesCount(String group) {
-        return inReadLock(
-                lock,
-                () ->
-                        pendingEnterTime.keySet().stream()
-                                .filter(tableId -> group.equals(tableTieringGroups.get(tableId)))
-                                .count());
-    }
-
-    @VisibleForTesting
-    long getRunningTablesCount(String group) {
-        return inReadLock(
-                lock, () -> runningTieringGroups.values().stream().filter(group::equals).count());
-    }
-
-    @VisibleForTesting
-    long getOldestPendingTime(String group) {
-        return inReadLock(
-                lock,
-                () ->
-                        pendingEnterTime.entrySet().stream()
-                                .filter(
-                                        entry ->
-                                                group.equals(
-                                                        tableTieringGroups.get(entry.getKey())))
-                                .mapToLong(entry -> clock.milliseconds() - entry.getValue())
-                                .max()
-                                .orElse(0L));
     }
 
     @VisibleForTesting

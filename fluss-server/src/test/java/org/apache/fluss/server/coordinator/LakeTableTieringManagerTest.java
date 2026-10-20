@@ -300,21 +300,21 @@ class LakeTableTieringManagerTest {
                 createTableInfo(1L, tablePath, Duration.ofSeconds(10), "large"));
         tableTieringManager.updateTableTieringGroup(1L, "small");
         manualClock.advanceTime(Duration.ofSeconds(10));
+        assertRequestTable(1L, tablePath, 1L, "small");
+
+        tableTieringManager.finishTableTiering(1L, 1L, false, TieringStats.UNKNOWN);
+        manualClock.advanceTime(Duration.ofSeconds(10));
         waitValue(
                 () ->
-                        tableTieringManager.getPendingTablesCount("small") == 1
+                        tableTieringManager.getPendingTablesCount() == 1
                                 ? Optional.of(true)
                                 : Optional.empty(),
                 Duration.ofSeconds(10),
                 "Table should be pending in the updated group");
 
-        manualClock.advanceTime(Duration.ofSeconds(5));
         tableTieringManager.updateTableTieringGroup(1L, "large");
         assertThat(tableTieringManager.requestTable("small")).isNull();
-        assertThat(tableTieringManager.getPendingTablesCount("small")).isZero();
-        assertThat(tableTieringManager.getPendingTablesCount("large")).isEqualTo(1);
-        assertThat(tableTieringManager.getOldestPendingTime("large")).isEqualTo(5000L);
-        assertRequestTable(1L, tablePath, 1L, "large");
+        assertRequestTable(1L, tablePath, 2L, "large");
     }
 
     @ParameterizedTest
@@ -326,8 +326,6 @@ class LakeTableTieringManagerTest {
         manualClock.advanceTime(Duration.ofSeconds(10));
         assertRequestTable(1L, tablePath, 1L, "large");
         tableTieringManager.updateTableTieringGroup(1L, "small");
-        assertThat(tableTieringManager.getRunningTablesCount("large")).isEqualTo(1);
-        assertThat(tableTieringManager.getRunningTablesCount("small")).isZero();
         tableTieringManager.renewTieringHeartbeat(1L, 1L);
         assertThat(tableTieringManager.requestTable("small")).isNull();
 
@@ -350,10 +348,8 @@ class LakeTableTieringManagerTest {
                 throw new IllegalArgumentException(outcome);
         }
 
-        assertThat(tableTieringManager.getRunningTablesCount("large")).isZero();
         assertThat(tableTieringManager.requestTable("large")).isNull();
         assertRequestTable(1L, tablePath, 2L, "small");
-        assertThat(tableTieringManager.getRunningTablesCount("small")).isEqualTo(1);
     }
 
     @Test
