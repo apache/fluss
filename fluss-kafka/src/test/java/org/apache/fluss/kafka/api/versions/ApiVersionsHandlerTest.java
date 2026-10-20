@@ -18,6 +18,7 @@
 package org.apache.fluss.kafka.api.versions;
 
 import org.apache.fluss.kafka.KafkaRequestContext;
+import org.apache.fluss.kafka.api.produce.ProduceHandler;
 import org.apache.fluss.kafka.dispatcher.KafkaApiHandler;
 import org.apache.fluss.kafka.dispatcher.KafkaApiRegistry;
 import org.apache.fluss.kafka.dispatcher.KafkaApiSpec;
@@ -59,6 +60,11 @@ class ApiVersionsHandlerTest {
                 new KafkaApiRegistry(
                         Arrays.asList(
                                 handler,
+                                new ProduceHandler(
+                                        command -> {
+                                            throw new AssertionError(
+                                                    "Capability advertisement must not invoke the Produce backend.");
+                                        }),
                                 metadataHandler,
                                 new TestingApiHandler(
                                         new KafkaApiSpec(
@@ -78,6 +84,7 @@ class ApiVersionsHandlerTest {
         assertThat(response.data().apiKeys())
                 .extracting(ApiVersion::apiKey, ApiVersion::minVersion, ApiVersion::maxVersion)
                 .containsExactly(
+                        tuple(ApiKeys.PRODUCE.id, (short) 3, (short) 11),
                         tuple(ApiKeys.METADATA.id, (short) 2, (short) 7),
                         tuple(ApiKeys.API_VERSIONS.id, (short) 0, (short) 4));
     }

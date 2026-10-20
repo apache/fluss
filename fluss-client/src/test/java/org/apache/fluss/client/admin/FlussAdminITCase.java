@@ -19,8 +19,10 @@ package org.apache.fluss.client.admin;
 
 import org.apache.fluss.client.Connection;
 import org.apache.fluss.client.ConnectionFactory;
+import org.apache.fluss.client.FlussConnection;
 import org.apache.fluss.client.metadata.KvSnapshotMetadata;
 import org.apache.fluss.client.metadata.KvSnapshots;
+import org.apache.fluss.client.metadata.MetadataUpdater;
 import org.apache.fluss.client.metadata.TestingMetadataUpdater;
 import org.apache.fluss.client.table.Table;
 import org.apache.fluss.client.table.writer.AppendWriter;
@@ -1211,19 +1213,24 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
         assertThat(zkClient.getKvSnapshotLeaseMetadata(lease.leaseId())).isPresent();
 
         restartCoordinatorServer(zkClient);
-        FLUSS_CLUSTER_EXTENSION.waitUntilAllGatewayHasSameMetadata();
-
         lease.dropLease().get();
         assertThat(zkClient.getKvSnapshotLeaseMetadata(lease.leaseId())).isNotPresent();
     }
 
     private void restartCoordinatorServer(ZooKeeperClient zkClient) throws Exception {
+        MetadataUpdater metadataUpdater = ((FlussConnection) conn).getMetadataUpdater();
+        ServerNode cachedCoordinator = metadataUpdater.getCoordinatorServer();
         FLUSS_CLUSTER_EXTENSION.stopCoordinatorServer();
         waitUntil(
                 () -> !zkClient.getCoordinatorLeaderAddress().isPresent(),
                 Duration.ofMinutes(1),
                 "Coordinator server node still exists in ZooKeeper");
         FLUSS_CLUSTER_EXTENSION.startCoordinatorServer();
+        // Election completes before the new coordinator address reaches every tablet server.
+        // Wait for server metadata to converge so that the client's retry can discover it.
+        FLUSS_CLUSTER_EXTENSION.waitUntilAllGatewayHasSameMetadata();
+        // Keep the client cache stale to exercise the lease's metadata refresh and retry.
+        assertThat(metadataUpdater.getCoordinatorServer()).isEqualTo(cachedCoordinator);
     }
 
     @Test
