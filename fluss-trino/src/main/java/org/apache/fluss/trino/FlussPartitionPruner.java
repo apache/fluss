@@ -21,26 +21,17 @@ package org.apache.fluss.trino;
 import org.apache.fluss.metadata.PartitionSpec;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableInfo;
-import org.apache.fluss.row.BinaryString;
 import org.apache.fluss.types.DataTypeRoot;
 
-import io.airlift.slice.Slice;
 import io.trino.spi.predicate.Domain;
 import io.trino.spi.predicate.TupleDomain;
-import io.trino.spi.type.Type;
 
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
-import static io.trino.spi.type.BigintType.BIGINT;
-import static io.trino.spi.type.BooleanType.BOOLEAN;
-import static io.trino.spi.type.DateType.DATE;
-import static io.trino.spi.type.IntegerType.INTEGER;
-import static io.trino.spi.type.SmallintType.SMALLINT;
-import static io.trino.spi.type.TinyintType.TINYINT;
-import static io.trino.spi.type.VarcharType.VARCHAR;
+import static org.apache.fluss.trino.FlussPredicateValues.toFlussValue;
 import static org.apache.fluss.utils.PartitionUtils.convertValueOfType;
 import static org.apache.fluss.utils.Preconditions.checkArgument;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
@@ -74,6 +65,10 @@ final class FlussPartitionPruner {
             }
 
             DataTypeRoot typeRoot = column.getDataType().getTypeRoot();
+            // Binary partition-name conversion is not enabled by this connector yet.
+            if (typeRoot == DataTypeRoot.BYTES) {
+                continue;
+            }
             toFlussValue(typeRoot, domain)
                     .map(value -> convertValueOfType(value, typeRoot))
                     .ifPresent(value -> partitionValues.put(columnName, value));
@@ -81,34 +76,5 @@ final class FlussPartitionPruner {
         return partitionValues.isEmpty()
                 ? Optional.empty()
                 : Optional.of(new PartitionSpec(partitionValues));
-    }
-
-    private static Optional<Object> toFlussValue(DataTypeRoot typeRoot, Domain domain) {
-        switch (typeRoot) {
-            case STRING:
-                return singleValue(domain, VARCHAR)
-                        .map(Slice.class::cast)
-                        .map(value -> BinaryString.fromString(value.toStringUtf8()));
-            case BOOLEAN:
-                return singleValue(domain, BOOLEAN);
-            case TINYINT:
-                return singleValue(domain, TINYINT).map(Long.class::cast).map(Long::byteValue);
-            case SMALLINT:
-                return singleValue(domain, SMALLINT).map(Long.class::cast).map(Long::shortValue);
-            case INTEGER:
-                return singleValue(domain, INTEGER).map(Long.class::cast).map(Long::intValue);
-            case BIGINT:
-                return singleValue(domain, BIGINT);
-            case DATE:
-                return singleValue(domain, DATE).map(Long.class::cast).map(Long::intValue);
-            default:
-                return Optional.empty();
-        }
-    }
-
-    private static Optional<Object> singleValue(Domain domain, Type expectedType) {
-        return domain.getType().equals(expectedType)
-                ? Optional.of(domain.getSingleValue())
-                : Optional.empty();
     }
 }
