@@ -20,6 +20,7 @@ package org.apache.fluss.rpc;
 import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.exception.RetriableException;
 import org.apache.fluss.utils.ExceptionUtils;
+import org.apache.fluss.utils.concurrent.FutureUtils;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -31,6 +32,7 @@ import java.lang.reflect.Proxy;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executor;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Supplier;
 
 /**
  * A proxy that wraps an existing {@link RpcGateway} proxy and adds automatic retry with metadata
@@ -50,9 +52,8 @@ import java.util.concurrent.atomic.AtomicReference;
  *   <li>The RPC is retried once with the refreshed server addresses
  * </ol>
  *
- * <p>A single retry is sufficient because {@code metadataRefreshAction} is expected to fully
- * recover the cluster node list on its own; the retry only validates the refreshed addresses and
- * absorbs transient errors right after a server/leader switch.
+ * <p>Each call is retried at most once. A per-call delegate can retain selection state across the
+ * initial invocation and retry.
  *
  * <p>Concurrent retriers share a single in-flight refresh: when many RPCs fail at once (e.g.,
  * during a rolling upgrade), they all piggyback on the first refresh future instead of each
@@ -65,7 +66,7 @@ public class RetryableGatewayClientProxy implements InvocationHandler {
 
     private static final Logger LOG = LoggerFactory.getLogger(RetryableGatewayClientProxy.class);
 
-    private final Object delegate;
+    private final Supplier<?> delegateFactory;
     private final Runnable metadataRefreshAction;
     private final Executor refreshExecutor;
 
@@ -79,7 +80,12 @@ public class RetryableGatewayClientProxy implements InvocationHandler {
 
     RetryableGatewayClientProxy(
             Object delegate, Runnable metadataRefreshAction, Executor refreshExecutor) {
-        this.delegate = delegate;
+        this(() -> delegate, metadataRefreshAction, refreshExecutor);
+    }
+
+    private RetryableGatewayClientProxy(
+            Supplier<?> delegateFactory, Runnable metadataRefreshAction, Executor refreshExecutor) {
+        this.delegateFactory = delegateFactory;
         this.metadataRefreshAction = metadataRefreshAction;
         this.refreshExecutor = refreshExecutor;
     }
@@ -102,6 +108,28 @@ public class RetryableGatewayClientProxy implements InvocationHandler {
             Runnable metadataRefreshAction,
             Executor refreshExecutor,
             Class<T> gatewayClass) {
+        Supplier<T> delegateFactory = () -> delegate;
+        return createRetryableGatewayProxy(
+                delegateFactory, metadataRefreshAction, refreshExecutor, gatewayClass);
+    }
+
+    /**
+     * Creates a retryable proxy with a separate delegate for each logical call. The initial
+     * invocation and its single retry share that delegate, while concurrent calls share metadata
+     * refreshes across the proxy.
+     *
+     * @param delegateFactory factory invoked once per logical call
+     * @param metadataRefreshAction callback to refresh metadata before retrying
+     * @param refreshExecutor executor on which metadata refresh runs, outside Netty event loops
+     * @param gatewayClass the gateway interface class
+     * @param <T> the gateway type
+     * @return a retryable gateway proxy
+     */
+    public static <T extends RpcGateway> T createRetryableGatewayProxy(
+            Supplier<T> delegateFactory,
+            Runnable metadataRefreshAction,
+            Executor refreshExecutor,
+            Class<T> gatewayClass) {
         ClassLoader classLoader = gatewayClass.getClassLoader();
 
         @SuppressWarnings("unchecked")
@@ -111,17 +139,24 @@ public class RetryableGatewayClientProxy implements InvocationHandler {
                                 classLoader,
                                 new Class<?>[] {gatewayClass},
                                 new RetryableGatewayClientProxy(
-                                        delegate, metadataRefreshAction, refreshExecutor));
+                                        delegateFactory, metadataRefreshAction, refreshExecutor));
         return proxy;
     }
 
     @Override
     public Object invoke(Object proxy, Method method, Object[] args) throws Throwable {
-        return invokeWithRetry(method, args, true);
+        Object delegate;
+        try {
+            delegate = delegateFactory.get();
+        } catch (Exception e) {
+            return FutureUtils.completedExceptionally(e);
+        }
+        return invokeWithRetry(delegate, method, args, true);
     }
 
     @SuppressWarnings("unchecked")
-    private <T> CompletableFuture<T> invokeWithRetry(Method method, Object[] args, boolean retry) {
+    private <T> CompletableFuture<T> invokeWithRetry(
+            Object delegate, Method method, Object[] args, boolean retry) {
         CompletableFuture<T> future;
         try {
             future = (CompletableFuture<T>) method.invoke(delegate, args);
@@ -158,7 +193,7 @@ public class RetryableGatewayClientProxy implements InvocationHandler {
                             .thenCompose(
                                     ignored ->
                                             RetryableGatewayClientProxy.this.<T>invokeWithRetry(
-                                                    method, args, false))
+                                                    delegate, method, args, false))
                             .whenComplete(
                                     (retryResult, retryError) -> {
                                         if (retryError != null) {

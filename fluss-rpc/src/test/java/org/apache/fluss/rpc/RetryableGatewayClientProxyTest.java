@@ -35,6 +35,7 @@ import java.util.concurrent.Executor;
 import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Supplier;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -230,6 +231,60 @@ class RetryableGatewayClientProxyTest {
         assertThat(refreshCount.get())
                 .as("concurrent retriers must share a single refresh")
                 .isEqualTo(1);
+    }
+
+    @Test
+    void testPerCallDelegatesShareRefreshButKeepTheirOwnRetryState() throws Exception {
+        List<AtomicInteger> attempts = new ArrayList<>();
+        List<Runnable> refreshTasks = new ArrayList<>();
+        AtomicInteger refreshCount = new AtomicInteger();
+        Supplier<RpcGateway> delegateFactory =
+                () -> {
+                    AtomicInteger callAttempts = new AtomicInteger();
+                    attempts.add(callAttempts);
+                    return createGateway(callAttempts, 1);
+                };
+        RpcGateway proxy =
+                RetryableGatewayClientProxy.createRetryableGatewayProxy(
+                        delegateFactory,
+                        refreshCount::incrementAndGet,
+                        refreshTasks::add,
+                        RpcGateway.class);
+        List<CompletableFuture<ApiVersionsResponse>> results = new ArrayList<>();
+        for (int i = 0; i < 8; i++) {
+            results.add(proxy.apiVersions(new ApiVersionsRequest()));
+        }
+        assertThat(attempts).hasSize(8).allSatisfy(count -> assertThat(count.get()).isEqualTo(1));
+        assertThat(refreshTasks).hasSize(1);
+        refreshTasks.get(0).run();
+        for (CompletableFuture<ApiVersionsResponse> result : results) {
+            assertThat(result.get(5, TimeUnit.SECONDS)).isNotNull();
+        }
+        assertThat(attempts).hasSize(8).allSatisfy(count -> assertThat(count.get()).isEqualTo(2));
+        assertThat(refreshCount.get()).isEqualTo(1);
+    }
+
+    @Test
+    void testDelegateFactoryFailureReturnsFailedFuture() {
+        AtomicInteger factories = new AtomicInteger();
+        AtomicInteger refreshes = new AtomicInteger();
+        Supplier<RpcGateway> delegateFactory =
+                () -> {
+                    factories.incrementAndGet();
+                    throw new IllegalStateException("factory failed");
+                };
+        RpcGateway proxy =
+                RetryableGatewayClientProxy.createRetryableGatewayProxy(
+                        delegateFactory,
+                        refreshes::incrementAndGet,
+                        REFRESH_EXECUTOR,
+                        RpcGateway.class);
+        CompletableFuture<ApiVersionsResponse> result = proxy.apiVersions(new ApiVersionsRequest());
+        assertThatThrownBy(result::get)
+                .hasCauseInstanceOf(IllegalStateException.class)
+                .hasRootCauseMessage("factory failed");
+        assertThat(factories.get()).isEqualTo(1);
+        assertThat(refreshes.get()).isZero();
     }
 
     /**

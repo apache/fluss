@@ -33,6 +33,7 @@ import org.apache.fluss.shaded.netty4.io.netty.bootstrap.Bootstrap;
 import org.apache.fluss.shaded.netty4.io.netty.buffer.PooledByteBufAllocator;
 import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelOption;
 import org.apache.fluss.shaded.netty4.io.netty.channel.EventLoopGroup;
+import org.apache.fluss.utils.ExponentialBackoff;
 import org.apache.fluss.utils.concurrent.FutureUtils;
 
 import org.slf4j.Logger;
@@ -41,11 +42,13 @@ import org.slf4j.LoggerFactory;
 import javax.annotation.concurrent.ThreadSafe;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
+import java.util.function.LongSupplier;
 import java.util.function.Supplier;
 
 import static org.apache.fluss.utils.Preconditions.checkArgument;
@@ -71,6 +74,12 @@ public final class NettyClient implements RpcClient {
      */
     private final Map<String, ServerConnection> connections;
 
+    // Never enter a ServerConnection lock while holding this lock: connection callbacks reenter it.
+    private final Object registryLock = new Object();
+    private final Map<String, ReconnectState> reconnectStates = new HashMap<>();
+    private final LongSupplier nanoTime;
+    private final ExponentialBackoff reconnectBackoff;
+
     /** Metric groups for client. */
     private final ClientMetricGroup clientMetricGroup;
 
@@ -79,7 +88,37 @@ public final class NettyClient implements RpcClient {
     private volatile boolean isClosed = false;
 
     public NettyClient(Configuration conf, ClientMetricGroup clientMetricGroup) {
+        this(
+                conf,
+                clientMetricGroup,
+                System::nanoTime,
+                new ExponentialBackoff(100L, 2, 5000L, 0.2));
+    }
+
+    @VisibleForTesting
+    NettyClient(
+            Configuration conf,
+            ClientMetricGroup clientMetricGroup,
+            LongSupplier nanoTime,
+            ExponentialBackoff reconnectBackoff) {
+        this(
+                conf,
+                clientMetricGroup,
+                nanoTime,
+                reconnectBackoff,
+                AuthenticationFactory.loadClientAuthenticatorSupplier(conf));
+    }
+
+    @VisibleForTesting
+    NettyClient(
+            Configuration conf,
+            ClientMetricGroup clientMetricGroup,
+            LongSupplier nanoTime,
+            ExponentialBackoff reconnectBackoff,
+            Supplier<ClientAuthenticator> authenticatorSupplier) {
         this.connections = new ConcurrentHashMap<>();
+        this.nanoTime = nanoTime;
+        this.reconnectBackoff = reconnectBackoff;
 
         // build bootstrap
         this.eventGroup =
@@ -102,7 +141,7 @@ public final class NettyClient implements RpcClient {
                         .option(ChannelOption.SO_KEEPALIVE, true)
                         .handler(new ClientChannelInitializer(connectionMaxIdle, preferHeap));
         this.clientMetricGroup = clientMetricGroup;
-        this.authenticatorSupplier = AuthenticationFactory.loadClientAuthenticatorSupplier(conf);
+        this.authenticatorSupplier = authenticatorSupplier;
         NettyMetrics.registerNettyMetrics(clientMetricGroup, allocator);
     }
 
@@ -130,7 +169,10 @@ public final class NettyClient implements RpcClient {
     public CompletableFuture<Void> disconnect(String serverUid) {
         LOG.debug("Disconnecting from server {}.", serverUid);
         checkArgument(!isClosed, "Netty client is closed.");
-        ServerConnection connection = connections.remove(serverUid);
+        ServerConnection connection;
+        synchronized (registryLock) {
+            connection = connections.remove(serverUid);
+        }
         if (connection != null) {
             return connection.close();
         }
@@ -153,6 +195,16 @@ public final class NettyClient implements RpcClient {
         return connection.isReady();
     }
 
+    @Override
+    public boolean isBackingOff(ServerNode node) {
+        synchronized (registryLock) {
+            ReconnectState state = reconnectStates.get(node.uid());
+            return state != null
+                    && state.matches(node)
+                    && state.remainingNanos(nanoTime.getAsLong()) > 0;
+        }
+    }
+
     /** Send an RPC request to the given server and return a future for the response. */
     @Override
     public CompletableFuture<ApiMessage> sendRequest(
@@ -164,12 +216,16 @@ public final class NettyClient implements RpcClient {
     @Override
     public void close() throws Exception {
         try {
-            isClosed = true;
+            List<ServerConnection> closing;
+            synchronized (registryLock) {
+                isClosed = true;
+                closing = new ArrayList<>(connections.values());
+                connections.clear();
+                reconnectStates.clear();
+            }
             final List<CompletableFuture<Void>> shutdownFutures = new ArrayList<>();
-            for (Map.Entry<String, ServerConnection> conn : connections.entrySet()) {
-                if (connections.remove(conn.getKey(), conn.getValue())) {
-                    shutdownFutures.add(conn.getValue().close());
-                }
+            for (ServerConnection connection : closing) {
+                shutdownFutures.add(connection.close());
             }
             shutdownFutures.add(NettyUtils.shutdownGroup(eventGroup));
             CompletableFuture.allOf(shutdownFutures.toArray(new CompletableFuture<?>[0]))
@@ -180,19 +236,89 @@ public final class NettyClient implements RpcClient {
         }
     }
 
-    private ServerConnection getOrCreateConnection(ServerNode node) {
-        String serverId = node.uid();
-        return connections.computeIfAbsent(
-                serverId,
-                ignored -> {
-                    LOG.debug("Creating connection to server {}.", node);
-                    return new ServerConnection(
-                            bootstrap,
-                            node,
-                            clientMetricGroup,
-                            authenticatorSupplier.get(),
-                            (con, ignore) -> connections.remove(serverId, con));
-                });
+    @VisibleForTesting
+    ServerConnection getOrCreateConnection(ServerNode node) {
+        ServerConnection connection;
+        ServerConnection replaced = null;
+        long delayNanos;
+        synchronized (registryLock) {
+            String serverId = node.uid();
+            ReconnectState state = reconnectStates.get(serverId);
+            boolean endpointChanged = state == null || !state.matches(node);
+            if (endpointChanged) {
+                state = new ReconnectState(node);
+            }
+            connection = endpointChanged ? null : connections.get(serverId);
+            if (connection == null) {
+                LOG.debug("Creating connection to server {}.", node);
+                connection =
+                        new ServerConnection(
+                                node,
+                                clientMetricGroup,
+                                authenticatorSupplier.get(),
+                                this::onDisconnected,
+                                this::onReady);
+                replaced = connections.put(serverId, connection);
+            }
+            if (endpointChanged && !isClosed) {
+                reconnectStates.put(serverId, state);
+            }
+            delayNanos = state.remainingNanos(nanoTime.getAsLong());
+        }
+        if (replaced != null) {
+            replaced.close();
+        }
+        // Either close() sees the registered connection, or this check closes it before starting.
+        if (isClosed) {
+            connection.close();
+        } else {
+            connection.connect(bootstrap, delayNanos);
+        }
+        return connection;
+    }
+
+    private void onDisconnected(ServerConnection connection, boolean transportFailure) {
+        synchronized (registryLock) {
+            String uid = connection.getServerNode().uid();
+            if (connections.remove(uid, connection) && transportFailure && !isClosed) {
+                ReconnectState state = reconnectStates.get(uid);
+                state.failedAtNanos = nanoTime.getAsLong();
+                state.delayNanos =
+                        TimeUnit.MILLISECONDS.toNanos(reconnectBackoff.backoff(state.failures++));
+            }
+        }
+    }
+
+    private void onReady(ServerConnection connection) {
+        synchronized (registryLock) {
+            String uid = connection.getServerNode().uid();
+            if (connections.get(uid) == connection) {
+                ReconnectState state = reconnectStates.get(uid);
+                state.failures = 0;
+                state.delayNanos = 0;
+            }
+        }
+    }
+
+    private static final class ReconnectState {
+        private final ServerNode node;
+        private long failures;
+        private long failedAtNanos;
+        private long delayNanos;
+
+        private ReconnectState(ServerNode node) {
+            this.node = node;
+        }
+
+        private boolean matches(ServerNode other) {
+            return node.host().equals(other.host())
+                    && node.port() == other.port()
+                    && node.serverType() == other.serverType();
+        }
+
+        private long remainingNanos(long now) {
+            return delayNanos == 0 ? 0 : Math.max(0, delayNanos - (now - failedAtNanos));
+        }
     }
 
     @VisibleForTesting

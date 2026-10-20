@@ -32,6 +32,7 @@ import org.apache.fluss.rpc.messages.MetadataResponse;
 import org.apache.fluss.rpc.messages.PbPartitionMetadata;
 import org.apache.fluss.rpc.messages.PbTableMetadata;
 import org.apache.fluss.rpc.metrics.TestingClientMetricGroup;
+import org.apache.fluss.rpc.protocol.ApiKeys;
 import org.apache.fluss.server.coordinator.TestCoordinatorGateway;
 
 import org.junit.jupiter.api.Test;
@@ -39,12 +40,22 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
+import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.buildMetadataResponse;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 /** UT Test for update metadata of {@link MetadataUpdater}. */
 public class MetadataUpdaterTest {
@@ -53,6 +64,77 @@ public class MetadataUpdaterTest {
             new ServerNode(1, "localhost", 8080, ServerType.COORDINATOR);
     private static final ServerNode TS_NODE =
             new ServerNode(1, "localhost", 8080, ServerType.TABLET_SERVER);
+
+    @Test
+    void testMetadataRefreshDoesNotResetConnectionBackoff() {
+        ServerNode failed = new ServerNode(2, "localhost", 8081, ServerType.TABLET_SERVER);
+        Map<Integer, ServerNode> nodes = new HashMap<>();
+        nodes.put(TS_NODE.id(), TS_NODE);
+        nodes.put(failed.id(), failed);
+        Cluster cluster =
+                new Cluster(
+                        nodes,
+                        CS_NODE,
+                        Collections.emptyMap(),
+                        Collections.emptyMap(),
+                        Collections.emptyMap(),
+                        Collections.emptyMap());
+        RpcClient client = mock(RpcClient.class);
+        when(client.isBackingOff(failed)).thenReturn(true);
+        MetadataResponse response = new MetadataResponse();
+        for (ServerNode node : nodes.values()) {
+            response.addTabletServer()
+                    .setNodeId(node.id())
+                    .setHost(node.host())
+                    .setPort(node.port());
+        }
+        when(client.sendRequest(eq(TS_NODE), eq(ApiKeys.GET_METADATA), any()))
+                .thenReturn(CompletableFuture.completedFuture(response));
+        MetadataUpdater updater = new MetadataUpdater(client, new Configuration(), cluster);
+        updater.refreshClusterUntilAvailable();
+        assertThat(updater.getCluster().getAliveTabletServerList())
+                .containsExactlyInAnyOrder(TS_NODE, failed);
+        updater.updateMetadata(null, null, null);
+        for (int i = 0; i < 100; i++) {
+            assertThat(updater.getRandomTabletServer()).isEqualTo(TS_NODE);
+        }
+        verify(client, never()).sendRequest(eq(failed), any(), any());
+        verify(client, never()).connect(any());
+    }
+
+    @Test
+    void testBackoffSelectionFallbackPreservesExclusions() {
+        ServerNode second = new ServerNode(2, "localhost", 8081, ServerType.TABLET_SERVER);
+        Map<Integer, ServerNode> nodes = new HashMap<>();
+        nodes.put(TS_NODE.id(), TS_NODE);
+        nodes.put(second.id(), second);
+        Cluster cluster =
+                new Cluster(
+                        nodes,
+                        CS_NODE,
+                        Collections.emptyMap(),
+                        Collections.emptyMap(),
+                        Collections.emptyMap(),
+                        Collections.emptyMap());
+        assertThat(
+                        MetadataUtils.getOneAvailableTabletServerNode(
+                                cluster, Collections.singleton(TS_NODE.id()), node -> true))
+                .isEqualTo(second);
+        assertThat(
+                        MetadataUtils.getOneAvailableTabletServerNode(
+                                cluster,
+                                new HashSet<>(Arrays.asList(TS_NODE.id(), second.id())),
+                                node -> true))
+                .isNull();
+        assertThat(
+                        MetadataUtils.getOneAvailableTabletServerNode(
+                                Cluster.empty(), Collections.emptySet(), node -> true))
+                .isNull();
+        assertThat(
+                        MetadataUtils.getOneAvailableTabletServerNode(
+                                cluster, Collections.emptySet(), node -> true))
+                .isIn(TS_NODE, second);
+    }
 
     @Test
     void testInitializeClusterWithRetries() throws Exception {
