@@ -137,12 +137,7 @@ public final class KvStateAccessor {
         if (!missingKeys.isEmpty()) {
             List<byte[]> results = rocksDBKv.multiGet(encodedKeys);
             for (int i = 0; i < missingKeys.size(); i++) {
-                byte[] value = results.get(i);
-                // multiGetAsList reports both NotFound and per-key read errors as null. A single
-                // Get distinguishes them, so an I/O error cannot become an insert or lost delete.
-                values.put(
-                        missingKeys.get(i),
-                        value == null ? rocksDBKv.get(encodedKeys.get(i)) : value);
+                values.put(missingKeys.get(i), results.get(i));
             }
         }
         return values;

@@ -44,9 +44,9 @@ import static org.apache.fluss.testutils.DataTestUtils.compactedRow;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.verifyNoMoreInteractions;
 import static org.mockito.Mockito.when;
 
 /** Tests for {@link KvStateAccessor}. */
@@ -126,14 +126,13 @@ class KvStateAccessorTest {
         assertThat(values.get(key)).isSameAs(stored);
         assertThat(values).containsEntry(missing, null);
         verify(rocksDBKv).multiGet(Arrays.asList(key.get(), missing.get()));
-        verify(rocksDBKv).get(missing.get());
-        verify(rocksDBKv, never()).get(key.get());
+        verifyNoMoreInteractions(rocksDBKv);
     }
 
     @Test
-    void testPrefetchDoesNotTurnReadErrorsIntoMissingValues() throws Exception {
-        when(rocksDBKv.multiGet(Arrays.asList(key.get()))).thenReturn(Arrays.asList((byte[]) null));
-        when(rocksDBKv.get(key.get())).thenThrow(new IOException("read failed"));
+    void testPrefetchPropagatesReadErrors() throws Exception {
+        when(rocksDBKv.multiGet(Arrays.asList(key.get())))
+                .thenThrow(new IOException("read failed"));
         assertThatThrownBy(
                         () ->
                                 stateAccessor.prefetchRocksDBValues(
