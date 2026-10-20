@@ -2883,6 +2883,199 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn collect_batches_preserves_pending_fetch_errors() -> Result<()> {
+        for (preceding_data, subscription_change) in [(false, 0), (true, 0), (true, 1), (true, 2)] {
+            for same_bucket in [false, true] {
+                for cancelled in [false, true] {
+                    check_pending_fetch_error(
+                        preceding_data,
+                        same_bucket,
+                        cancelled,
+                        subscription_change,
+                    )
+                    .await?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    async fn check_pending_fetch_error(
+        preceding_data: bool,
+        same_bucket: bool,
+        cancelled: bool,
+        subscription_change: u8,
+    ) -> Result<()> {
+        use crate::client::table::remote_log::{RemoteLogDownloadFuture, RemoteLogSegment};
+
+        let table_path = TablePath::new("db", "tbl");
+        let table_info = build_table_info(table_path.clone(), 1, 2);
+        let metadata = Arc::new(Metadata::new_for_test(build_cluster_arc(&table_path, 1, 2)));
+        let status = Arc::new(LogScannerStatus::new());
+        let fetcher = LogFetcher::new(
+            table_info.clone(),
+            Arc::new(RpcClient::new()),
+            metadata.clone(),
+            status.clone(),
+            &Config::default(),
+            None,
+            false,
+            None,
+            test_scanner_metrics(&table_path),
+            test_schema_getter(&table_info, &metadata),
+        )?;
+        let data_bucket = TableBucket::new(1, 0);
+        let error_bucket = TableBucket::new(1, i32::from(!same_bucket));
+        let error_offset = if same_bucket {
+            i64::from(preceding_data)
+        } else {
+            5
+        };
+        status.assign_scan_bucket(error_bucket.clone(), error_offset);
+        if preceding_data {
+            status.assign_scan_bucket(data_bucket.clone(), 0);
+            let data = build_records(&table_info, Arc::new(table_path))?;
+            let size = data.len();
+            fetcher
+                .log_fetch_buffer
+                .add(Box::new(DefaultCompletedFetch::new(
+                    data_bucket.clone(),
+                    LogRecordsBatches::new(data),
+                    size,
+                    test_resolver(&table_info),
+                    false,
+                    0,
+                    0,
+                )));
+        }
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        let download = RemoteLogDownloadFuture::new(receiver);
+        let completed = Arc::new(tokio::sync::Notify::new());
+        let notification = completed.clone();
+        download.on_complete(move || notification.notify_one());
+        fetcher
+            .log_fetch_buffer
+            .pend(Box::new(RemotePendingFetch::new(
+                RemoteLogSegment {
+                    segment_id: "failed-download".to_string(),
+                    start_offset: 0,
+                    end_offset: 10,
+                    size_in_bytes: 0,
+                    table_bucket: error_bucket.clone(),
+                    max_timestamp: 0,
+                },
+                download,
+                0,
+                error_offset,
+                10,
+                test_resolver(&table_info),
+            )));
+        if cancelled {
+            drop(sender);
+        } else {
+            assert!(
+                sender
+                    .send(Err(Error::UnexpectedError {
+                        message: "download failed".to_string(),
+                        source: None,
+                    }))
+                    .is_ok()
+            );
+        }
+        completed.notified().await;
+        fetcher.log_fetch_buffer.try_complete(&error_bucket);
+
+        if preceding_data {
+            let batches = fetcher.collect_batches().await?;
+            assert_eq!(batches.len(), 1);
+            assert_eq!(batches[0].bucket(), &data_bucket);
+            assert_eq!(batches[0].base_offset(), 0);
+            assert_eq!(batches[0].batch().num_rows(), 1);
+            assert_eq!(status.get_bucket_offset(&data_bucket), Some(1));
+        }
+        assert_eq!(status.get_bucket_offset(&error_bucket), Some(error_offset));
+        // Subscription changes apply after an error has been deferred.
+        if preceding_data && subscription_change == 1 {
+            status.unassign_scan_buckets(std::slice::from_ref(&error_bucket));
+        } else if preceding_data && subscription_change == 2 {
+            status.update_offset(&error_bucket, error_offset + 1);
+        } else {
+            let error = fetcher.collect_batches().await.unwrap_err();
+            let expected = if cancelled {
+                "future cancelled"
+            } else {
+                "download failed"
+            };
+            assert!(matches!(error, Error::IoUnexpectedError { message, .. }
+                if message.contains(expected)));
+            assert_eq!(status.get_bucket_offset(&error_bucket), Some(error_offset));
+        }
+        assert!(fetcher.collect_batches().await?.is_empty());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn collect_batches_preserves_data_across_schema_errors() -> Result<()> {
+        use crate::record::SCHEMA_ID_OFFSET;
+
+        for same_fetch in [false, true] {
+            let table_path = TablePath::new("db", "tbl");
+            let table_info = build_table_info(table_path.clone(), 1, 1);
+            let metadata = Arc::new(Metadata::new_for_test(Default::default()));
+            let status = Arc::new(LogScannerStatus::new());
+            let fetcher = filtering_fetcher(&table_info, &metadata, status.clone(), None)?;
+            let bucket = TableBucket::new(1, 0);
+            status.assign_scan_bucket(bucket.clone(), 0);
+            let data = build_records(&table_info, Arc::new(table_path))?;
+            let mut unknown_schema = data.clone();
+            unknown_schema[..8].copy_from_slice(&1i64.to_le_bytes());
+            let schema_id = table_info.get_schema_id() as i16 + 1;
+            unknown_schema[SCHEMA_ID_OFFSET..SCHEMA_ID_OFFSET + 2]
+                .copy_from_slice(&schema_id.to_le_bytes());
+            let add = |bytes: Vec<u8>, offset| {
+                fetcher
+                    .log_fetch_buffer
+                    .add(Box::new(DefaultCompletedFetch::new(
+                        bucket.clone(),
+                        LogRecordsBatches::new(bytes.clone()),
+                        bytes.len(),
+                        fetcher.resolver.clone(),
+                        false,
+                        offset,
+                        0,
+                    )));
+            };
+            if same_fetch {
+                add([data, unknown_schema].concat(), 0);
+            } else {
+                add(data, 0);
+                add(unknown_schema, 1);
+            }
+            let batches = fetcher.collect_batches().await?;
+            assert_eq!(batches.len(), 1);
+            assert_eq!(batches[0].base_offset(), 0);
+            assert_eq!(status.get_bucket_offset(&bucket), Some(1));
+            // Failed schema lookup must retain the unread batch and its offset.
+            for _ in 0..2 {
+                let error = fetcher.collect_batches().await.unwrap_err();
+                assert!(matches!(error, Error::UnexpectedError { message, .. }
+                    if message == "Coordinator server not found in cluster metadata"));
+                assert_eq!(status.get_bucket_offset(&bucket), Some(1));
+            }
+            fetcher
+                .resolver
+                .register_schema(schema_id, table_info.get_schema())?;
+            let recovered = fetcher.collect_batches().await?;
+            assert_eq!(recovered.len(), 1);
+            assert_eq!(recovered[0].base_offset(), 1);
+            assert_eq!(recovered[0].batch().num_rows(), 1);
+            assert_eq!(status.get_bucket_offset(&bucket), Some(2));
+            assert!(fetcher.collect_batches().await?.is_empty());
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn collect_batches_returns_data_before_initialization_error() -> Result<()> {
         for subscription_change in 0..3 {
             check_batch_initialization_error(true, subscription_change).await?;
@@ -2982,26 +3175,11 @@ mod tests {
     #[tokio::test]
     async fn collect_batches_preserves_partial_results_and_error_order() -> Result<()> {
         // Cover failures within one fetch and in the next fetch, including no preceding data.
-        let cases = [
-            (false, 0, 0),
-            (false, 0, 1),
-            (false, 0, 2),
-            (false, 1, 0),
-            (false, 1, 1),
-            (false, 1, 2),
-            (false, 2, 0),
-            (false, 2, 1),
-            (false, 2, 2),
-            (true, 0, 0),
-            (true, 0, 1),
-            (true, 0, 2),
-            (true, 1, 0),
-            (true, 1, 1),
-            (true, 1, 2),
-            (true, 2, 0),
-            (true, 2, 1),
-            (true, 2, 2),
-        ];
+        let cases = [false, true].into_iter().flat_map(|same_fetch| {
+            [0, 1, 2, 99, 100, 101]
+                .into_iter()
+                .flat_map(move |count| (0..3).map(move |change| (same_fetch, count, change)))
+        });
         for (same_fetch, good_batches, subscription_change) in cases {
             let table_path = TablePath::new("db", "tbl");
             let table_info = build_table_info(table_path.clone(), 1, 1);
@@ -3066,7 +3244,15 @@ mod tests {
             if good_batches == 0 {
                 assert!(first.is_err());
             } else {
-                let batches = first?;
+                let mut batches = first?;
+                assert_eq!(batches.len(), good_batches.min(100));
+                assert_eq!(
+                    status.get_bucket_offset(&bucket),
+                    Some(batches.len() as i64)
+                );
+                if good_batches > 100 {
+                    batches.extend(fetcher.collect_batches().await?);
+                }
                 assert_eq!(batches.len(), good_batches);
                 for (offset, batch) in batches.iter().enumerate() {
                     assert_eq!(batch.base_offset(), offset as i64);

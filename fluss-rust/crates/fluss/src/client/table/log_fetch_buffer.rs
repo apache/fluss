@@ -121,6 +121,7 @@ enum FetchStep<T> {
 /// Represents a pending fetch that is waiting to be completed
 pub trait PendingFetch: Send + Sync {
     fn table_bucket(&self) -> &TableBucket;
+    fn fetch_offset(&self) -> i64;
     fn is_completed(&self) -> bool;
     fn to_completed_fetch(self: Box<Self>) -> Result<Box<dyn CompletedFetch>>;
 }
@@ -234,20 +235,21 @@ impl LogFetchBuffer {
         // holding both locks simultaneously.
         let mut completed_to_push: Vec<Box<dyn CompletedFetch>> = Vec::new();
         let mut has_completed = false;
-        let mut pending_error: Option<Error> = None;
+        let mut pending_error: Option<(Error, i64)> = None;
         {
             let mut pending_map = self.pending_fetches.lock();
             if let Some(pendings) = pending_map.get_mut(table_bucket) {
                 while let Some(front) = pendings.front() {
                     if front.is_completed() {
                         let pending = pendings.pop_front().unwrap();
+                        let fetch_offset = pending.fetch_offset();
                         match pending.to_completed_fetch() {
                             Ok(completed) => {
                                 completed_to_push.push(completed);
                                 has_completed = true;
                             }
                             Err(e) => {
-                                pending_error = Some(e);
+                                pending_error = Some((e, fetch_offset));
                                 has_completed = true;
                                 break;
                             }
@@ -262,11 +264,11 @@ impl LogFetchBuffer {
             }
         }
 
-        if let Some(error) = pending_error {
+        if let Some((error, fetch_offset)) = pending_error {
             let error_fetch = DefaultCompletedFetch::from_error(
                 table_bucket.clone(),
                 error,
-                -1,
+                fetch_offset,
                 Arc::clone(&self.resolver),
             );
             completed_to_push.push(Box::new(error_fetch));
@@ -361,6 +363,10 @@ impl CompletedPendingFetch {
 impl PendingFetch for CompletedPendingFetch {
     fn table_bucket(&self) -> &TableBucket {
         self.completed_fetch.table_bucket()
+    }
+
+    fn fetch_offset(&self) -> i64 {
+        self.completed_fetch.next_fetch_offset()
     }
 
     fn is_completed(&self) -> bool {
@@ -1001,6 +1007,10 @@ impl PendingFetch for RemotePendingFetch {
         &self.segment.table_bucket
     }
 
+    fn fetch_offset(&self) -> i64 {
+        self.fetch_offset
+    }
+
     fn is_completed(&self) -> bool {
         self.download_future.is_done()
     }
@@ -1248,6 +1258,10 @@ mod tests {
             &self.table_bucket
         }
 
+        fn fetch_offset(&self) -> i64 {
+            5
+        }
+
         fn is_completed(&self) -> bool {
             true
         }
@@ -1270,6 +1284,73 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn pending_file_open_failure_preserves_offset_and_releases_permit() -> Result<()> {
+        use crate::client::table::remote_log::{
+            FetchResult as DownloadResult, RemoteLogDownloadRequest, RemoteLogDownloader,
+            RemoteLogFetcher,
+        };
+        use std::future::Future;
+        use std::path::PathBuf;
+        use std::pin::Pin;
+
+        struct MissingFileFetcher(PathBuf);
+        impl RemoteLogFetcher for MissingFileFetcher {
+            fn fetch(
+                &self,
+                _: &RemoteLogDownloadRequest,
+            ) -> Pin<Box<dyn Future<Output = Result<DownloadResult>> + Send>> {
+                let file_path = self.0.clone();
+                Box::pin(async move {
+                    Ok(DownloadResult {
+                        file_path,
+                        file_size: 0,
+                    })
+                })
+            }
+        }
+        let directory = tempfile::tempdir()?;
+        let downloader = RemoteLogDownloader::new_with_fetcher(
+            Arc::new(MissingFileFetcher(directory.path().join("missing.log"))),
+            1,
+            1,
+            crate::test_utils::test_scanner_metrics(&TablePath::new("db", "tbl")),
+        )?;
+        let segment = RemoteLogSegment {
+            segment_id: "missing".to_string(),
+            start_offset: 0,
+            end_offset: 10,
+            size_in_bytes: 0,
+            table_bucket: TableBucket::new(1, 0),
+            max_timestamp: 0,
+        };
+        let buffer = LogFetchBuffer::new(test_resolver()?);
+        // The second download needs the sole permit released by the first failure.
+        for offset in [5, 6] {
+            let download = downloader.request_remote_log("unused", &segment);
+            let ready = Arc::new(Notify::new());
+            let notification = ready.clone();
+            download.on_complete(move || notification.notify_one());
+            buffer.pend(Box::new(RemotePendingFetch::new(
+                segment.clone(),
+                download,
+                0,
+                offset,
+                10,
+                test_resolver()?,
+            )));
+            tokio::time::timeout(Duration::from_secs(5), ready.notified())
+                .await
+                .unwrap();
+            buffer.try_complete(&segment.table_bucket);
+            let mut failed = buffer.poll().expect("file-open error");
+            assert_eq!(failed.next_fetch_offset(), offset);
+            assert!(failed.take_error().is_some());
+            assert!(buffer.poll().is_none());
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn await_not_empty_returns_pending_error() {
         let buffer = LogFetchBuffer::new(test_resolver().unwrap());
         let table_bucket = TableBucket::new(1, 0);
@@ -1282,6 +1363,7 @@ mod tests {
         assert!(matches!(result, Ok(true)));
 
         let mut completed = buffer.poll().expect("completed fetch");
+        assert_eq!(completed.next_fetch_offset(), 5);
         assert!(completed.take_error().is_some());
     }
 
