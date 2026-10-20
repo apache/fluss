@@ -35,6 +35,8 @@ import org.apache.fluss.utils.types.Tuple2;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.time.Duration;
 import java.util.Arrays;
@@ -266,6 +268,95 @@ class LakeTableTieringManagerTest {
     }
 
     @Test
+    void testRequestTablesByGroup() {
+        TablePath defaultPath = TablePath.of("db", "default_table");
+        TablePath groupPath1 = TablePath.of("db", "group_table1");
+        TablePath groupPath2 = TablePath.of("db", "group_table2");
+        tableTieringManager.initWithLakeTables(
+                Arrays.asList(
+                        Tuple2.of(
+                                createTableInfo(1L, groupPath1, Duration.ofSeconds(10), "large"),
+                                -10_000L),
+                        Tuple2.of(
+                                createTableInfo(2L, defaultPath, Duration.ofSeconds(10)),
+                                -10_000L)));
+        tableTieringManager.addNewLakeTable(
+                createTableInfo(3L, groupPath2, Duration.ofSeconds(10), "large"));
+
+        assertRequestTable(2L, defaultPath, 1L);
+        assertThat(tableTieringManager.requestTable()).isNull();
+        assertThat(tableTieringManager.requestTable("unused")).isNull();
+        assertRequestTable(1L, groupPath1, 1L, "large");
+        assertThat(tableTieringManager.requestTable("large")).isNull();
+        manualClock.advanceTime(Duration.ofSeconds(10));
+        assertRequestTable(3L, groupPath2, 1L, "large");
+        assertThat(tableTieringManager.requestTable("large")).isNull();
+    }
+
+    @Test
+    void testUpdateGroupWhileScheduledAndPending() {
+        TablePath tablePath = TablePath.of("db", "table");
+        tableTieringManager.addNewLakeTable(
+                createTableInfo(1L, tablePath, Duration.ofSeconds(10), "large"));
+        tableTieringManager.updateTableTieringGroup(1L, "small");
+        manualClock.advanceTime(Duration.ofSeconds(10));
+        waitValue(
+                () ->
+                        tableTieringManager.getPendingTablesCount("small") == 1
+                                ? Optional.of(true)
+                                : Optional.empty(),
+                Duration.ofSeconds(10),
+                "Table should be pending in the updated group");
+
+        manualClock.advanceTime(Duration.ofSeconds(5));
+        tableTieringManager.updateTableTieringGroup(1L, "large");
+        assertThat(tableTieringManager.requestTable("small")).isNull();
+        assertThat(tableTieringManager.getPendingTablesCount("small")).isZero();
+        assertThat(tableTieringManager.getPendingTablesCount("large")).isEqualTo(1);
+        assertThat(tableTieringManager.getOldestPendingTime("large")).isEqualTo(5000L);
+        assertRequestTable(1L, tablePath, 1L, "large");
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"finish", "force-finish", "fail", "timeout"})
+    void testUpdateGroupWhileTiering(String outcome) {
+        TablePath tablePath = TablePath.of("db", "table");
+        tableTieringManager.addNewLakeTable(
+                createTableInfo(1L, tablePath, Duration.ofSeconds(10), "large"));
+        manualClock.advanceTime(Duration.ofSeconds(10));
+        assertRequestTable(1L, tablePath, 1L, "large");
+        tableTieringManager.updateTableTieringGroup(1L, "small");
+        assertThat(tableTieringManager.getRunningTablesCount("large")).isEqualTo(1);
+        assertThat(tableTieringManager.getRunningTablesCount("small")).isZero();
+        tableTieringManager.renewTieringHeartbeat(1L, 1L);
+        assertThat(tableTieringManager.requestTable("small")).isNull();
+
+        switch (outcome) {
+            case "finish":
+                tableTieringManager.finishTableTiering(1L, 1L, false, TieringStats.UNKNOWN);
+                manualClock.advanceTime(Duration.ofSeconds(10));
+                break;
+            case "force-finish":
+                tableTieringManager.finishTableTiering(1L, 1L, true, TieringStats.UNKNOWN);
+                break;
+            case "fail":
+                tableTieringManager.reportTieringFail(1L, 1L);
+                break;
+            case "timeout":
+                manualClock.advanceTime(Duration.ofMillis(TIERING_SERVICE_TIMEOUT_MS));
+                tableTieringManager.checkTieringServiceTimeout();
+                break;
+            default:
+                throw new IllegalArgumentException(outcome);
+        }
+
+        assertThat(tableTieringManager.getRunningTablesCount("large")).isZero();
+        assertThat(tableTieringManager.requestTable("large")).isNull();
+        assertRequestTable(1L, tablePath, 2L, "small");
+        assertThat(tableTieringManager.getRunningTablesCount("small")).isEqualTo(1);
+    }
+
+    @Test
     void testGlobalMetrics() throws Exception {
         // Initially no tables - verify counts are 0
         assertThat(tableTieringManager.getPendingTablesCount()).isEqualTo(0);
@@ -454,11 +545,21 @@ class LakeTableTieringManagerTest {
     }
 
     private TableInfo createTableInfo(long tableId, TablePath tablePath, Duration freshness) {
+        return createTableInfo(
+                tableId,
+                tablePath,
+                freshness,
+                ConfigOptions.TABLE_DATALAKE_TIERING_GROUP.defaultValue());
+    }
+
+    private TableInfo createTableInfo(
+            long tableId, TablePath tablePath, Duration freshness, String group) {
         TableDescriptor tableDescriptor =
                 TableDescriptor.builder()
                         .schema(Schema.newBuilder().column("c1", DataTypes.INT()).build())
                         .property(ConfigOptions.TABLE_DATALAKE_ENABLED, true)
                         .property(ConfigOptions.TABLE_DATALAKE_FRESHNESS, freshness)
+                        .property(ConfigOptions.TABLE_DATALAKE_TIERING_GROUP, group)
                         .distributedBy(1)
                         .build();
 
@@ -473,9 +574,18 @@ class LakeTableTieringManagerTest {
     }
 
     private void assertRequestTable(long tableId, TablePath tablePath, long tieredEpoch) {
+        assertRequestTable(
+                tableId,
+                tablePath,
+                tieredEpoch,
+                ConfigOptions.TABLE_DATALAKE_TIERING_GROUP.defaultValue());
+    }
+
+    private void assertRequestTable(
+            long tableId, TablePath tablePath, long tieredEpoch, String group) {
         LakeTieringTableInfo table =
                 waitValue(
-                        () -> Optional.ofNullable(tableTieringManager.requestTable()),
+                        () -> Optional.ofNullable(tableTieringManager.requestTable(group)),
                         Duration.ofSeconds(10),
                         "Request tiering table timout");
         assertThat(table).isEqualTo(new LakeTieringTableInfo(tableId, tablePath, tieredEpoch));
