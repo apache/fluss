@@ -94,6 +94,12 @@ public final class KvWriteProcessor {
 
     private static final Logger LOG = LoggerFactory.getLogger(KvWriteProcessor.class);
 
+    // Hot-cache JMH of complete putAsLeader calls found benefits at eight records for batches
+    // with hits, with missing-only batches near parity. Smaller batches avoid the extra scan and
+    // collections. Record count is a cheap upper bound on the required RocksDB lookups; duplicates
+    // and buffered values can reduce the actual count.
+    private static final int MIN_BATCH_SIZE_FOR_PREFETCH = 8;
+
     private final TableBucket tableBucket;
     private final LogTablet logTablet;
     private final ArrowWriterProvider arrowWriterProvider;
@@ -327,6 +333,9 @@ public final class KvWriteProcessor {
         KvRecordBatch.ReadContext readContext =
                 KvRecordReadContext.createReadContext(kvFormat, schemaGetter);
 
+        boolean prefetchEnabled =
+                originalPartitionName == null
+                        && kvRecords.getRecordCount() >= MIN_BATCH_SIZE_FOR_PREFETCH;
         Function<byte[], BinaryValue> previousValueLookup =
                 historicalValueLookup == null ? null : historicalValueLookup::lookup;
         for (KvRecord kvRecord : kvRecords.records(readContext)) {
@@ -335,7 +344,7 @@ public final class KvWriteProcessor {
             BinaryRow row = kvRecord.getRow();
             BinaryValue currentValue = row == null ? null : new BinaryValue(schemaIdOfNewData, row);
 
-            if (originalPartitionName == null
+            if (prefetchEnabled
                     && previousValueLookup == null
                     && (currentValue == null
                             ? !shouldIgnoreDeletion(currentMerger)
