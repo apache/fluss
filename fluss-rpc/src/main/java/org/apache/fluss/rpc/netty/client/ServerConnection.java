@@ -25,6 +25,7 @@ import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.exception.InvalidServerTypeException;
 import org.apache.fluss.exception.NetworkException;
 import org.apache.fluss.exception.RetriableAuthenticationException;
+import org.apache.fluss.exception.TimeoutException;
 import org.apache.fluss.exception.UnsupportedVersionException;
 import org.apache.fluss.rpc.messages.AlterTableRequest;
 import org.apache.fluss.rpc.messages.ApiMessage;
@@ -48,11 +49,11 @@ import org.apache.fluss.shaded.netty4.io.netty.channel.Channel;
 import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelFuture;
 import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelFutureListener;
 import org.apache.fluss.utils.ExponentialBackoff;
-import org.apache.fluss.utils.concurrent.FutureUtils;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import javax.annotation.Nullable;
 import javax.annotation.concurrent.GuardedBy;
 import javax.annotation.concurrent.ThreadSafe;
 
@@ -64,6 +65,8 @@ import java.util.ArrayDeque;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.function.BiConsumer;
 
@@ -178,7 +181,7 @@ final class ServerConnection {
             }
             // notify all the inflight requests
             for (int requestId : inflightRequests.keySet()) {
-                InflightRequest request = inflightRequests.remove(requestId);
+                InflightRequest request = removeInflightRequest(requestId, 0);
                 if (request != null) {
                     request.responseFuture.completeExceptionally(requestCause);
                 }
@@ -233,22 +236,25 @@ final class ServerConnection {
 
         @Override
         public void onRequestResult(int requestId, ApiMessage response) {
-            InflightRequest request = inflightRequests.remove(requestId);
-            if (request != null && !request.responseFuture.isDone()) {
-                connectionMetrics.updateMetricsAfterGetResponse(
-                        ApiKeys.forId(request.apiKey),
-                        request.requestStartTime,
-                        response.totalSize());
-                request.responseFuture.complete(response);
+            // the removal decides who is responsible for the request bookkeeping, a completed
+            // response future must not skip it, otherwise a deadline that already removed the
+            // request would leave the request counted as in flight forever
+            InflightRequest request = removeInflightRequest(requestId, response.totalSize());
+            if (request == null) {
+                // the request is gone (e.g. it timed out), the response can never be delivered
+                releaseDroppedResponse(response);
+                return;
+            }
+            if (!request.responseFuture.complete(response)) {
+                // the deadline completed the future in the meantime, the response is dropped
+                releaseDroppedResponse(response);
             }
         }
 
         @Override
         public void onRequestFailure(int requestId, Throwable cause) {
-            InflightRequest request = inflightRequests.remove(requestId);
-            if (request != null && !request.responseFuture.isDone()) {
-                connectionMetrics.updateMetricsAfterGetResponse(
-                        ApiKeys.forId(request.apiKey), request.requestStartTime, 0);
+            InflightRequest request = removeInflightRequest(requestId, 0);
+            if (request != null) {
                 request.responseFuture.completeExceptionally(cause);
             }
         }
@@ -350,6 +356,8 @@ final class ServerConnection {
                         }
                     }
                 }
+                // the request metrics have not been increased yet, so they must not be updated
+                // here, but a deadline can never have been armed for this request either
                 inflightRequests.remove(inflight.requestId);
                 if (t instanceof Error) {
                     responseFuture.completeExceptionally(t);
@@ -364,19 +372,35 @@ final class ServerConnection {
                 return responseFuture;
             }
 
-            FutureUtils.orTimeout(
-                    inflight.responseFuture,
-                    requestTimeoutMs,
-                    TimeUnit.MILLISECONDS,
-                    String.format(
-                            "Timed out waiting for response from node %s after %d ms.",
-                            node, requestTimeoutMs));
+            try {
+                inflight.timeoutTask =
+                        channel.eventLoop()
+                                .schedule(
+                                        new RequestTimeoutTask(inflight),
+                                        requestTimeoutMs,
+                                        TimeUnit.MILLISECONDS);
+            } catch (RejectedExecutionException t) {
+                // the event loop is shutting down and rejected the deadline, fail the request as
+                // retryable instead of letting it wait for a deadline which is never armed
+                LOG.debug("Failed to schedule request timeout for node {}.", node, t);
+                byteBuf.release();
+                InflightRequest removed = removeInflightRequest(inflight, 0);
+                if (removed != null) {
+                    removed.responseFuture.completeExceptionally(
+                            new NetworkException(
+                                    new DisconnectException(
+                                            "Cannot schedule the request timeout for node "
+                                                    + node
+                                                    + " because the connection is closing.")));
+                }
+                return inflight.responseFuture;
+            }
             inflight.responseFuture.whenComplete(
                     (ignored, throwable) -> {
-                        if (inflightRequests.remove(inflight.requestId, inflight)) {
-                            connectionMetrics.updateMetricsAfterGetResponse(
-                                    apiKey, inflight.requestStartTime, 0);
-                        }
+                        // a response, a failure and the deadline all cancel the timer before they
+                        // remove the request, so a completed request never keeps a timer around
+                        cancelRequestTimeout(inflight);
+                        removeInflightRequest(inflight, 0);
                     });
 
             channel.writeAndFlush(byteBuf)
@@ -384,10 +408,9 @@ final class ServerConnection {
                             (ChannelFutureListener)
                                     future -> {
                                         if (!future.isSuccess()) {
-                                            if (inflightRequests.remove(
-                                                    inflight.requestId, inflight)) {
-                                                connectionMetrics.updateMetricsAfterGetResponse(
-                                                        apiKey, inflight.requestStartTime, 0);
+                                            InflightRequest removed =
+                                                    removeInflightRequest(inflight, 0);
+                                            if (removed != null) {
                                                 Throwable cause = future.cause();
                                                 if (cause instanceof IOException) {
                                                     // when server close the channel, the cause will
@@ -396,12 +419,74 @@ final class ServerConnection {
                                                     // retry to connect
                                                     cause = new NetworkException(cause);
                                                 }
-                                                inflight.responseFuture.completeExceptionally(
-                                                        cause);
+                                                removed.responseFuture.completeExceptionally(cause);
                                             }
                                         }
                                     });
             return inflight.responseFuture;
+        }
+    }
+
+    /**
+     * Atomically removes the inflight request with the given id and, if this caller won the
+     * removal, accounts for its response in the connection metrics.
+     *
+     * @return the removed request, or {@code null} if another path (e.g. the request deadline)
+     *     already removed and accounted for it.
+     */
+    @Nullable
+    private InflightRequest removeInflightRequest(int requestId, int responseSize) {
+        return updateMetricsAfterRemoval(inflightRequests.remove(requestId), responseSize);
+    }
+
+    /**
+     * Same as {@link #removeInflightRequest(int, int)}, but only removes the given request and
+     * leaves the entry alone if it has already been replaced by another request.
+     */
+    @Nullable
+    private InflightRequest removeInflightRequest(InflightRequest request, int responseSize) {
+        InflightRequest removed =
+                inflightRequests.remove(request.requestId, request) ? request : null;
+        return updateMetricsAfterRemoval(removed, responseSize);
+    }
+
+    /**
+     * Updates the metrics of a request which has just been removed from the inflight requests.
+     *
+     * <p>Only the path that successfully removed the request may call this, which is what keeps the
+     * in-flight bookkeeping balanced exactly once, no matter whether the response, the failure, the
+     * write failure or the deadline completes the request.
+     */
+    @Nullable
+    private InflightRequest updateMetricsAfterRemoval(
+            InflightRequest removedRequest, int responseSize) {
+        if (removedRequest != null) {
+            cancelRequestTimeout(removedRequest);
+            connectionMetrics.updateMetricsAfterGetResponse(
+                    ApiKeys.forId(removedRequest.apiKey),
+                    removedRequest.requestStartTime,
+                    responseSize);
+        }
+        return removedRequest;
+    }
+
+    /** Cancels the deadline of the given request if it has been armed. */
+    private static void cancelRequestTimeout(InflightRequest request) {
+        ScheduledFuture<?> timeoutTask = request.timeoutTask;
+        if (timeoutTask != null) {
+            timeoutTask.cancel(false);
+        }
+    }
+
+    /**
+     * Releases the buffer of a response which is never handed over to the consumer. Responses which
+     * are not lazily parsed have already been released by the {@link NettyClientHandler}, and a
+     * delivered response stays owned by the consumer, which releases the buffer after the response
+     * has been fully consumed.
+     */
+    private static void releaseDroppedResponse(ApiMessage response) {
+        if (response.isLazilyParsed()) {
+            response.getParsedByteBuf().release();
         }
     }
 
@@ -645,6 +730,12 @@ final class ServerConnection {
         final long requestStartTime;
         final CompletableFuture<ApiMessage> responseFuture;
 
+        /**
+         * The deadline of this request, armed before the request is written. It is cancelled as
+         * soon as the request completes, whatever completes it.
+         */
+        private volatile ScheduledFuture<?> timeoutTask;
+
         InflightRequest(
                 short apiKey,
                 short apiVersion,
@@ -661,6 +752,36 @@ final class ServerConnection {
 
         ByteBuf toByteBuf(ByteBufAllocator allocator) {
             return MessageCodec.encodeRequest(allocator, apiKey, apiVersion, requestId, request);
+        }
+    }
+
+    /**
+     * The deadline of a single inflight request.
+     *
+     * <p>It runs on the event loop of the connection it belongs to, so the completion callbacks of
+     * a request never run on a shared timer thread and a blocking callback can only delay the
+     * deadlines of its own connection. The deadline only completes the request if it wins the
+     * removal of the inflight request, so a response that is delivered at the same time is never
+     * dropped silently.
+     */
+    private final class RequestTimeoutTask implements Runnable {
+
+        private final InflightRequest inflightRequest;
+
+        private RequestTimeoutTask(InflightRequest inflightRequest) {
+            this.inflightRequest = inflightRequest;
+        }
+
+        @Override
+        public void run() {
+            InflightRequest removed = removeInflightRequest(inflightRequest, 0);
+            if (removed != null) {
+                removed.responseFuture.completeExceptionally(
+                        new TimeoutException(
+                                String.format(
+                                        "Timed out waiting for response from node %s after %d ms.",
+                                        node, requestTimeoutMs)));
+            }
         }
     }
 
