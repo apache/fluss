@@ -702,7 +702,13 @@ public class CoordinatorRequestBatch {
                 (tableId, bucketMetadataList) -> {
                     TableInfo tableInfo = getTableInfo(tableId);
                     if (tableInfo != null) {
-                        tableMetadataList.add(new TableMetadata(tableInfo, bucketMetadataList));
+                        tableMetadataList.add(
+                                new TableMetadata(
+                                        tableInfo,
+                                        bucketMetadataList,
+                                        coordinatorContext.isTableQueuedForDeletion(tableId)
+                                                ? tableId
+                                                : null));
                     }
                 });
 
@@ -755,7 +761,12 @@ public class CoordinatorRequestBatch {
                     TableInfo tableInfo = getTableInfo(tableId);
                     if (tableInfo != null) {
                         tableMetadataList.add(
-                                new TableMetadata(getTableInfo(tableId), Collections.emptyList()));
+                                new TableMetadata(
+                                        tableInfo,
+                                        Collections.emptyList(),
+                                        coordinatorContext.isTableQueuedForDeletion(tableId)
+                                                ? tableId
+                                                : null));
                     }
                 });
 

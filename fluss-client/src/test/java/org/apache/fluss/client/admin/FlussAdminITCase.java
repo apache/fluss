@@ -1212,7 +1212,6 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
         assertThat(zkClient.getKvSnapshotLeaseMetadata(lease.leaseId())).isPresent();
 
         restartCoordinatorServer(zkClient);
-        FLUSS_CLUSTER_EXTENSION.waitUntilAllGatewayHasSameMetadata();
 
         lease.dropLease().get();
         assertThat(zkClient.getKvSnapshotLeaseMetadata(lease.leaseId())).isNotPresent();
@@ -1225,6 +1224,9 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
                 Duration.ofMinutes(1),
                 "Coordinator server node still exists in ZooKeeper");
         FLUSS_CLUSTER_EXTENSION.startCoordinatorServer();
+        // The client must refresh its stale address from a tablet server. Election alone does
+        // not guarantee that tablet servers have received the new coordinator address yet.
+        FLUSS_CLUSTER_EXTENSION.waitUntilAllGatewayHasSameMetadata();
     }
 
     @Test

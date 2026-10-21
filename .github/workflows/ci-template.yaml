@@ -66,7 +66,7 @@ jobs:
           java-version: ${{ inputs.java-version }}
           distribution: 'temurin'
       # Use a job-local toolchains file: ~/.m2/toolchains.xml on the self-hosted runners keeps
-      # entries for JDKs that no longer exist, and the toolchains plugin fails on any of them.
+      # entries for JDKs that no longer exist, and the toolchains plugin fails on any of them123.
       - name: Configure Maven toolchains
         run: |
           cat > "${{ runner.temp }}/toolchains.xml" <<EOF

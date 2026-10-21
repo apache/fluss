@@ -46,7 +46,6 @@ import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.types.RowType;
 
-import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
@@ -77,14 +76,6 @@ public class MultiTableLogScannerITCase extends ClientToServerITCaseBase {
                     .column("value", DataTypes.STRING())
                     .column("score", DataTypes.BIGINT())
                     .build();
-
-    @AfterEach
-    protected void teardown() throws Exception {
-        if (admin != null) {
-            admin.dropDatabase(TEST_DB, true, true);
-        }
-        super.teardown();
-    }
 
     @Test
     void testSingleTableSubscribeAndPoll() throws Exception {

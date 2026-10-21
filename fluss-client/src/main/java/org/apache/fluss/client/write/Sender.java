@@ -22,6 +22,7 @@ import org.apache.fluss.client.metadata.MetadataUpdater;
 import org.apache.fluss.client.metrics.WriterMetricGroup;
 import org.apache.fluss.client.write.RecordAccumulator.ReadyCheckResult;
 import org.apache.fluss.cluster.Cluster;
+import org.apache.fluss.exception.InvalidBucketRoutingException;
 import org.apache.fluss.exception.InvalidMetadataException;
 import org.apache.fluss.exception.LeaderNotAvailableException;
 import org.apache.fluss.exception.OutOfOrderSequenceException;
@@ -253,6 +254,26 @@ public class Sender implements Runnable {
         // if there are any buckets whose leaders are not known yet, force metadata update
         if (!readyCheckResult.unknownLeaderTables.isEmpty()) {
             try {
+                if (!readyCheckResult.invalidBucketTables.isEmpty()) {
+                    // A cached layout can lag a bucket expansion. Confirm with the coordinator
+                    // before failing a batch that cannot reach a server for routing validation.
+                    Cluster refreshedCluster =
+                            metadataUpdater.updatePhysicalTableMetadataFromCoordinator(
+                                    readyCheckResult.invalidBucketTables);
+                    Set<PhysicalTablePath> invalidTables =
+                            new HashSet<>(accumulator.ready(refreshedCluster).invalidBucketTables);
+                    invalidTables.retainAll(readyCheckResult.invalidBucketTables);
+                    if (!invalidTables.isEmpty()) {
+                        InvalidBucketRoutingException failure =
+                                new InvalidBucketRoutingException(
+                                        "Buffered records target buckets outside the current layout for "
+                                                + invalidTables
+                                                + ". Recreate the writer with current metadata.");
+                        recordFatalError(failure);
+                        maybeAbortBatches(failure);
+                    }
+                    return;
+                }
                 metadataUpdater.updatePhysicalTableMetadata(readyCheckResult.unknownLeaderTables);
             } catch (Exception e) {
                 // TODO: this try-catch is not needed when we don't update metadata for

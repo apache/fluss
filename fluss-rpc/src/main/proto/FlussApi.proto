@@ -982,8 +982,9 @@ message PbTableMetadata {
   // A table-level, monotonically increasing version for bucket.num changes.
   optional int64 bucket_count_epoch = 9;
 
-  // TODO add a new filed 'deleted_table' to indicate this table is deleted in UpdateMetadataRequest.
-  // trace by: https://github.com/apache/fluss/issues/981
+  // Original ID of a deleted table. Keep the legacy table_id/path tombstone for older servers.
+  // The ID prevents a delayed deletion from removing a newly created table with the same name.
+  optional int64 deleted_table_id = 10;
 }
 
 message PbPartitionMetadata {

@@ -25,6 +25,9 @@ import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.rpc.messages.NotifyLeaderAndIsrRequest;
 import org.apache.fluss.rpc.messages.NotifyLeaderAndIsrResponse;
 import org.apache.fluss.rpc.messages.PbNotifyLeaderAndIsrReqForBucket;
+import org.apache.fluss.rpc.messages.PbTableMetadata;
+import org.apache.fluss.rpc.messages.UpdateMetadataRequest;
+import org.apache.fluss.rpc.messages.UpdateMetadataResponse;
 import org.apache.fluss.server.coordinator.event.AccessContextEvent;
 import org.apache.fluss.server.coordinator.event.EventManager;
 import org.apache.fluss.server.zk.ZkEpoch;
@@ -32,6 +35,8 @@ import org.apache.fluss.server.zk.data.LeaderAndIsr;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.util.Arrays;
 import java.util.Collections;
@@ -40,6 +45,8 @@ import java.util.function.BiConsumer;
 
 import static org.apache.fluss.record.TestData.DATA1_TABLE_DESCRIPTOR;
 import static org.apache.fluss.record.TestData.DEFAULT_REMOTE_DATA_DIR;
+import static org.apache.fluss.server.metadata.TableMetadata.DELETED_TABLE_ID;
+import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getUpdateMetadataRequestData;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** Test for the {@link CoordinatorRequestBatch}. */
@@ -201,6 +208,53 @@ class CoordinatorRequestBatchTest {
                         DEFAULT_REMOTE_DATA_DIR,
                         System.currentTimeMillis(),
                         System.currentTimeMillis()));
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void testTableDeletionPreservesOriginalId(boolean tableInfoPresent) throws Exception {
+        long tableId = 100L;
+        TablePath tablePath = TablePath.of("db", "recreated");
+        if (tableInfoPresent) {
+            putTableInfo(tableId, tablePath);
+        }
+        coordinatorContext.queueTableDeletion(Collections.singleton(tableId));
+        AtomicReference<UpdateMetadataRequest> sentRequest = new AtomicReference<>();
+        TestCoordinatorChannelManager channelManager =
+                new TestCoordinatorChannelManager() {
+                    @Override
+                    public void sendUpdateMetadataRequest(
+                            int targetServerId,
+                            UpdateMetadataRequest request,
+                            BiConsumer<UpdateMetadataResponse, ? super Throwable> consumer) {
+                        sentRequest.set(request);
+                        consumer.accept(new UpdateMetadataResponse(), null);
+                    }
+                };
+        try {
+            CoordinatorRequestBatch batch =
+                    new CoordinatorRequestBatch(
+                            channelManager,
+                            newSynchronousAccessContextEventManager(),
+                            coordinatorContext);
+            batch.addUpdateMetadataRequestForTabletServers(
+                    Collections.singleton(0), tableId, null, Collections.emptySet());
+            batch.sendUpdateMetadataRequest();
+
+            PbTableMetadata wireMetadata = sentRequest.get().getTableMetadatasList().get(0);
+            assertThat(wireMetadata.getDeletedTableId()).isEqualTo(tableId);
+            // Preserve the old tombstone representation for older tablet servers.
+            assertThat(wireMetadata.getTableId())
+                    .isEqualTo(tableInfoPresent ? DELETED_TABLE_ID : tableId);
+            assertThat(
+                            getUpdateMetadataRequestData(sentRequest.get())
+                                    .getTableMetadataList()
+                                    .get(0)
+                                    .getDeletedTableId())
+                    .isEqualTo(tableId);
+        } finally {
+            channelManager.close();
+        }
     }
 
     private static TestCoordinatorChannelManager newAlwaysFailingChannelManager() {

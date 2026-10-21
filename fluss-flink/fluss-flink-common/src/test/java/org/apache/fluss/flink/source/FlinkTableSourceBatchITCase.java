@@ -179,7 +179,8 @@ abstract class FlinkTableSourceBatchITCase extends FlinkTestBase {
     @Test
     void testFilterOnLookupSource() throws Exception {
         String srcTableName = String.format("test_src_table_%s", RandomUtils.nextInt());
-        tEnv.executeSql(
+        createTableAndWaitUntilReady(
+                srcTableName,
                 String.format(
                         "create table %s ("
                                 + "  id int not null,"
@@ -194,7 +195,8 @@ abstract class FlinkTableSourceBatchITCase extends FlinkTestBase {
                         srcTableName));
 
         String dimTableName = String.format("test_dim_table_%s", RandomUtils.nextInt());
-        tEnv.executeSql(
+        createTableAndWaitUntilReady(
+                dimTableName,
                 String.format(
                         "create table %s ("
                                 + "  id int not null,"
@@ -356,7 +358,8 @@ abstract class FlinkTableSourceBatchITCase extends FlinkTestBase {
     @Test
     void testFilteredLogTableBatchScanCompletesWhenNoRecordsMatch() throws Exception {
         String tableName = String.format("test_filtered_log_table_%s", RandomUtils.nextInt());
-        tEnv.executeSql(
+        createTableAndWaitUntilReady(
+                tableName,
                 String.format(
                         "create table %s (id int, name varchar) with ("
                                 + "'bucket.num' = '1', "
@@ -383,7 +386,8 @@ abstract class FlinkTableSourceBatchITCase extends FlinkTestBase {
     void testBatchLogTableScanWithEmptyBucket() throws Exception {
         tEnv.getConfig().set(ExecutionConfigOptions.TABLE_EXEC_RESOURCE_DEFAULT_PARALLELISM, 1);
         String tableName = String.format("test_empty_bucket_log_table_%s", RandomUtils.nextInt());
-        tEnv.executeSql(
+        createTableAndWaitUntilReady(
+                tableName,
                 String.format(
                         "create table %s (id int, name varchar) with ('bucket.num' = '2')",
                         tableName));
@@ -461,7 +465,8 @@ abstract class FlinkTableSourceBatchITCase extends FlinkTestBase {
     @Test
     void testPrimaryKeyTableBatchScanMergesSnapshotAndLog() throws Exception {
         String tableName = String.format("test_pk_batch_snapshot_log_%s", RandomUtils.nextInt());
-        tEnv.executeSql(
+        createTableAndWaitUntilReady(
+                tableName,
                 String.format(
                         "create table %s ("
                                 + "  id int not null,"
@@ -647,16 +652,16 @@ abstract class FlinkTableSourceBatchITCase extends FlinkTestBase {
     @Test
     void testCountPushDownWithWALMode() throws Exception {
         String tableName = "test_count_table_with_wal";
-        tEnv.executeSql(
-                        String.format(
-                                "create table %s ("
-                                        + "  id int not null,"
-                                        + "  address varchar,"
-                                        + "  name varchar,"
-                                        + "  primary key (id) NOT ENFORCED)"
-                                        + " with ('bucket.num' = '4', 'table.changelog.image' = 'wal')",
-                                tableName))
-                .await();
+        createTableAndWaitUntilReady(
+                tableName,
+                String.format(
+                        "create table %s ("
+                                + "  id int not null,"
+                                + "  address varchar,"
+                                + "  name varchar,"
+                                + "  primary key (id) NOT ENFORCED)"
+                                + " with ('bucket.num' = '4', 'table.changelog.image' = 'wal')",
+                        tableName));
 
         String query = String.format("SELECT COUNT(*) FROM %s", tableName);
         assertThatThrownBy(() -> tEnv.explainSql(query))
@@ -669,17 +674,17 @@ abstract class FlinkTableSourceBatchITCase extends FlinkTestBase {
     @Test
     void testCountIsNotPushedDownForRowTtlTable() throws Exception {
         String tableName = "test_count_table_with_row_ttl";
-        tEnv.executeSql(
-                        String.format(
-                                "create table %s ("
-                                        + "  id int not null,"
-                                        + "  address varchar,"
-                                        + "  name varchar,"
-                                        + "  primary key (id) NOT ENFORCED)"
-                                        + " with ('bucket.num' = '4',"
-                                        + " 'table.kv.ttl' = '1 h')",
-                                tableName))
-                .await();
+        createTableAndWaitUntilReady(
+                tableName,
+                String.format(
+                        "create table %s ("
+                                + "  id int not null,"
+                                + "  address varchar,"
+                                + "  name varchar,"
+                                + "  primary key (id) NOT ENFORCED)"
+                                + " with ('bucket.num' = '4',"
+                                + " 'table.kv.ttl' = '1 h')",
+                        tableName));
 
         String query = String.format("SELECT COUNT(*) FROM %s", tableName);
         assertThat(tEnv.explainSql(query))
@@ -737,7 +742,8 @@ abstract class FlinkTableSourceBatchITCase extends FlinkTestBase {
     @Test
     void testKvBatchScanOnPkTable() throws Exception {
         String tableName = String.format("test_kv_batch_pk_%s", RandomUtils.nextInt());
-        tEnv.executeSql(
+        createTableAndWaitUntilReady(
+                tableName,
                 String.format(
                         "create table %s ("
                                 + "  id int not null,"
@@ -772,7 +778,8 @@ abstract class FlinkTableSourceBatchITCase extends FlinkTestBase {
     @Test
     void testKvBatchScanReflectsUpdatesAndDeletes() throws Exception {
         String tableName = String.format("test_kv_batch_upd_del_%s", RandomUtils.nextInt());
-        tEnv.executeSql(
+        createTableAndWaitUntilReady(
+                tableName,
                 String.format(
                         "create table %s ("
                                 + "  id int not null,"
@@ -809,7 +816,8 @@ abstract class FlinkTableSourceBatchITCase extends FlinkTestBase {
     @Test
     void testKvBatchStrategiesReturnSameState() throws Exception {
         String tableName = String.format("test_kv_batch_strategies_%s", RandomUtils.nextInt());
-        tEnv.executeSql(
+        createTableAndWaitUntilReady(
+                tableName,
                 String.format(
                         "create table %s ("
                                 + "  id int not null,"
@@ -849,7 +857,8 @@ abstract class FlinkTableSourceBatchITCase extends FlinkTestBase {
     @Test
     void testKvBatchScanReturnsAllRecords() throws Exception {
         String tableName = String.format("test_kv_batch_100_%s", RandomUtils.nextInt());
-        tEnv.executeSql(
+        createTableAndWaitUntilReady(
+                tableName,
                 String.format(
                         "create table %s ("
                                 + "  id int not null,"
@@ -882,7 +891,8 @@ abstract class FlinkTableSourceBatchITCase extends FlinkTestBase {
     @Test
     void testKvBatchScanWithProjection() throws Exception {
         String tableName = String.format("test_kv_batch_proj_%s", RandomUtils.nextInt());
-        tEnv.executeSql(
+        createTableAndWaitUntilReady(
+                tableName,
                 String.format(
                         "create table %s ("
                                 + "  id int not null,"
@@ -912,7 +922,8 @@ abstract class FlinkTableSourceBatchITCase extends FlinkTestBase {
     @Test
     void testKvBatchScanOnEmptyTable() throws Exception {
         String tableName = String.format("test_kv_batch_empty_%s", RandomUtils.nextInt());
-        tEnv.executeSql(
+        createTableAndWaitUntilReady(
+                tableName,
                 String.format(
                         "create table %s ("
                                 + "  id int not null,"
@@ -929,11 +940,40 @@ abstract class FlinkTableSourceBatchITCase extends FlinkTestBase {
         assertThat(actual).isEmpty();
     }
 
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void testBatchScanOnEmptyPartitions(boolean hasPrimaryKey) throws Exception {
+        String tableName = String.format("test_empty_partitions_%s", RandomUtils.nextInt());
+        createTableAndWaitUntilReady(
+                tableName,
+                String.format(
+                        "create table %s ("
+                                + "  id int not null,"
+                                + "  dt varchar%s) partitioned by (dt)"
+                                + " with ("
+                                + "  'bucket.num' = '4',"
+                                + "  'table.auto-partition.enabled' = 'true',"
+                                + "  'table.auto-partition.time-unit' = 'year')",
+                        tableName, hasPrimaryKey ? ", primary key (id, dt) NOT ENFORCED" : ""));
+
+        // No writer has waited for any bucket, including those in precreated empty partitions.
+        List<String> actual =
+                collectBatchRows(
+                        tEnv.executeSql(String.format("SELECT * FROM %s", tableName)).collect());
+        assertThat(actual).isEmpty();
+    }
+
+    private void createTableAndWaitUntilReady(String tableName, String ddl) throws Exception {
+        tEnv.executeSql(ddl).await();
+        FLUSS_CLUSTER_EXTENSION.waitUntilTableReady(TablePath.of(databaseName, tableName));
+    }
+
     private String prepareSourceTable(String[] keys, String partitionedKey) throws Exception {
         String tableName =
                 String.format("test_%s_%s", String.join("_", keys), RandomUtils.nextInt());
         if (partitionedKey == null) {
-            tEnv.executeSql(
+            createTableAndWaitUntilReady(
+                    tableName,
                     String.format(
                             "create table %s ("
                                     + "  id int not null,"
@@ -943,7 +983,8 @@ abstract class FlinkTableSourceBatchITCase extends FlinkTestBase {
                                     + " with ('bucket.num' = '4')",
                             tableName, String.join(",", keys)));
         } else {
-            tEnv.executeSql(
+            createTableAndWaitUntilReady(
+                    tableName,
                     String.format(
                             "create table %s ("
                                     + "  id int not null,"
@@ -987,7 +1028,8 @@ abstract class FlinkTableSourceBatchITCase extends FlinkTestBase {
 
     private String prepareLogTable() throws Exception {
         String tableName = String.format("test_log_table_%s", RandomUtils.nextInt());
-        tEnv.executeSql(
+        createTableAndWaitUntilReady(
+                tableName,
                 String.format(
                         "create table %s ("
                                 + "  id int not null,"
@@ -1017,7 +1059,8 @@ abstract class FlinkTableSourceBatchITCase extends FlinkTestBase {
 
     protected String preparePartitionedLogTable() throws Exception {
         String tableName = String.format("test_partitioned_log_table_%s", RandomUtils.nextInt());
-        tEnv.executeSql(
+        createTableAndWaitUntilReady(
+                tableName,
                 String.format(
                         "create table %s ("
                                 + "  id int not null,"
@@ -1057,7 +1100,8 @@ abstract class FlinkTableSourceBatchITCase extends FlinkTestBase {
 
     private String prepareLogTableWithComplexTypes() throws Exception {
         String tableName = String.format("test_complex_log_table_%s", RandomUtils.nextInt());
-        tEnv.executeSql(
+        createTableAndWaitUntilReady(
+                tableName,
                 String.format(
                         "create table %s ("
                                 + "  id int not null,"

@@ -78,6 +78,7 @@ import java.util.stream.Collectors;
 
 import static org.apache.fluss.cluster.rebalance.RebalanceStatus.COMPLETED;
 import static org.apache.fluss.cluster.rebalance.RebalanceStatus.NOT_STARTED;
+import static org.apache.fluss.record.TestData.DATA1_PARTITIONED_TABLE_DESCRIPTOR;
 import static org.apache.fluss.server.utils.TableAssignmentUtils.generateAssignment;
 import static org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.common.ZKConfig.JUTE_MAXBUFFER;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -645,12 +646,17 @@ class ZooKeeperClientTest {
         long partitionId = 2L;
         Map<Integer, BucketAssignment> partitionBucketAssignments =
                 Collections.singletonMap(0, BucketAssignment.of(0));
+        TablePath partitionedTablePath = TablePath.of("db", "partitioned_table");
+        zookeeperClient.registerTable(
+                partitionedTablePath,
+                TableRegistration.newTable(
+                        tableId, remoteDataDir, DATA1_PARTITIONED_TABLE_DESCRIPTOR));
         zookeeperClient.registerPartitionAssignmentAndMetadata(
                 partitionId,
                 "p1",
                 new PartitionAssignment(tableId, partitionBucketAssignments),
                 remoteDataDir,
-                TablePath.of("db", "partitioned_table"),
+                partitionedTablePath,
                 tableId,
                 partitionBucketAssignments.size());
         TableBucket partitionBucket = new TableBucket(tableId, partitionId, 0);
@@ -866,6 +872,73 @@ class ZooKeeperClientTest {
                 .containsOnlyKeys("p2");
         partitions = zookeeperClient.getPartitions(tablePath);
         assertThat(partitions).containsExactly("p2");
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void testLatePartitionRegistrationDoesNotRecreateDroppedTable(boolean dropDatabase)
+            throws Exception {
+        TablePath tablePath = TablePath.of("db", "dropped");
+        long tableId = 12L;
+        zookeeperClient.registerTable(
+                tablePath,
+                TableRegistration.newTable(
+                        tableId, remoteDataDir, DATA1_PARTITIONED_TABLE_DESCRIPTOR));
+
+        // An auto-partition task has captured this table's ID before DDL removes it.
+        if (dropDatabase) {
+            zookeeperClient.deleteDatabase(tablePath.getDatabaseName());
+        } else {
+            zookeeperClient.deleteTable(tablePath);
+        }
+        assertThatThrownBy(() -> registerPartitionForTable(tablePath, tableId))
+                .isInstanceOf(KeeperException.NoNodeException.class);
+        assertThat(zookeeperClient.getTable(tablePath)).isEmpty();
+        assertThat(zookeeperClient.getPartitions(tablePath)).isEmpty();
+        assertThat(zookeeperClient.getPartitionsAssignments(Collections.singletonList(1L)))
+                .isEmpty();
+        if (dropDatabase) {
+            assertThat(zookeeperClient.databaseExists(tablePath.getDatabaseName())).isFalse();
+        }
+    }
+
+    @Test
+    void testLatePartitionRegistrationDoesNotAffectRecreatedTable() throws Exception {
+        TablePath tablePath = TablePath.of("db", "recreated");
+        long oldTableId = 12L;
+        long newTableId = 13L;
+        zookeeperClient.registerTable(
+                tablePath,
+                TableRegistration.newTable(
+                        oldTableId, remoteDataDir, DATA1_PARTITIONED_TABLE_DESCRIPTOR));
+        zookeeperClient.deleteTable(tablePath);
+        zookeeperClient.registerTable(
+                tablePath,
+                TableRegistration.newTable(
+                        newTableId, remoteDataDir, DATA1_PARTITIONED_TABLE_DESCRIPTOR));
+
+        assertThatThrownBy(() -> registerPartitionForTable(tablePath, oldTableId))
+                .isInstanceOf(KeeperException.NoNodeException.class);
+        assertThat(zookeeperClient.getTable(tablePath).get().tableId).isEqualTo(newTableId);
+        assertThat(zookeeperClient.getPartitions(tablePath)).isEmpty();
+        assertThat(zookeeperClient.getPartitionsAssignments(Collections.singletonList(1L)))
+                .isEmpty();
+
+        registerPartitionForTable(tablePath, newTableId);
+        assertThat(zookeeperClient.getPartition(tablePath, "p1").get().getTableId())
+                .isEqualTo(newTableId);
+    }
+
+    private void registerPartitionForTable(TablePath tablePath, long tableId) throws Exception {
+        zookeeperClient.registerPartitionAssignmentAndMetadata(
+                1L,
+                "p1",
+                new PartitionAssignment(
+                        tableId, Collections.singletonMap(0, BucketAssignment.of(0))),
+                remoteDataDir,
+                tablePath,
+                tableId,
+                1);
     }
 
     @Test

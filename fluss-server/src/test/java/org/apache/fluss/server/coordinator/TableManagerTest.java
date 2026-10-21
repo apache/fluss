@@ -39,6 +39,7 @@ import org.apache.fluss.server.zk.ZooKeeperExtension;
 import org.apache.fluss.server.zk.data.BucketAssignment;
 import org.apache.fluss.server.zk.data.PartitionAssignment;
 import org.apache.fluss.server.zk.data.TableAssignment;
+import org.apache.fluss.server.zk.data.TableRegistration;
 import org.apache.fluss.testutils.common.AllCallbackWrapper;
 import org.apache.fluss.utils.clock.SystemClock;
 
@@ -389,6 +390,10 @@ class TableManagerTest {
     void testCreateAndDropPartition() throws Exception {
         // create a table
         long tableId = zookeeperClient.getTableIdAndIncrement();
+        zookeeperClient.registerTable(
+                DATA1_TABLE_PATH,
+                TableRegistration.newTable(
+                        tableId, DEFAULT_REMOTE_DATA_DIR, DATA1_TABLE_DESCRIPTOR));
         TableAssignment assignment = TableAssignment.builder().build();
         zookeeperClient.registerTableAssignment(tableId, assignment);
 

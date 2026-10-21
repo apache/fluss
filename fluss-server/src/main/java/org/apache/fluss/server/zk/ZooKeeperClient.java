@@ -98,6 +98,7 @@ import org.apache.fluss.shaded.curator5.org.apache.curator.framework.CuratorFram
 import org.apache.fluss.shaded.curator5.org.apache.curator.framework.api.BackgroundCallback;
 import org.apache.fluss.shaded.curator5.org.apache.curator.framework.api.CuratorEvent;
 import org.apache.fluss.shaded.curator5.org.apache.curator.framework.api.transaction.CuratorOp;
+import org.apache.fluss.shaded.guava32.com.google.common.util.concurrent.Striped;
 import org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.CreateMode;
 import org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.KeeperException;
 import org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.data.Stat;
@@ -126,6 +127,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Semaphore;
+import java.util.concurrent.locks.Lock;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
@@ -133,6 +135,7 @@ import static java.util.stream.Collectors.toMap;
 import static org.apache.fluss.metadata.ResolvedPartitionSpec.fromPartitionName;
 import static org.apache.fluss.server.zk.ZooKeeperOp.multiRequest;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
+import static org.apache.fluss.utils.concurrent.LockUtils.inLock;
 
 /**
  * This class includes methods for write/read various metadata (leader address, tablet server
@@ -194,6 +197,11 @@ public class ZooKeeperClient implements AutoCloseable {
     private final Configuration configuration;
 
     private final String defaultRemoteDataDir;
+
+    // Auto partitioning and DDL use the coordinator's shared client. Serialize partition
+    // registration with table/database deletion so a stale task cannot write into a new table
+    // with the same name. Database-scoped locks also cover cascading database drops.
+    private final Striped<Lock> partitionRegistrationLocks = Striped.lazyWeakLock(64);
 
     public ZooKeeperClient(
             CuratorFrameworkWithUnhandledErrorListener curatorFrameworkWrapper,
@@ -687,7 +695,9 @@ public class ZooKeeperClient implements AutoCloseable {
 
     public void deleteDatabase(String database) throws Exception {
         String path = DatabaseZNode.path(database);
-        zkClient.delete().deletingChildrenIfNeeded().forPath(path);
+        inLock(
+                partitionRegistrationLocks.get(database),
+                () -> zkClient.delete().deletingChildrenIfNeeded().forPath(path));
     }
 
     public boolean databaseExists(String database) throws Exception {
@@ -903,7 +913,9 @@ public class ZooKeeperClient implements AutoCloseable {
     /** Delete the table in ZK. */
     public void deleteTable(TablePath tablePath) throws Exception {
         String path = TableZNode.path(tablePath);
-        zkClient.delete().deletingChildrenIfNeeded().forPath(path);
+        inLock(
+                partitionRegistrationLocks.get(tablePath.getDatabaseName()),
+                () -> zkClient.delete().deletingChildrenIfNeeded().forPath(path));
         LOG.info("Deleted table {}.", tablePath);
     }
 
@@ -1244,6 +1256,33 @@ public class ZooKeeperClient implements AutoCloseable {
             long tableId,
             int bucketCount)
             throws Exception {
+        inLock(
+                partitionRegistrationLocks.get(tablePath.getDatabaseName()),
+                () ->
+                        registerPartitionAssignmentAndMetadataLocked(
+                                partitionId,
+                                partitionName,
+                                partitionAssignment,
+                                remoteDataDir,
+                                tablePath,
+                                tableId,
+                                bucketCount));
+    }
+
+    private void registerPartitionAssignmentAndMetadataLocked(
+            long partitionId,
+            String partitionName,
+            PartitionAssignment partitionAssignment,
+            String remoteDataDir,
+            TablePath tablePath,
+            long tableId,
+            int bucketCount)
+            throws Exception {
+        Optional<TableRegistration> table = getTable(tablePath);
+        if (!table.isPresent() || table.get().tableId != tableId) {
+            throw new KeeperException.NoNodeException(TableZNode.path(tablePath));
+        }
+
         // Merge "registerPartitionAssignment()" and "registerPartition()"
         // into one transaction. This is to avoid the case that the partition assignment is
         // registered
@@ -1261,10 +1300,8 @@ public class ZooKeeperClient implements AutoCloseable {
         }
         try {
             String metadataPartitionParentPath = PartitionsZNode.path(tablePath);
-            zkClient.create()
-                    .creatingParentsIfNeeded()
-                    .withMode(CreateMode.PERSISTENT)
-                    .forPath(metadataPartitionParentPath);
+            // Never recreate a dropped table/database as an empty parent node.
+            zkClient.create().withMode(CreateMode.PERSISTENT).forPath(metadataPartitionParentPath);
         } catch (KeeperException.NodeExistsException e) {
             // ignore
         }

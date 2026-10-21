@@ -37,8 +37,11 @@ import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.rpc.messages.CommitLakeTableSnapshotRequest;
+import org.apache.fluss.rpc.messages.LakeTieringHeartbeatRequest;
+import org.apache.fluss.rpc.messages.LakeTieringHeartbeatResponse;
 import org.apache.fluss.rpc.messages.PbLakeTableOffsetForBucket;
 import org.apache.fluss.rpc.messages.PbLakeTableSnapshotInfo;
+import org.apache.fluss.testutils.common.ManuallyTriggeredScheduledExecutorService;
 
 import org.apache.flink.api.connector.source.SourceEvent;
 import org.apache.flink.api.connector.source.SplitsAssignment;
@@ -49,6 +52,7 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import javax.annotation.Nullable;
@@ -88,6 +92,64 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
     @BeforeEach
     protected void beforeEach() throws Exception {
         super.beforeEach();
+    }
+
+    @ParameterizedTest
+    @CsvSource({"true, true", "false, true", "false, false"})
+    void testCloseReleasesTableBeforeNextHeartbeat(boolean emptyTable, boolean finished)
+            throws Exception {
+        long tableId = createTable(DEFAULT_TABLE_PATH, DEFAULT_PK_TABLE_DESCRIPTOR);
+        if (!emptyTable) {
+            upsertRow(DEFAULT_TABLE_PATH, DEFAULT_PK_TABLE_DESCRIPTOR, 0, 10);
+            triggerAndWaitSnapshot(tableId);
+        }
+        ManuallyTriggeredScheduledExecutorService timer =
+                new ManuallyTriggeredScheduledExecutorService();
+        try (FlussMockSplitEnumeratorContext<FlinkTieringSplit> context =
+                        new FlussMockSplitEnumeratorContext<>(1);
+                TieringSourceEnumerator enumerator =
+                        new TieringSourceEnumerator(
+                                flussConf,
+                                new Configuration(),
+                                context,
+                                new TestingLakeTieringFactory(),
+                                500,
+                                timer)) {
+            enumerator.start();
+            context.registerSourceReader(0, 0, "localhost");
+            enumerator.addReader(0);
+            retry(
+                    Duration.ofSeconds(10),
+                    () -> {
+                        enumerator.handleSplitRequest(0, "localhost");
+                        assertThat(timer.getActiveNonPeriodicScheduledTask()).isNotEmpty();
+                    });
+            if (emptyTable) {
+                assertThat(context.getSplitsAssignmentSequence()).isEmpty();
+            } else {
+                assertThat(context.getSplitsAssignmentSequence()).isNotEmpty();
+                if (finished) {
+                    enumerator.handleSourceEvent(0, new FinishedTieringEvent(tableId));
+                }
+            }
+
+            // Neither periodic heartbeats nor completion callbacks run before shutdown.
+            // Closing must release both empty/completed rounds and unfinished work.
+            enumerator.close();
+            retry(
+                    Duration.ofSeconds(10),
+                    () -> {
+                        LakeTieringHeartbeatResponse response =
+                                coordinatorGateway
+                                        .lakeTieringHeartbeat(
+                                                new LakeTieringHeartbeatRequest()
+                                                        .setRequestTable(true))
+                                        .get();
+                        assertThat(response.hasTieringTable()).isTrue();
+                        assertThat(response.getTieringTable().getTableId()).isEqualTo(tableId);
+                        assertThat(response.getTieringTable().getTieringEpoch()).isGreaterThan(1);
+                    });
+        }
     }
 
     @ParameterizedTest
