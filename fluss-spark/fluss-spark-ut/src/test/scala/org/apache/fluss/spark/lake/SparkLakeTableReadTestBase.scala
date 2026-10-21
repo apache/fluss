@@ -17,19 +17,18 @@
 
 package org.apache.fluss.spark.lake
 
+import org.apache.fluss.client.initializer.BucketOffsetsRetrieverImpl
 import org.apache.fluss.config.Configuration
-import org.apache.fluss.flink.tiering.LakeTieringJobBuilder
-import org.apache.fluss.flink.tiering.source.TieringSourceOptions
 import org.apache.fluss.metadata.{DataLakeFormat, TableBucket}
 import org.apache.fluss.spark.FlussSparkTestBase
 import org.apache.fluss.spark.read.{FlussAppendScan, FlussScan, FlussUpsertScan}
+import org.apache.fluss.spark.tiering.{SparkTieringJobRunner, SparkTieringOptions}
 
-import org.apache.flink.api.common.RuntimeExecutionMode
-import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment
 import org.apache.spark.sql.DataFrame
 import org.apache.spark.sql.connector.expressions.filter.Predicate
 import org.apache.spark.sql.connector.read.InputPartition
 import org.apache.spark.sql.execution.datasources.v2.{BatchScanExec, DataSourceV2ScanRelation}
+import org.assertj.core.api.Assertions.assertThat
 
 import java.time.Duration
 
@@ -49,64 +48,73 @@ abstract class SparkLakeTableReadTestBase extends FlussSparkTestBase {
   /** Lake catalog configuration specific to the format. */
   protected def lakeCatalogConf: Configuration
 
-  private val TIERING_PARALLELISM = 2
-  private val CHECKPOINT_INTERVAL_MS = 1000L
   private val POLL_INTERVAL: Duration = Duration.ofMillis(500L)
   private val SYNC_TIMEOUT: Duration = Duration.ofMinutes(2)
   private val SYNC_POLL_INTERVAL_MS = 500L
 
-  /** Tier all pending data for the given table to the lake. */
+  /** Tier all pending data for the given table using the Spark service. */
   protected def tierToLake(tableName: String): Unit = {
     val tablePath = createTablePath(tableName)
-    val tableInfo = loadFlussTable(tablePath).getTableInfo
-    val tableId = tableInfo.getTableId
-    val numBuckets = tableInfo.getNumBuckets
+    val tableInfo = admin.getTableInfo(tablePath).get()
+    val offsetsRetriever = new BucketOffsetsRetrieverImpl(admin, tablePath)
 
-    val execEnv = StreamExecutionEnvironment.getExecutionEnvironment
-    execEnv.setRuntimeMode(RuntimeExecutionMode.STREAMING)
-    execEnv.setParallelism(TIERING_PARALLELISM)
-    execEnv.enableCheckpointing(CHECKPOINT_INTERVAL_MS)
+    def bucketOffsets(
+        partitionId: java.lang.Long,
+        partitionName: String,
+        bucketCount: Int): Map[TableBucket, Long] = {
+      offsetsRetriever
+        .latestOffsets(partitionName, (0 until bucketCount).map(Int.box).asJava)
+        .asScala
+        .map {
+          case (bucket, offset) =>
+            new TableBucket(tableInfo.getTableId, partitionId, bucket) -> offset.longValue()
+        }
+        .toMap
+    }
 
+    val expectedOffsets = if (tableInfo.isPartitioned) {
+      admin
+        .listPartitionInfos(tablePath)
+        .get()
+        .asScala
+        .flatMap {
+          partition =>
+            bucketOffsets(
+              partition.getPartitionId,
+              partition.getPartitionName,
+              partition.getBucketCount)
+        }
+        .toMap
+    } else {
+      bucketOffsets(null, null, tableInfo.getNumBuckets)
+    }
+    val tableBuckets = expectedOffsets.filter { case (_, offset) => offset > 0 }.keySet
     val flussConfig = new Configuration(flussServer.getClientConfig)
-    flussConfig.set(TieringSourceOptions.POLL_TIERING_TABLE_INTERVAL, POLL_INTERVAL)
-
-    val jobClient = LakeTieringJobBuilder
-      .newBuilder(
-        execEnv,
-        flussConfig,
-        lakeCatalogConf,
-        new Configuration(),
-        dataLakeFormat.toString)
-      .build()
+    flussConfig.set(SparkTieringOptions.POLL_TIERING_TABLE_INTERVAL, POLL_INTERVAL)
+    val runner = new SparkTieringJobRunner(
+      spark,
+      flussConfig,
+      new Configuration(),
+      dataLakeFormat.toString,
+      lakeCatalogConf)
 
     try {
-      // Collect all buckets to wait for sync
-      val tableBuckets = if (tableInfo.isPartitioned) {
-        val partitionInfos = admin.listPartitionInfos(tablePath).get()
-        partitionInfos.asScala.flatMap {
-          partitionInfo =>
-            (0 until numBuckets).map {
-              bucket => new TableBucket(tableId, partitionInfo.getPartitionId, bucket)
-            }
-        }.toSet
-      } else {
-        (0 until numBuckets).map(bucket => new TableBucket(tableId, bucket)).toSet
-      }
-
+      val termination = runner.startAsync()
       val deadline = System.currentTimeMillis() + SYNC_TIMEOUT.toMillis
       val syncedBuckets = scala.collection.mutable.Set[TableBucket]()
 
       while (syncedBuckets.size < tableBuckets.size && System.currentTimeMillis() < deadline) {
+        // Propagate service failures immediately instead of waiting for the sync timeout.
+        termination.value.foreach(_.get)
         tableBuckets.foreach {
           tableBucket =>
             if (!syncedBuckets.contains(tableBucket)) {
-              try {
-                val replica = flussServer.waitAndGetLeaderReplica(tableBucket)
-                if (replica.getLogTablet.getLakeTableSnapshotId >= 0) {
-                  syncedBuckets.add(tableBucket)
-                }
-              } catch {
-                case _: Exception =>
+              val replica = flussServer.waitAndGetLeaderReplica(tableBucket)
+              if (
+                replica.getLogTablet.getLakeTableSnapshotId >= 0 &&
+                replica.getLogTablet.getLakeLogEndOffset >= expectedOffsets(tableBucket)
+              ) {
+                syncedBuckets.add(tableBucket)
               }
             }
         }
@@ -115,13 +123,11 @@ abstract class SparkLakeTableReadTestBase extends FlussSparkTestBase {
         }
       }
 
-      assert(
-        syncedBuckets.size == tableBuckets.size,
-        s"Not all buckets synced to lake within $SYNC_TIMEOUT. " +
-          s"Synced: ${syncedBuckets.size}, Total: ${tableBuckets.size}"
-      )
+      assertThat(syncedBuckets.size)
+        .withFailMessage(s"Not all buckets of $tablePath synced to lake within $SYNC_TIMEOUT")
+        .isEqualTo(tableBuckets.size)
     } finally {
-      jobClient.cancel().get()
+      runner.stop()
     }
   }
 

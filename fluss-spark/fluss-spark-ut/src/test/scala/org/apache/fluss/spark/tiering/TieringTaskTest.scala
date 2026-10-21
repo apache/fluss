@@ -24,19 +24,89 @@ import org.apache.fluss.client.table.scanner.log.{LogScanner, ScanRecords}
 import org.apache.fluss.client.tiering.{TieringLogSplit, TieringSnapshotSplit}
 import org.apache.fluss.lake.writer.LakeWriter
 import org.apache.fluss.metadata.{TableBucket, TablePath}
-import org.apache.fluss.row.InternalRow
+import org.apache.fluss.record.{ChangeType, LogRecord}
+import org.apache.fluss.row.{GenericRow, InternalRow}
 import org.apache.fluss.utils.CloseableIterator
 
 import org.assertj.core.api.Assertions.assertThat
+import org.mockito.ArgumentCaptor
 import org.mockito.ArgumentMatchers.any
-import org.mockito.Mockito.{doThrow, mock, never, verify, when}
+import org.mockito.Mockito.{doThrow, mock, never, times, verify, when}
 import org.scalatest.funsuite.AnyFunSuite
 
 import java.time.Duration
-import java.util.Collections
+import java.util.{Arrays, Collections}
 
 /** Regression tests for executor-side Spark tiering. */
 class TieringTaskTest extends AnyFunSuite {
+
+  // Basic log and snapshot cases mirror Flink's TieringSplitReaderTest.
+  test("log split writes changelog records only before its stopping offset") {
+    val table = mock(classOf[Table])
+    val scan = mock(classOf[Scan])
+    val scanner = mock(classOf[LogScanner])
+    val writer = mock(classOf[LakeWriter[AnyRef]])
+    val bucket = new TableBucket(1L, 0)
+    val first = new ScanRecord(2L, 20L, ChangeType.INSERT, GenericRow.of(Int.box(1)))
+    val second = new ScanRecord(3L, 30L, ChangeType.DELETE, GenericRow.of(Int.box(2)))
+    val beyondEnd = new ScanRecord(4L, 99L, ChangeType.INSERT, GenericRow.of(Int.box(3)))
+    val records = new ScanRecords(
+      Collections.singletonMap(bucket, Arrays.asList(first, second, beyondEnd)),
+      Collections.singletonMap[TableBucket, java.lang.Long](bucket, 5L))
+    val writeResult = new Object()
+    when(table.newScan()).thenReturn(scan)
+    when(scan.createLogScanner()).thenReturn(scanner)
+    when(scanner.poll(Duration.ofMillis(1))).thenReturn(records)
+    when(writer.complete()).thenAnswer(_ => writeResult)
+    val split = new TieringLogSplit(TablePath.of("db", "table"), bucket, null, 2L, 4L, 3)
+
+    val result = TieringTask.processLogSplit(table, writer, split, 1L)
+
+    val written = ArgumentCaptor.forClass(classOf[LogRecord])
+    verify(writer, times(2)).write(written.capture())
+    assertThat(written.getAllValues.get(0)).isSameAs(first)
+    assertThat(written.getAllValues.get(1)).isSameAs(second)
+    assertThat(result.writeResult()).isSameAs(writeResult)
+    assertThat(result.logEndOffset()).isEqualTo(4L)
+    assertThat(result.maxTimestamp()).isEqualTo(30L)
+    assertThat(result.numberOfWriteResults()).isEqualTo(3)
+    verify(scanner).subscribe(0, 2L)
+    verify(scanner).close()
+  }
+
+  test("snapshot split writes snapshot rows as inserts and preserves its log offset") {
+    val table = mock(classOf[Table])
+    val scan = mock(classOf[Scan])
+    val scanner = mock(classOf[BatchScanner])
+    val batch = mock(classOf[CloseableIterator[InternalRow]])
+    val writer = mock(classOf[LakeWriter[AnyRef]])
+    val bucket = new TableBucket(1L, 0)
+    val first = GenericRow.of(Int.box(1))
+    val second = GenericRow.of(Int.box(2))
+    val writeResult = new Object()
+    when(table.newScan()).thenReturn(scan)
+    when(scan.createBatchScanner(bucket, 7L)).thenReturn(scanner)
+    when(scanner.pollBatch(Duration.ofMillis(1))).thenReturn(batch).thenReturn(null)
+    when(batch.hasNext).thenReturn(true).thenReturn(true).thenReturn(false)
+    when(batch.next()).thenReturn(first).thenReturn(second)
+    when(writer.complete()).thenAnswer(_ => writeResult)
+    val split = new TieringSnapshotSplit(TablePath.of("db", "table"), bucket, null, 7L, 17L, 3)
+
+    val result = TieringTask.processSnapshotSplit(table, writer, split, 1L)
+
+    val written = ArgumentCaptor.forClass(classOf[LogRecord])
+    verify(writer, times(2)).write(written.capture())
+    assertThat(written.getAllValues.get(0).getRow).isSameAs(first)
+    assertThat(written.getAllValues.get(1).getRow).isSameAs(second)
+    written.getAllValues.forEach(
+      record => assertThat(record.getChangeType).isEqualTo(ChangeType.INSERT))
+    assertThat(result.writeResult()).isSameAs(writeResult)
+    assertThat(result.logEndOffset()).isEqualTo(17L)
+    assertThat(result.maxTimestamp()).isEqualTo(-1L)
+    assertThat(result.numberOfWriteResults()).isEqualTo(3)
+    verify(batch).close()
+    verify(scanner).close()
+  }
 
   test("log split finishes when empty WAL batches advance to the stopping offset") {
     val table = mock(classOf[Table])
