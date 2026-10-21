@@ -2020,10 +2020,10 @@ public class ConfigOptions {
                     .booleanType()
                     .defaultValue(false)
                     .withDescription(
-                            "For a primary key table using the default merge behavior, skip the state write and changelog when the complete candidate row is logically equal to the stored row. "
+                            "For a primary key table using the default merge behavior, skip the state write and changelog when the complete candidate row has the same schema ID and serialized row bytes as the stored row. "
                                     + "This also applies to partial updates and partial deletes. "
-                                    + "It requires FULL changelog image mode and cannot be combined with row-level KV TTL or a merge engine. "
-                                    + "FULL changelog image mode already reads the previous value for every upsert. Comparing it with the complete candidate row adds comparison and allocation costs.");
+                                    + "It requires FULL changelog image mode and cannot be combined with row-level KV TTL or a merge engine. As with other tables without a merge engine, OVERWRITE writes are unsupported. "
+                                    + "FULL changelog image mode already reads the previous value for every upsert. Comparing it with the complete candidate row adds comparison costs.");
 
     public static final ConfigOption<String> TABLE_MERGE_ENGINE_VERSION_COLUMN =
             // we may need to introduce "del-column" in the future to support delete operation

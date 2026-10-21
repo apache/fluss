@@ -197,7 +197,6 @@ class RowMergerCreateTest {
 
         RowMerger merger =
                 RowMerger.create(tableConfig, KvFormat.COMPACTED, createSchemaGetter(schema));
-        merger.configureTargetColumns(null, SCHEMA_ID, schema);
 
         assertThat(merger).isInstanceOf(DefaultRowMerger.class);
         // delete is supported and defaults to ALLOW

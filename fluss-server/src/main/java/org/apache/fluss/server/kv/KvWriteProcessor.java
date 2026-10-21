@@ -181,7 +181,6 @@ public final class KvWriteProcessor {
                     kvRecords,
                     kvRecords.schemaId(),
                     writeContext.rowMerger,
-                    writeContext.rowEqualizer,
                     writeContext.autoIncrementUpdater,
                     walBuilder,
                     latestSchemaRow,
@@ -293,14 +292,8 @@ public final class KvWriteProcessor {
                                 targetColumns, latestSchemaId, latestSchema)
                         : rowMerger.configureTargetColumns(
                                 targetColumns, latestSchemaId, latestSchema);
-        LogicalRowEqualizer rowEqualizer =
-                skipUnchangedUpsert ? new LogicalRowEqualizer(schemaGetter, latestSchema) : null;
         return new WriteContext(
-                latestSchema,
-                latestSchemaId,
-                autoIncrementUpdater,
-                configuredRowMerger,
-                rowEqualizer);
+                latestSchema, latestSchemaId, autoIncrementUpdater, configuredRowMerger);
     }
 
     private void validateSchemaId(short schemaIdOfNewData, short latestSchemaId) {
@@ -317,7 +310,6 @@ public final class KvWriteProcessor {
             KvRecordBatch kvRecords,
             short schemaIdOfNewData,
             RowMerger currentMerger,
-            @Nullable LogicalRowEqualizer rowEqualizer,
             AutoIncrementUpdater autoIncrementUpdater,
             WalBuilder walBuilder,
             PaddingRow latestSchemaRow,
@@ -343,7 +335,6 @@ public final class KvWriteProcessor {
                         processDeletion(
                                 key,
                                 currentMerger,
-                                rowEqualizer,
                                 walBuilder,
                                 latestSchemaRow,
                                 logOffset,
@@ -356,7 +347,6 @@ public final class KvWriteProcessor {
                                 key,
                                 currentValue,
                                 currentMerger,
-                                rowEqualizer,
                                 autoIncrementUpdater,
                                 walBuilder,
                                 latestSchemaRow,
@@ -371,7 +361,6 @@ public final class KvWriteProcessor {
     private long processDeletion(
             KvPreWriteBuffer.Key key,
             RowMerger currentMerger,
-            @Nullable LogicalRowEqualizer rowEqualizer,
             WalBuilder walBuilder,
             PaddingRow latestSchemaRow,
             long logOffset,
@@ -395,7 +384,9 @@ public final class KvWriteProcessor {
         BinaryValue newValue = currentMerger.delete(oldValue);
 
         boolean skipWrite =
-                rowEqualizer != null && newValue != null && rowEqualizer.equals(oldValue, newValue);
+                skipUnchangedUpsert
+                        && newValue != null
+                        && BytewiseRowEqualizer.equals(oldValue, newValue);
         if (skipWrite) {
             return logOffset;
         }
@@ -414,7 +405,6 @@ public final class KvWriteProcessor {
             KvPreWriteBuffer.Key key,
             BinaryValue currentValue,
             RowMerger currentMerger,
-            @Nullable LogicalRowEqualizer rowEqualizer,
             AutoIncrementUpdater autoIncrementUpdater,
             WalBuilder walBuilder,
             PaddingRow latestSchemaRow,
@@ -445,8 +435,8 @@ public final class KvWriteProcessor {
         BinaryValue newValue = currentMerger.merge(oldValue, currentValue);
 
         boolean skipWrite =
-                rowEqualizer != null
-                        ? rowEqualizer.equals(oldValue, newValue)
+                skipUnchangedUpsert
+                        ? BytewiseRowEqualizer.equals(oldValue, newValue)
                         : newValue == oldValue;
         if (skipWrite) {
             // no actual change, skip this record
@@ -594,19 +584,16 @@ public final class KvWriteProcessor {
         private final short latestSchemaId;
         private final AutoIncrementUpdater autoIncrementUpdater;
         private final RowMerger rowMerger;
-        @Nullable private final LogicalRowEqualizer rowEqualizer;
 
         private WriteContext(
                 Schema latestSchema,
                 short latestSchemaId,
                 AutoIncrementUpdater autoIncrementUpdater,
-                RowMerger rowMerger,
-                @Nullable LogicalRowEqualizer rowEqualizer) {
+                RowMerger rowMerger) {
             this.latestSchema = latestSchema;
             this.latestSchemaId = latestSchemaId;
             this.autoIncrementUpdater = autoIncrementUpdater;
             this.rowMerger = rowMerger;
-            this.rowEqualizer = rowEqualizer;
         }
     }
 }
