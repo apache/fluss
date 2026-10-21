@@ -27,6 +27,9 @@ import org.apache.fluss.lake.serializer.SimpleVersionedSerializer;
 import org.apache.fluss.lake.source.LakeSource;
 import org.apache.fluss.lake.source.Planner;
 import org.apache.fluss.lake.source.RecordReader;
+import org.apache.fluss.lake.source.SupportsHistoricalSnapshot;
+import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.predicate.Predicate;
 import org.apache.fluss.utils.ArrayUtils;
@@ -41,17 +44,19 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 /**
  * Paimon Lake format implementation of {@link org.apache.fluss.lake.source.LakeSource} for reading
  * paimon table.
  */
-public class PaimonLakeSource implements LakeSource<PaimonSplit> {
+public class PaimonLakeSource implements LakeSource<PaimonSplit>, SupportsHistoricalSnapshot {
     private static final long serialVersionUID = 1L;
 
     private final PaimonTableLoader tableLoader;
 
+    private @Nullable org.apache.fluss.types.RowType expectedSchema;
     private @Nullable int[][] project;
     private @Nullable org.apache.paimon.predicate.Predicate predicate;
 
@@ -71,7 +76,29 @@ public class PaimonLakeSource implements LakeSource<PaimonSplit> {
     private PaimonLakeSource(PaimonLakeSource source) {
         this.tableLoader = source.tableLoader;
         this.project = ArrayUtils.deepCopy(source.project);
+        this.expectedSchema = source.expectedSchema;
         this.predicate = source.predicate;
+    }
+
+    @Override
+    public void withExpectedSchema(org.apache.fluss.types.RowType expectedSchema) {
+        this.expectedSchema = expectedSchema;
+    }
+
+    @Override
+    public Optional<HistoricalSnapshot> findHistoricalSnapshot(
+            TableInfo tableInfo,
+            Map<TableBucket, Long> earliestOffsets,
+            Map<TableBucket, Long> targetOffsets)
+            throws IOException {
+        try (PaimonTableHandle handle = tableLoader.load()) {
+            return new PaimonHistoricalSnapshotSelector(handle.table())
+                    .select(tableInfo, earliestOffsets, targetOffsets);
+        } catch (IOException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new IOException("Failed to select historical snapshot for " + tableInfo.getTablePath(), e);
+        }
     }
 
     @Override
@@ -123,6 +150,12 @@ public class PaimonLakeSource implements LakeSource<PaimonSplit> {
     public RecordReader createRecordReader(ReaderContext<PaimonSplit> context) throws IOException {
         try (PaimonTableHandle handle = tableLoader.load()) {
             FileStoreTable fileStoreTable = handle.table();
+            if (expectedSchema != null
+                    && !org.apache.fluss.lake.paimon.utils.PaimonConversions.toFlussRowType(
+                                    fileStoreTable.rowType())
+                            .equals(expectedSchema)) {
+                throw new IOException("Paimon schema changed during historical read");
+            }
             if (fileStoreTable.primaryKeys().isEmpty()) {
                 return new PaimonRecordReader(
                         fileStoreTable, context.lakeSplit(), project, predicate);

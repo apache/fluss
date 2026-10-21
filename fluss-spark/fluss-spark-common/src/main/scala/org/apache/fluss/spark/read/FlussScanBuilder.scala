@@ -41,11 +41,16 @@ trait FlussScanBuilder
   protected var requiredSchema: Option[StructType] = None
   protected var limit: Option[Int] = None
 
+  protected def snapshotRead: Boolean = false
+
   override def pruneColumns(requiredSchema: StructType): Unit = {
     this.requiredSchema = Some(requiredSchema)
   }
 
   override def pushLimit(limit: Int): Boolean = {
+    if (snapshotRead) {
+      return false
+    }
     this.limit = Some(limit)
     true
   }
@@ -89,6 +94,12 @@ trait FlussSupportsPushDownV2Filters extends FlussSupportsPushDownPartitionFilte
   def flussConfig: FlussConfiguration
 
   override def pushPredicates(predicates: Array[Predicate]): Array[Predicate] = {
+    if (snapshotRead) {
+      partitionPredicate = None
+      pushedPredicate = None
+      acceptedPredicates = Array.empty
+      return predicates
+    }
     val nonPartition = super.pushPredicates(predicates)
     if (!tableInfo.hasPrimaryKey && tableInfo.getTableConfig.getLogFormat == LogFormat.ARROW) {
       // Server-side batch filter for log table only supports ARROW; other log formats reject it.
@@ -142,6 +153,9 @@ class FlussAppendScanBuilder(
     val flussConfig: FlussConfiguration)
   extends FlussSupportsPushDownV2Filters {
 
+  override protected val snapshotRead: Boolean =
+    TimestampBoundaryResolver.timestamp(options, flussConfig, tableInfo).isDefined
+
   override def build(): Scan = {
     val projection = FlussScanBuilder.projectionOf(tableInfo, requiredSchema)
     val planner = new AppendPlanner(
@@ -177,6 +191,9 @@ class FlussUpsertScanBuilder(
     options: CaseInsensitiveStringMap,
     val flussConfig: FlussConfiguration)
   extends FlussSupportsPushDownV2Filters {
+
+  override protected val snapshotRead: Boolean =
+    TimestampBoundaryResolver.timestamp(options, flussConfig, tableInfo).isDefined
 
   override def build(): Scan = {
     val projection = FlussScanBuilder.projectionOf(tableInfo, requiredSchema)

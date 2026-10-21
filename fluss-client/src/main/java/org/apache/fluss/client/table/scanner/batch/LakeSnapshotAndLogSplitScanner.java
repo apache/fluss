@@ -33,6 +33,7 @@ import org.apache.fluss.record.LogRecord;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.KeyValueRow;
 import org.apache.fluss.utils.CloseableIterator;
+import org.apache.fluss.utils.IOUtils;
 
 import javax.annotation.Nullable;
 
@@ -66,7 +67,11 @@ public class LakeSnapshotAndLogSplitScanner implements BatchScanner {
 
     private final LogScanner logScanner;
     private final long stoppingOffset;
+    private final TableBucket tableBucket;
     private boolean logScanFinished;
+    private final @Nullable Duration progressTimeout;
+    private long consumedOffset;
+    private long lastProgressNanos;
 
     private SortMergeReader currentSortMergeReader;
 
@@ -78,10 +83,34 @@ public class LakeSnapshotAndLogSplitScanner implements BatchScanner {
             long startingOffset,
             long stoppingOffset,
             @Nullable int[] projectedFields) {
+        this(
+                table,
+                lakeSource,
+                lakeSplits,
+                tableBucket,
+                startingOffset,
+                stoppingOffset,
+                projectedFields,
+                null);
+    }
+
+    public LakeSnapshotAndLogSplitScanner(
+            Table table,
+            LakeSource<LakeSplit> lakeSource,
+            @Nullable List<LakeSplit> lakeSplits,
+            TableBucket tableBucket,
+            long startingOffset,
+            long stoppingOffset,
+            @Nullable int[] projectedFields,
+            @Nullable Duration progressTimeout) {
+        this.progressTimeout = progressTimeout;
+        this.consumedOffset = startingOffset;
+        this.lastProgressNanos = System.nanoTime();
         this.pkIndexes = table.getTableInfo().getSchema().getPrimaryKeyIndexes();
         this.lakeSplits = lakeSplits;
         this.lakeSource = lakeSource;
         this.stoppingOffset = stoppingOffset;
+        this.tableBucket = tableBucket;
         ProjectionPlan projectionPlan =
                 ProjectionPlan.create(
                         table.getTableInfo().getRowType().getFieldCount(),
@@ -91,20 +120,31 @@ public class LakeSnapshotAndLogSplitScanner implements BatchScanner {
         this.adjustProjectedFields = projectionPlan.adjustProjectedFields;
         int[] newProjectedFields = projectionPlan.scanProjectedFields;
 
-        this.logScanner = table.newScan().project(newProjectedFields).createLogScanner();
         this.lakeSource.withProject(
                 Arrays.stream(newProjectedFields)
                         .mapToObj(field -> new int[] {field})
                         .toArray(int[][]::new));
-
-        if (tableBucket.getPartitionId() != null) {
-            this.logScanner.subscribe(
-                    tableBucket.getPartitionId(), tableBucket.getBucket(), startingOffset);
-        } else {
-            this.logScanner.subscribe(tableBucket.getBucket(), startingOffset);
-        }
+        this.logScanner = table.newScan().project(newProjectedFields).createLogScanner();
 
         this.logScanFinished = startingOffset >= stoppingOffset || stoppingOffset <= 0;
+        if (logScanFinished) {
+            return;
+        }
+        try {
+            if (tableBucket.getPartitionId() != null) {
+                this.logScanner.subscribe(
+                        tableBucket.getPartitionId(), tableBucket.getBucket(), startingOffset);
+            } else {
+                this.logScanner.subscribe(tableBucket.getBucket(), startingOffset);
+            }
+        } catch (RuntimeException | Error error) {
+            try {
+                logScanner.close();
+            } catch (Exception closeError) {
+                error.addSuppressed(closeError);
+            }
+            throw error;
+        }
     }
 
     @Nullable
@@ -140,25 +180,25 @@ public class LakeSnapshotAndLogSplitScanner implements BatchScanner {
             return;
         }
 
-        List<RecordReader> recordReaders = new ArrayList<>();
         if (lakeSplits == null || lakeSplits.isEmpty()) {
-            // pass null split to get rowComparator
-            recordReaders.add(lakeSource.createRecordReader(sortedReaderContext(null)));
+            initializeLakeReader(null);
         } else {
             for (LakeSplit lakeSplit : lakeSplits) {
-                recordReaders.add(lakeSource.createRecordReader(sortedReaderContext(lakeSplit)));
+                initializeLakeReader(lakeSplit);
             }
-        }
-        for (RecordReader reader : recordReaders) {
-            if (reader instanceof SortedRecordReader) {
-                rowComparator = ((SortedRecordReader) reader).order();
-            } else {
-                throw new UnsupportedOperationException(
-                        "lake records must instance of sorted view.");
-            }
-            lakeRecordIterators.add(reader.read());
         }
         lakeRecordIteratorsInitialized = true;
+    }
+
+    private void initializeLakeReader(@Nullable LakeSplit split) throws IOException {
+        RecordReader reader = lakeSource.createRecordReader(sortedReaderContext(split));
+        CloseableIterator<LogRecord> iterator = reader.read();
+        // Register each opened reader immediately so a later split's failure closes earlier ones.
+        lakeRecordIterators.add(iterator);
+        if (!(reader instanceof SortedRecordReader)) {
+            throw new UnsupportedOperationException("lake records must instance of sorted view.");
+        }
+        rowComparator = ((SortedRecordReader) reader).order();
     }
 
     private LakeSource.ReaderContext<LakeSplit> sortedReaderContext(@Nullable LakeSplit lakeSplit) {
@@ -176,9 +216,15 @@ public class LakeSnapshotAndLogSplitScanner implements BatchScanner {
         };
     }
 
-    private void pollLogRecords(Duration timeout) {
+    private void pollLogRecords(Duration timeout) throws IOException {
+        long previousOffset = consumedOffset;
         ScanRecords scanRecords = logScanner.poll(timeout);
         for (ScanRecord scanRecord : scanRecords) {
+            if (scanRecord.logOffset() >= stoppingOffset) {
+                logScanFinished = true;
+                break;
+            }
+            consumedOffset = Math.max(consumedOffset, scanRecord.logOffset() + 1);
             boolean isDelete =
                     scanRecord.getChangeType() == ChangeType.DELETE
                             || scanRecord.getChangeType() == ChangeType.UPDATE_BEFORE;
@@ -193,19 +239,35 @@ public class LakeSnapshotAndLogSplitScanner implements BatchScanner {
                 break;
             }
         }
+        Long consumedUpTo = scanRecords.consumedUpToOffset(tableBucket);
+        if (consumedUpTo != null) {
+            consumedOffset = Math.max(consumedOffset, consumedUpTo);
+            if (consumedUpTo >= stoppingOffset) {
+                logScanFinished = true;
+            }
+        }
+        if (consumedOffset > previousOffset) {
+            lastProgressNanos = System.nanoTime();
+        } else if (!logScanFinished
+                && progressTimeout != null
+                && System.nanoTime() - lastProgressNanos >= progressTimeout.toNanos()) {
+            throw new IOException(
+                    "Historical log replay made no progress for "
+                            + tableBucket
+                            + "; consumed="
+                            + consumedOffset
+                            + ", stop="
+                            + stoppingOffset);
+        }
     }
 
     @Override
     public void close() throws IOException {
         try {
-            if (logScanner != null) {
-                logScanner.close();
-            }
-            if (lakeRecordIterators != null) {
-                for (CloseableIterator<LogRecord> iterator : lakeRecordIterators) {
-                    iterator.close();
-                }
-            }
+            List<AutoCloseable> resources = new ArrayList<>();
+            resources.add(logScanner);
+            resources.addAll(lakeRecordIterators);
+            IOUtils.closeAll(resources);
         } catch (Exception e) {
             throw new IOException("Failed to close resources", e);
         }

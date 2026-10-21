@@ -96,7 +96,10 @@ case class FlussAppendScan(
   extends FlussScan {
 
   override protected lazy val scanType: String =
-    if (planner.hasLakeSnapshot) "LakeAppend" else "Append"
+    if (options.containsKey(org.apache.fluss.spark.SparkFlussConf.SCAN_AS_OF_TIMESTAMP.key()))
+      s"SnapshotAtTimestamp(${options.get(org.apache.fluss.spark.SparkFlussConf.SCAN_AS_OF_TIMESTAMP.key())})"
+    else if (planner.hasLakeSnapshot) "LakeAppend"
+    else "Append"
 
   override def timeRange: Option[FlussTimeRange] = planner.timeRange
 
@@ -113,6 +116,10 @@ case class FlussAppendScan(
   }
 
   override def toMicroBatchStream(checkpointLocation: String): MicroBatchStream = {
+    require(
+      !options.containsKey(org.apache.fluss.spark.SparkFlussConf.SCAN_AS_OF_TIMESTAMP.key()),
+      "Snapshot-at-timestamp is a batch-only read and cannot be used in streaming."
+    )
     new FlussAppendMicroBatchStream(
       tablePath,
       tableInfo,
@@ -142,7 +149,10 @@ case class FlussUpsertScan(
   extends FlussScan {
 
   override protected lazy val scanType: String =
-    if (planner.hasLakeSnapshot) "LakeUpsert" else "Upsert"
+    if (options.containsKey(org.apache.fluss.spark.SparkFlussConf.SCAN_AS_OF_TIMESTAMP.key()))
+      s"SnapshotAtTimestamp(${options.get(org.apache.fluss.spark.SparkFlussConf.SCAN_AS_OF_TIMESTAMP.key())})"
+    else if (planner.hasLakeSnapshot) "LakeUpsert"
+    else "Upsert"
 
   override def timeRange: Option[FlussTimeRange] = planner.timeRange
 
@@ -159,6 +169,10 @@ case class FlussUpsertScan(
   }
 
   override def toMicroBatchStream(checkpointLocation: String): MicroBatchStream = {
+    require(
+      !options.containsKey(org.apache.fluss.spark.SparkFlussConf.SCAN_AS_OF_TIMESTAMP.key()),
+      "Snapshot-at-timestamp is a batch-only read and cannot be used in streaming."
+    )
     new FlussUpsertMicroBatchStream(
       tablePath,
       tableInfo,
