@@ -20,6 +20,8 @@ package org.apache.fluss.server.kv.snapshot;
 import org.apache.fluss.fs.FileSystem;
 import org.apache.fluss.fs.FsPath;
 
+import javax.annotation.Nullable;
+
 import java.io.IOException;
 import java.io.Serializable;
 import java.util.Objects;
@@ -34,9 +36,17 @@ public class KvFileHandle implements Serializable {
 
     private final long size;
 
+    private final @Nullable String sha256;
+
     public KvFileHandle(String fileHandle, long size) {
+        this(fileHandle, size, null);
+    }
+
+    /** Creates a file handle with an optional lowercase hexadecimal SHA-256 digest. */
+    public KvFileHandle(String fileHandle, long size, @Nullable String sha256) {
         this.filePath = fileHandle;
         this.size = size;
+        this.sha256 = sha256;
     }
 
     public String getFilePath() {
@@ -45,6 +55,12 @@ public class KvFileHandle implements Serializable {
 
     public long getSize() {
         return size;
+    }
+
+    /** Returns the expected lowercase hexadecimal SHA-256 when present. */
+    @Nullable
+    public String getSha256() {
+        return sha256;
     }
 
     @Override
@@ -56,17 +72,26 @@ public class KvFileHandle implements Serializable {
             return false;
         }
         KvFileHandle that = (KvFileHandle) o;
-        return size == that.size && Objects.equals(filePath, that.filePath);
+        return size == that.size
+                && Objects.equals(filePath, that.filePath)
+                && Objects.equals(sha256, that.sha256);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(filePath, size);
+        return Objects.hash(filePath, size, sha256);
     }
 
     @Override
     public String toString() {
-        return "KvFileHandle{" + "filePath=" + filePath + ", size=" + size + '}';
+        return "KvFileHandle{"
+                + "filePath="
+                + filePath
+                + ", size="
+                + size
+                + ", sha256="
+                + sha256
+                + '}';
     }
 
     /**

@@ -19,6 +19,7 @@
 
 #include <arrow/c/bridge.h>
 
+#include <algorithm>
 #include <cassert>
 #include <ctime>
 #include <functional>
@@ -1045,6 +1046,16 @@ void LookupResult::Destroy() noexcept {
     }
 }
 
+Result LookupResult::Adopt(ffi::LookupResultInner* inner) {
+    auto owned = rust::Box<ffi::LookupResultInner>::from_raw(inner);
+    if (owned->lv_has_error()) {
+        return utils::make_error(owned->lv_error_code(), std::string(owned->lv_error_message()));
+    }
+    Destroy();
+    inner_ = owned.into_raw();
+    return utils::make_ok();
+}
+
 LookupResult::LookupResult(LookupResult&& other) noexcept
     : inner_(other.inner_), column_map_(std::move(other.column_map_)) {
     other.inner_ = nullptr;
@@ -1979,23 +1990,79 @@ Lookuper& Lookuper::operator=(Lookuper&& other) noexcept {
 
 bool Lookuper::Available() const { return lookuper_ != nullptr; }
 
-Result Lookuper::Lookup(const GenericRow& pk_row, LookupResult& out) {
+Result Lookuper::Lookup(const GenericRow& pk_row, LookupResult& out) const {
     if (!Available()) {
         return utils::make_client_error("Lookuper not available");
     }
     if (!pk_row.Available()) {
         return utils::make_client_error("GenericRow not available");
     }
+    return out.Adopt(lookuper_->lookup(*pk_row.inner_).into_raw());
+}
 
-    auto result_box = lookuper_->lookup(*pk_row.inner_);
-    if (result_box->lv_has_error()) {
-        return utils::make_error(result_box->lv_error_code(),
-                                 std::string(result_box->lv_error_message()));
+Result Lookuper::Lookup(const GenericRow& pk_row, PendingLookup& out) const {
+    if (!Available()) {
+        return utils::make_client_error("Lookuper not available");
     }
+    if (!pk_row.Available()) {
+        return utils::make_client_error("GenericRow not available");
+    }
+    auto ffi_result = lookuper_->lookup_async(*pk_row.inner_);
+    auto result = utils::from_ffi_result(ffi_result.result);
+    if (result.Ok()) {
+        out = PendingLookup(utils::ptr_from_ffi<ffi::PendingLookup>(ffi_result));
+    }
+    return result;
+}
 
-    out.Destroy();
-    out.inner_ = result_box.into_raw();
-    return utils::make_ok();
+// ============================================================================
+// PendingLookup
+// ============================================================================
+
+PendingLookup::PendingLookup() noexcept = default;
+
+PendingLookup::PendingLookup(ffi::PendingLookup* pending) noexcept : pending_(pending) {}
+
+PendingLookup::~PendingLookup() noexcept { Destroy(); }
+
+void PendingLookup::Destroy() noexcept {
+    if (pending_) {
+        ffi::delete_pending_lookup(pending_);
+        pending_ = nullptr;
+    }
+}
+
+PendingLookup::PendingLookup(PendingLookup&& other) noexcept : pending_(other.pending_) {
+    other.pending_ = nullptr;
+}
+
+PendingLookup& PendingLookup::operator=(PendingLookup&& other) noexcept {
+    if (this != &other) {
+        Destroy();
+        pending_ = other.pending_;
+        other.pending_ = nullptr;
+    }
+    return *this;
+}
+
+bool PendingLookup::Available() const { return pending_ != nullptr; }
+
+Result PendingLookup::Wait(LookupResult& out) { return DoWait(out, -1); }
+
+Result PendingLookup::Wait(LookupResult& out, int64_t timeout_ms) {
+    return DoWait(out, std::max<int64_t>(timeout_ms, 0));
+}
+
+Result PendingLookup::DoWait(LookupResult& out, int64_t timeout_ms) {
+    if (!Available()) {
+        return utils::make_client_error("PendingLookup not available");
+    }
+    auto result = out.Adopt(pending_->lookup_wait(timeout_ms).into_raw());
+    // A timeout leaves the lookup running; any other outcome ends it.
+    if (!pending_->lookup_is_pending()) {
+        Destroy();
+    }
+    return result;
 }
 
 // ============================================================================
@@ -2030,32 +2097,101 @@ PrefixLookuper& PrefixLookuper::operator=(PrefixLookuper&& other) noexcept {
 
 bool PrefixLookuper::Available() const { return lookuper_ != nullptr; }
 
-Result PrefixLookuper::PrefixLookup(const GenericRow& prefix_row, PrefixLookupResult& out) {
+Result PrefixLookuper::PrefixLookup(const GenericRow& prefix_row, PrefixLookupResult& out) const {
     if (!Available()) {
         return utils::make_client_error("PrefixLookuper not available");
     }
     if (!prefix_row.Available()) {
         return utils::make_client_error("GenericRow not available");
     }
+    return out.Adopt(lookuper_->prefix_lookup(*prefix_row.inner_).into_raw());
+}
 
-    auto result_box = lookuper_->prefix_lookup(*prefix_row.inner_);
-    if (result_box->plv_has_error()) {
-        return utils::make_error(result_box->plv_error_code(),
-                                 std::string(result_box->plv_error_message()));
+Result PrefixLookuper::PrefixLookup(const GenericRow& prefix_row, PendingPrefixLookup& out) const {
+    if (!Available()) {
+        return utils::make_client_error("PrefixLookuper not available");
+    }
+    if (!prefix_row.Available()) {
+        return utils::make_client_error("GenericRow not available");
+    }
+    auto ffi_result = lookuper_->prefix_lookup_async(*prefix_row.inner_);
+    auto result = utils::from_ffi_result(ffi_result.result);
+    if (result.Ok()) {
+        out = PendingPrefixLookup(utils::ptr_from_ffi<ffi::PendingPrefixLookup>(ffi_result));
+    }
+    return result;
+}
+
+Result PrefixLookupResult::Adopt(ffi::PrefixLookupResultInner* inner) {
+    auto owned = rust::Box<ffi::PrefixLookupResultInner>::from_raw(inner);
+    if (owned->plv_has_error()) {
+        return utils::make_error(owned->plv_error_code(), std::string(owned->plv_error_message()));
     }
 
     // Take ownership of the FFI box first (~PrefixData calls from_raw), so the
     // column-map loop below can't leak it if a string/map allocation throws.
     // The map is built eagerly and shared by all PrefixRowViews.
-    auto data = std::make_shared<detail::PrefixData>(result_box.into_raw(), detail::ColumnMap{});
+    auto data = std::make_shared<detail::PrefixData>(owned.into_raw(), detail::ColumnMap{});
     auto col_count = data->raw->plv_field_count();
     for (size_t i = 0; i < col_count; ++i) {
         auto name = data->raw->plv_column_name(i);
         data->columns[std::string(name.data(), name.size())] = {
             i, static_cast<TypeId>(data->raw->plv_column_type(i))};
     }
-    out.data_ = std::move(data);
+    data_ = std::move(data);
     return utils::make_ok();
+}
+
+// ============================================================================
+// PendingPrefixLookup
+// ============================================================================
+
+PendingPrefixLookup::PendingPrefixLookup() noexcept = default;
+
+PendingPrefixLookup::PendingPrefixLookup(ffi::PendingPrefixLookup* pending) noexcept
+    : pending_(pending) {}
+
+PendingPrefixLookup::~PendingPrefixLookup() noexcept { Destroy(); }
+
+void PendingPrefixLookup::Destroy() noexcept {
+    if (pending_) {
+        ffi::delete_pending_prefix_lookup(pending_);
+        pending_ = nullptr;
+    }
+}
+
+PendingPrefixLookup::PendingPrefixLookup(PendingPrefixLookup&& other) noexcept
+    : pending_(other.pending_) {
+    other.pending_ = nullptr;
+}
+
+PendingPrefixLookup& PendingPrefixLookup::operator=(PendingPrefixLookup&& other) noexcept {
+    if (this != &other) {
+        Destroy();
+        pending_ = other.pending_;
+        other.pending_ = nullptr;
+    }
+    return *this;
+}
+
+bool PendingPrefixLookup::Available() const { return pending_ != nullptr; }
+
+Result PendingPrefixLookup::Wait(PrefixLookupResult& out) { return DoWait(out, -1); }
+
+Result PendingPrefixLookup::Wait(PrefixLookupResult& out, int64_t timeout_ms) {
+    return DoWait(out, std::max<int64_t>(timeout_ms, 0));
+}
+
+Result PendingPrefixLookup::DoWait(PrefixLookupResult& out, int64_t timeout_ms) {
+    if (!Available()) {
+        return utils::make_client_error("PendingPrefixLookup not available");
+    }
+    auto result = out.Adopt(pending_->prefix_lookup_wait(timeout_ms).into_raw());
+    // A timeout leaves the lookup running; any other outcome ends it.
+    if (!pending_->prefix_lookup_is_pending()) {
+        Destroy();
+    }
+    return result;
 }
 
 // ============================================================================
@@ -2189,12 +2325,13 @@ Result LogScanner::Poll(int64_t timeout_ms, ScanRecords& out) {
 
 ArrowRecordBatch::ArrowRecordBatch(std::shared_ptr<arrow::RecordBatch> batch, int64_t table_id,
                                    int64_t partition_id, int32_t bucket_id,
-                                   int64_t base_offset) noexcept
+                                   int64_t base_offset, int64_t commit_timestamp) noexcept
     : batch_(std::move(batch)),
       table_id_(table_id),
       partition_id_(partition_id),
       bucket_id_(bucket_id),
-      base_offset_(base_offset) {}
+      base_offset_(base_offset),
+      commit_timestamp_(commit_timestamp) {}
 
 bool ArrowRecordBatch::Available() const { return batch_ != nullptr; }
 
@@ -2228,6 +2365,11 @@ int64_t ArrowRecordBatch::GetLastOffset() const {
     return this->base_offset_ + this->NumRows() - 1;
 }
 
+int64_t ArrowRecordBatch::GetCommitTimestamp() const {
+    if (!Available()) return NO_COMMIT_TIMESTAMP;
+    return this->commit_timestamp_;
+}
+
 namespace detail {
 // Imports FFI Arrow batches (C Data Interface) into C++ ArrowRecordBatch
 // wrappers. A friend of ArrowRecordBatch so it can build the wrapper's private
@@ -2253,7 +2395,7 @@ struct ArrowBatchImporter {
             }
             out.batches.push_back(std::unique_ptr<ArrowRecordBatch>(new ArrowRecordBatch(
                 import_result.ValueOrDie(), ffi_batch.table_id, ffi_batch.partition_id,
-                ffi_batch.bucket_id, ffi_batch.base_offset)));
+                ffi_batch.bucket_id, ffi_batch.base_offset, ffi_batch.commit_timestamp)));
         }
         return utils::make_ok();
     }

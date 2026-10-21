@@ -373,6 +373,49 @@ export const userStories: UserStory[] = [
             },
         ],
     },
+    {
+        id: 'starrocks',
+        organizationId: 'starrocks',
+        name: 'StarRocks',
+        category: 'Ecosystem integration',
+        region: 'Global',
+        about: 'StarRocks is an open-source analytical database for low-latency, interactive SQL analytics.',
+        website: 'https://www.starrocks.io/',
+        title: 'Interactive SQL across real-time and historical data',
+        summary:
+            'StarRocks connects to Fluss through an external catalog, combining fresh streaming data with history tiered into Paimon for interactive SQL analytics.',
+        tags: ['SQL analytics', 'Lake and log union reads'],
+        href: '/user-stories/starrocks/',
+        submission: `${userDiscussion}#discussioncomment-18851523`,
+        sections: [
+            {
+                heading: 'Discovering Fluss tables through an external catalog',
+                text: 'The Fluss External Catalog lets StarRocks discover Fluss databases and tables and query them with standard SQL. Users do not need to load the data into StarRocks or manually create external tables. The current integration requires Fluss tables with lake tiering enabled and Apache Paimon as the lake storage.',
+            },
+            {
+                heading: 'Choosing between unified, historical, and real-time reads',
+                text: 'Union Read combines historical data tiered into Paimon with the latest real-time data in Fluss. The $lake table suffix reads only the historical lake data, while the $rt suffix reads fresh data directly from Fluss. These modes let teams query both layers together or choose the data they need.',
+            },
+            {
+                heading: 'Connecting streaming storage to interactive analytics',
+                text: 'Fluss provides the streaming storage layer while StarRocks serves interactive SQL queries across real-time and historical data. The integration has been merged into the StarRocks main branch and, according to the community submission, is planned for StarRocks 4.2. The current documentation marks the Fluss Catalog as experimental.',
+            },
+        ],
+        references: [
+            {
+                title: 'Fluss Catalog — StarRocks Documentation',
+                href: 'https://github.com/StarRocks/starrocks/blob/main/docs/en/data_source/catalog/fluss_catalog.md',
+            },
+            {
+                title: 'Support reading Fluss tables — StarRocks PR #72424',
+                href: 'https://github.com/StarRocks/starrocks/pull/72424',
+            },
+            {
+                title: 'Support Fluss Table Format — StarRocks Issue #67606',
+                href: 'https://github.com/StarRocks/starrocks/issues/67606',
+            },
+        ],
+    },
 ];
 
 // Homepage logos link to the same destinations as the organization cards.
@@ -433,6 +476,11 @@ export const logoArtwork: Record<string, {file?: string; width: number; height: 
         height: 480,
         viewBox: '158 88 2084 305',
     },
+    starrocks: {
+        width: 714,
+        height: 192,
+        viewBox: '0 0 714 192',
+    },
 };
 
 // White artwork is separate from the original submission images.
@@ -450,4 +498,5 @@ export const whiteLogoArtwork: Record<string, {
     'ant-group': {file: 'ant-group.png', width: 256, height: 80, viewBox: '0 2 179 76'},
     jd: {file: 'jd.png', width: 200, height: 39, viewBox: '1 3 199 27'},
     cisco: {file: 'cisco.svg', width: 24, height: 24, viewBox: '0 4.3 24 15.4'},
+    starrocks: {file: 'starrocks.png', width: 340, height: 88, viewBox: '0 0 340 88'},
 };

@@ -263,8 +263,7 @@ public class TestingPaimonStoragePlugin implements LakeStoragePlugin {
         }
 
         @Override
-        public LakeCommitResult commit(
-                TestPaimonCommittable committable, Map<String, String> snapshotProperties)
+        public LakeCommitResult commit(TestPaimonCommittable committable, CommitContext context)
                 throws IOException {
             // do nothing, and always return 1 as committed snapshot
             return LakeCommitResult.committedIsReadable(1);

@@ -550,6 +550,101 @@ pub struct ListOffsetsResponse {
     #[prost(message, repeated, tag = "1")]
     pub buckets_resp: ::prost::alloc::vec::Vec<PbListOffsetsRespForBucket>,
 }
+/// Find consumer group owner request and response.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct FindConsumerGroupOwnerRequest {
+    #[prost(string, required, tag = "1")]
+    pub group_id: ::prost::alloc::string::String,
+}
+/// All failures are returned through the RPC ErrorResponse envelope.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct FindConsumerGroupOwnerResponse {
+    #[prost(message, required, tag = "1")]
+    pub owner: PbServerNode,
+}
+/// Commit consumer offsets request and response.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct CommitConsumerOffsetsRequest {
+    #[prost(string, required, tag = "1")]
+    pub group_id: ::prost::alloc::string::String,
+    /// An empty list, or tables containing no buckets, is a valid no-op and produces an empty
+    /// successful response.
+    #[prost(message, repeated, tag = "2")]
+    pub tables: ::prost::alloc::vec::Vec<PbCommitConsumerOffsetsRequestTable>,
+}
+/// Request-level failures, such as authentication, authorization, malformed requests, or an
+/// unexpected server failure, are returned through the RPC ErrorResponse envelope. Logical commit
+/// failures, including group validation, ownership, and bucket write failures, are reported in each
+/// PbCommitConsumerOffsetsResponseBucket.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct CommitConsumerOffsetsResponse {
+    #[prost(message, repeated, tag = "1")]
+    pub tables: ::prost::alloc::vec::Vec<PbCommitConsumerOffsetsResponseTable>,
+}
+/// Get consumer offsets request and response.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct GetConsumerOffsetsRequest {
+    #[prost(string, required, tag = "1")]
+    pub group_id: ::prost::alloc::string::String,
+    /// When true, tables must be empty and the server returns all committed offsets of the group.
+    /// When false, only requested buckets are returned; an empty list, or tables containing no
+    /// buckets, is a valid no-op and produces an empty successful response.
+    #[prost(bool, optional, tag = "2")]
+    pub all_offsets: ::core::option::Option<bool>,
+    #[prost(message, repeated, tag = "3")]
+    pub tables: ::prost::alloc::vec::Vec<PbGetConsumerOffsetsRequestTable>,
+}
+/// Group-wide or request-level failures are returned through the RPC ErrorResponse envelope.
+/// Failures affecting only one requested bucket are reported in the corresponding
+/// PbGetConsumerOffsetsResponseBucket.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct GetConsumerOffsetsResponse {
+    #[prost(message, repeated, tag = "1")]
+    pub tables: ::prost::alloc::vec::Vec<PbGetConsumerOffsetsResponseTable>,
+}
+/// Delete consumer offsets request and response.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct DeleteConsumerOffsetsRequest {
+    #[prost(string, required, tag = "1")]
+    pub group_id: ::prost::alloc::string::String,
+    /// An empty list, or tables containing no buckets, is a valid no-op and produces an empty
+    /// successful response.
+    #[prost(message, repeated, tag = "2")]
+    pub tables: ::prost::alloc::vec::Vec<PbDeleteConsumerOffsetsRequestTable>,
+}
+/// Group-wide or request-level failures are returned through the RPC ErrorResponse envelope.
+/// Failures affecting only one requested bucket are reported in the corresponding
+/// PbDeleteConsumerOffsetsResponseBucket.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct DeleteConsumerOffsetsResponse {
+    #[prost(message, repeated, tag = "1")]
+    pub tables: ::prost::alloc::vec::Vec<PbDeleteConsumerOffsetsResponseTable>,
+}
+/// Lists consumer groups currently owned by the tablet server receiving this request. This is not
+/// a cluster-wide listing; callers that need a cluster-wide view must query every tablet server and
+/// merge the responses.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ListConsumerGroupsRequest {}
+/// All failures are returned through the RPC ErrorResponse envelope.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ListConsumerGroupsResponse {
+    #[prost(message, repeated, tag = "1")]
+    pub groups: ::prost::alloc::vec::Vec<PbListedGroup>,
+}
+/// Delete consumer groups request and response.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct DeleteConsumerGroupsRequest {
+    /// An empty list is a valid no-op and produces an empty successful response.
+    #[prost(string, repeated, tag = "1")]
+    pub groups: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+}
+/// Request-level failures are returned through the RPC ErrorResponse envelope. A failure affecting
+/// one group is reported in the corresponding PbDeletedGroup.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct DeleteConsumerGroupsResponse {
+    #[prost(message, repeated, tag = "1")]
+    pub groups: ::prost::alloc::vec::Vec<PbDeletedGroup>,
+}
 /// commit kv snapshot request and response
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct CommitKvSnapshotRequest {
@@ -1959,6 +2054,134 @@ pub struct PbKvSnapshotLeaseForBucket {
     pub bucket_id: i32,
     #[prost(int64, required, tag = "3")]
     pub snapshot_id: i64,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PbCommitConsumerOffsetsRequestTable {
+    #[prost(int64, required, tag = "1")]
+    pub table_id: i64,
+    #[prost(message, repeated, tag = "2")]
+    pub buckets: ::prost::alloc::vec::Vec<PbCommitConsumerOffsetsRequestBucket>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct PbCommitConsumerOffsetsRequestBucket {
+    #[prost(int64, optional, tag = "1")]
+    pub partition_id: ::core::option::Option<i64>,
+    #[prost(int32, required, tag = "2")]
+    pub bucket_id: i32,
+    #[prost(int64, required, tag = "3")]
+    pub offset: i64,
+    #[prost(string, optional, tag = "4")]
+    pub metadata: ::core::option::Option<::prost::alloc::string::String>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PbCommitConsumerOffsetsResponseTable {
+    #[prost(int64, required, tag = "1")]
+    pub table_id: i64,
+    #[prost(message, repeated, tag = "2")]
+    pub buckets: ::prost::alloc::vec::Vec<PbCommitConsumerOffsetsResponseBucket>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct PbCommitConsumerOffsetsResponseBucket {
+    #[prost(int64, optional, tag = "1")]
+    pub partition_id: ::core::option::Option<i64>,
+    #[prost(int32, required, tag = "2")]
+    pub bucket_id: i32,
+    /// Absent means that the commit succeeded for this bucket.
+    #[prost(int32, optional, tag = "3")]
+    pub error_code: ::core::option::Option<i32>,
+    /// Set only when error_code is present and additional diagnostic information is available.
+    #[prost(string, optional, tag = "4")]
+    pub error_message: ::core::option::Option<::prost::alloc::string::String>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PbGetConsumerOffsetsRequestTable {
+    #[prost(int64, required, tag = "1")]
+    pub table_id: i64,
+    #[prost(message, repeated, tag = "2")]
+    pub buckets: ::prost::alloc::vec::Vec<PbGetConsumerOffsetsRequestBucket>,
+}
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct PbGetConsumerOffsetsRequestBucket {
+    #[prost(int64, optional, tag = "1")]
+    pub partition_id: ::core::option::Option<i64>,
+    #[prost(int32, required, tag = "2")]
+    pub bucket_id: i32,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PbGetConsumerOffsetsResponseTable {
+    #[prost(int64, required, tag = "1")]
+    pub table_id: i64,
+    #[prost(message, repeated, tag = "2")]
+    pub buckets: ::prost::alloc::vec::Vec<PbGetConsumerOffsetsResponseBucket>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct PbGetConsumerOffsetsResponseBucket {
+    #[prost(int64, optional, tag = "1")]
+    pub partition_id: ::core::option::Option<i64>,
+    #[prost(int32, required, tag = "2")]
+    pub bucket_id: i32,
+    /// Absent with no error means not committed.
+    #[prost(int64, optional, tag = "3")]
+    pub offset: ::core::option::Option<i64>,
+    /// Absent means that no user metadata was committed.
+    #[prost(string, optional, tag = "4")]
+    pub metadata: ::core::option::Option<::prost::alloc::string::String>,
+    /// Absent means that the fetch succeeded for this bucket.
+    #[prost(int32, optional, tag = "5")]
+    pub error_code: ::core::option::Option<i32>,
+    /// Set only when error_code is present and additional diagnostic information is available.
+    #[prost(string, optional, tag = "6")]
+    pub error_message: ::core::option::Option<::prost::alloc::string::String>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PbDeleteConsumerOffsetsRequestTable {
+    #[prost(int64, required, tag = "1")]
+    pub table_id: i64,
+    #[prost(message, repeated, tag = "2")]
+    pub buckets: ::prost::alloc::vec::Vec<PbDeleteConsumerOffsetsRequestBucket>,
+}
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct PbDeleteConsumerOffsetsRequestBucket {
+    #[prost(int64, optional, tag = "1")]
+    pub partition_id: ::core::option::Option<i64>,
+    #[prost(int32, required, tag = "2")]
+    pub bucket_id: i32,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PbDeleteConsumerOffsetsResponseTable {
+    #[prost(int64, required, tag = "1")]
+    pub table_id: i64,
+    #[prost(message, repeated, tag = "2")]
+    pub buckets: ::prost::alloc::vec::Vec<PbDeleteConsumerOffsetsResponseBucket>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct PbDeleteConsumerOffsetsResponseBucket {
+    #[prost(int64, optional, tag = "1")]
+    pub partition_id: ::core::option::Option<i64>,
+    #[prost(int32, required, tag = "2")]
+    pub bucket_id: i32,
+    /// Absent means that the delete succeeded for this bucket.
+    #[prost(int32, optional, tag = "3")]
+    pub error_code: ::core::option::Option<i32>,
+    /// Set only when error_code is present and additional diagnostic information is available.
+    #[prost(string, optional, tag = "4")]
+    pub error_message: ::core::option::Option<::prost::alloc::string::String>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct PbListedGroup {
+    #[prost(string, required, tag = "1")]
+    pub group_id: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct PbDeletedGroup {
+    #[prost(string, required, tag = "1")]
+    pub group_id: ::prost::alloc::string::String,
+    /// Absent means that the group was deleted successfully.
+    #[prost(int32, optional, tag = "2")]
+    pub error_code: ::core::option::Option<i32>,
+    /// Set only when error_code is present and additional diagnostic information is available.
+    #[prost(string, optional, tag = "3")]
+    pub error_message: ::core::option::Option<::prost::alloc::string::String>,
 }
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct PbTableStatsReqForBucket {

@@ -23,18 +23,22 @@ import org.apache.fluss.metrics.Counter;
 import org.apache.fluss.metrics.ThreadSafeSimpleCounter;
 import org.apache.fluss.server.kv.rocksdb.RocksDBExtension;
 import org.apache.fluss.server.kv.rocksdb.RocksDBKv;
+import org.apache.fluss.server.kv.rocksdb.RocksDBKvBuilder;
 import org.apache.fluss.server.testutils.KvTestUtils;
 import org.apache.fluss.server.utils.ResourceGuard;
+import org.apache.fluss.server.utils.TestProcessBuilder;
 import org.apache.fluss.utils.CloseableRegistry;
 import org.apache.fluss.utils.FlussPaths;
 
+import io.github.fluss_contrib.rocksdb.RocksDB;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 import org.junit.jupiter.api.io.TempDir;
-import org.rocksdb.RocksDB;
 
+import java.nio.ByteBuffer;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.util.Collection;
 import java.util.HashMap;
@@ -42,6 +46,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.Stream;
 
 import static org.apache.fluss.server.testutils.KvTestUtils.checkSnapshotIncrementWithNewlyFiles;
@@ -153,6 +158,98 @@ class RocksIncrementalSnapshotTest {
                 assertThat(rocksDBKv.get("key3".getBytes())).isEqualTo("val3".getBytes());
             }
         }
+    }
+
+    @Test
+    void testSnapshotCanBeReadByFrocksDB(
+            @TempDir Path snapshotBaseDir, @TempDir Path snapshotDownDir) throws Exception {
+        RocksDB rocksDB = rocksDBExtension.getRocksDb();
+        rocksDB.put(
+                "key1".getBytes(StandardCharsets.UTF_8), "val1".getBytes(StandardCharsets.UTF_8));
+        rocksDB.put(
+                "key2".getBytes(StandardCharsets.UTF_8), "val2".getBytes(StandardCharsets.UTF_8));
+
+        assertSnapshotReadableByFrocksDB(
+                snapshotBaseDir, snapshotDownDir, "key1", "val1", "key2", "val2");
+    }
+
+    /**
+     * Sequential big-endian long keys, like encoded integer primary keys, make the index blocks
+     * hold evenly spaced keys. RocksDB 11 then marks those blocks "uniform" in the block footer
+     * unless uniform_cv_threshold is -1, and FRocksDB fails the scan with "bad block contents".
+     */
+    @Test
+    void testSnapshotWithUniformKeysCanBeReadByFrocksDB(
+            @TempDir Path snapshotBaseDir, @TempDir Path snapshotDownDir) throws Exception {
+        int numRows = 10_000;
+        RocksDB rocksDB = rocksDBExtension.getRocksDb();
+        for (int i = 0; i < numRows; i++) {
+            rocksDB.put(longKey(i), longKey(i));
+        }
+
+        assertSnapshotReadableByFrocksDB(
+                snapshotBaseDir,
+                snapshotDownDir,
+                FrocksDBSnapshotReader.COUNT_ARG,
+                String.valueOf(numRows));
+    }
+
+    private static byte[] longKey(long value) {
+        return ByteBuffer.allocate(Long.BYTES).putLong(value).array();
+    }
+
+    private void assertSnapshotReadableByFrocksDB(
+            Path snapshotBaseDir, Path snapshotDownDir, String... readerArgs) throws Exception {
+        FsPath testingTabletDir = FsPath.fromLocalFile(snapshotBaseDir.toFile());
+        SnapshotLocation snapshotLocation =
+                new SnapshotLocation(
+                        LocalFileSystem.getSharedInstance(),
+                        FlussPaths.remoteKvSnapshotDir(testingTabletDir, 1L),
+                        FlussPaths.remoteKvSharedDir(testingTabletDir),
+                        1024);
+
+        try (CloseableRegistry closeableRegistry = new CloseableRegistry();
+                RocksIncrementalSnapshot incrementalSnapshot = createIncrementalSnapshot()) {
+            KvSnapshotHandle snapshotHandle =
+                    snapshot(1L, incrementalSnapshot, snapshotLocation, closeableRegistry);
+            incrementalSnapshot.notifySnapshotComplete(1L);
+
+            Path restoredDbPath = snapshotDownDir.resolve(RocksDBKvBuilder.DB_INSTANCE_DIR_STRING);
+            KvSnapshotDataDownloader snapshotDataDownloader =
+                    new KvSnapshotDataDownloader(dataTransferThreadPool);
+            snapshotDataDownloader.transferAllDataToDirectory(
+                    new KvSnapshotDownloadSpec(snapshotHandle, restoredDbPath), closeableRegistry);
+
+            TestProcessBuilder frocksDBReaderBuilder =
+                    new TestProcessBuilder(FrocksDBSnapshotReader.class.getName())
+                            .addMainClassArg(restoredDbPath.toString());
+            for (String readerArg : readerArgs) {
+                frocksDBReaderBuilder.addMainClassArg(readerArg);
+            }
+
+            TestProcessBuilder.TestProcess frocksDBReader = null;
+            try {
+                frocksDBReader = frocksDBReaderBuilder.start();
+
+                boolean exited = frocksDBReader.getProcess().waitFor(1, TimeUnit.MINUTES);
+                assertThat(exited)
+                        .describedAs(
+                                "FRocksDB reader process output: %s", processOutput(frocksDBReader))
+                        .isTrue();
+                assertThat(frocksDBReader.getProcess().exitValue())
+                        .describedAs(
+                                "FRocksDB reader process output: %s", processOutput(frocksDBReader))
+                        .isZero();
+            } finally {
+                if (frocksDBReader != null && frocksDBReader.getProcess().isAlive()) {
+                    frocksDBReader.destroy();
+                }
+            }
+        }
+    }
+
+    private String processOutput(TestProcessBuilder.TestProcess process) {
+        return process.getProcessOutput().toString() + process.getErrorOutput().toString();
     }
 
     private void verifyShareFileEqual(

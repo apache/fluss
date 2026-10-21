@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Predicates for server-side filter pushdown on log scans.
+//! Predicates for server-side filter pushdown and local Arrow evaluation.
 //!
 //! ```rust
 //! use fluss::predicate::col;
@@ -31,11 +31,19 @@
 //! Setting a predicate on a scan is only supported on log scans over tables
 //! with the ARROW log format.
 
+mod arrow_eval;
+mod binding;
+mod coercion;
+mod numeric;
 mod pb;
 
+#[doc(hidden)]
+pub use arrow_eval::PredicateEvaluator;
+#[doc(hidden)]
+pub use binding::BoundPredicate;
 pub(crate) use pb::to_pb_predicate;
 
-use crate::row::{Decimal, TimestampLtz, TimestampNtz};
+use crate::row::{Date, Datum, Decimal, Time, TimestampLtz, TimestampNtz};
 
 /// Comparison applied by a [`Predicate::Leaf`] to one column.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -82,6 +90,36 @@ pub enum Literal {
     Time(i32),
     TimestampNtz(TimestampNtz),
     TimestampLtz(TimestampLtz),
+}
+
+impl Literal {
+    /// Returns whether this is a null literal.
+    #[doc(hidden)]
+    pub fn is_null(&self) -> bool {
+        matches!(self, Self::Null)
+    }
+
+    /// Converts this literal into a Fluss row datum.
+    #[doc(hidden)]
+    pub fn to_datum(&self) -> Datum<'static> {
+        match self {
+            Self::Null => Datum::Null,
+            Self::Bool(value) => (*value).into(),
+            Self::Int8(value) => (*value).into(),
+            Self::Int16(value) => (*value).into(),
+            Self::Int32(value) => (*value).into(),
+            Self::Int64(value) => (*value).into(),
+            Self::Float32(value) => (*value).into(),
+            Self::Float64(value) => (*value).into(),
+            Self::String(value) => value.clone().into(),
+            Self::Bytes(value) => value.clone().into(),
+            Self::Decimal(value) => value.clone().into(),
+            Self::Date(value) => Date::new(*value).into(),
+            Self::Time(value) => Time::new(*value).into(),
+            Self::TimestampNtz(value) => (*value).into(),
+            Self::TimestampLtz(value) => (*value).into(),
+        }
+    }
 }
 
 macro_rules! impl_from_literal {
@@ -316,6 +354,70 @@ impl ColumnRef {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::metadata::{DataField, DataType, RowType};
+    use arrow::array::{Array, ArrayRef};
+    use arrow::record_batch::RecordBatch;
+    use std::cmp::Ordering;
+
+    pub(super) fn assert_comparisons(
+        data_type: DataType,
+        array: ArrayRef,
+        literal: Literal,
+        orderings: Vec<Option<Ordering>>,
+    ) {
+        let row_type = RowType::new(vec![DataField::with_field_id("c", data_type, None, 7)]);
+        let batch = RecordBatch::try_from_iter([("c", array)]).unwrap();
+        for function in [
+            LeafFunction::Equal,
+            LeafFunction::NotEqual,
+            LeafFunction::LessThan,
+            LeafFunction::LessOrEqual,
+            LeafFunction::GreaterThan,
+            LeafFunction::GreaterOrEqual,
+            LeafFunction::In,
+            LeafFunction::NotIn,
+        ] {
+            let predicate = Predicate::Leaf {
+                field: "c".into(),
+                function,
+                literals: vec![literal.clone()],
+            };
+            let bound = BoundPredicate::bind(Some(&predicate), &row_type).unwrap();
+            let actual = bound.evaluate_batch(&batch).unwrap();
+            let expected: Vec<_> = orderings
+                .iter()
+                .map(|ordering| {
+                    ordering.is_some_and(|ordering| match function {
+                        LeafFunction::Equal | LeafFunction::In => ordering == Ordering::Equal,
+                        LeafFunction::NotEqual | LeafFunction::NotIn => ordering != Ordering::Equal,
+                        LeafFunction::LessThan => ordering == Ordering::Less,
+                        LeafFunction::LessOrEqual => ordering != Ordering::Greater,
+                        LeafFunction::GreaterThan => ordering == Ordering::Greater,
+                        LeafFunction::GreaterOrEqual => ordering != Ordering::Less,
+                        _ => unreachable!(),
+                    })
+                })
+                .collect();
+            assert_eq!(
+                actual.values().iter().collect::<Vec<_>>(),
+                expected,
+                "{predicate:?}, {row_type:?}"
+            );
+            let evaluator = bound.clone().into_evaluator().unwrap();
+            assert_eq!(evaluator.evaluate_batch(&batch).unwrap(), actual);
+            assert_eq!(
+                evaluator.evaluate_batch(&batch.slice(0, 0)).unwrap().len(),
+                0
+            );
+            assert_eq!(actual.null_count(), 0);
+            assert_eq!(bound.evaluate_batch(&batch.slice(0, 0)).unwrap().len(), 0);
+            if let Some(pushdown) = bound.to_pushdown_predicate() {
+                to_pb_predicate(&pushdown, &row_type).unwrap();
+                let rebound = BoundPredicate::bind(Some(&pushdown), &row_type).unwrap();
+                assert_eq!(rebound.evaluate_batch(&batch).unwrap(), actual);
+            }
+        }
+    }
 
     fn leaf(field: &str, function: LeafFunction, literals: Vec<Literal>) -> Predicate {
         Predicate::Leaf {

@@ -17,6 +17,10 @@
 
 package org.apache.fluss.flink.tiering.source.enumerator;
 
+import org.apache.fluss.client.tiering.TieringLogSplit;
+import org.apache.fluss.client.tiering.TieringSnapshotSplit;
+import org.apache.fluss.client.tiering.TieringSplit;
+import org.apache.fluss.client.tiering.TieringSplitGenerator;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.NetworkException;
@@ -25,10 +29,7 @@ import org.apache.fluss.flink.tiering.event.FailedTieringEvent;
 import org.apache.fluss.flink.tiering.event.FinishedTieringEvent;
 import org.apache.fluss.flink.tiering.event.TieringReachMaxDurationEvent;
 import org.apache.fluss.flink.tiering.source.TieringTestBase;
-import org.apache.fluss.flink.tiering.source.split.TieringLogSplit;
-import org.apache.fluss.flink.tiering.source.split.TieringSnapshotSplit;
-import org.apache.fluss.flink.tiering.source.split.TieringSplit;
-import org.apache.fluss.flink.tiering.source.split.TieringSplitGenerator;
+import org.apache.fluss.flink.tiering.source.split.FlinkTieringSplit;
 import org.apache.fluss.lake.writer.LakeTieringFactory;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableChange;
@@ -42,10 +43,13 @@ import org.apache.fluss.rpc.messages.PbLakeTableSnapshotInfo;
 import org.apache.flink.api.connector.source.SourceEvent;
 import org.apache.flink.api.connector.source.SplitsAssignment;
 import org.apache.flink.api.connector.source.mocks.MockSplitEnumeratorContext;
+import org.apache.flink.api.java.tuple.Tuple3;
 import org.apache.flink.util.FlinkRuntimeException;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import javax.annotation.Nullable;
 
@@ -65,6 +69,10 @@ import static org.apache.fluss.config.ConfigOptions.TABLE_AUTO_PARTITION_NUM_PRE
 import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoMoreInteractions;
+import static org.mockito.Mockito.when;
 
 /** Unit tests for {@link TieringSourceEnumerator} and {@link TieringSplitGenerator}. */
 class TieringSourceEnumeratorTest extends TieringTestBase {
@@ -82,16 +90,25 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
         super.beforeEach();
     }
 
-    @Test
-    void testPrimaryKeyTableWithNoSnapshotSplits() throws Throwable {
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void testPrimaryKeyTableWithNoSnapshotSplits(boolean markDoneEnabled) throws Throwable {
         TablePath tablePath = DEFAULT_TABLE_PATH;
         long tableId = createTable(tablePath, DEFAULT_PK_TABLE_DESCRIPTOR);
         int numSubtasks = 4;
         int expectNumberOfSplits = 3;
+        Configuration tieringConfig = new Configuration();
+        tieringConfig.set(ConfigOptions.LAKE_TIERING_PARTITION_MARK_DONE_ENABLED, markDoneEnabled);
         // test get snapshot split & log split and the assignment
-        try (FlussMockSplitEnumeratorContext<TieringSplit> context =
+        try (FlussMockSplitEnumeratorContext<FlinkTieringSplit> context =
                 new FlussMockSplitEnumeratorContext<>(numSubtasks)) {
-            TieringSourceEnumerator enumerator = createTieringSourceEnumerator(flussConf, context);
+            TieringSourceEnumerator enumerator =
+                    new TieringSourceEnumerator(
+                            flussConf,
+                            tieringConfig,
+                            context,
+                            new TestingLakeTieringFactory(),
+                            500);
 
             enumerator.start();
             assertThat(context.getSplitsAssignmentSequence()).isEmpty();
@@ -102,7 +119,7 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
             // try to assign splits
             context.runPeriodicCallable(0);
 
-            List<TieringSplit> actualAssignment = new ArrayList<>();
+            List<FlinkTieringSplit> actualAssignment = new ArrayList<>();
             context.getSplitsAssignmentSequence()
                     .forEach(a -> a.assignment().values().forEach(actualAssignment::addAll));
 
@@ -146,7 +163,7 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
                                         + bucketOffsetOfSecondWrite.get(tableBucket),
                                 expectNumberOfSplits));
             }
-            List<TieringSplit> actualLogAssignment = new ArrayList<>();
+            List<FlinkTieringSplit> actualLogAssignment = new ArrayList<>();
             context.getSplitsAssignmentSequence()
                     .forEach(a -> a.assignment().values().forEach(actualLogAssignment::addAll));
             assertTieringSplitsMatch(actualLogAssignment, expectedLogAssignment);
@@ -166,7 +183,7 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
         int expectNumberOfSplits = 3;
 
         // test get snapshot split assignment
-        try (FlussMockSplitEnumeratorContext<TieringSplit> context =
+        try (FlussMockSplitEnumeratorContext<FlinkTieringSplit> context =
                 new FlussMockSplitEnumeratorContext<>(numSubtasks)) {
             TieringSourceEnumerator enumerator = createTieringSourceEnumerator(flussConf, context);
 
@@ -188,7 +205,7 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
                                 bucketOffsetOfInitialWrite.get(tableBucket),
                                 expectNumberOfSplits));
             }
-            List<TieringSplit> actualAssignment = new ArrayList<>();
+            List<FlinkTieringSplit> actualAssignment = new ArrayList<>();
             context.getSplitsAssignmentSequence()
                     .forEach(a -> a.assignment().values().forEach(actualAssignment::addAll));
             assertTieringSplitsMatch(actualAssignment, expectedSnapshotAssignment);
@@ -232,7 +249,7 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
                                         + bucketOffsetOfSecondWrite.get(tableBucket),
                                 expectNumberOfSplits));
             }
-            List<TieringSplit> actualLogAssignment = new ArrayList<>();
+            List<FlinkTieringSplit> actualLogAssignment = new ArrayList<>();
             context.getSplitsAssignmentSequence()
                     .forEach(a -> a.assignment().values().forEach(actualLogAssignment::addAll));
             assertTieringSplitsMatch(actualLogAssignment, expectedLogAssignment);
@@ -246,7 +263,7 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
         int numSubtasks = 4;
         int expectNumberOfSplits = 3;
         // test get log split and the assignment
-        try (FlussMockSplitEnumeratorContext<TieringSplit> context =
+        try (FlussMockSplitEnumeratorContext<FlinkTieringSplit> context =
                 new FlussMockSplitEnumeratorContext<>(numSubtasks)) {
             TieringSourceEnumerator enumerator = createTieringSourceEnumerator(flussConf, context);
 
@@ -273,7 +290,7 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
                                 bucketOffsetOfFirstWrite.get(bucketId),
                                 bucketOffsetOfFirstWrite.size()));
             }
-            List<TieringSplit> actualAssignment = new ArrayList<>();
+            List<FlinkTieringSplit> actualAssignment = new ArrayList<>();
             context.getSplitsAssignmentSequence()
                     .forEach(a -> a.assignment().values().forEach(actualAssignment::addAll));
 
@@ -317,7 +334,7 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
                                         + bucketOffsetOfSecondWrite.get(tableBucket),
                                 expectNumberOfSplits));
             }
-            List<TieringSplit> actualLogAssignment = new ArrayList<>();
+            List<FlinkTieringSplit> actualLogAssignment = new ArrayList<>();
             context.getSplitsAssignmentSequence()
                     .forEach(a -> a.assignment().values().forEach(actualLogAssignment::addAll));
             assertTieringSplitsMatch(actualLogAssignment, expectedLogAssignment);
@@ -335,11 +352,15 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
 
         int numSubtasks = 6;
         int expectNumberOfSplits = 6;
+        Configuration tieringConfig = new Configuration();
+        LakeTieringFactory<?, ?> factory = mock(LakeTieringFactory.class);
+        when(factory.supportsPartitionMarkDone()).thenReturn(true);
         // test get snapshot split assignment
-        try (FlussMockSplitEnumeratorContext<TieringSplit> context =
-                new FlussMockSplitEnumeratorContext<>(numSubtasks)) {
-            TieringSourceEnumerator enumerator = createTieringSourceEnumerator(flussConf, context);
-
+        try (FlussMockSplitEnumeratorContext<FlinkTieringSplit> context =
+                        new FlussMockSplitEnumeratorContext<>(numSubtasks);
+                TieringSourceEnumerator enumerator =
+                        new TieringSourceEnumerator(
+                                flussConf, tieringConfig, context, factory, 500)) {
             enumerator.start();
             assertThat(context.getSplitsAssignmentSequence()).isEmpty();
 
@@ -349,14 +370,32 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
             // try to assign splits
             context.runPeriodicCallable(0);
 
-            List<TieringSplit> actualSnapshotAssignment = new ArrayList<>();
-            for (SplitsAssignment<TieringSplit> splitsAssignment :
+            List<FlinkTieringSplit> actualSnapshotAssignment = new ArrayList<>();
+            for (SplitsAssignment<FlinkTieringSplit> splitsAssignment :
                     context.getSplitsAssignmentSequence()) {
                 splitsAssignment.assignment().values().forEach(actualSnapshotAssignment::addAll);
             }
 
             // no snapshot split should be assigned for empty buckets
             assertThat(actualSnapshotAssignment).isEmpty();
+
+            tieringConfig.set(ConfigOptions.LAKE_TIERING_PARTITION_MARK_DONE_ENABLED, true);
+            enumerator.generateAndAssignSplits(Tuple3.of(tableId, 1L, tablePath), null);
+            List<FlinkTieringSplit> maintenanceSplits = new ArrayList<>();
+            context.getSplitsAssignmentSequence()
+                    .forEach(a -> a.assignment().values().forEach(maintenanceSplits::addAll));
+            assertThat(maintenanceSplits)
+                    .singleElement()
+                    .satisfies(
+                            split -> {
+                                assertThat(split.unwrap().getTableBucket().getTableId())
+                                        .isEqualTo(tableId);
+                                assertThat(split.unwrap().shouldSkipCurrentRound()).isTrue();
+                            });
+            assertValidTieringRound(maintenanceSplits);
+            verify(factory).supportsPartitionMarkDone();
+            verifyNoMoreInteractions(factory);
+            tieringConfig.set(ConfigOptions.LAKE_TIERING_PARTITION_MARK_DONE_ENABLED, false);
 
             // mock finished tiered this round, check second round
             context.getSplitsAssignmentSequence().clear();
@@ -414,8 +453,8 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
                                     expectNumberOfSplits));
                 }
             }
-            List<TieringSplit> actualLogAssignment = new ArrayList<>();
-            for (SplitsAssignment<TieringSplit> splitsAssignment :
+            List<FlinkTieringSplit> actualLogAssignment = new ArrayList<>();
+            for (SplitsAssignment<FlinkTieringSplit> splitsAssignment :
                     context.getSplitsAssignmentSequence()) {
                 splitsAssignment.assignment().values().forEach(actualLogAssignment::addAll);
             }
@@ -435,7 +474,7 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
         int numSubtasks = 6;
         int expectNumberOfSplits = 6;
         // test get log split assignment
-        try (FlussMockSplitEnumeratorContext<TieringSplit> context =
+        try (FlussMockSplitEnumeratorContext<FlinkTieringSplit> context =
                 new FlussMockSplitEnumeratorContext<>(numSubtasks)) {
             TieringSourceEnumerator enumerator = createTieringSourceEnumerator(flussConf, context);
 
@@ -469,8 +508,8 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
                                     bucketOffsetOfFirstWrite.size()));
                 }
             }
-            List<TieringSplit> actualAssignment = new ArrayList<>();
-            for (SplitsAssignment<TieringSplit> splitsAssignment :
+            List<FlinkTieringSplit> actualAssignment = new ArrayList<>();
+            for (SplitsAssignment<FlinkTieringSplit> splitsAssignment :
                     context.getSplitsAssignmentSequence()) {
                 splitsAssignment.assignment().values().forEach(actualAssignment::addAll);
             }
@@ -536,8 +575,8 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
                                     expectNumberOfSplits));
                 }
             }
-            List<TieringSplit> actualLogAssignment = new ArrayList<>();
-            for (SplitsAssignment<TieringSplit> splitsAssignment :
+            List<FlinkTieringSplit> actualLogAssignment = new ArrayList<>();
+            for (SplitsAssignment<FlinkTieringSplit> splitsAssignment :
                     context.getSplitsAssignmentSequence()) {
                 splitsAssignment.assignment().values().forEach(actualLogAssignment::addAll);
             }
@@ -554,7 +593,7 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
         Map<Integer, Long> bucketOffsetOfWrite =
                 appendRow(tablePath, DEFAULT_LOG_TABLE_DESCRIPTOR, 0, 10);
         // test get log split and the assignment
-        try (FlussMockSplitEnumeratorContext<TieringSplit> context =
+        try (FlussMockSplitEnumeratorContext<FlinkTieringSplit> context =
                 new FlussMockSplitEnumeratorContext<>(numSubtasks)) {
             TieringSourceEnumerator enumerator = createTieringSourceEnumerator(flussConf, context);
 
@@ -576,7 +615,7 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
                                 bucketOffsetOfWrite.get(bucketId),
                                 expectNumberOfSplits));
             }
-            List<TieringSplit> actualAssignment = new ArrayList<>();
+            List<FlinkTieringSplit> actualAssignment = new ArrayList<>();
             context.getSplitsAssignmentSequence()
                     .forEach(a -> a.assignment().values().forEach(actualAssignment::addAll));
 
@@ -591,7 +630,7 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
                 enumerator.handleSplitRequest(subtaskId, "localhost-" + subtaskId);
             }
             waitUntilTieringTableSplitAssignmentReady(context, DEFAULT_BUCKET_NUM, 500L);
-            List<TieringSplit> actualAssignment1 = new ArrayList<>();
+            List<FlinkTieringSplit> actualAssignment1 = new ArrayList<>();
             context.getSplitsAssignmentSequence()
                     .forEach(a -> a.assignment().values().forEach(actualAssignment1::addAll));
             assertTieringSplitsMatch(actualAssignment1, expectedAssignment);
@@ -612,7 +651,7 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
         createTable(tablePath2, tableDescriptor);
         appendRow(tablePath2, tableDescriptor, 0, 10);
 
-        try (FlussMockSplitEnumeratorContext<TieringSplit> context =
+        try (FlussMockSplitEnumeratorContext<FlinkTieringSplit> context =
                 new FlussMockSplitEnumeratorContext<>(3)) {
             TieringSourceEnumerator enumerator = createTieringSourceEnumerator(flussConf, context);
 
@@ -627,7 +666,7 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
             assertThat(context.getSplitsAssignmentSequence())
                     .flatExtracting(assignment -> assignment.assignment().values())
                     .flatExtracting(splits -> splits)
-                    .extracting(TieringSplit::getNumberOfSplits)
+                    .extracting(split -> split.unwrap().getNumberOfSplits())
                     .containsOnly(4);
 
             // clean assignment
@@ -690,16 +729,18 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
      * the regular {@code equals}.
      */
     private static void assertTieringSplitsMatch(
-            List<TieringSplit> actualSplits, List<TieringSplit> expectedSplits) {
+            List<FlinkTieringSplit> actualSplits, List<TieringSplit> expectedSplits) {
         assertValidTieringRound(actualSplits);
         List<TieringSplit> normalizedActualSplits =
                 actualSplits.stream()
                         .map(
-                                split ->
-                                        split.copy(
-                                                split.getNumberOfSplits(),
-                                                TieringSplit.UNKNOWN_SPLIT_INDEX,
-                                                TieringSplit.UNKNOWN_TIERING_ROUND_TIMESTAMP))
+                                flinkSplit -> {
+                                    TieringSplit split = flinkSplit.unwrap();
+                                    return split.copy(
+                                            split.getNumberOfSplits(),
+                                            TieringSplit.UNKNOWN_SPLIT_INDEX,
+                                            TieringSplit.UNKNOWN_TIERING_ROUND_TIMESTAMP);
+                                })
                         .collect(Collectors.toList());
         assertThat(normalizedActualSplits).containsExactlyInAnyOrderElementsOf(expectedSplits);
     }
@@ -709,28 +750,29 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
      * 0..size-1} with exactly one first split, every split reports the round size as its number of
      * splits, and all splits share the same positive tiering round timestamp.
      */
-    private static void assertValidTieringRound(List<TieringSplit> tieringSplits) {
+    private static void assertValidTieringRound(List<FlinkTieringSplit> tieringSplits) {
         assertThat(tieringSplits).isNotEmpty();
-        assertThat(tieringSplits).filteredOn(TieringSplit::isFirstSplit).hasSize(1);
+        assertThat(tieringSplits).filteredOn(split -> split.unwrap().isFirstSplit()).hasSize(1);
         assertThat(tieringSplits)
-                .extracting(TieringSplit::getSplitIndex)
+                .extracting(split -> split.unwrap().getSplitIndex())
                 .containsExactlyInAnyOrderElementsOf(
                         IntStream.range(0, tieringSplits.size())
                                 .boxed()
                                 .collect(Collectors.toList()));
-        long tieringRoundTimestamp = tieringSplits.get(0).getTieringRoundTimestamp();
+        long tieringRoundTimestamp = tieringSplits.get(0).unwrap().getTieringRoundTimestamp();
         assertThat(tieringRoundTimestamp).isPositive();
         assertThat(tieringSplits)
                 .allSatisfy(
                         split -> {
-                            assertThat(split.getNumberOfSplits()).isEqualTo(tieringSplits.size());
-                            assertThat(split.getTieringRoundTimestamp())
+                            assertThat(split.unwrap().getNumberOfSplits())
+                                    .isEqualTo(tieringSplits.size());
+                            assertThat(split.unwrap().getTieringRoundTimestamp())
                                     .isEqualTo(tieringRoundTimestamp);
                         });
     }
 
     private void registerReaderAndHandleSplitRequests(
-            FlussMockSplitEnumeratorContext<TieringSplit> context,
+            FlussMockSplitEnumeratorContext<FlinkTieringSplit> context,
             TieringSourceEnumerator enumerator,
             int numSubtasks,
             int attemptNumber) {
@@ -741,7 +783,7 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
     }
 
     private void registerSingleReaderAndHandleSplitRequests(
-            FlussMockSplitEnumeratorContext<TieringSplit> context,
+            FlussMockSplitEnumeratorContext<FlinkTieringSplit> context,
             TieringSourceEnumerator enumerator,
             int subtaskId,
             int attemptNumber) {
@@ -751,7 +793,7 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
     }
 
     private void waitUntilTieringTableSplitAssignmentReady(
-            FlussMockSplitEnumeratorContext<TieringSplit> context,
+            FlussMockSplitEnumeratorContext<FlinkTieringSplit> context,
             int expectedSplitsNum,
             long sleepMs)
             throws Throwable {
@@ -766,32 +808,34 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
     }
 
     private void verifyTieringSplitAssignment(
-            FlussMockSplitEnumeratorContext<TieringSplit> context,
+            FlussMockSplitEnumeratorContext<FlinkTieringSplit> context,
             int expectedSplitSize,
             TablePath expectedTablePath)
             throws Throwable {
         waitUntilTieringTableSplitAssignmentReady(context, expectedSplitSize, 200);
-        List<SplitsAssignment<TieringSplit>> actualAssignment =
+        List<SplitsAssignment<FlinkTieringSplit>> actualAssignment =
                 context.getSplitsAssignmentSequence();
 
-        List<TieringSplit> allTieringSplits =
+        List<FlinkTieringSplit> allTieringSplits =
                 actualAssignment.stream()
                         .flatMap(assignments -> assignments.assignment().values().stream())
                         .flatMap(List::stream)
                         .collect(Collectors.toList());
         assertThat(allTieringSplits).hasSize(expectedSplitSize);
         assertThat(allTieringSplits)
-                .allMatch(tieringSplit -> tieringSplit.getTablePath().equals(expectedTablePath));
+                .allMatch(
+                        tieringSplit ->
+                                tieringSplit.unwrap().getTablePath().equals(expectedTablePath));
     }
 
     private TieringSourceEnumerator createTieringSourceEnumerator(
-            Configuration flussConf, MockSplitEnumeratorContext<TieringSplit> context) {
+            Configuration flussConf, MockSplitEnumeratorContext<FlinkTieringSplit> context) {
         return createTieringSourceEnumerator(flussConf, context, new TestingLakeTieringFactory());
     }
 
     private TieringSourceEnumerator createTieringSourceEnumerator(
             Configuration flussConf,
-            MockSplitEnumeratorContext<TieringSplit> context,
+            MockSplitEnumeratorContext<FlinkTieringSplit> context,
             LakeTieringFactory<?, ?> lakeTieringFactory) {
         return new TieringSourceEnumerator(flussConf, context, lakeTieringFactory, 500);
     }
@@ -810,7 +854,7 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
                     }
                 };
 
-        try (FlussMockSplitEnumeratorContext<TieringSplit> context =
+        try (FlussMockSplitEnumeratorContext<FlinkTieringSplit> context =
                         new FlussMockSplitEnumeratorContext<>(1);
                 TieringSourceEnumerator enumerator =
                         createTieringSourceEnumerator(flussConf, context, lakeTieringFactory)) {
@@ -825,7 +869,7 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
 
     @Test
     void testNetworkErrorInHeartbeatTriggersFailover() throws Exception {
-        try (FlussMockSplitEnumeratorContext<TieringSplit> context =
+        try (FlussMockSplitEnumeratorContext<FlinkTieringSplit> context =
                 new FlussMockSplitEnumeratorContext<>(1)) {
             TieringSourceEnumerator enumerator = createTieringSourceEnumerator(flussConf, context);
             FlinkRuntimeException networkError =
@@ -843,7 +887,7 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
         long tableId = createTable(tablePath, DEFAULT_LOG_TABLE_DESCRIPTOR);
         int numSubtasks = 2;
 
-        try (FlussMockSplitEnumeratorContext<TieringSplit> context =
+        try (FlussMockSplitEnumeratorContext<FlinkTieringSplit> context =
                         new FlussMockSplitEnumeratorContext<>(numSubtasks);
                 TieringSourceEnumerator enumerator =
                         createTieringSourceEnumerator(flussConf, context)) {
@@ -887,11 +931,11 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
             // the split should be marked as skipCurrentRound
             waitUntilTieringTableSplitAssignmentReady(context, 1, 100L);
 
-            List<TieringSplit> assignedSplits = new ArrayList<>();
+            List<FlinkTieringSplit> assignedSplits = new ArrayList<>();
             context.getSplitsAssignmentSequence()
                     .forEach(a -> a.assignment().values().forEach(assignedSplits::addAll));
             assertThat(assignedSplits).hasSize(1);
-            assertThat(assignedSplits.get(0).shouldSkipCurrentRound()).isTrue();
+            assertThat(assignedSplits.get(0).unwrap().shouldSkipCurrentRound()).isTrue();
 
             // alter table freshness to 10 min to make sure we won't assign in
             // normal finish
@@ -933,7 +977,7 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
             // Wait for the table to be assigned again
             waitUntilTieringTableSplitAssignmentReady(context, 2, 500L);
 
-            List<TieringSplit> reassignedSplits = new ArrayList<>();
+            List<FlinkTieringSplit> reassignedSplits = new ArrayList<>();
             context.getSplitsAssignmentSequence()
                     .forEach(a -> a.assignment().values().forEach(reassignedSplits::addAll));
             assertThat(reassignedSplits).hasSize(2);
@@ -941,8 +985,8 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
             assertThat(reassignedSplits)
                     .allMatch(
                             split ->
-                                    split.getTableBucket().getTableId() == tableId
-                                            && !split.shouldSkipCurrentRound());
+                                    split.unwrap().getTableBucket().getTableId() == tableId
+                                            && !split.unwrap().shouldSkipCurrentRound());
         }
     }
 }

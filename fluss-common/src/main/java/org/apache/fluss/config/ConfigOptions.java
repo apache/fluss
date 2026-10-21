@@ -656,6 +656,98 @@ public class ConfigOptions {
                                     + "from 'security.sasl.plain.credentials' when that credential map is set, "
                                     + "and can also be configured directly for compatibility.");
 
+    // ------------------------------------------------------------------------
+    //  Server-side TLS (transport encryption + mTLS) options
+    // ------------------------------------------------------------------------
+
+    public static final ConfigOption<List<String>> SERVER_SSL_ENABLED_LISTENERS =
+            key("security.ssl.enabled.listeners")
+                    .stringType()
+                    .asList()
+                    .noDefaultValue()
+                    .withDescription(
+                            "Listener names with TLS enabled, e.g. `CLIENT,INTERNAL`; others "
+                                    + "accept plaintext. Requires `security.ssl.keystore.path`. A "
+                                    + "listener whose `security.protocol.map` entry is `mTLS` must "
+                                    + "be listed here, since it authenticates by certificate. Names "
+                                    + "match exactly: spell and case them as in `bind.listeners` "
+                                    + "and `security.protocol.map`, or no listener is selected.");
+
+    public static final ConfigOption<List<String>> SERVER_SSL_ENABLED_PROTOCOLS =
+            key("security.ssl.enabled.protocols")
+                    .stringType()
+                    .asList()
+                    .defaultValues("TLSv1.2", "TLSv1.3")
+                    .withDescription(
+                            "TLS protocols enabled for incoming connections. `TLSv1.2` is kept "
+                                    + "by default for JDK 8 builds older than 8u261.");
+
+    public static final ConfigOption<List<String>> SERVER_SSL_CIPHER_SUITES =
+            key("security.ssl.cipher.suites")
+                    .stringType()
+                    .asList()
+                    .noDefaultValue()
+                    .withDescription(
+                            "Cipher suites enabled for TLS connections. Empty uses the provider "
+                                    + "defaults.");
+
+    public static final ConfigOption<String> SERVER_SSL_KEYSTORE_PATH =
+            key("security.ssl.keystore.path")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "Keystore file with the server certificate and key. Required with "
+                                    + "`security.ssl.enabled.listeners`.");
+
+    public static final ConfigOption<Password> SERVER_SSL_KEYSTORE_PASSWORD =
+            key("security.ssl.keystore.password")
+                    .passwordType()
+                    .noDefaultValue()
+                    .withDescription("The password to access the server keystore.");
+
+    public static final ConfigOption<String> SERVER_SSL_KEYSTORE_TYPE =
+            key("security.ssl.keystore.type")
+                    .stringType()
+                    .defaultValue("JKS")
+                    .withDescription("Format of the server keystore: `JKS` or `PKCS12`.");
+
+    public static final ConfigOption<Password> SERVER_SSL_KEY_PASSWORD =
+            key("security.ssl.key.password")
+                    .passwordType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "Password of the server private key. Defaults to "
+                                    + "`security.ssl.keystore.password`.");
+
+    public static final ConfigOption<String> SERVER_SSL_TRUSTSTORE_PATH =
+            key("security.ssl.truststore.path")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "Truststore file holding the certificates the server trusts. Required "
+                                    + "for `mTLS` listeners, to validate client certificates.");
+
+    public static final ConfigOption<Password> SERVER_SSL_TRUSTSTORE_PASSWORD =
+            key("security.ssl.truststore.password")
+                    .passwordType()
+                    .noDefaultValue()
+                    .withDescription("The password to access the server truststore.");
+
+    public static final ConfigOption<String> SERVER_SSL_TRUSTSTORE_TYPE =
+            key("security.ssl.truststore.type")
+                    .stringType()
+                    .defaultValue("JKS")
+                    .withDescription("Format of the server truststore: `JKS` or `PKCS12`.");
+
+    public static final ConfigOption<String> SERVER_SSL_PRINCIPAL_MAPPING_RULES =
+            key("security.ssl.principal.mapping.rules")
+                    .stringType()
+                    .defaultValue("DEFAULT")
+                    .withDescription(
+                            "Rules that map the distinguished name of a client certificate, in "
+                                    + "RFC 2253 form, to the principal name of an `mTLS` listener. "
+                                    + "`DEFAULT` keeps the full distinguished name.");
+
     public static final ConfigOption<Integer> TABLET_SERVER_ID =
             key("tablet-server.id")
                     .intType()
@@ -1009,11 +1101,11 @@ public class ConfigOptions {
     public static final ConfigOption<Boolean> LOG_RETENTION_ROLL_ACTIVE_SEGMENT_ENABLED =
             key("log.retention.roll-active-segment.enabled")
                     .booleanType()
-                    .defaultValue(false)
+                    .defaultValue(true)
                     .withDescription(
                             "Whether to roll a non-empty active log segment after it has expired "
                                     + "according to the effective local cleanup TTL and the high "
-                                    + "watermark has reached the log end offset. Disabled by default.");
+                                    + "watermark has reached the log end offset. Enabled by default.");
 
     public static final ConfigOption<Duration> LOG_REPLICA_HIGH_WATERMARK_CHECKPOINT_INTERVAL =
             key("log.replica.high-watermark.checkpoint-interval")
@@ -1410,6 +1502,47 @@ public class ConfigOptions {
                             "Setting a value greater than zero will cause the client to resend any record whose "
                                     + "send fails with a potentially transient error.");
 
+    public static final ConfigOption<Duration> CLIENT_WRITER_RETRY_BACKOFF =
+            key("client.writer.retry-backoff")
+                    .durationType()
+                    .defaultValue(Duration.ofMillis(100))
+                    .withDescription(
+                            "The initial delay before retrying a write that failed with a retriable error. "
+                                    + "The delay doubles with the batch retry count and uses 20% jitter, "
+                                    + "up to client.writer.retry-backoff-max. Set to 0 to disable this backoff.");
+
+    public static final ConfigOption<Duration> CLIENT_WRITER_RETRY_BACKOFF_MAX =
+            key("client.writer.retry-backoff-max")
+                    .durationType()
+                    .defaultValue(Duration.ofSeconds(1))
+                    .withDescription(
+                            "The maximum delay before retrying a write that failed with a retriable error. "
+                                    + "Must be between the initial backoff and 2147483647ms. "
+                                    + "The backoff applies per physical table bucket and is independent of "
+                                    + "KV backpressure and disk-write protection.");
+
+    public static final ConfigOption<Duration> CLIENT_WRITER_DISK_WRITE_LOCKED_BACKOFF =
+            key("client.writer.disk-write-locked.backoff")
+                    .durationType()
+                    .defaultValue(Duration.ofSeconds(1))
+                    .withDescription(
+                            "The initial retry backoff when disk write protection rejects a write. "
+                                    + "Applies to both Log and KV writes, independently of KV backpressure. "
+                                    + "The backoff doubles with the batch retry count and uses 20% jitter, "
+                                    + "up to client.writer.disk-write-locked.backoff-max. "
+                                    + "The value must be at least 1ms and no greater than the maximum backoff.");
+
+    public static final ConfigOption<Duration> CLIENT_WRITER_DISK_WRITE_LOCKED_BACKOFF_MAX =
+            key("client.writer.disk-write-locked.backoff-max")
+                    .durationType()
+                    .defaultValue(Duration.ofSeconds(10))
+                    .withDescription(
+                            "The maximum retry backoff for a bucket whose writes are rejected by disk "
+                                    + "write protection. Must be between the initial backoff and 2147483647ms. "
+                                    + "Setting this equal to the initial backoff uses a fixed delay without jitter. "
+                                    + "Writes retry automatically after the delay, subject to client.writer.retries. "
+                                    + "Flush and graceful close also respect this delay.");
+
     public static final ConfigOption<Boolean> CLIENT_WRITER_ENABLE_IDEMPOTENCE =
             key("client.writer.enable-idempotence")
                     .booleanType()
@@ -1508,6 +1641,87 @@ public class ConfigOptions {
                                     + "This is useful for standalone tools or scripts that run outside "
                                     + "the server JVM but still need to load authentication plugins "
                                     + "shipped in plugins/.");
+
+    // ------------------------------------------------------------------------
+    //  Client-side TLS (transport encryption + mTLS) options
+    // ------------------------------------------------------------------------
+
+    public static final ConfigOption<Boolean> CLIENT_SSL_ENABLED =
+            key("client.security.ssl.enabled")
+                    .booleanType()
+                    .defaultValue(false)
+                    .withDescription(
+                            "Whether the client connects over TLS. Must match the listener it "
+                                    + "connects to (`security.ssl.enabled.listeners`).");
+
+    public static final ConfigOption<List<String>> CLIENT_SSL_ENABLED_PROTOCOLS =
+            key("client.security.ssl.enabled.protocols")
+                    .stringType()
+                    .asList()
+                    .defaultValues("TLSv1.2", "TLSv1.3")
+                    .withDescription("TLS protocols enabled for client connections.");
+
+    public static final ConfigOption<List<String>> CLIENT_SSL_CIPHER_SUITES =
+            key("client.security.ssl.cipher.suites")
+                    .stringType()
+                    .asList()
+                    .defaultValues()
+                    .withDescription("Cipher suites enabled for client connections.");
+
+    public static final ConfigOption<String> CLIENT_SSL_TRUSTSTORE_PATH =
+            key("client.security.ssl.truststore.path")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "Truststore file holding the certificates the client trusts. If "
+                                    + "unset, the JVM default truststore is used.");
+
+    public static final ConfigOption<String> CLIENT_SSL_TRUSTSTORE_PASSWORD =
+            key("client.security.ssl.truststore.password")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription("The password to access the client truststore.");
+
+    public static final ConfigOption<String> CLIENT_SSL_TRUSTSTORE_TYPE =
+            key("client.security.ssl.truststore.type")
+                    .stringType()
+                    .defaultValue("JKS")
+                    .withDescription("Format of the client truststore: `JKS` or `PKCS12`.");
+
+    public static final ConfigOption<String> CLIENT_SSL_KEYSTORE_PATH =
+            key("client.security.ssl.keystore.path")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription("Keystore file with the client certificate and key.");
+
+    public static final ConfigOption<String> CLIENT_SSL_KEYSTORE_PASSWORD =
+            key("client.security.ssl.keystore.password")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription("The password to access the client keystore.");
+
+    public static final ConfigOption<String> CLIENT_SSL_KEYSTORE_TYPE =
+            key("client.security.ssl.keystore.type")
+                    .stringType()
+                    .defaultValue("JKS")
+                    .withDescription("Format of the client keystore: `JKS` or `PKCS12`.");
+
+    public static final ConfigOption<String> CLIENT_SSL_KEY_PASSWORD =
+            key("client.security.ssl.key.password")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "Password of the client private key. Defaults to "
+                                    + "`client.security.ssl.keystore.password`.");
+
+    public static final ConfigOption<String> CLIENT_SSL_ENDPOINT_IDENTIFICATION_ALGORITHM =
+            key("client.security.ssl.endpoint.identification.algorithm")
+                    .stringType()
+                    .defaultValue("https")
+                    .withDescription(
+                            "Algorithm verifying the server hostname against its certificate: "
+                                    + "`https` or `ldaps`. Empty disables the check, which is not "
+                                    + "recommended in production.");
 
     public static final ConfigOption<MemorySize> CLIENT_SCANNER_LOG_FETCH_MAX_BYTES =
             key("client.scanner.log.fetch.max-bytes")
@@ -2042,6 +2256,16 @@ public class ConfigOptions {
                                     + "The `versioned` merge engine will keep the row with the largest version of the same primary key. "
                                     + "The `aggregation` merge engine will aggregate rows with the same primary key using field-level aggregate functions.");
 
+    public static final ConfigOption<Boolean> TABLE_UPSERT_SKIP_UNCHANGED =
+            key("table.upsert.skip-unchanged")
+                    .booleanType()
+                    .defaultValue(false)
+                    .withDescription(
+                            "For a primary key table using the default merge behavior, skip the state write and changelog when the complete candidate row has the same schema ID and serialized row bytes as the stored row. "
+                                    + "This also applies to partial updates and partial deletes. "
+                                    + "It requires FULL changelog image mode and cannot be combined with row-level KV TTL or a merge engine. As with other tables without a merge engine, OVERWRITE writes are unsupported. "
+                                    + "FULL changelog image mode already reads the previous value for every upsert. Comparing it with the complete candidate row adds comparison costs.");
+
     public static final ConfigOption<String> TABLE_MERGE_ENGINE_VERSION_COLUMN =
             // we may need to introduce "del-column" in the future to support delete operation
             key("table.merge-engine.versioned.ver-column")
@@ -2104,6 +2328,86 @@ public class ConfigOptions {
                                     + "Note: enabling column statistics requires the V1 batch format. "
                                     + "Downstream consumers must be upgraded to Fluss v1.0+ before enabling this option, "
                                     + "as older versions cannot parse the extended batch format.");
+
+    public static final ConfigOption<Boolean> TABLE_KAFKA_ENABLED =
+            key("table.kafka.enabled")
+                    .booleanType()
+                    .defaultValue(false)
+                    .withDescription(
+                            "Whether to expose this table as a Kafka topic. Requires a non-partitioned "
+                                    + "log table using the Arrow log format.");
+
+    public static final ConfigOption<KafkaValueConversionType> TABLE_KAFKA_CONVERT_VALUE_TYPE =
+            key("table.kafka.convert.value.type")
+                    .enumType(KafkaValueConversionType.class)
+                    .defaultValue(KafkaValueConversionType.PARSE_JSON)
+                    .withDescription(
+                            "How to convert Kafka record values. 'binary' stores the raw bytes in "
+                                    + "_kafka_value (BYTES); 'string' decodes UTF-8 text into _kafka_value "
+                                    + "(STRING); 'parse_json' parses a JSON object and maps its fields "
+                                    + "according to table.kafka.convert.value.layout. Defaults to 'parse_json'.");
+
+    public static final ConfigOption<KafkaValueConversionLayout> TABLE_KAFKA_CONVERT_VALUE_LAYOUT =
+            key("table.kafka.convert.value.layout")
+                    .enumType(KafkaValueConversionLayout.class)
+                    .defaultValue(KafkaValueConversionLayout.FLAT)
+                    .withDescription(
+                            "How to map JSON object fields when table.kafka.convert.value.type is "
+                                    + "'parse_json'. 'flat' maps fields by name to top-level table columns; "
+                                    + "'nested' maps them to fields in the _kafka_value column, which must "
+                                    + "have ROW type. Defaults to 'flat'. Ignored for 'binary' and 'string' conversion.");
+
+    public static final ConfigOption<KafkaKeyConversionType> TABLE_KAFKA_CONVERT_KEY_TYPE =
+            key("table.kafka.convert.key.type")
+                    .enumType(KafkaKeyConversionType.class)
+                    .noDefaultValue()
+                    .withDescription(
+                            "How to convert Kafka record keys. Only 'binary' is supported, which stores "
+                                    + "raw key bytes in the _kafka_key column of type BYTES. If this column "
+                                    + "is declared, keys are stored even when this option is omitted. "
+                                    + "Without this column, keys are not stored and this option must be left unset.");
+
+    // ------------------------------------------------------------------------
+    //  ConfigOptions for Consumer Offsets
+    // ------------------------------------------------------------------------
+
+    public static final ConfigOption<MemorySize> OFFSET_METADATA_MAX_BYTES =
+            key("server.consumer-offsets.metadata.max-size")
+                    .memoryType()
+                    .defaultValue(MemorySize.parse("4kb"))
+                    .withDescription(
+                            "The maximum size for a metadata entry associated with an offset commit.");
+
+    public static final ConfigOption<Duration> OFFSETS_RETENTION =
+            key("server.consumer-offsets.ttl")
+                    .durationType()
+                    .defaultValue(Duration.ofDays(7))
+                    .withDescription(
+                            "The retention period for committed consumer offsets after they become inactive.");
+
+    public static final ConfigOption<Integer> OFFSETS_TABLE_NUM_BUCKETS =
+            key("server.consumer-offsets.table.bucket-count")
+                    .intType()
+                    .defaultValue(16)
+                    .withDescription(
+                            "The number of buckets for the consumer-offset system table. This value should not change after deployment. "
+                                    + "Unlike log tables, each KV bucket leader maintains a separate RocksDB instance, so a large value "
+                                    + "introduces overhead for small and medium clusters. Increase it only if the consumer-offset write "
+                                    + "load cannot be handled by the default number of bucket leaders.");
+
+    public static final ConfigOption<Integer> OFFSETS_TABLE_REPLICATION_FACTOR =
+            key("server.consumer-offsets.table.replication-factor")
+                    .intType()
+                    .defaultValue(3)
+                    .withDescription(
+                            "The replication factor for the consumer-offset system table. Table creation waits until the cluster has enough tablet servers.");
+
+    public static final ConfigOption<Duration> OFFSET_COMMIT_TIMEOUT =
+            key("server.consumer-offsets.commit-timeout")
+                    .durationType()
+                    .defaultValue(Duration.ofSeconds(5))
+                    .withDescription(
+                            "The maximum time to wait for all replicas to acknowledge an offset commit.");
 
     // ------------------------------------------------------------------------
     //  ConfigOptions for Kv
@@ -2443,6 +2747,20 @@ public class ConfigOptions {
                                     + "so that the total memory used by RocksDB is bounded by block cache size. "
                                     + "The default value is `false`.");
 
+    public static final ConfigOption<Boolean> KV_PARTITIONED_INDEX_FILTERS =
+            key("kv.rocksdb.block.partitioned-index-filters")
+                    .booleanType()
+                    .defaultValue(false)
+                    .withDescription(
+                            "Enables partitioned indexes. If `kv.rocksdb.use-bloom-filter` is true, "
+                                    + "Bloom filters are partitioned as well. Requires a positive "
+                                    + "`kv.rocksdb.block.metadata-blocksize`; when `kv.rocksdb.use-bloom-filter` "
+                                    + "is true, `kv.rocksdb.bloom-filter.block-based-mode` must be `false`. "
+                                    + "Only newly generated SSTs "
+                                    + "use this format; existing SSTs remain readable when this option is enabled or disabled. "
+                                    + "Partitions use the block cache even when metadata caching is disabled. "
+                                    + "Takes effect when opening a RocksDB instance.");
+
     public static final ConfigOption<Boolean> KV_CACHE_INDEX_AND_FILTER_BLOCKS_WITH_HIGH_PRIORITY =
             key("kv.rocksdb.block.cache-index-and-filter-blocks-with-high-priority")
                     .booleanType()
@@ -2703,6 +3021,15 @@ public class ConfigOptions {
                                     + ConfigOptions.TABLE_DATALAKE_AUTO_EXPIRE_SNAPSHOT
                                     + " is false.");
 
+    public static final ConfigOption<Boolean> LAKE_TIERING_PARTITION_MARK_DONE_ENABLED =
+            key("lake.tiering.partition.mark-done.enabled")
+                    .booleanType()
+                    .defaultValue(false)
+                    .withDescription(
+                            "Whether the tiering service marks idle partitions of tiered partitioned tables as done. "
+                                    + "Disabled by default. When enabled, mark-done uses the actual lake table's options "
+                                    + "(e.g. 'partition.idle-time-to-done' on the Paimon table).");
+
     public static final ConfigOption<String> LAKE_TIERING_IO_TMP_DIRS =
             key("lake.tiering.io.tmp.dirs")
                     .stringType()
@@ -2732,19 +3059,15 @@ public class ConfigOptions {
                     .withDescription(
                             "The listener names for Kafka wire protocol communication. Support multiple listener names, separated by comma.");
 
-    public static final ConfigOption<String> KAFKA_DATABASE =
-            key("kafka.database")
+    public static final ConfigOption<String> KAFKA_DEFAULT_DATABASE =
+            key("kafka.default.database")
                     .stringType()
-                    .defaultValue("kafka")
+                    .defaultValue("fluss")
                     .withDescription(
-                            "The database for fluss kafka. The default database is `kafka`.");
-
-    public static final ConfigOption<Duration> KAFKA_CONNECTION_MAX_IDLE_TIME =
-            key("kafka.connection.max-idle-time")
-                    .durationType()
-                    .defaultValue(Duration.ofSeconds(60))
-                    .withDescription(
-                            "Close kafka idle connections after the given time specified by this config.");
+                            "Default database for unqualified Kafka topic names. Fully qualified names may "
+                                    + "access other databases. When Kafka is enabled, the coordinator creates "
+                                    + "the configured database if missing, including 'fluss'. With Kafka disabled, "
+                                    + "native initialization creates 'fluss' only when the cluster has no databases.");
 
     /**
      * Compaction style for Fluss's kv, which is same to rocksdb's, but help use avoid including

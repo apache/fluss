@@ -30,42 +30,65 @@ on:
         required: false
         type: string
         default: ""
+      modules:
+        description: "JSON array of CI stages to run."
+        required: false
+        type: string
+        default: '["core","flink1","flink2","spark3","spark3-lake","spark3-scala213","lake"]'
+      run-spark-scala213:
+        description: "Whether to run the Spark tests with Scala 2.13."
+        required: false
+        type: boolean
+        default: false
 jobs:
   build:
     runs-on: self-hosted
     strategy:
       fail-fast: false
       matrix:
-        module: [ core, flink1, flink2, spark3, spark3-lake, spark3-scala213, lake ]
-        include:
-          - module: flink1
-            test-profile: "test-flink1"
-          - module: flink2
-            test-profile: "test-flink2"
-          - module: spark3-lake
-            test-profile: "test-spark3"
-          - module: spark3-scala213
-            scala-profile: "-Pscala-2.13"
-            test-profile: "test-spark3"
+        module: ${{ fromJSON(inputs.modules) }}
+        exclude: ${{ fromJSON(inputs.run-spark-scala213 && '[]' || '[{"module":"spark3-scala213"}]') }}
     name: "${{ matrix.module }}"
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
+      # Maven toolchain for fluss-lake-iceberg-1.12. The next step sets the JDK that runs Maven
+      # and every other module.
+      - name: Set up JDK 17 toolchain
+        id: jdk17
+        uses: actions/setup-java@v5
+        with:
+          java-version: '17'
+          distribution: 'temurin'
       - name: Set up JDK
         uses: actions/setup-java@v5
         with:
           java-version: ${{ inputs.java-version }}
           distribution: 'temurin'
+      # Use a job-local toolchains file: ~/.m2/toolchains.xml on the self-hosted runners keeps
+      # entries for JDKs that no longer exist, and the toolchains plugin fails on any of them.
+      - name: Configure Maven toolchains
+        run: |
+          cat > "${{ runner.temp }}/toolchains.xml" <<EOF
+          <toolchains>
+            <toolchain>
+              <type>jdk</type>
+              <provides><version>17</version></provides>
+              <configuration><jdkHome>${{ steps.jdk17.outputs.path }}</jdkHome></configuration>
+            </toolchain>
+          </toolchains>
+          EOF
+          echo "MAVEN_TOOLCHAIN_ARGS=-t ${{ runner.temp }}/toolchains.xml -Dtoolchain.jdk.discover=false" >> "$GITHUB_ENV"
       - name: Build
         run: |
-          mvn -T 1C -B clean install -DskipTests ${{ matrix.scala-profile }} ${{ inputs.maven-parameters }}
+          mvn -T 1C -B clean install -DskipTests $MAVEN_TOOLCHAIN_ARGS ${{ matrix.module == 'spark3-scala213' && '-Pscala-2.13' || '' }} ${{ inputs.maven-parameters }}
       - name: Test
         timeout-minutes: 60
         run: |
           TEST_MODULES=$(./.github/workflows/stage.sh ${{ matrix.module }})
           echo "github ref: ${{ github.ref }}"
           echo "Start testing modules: $TEST_MODULES"
-          mvn -B verify $TEST_MODULES -Ptest-coverage -P${{ matrix.test-profile || format('test-{0}', matrix.module) }} ${{ matrix.scala-profile }} -Dlog.dir=${{ runner.temp }}/fluss-logs -Dlog4j.configurationFile=${{ github.workspace }}/tools/ci/log4j.properties ${{ inputs.maven-parameters }}
+          mvn -B verify $TEST_MODULES $MAVEN_TOOLCHAIN_ARGS -Ptest-coverage -P${{ startsWith(matrix.module, 'spark3') && 'test-spark3' || format('test-{0}', matrix.module) }} -Dlog.dir=${{ runner.temp }}/fluss-logs -Dlog4j.configurationFile=${{ github.workspace }}/tools/ci/log4j.properties ${{ inputs.maven-parameters }}
         env:
           MAVEN_OPTS: -Xmx4096m
           ARTIFACTS_OSS_ENDPOINT: ${{ secrets.ARTIFACTS_OSS_ENDPOINT }}

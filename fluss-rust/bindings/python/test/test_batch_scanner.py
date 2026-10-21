@@ -55,6 +55,9 @@ async def test_returns_appended_rows_then_none(connection, admin):
     first = await scanner.next_batch()
     assert first is not None
     assert first.bucket == bucket
+    # A limit scan merges every log batch it read into one Arrow batch, so there
+    # is no single commit timestamp to report.
+    assert first.commit_timestamp == fluss.NO_COMMIT_TIMESTAMP
     # The server may return fewer rows than the limit, but never more.
     assert 0 < first.batch.num_rows <= 3
     assert await scanner.next_batch() is None

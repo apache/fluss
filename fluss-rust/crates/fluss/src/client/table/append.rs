@@ -219,11 +219,13 @@ impl AppendWriter {
         };
 
         let Some(router) = self.bucket_router.as_ref() else {
-            return self.send_arrow_batch(batch, physical_table_path, None, deadline);
+            return self.send_arrow_batch(batch, physical_table_path, None, None, deadline);
         };
 
         // Group rows by bucket, keeping one key per bucket (it hashes back there).
-        let num_buckets = self.table_info.get_num_buckets();
+        let num_buckets = self
+            .writer_client
+            .routing_bucket_count(&physical_table_path, &self.table_info)?;
         let batch_arc = Arc::new(batch.clone());
         let row_type = Arc::new(self.table_info.row_type.clone());
         let mut groups: HashMap<i32, (Vec<u32>, Bytes)> = HashMap::new();
@@ -241,7 +243,13 @@ impl AppendWriter {
 
         if groups.len() == 1 {
             let (_, (_, rep_key)) = groups.into_iter().next().unwrap();
-            return self.send_arrow_batch(batch, physical_table_path, Some(rep_key), deadline);
+            return self.send_arrow_batch(
+                batch,
+                physical_table_path,
+                Some(rep_key),
+                Some(num_buckets),
+                deadline,
+            );
         }
 
         let mut handles = Vec::with_capacity(groups.len());
@@ -255,7 +263,10 @@ impl AppendWriter {
             )
             .with_bucket_key(Some(rep_key))
             .with_submit_deadline(deadline);
-            handles.push(self.writer_client.send(&record)?);
+            handles.push(
+                self.writer_client
+                    .send_with_bucket_count(&record, num_buckets)?,
+            );
         }
         Ok(WriteResultFuture::join(handles))
     }
@@ -265,6 +276,7 @@ impl AppendWriter {
         batch: RecordBatch,
         physical_table_path: Arc<PhysicalTablePath>,
         bucket_key: Option<Bytes>,
+        bucket_count: Option<i32>,
         deadline: Option<Instant>,
     ) -> Result<WriteResultFuture> {
         let record = WriteRecord::for_append_record_batch(
@@ -275,7 +287,12 @@ impl AppendWriter {
         )
         .with_bucket_key(bucket_key)
         .with_submit_deadline(deadline);
-        let result_handle = self.writer_client.send(&record)?;
+        let result_handle = match bucket_count {
+            Some(bucket_count) => self
+                .writer_client
+                .send_with_bucket_count(&record, bucket_count)?,
+            None => self.writer_client.send(&record)?,
+        };
         Ok(WriteResultFuture::new(result_handle))
     }
 

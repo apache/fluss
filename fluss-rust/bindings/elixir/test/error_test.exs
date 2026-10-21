@@ -32,7 +32,9 @@ defmodule Fluss.ErrorTest do
     :not_enough_replicas_after_append_exception,
     :not_enough_replicas_exception,
     :leader_not_available_exception,
-    :storage_backpressure_exception
+    :storage_backpressure_exception,
+    :disk_write_locked,
+    :historical_partition_throttled
   ]
 
   @non_retriable_codes [
@@ -47,7 +49,8 @@ defmodule Fluss.ErrorTest do
     :invalid_coordinator_exception,
     :fenced_leader_epoch_exception,
     :fenced_tiering_epoch_exception,
-    :retriable_authenticate_exception
+    :retriable_authenticate_exception,
+    :invalid_bucket_routing
   ]
 
   defp err(code), do: %Fluss.Error{code: code, error_code: 0, message: ""}

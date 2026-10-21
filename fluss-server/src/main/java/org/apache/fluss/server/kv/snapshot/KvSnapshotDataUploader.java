@@ -150,6 +150,8 @@ public class KvSnapshotDataUploader extends KvSnapshotDataTransfer {
                 uploadedBytes += numBytes;
             }
 
+            outputStream.flushToFile();
+
             final KvFileHandle result;
             if (closeableRegistry.unregisterCloseable(outputStream)) {
                 result = outputStream.closeAndGetHandle();

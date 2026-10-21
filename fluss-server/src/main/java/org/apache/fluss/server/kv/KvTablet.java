@@ -70,14 +70,14 @@ import org.apache.fluss.utils.IOUtils;
 import org.apache.fluss.utils.clock.Clock;
 import org.apache.fluss.utils.clock.SystemClock;
 
-import org.rocksdb.AbstractCompactionFilter;
-import org.rocksdb.AbstractCompactionFilterFactory;
-import org.rocksdb.Cache;
-import org.rocksdb.RateLimiter;
-import org.rocksdb.ReadOptions;
-import org.rocksdb.RocksIterator;
-import org.rocksdb.Snapshot;
-import org.rocksdb.WriteBufferManager;
+import io.github.fluss_contrib.rocksdb.AbstractCompactionFilter;
+import io.github.fluss_contrib.rocksdb.AbstractCompactionFilterFactory;
+import io.github.fluss_contrib.rocksdb.Cache;
+import io.github.fluss_contrib.rocksdb.RateLimiter;
+import io.github.fluss_contrib.rocksdb.ReadOptions;
+import io.github.fluss_contrib.rocksdb.RocksIterator;
+import io.github.fluss_contrib.rocksdb.Snapshot;
+import io.github.fluss_contrib.rocksdb.WriteBufferManager;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -218,7 +218,8 @@ public final class KvTablet {
             AutoIncrementManager autoIncrementManager,
             @Nullable RowTtlTimestampProvider rowTtlTimestampProvider,
             Clock clock,
-            boolean rowTtlEnabled) {
+            boolean rowTtlEnabled,
+            boolean skipUnchangedUpsert) {
         this.physicalPath = physicalPath;
         this.tableBucket = tableBucket;
         this.historicalPartition =
@@ -256,7 +257,8 @@ public final class KvTablet {
                         stateValueEncoder,
                         valueDecoder,
                         rowTtlTimestampProvider,
-                        clock);
+                        clock,
+                        skipUnchangedUpsert);
         this.rocksDBStatistics = rocksDBStatistics;
         this.autoIncrementManager = autoIncrementManager;
         this.flushCompleteListener = flushCompleteListener;
@@ -518,7 +520,8 @@ public final class KvTablet {
                 autoIncrementManager,
                 rowTtlTimestampProvider,
                 clock,
-                rowTtl.isPresent());
+                rowTtl.isPresent(),
+                tableConfig.isUpsertSkipUnchanged());
     }
 
     public static KvTablet create(

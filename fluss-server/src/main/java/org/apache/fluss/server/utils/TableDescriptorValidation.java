@@ -32,6 +32,7 @@ import org.apache.fluss.metadata.AggFunction;
 import org.apache.fluss.metadata.ChangelogImage;
 import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.DeleteBehavior;
+import org.apache.fluss.metadata.KafkaTableSchema;
 import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.MergeEngineType;
@@ -122,6 +123,8 @@ public class TableDescriptorValidation {
             }
         }
 
+        KafkaTableSchema.validate(tableDescriptor);
+
         // check distribution
         checkDistribution(tableDescriptor, maxBucketNum);
         checkPrimaryKey(tableDescriptor);
@@ -130,6 +133,7 @@ public class TableDescriptorValidation {
         checkLogFormat(tableConf, hasPrimaryKey);
         checkArrowCompression(tableConf);
         checkMergeEngine(tableConf, hasPrimaryKey, schema);
+        checkUpsertSkipUnchanged(tableConf, hasPrimaryKey);
         checkDeleteBehavior(tableConf, hasPrimaryKey);
         checkTieredLog(tableConf);
         checkHistoricalPartition(tableDescriptor, tableConf);
@@ -155,6 +159,10 @@ public class TableDescriptorValidation {
         } else {
             validateNoAggregationFunctions(newSchema);
         }
+        TableDescriptor updated =
+                TableDescriptor.builder(table.toTableDescriptor()).schema(newSchema).build();
+        KafkaTableSchema.validate(updated);
+        KafkaTableSchema.validateTablePath(table.getTablePath(), updated);
     }
 
     private static void checkTableLakeFormatMatchesCluster(
@@ -601,6 +609,35 @@ public class TableDescriptorValidation {
                 // Validate aggregation function parameters for aggregation merge engine
                 validateAggregationFunctionParameters(schema);
             }
+        }
+    }
+
+    private static void checkUpsertSkipUnchanged(Configuration tableConf, boolean hasPrimaryKey) {
+        if (!tableConf.get(ConfigOptions.TABLE_UPSERT_SKIP_UNCHANGED)) {
+            return;
+        }
+        String option = ConfigOptions.TABLE_UPSERT_SKIP_UNCHANGED.key();
+        if (!hasPrimaryKey) {
+            throw new InvalidConfigException(
+                    String.format("'%s' is only supported for primary key tables.", option));
+        }
+        if (tableConf.getOptional(ConfigOptions.TABLE_MERGE_ENGINE).isPresent()) {
+            throw new InvalidConfigException(
+                    String.format(
+                            "'%s' cannot be combined with '%s'.",
+                            option, ConfigOptions.TABLE_MERGE_ENGINE.key()));
+        }
+        if (tableConf.get(ConfigOptions.TABLE_CHANGELOG_IMAGE) == ChangelogImage.WAL) {
+            throw new InvalidConfigException(
+                    String.format(
+                            "'%s' requires '%s' to be FULL.",
+                            option, ConfigOptions.TABLE_CHANGELOG_IMAGE.key()));
+        }
+        if (tableConf.getOptional(ConfigOptions.TABLE_KV_TTL).isPresent()) {
+            throw new InvalidConfigException(
+                    String.format(
+                            "'%s' cannot be combined with '%s'.",
+                            option, ConfigOptions.TABLE_KV_TTL.key()));
         }
     }
 

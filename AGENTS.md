@@ -38,7 +38,7 @@ import org.apache.zookeeper.*                           // → org.apache.fluss.
 
 **Source level: Java 8** — All code MUST compile with JDK 8. CI enforces this via `compile-on-jdk8`.
 
-**Build requirement:** Java 11 is required to build the project, but all source code must remain Java 8 compatible.
+**Build requirement:** Java 11 is required to build the project, but all source code must remain Java 8 compatible. Exception: `fluss-lake-iceberg-1.12` is compiled and tested with a JDK 17 Maven toolchain (Iceberg 1.11+ needs Java 17) and still targets Java 11 bytecode.
 
 **FORBIDDEN Java 9+ features:**
 ```java
@@ -184,7 +184,7 @@ Apache Fluss follows a layered Maven module architecture: `fluss-common` (founda
 
 #### Lake Tiering
 
-**`fluss-lake/`** - Lake format integrations: `fluss-lake-{iceberg,paimon,lance}`
+**`fluss-lake/`** - Lake format integrations: `fluss-lake-{iceberg,paimon,lance,hudi}`; Iceberg code lives in `fluss-lake-iceberg-common`, bundled by `fluss-lake-iceberg` (Iceberg 1.10, default) and `fluss-lake-iceberg-1.12` (opt-in, Java 17)
 
 #### Filesystems
 
@@ -363,7 +363,7 @@ public static final FlussClusterExtension FLUSS_CLUSTER_EXTENSION =
 
 ### Quick Start (Deployment)
 
-**Prerequisites:** Java 11, Maven 3.8.6+, Unix-like environment
+**Prerequisites:** Java 11, JDK 17 (Maven toolchain for `fluss-lake-iceberg-1.12`; skip with `-Dskip.iceberg-1.12`), Maven 3.8.6+, Unix-like environment
 
 **Build from source:**
 ```bash
@@ -394,7 +394,7 @@ cd fluss
 ### CI Pipeline
 
 **CI stages:** compile-on-jdk8 → core (excludes Flink/Spark/Lake) → flink → spark3 → lake (`.github/workflows/ci.yaml`)
-**Java:** Build on Java 11 (required); runtime Java 8 compatible
+**Java:** Build on Java 11 (required), plus a JDK 17 toolchain for `fluss-lake-iceberg-1.12`; runtime Java 8 compatible
 
 **Test coverage:** `./mvnw verify -Ptest-coverage` → view `fluss-test-coverage/target/site/jacoco-aggregate/index.html`
 **License headers:** Apache 2.0 required (enforced by RAT); check with `./mvnw validate`

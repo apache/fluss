@@ -148,6 +148,27 @@ public final class AggregateFieldsProcessor {
     }
 
     /**
+     * Encodes the first row written for a key, passing the fields whose aggregator requires it
+     * through {@code agg(null, value)}.
+     *
+     * @param row the first row written for the key
+     * @param context context for the row schema
+     * @param encoder the row encoder to encode results (should match context)
+     */
+    public static void aggregateFirstRow(
+            BinaryRow row, AggregationContext context, RowEncoder encoder) {
+        InternalRow.FieldGetter[] fieldGetters = context.getFieldGetters();
+        FieldAggregator[] aggregators = context.getAggregators();
+        for (int idx = 0; idx < context.getFieldCount(); idx++) {
+            Object field = fieldGetters[idx].getFieldOrNull(row);
+            FieldAggregator aggregator = aggregators[idx];
+            encoder.encodeField(
+                    idx,
+                    aggregator.requiresAggOnFirstWrite() ? aggregator.agg(null, field) : field);
+        }
+    }
+
+    /**
      * Aggregate target fields from old and new rows with explicit target schema (partial
      * aggregation).
      *

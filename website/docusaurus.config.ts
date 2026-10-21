@@ -165,22 +165,6 @@ const config: Config = {
       {
         docs: {
             sidebarPath: './sidebars.ts',
-            async sidebarItemsGenerator({defaultSidebarItemsGenerator, ...args}) {
-                const items = await defaultSidebarItemsGenerator(args);
-                // Present the combined concepts page directly. The detailed
-                // Fluss architecture remains linked from the introduction.
-                // Released docs without this page keep their generated sidebar.
-                return items.map((item) => {
-                    if (item.type === 'category') {
-                        const concepts = item.items.find((child) =>
-                            child.type === 'doc' && child.id === 'concepts/streamhouse-and-lakestream');
-                        if (concepts) {
-                            return concepts;
-                        }
-                    }
-                    return item;
-                });
-            },
             remarkPlugins: [versionReplace],
             lastVersion: latestVersion,
             versions: versionsMap

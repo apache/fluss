@@ -36,12 +36,12 @@ import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.utils.FlussPaths;
 import org.apache.fluss.utils.types.Tuple2;
 
+import io.github.fluss_contrib.rocksdb.FlushOptions;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
-import org.rocksdb.FlushOptions;
 
 import java.io.File;
 import java.nio.file.Files;

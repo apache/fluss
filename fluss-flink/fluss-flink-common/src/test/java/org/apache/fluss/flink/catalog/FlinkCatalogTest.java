@@ -561,6 +561,31 @@ class FlinkCatalogTest {
     }
 
     @Test
+    @MultiVersionTest
+    void testListMaterializedTables() throws Exception {
+        FlinkCatalog flinkCatalog = (FlinkCatalog) catalog;
+        assertThat(flinkCatalog.listMaterializedTables(DEFAULT_DB)).isEmpty();
+
+        catalog.createTable(tableInDefaultDb, newCatalogTable(Collections.emptyMap()), false);
+        CatalogMaterializedTable materializedTable =
+                newCatalogMaterializedTable(
+                        this.createSchema(),
+                        CatalogMaterializedTable.RefreshMode.CONTINUOUS,
+                        Collections.emptyMap());
+        catalog.createTable(new ObjectPath(DEFAULT_DB, "mt1"), materializedTable, false);
+        catalog.createTable(new ObjectPath(DEFAULT_DB, "mt2"), materializedTable, false);
+
+        assertThat(flinkCatalog.listMaterializedTables(DEFAULT_DB))
+                .containsExactlyInAnyOrder("mt1", "mt2");
+        assertThat(catalog.listTables(DEFAULT_DB)).containsExactlyInAnyOrder("t1", "mt1", "mt2");
+
+        assertThatThrownBy(() -> flinkCatalog.listMaterializedTables("non_exist_db"))
+                .isInstanceOf(DatabaseNotExistException.class)
+                .hasMessage(
+                        "Database %s does not exist in Catalog %s.", "non_exist_db", CATALOG_NAME);
+    }
+
+    @Test
     void testAlterMaterializedTable() throws Exception {
         ObjectPath mt2 = new ObjectPath(DEFAULT_DB, "mt2");
         CatalogMaterializedTable materializedTable =

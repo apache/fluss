@@ -74,6 +74,22 @@ defmodule Fluss.Native do
   def append_writer_append(_writer, _values), do: :erlang.nif_error(:nif_not_loaded)
   def append_writer_flush(_writer), do: :erlang.nif_error(:nif_not_loaded)
 
+  # TableUpsert
+  def table_upsert_new(_table), do: :erlang.nif_error(:nif_not_loaded)
+
+  def table_upsert_partial_update_by_name(_table_upsert, _column_names),
+    do: :erlang.nif_error(:nif_not_loaded)
+
+  def table_upsert_partial_update_by_index(_table_upsert, _column_indices),
+    do: :erlang.nif_error(:nif_not_loaded)
+
+  def table_upsert_create_writer(_table_upsert), do: :erlang.nif_error(:nif_not_loaded)
+
+  # UpsertWriter
+  def upsert_writer_upsert(_writer, _values), do: :erlang.nif_error(:nif_not_loaded)
+  def upsert_writer_delete(_writer, _primary_key), do: :erlang.nif_error(:nif_not_loaded)
+  def upsert_writer_flush(_writer), do: :erlang.nif_error(:nif_not_loaded)
+
   # LogScanner
   def log_scanner_new(_table), do: :erlang.nif_error(:nif_not_loaded)
   def log_scanner_subscribe(_scanner, _bucket, _offset), do: :erlang.nif_error(:nif_not_loaded)
@@ -96,4 +112,11 @@ defmodule Fluss.Native do
       {^ref, result} -> result
     end
   end
+
+  # With the write buffer full, a write waits for room off the scheduler and its handle
+  # arrives as a message.
+  @doc false
+  def await_queued({:pending, ref}), do: await_nif(ref)
+  def await_queued({:error, _} = err), do: err
+  def await_queued(handle), do: {:ok, handle}
 end

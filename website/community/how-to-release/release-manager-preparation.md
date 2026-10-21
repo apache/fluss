@@ -16,6 +16,7 @@ Note: The following setup is a one-time configuration required for release prepa
 This release process is suggested to operate on MacOS or Linux systems, and the following tools are required:
 
 - Java 11
+- JDK 17 (Maven toolchain for the Iceberg 1.12 lake plugin)
 - Apache Maven 3.8.6
 - GnuPG 2.x
 - Git

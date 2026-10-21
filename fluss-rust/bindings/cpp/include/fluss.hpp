@@ -56,6 +56,8 @@ struct BatchScanner;
 struct UpsertWriter;
 struct Lookuper;
 struct PrefixLookuper;
+struct PendingLookup;
+struct PendingPrefixLookup;
 struct ScanResultInner;
 struct GenericRowInner;
 struct LookupResultInner;
@@ -195,8 +197,40 @@ struct ErrorCode {
     static constexpr int INVALID_ALTER_TABLE_EXCEPTION = 56;
     /// Deletion operations are disabled on this table.
     static constexpr int DELETION_DISABLED_EXCEPTION = 57;
+    /// The server does not exist.
+    static constexpr int SERVER_NOT_EXIST_EXCEPTION = 58;
+    /// The server tag already exists.
+    static constexpr int SERVER_TAG_ALREADY_EXIST_EXCEPTION = 59;
+    /// The server tag does not exist.
+    static constexpr int SERVER_TAG_NOT_EXIST_EXCEPTION = 60;
+    /// The rebalance task failed.
+    static constexpr int REBALANCE_FAILURE_EXCEPTION = 61;
+    /// No rebalance task is in progress.
+    static constexpr int NO_REBALANCE_IN_PROGRESS_EXCEPTION = 62;
+    /// The client used an invalid producer ID.
+    static constexpr int INVALID_PRODUCER_ID_EXCEPTION = 63;
+    /// A configuration error occurred.
+    static constexpr int CONFIG_EXCEPTION = 64;
+    /// The coordinator is not the leader and cannot process the request.
+    static constexpr int NOT_COORDINATOR_LEADER_EXCEPTION = 65;
+    /// The scanner session expired due to inactivity.
+    static constexpr int SCANNER_EXPIRED = 66;
+    /// The server does not recognize the scanner id.
+    static constexpr int UNKNOWN_SCANNER_ID = 67;
+    /// The scan request is invalid.
+    static constexpr int INVALID_SCAN_REQUEST = 68;
+    /// The per-bucket or per-server scanner session limit has been reached.
+    static constexpr int TOO_MANY_SCANNERS = 69;
+    /// The tablet server rejected writes because its data disk reached the write-limit ratio.
+    static constexpr int DISK_WRITE_LOCKED = 70;
+    /// The cluster does not have enough KV leader replica capacity.
+    static constexpr int INSUFFICIENT_KV_LEADER_REPLICA_CAPACITY = 71;
     /// The server rejected a write due to storage backpressure.
     static constexpr int STORAGE_BACKPRESSURE_EXCEPTION = 72;
+    /// The historical partition request was throttled because too many are in flight.
+    static constexpr int HISTORICAL_PARTITION_THROTTLED = 73;
+    /// The request's bucket routing is missing or stale; refresh metadata and rebuild it.
+    static constexpr int INVALID_BUCKET_ROUTING = 74;
 
     /// Returns true if retrying the request may succeed. Mirrors Java's RetriableException hierarchy.
     static constexpr bool IsRetriable(int32_t code) {
@@ -208,7 +242,8 @@ struct ErrorCode {
                code == STORAGE_EXCEPTION ||
                code == NOT_ENOUGH_REPLICAS_AFTER_APPEND_EXCEPTION ||
                code == NOT_ENOUGH_REPLICAS_EXCEPTION || code == LEADER_NOT_AVAILABLE_EXCEPTION ||
-               code == STORAGE_BACKPRESSURE_EXCEPTION;
+               code == STORAGE_BACKPRESSURE_EXCEPTION || code == DISK_WRITE_LOCKED ||
+               code == HISTORICAL_PARTITION_THROTTLED;
     }
 };
 
@@ -1217,6 +1252,9 @@ class PrefixLookupResult {
 
    private:
     friend class PrefixLookuper;
+    friend class PendingPrefixLookup;
+    /// Takes ownership of `inner`, or returns its error.
+    Result Adopt(ffi::PrefixLookupResultInner* inner);
     std::shared_ptr<const detail::PrefixData> data_;
 };
 
@@ -1359,6 +1397,11 @@ struct ArrowBatchImporter;
 
 class ArrowRecordBatch {
    public:
+    // Reported by GetCommitTimestamp() when the batch carries no single commit
+    // timestamp, which is the case for a limit scan because it merges several
+    // log batches into one Arrow batch.
+    static constexpr int64_t NO_COMMIT_TIMESTAMP = -1;
+
     std::shared_ptr<arrow::RecordBatch> GetArrowRecordBatch() const { return batch_; }
 
     bool Available() const;
@@ -1372,13 +1415,15 @@ class ArrowRecordBatch {
     int32_t GetBucketId() const;
     int64_t GetBaseOffset() const;
     int64_t GetLastOffset() const;
+    // Epoch milliseconds, or NO_COMMIT_TIMESTAMP when unavailable.
+    int64_t GetCommitTimestamp() const;
 
    private:
     friend class LogScanner;
     friend struct detail::ArrowBatchImporter;
     explicit ArrowRecordBatch(std::shared_ptr<arrow::RecordBatch> batch, int64_t table_id,
                               int64_t partition_id, int32_t bucket_id,
-                              int64_t base_offset) noexcept;
+                              int64_t base_offset, int64_t commit_timestamp) noexcept;
 
     std::shared_ptr<arrow::RecordBatch> batch_{nullptr};
 
@@ -1386,6 +1431,9 @@ class ArrowRecordBatch {
     int64_t partition_id_;
     int32_t bucket_id_;
     int64_t base_offset_;
+    // Defaults to the sentinel so any future construction path that forgets to
+    // set it reports "unknown" rather than an arbitrary value.
+    int64_t commit_timestamp_{NO_COMMIT_TIMESTAMP};
 };
 
 struct ArrowRecordBatches {
@@ -1465,6 +1513,7 @@ struct LakeSnapshot {
 struct PartitionInfo {
     int64_t partition_id;
     std::string partition_name;
+    int32_t bucket_count{0};
 };
 
 struct ServerNode {
@@ -1542,12 +1591,15 @@ class LookupResult : public detail::NamedGetters<LookupResult> {
 
    private:
     friend class Lookuper;
+    friend class PendingLookup;
     size_t Resolve(const std::string& name) const {
         if (!column_map_) {
             BuildColumnMap();
         }
         return detail::ResolveColumn(*column_map_, name);
     }
+    /// Takes ownership of `inner`, or returns its error.
+    Result Adopt(ffi::LookupResultInner* inner);
     void Destroy() noexcept;
     void BuildColumnMap() const;
     ffi::LookupResultInner* inner_{nullptr};
@@ -2034,6 +2086,69 @@ class UpsertWriter {
     std::shared_ptr<ffi::WriteCallbackCapacity> callback_capacity_;
 };
 
+/// A lookup started by Lookuper::Lookup(pk_row, PendingLookup&). Move-only. Destroying it
+/// before Wait() returns abandons the lookup.
+class PendingLookup {
+   public:
+    PendingLookup() noexcept;
+    ~PendingLookup() noexcept;
+
+    PendingLookup(const PendingLookup&) = delete;
+    PendingLookup& operator=(const PendingLookup&) = delete;
+    PendingLookup(PendingLookup&& other) noexcept;
+    PendingLookup& operator=(PendingLookup&& other) noexcept;
+
+    /// True while the lookup is running. False once Wait() has returned its outcome, which can
+    /// be an error with any code, REQUEST_TIME_OUT included.
+    bool Available() const;
+
+    /// Blocks until the row arrives.
+    Result Wait(LookupResult& out);
+
+    /// Blocks for at most `timeout_ms`. If the wait runs out, it returns REQUEST_TIME_OUT and
+    /// the lookup keeps running. The lookup itself can also fail with REQUEST_TIME_OUT, which
+    /// ends it, so check Available() before waiting again.
+    Result Wait(LookupResult& out, int64_t timeout_ms);
+
+   private:
+    friend class Lookuper;
+    explicit PendingLookup(ffi::PendingLookup* pending) noexcept;
+    // A negative timeout_ms waits without limit.
+    Result DoWait(LookupResult& out, int64_t timeout_ms);
+    void Destroy() noexcept;
+    ffi::PendingLookup* pending_{nullptr};
+};
+
+/// A prefix lookup started by PrefixLookuper::PrefixLookup(prefix_row, PendingPrefixLookup&).
+/// Behaves like PendingLookup.
+class PendingPrefixLookup {
+   public:
+    PendingPrefixLookup() noexcept;
+    ~PendingPrefixLookup() noexcept;
+
+    PendingPrefixLookup(const PendingPrefixLookup&) = delete;
+    PendingPrefixLookup& operator=(const PendingPrefixLookup&) = delete;
+    PendingPrefixLookup(PendingPrefixLookup&& other) noexcept;
+    PendingPrefixLookup& operator=(PendingPrefixLookup&& other) noexcept;
+
+    /// True while the lookup is running, like PendingLookup::Available.
+    bool Available() const;
+
+    /// Blocks until the rows arrive.
+    Result Wait(PrefixLookupResult& out);
+
+    /// Blocks for at most `timeout_ms`, like PendingLookup::Wait.
+    Result Wait(PrefixLookupResult& out, int64_t timeout_ms);
+
+   private:
+    friend class PrefixLookuper;
+    explicit PendingPrefixLookup(ffi::PendingPrefixLookup* pending) noexcept;
+    // A negative timeout_ms waits without limit.
+    Result DoWait(PrefixLookupResult& out, int64_t timeout_ms);
+    void Destroy() noexcept;
+    ffi::PendingPrefixLookup* pending_{nullptr};
+};
+
 class Lookuper {
    public:
     Lookuper() noexcept;
@@ -2046,7 +2161,14 @@ class Lookuper {
 
     bool Available() const;
 
-    Result Lookup(const GenericRow& pk_row, LookupResult& out);
+    /// Looks up the row with the primary key set on `pk_row`, blocking until the result
+    /// arrives. Thread-safe: threads may share one Lookuper, and their concurrent lookups
+    /// go out in the same batches.
+    Result Lookup(const GenericRow& pk_row, LookupResult& out) const;
+
+    /// Starts the lookup without blocking; `out` waits for its row. Lookups started this way
+    /// share batches too, so one thread can keep many in flight.
+    Result Lookup(const GenericRow& pk_row, PendingLookup& out) const;
 
    private:
     friend class Table;
@@ -2069,8 +2191,12 @@ class PrefixLookuper {
 
     bool Available() const;
 
-    /// Looks up all rows matching the prefix columns set on `prefix_row`.
-    Result PrefixLookup(const GenericRow& prefix_row, PrefixLookupResult& out);
+    /// Looks up all rows matching the prefix columns set on `prefix_row`, blocking until the
+    /// result arrives. Thread-safe, like Lookuper::Lookup.
+    Result PrefixLookup(const GenericRow& prefix_row, PrefixLookupResult& out) const;
+
+    /// Starts the lookup without blocking, like Lookuper::Lookup(pk_row, PendingLookup&).
+    Result PrefixLookup(const GenericRow& prefix_row, PendingPrefixLookup& out) const;
 
    private:
     friend class Table;

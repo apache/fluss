@@ -60,6 +60,8 @@ append_writer.flush().await?;
 ### Reading from Partitioned Log Tables
 
 For partitioned tables, use partition-aware subscribe methods.
+A partition keeps the bucket count it was created with, so a change to `bucket.num` leaves older partitions with a different count than the table.
+Read each partition's count from its `PartitionInfo`.
 
 ```rust
 use std::time::Duration;
@@ -73,7 +75,7 @@ let log_scanner = table.new_scan().create_log_scanner()?;
 // Subscribe to each partition's buckets
 for partition_info in &partitions {
     let partition_id = partition_info.get_partition_id();
-    let num_buckets = table.get_table_info().get_num_buckets();
+    let num_buckets = partition_info.get_bucket_count();
     for bucket_id in 0..num_buckets {
         log_scanner.subscribe_partition(partition_id, bucket_id, 0).await?;
     }
@@ -199,7 +201,7 @@ upsert_writer.flush().await?;
 Lookup requires all primary key columns including partition columns.
 
 ```rust
-let mut lookuper = table.new_lookup()?.create_lookuper()?;
+let lookuper = table.new_lookup()?.create_lookuper()?;
 
 let mut key = GenericRow::new(3);
 key.set_field(0, 1001);    // user_id

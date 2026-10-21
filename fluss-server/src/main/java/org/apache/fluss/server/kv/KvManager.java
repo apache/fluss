@@ -26,7 +26,6 @@ import org.apache.fluss.config.TableConfig;
 import org.apache.fluss.config.cluster.ServerReconfigurable;
 import org.apache.fluss.exception.ConfigException;
 import org.apache.fluss.exception.KvStorageException;
-import org.apache.fluss.fs.FileSystem;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.memory.LazyMemorySegmentPool;
 import org.apache.fluss.metadata.KvFormat;
@@ -38,6 +37,7 @@ import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.server.TabletManagerBase;
 import org.apache.fluss.server.kv.autoinc.AutoIncrementManager;
 import org.apache.fluss.server.kv.autoinc.ZkSequenceGeneratorFactory;
+import org.apache.fluss.server.kv.rocksdb.RocksDBResourceContainer;
 import org.apache.fluss.server.kv.rowmerger.RowMerger;
 import org.apache.fluss.server.log.LogManager;
 import org.apache.fluss.server.log.LogTablet;
@@ -54,12 +54,13 @@ import org.apache.fluss.utils.clock.SystemClock;
 import org.apache.fluss.utils.function.SupplierWithException;
 import org.apache.fluss.utils.types.Tuple2;
 
-import org.rocksdb.Cache;
-import org.rocksdb.LRUCache;
-import org.rocksdb.RateLimiter;
-import org.rocksdb.RateLimiterMode;
-import org.rocksdb.RocksDB;
-import org.rocksdb.WriteBufferManager;
+import io.github.fluss_contrib.rocksdb.Cache;
+import io.github.fluss_contrib.rocksdb.HyperClockCache;
+import io.github.fluss_contrib.rocksdb.LRUCache;
+import io.github.fluss_contrib.rocksdb.RateLimiter;
+import io.github.fluss_contrib.rocksdb.RateLimiterMode;
+import io.github.fluss_contrib.rocksdb.RocksDB;
+import io.github.fluss_contrib.rocksdb.WriteBufferManager;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -151,10 +152,6 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
     /** The memory segment pool to allocate memorySegment. */
     private final LazyMemorySegmentPool memorySegmentPool;
 
-    private final FsPath remoteKvDir;
-
-    private final FileSystem remoteFileSystem;
-
     /**
      * The shared rate limiter for all RocksDB instances to control flush and compaction write rate.
      */
@@ -187,14 +184,18 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
             Clock clock)
             throws IOException {
         super(TabletType.KV, localDiskManager.dataDirs(), conf, recoveryThreadsPerDataDir);
+        RocksDBResourceContainer.validateConfiguration(conf);
+        if (conf.get(ConfigOptions.KV_PIN_L0_FILTER_AND_INDEX_BLOCKS_IN_CACHE)
+                && conf.get(ConfigOptions.KV_COMPACTION_STYLE)
+                        != ConfigOptions.CompactionStyle.LEVEL) {
+            LOG.warn("RocksDB L0 metadata pinning is recommended only for LEVEL compaction.");
+        }
         this.localDiskManager = localDiskManager;
         this.logManager = logManager;
         this.arrowBufferAllocator = BufferAllocatorUtil.createBufferAllocator(null);
         this.memorySegmentPool = LazyMemorySegmentPool.createServerBufferPool(conf);
         this.zkClient = zkClient;
         this.clock = clock;
-        this.remoteKvDir = FlussPaths.remoteKvDir(conf);
-        this.remoteFileSystem = remoteKvDir.getFileSystem();
         this.serverMetricGroup = tabletServerMetricGroup;
         this.sharedRocksDBRateLimiter = createSharedRateLimiter(conf);
         this.sharedBlockCache = createSharedBlockCache(conf);
@@ -270,7 +271,8 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
             return null;
         }
         RocksDB.loadLibrary();
-        return new LRUCache(sharedBlockCacheSize);
+        // Let HyperClockCache size its table automatically and choose its default shard count.
+        return new HyperClockCache(sharedBlockCacheSize, 0, -1, false);
     }
 
     public static KvManager create(
@@ -754,12 +756,13 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
     }
 
     public void deleteRemoteKvSnapshot(
-            PhysicalTablePath physicalTablePath, TableBucket tableBucket) {
+            String remoteDataDir, PhysicalTablePath physicalTablePath, TableBucket tableBucket) {
         FsPath remoteKvTabletDir =
-                FlussPaths.remoteKvTabletDir(remoteKvDir, physicalTablePath, tableBucket);
+                FlussPaths.remoteKvTabletDir(
+                        FlussPaths.remoteKvDir(remoteDataDir), physicalTablePath, tableBucket);
         try {
-            if (remoteFileSystem.exists(remoteKvTabletDir)) {
-                remoteFileSystem.delete(remoteKvTabletDir, true);
+            if (remoteKvTabletDir.getFileSystem().exists(remoteKvTabletDir)) {
+                remoteKvTabletDir.getFileSystem().delete(remoteKvTabletDir, true);
                 LOG.info("Delete table's remote bucket snapshot dir of {} success.", tableBucket);
             }
         } catch (Exception e) {
@@ -828,22 +831,6 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
 
     private <T, E extends Exception> T inKvLock(
             TableBucket tableBucket, SupplierWithException<T, E> action) throws E {
-        while (true) {
-            Object lock = kvLocks.computeIfAbsent(tableBucket, ignored -> new Object());
-            synchronized (lock) {
-                if (kvLocks.get(tableBucket) != lock) {
-                    continue;
-                }
-                try {
-                    return action.get();
-                } finally {
-                    if (!currentKvs.containsKey(tableBucket)) {
-                        // Retire the lock only after the action completes, while still holding
-                        // its monitor. Threads waiting on this lock must retry with the new one.
-                        kvLocks.remove(tableBucket, lock);
-                    }
-                }
-            }
-        }
+        return inTabletLock(tableBucket, kvLocks, currentKvs, action);
     }
 }

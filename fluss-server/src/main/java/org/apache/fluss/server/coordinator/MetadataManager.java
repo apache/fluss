@@ -39,6 +39,7 @@ import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.DatabaseDescriptor;
 import org.apache.fluss.metadata.DatabaseInfo;
 import org.apache.fluss.metadata.DatabaseSummary;
+import org.apache.fluss.metadata.KafkaTableSchema;
 import org.apache.fluss.metadata.LakeTableUtil;
 import org.apache.fluss.metadata.MergeEngineType;
 import org.apache.fluss.metadata.ResolvedPartitionSpec;
@@ -123,12 +124,13 @@ public class MetadataManager {
         this.lakeCatalogDynamicLoader = lakeCatalogDynamicLoader;
     }
 
-    /** Validates the table descriptor. */
-    public void validateTableDescriptor(TableDescriptor tableDescriptor) {
+    /** Validates a descriptor and its Kafka topic identity before persistence. */
+    public void validateTableDescriptor(TablePath tablePath, TableDescriptor tableDescriptor) {
         TableDescriptorValidation.validateTableDescriptor(
                 tableDescriptor,
                 maxBucketNum,
                 lakeCatalogDynamicLoader.getLakeCatalogContainer().getDataLakeFormat());
+        KafkaTableSchema.validateTablePath(tablePath, tableDescriptor);
     }
 
     public void createDatabase(
@@ -852,7 +854,7 @@ public class MetadataManager {
             }
 
             // reuse the same validate logic with the createTable() method
-            validateTableDescriptor(newDescriptor);
+            validateTableDescriptor(tablePath, newDescriptor);
 
             beforeUpdate.accept(tableInfo, newDescriptor);
 

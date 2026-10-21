@@ -60,6 +60,11 @@ When both TTLs are positive, `table.log.local-ttl` must not exceed `table.log.tt
 can be removed when **either** the local TTL or segment-count limit is reached, after they have
 been copied remotely. Setting local TTL to `0ms` leaves count-based cleanup enabled.
 
+Fluss servers support active-segment rolling, which seals an active log segment so it can be
+uploaded and cleaned up locally even when no new data arrives. Eligible non-empty active segments
+are rolled once the local TTL expires and all records are committed, making local TTL effective
+for low-traffic tables.
+
 For example, if consumers normally lag by at most 30 minutes and need an additional hour for
 restarts and catching up, `table.log.local-ttl = '2 h'` is a starting point with some headroom.
 Set `table.log.ttl = '7 d'` if consumers need seven days of replay history. Also size
@@ -70,19 +75,6 @@ expires. Reads beyond the remaining local window access remote storage.
 
 All three table options support `ALTER TABLE ... SET` and `ALTER TABLE ... RESET`.
 See [Updating Configs](../../maintenance/operations/updating-configs.md#updating-table-configs).
-
-<!-- TODO: remove this section when we change `log.retention.roll-active-segment.enabled` default to true in next version -->
-### Active-segment Rolling
-
-For low-traffic tables, enable the server option `log.retention.roll-active-segment.enabled` to
-allow expired active logs to become eligible for upload and cleanup even when no new data arrives.
-It is **disabled by default** and supports
-[dynamic cluster updates](../../maintenance/operations/updating-configs.md#updating-cluster-configs).
-The expiration time follows the effective local log TTL described above.
-
-When upgrading from v0.9, keep this option disabled until every CoordinatorServer and TabletServer
-has been upgraded to v1.0 and the upgrade is complete. Then enable it dynamically as described in
-the [1.0 Upgrade Notes](../../maintenance/operations/upgrade-notes-1.0.md#active-segment-retention-rollout).
 
 ## KV Retention
 

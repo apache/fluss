@@ -21,6 +21,8 @@ import org.apache.fluss.client.admin.OffsetSpec;
 import org.apache.fluss.client.initializer.OffsetsInitializer;
 import org.apache.fluss.client.table.Table;
 import org.apache.fluss.client.table.writer.UpsertWriter;
+import org.apache.fluss.client.tiering.TieringSplit;
+import org.apache.fluss.client.tiering.TieringSplitGenerator;
 import org.apache.fluss.client.write.HashBucketAssigner;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
@@ -39,8 +41,6 @@ import org.apache.fluss.flink.source.split.LogSplit;
 import org.apache.fluss.flink.source.split.SnapshotSplit;
 import org.apache.fluss.flink.source.split.SourceSplitBase;
 import org.apache.fluss.flink.source.state.SourceEnumeratorState;
-import org.apache.fluss.flink.tiering.source.split.TieringSplit;
-import org.apache.fluss.flink.tiering.source.split.TieringSplitGenerator;
 import org.apache.fluss.flink.utils.FlinkTestBase;
 import org.apache.fluss.lake.source.LakeSource;
 import org.apache.fluss.lake.source.LakeSplit;
@@ -214,13 +214,19 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
 
     @Test
     void testBoundedPkTableEmitsSnapshotSplitsByDefault() throws Throwable {
-        createTable(DEFAULT_TABLE_PATH, DEFAULT_PK_TABLE_DESCRIPTOR);
+        TablePath tablePath = TablePath.of(DEFAULT_DB, "bounded-pk-snapshot-default");
+        long tableId = createTable(tablePath, DEFAULT_PK_TABLE_DESCRIPTOR);
+        // Bounded snapshot splits require the latest offset from every bucket leader. Creating
+        // table metadata does not wait for TabletServers to create replicas and become leaders.
+        for (int bucket = 0; bucket < DEFAULT_BUCKET_NUM; bucket++) {
+            FLUSS_CLUSTER_EXTENSION.waitUntilAllReplicaReady(new TableBucket(tableId, bucket));
+        }
         int numSubtasks = DEFAULT_BUCKET_NUM;
         try (MockSplitEnumeratorContext<SourceSplitBase> context =
                 new MockSplitEnumeratorContext<>(numSubtasks)) {
             FlinkSourceEnumerator enumerator =
                     new FlinkSourceEnumerator(
-                            DEFAULT_TABLE_PATH,
+                            tablePath,
                             flussConf,
                             true,
                             false,

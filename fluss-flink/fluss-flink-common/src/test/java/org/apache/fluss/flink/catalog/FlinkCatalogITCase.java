@@ -407,6 +407,45 @@ abstract class FlinkCatalogITCase {
     }
 
     @Test
+    void testCreateTableWithDistributedBy() throws Exception {
+        tEnv.executeSql(
+                "create table distributed_pk_table (a int, b string, c int,"
+                        + " primary key (a, b) not enforced) distributed by hash(a) into 3 buckets");
+        tEnv.executeSql(
+                "create table distributed_log_table (a int, b string) distributed into 2 buckets");
+
+        try (Connection conn =
+                ConnectionFactory.createConnection(FLUSS_CLUSTER_EXTENSION.getClientConfig())) {
+            Admin admin = conn.getAdmin();
+            TableInfo pkTable =
+                    admin.getTableInfo(TablePath.of(DEFAULT_DB, "distributed_pk_table")).get();
+            assertThat(pkTable.getNumBuckets()).isEqualTo(3);
+            assertThat(pkTable.getBucketKeys()).containsExactly("a");
+
+            TableInfo logTable =
+                    admin.getTableInfo(TablePath.of(DEFAULT_DB, "distributed_log_table")).get();
+            assertThat(logTable.getNumBuckets()).isEqualTo(2);
+            assertThat(logTable.getBucketKeys()).isEmpty();
+        }
+
+        assertThatThrownBy(
+                        () ->
+                                tEnv.executeSql(
+                                        "create table distributed_by_range_table (a int, b string)"
+                                                + " distributed by range(a) into 2 buckets"))
+                .hasRootCauseMessage(
+                        "Fluss only supports hash distribution, but got DISTRIBUTED BY RANGE.");
+        assertThatThrownBy(
+                        () ->
+                                tEnv.executeSql(
+                                        "create table distributed_with_option_table (a int, b string)"
+                                                + " distributed by hash(a) into 2 buckets"
+                                                + " with ('bucket.num' = '4')"))
+                .hasRootCauseMessage(
+                        "Cannot use DISTRIBUTED BY together with the 'bucket.key' or 'bucket.num' option.");
+    }
+
+    @Test
     void testPartitionedTable() throws Exception {
         ObjectPath objectPath = new ObjectPath(DEFAULT_DB, "test_partitioned_table");
 

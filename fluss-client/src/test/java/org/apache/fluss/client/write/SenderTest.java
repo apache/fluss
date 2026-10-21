@@ -27,6 +27,7 @@ import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.MemorySize;
 import org.apache.fluss.exception.AuthorizationException;
+import org.apache.fluss.exception.DiskWriteLockedException;
 import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.exception.InvalidBucketRoutingException;
 import org.apache.fluss.exception.NetworkException;
@@ -35,6 +36,7 @@ import org.apache.fluss.exception.PartitionNotExistException;
 import org.apache.fluss.exception.TableNotExistException;
 import org.apache.fluss.exception.TimeoutException;
 import org.apache.fluss.exception.TooManyPartitionsException;
+import org.apache.fluss.exception.UnknownWriterIdException;
 import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.Schema;
@@ -59,6 +61,9 @@ import org.apache.fluss.server.entity.ProduceLogDataForBucket;
 import org.apache.fluss.server.entity.PutKvDataForBucket;
 import org.apache.fluss.server.tablet.TestTabletServerGateway;
 import org.apache.fluss.types.DataTypes;
+import org.apache.fluss.utils.ExponentialBackoff;
+import org.apache.fluss.utils.clock.Clock;
+import org.apache.fluss.utils.clock.ManualClock;
 import org.apache.fluss.utils.clock.SystemClock;
 
 import org.junit.jupiter.api.AfterEach;
@@ -81,6 +86,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
@@ -129,6 +135,7 @@ final class SenderTest {
     private TestingBucketAssigner bucketAssigner;
     private Sender sender = null;
     private TestingWriterMetricGroup writerMetricGroup;
+    private Clock clock = SystemClock.getInstance();
 
     // TODO add more tests as kafka SenderTest.
 
@@ -237,6 +244,182 @@ final class SenderTest {
     }
 
     @ParameterizedTest
+    @CsvSource({"false,false", "false,true", "true,false", "true,true"})
+    void testInvalidatesMetadataOnceBeforePublishingRetries(boolean kv, boolean rpcFailure)
+            throws Exception {
+        sender.destroyResources();
+        TableInfo tableInfo = kv ? DATA1_TABLE_INFO_PK : DATA1_TABLE_INFO;
+        PhysicalTablePath path = PhysicalTablePath.of(tableInfo.getTablePath());
+        List<Set<PhysicalTablePath>> invalidations = new ArrayList<>();
+        List<Boolean> retriesQueuedAtInvalidation = new ArrayList<>();
+        metadataUpdater =
+                metadataUpdaterRecordingInvalidations(
+                        tableInfo, invalidations, retriesQueuedAtInvalidation);
+        TableBucket firstBucket = new TableBucket(tableInfo.getTableId(), 0);
+        TableBucket secondBucket = new TableBucket(tableInfo.getTableId(), 1);
+        Cluster cluster =
+                new Cluster(
+                        Collections.singletonMap(
+                                TestingMetadataUpdater.NODE1.id(), TestingMetadataUpdater.NODE1),
+                        TestingMetadataUpdater.COORDINATOR,
+                        Collections.singletonMap(
+                                path,
+                                Arrays.asList(
+                                        new BucketLocation(path, firstBucket, 1, new int[] {1}),
+                                        new BucketLocation(path, secondBucket, 1, new int[] {1}))),
+                        Collections.singletonMap(tableInfo.getTablePath(), tableInfo.getTableId()),
+                        Collections.emptyMap(),
+                        Collections.singletonMap(
+                                TableOrPartition.ofTable(tableInfo.getTableId()),
+                                tableInfo.getNumBuckets()));
+        metadataUpdater.updateCluster(cluster);
+        sender = setupWithIdempotenceState();
+        CompletableFuture<Exception> firstResult = appendDiskTestRecord(kv, firstBucket, 1);
+        CompletableFuture<Exception> secondResult = appendDiskTestRecord(kv, secondBucket, 2);
+        sender.runOnce();
+
+        TestTabletServerGateway gateway = node1Gateway();
+        assertThat(gateway.pendingRequestSize()).isOne();
+        ApiMessage request = gateway.getRequest(0);
+        assertThat(
+                        kv
+                                ? ((PutKvRequest) request).getBucketsReqsCount()
+                                : ((ProduceLogRequest) request).getBucketsReqsCount())
+                .isEqualTo(2);
+        if (rpcFailure) {
+            gateway.failRequest(0, Errors.NOT_LEADER_OR_FOLLOWER.exception());
+        } else {
+            gateway.response(
+                    0,
+                    kv
+                            ? makePutKvResponse(
+                                    Arrays.asList(
+                                            new PutKvResultForBucket(
+                                                    firstBucket,
+                                                    Errors.NOT_LEADER_OR_FOLLOWER.toApiError()),
+                                            new PutKvResultForBucket(
+                                                    secondBucket,
+                                                    Errors.NOT_LEADER_OR_FOLLOWER.toApiError())))
+                            : makeProduceLogResponse(
+                                    Arrays.asList(
+                                            new ProduceLogResultForBucket(
+                                                    firstBucket,
+                                                    Errors.NOT_LEADER_OR_FOLLOWER.toApiError()),
+                                            new ProduceLogResultForBucket(
+                                                    secondBucket,
+                                                    Errors.NOT_LEADER_OR_FOLLOWER.toApiError()))));
+        }
+
+        assertThat(invalidations).containsExactly(Collections.singleton(path));
+        assertThat(retriesQueuedAtInvalidation).containsExactly(false);
+        assertThat(firstResult).isNotDone();
+        assertThat(secondResult).isNotDone();
+        assertThat(writerMetricGroup.recordsRetryTotal().getCount()).isEqualTo(2);
+        assertThat(metadataUpdater.getCluster().getBucketLocation(firstBucket)).isEmpty();
+        assertThat(metadataUpdater.getCluster().getBucketLocation(secondBucket)).isEmpty();
+        assertThat(accumulator.hasUnDrained()).isTrue();
+        accumulator.abortAllBatches(new RuntimeException("test cleanup"));
+    }
+
+    @ParameterizedTest
+    @CsvSource({"false,false", "false,true", "true,false", "true,true"})
+    void testInvalidatesHistoricalTargetOnceBeforePublishingRetries(boolean kv, boolean rpcFailure)
+            throws Exception {
+        sender.destroyResources();
+        TableInfo info = createHistoricalTableInfo(AutoPartitionTimeUnit.DAY, 7, kv);
+        PhysicalTablePath firstOriginal = PhysicalTablePath.of(info.getTablePath(), "20000101");
+        PhysicalTablePath secondOriginal = PhysicalTablePath.of(info.getTablePath(), "20000102");
+        PhysicalTablePath historical =
+                PhysicalTablePath.of(info.getTablePath(), HISTORICAL_PARTITION_VALUE);
+        TableBucket bucket = new TableBucket(info.getTableId(), 22L, 0);
+        List<Set<PhysicalTablePath>> invalidations = new ArrayList<>();
+        List<Boolean> retriesQueuedAtInvalidation = new ArrayList<>();
+        metadataUpdater =
+                metadataUpdaterRecordingInvalidations(
+                        info, invalidations, retriesQueuedAtInvalidation);
+        metadataUpdater.updateCluster(
+                partitionedCluster(info, Collections.singletonMap(historical, bucket)));
+        sender = setupWithIdempotenceState();
+        accumulator.checkAndCacheHistoricalPartitionEnabled(info);
+        List<CompletableFuture<Exception>> results = new ArrayList<>();
+        for (PhysicalTablePath original : Arrays.asList(firstOriginal, secondOriginal)) {
+            accumulator.routeWritesTo(info, original, historical, bucket.getPartitionId());
+            if (kv) {
+                results.add(appendKvRecord(info, original, 1, metadataUpdater.getCluster()));
+            } else {
+                CompletableFuture<Exception> result = new CompletableFuture<>();
+                results.add(result);
+                bucketAssigner.setBucketId(0);
+                accumulator.append(
+                        WriteRecord.forArrowAppend(
+                                info, original, row(1, original.getPartitionName()), null),
+                        (tb, offset, error) -> result.complete(error),
+                        metadataUpdater.getCluster());
+            }
+        }
+        sender.runOnce();
+        TestTabletServerGateway gateway = node1Gateway();
+        assertThat(gateway.pendingRequestSize()).isOne();
+        ApiMessage request = gateway.getRequest(0);
+        assertThat(
+                        kv
+                                ? ((PutKvRequest) request).getBucketsReqsCount()
+                                : ((ProduceLogRequest) request).getBucketsReqsCount())
+                .isEqualTo(2);
+        if (rpcFailure) {
+            gateway.failRequest(0, Errors.NOT_LEADER_OR_FOLLOWER.exception());
+        } else {
+            gateway.response(
+                    0,
+                    kv
+                            ? makePutKvResponse(
+                                    Arrays.asList(
+                                            PutKvResultForBucket.historicalFailure(
+                                                    bucket,
+                                                    Errors.NOT_LEADER_OR_FOLLOWER.toApiError(),
+                                                    firstOriginal.getPartitionName()),
+                                            PutKvResultForBucket.historicalFailure(
+                                                    bucket,
+                                                    Errors.NOT_LEADER_OR_FOLLOWER.toApiError(),
+                                                    secondOriginal.getPartitionName())))
+                            : makeProduceLogResponse(
+                                    Arrays.asList(
+                                            ProduceLogResultForBucket.historicalFailure(
+                                                    bucket,
+                                                    Errors.NOT_LEADER_OR_FOLLOWER.toApiError(),
+                                                    firstOriginal.getPartitionName()),
+                                            ProduceLogResultForBucket.historicalFailure(
+                                                    bucket,
+                                                    Errors.NOT_LEADER_OR_FOLLOWER.toApiError(),
+                                                    secondOriginal.getPartitionName()))));
+        }
+        assertThat(invalidations).containsExactly(Collections.singleton(historical));
+        assertThat(retriesQueuedAtInvalidation).containsExactly(false);
+        results.forEach(result -> assertThat(result).isNotDone());
+        assertThat(writerMetricGroup.recordsRetryTotal().getCount()).isEqualTo(2);
+        assertThat(metadataUpdater.getCluster().getBucketLocation(bucket)).isEmpty();
+        assertThat(accumulator.hasUnDrained()).isTrue();
+        accumulator.abortAllBatches(new RuntimeException("test cleanup"));
+    }
+
+    private TestingMetadataUpdater metadataUpdaterRecordingInvalidations(
+            TableInfo info,
+            List<Set<PhysicalTablePath>> invalidations,
+            List<Boolean> retriesQueuedAtInvalidation) {
+        return new TestingMetadataUpdater(Collections.singletonMap(info.getTablePath(), info)) {
+            @Override
+            public void invalidPhysicalTableBucketMeta(
+                    Set<PhysicalTablePath> physicalTablesToInvalid) {
+                if (!physicalTablesToInvalid.isEmpty()) {
+                    invalidations.add(new HashSet<>(physicalTablesToInvalid));
+                    retriesQueuedAtInvalidation.add(accumulator.hasUnDrained());
+                }
+                super.invalidPhysicalTableBucketMeta(physicalTablesToInvalid);
+            }
+        };
+    }
+
+    @ParameterizedTest
     @CsvSource({"2, 4", "4, 2"})
     void testServerValidatesResolvedBucketCount(int initialCount, int updatedCount)
             throws Exception {
@@ -334,8 +517,12 @@ final class SenderTest {
         assertThat(activeFuture.get()).isNull();
     }
 
-    @Test
-    void testNormalAndHistoricalPutRequests() throws Exception {
+    @ParameterizedTest
+    @CsvSource({"false,false", "true,false", "true,true"})
+    void testNormalAndHistoricalPutRequests(boolean diskRejected, boolean rpcFailure)
+            throws Exception {
+        ManualClock manualClock = new ManualClock();
+        clock = manualClock;
         sender.destroyResources();
         TableInfo tableInfo = createHistoricalTableInfo();
         PhysicalTablePath activePath = PhysicalTablePath.of(tableInfo.getTablePath(), "20990101");
@@ -394,6 +581,41 @@ final class SenderTest {
                         secondOriginalPath.getPartitionName());
 
         gateway.response(0, createPutKvResponse(activeBucket, 1L));
+        if (diskRejected) {
+            if (rpcFailure) {
+                gateway.failRequest(0, new DiskWriteLockedException("disk full"));
+            } else {
+                gateway.response(
+                        0,
+                        makePutKvResponse(
+                                Arrays.asList(
+                                        PutKvResultForBucket.historicalFailure(
+                                                historicalBucket,
+                                                Errors.DISK_WRITE_LOCKED.toApiError(),
+                                                firstOriginalPath.getPartitionName()),
+                                        PutKvResultForBucket.historicalFailure(
+                                                historicalBucket,
+                                                Errors.DISK_WRITE_LOCKED.toApiError(),
+                                                secondOriginalPath.getPartitionName()))));
+            }
+            assertThat(accumulator.diskWriteBackoffRemainingMs(historicalBucket)).isEqualTo(1000);
+            assertThat(accumulator.diskWriteBackoffRemainingMs(activeBucket)).isZero();
+            sender.wakeup();
+            sender.runOnce();
+            assertThat(gateway.pendingRequestSize()).isZero();
+            manualClock.advanceTime(Duration.ofSeconds(1));
+            sender.runOnce();
+            assertThat(gateway.pendingRequestSize()).isOne();
+            PutKvRequest retried = (PutKvRequest) gateway.getRequest(0);
+            assertThat(retried.getBucketsReqsCount()).isEqualTo(2);
+            Set<String> retriedOriginals = new HashSet<>();
+            for (int i = 0; i < retried.getBucketsReqsCount(); i++) {
+                retriedOriginals.add(retried.getBucketsReqAt(i).getOriginalPartitionName());
+                assertThat(retried.getBucketsReqAt(i).getPartitionId())
+                        .isEqualTo(historicalBucket.getPartitionId());
+            }
+            assertThat(retriedOriginals).isEqualTo(originalPartitionNames);
+        }
         gateway.response(
                 0,
                 makePutKvResponse(
@@ -1575,6 +1797,58 @@ final class SenderTest {
     }
 
     @Test
+    void testLowerKvPressureWakesSenderWaitingOnPreviousDeadline() throws Exception {
+        TableBucket tableBucket = new TableBucket(DATA1_TABLE_ID_PK, 0);
+        CompletableFuture<Exception> first = appendDiskTestRecord(true, tableBucket, 1);
+        sender.runOnce();
+        CompletableFuture<Exception> second = appendDiskTestRecord(true, tableBucket, 2);
+        sender.runOnce();
+        CompletableFuture<Exception> queued = appendDiskTestRecord(true, tableBucket, 3);
+
+        // The first response installs a 2430 ms gate (3000 * 0.9^2) while another request remains
+        // in flight and the third batch waits in the accumulator.
+        finishRequest(tableBucket, 0, createPutKvResponse(tableBucket, 1L, 0.9f));
+        assertThat(first.get()).isNull();
+
+        CompletableFuture<Void> finished = new CompletableFuture<>();
+        Thread thread =
+                new Thread(
+                        () -> {
+                            try {
+                                sender.runOnce();
+                                finished.complete(null);
+                            } catch (Throwable t) {
+                                finished.completeExceptionally(t);
+                            }
+                        },
+                        "kv-pressure-wakeup-test");
+        thread.start();
+        try {
+            retry(
+                    Duration.ofSeconds(10),
+                    () -> assertThat(thread.getState()).isEqualTo(Thread.State.TIMED_WAITING));
+
+            // Latest-wins pressure shortens the KV gate to about 30 ms. The response must wake the
+            // sender from its old 2430 ms wait after completing the corresponding in-flight batch.
+            finishRequest(tableBucket, 0, createPutKvResponse(tableBucket, 2L, 0.1f));
+            assertThat(second.get()).isNull();
+            finished.get(1, TimeUnit.SECONDS);
+            assertThat(queued).isNotDone();
+
+            // One iteration consumes any remaining 30 ms gate; the next sends the queued batch.
+            sender.runOnce();
+            sender.runOnce();
+            assertThat(pendingRequestSize(tableBucket)).isOne();
+            finishRequest(tableBucket, 0, createPutKvResponse(tableBucket, 3L));
+            assertThat(queued.get()).isNull();
+        } finally {
+            sender.wakeup();
+            thread.join(10000);
+            accumulator.abortAllBatches(new RuntimeException("test cleanup"));
+        }
+    }
+
+    @Test
     void testPutKvStorageBackpressureResponseAppliesRetryBackoff() throws Exception {
         TableBucket tableBucket = new TableBucket(DATA1_TABLE_ID_PK, 0);
         CompletableFuture<Exception> future = new CompletableFuture<>();
@@ -1618,16 +1892,22 @@ final class SenderTest {
         // The batch is re-enqueued for retry rather than completed with an exception.
         assertThat(future.isDone()).isFalse();
 
-        // Unlike STORAGE_BACKPRESSURE_EXCEPTION, no throttle is installed, so the retried batch
-        // is sent out again immediately and completes once the server recovers.
+        // Generic retry backoff is disabled by this test fixture. Unlike
+        // STORAGE_BACKPRESSURE_EXCEPTION, no policy-specific gate is installed, so the retried
+        // batch is sent again immediately and completes once the server recovers.
         sender.runOnce();
         assertThat(sender.numOfInFlightBatches(tableBucket)).isEqualTo(1);
         finishRequest(tableBucket, 0, createPutKvResponse(tableBucket, 1L));
         assertThat(future.get()).isNull();
     }
 
-    @Test
-    void testPutKvRpcFailuresRetryOnlyOwnedTableBatches() throws Exception {
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void testPutKvRpcFailuresRetryOnlyOwnedTableBatches(boolean diskRejected) throws Exception {
+        ManualClock manualClock = new ManualClock();
+        clock = manualClock;
+        sender.destroyResources();
+        sender = setupWithIdempotenceState();
         TablePath secondTablePath = TablePath.of("test_db_2", "test_pk_table_2");
         TableInfo secondTableInfo =
                 TableInfo.of(
@@ -1662,7 +1942,12 @@ final class SenderTest {
         failRequest(
                 tb1,
                 findRequestIndex(tb1, DATA1_TABLE_ID_PK),
-                new NetworkException("first table request failed"));
+                diskRejected
+                        ? new DiskWriteLockedException("disk full")
+                        : new NetworkException("first table request failed"));
+        assertThat(accumulator.diskWriteBackoffRemainingMs(firstTableBucket))
+                .isEqualTo(diskRejected ? 1000L : 0L);
+        assertThat(accumulator.diskWriteBackoffRemainingMs(secondTableBucket)).isZero();
         assertThat(writerMetricGroup.recordsRetryTotal().getCount()).isEqualTo(1L);
         assertThat(sender.numOfInFlightBatches(firstTableBucket)).isEqualTo(0);
         assertThat(sender.numOfInFlightBatches(secondTableBucket)).isEqualTo(1);
@@ -1677,6 +1962,11 @@ final class SenderTest {
         assertThat(sender.numOfInFlightBatches(secondTableBucket)).isEqualTo(0);
 
         metadataUpdater.updateCluster(clusterBeforeFailures);
+        if (diskRejected) {
+            sender.runOnce();
+            assertThat(pendingWriteRequestTableIds(tb1)).containsExactly(DATA2_TABLE_ID);
+            manualClock.advanceTime(Duration.ofSeconds(1));
+        }
         sender.runOnce();
         assertThat(pendingWriteRequestTableIds(tb1))
                 .containsExactlyInAnyOrder(DATA1_TABLE_ID_PK, DATA2_TABLE_ID);
@@ -1693,10 +1983,16 @@ final class SenderTest {
         assertThat(secondFuture.get()).isNull();
     }
 
-    @Test
-    void testSendWhenTableIdChanges() throws Exception {
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void testSendWhenTableIdChanges(boolean diskRejected) throws Exception {
         CompletableFuture<Exception> future1 = new CompletableFuture<>();
         appendToAccumulator(tb1, row(1, "a"), (tb, leo, e) -> future1.complete(e));
+        if (diskRejected) {
+            sender.runOnce();
+            failRequest(tb1, 0, new DiskWriteLockedException("disk full"));
+            assertThat(accumulator.diskWriteBackoffRemainingMs(tb1)).isPositive();
+        }
         TableInfo newTableInfo =
                 TableInfo.of(
                         DATA1_TABLE_PATH,
@@ -1707,6 +2003,7 @@ final class SenderTest {
                         System.currentTimeMillis(),
                         System.currentTimeMillis());
         TableBucket newTableBucket = new TableBucket(newTableInfo.getTableId(), tb1.getBucket());
+        assertThat(accumulator.diskWriteBackoffRemainingMs(newTableBucket)).isZero();
 
         metadataUpdater.updateTableInfos(Collections.singletonMap(DATA1_TABLE_PATH, newTableInfo));
         sender.runOnce();
@@ -1800,14 +2097,32 @@ final class SenderTest {
         return createPartitionedTableInfo(AutoPartitionTimeUnit.DAY, 7, true);
     }
 
+    private static TableInfo createHistoricalTableInfo(
+            AutoPartitionTimeUnit timeUnit, int numToRetain) {
+        return createHistoricalTableInfo(timeUnit, numToRetain, true);
+    }
+
+    private static TableInfo createHistoricalTableInfo(
+            AutoPartitionTimeUnit timeUnit, int numToRetain, boolean primaryKey) {
+        return createPartitionedTableInfo(timeUnit, numToRetain, true, primaryKey);
+    }
+
     private static TableInfo createPartitionedTableInfo(
             AutoPartitionTimeUnit timeUnit, int numToRetain, boolean historicalPartitionEnabled) {
-        Schema schema =
-                Schema.newBuilder()
-                        .column("id", DataTypes.INT())
-                        .column("dt", DataTypes.STRING())
-                        .primaryKey("id", "dt")
-                        .build();
+        return createPartitionedTableInfo(timeUnit, numToRetain, historicalPartitionEnabled, true);
+    }
+
+    private static TableInfo createPartitionedTableInfo(
+            AutoPartitionTimeUnit timeUnit,
+            int numToRetain,
+            boolean historicalPartitionEnabled,
+            boolean primaryKey) {
+        Schema.Builder schemaBuilder =
+                Schema.newBuilder().column("id", DataTypes.INT()).column("dt", DataTypes.STRING());
+        if (primaryKey) {
+            schemaBuilder.primaryKey("id", "dt");
+        }
+        Schema schema = schemaBuilder.build();
         TableDescriptor descriptor =
                 TableDescriptor.builder()
                         .schema(schema)
@@ -2071,6 +2386,301 @@ final class SenderTest {
                 Collections.singletonList(new PutKvResultForBucket(tb, error.toApiError())));
     }
 
+    @ParameterizedTest
+    @CsvSource({
+        "false,false,false",
+        "false,false,true",
+        "false,true,false",
+        "false,true,true",
+        "true,false,false",
+        "true,false,true",
+        "true,true,false",
+        "true,true,true"
+    })
+    void testDiskWriteLockedRetries(boolean kv, boolean rpcFailure, boolean idempotent)
+            throws Exception {
+        sender.destroyResources();
+        ManualClock manualClock = new ManualClock();
+        clock = manualClock;
+        IdempotenceManager manager = createIdempotenceManager(idempotent);
+        manager.setWriterId(42L);
+        sender = setupWithIdempotenceState(manager, 6, 0);
+        TableBucket bucket = kv ? new TableBucket(DATA1_TABLE_ID_PK, 0) : tb1;
+        CompletableFuture<Exception> result = appendDiskTestRecord(kv, bucket, 1);
+        sender.runOnce();
+        byte[] originalPayload = diskTestPayload(kv, bucket, getRequest(tb1, 0));
+        for (long delay : new long[] {1000, 2000, 4000, 8000, 10000, 10000}) {
+            ApiMessage request = getRequest(tb1, 0);
+            assertThat(diskTestPayload(kv, bucket, request)).isEqualTo(originalPayload);
+            if (!kv && idempotent) {
+                assertThat(
+                                getProduceLogRecords((ProduceLogRequest) request, bucket)
+                                        .batchIterator()
+                                        .next()
+                                        .writerId())
+                        .isEqualTo(42L);
+                assertBatchSequenceEquals(bucket, (ProduceLogRequest) request, 0);
+            }
+            if (rpcFailure) {
+                failRequest(
+                        tb1, 0, new CompletionException(new DiskWriteLockedException("disk full")));
+            } else {
+                finishRequest(
+                        tb1,
+                        0,
+                        kv
+                                ? createPutKvResponse(bucket, Errors.DISK_WRITE_LOCKED)
+                                : createProduceLogResponse(bucket, Errors.DISK_WRITE_LOCKED));
+            }
+            assertThat(result).isNotDone();
+            assertThat(accumulator.ready(metadataUpdater.getCluster()).nextReadyCheckDelayMs)
+                    .isEqualTo(delay);
+            sender.wakeup();
+            sender.runOnce();
+            assertThat(pendingRequestSize(tb1)).isZero();
+            manualClock.advanceTime(Duration.ofMillis(delay - 1));
+            sender.wakeup();
+            sender.runOnce();
+            assertThat(pendingRequestSize(tb1)).isZero();
+            manualClock.advanceTime(Duration.ofMillis(1));
+            sender.runOnce();
+            assertThat(pendingRequestSize(tb1)).isOne();
+        }
+        finishRequest(
+                tb1,
+                0,
+                kv ? createPutKvResponse(bucket, 1L) : createProduceLogResponse(bucket, 0L, 1L));
+        assertThat(result.get()).isNull();
+        assertThat(writerMetricGroup.recordsRetryTotal().getCount()).isEqualTo(6L);
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void testNotEnoughReplicasUsesRetriableWriteBackoff(boolean idempotent) throws Exception {
+        sender.destroyResources();
+        ManualClock manualClock = new ManualClock();
+        clock = manualClock;
+        IdempotenceManager manager = createIdempotenceManager(idempotent);
+        manager.setWriterId(42L);
+        sender = setupWithIdempotenceState(manager, Integer.MAX_VALUE, 0, Duration.ofMillis(100));
+        CompletableFuture<Exception> result = appendDiskTestRecord(false, tb1, 1);
+        sender.runOnce();
+
+        finishRequest(tb1, 0, createProduceLogResponse(tb1, Errors.NOT_ENOUGH_REPLICAS_EXCEPTION));
+
+        assertThat(result).isNotDone();
+        assertThat(accumulator.retriableWriteBackoffRemainingMs(tb1)).isEqualTo(100);
+        assertThat(writerMetricGroup.recordsRetryTotal().getCount()).isOne();
+
+        // Consume the response wakeup. The re-enqueued batch remains blocked by the retry gate.
+        sender.runOnce();
+        assertThat(pendingRequestSize(tb1)).isZero();
+        manualClock.advanceTime(Duration.ofMillis(99));
+        sender.wakeup();
+        sender.runOnce();
+        assertThat(pendingRequestSize(tb1)).isZero();
+
+        manualClock.advanceTime(Duration.ofMillis(1));
+        sender.runOnce();
+        assertThat(pendingRequestSize(tb1)).isOne();
+        finishRequest(tb1, 0, createProduceLogResponse(tb1, 0L, 1L));
+        assertThat(result.get()).isNull();
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void testDiskWriteLockedFailsWhenRetryIsNotAllowed(boolean writerIdChanged) throws Exception {
+        sender.destroyResources();
+        clock = new ManualClock();
+        IdempotenceManager manager = createIdempotenceManager(writerIdChanged);
+        manager.setWriterId(42L);
+        sender = setupWithIdempotenceState(manager, writerIdChanged ? 5 : 0, 0);
+        CompletableFuture<Exception> result = appendDiskTestRecord(false, tb1, 1);
+        sender.runOnce();
+        if (writerIdChanged) {
+            manager.setWriterId(43L);
+        }
+        failRequest(tb1, 0, new DiskWriteLockedException("disk full"));
+        assertThat(result.get())
+                .isInstanceOf(
+                        writerIdChanged
+                                ? UnknownWriterIdException.class
+                                : DiskWriteLockedException.class);
+        assertThat(accumulator.diskWriteBackoffCount()).isZero();
+        assertThat(writerMetricGroup.recordsRetryTotal().getCount()).isZero();
+        assertThat(accumulator.hasUnDrained()).isFalse();
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void testLateKvSuccessDoesNotClearDiskBackoff(boolean idempotent) throws Exception {
+        sender.destroyResources();
+        ManualClock manualClock = new ManualClock();
+        clock = manualClock;
+        IdempotenceManager manager = createIdempotenceManager(idempotent);
+        manager.setWriterId(42L);
+        sender = setupWithIdempotenceState(manager);
+        TableBucket bucket = new TableBucket(DATA1_TABLE_ID_PK, 0);
+        CompletableFuture<Exception> first = appendDiskTestRecord(true, bucket, 1);
+        sender.runOnce();
+        CompletableFuture<Exception> second = appendDiskTestRecord(true, bucket, 2);
+        sender.runOnce();
+        finishRequest(tb1, 1, createPutKvResponse(bucket, Errors.DISK_WRITE_LOCKED));
+        finishRequest(tb1, 0, createPutKvResponse(bucket, 1L, 0f));
+        assertThat(first.get()).isNull();
+        assertThat(second).isNotDone();
+        assertThat(accumulator.diskWriteBackoffRemainingMs(bucket)).isEqualTo(1000);
+        sender.wakeup();
+        sender.runOnce();
+        assertThat(pendingRequestSize(tb1)).isZero();
+        manualClock.advanceTime(Duration.ofSeconds(1));
+        sender.runOnce();
+        finishRequest(tb1, 0, createPutKvResponse(bucket, 2L));
+        assertThat(second.get()).isNull();
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"append", "retry", "close"})
+    void testDiskBackoffWaitCanBeWokenByHealthyWorkOrClose(String cause) throws Exception {
+        boolean close = cause.equals("close");
+        boolean retryResponse = cause.equals("retry");
+        sender.destroyResources();
+        clock = new ManualClock();
+        sender = setupWithIdempotenceState();
+        CompletableFuture<Exception> blocked = appendDiskTestRecord(false, tb1, 1);
+        sender.runOnce();
+        failRequest(tb1, 0, new DiskWriteLockedException("disk full"));
+        TableBucket healthy = new TableBucket(DATA1_TABLE_ID, 1);
+        if (retryResponse) {
+            appendDiskTestRecord(false, healthy, 2);
+            sender.runOnce();
+        }
+        // Consume the retry wakeup, then enter a real wait in a controlled sender thread.
+        sender.runOnce();
+        CompletableFuture<Void> finished = new CompletableFuture<>();
+        Thread thread =
+                new Thread(
+                        () -> {
+                            try {
+                                sender.runOnce();
+                                finished.complete(null);
+                            } catch (Throwable t) {
+                                finished.completeExceptionally(t);
+                            }
+                        },
+                        "disk-backoff-wakeup-test");
+        thread.start();
+        try {
+            retry(
+                    Duration.ofSeconds(10),
+                    () -> assertThat(thread.getState()).isEqualTo(Thread.State.TIMED_WAITING));
+            if (close) {
+                sender.forceClose();
+            } else if (retryResponse) {
+                failRequest(healthy, 0, new TimeoutException("retry healthy bucket"));
+            } else {
+                appendDiskTestRecord(false, healthy, 2);
+                sender.wakeup(); // WriterClient wakes the sender after appending a new batch.
+            }
+            finished.get(10, TimeUnit.SECONDS);
+            assertThat(blocked).isNotDone();
+            assertThat(pendingRequestSize(tb1)).isZero();
+            if (!close) {
+                sender.runOnce();
+                assertThat(pendingRequestSize(healthy)).isOne();
+                finishRequest(healthy, 0, createProduceLogResponse(healthy, 0L, 1L));
+            }
+        } finally {
+            sender.wakeup();
+            thread.join(10000);
+            accumulator.abortAllBatches(new RuntimeException("test cleanup"));
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void testHistoricalLogDiskRejection(boolean rpcFailure) throws Exception {
+        sender.destroyResources();
+        ManualClock manualClock = new ManualClock();
+        clock = manualClock;
+        TableInfo info = createHistoricalTableInfo(AutoPartitionTimeUnit.DAY, 7, false);
+        PhysicalTablePath original = PhysicalTablePath.of(info.getTablePath(), "20000101");
+        PhysicalTablePath historical =
+                PhysicalTablePath.of(info.getTablePath(), HISTORICAL_PARTITION_VALUE);
+        TableBucket bucket = new TableBucket(info.getTableId(), 22L, 0);
+        metadataUpdater =
+                new TestingMetadataUpdater(Collections.singletonMap(info.getTablePath(), info));
+        metadataUpdater.updateCluster(
+                partitionedCluster(info, Collections.singletonMap(historical, bucket)));
+        sender = setupWithIdempotenceState();
+        accumulator.checkAndCacheHistoricalPartitionEnabled(info);
+        accumulator.routeWritesTo(info, original, historical, bucket.getPartitionId());
+        CompletableFuture<Exception> result = new CompletableFuture<>();
+        bucketAssigner.setBucketId(bucket.getBucket());
+        accumulator.append(
+                WriteRecord.forArrowAppend(info, original, row(1, "20000101"), null),
+                (tb, offset, error) -> result.complete(error),
+                metadataUpdater.getCluster());
+        sender.runOnce();
+        TestTabletServerGateway gateway = node1Gateway();
+        if (rpcFailure) {
+            gateway.failRequest(0, new DiskWriteLockedException("disk full"));
+        } else {
+            gateway.response(
+                    0,
+                    makeProduceLogResponse(
+                            Collections.singletonList(
+                                    ProduceLogResultForBucket.historicalFailure(
+                                            bucket,
+                                            Errors.DISK_WRITE_LOCKED.toApiError(),
+                                            original.getPartitionName()))));
+        }
+        sender.wakeup();
+        sender.runOnce();
+        assertThat(gateway.pendingRequestSize()).isZero();
+        manualClock.advanceTime(Duration.ofSeconds(1));
+        sender.runOnce();
+        ProduceLogRequest request = (ProduceLogRequest) gateway.getRequest(0);
+        assertThat(request.getBucketsReqAt(0).getPartitionId()).isEqualTo(bucket.getPartitionId());
+        assertThat(request.getBucketsReqAt(0).getOriginalPartitionName())
+                .isEqualTo(original.getPartitionName());
+        gateway.response(
+                0,
+                makeProduceLogResponse(
+                        Collections.singletonList(
+                                ProduceLogResultForBucket.historicalSuccess(
+                                        bucket, 0L, 1L, original.getPartitionName()))));
+        assertThat(result.get()).isNull();
+    }
+
+    private CompletableFuture<Exception> appendDiskTestRecord(
+            boolean kv, TableBucket bucket, int key) throws Exception {
+        CompletableFuture<Exception> result = new CompletableFuture<>();
+        if (kv) {
+            appendKvToAccumulator(
+                    bucket,
+                    compactedRow(DATA1_ROW_TYPE, new Object[] {key, "a"}),
+                    (tb, offset, error) -> result.complete(error));
+        } else {
+            appendToAccumulator(
+                    bucket, row(key, "a"), (tb, offset, error) -> result.complete(error));
+        }
+        return result;
+    }
+
+    private byte[] diskTestPayload(boolean kv, TableBucket bucket, ApiMessage request) {
+        java.nio.ByteBuffer buffer =
+                (kv
+                                ? ((PutKvRequest) request).getBucketsReqAt(0).getRecordsSlice()
+                                : ((ProduceLogRequest) request)
+                                        .getBucketsReqAt(0)
+                                        .getRecordsSlice())
+                        .nioBuffer();
+        byte[] bytes = new byte[buffer.remaining()];
+        buffer.duplicate().get(bytes);
+        return bytes;
+    }
+
     private Sender setupWithIdempotenceState() {
         return setupWithIdempotenceState(createIdempotenceManager(false));
     }
@@ -2081,18 +2691,29 @@ final class SenderTest {
 
     private Sender setupWithIdempotenceState(
             IdempotenceManager idempotenceManager, int reties, int batchTimeoutMs) {
+        return setupWithIdempotenceState(idempotenceManager, reties, batchTimeoutMs, Duration.ZERO);
+    }
+
+    private Sender setupWithIdempotenceState(
+            IdempotenceManager idempotenceManager,
+            int reties,
+            int batchTimeoutMs,
+            Duration retryBackoff) {
         Configuration conf = new Configuration();
         conf.set(ConfigOptions.CLIENT_WRITER_BUFFER_MEMORY_SIZE, new MemorySize(TOTAL_MEMORY_SIZE));
         conf.set(ConfigOptions.CLIENT_WRITER_BATCH_SIZE, new MemorySize(BATCH_SIZE));
         conf.set(ConfigOptions.CLIENT_WRITER_BUFFER_PAGE_SIZE, new MemorySize(PAGE_SIZE));
         conf.set(ConfigOptions.CLIENT_WRITER_BATCH_TIMEOUT, Duration.ofMillis(batchTimeoutMs));
+        conf.set(ConfigOptions.CLIENT_WRITER_RETRY_BACKOFF, retryBackoff);
+        conf.set(ConfigOptions.CLIENT_WRITER_RETRY_BACKOFF_MAX, retryBackoff);
         bucketAssigner = new TestingBucketAssigner();
         accumulator =
                 new RecordAccumulator(
                         conf,
                         idempotenceManager,
                         writerMetricGroup,
-                        SystemClock.getInstance(),
+                        clock,
+                        new ExponentialBackoff(1000, 2, 10000, 0),
                         (tableInfo, path) -> bucketAssigner);
         return new Sender(
                 accumulator,

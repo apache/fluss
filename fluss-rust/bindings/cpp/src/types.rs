@@ -750,6 +750,7 @@ pub fn core_scan_batches_to_ffi(
             partition_id: batch.bucket().partition_id().unwrap_or(-1),
             bucket_id: batch.bucket().bucket_id(),
             base_offset: batch.base_offset(),
+            commit_timestamp: batch.commit_timestamp(),
         });
     }
 

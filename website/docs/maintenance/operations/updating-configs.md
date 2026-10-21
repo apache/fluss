@@ -22,7 +22,7 @@ Currently, the supported dynamically updatable server configurations include:
 - Options with prefix `datalake.${datalake.format}`
 - `log.retention.roll-active-segment.enabled`: Control whether a non-empty active segment can be
   rolled after the effective local cleanup TTL expires and the high watermark reaches the log end
-  offset. See [TTL](../../table-design/data-distribution/ttl.md#active-segment-rolling).
+  offset. See [TTL](../../table-design/data-distribution/ttl.md#local-log-ttl).
 - `kv.rocksdb.shared-rate-limiter.bytes-per-sec`: Control RocksDB flush and compaction write rate shared across all RocksDB instances on the TabletServer. The rate limiter is always enabled. Set to a lower value (e.g., 100MB) to limit the rate, or a very high value to effectively disable rate limiting.
 - `security.sasl.plain.credentials`: Add, change, or remove the users that can authenticate with SASL/PLAIN, see [Authentication](security/authentication.md#managing-multiple-users).
 - `server.historical-partition.thread-pool.max-size`: Change the maximum number of threads used for historical partition operations.
