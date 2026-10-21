@@ -524,8 +524,10 @@ public class AutoPartitionManager implements AutoCloseable {
                 continue;
             }
 
+            // Use the latest datalake setting even before the cached TableInfo is refreshed.
             dropPartitions(
                     tableInfo,
+                    table.getTableConfig().isDataLakeEnabled(),
                     now,
                     tableInfo.getTableConfig().getAutoPartitionStrategy(),
                     currentPartitions);
@@ -646,11 +648,10 @@ public class AutoPartitionManager implements AutoCloseable {
 
     private void dropPartitions(
             TableInfo tableInfo,
+            boolean dataLakeEnabled,
             Instant currentInstant,
             AutoPartitionStrategy autoPartitionStrategy,
             NavigableMap<String, Set<String>> currentPartitions) {
-        boolean ensureTiered = autoPartitionStrategy.ensureLakeTieredBeforeDrop();
-
         int numToRetain = autoPartitionStrategy.numToRetain();
         // negative value means not to drop partitions
         if (numToRetain < 0) {
@@ -690,13 +691,13 @@ public class AutoPartitionManager implements AutoCloseable {
             if (HISTORICAL_PARTITION_VALUE.equals(entry.getKey())) {
                 continue;
             }
-            dropPartitions(tableInfo, ensureTiered, iterator, entry);
+            dropPartitions(tableInfo, dataLakeEnabled, iterator, entry);
         }
     }
 
     private void dropPartitions(
             TableInfo tableInfo,
-            boolean ensureTiered,
+            boolean dataLakeEnabled,
             Iterator<Map.Entry<String, Set<String>>> iterator,
             Map.Entry<String, Set<String>> entry) {
         TablePath tablePath = tableInfo.getTablePath();
@@ -708,9 +709,8 @@ public class AutoPartitionManager implements AutoCloseable {
             dropIterator = entry.getValue().iterator();
         }
 
-        // if the partition is needed to be tiered into lake, the drop operation should be
-        // delegated to the LakeAwarePartitionDropManager
-        if (ensureTiered) {
+        // Lake-enabled tables must finish tiering before expired partitions can be dropped.
+        if (dataLakeEnabled) {
             while (dropIterator.hasNext()) {
                 String partitionName = dropIterator.next();
                 checkNotNull(lakeAwarePartitionDropManager).tryDrop(tableInfo, partitionName);

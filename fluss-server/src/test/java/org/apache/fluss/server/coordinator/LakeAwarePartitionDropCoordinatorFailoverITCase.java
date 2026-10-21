@@ -83,7 +83,6 @@ class LakeAwarePartitionDropCoordinatorFailoverITCase {
                         .property(ConfigOptions.TABLE_AUTO_PARTITION_TIMEZONE, "UTC")
                         .property(ConfigOptions.TABLE_AUTO_PARTITION_NUM_PRECREATE, 0)
                         .property(ConfigOptions.TABLE_AUTO_PARTITION_NUM_RETENTION, 24)
-                        .property(ConfigOptions.TABLE_AUTO_PARTITION_DROP_ENSURE_TIERED, true)
                         .property(ConfigOptions.TABLE_DATALAKE_ENABLED, true)
                         .build();
         long tableId =

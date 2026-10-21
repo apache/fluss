@@ -56,8 +56,9 @@ import org.apache.fluss.utils.clock.ManualClock;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
-import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 
 import java.time.LocalDateTime;
 import java.time.ZoneId;
@@ -103,14 +104,16 @@ class LakeAwarePartitionDropFlowTest {
         ZOO_KEEPER_EXTENSION_WRAPPER.getCustomExtension().cleanupRoot();
     }
 
-    @Test
-    void testExpiredPartitionIsDroppedOnlyAfterBucketReportsTiered() throws Exception {
+    @ParameterizedTest
+    @CsvSource({"false, false", "true, true", "false, true", "true, false"})
+    void testExpiredPartitionDropUsesCurrentDataLakeSetting(
+            boolean initialDataLakeEnabled, boolean dataLakeEnabled) throws Exception {
         MetadataManager metadataManager =
                 new MetadataManager(
                         zooKeeperClient,
                         new Configuration(),
                         new LakeCatalogDynamicLoader(new Configuration(), null, true));
-        TableInfo tableInfo = createTable();
+        TableInfo tableInfo = createTable(initialDataLakeEnabled);
         PartitionRegistration partitionRegistration =
                 createExpiredPartition(metadataManager, tableInfo);
         TableBucket tableBucket =
@@ -143,10 +146,27 @@ class LakeAwarePartitionDropFlowTest {
         try {
             autoPartitionManager.start();
             autoPartitionManager.addAutoPartitionTable(tableInfo, true);
+            if (initialDataLakeEnabled != dataLakeEnabled) {
+                // Simulate ALTER TABLE before the cached TableInfo is refreshed.
+                TableRegistration registration =
+                        zooKeeperClient.getTable(tableInfo.getTablePath()).get();
+                Map<String, String> properties = new HashMap<>(registration.properties);
+                properties.put(
+                        ConfigOptions.TABLE_DATALAKE_ENABLED.key(),
+                        Boolean.toString(dataLakeEnabled));
+                zooKeeperClient.updateTable(
+                        tableInfo.getTablePath(),
+                        registration.newProperties(properties, registration.customProperties));
+            }
             periodicExecutor.triggerNonPeriodicScheduledTask();
 
             Optional<PartitionRegistration> frozenRegistration =
                     zooKeeperClient.getPartition(tableInfo.getTablePath(), EXPIRED_PARTITION);
+            if (!dataLakeEnabled) {
+                assertThat(frozenRegistration).isEmpty();
+                assertThat(freezeGateway.getFreezeRequests()).isEmpty();
+                return;
+            }
             assertThat(frozenRegistration).isPresent();
             assertThat(frozenRegistration.get().isFrozen()).isTrue();
             assertThat(freezeGateway.getFreezeRequests()).hasSize(1);
@@ -195,7 +215,7 @@ class LakeAwarePartitionDropFlowTest {
         }
     }
 
-    private TableInfo createTable() throws Exception {
+    private TableInfo createTable(boolean dataLakeEnabled) throws Exception {
         TablePath tablePath = TablePath.of("db", "lake_aware_partition_drop_flow");
         TableDescriptor descriptor =
                 TableDescriptor.builder()
@@ -215,8 +235,7 @@ class LakeAwarePartitionDropFlowTest {
                                 AutoPartitionTimeUnit.HOUR)
                         .property(ConfigOptions.TABLE_AUTO_PARTITION_NUM_RETENTION, 1)
                         .property(ConfigOptions.TABLE_AUTO_PARTITION_NUM_PRECREATE, 0)
-                        .property(ConfigOptions.TABLE_AUTO_PARTITION_DROP_ENSURE_TIERED, true)
-                        .property(ConfigOptions.TABLE_DATALAKE_ENABLED, true)
+                        .property(ConfigOptions.TABLE_DATALAKE_ENABLED, dataLakeEnabled)
                         .build();
         long now = System.currentTimeMillis();
         TableInfo tableInfo =
