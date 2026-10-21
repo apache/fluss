@@ -371,6 +371,22 @@ public class MetadataUpdater {
         }
     }
 
+    /** Refreshes physical table layouts from the coordinator before rejecting stale routing. */
+    public synchronized Cluster updatePhysicalTableMetadataFromCoordinator(
+            Set<PhysicalTablePath> physicalTablePaths)
+            throws ExecutionException, InterruptedException, TimeoutException {
+        Set<TablePath> tables = new HashSet<>();
+        Set<PhysicalTablePath> partitions = new HashSet<>();
+        for (PhysicalTablePath path : physicalTablePaths) {
+            tables.add(path.getTablePath());
+            if (path.getPartitionName() != null) {
+                partitions.add(path);
+            }
+        }
+        cluster = fetchMetadataFromCoordinator(tables, partitions, null, null);
+        return cluster;
+    }
+
     private Cluster fetchMetadataFromCoordinator(
             @Nullable Set<TablePath> tablePaths,
             @Nullable Collection<PhysicalTablePath> partitions,
