@@ -286,6 +286,13 @@ RELOCATED_REF = re.compile(
     rb"org/apache/fluss/(?:fs/)?shaded/[A-Za-z0-9_$/-]+"
 )
 
+# Packages of the fluss-shaded artifacts. Fluss code reaches them through
+# fluss-common, which plugins declare as provided, so a plugin jar references
+# them without bundling them by design.
+FLUSS_SHADED_REF = re.compile(
+    r"^org/apache/fluss/shaded/(?:arrow|curator|guava|jackson|netty|zookeeper)\d*/"
+)
+
 
 def dangling_relocations(path: str, limit: int = 12) -> List[Tuple[str, int]]:
     """Relocated class names referenced by the jar but not contained in it.
@@ -302,6 +309,9 @@ def dangling_relocations(path: str, limit: int = 12) -> List[Tuple[str, int]]:
     template as ``.../bm/``. Such a reference counts as present when a jar
     entry carries it as a file stem or a directory.
 
+    References into FLUSS_SHADED_REF packages are skipped: the host supplies
+    those classes at runtime.
+
     Returns (missing class name, reference count), most referenced first.
     """
     missing: Dict[str, int] = {}
@@ -316,6 +326,8 @@ def dangling_relocations(path: str, limit: int = 12) -> List[Tuple[str, int]]:
                 continue
             for raw in set(RELOCATED_REF.findall(blob)):
                 ref = raw.decode("utf-8", "replace").rstrip("/")
+                if FLUSS_SHADED_REF.match(ref):
+                    continue
                 # inner classes and array/descriptor noise resolve via the
                 # outer name; only flag when nothing plausible is present
                 if ref + ".class" in names:
