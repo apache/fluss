@@ -69,3 +69,9 @@ fs.gs.auth.type: APPLICATION_DEFAULT
 ```
 
 Other valid values for `fs.gs.auth.type` include `COMPUTE_ENGINE`, `USER_CREDENTIALS`, `ACCESS_TOKEN_PROVIDER`, and `UNAUTHENTICATED`. See the [GCS Hadoop connector documentation](https://github.com/GoogleCloudDataproc/hadoop-connectors/blob/master/gcs/CONFIGURATION.md) for the full list of `fs.gs.*` options.
+
+## Security tokens for clients
+
+Clients that read tiered data do not need the service account key file. When `fs.gs.auth.type` is `SERVICE_ACCOUNT_JSON_KEYFILE`, the Fluss server exchanges the key for a short-lived OAuth access token at the key's `token_uri`, scoped to `https://www.googleapis.com/auth/devstorage.read_write`. When `fs.gs.auth.type` is `COMPUTE_ENGINE`, the server reads the same kind of token from the instance metadata server. The token is the server identity's own access token. A client installs it through `GSSecurityTokenReceiver`. The connector then authenticates with `fs.gs.auth.access.token.provider.impl` set to `GSAccessTokenProvider`.
+
+`UNAUTHENTICATED` cannot mint a token for clients.

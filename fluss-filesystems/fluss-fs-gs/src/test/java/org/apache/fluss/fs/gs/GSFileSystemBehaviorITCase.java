@@ -18,9 +18,17 @@
 package org.apache.fluss.fs.gs;
 
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.fs.FSDataInputStream;
+import org.apache.fluss.fs.FSDataOutputStream;
 import org.apache.fluss.fs.FileSystem;
 import org.apache.fluss.fs.FileSystemBehaviorTestSuite;
 import org.apache.fluss.fs.FsPath;
+import org.apache.fluss.fs.gs.token.GSAccessTokenProvider;
+import org.apache.fluss.fs.gs.token.GSSecurityTokenProvider;
+import org.apache.fluss.fs.gs.token.GSSecurityTokenReceiver;
+import org.apache.fluss.fs.token.Credentials;
+import org.apache.fluss.fs.token.CredentialsJsonSerde;
+import org.apache.fluss.fs.token.ObtainedSecurityToken;
 import org.apache.fluss.testutils.common.CommonTestUtils;
 
 import com.google.cloud.hadoop.gcsio.GoogleCloudStorageFileSystem;
@@ -29,14 +37,21 @@ import com.google.cloud.hadoop.gcsio.testing.InMemoryGoogleCloudStorage;
 import org.apache.commons.lang3.reflect.FieldUtils;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.parallel.ResourceLock;
 
 import java.io.IOException;
 import java.net.URI;
+import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.function.Supplier;
 
+import static org.apache.fluss.fs.FileSystem.WriteMode.NO_OVERWRITE;
+import static org.assertj.core.api.Assertions.assertThat;
+
 /** Tests that validate the behavior of the Google Cloud Storage File System Plugin. */
+@ResourceLock("gs-security-token")
 class GSFileSystemBehaviorITCase extends FileSystemBehaviorTestSuite {
 
     private static MockAuthServer mockGSServer;
@@ -108,6 +123,65 @@ class GSFileSystemBehaviorITCase extends FileSystemBehaviorTestSuite {
 
     @AfterAll
     static void tearDown() throws IOException {
+        GSSecurityTokenReceiver.reset();
         mockGSServer.close();
+    }
+
+    @Test
+    void receivedTokenCanBeUsedByAClientWithoutTheServiceAccountKey() throws Exception {
+        ObtainedSecurityToken obtainedSecurityToken =
+                new ObtainedSecurityToken(
+                        "gs",
+                        CredentialsJsonSerde.toJson(new Credentials("", "", "token")),
+                        System.currentTimeMillis() + 3_600_000L,
+                        new HashMap<String, String>());
+        assertThat(obtainedSecurityToken.getScheme()).isEqualTo("gs");
+
+        GSSecurityTokenReceiver receiver = new GSSecurityTokenReceiver();
+        receiver.onNewTokensObtained(obtainedSecurityToken);
+
+        GSFileSystemPlugin plugin = new GSFileSystemPlugin();
+        Configuration clientConfig = new Configuration();
+        clientConfig.setString("fs.gs.storage.root.url", "http://localhost:8080");
+        clientConfig.setString("fs.gs.inputstream.support.gzip.encoding.enable", "false");
+        FileSystem clientFileSystem =
+                plugin.create(URI.create("gs://test-bucket/flusspath"), clientConfig);
+        applyInMemoryStorage(clientFileSystem);
+
+        FsPath path = new FsPath("gs://test-bucket/fluss-token/hello");
+        byte[] payload = "hello".getBytes(StandardCharsets.UTF_8);
+        try (FSDataOutputStream outputStream = clientFileSystem.create(path, NO_OVERWRITE)) {
+            outputStream.write(payload);
+        }
+        try (FSDataInputStream inputStream = clientFileSystem.open(path)) {
+            byte[] read = new byte[payload.length];
+            assertThat(inputStream.read(read)).isEqualTo(payload.length);
+            assertThat(read).isEqualTo(payload);
+        }
+    }
+
+    @Test
+    void serviceAccountKeyRefreshesAnAccessToken() throws Exception {
+        ObtainedSecurityToken obtained = fileSystem.obtainSecurityToken();
+        assertThat(obtained.getScheme()).isEqualTo("gs");
+        Credentials credentials = CredentialsJsonSerde.fromJson(obtained.getToken());
+        assertThat(credentials.getSecurityToken()).isEqualTo("token");
+        assertThat(obtained.getValidUntil().get()).isGreaterThan(System.currentTimeMillis());
+
+        GSSecurityTokenReceiver.reset();
+        new GSSecurityTokenReceiver().onNewTokensObtained(obtained);
+        assertThat(new GSAccessTokenProvider().getAccessToken().getToken()).isEqualTo("token");
+    }
+
+    @Test
+    void computeEngineRefreshesAnAccessTokenFromMetadata() {
+        org.apache.hadoop.conf.Configuration hadoopConfig =
+                new org.apache.hadoop.conf.Configuration(false);
+        hadoopConfig.set("fs.gs.auth.type", "COMPUTE_ENGINE");
+        ObtainedSecurityToken obtained =
+                new GSSecurityTokenProvider("gs", hadoopConfig).obtainSecurityToken();
+        Credentials credentials = CredentialsJsonSerde.fromJson(obtained.getToken());
+        assertThat(credentials.getSecurityToken()).isEqualTo("token");
+        assertThat(obtained.getValidUntil().get()).isGreaterThan(System.currentTimeMillis());
     }
 }

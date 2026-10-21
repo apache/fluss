@@ -21,6 +21,7 @@ import org.apache.fluss.config.ConfigBuilder;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.fs.FileSystem;
 import org.apache.fluss.fs.FileSystemPlugin;
+import org.apache.fluss.fs.gs.token.GSSecurityTokenReceiver;
 
 import com.google.cloud.hadoop.fs.gcs.GoogleHadoopFileSystem;
 import org.slf4j.Logger;
@@ -45,6 +46,12 @@ public class GSFileSystemPlugin implements FileSystemPlugin {
     @Override
     public FileSystem create(URI fsUri, Configuration flussConfig) throws IOException {
         org.apache.hadoop.conf.Configuration hadoopConfig = getHadoopConfiguration(flussConfig);
+        // A client that already received a token has no local service-account key. Point the
+        // connector at the access-token provider filled by GSSecurityTokenReceiver.
+        if (!hasStaticCredentials(hadoopConfig)
+                && GSSecurityTokenReceiver.getAccessToken() != null) {
+            GSSecurityTokenReceiver.updateHadoopConfig(hadoopConfig);
+        }
 
         // create the Google Hadoop FileSystem
         org.apache.hadoop.fs.FileSystem fs = new GoogleHadoopFileSystem();
@@ -73,6 +80,15 @@ public class GSFileSystemPlugin implements FileSystemPlugin {
             }
         }
         return conf;
+    }
+
+    private static boolean hasStaticCredentials(org.apache.hadoop.conf.Configuration hadoopConfig) {
+        return isNotEmpty(hadoopConfig.get("fs.gs.auth.service.account.json.keyfile"))
+                || isNotEmpty(hadoopConfig.get("fs.gs.auth.service.account.keyfile"));
+    }
+
+    private static boolean isNotEmpty(String value) {
+        return value != null && !value.isEmpty();
     }
 
     private URI getInitURI(URI fsUri, org.apache.hadoop.conf.Configuration hadoopConfig) {
