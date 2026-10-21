@@ -56,7 +56,9 @@ abstract class SparkLakeTableReadTestBase extends FlussSparkTestBase {
   private val SYNC_POLL_INTERVAL_MS = 500L
 
   /** Tier all pending data for the given table to the lake. */
-  protected def tierToLake(tableName: String): Unit = {
+  protected def tierToLake(
+      tableName: String,
+      expectedOffsets: Map[TableBucket, Long] = Map.empty): Unit = {
     val tablePath = createTablePath(tableName)
     val tableInfo = loadFlussTable(tablePath).getTableInfo
     val tableId = tableInfo.getTableId
@@ -102,7 +104,12 @@ abstract class SparkLakeTableReadTestBase extends FlussSparkTestBase {
             if (!syncedBuckets.contains(tableBucket)) {
               try {
                 val replica = flussServer.waitAndGetLeaderReplica(tableBucket)
-                if (replica.getLogTablet.getLakeTableSnapshotId >= 0) {
+                if (
+                  replica.getLogTablet.getLakeTableSnapshotId >= 0 &&
+                  expectedOffsets
+                    .get(tableBucket)
+                    .forall(replica.getLogTablet.getLakeLogEndOffset >= _)
+                ) {
                   syncedBuckets.add(tableBucket)
                 }
               } catch {

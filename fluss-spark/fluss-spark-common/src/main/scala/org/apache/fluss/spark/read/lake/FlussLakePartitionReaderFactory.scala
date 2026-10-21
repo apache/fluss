@@ -18,10 +18,10 @@
 package org.apache.fluss.spark.read.lake
 
 import org.apache.fluss.config.Configuration
-import org.apache.fluss.lake.source.{LakeSource, LakeSplit}
+import org.apache.fluss.lake.source.{LakeSource, LakeSplit, SupportsHistoricalSnapshot}
 import org.apache.fluss.metadata.TablePath
 import org.apache.fluss.predicate.{Predicate => FlussPredicate}
-import org.apache.fluss.spark.read.{FlussAppendInputPartition, FlussAppendPartitionReader}
+import org.apache.fluss.spark.read.{FlussAppendInputPartition, FlussAppendPartitionReader, HistoricalReadMetadata}
 
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.connector.read.{InputPartition, PartitionReader, PartitionReaderFactory}
@@ -36,11 +36,17 @@ class FlussLakePartitionReaderFactory(
     flussPredicate: Option[FlussPredicate],
     logTailPredicate: Option[FlussPredicate],
     limit: Option[Int],
-    flussConfig: Configuration)
+    flussConfig: Configuration,
+    expectedTableInfo: Option[HistoricalReadMetadata] = None)
   extends PartitionReaderFactory {
 
   @transient private lazy val lakeSource: LakeSource[LakeSplit] = {
     val source = FlussLakeUtils.createLakeSource(flussConfig.toMap, tableProperties, tablePath)
+    expectedTableInfo.foreach(
+      info =>
+        source
+          .asInstanceOf[SupportsHistoricalSnapshot]
+          .withExpectedSchema(info.rowType))
     source.withProject(FlussLakeUtils.lakeProjection(projection))
     flussPredicate.foreach(FlussLakeUtils.applyLakeFilters(source, _))
     source
@@ -55,7 +61,8 @@ class FlussLakePartitionReaderFactory(
           lakeSource,
           projection,
           limit,
-          flussConfig)
+          flussConfig,
+          expectedTableInfo)
       case logSplit: FlussAppendInputPartition =>
         new FlussAppendPartitionReader(
           tablePath,
@@ -63,7 +70,8 @@ class FlussLakePartitionReaderFactory(
           logTailPredicate,
           limit,
           logSplit,
-          flussConfig)
+          flussConfig,
+          expectedTableInfo)
       case mixedSplit: FlussLakeUpsertInputPartition =>
         new FlussLakeUpsertPartitionReader(
           tablePath,
@@ -71,7 +79,8 @@ class FlussLakePartitionReaderFactory(
           projection,
           limit,
           mixedSplit,
-          flussConfig)
+          flussConfig,
+          expectedTableInfo)
       case _ =>
         throw new IllegalArgumentException(s"Unexpected partition type: ${partition.getClass}")
     }
