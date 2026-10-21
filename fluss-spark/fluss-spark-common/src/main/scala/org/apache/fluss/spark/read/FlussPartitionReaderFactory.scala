@@ -25,14 +25,18 @@ import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.connector.read.{InputPartition, PartitionReader, PartitionReaderFactory}
 import org.apache.spark.sql.util.CaseInsensitiveStringMap
 
-/** Factory for creating partition readers to read data from Fluss. */
+/**
+ * Factory for creating append partition readers. Batch scans can allow retention gaps; streaming
+ * reads retain strict numeric offsets by default.
+ */
 class FlussAppendPartitionReaderFactory(
     tablePath: TablePath,
     projection: Array[Int],
     pushedPredicate: Option[Predicate],
     limit: Option[Int],
     options: CaseInsensitiveStringMap,
-    flussConfig: Configuration)
+    flussConfig: Configuration,
+    allowExpiredOffsets: Boolean = false)
   extends PartitionReaderFactory {
 
   override def createReader(partition: InputPartition): PartitionReader[InternalRow] = {
@@ -43,7 +47,8 @@ class FlussAppendPartitionReaderFactory(
       pushedPredicate,
       limit,
       flussPartition,
-      flussConfig
+      flussConfig,
+      allowExpiredOffsets
     )
   }
 }
