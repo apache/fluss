@@ -350,7 +350,7 @@ public class CoordinatorServer extends ServerBase {
                             zkClient,
                             coordinatorChannelManager,
                             ioExecutor,
-                            conf.get(ConfigOptions.AUTO_PARTITION_DROP_FREEZE_TIMEOUT).toMillis());
+                            conf.get(ConfigOptions.COORDINATOR_CONTROL_REQUEST_TIMEOUT).toMillis());
             this.autoPartitionManager =
                     new AutoPartitionManager(
                             metadataCache,
