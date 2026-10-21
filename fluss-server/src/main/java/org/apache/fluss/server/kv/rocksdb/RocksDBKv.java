@@ -24,7 +24,6 @@ import org.apache.fluss.metrics.Histogram;
 import org.apache.fluss.rocksdb.RocksDBOperationUtils;
 import org.apache.fluss.server.kv.KvCloseMode;
 import org.apache.fluss.server.utils.ResourceGuard;
-import org.apache.fluss.utils.BytesUtils;
 import org.apache.fluss.utils.IOUtils;
 
 import io.github.fluss_contrib.rocksdb.Cache;
@@ -35,6 +34,7 @@ import io.github.fluss_contrib.rocksdb.ReadOptions;
 import io.github.fluss_contrib.rocksdb.RocksDB;
 import io.github.fluss_contrib.rocksdb.RocksDBException;
 import io.github.fluss_contrib.rocksdb.RocksIterator;
+import io.github.fluss_contrib.rocksdb.Slice;
 import io.github.fluss_contrib.rocksdb.Statistics;
 import io.github.fluss_contrib.rocksdb.WriteOptions;
 import org.slf4j.Logger;
@@ -44,6 +44,7 @@ import javax.annotation.Nullable;
 
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.TimeUnit;
@@ -211,17 +212,20 @@ public class RocksDBKv implements AutoCloseable {
 
     public List<byte[]> prefixLookup(byte[] prefixKey) {
         List<byte[]> pkList = new ArrayList<>();
-        ReadOptions readOptions = new ReadOptions();
-        RocksIterator iterator = db.newIterator(defaultColumnFamilyHandle, readOptions);
-        try {
-            iterator.seek(prefixKey);
-            while (iterator.isValid() && BytesUtils.prefixEquals(prefixKey, iterator.key())) {
-                pkList.add(iterator.value());
-                iterator.next();
+        byte[] upperBound = prefixUpperBound(prefixKey);
+        // The bound must outlive both the read options and the iterator that reference it.
+        try (Slice upperBoundSlice = upperBound == null ? null : new Slice(upperBound);
+                ReadOptions readOptions = new ReadOptions().setTotalOrderSeek(true)) {
+            if (upperBoundSlice != null) {
+                readOptions.setIterateUpperBound(upperBoundSlice);
             }
-        } finally {
-            readOptions.close();
-            iterator.close();
+            try (RocksIterator iterator = db.newIterator(defaultColumnFamilyHandle, readOptions)) {
+                iterator.seek(prefixKey);
+                while (iterator.isValid()) {
+                    pkList.add(iterator.value());
+                    iterator.next();
+                }
+            }
         }
 
         return pkList;
@@ -481,5 +485,19 @@ public class RocksDBKv implements AutoCloseable {
         int window = level0SlowdownWritesTrigger - flussL0SlowdownTrigger;
         long offset = Math.min(l0Files - flussL0SlowdownTrigger, (long) window - 1);
         return (float) offset / window;
+    }
+
+    /** Returns the exclusive bytewise bound, or null if the prefix has no finite upper bound. */
+    @Nullable
+    private static byte[] prefixUpperBound(byte[] prefix) {
+        for (int i = prefix.length - 1; i >= 0; i--) {
+            if ((prefix[i] & 0xff) != 0xff) {
+                byte[] upperBound = Arrays.copyOf(prefix, i + 1);
+                upperBound[i]++;
+                return upperBound;
+            }
+        }
+        // Empty and all-0xff prefixes match every key at or after the seek position.
+        return null;
     }
 }

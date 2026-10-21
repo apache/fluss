@@ -22,15 +22,16 @@ import org.apache.fluss.client.Connection;
 import org.apache.fluss.client.ConnectionFactory;
 import org.apache.fluss.client.admin.Admin;
 import org.apache.fluss.client.metadata.MetadataUpdater;
+import org.apache.fluss.client.tiering.TieringLogSplit;
+import org.apache.fluss.client.tiering.TieringSplit;
+import org.apache.fluss.client.tiering.TieringSplitGenerator;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.flink.metrics.FlinkMetricRegistry;
 import org.apache.fluss.flink.tiering.event.FailedTieringEvent;
 import org.apache.fluss.flink.tiering.event.FinishedTieringEvent;
 import org.apache.fluss.flink.tiering.event.TieringReachMaxDurationEvent;
-import org.apache.fluss.flink.tiering.source.split.TieringLogSplit;
-import org.apache.fluss.flink.tiering.source.split.TieringSplit;
-import org.apache.fluss.flink.tiering.source.split.TieringSplitGenerator;
+import org.apache.fluss.flink.tiering.source.split.FlinkTieringSplit;
 import org.apache.fluss.flink.tiering.source.state.TieringSourceEnumeratorState;
 import org.apache.fluss.lake.committer.TieringStats;
 import org.apache.fluss.lake.writer.LakeTieringFactory;
@@ -100,7 +101,7 @@ import static org.apache.fluss.flink.tiering.source.enumerator.TieringSourceEnum
  * </ul>
  */
 public class TieringSourceEnumerator
-        implements SplitEnumerator<TieringSplit, TieringSourceEnumeratorState> {
+        implements SplitEnumerator<FlinkTieringSplit, TieringSourceEnumeratorState> {
 
     private static final Logger LOG = LoggerFactory.getLogger(TieringSourceEnumerator.class);
 
@@ -109,7 +110,7 @@ public class TieringSourceEnumerator
 
     private final Configuration flussConf;
     private final Configuration lakeTieringConfig;
-    private final SplitEnumeratorContext<TieringSplit> context;
+    private final SplitEnumeratorContext<FlinkTieringSplit> context;
     private final LakeTieringFactory<?, ?> lakeTieringFactory;
     private final ScheduledExecutorService timerService;
     private final SplitEnumeratorMetricGroup enumeratorMetricGroup;
@@ -140,7 +141,7 @@ public class TieringSourceEnumerator
 
     public TieringSourceEnumerator(
             Configuration flussConf,
-            SplitEnumeratorContext<TieringSplit> context,
+            SplitEnumeratorContext<FlinkTieringSplit> context,
             LakeTieringFactory<?, ?> lakeTieringFactory,
             long pollTieringTableIntervalMs) {
         this(
@@ -154,7 +155,7 @@ public class TieringSourceEnumerator
     public TieringSourceEnumerator(
             Configuration flussConf,
             Configuration lakeTieringConfig,
-            SplitEnumeratorContext<TieringSplit> context,
+            SplitEnumeratorContext<FlinkTieringSplit> context,
             LakeTieringFactory<?, ?> lakeTieringFactory,
             long pollTieringTableIntervalMs) {
         this(
@@ -171,7 +172,7 @@ public class TieringSourceEnumerator
     TieringSourceEnumerator(
             Configuration flussConf,
             Configuration lakeTieringConfig,
-            SplitEnumeratorContext<TieringSplit> context,
+            SplitEnumeratorContext<FlinkTieringSplit> context,
             LakeTieringFactory<?, ?> lakeTieringFactory,
             long pollTieringTableIntervalMs,
             ScheduledExecutorService timerService) {
@@ -264,9 +265,9 @@ public class TieringSourceEnumerator
     }
 
     @Override
-    public void addSplitsBack(List<TieringSplit> splits, int subtaskId) {
+    public void addSplitsBack(List<FlinkTieringSplit> splits, int subtaskId) {
         readersAwaitingSplit.add(subtaskId);
-        pendingSplits.addAll(splits);
+        splits.forEach(split -> pendingSplits.addLast(split.unwrap()));
         assignSplits();
     }
 
@@ -436,7 +437,7 @@ public class TieringSourceEnumerator
                 }
                 TieringSplit tieringSplit = pendingSplits.pollFirst();
                 if (tieringSplit != null) {
-                    context.assignSplit(tieringSplit, nextAwaitingReader);
+                    context.assignSplit(new FlinkTieringSplit(tieringSplit), nextAwaitingReader);
                     LOG.info("Assigning split {} to readers {}", tieringSplit, nextAwaitingReader);
                     readersAwaitingSplit.remove(nextAwaitingReader);
                 }
@@ -530,13 +531,13 @@ public class TieringSourceEnumerator
             // shuffle tiering split to avoid splits tiering skew
             // after introduce tiering max duration
             Collections.shuffle(tieringSplits);
-            tieringSplits = populateTieringRoundMetadata(tieringSplits);
+            List<TieringSplit> splitsWithMetadata = populateTieringRoundMetadata(tieringSplits);
             LOG.info(
                     "Generate Tiering {} splits for table {} with cost {}ms.",
-                    tieringSplits.size(),
+                    splitsWithMetadata.size(),
                     tieringTable.f2,
                     System.currentTimeMillis() - start);
-            if (tieringSplits.isEmpty()) {
+            if (splitsWithMetadata.isEmpty()) {
                 LOG.info(
                         "Generate Tiering splits for table {} is empty, no need to tier data.",
                         tieringTable.f2.getTableName());
@@ -545,7 +546,7 @@ public class TieringSourceEnumerator
                 // An empty round has no split or completion event to drive the next table.
                 requestTableAndAssign(EMPTY_TABLE_POLL_DELAY_MS);
             } else {
-                pendingSplits.addAll(tieringSplits);
+                pendingSplits.addAll(splitsWithMetadata);
 
                 timerService.schedule(
                         () ->

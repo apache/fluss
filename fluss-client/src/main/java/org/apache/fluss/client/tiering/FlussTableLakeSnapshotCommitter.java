@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-package org.apache.fluss.flink.tiering.committer;
+package org.apache.fluss.client.tiering;
 
 import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.client.metadata.MetadataUpdater;
@@ -229,7 +229,22 @@ public class FlussTableLakeSnapshotCommitter implements AutoCloseable {
         }
     }
 
-    void commit(
+    /**
+     * Registers a lake snapshot and its bucket offsets in Fluss.
+     *
+     * @param tableId the Fluss table ID
+     * @param snapshotId the lake snapshot ID
+     * @param lakeBucketTieredOffsetsPath the file containing tiered bucket offsets
+     * @param readableLakeBucketTieredOffsetsPath the file containing readable bucket offsets, or
+     *     {@code null} if the snapshot is not readable
+     * @param logEndOffsets the tiered log end offsets used for metrics reporting
+     * @param logMaxTieredTimestamps the maximum tiered timestamps used for metrics reporting
+     * @param earliestSnapshotIDToKeep the earliest snapshot ID to retain; {@code null} retains only
+     *     the latest snapshot, and {@link LakeCommitResult#KEEP_ALL_PREVIOUS} retains all previous
+     *     snapshots
+     * @throws IOException if the snapshot cannot be committed to Fluss
+     */
+    public void commit(
             long tableId,
             long snapshotId,
             String lakeBucketTieredOffsetsPath,
@@ -335,7 +350,7 @@ public class FlussTableLakeSnapshotCommitter implements AutoCloseable {
                 commitLakeTableSnapshotRequest.addLakeTableSnapshotMetadata();
         pbLakeTableSnapshotMetadata.setSnapshotId(snapshotId);
         pbLakeTableSnapshotMetadata.setTableId(tableId);
-        // tiered snapshot file path is equal to readable snapshot currently
+        // Keep the tiered offsets path separate from the optional readable offsets path.
         pbLakeTableSnapshotMetadata.setTieredBucketOffsetsFilePath(tieredBucketOffsetsPath);
         if (readableBucketTieredOffsetsPath != null) {
             pbLakeTableSnapshotMetadata.setReadableBucketOffsetsFilePath(
@@ -360,7 +375,7 @@ public class FlussTableLakeSnapshotCommitter implements AutoCloseable {
     }
 
     @VisibleForTesting
-    protected CommitLakeTableSnapshotRequest addLogEndOffsets(
+    CommitLakeTableSnapshotRequest addLogEndOffsets(
             CommitLakeTableSnapshotRequest commitLakeTableSnapshotRequest,
             long tableId,
             long snapshotId,

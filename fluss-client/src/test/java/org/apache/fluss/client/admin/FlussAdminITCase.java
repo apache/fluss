@@ -125,6 +125,7 @@ import static org.apache.fluss.record.TestData.DATA1_SCHEMA;
 import static org.apache.fluss.row.encode.KvValueLayout.PLAIN;
 import static org.apache.fluss.testutils.DataTestUtils.row;
 import static org.apache.fluss.testutils.InternalRowAssert.assertThatRow;
+import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.apache.fluss.testutils.common.CommonTestUtils.waitUntil;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -2644,6 +2645,22 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
                         .build();
         admin.createTable(tablePath6, tableDescriptor6, false).get();
         assertThat(admin.tableExists(tablePath6).get()).isTrue();
+
+        // Finish leader initialization before teardown deletes the schemas needed by KV recovery.
+        for (TablePath tablePath :
+                Arrays.asList(
+                        DEFAULT_TABLE_PATH,
+                        tablePath2,
+                        tablePath3,
+                        tablePath4,
+                        tablePath5,
+                        tablePath6)) {
+            TableInfo tableInfo = admin.getTableInfo(tablePath).get();
+            for (int bucket = 0; bucket < tableInfo.getNumBuckets(); bucket++) {
+                FLUSS_CLUSTER_EXTENSION.waitAndGetLeaderReplica(
+                        new TableBucket(tableInfo.getTableId(), bucket));
+            }
+        }
     }
 
     // ==================== Table Statistics Tests ====================
@@ -2905,10 +2922,16 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
         waitAllReplicasReady(tableId, 3);
 
         // Phase 1: Cluster is healthy — status should be GREEN.
-        ClusterHealth health = admin.getClusterHealth().get();
-        assertThat(health.getStatus()).isEqualTo(ClusterHealthStatus.GREEN);
-        assertThat(health.getNumReplicas()).isEqualTo(health.getInSyncReplicas());
-        assertThat(health.getNumLeaderReplicas()).isEqualTo(health.getActiveLeaderReplicas());
+        // Wait for previous table deletions and coordinator-side leader activation to settle.
+        retry(
+                Duration.ofMinutes(1),
+                () -> {
+                    ClusterHealth health = admin.getClusterHealth().get();
+                    assertThat(health.getStatus()).isEqualTo(ClusterHealthStatus.GREEN);
+                    assertThat(health.getNumReplicas()).isEqualTo(health.getInSyncReplicas());
+                    assertThat(health.getNumLeaderReplicas())
+                            .isEqualTo(health.getActiveLeaderReplicas());
+                });
 
         // Phase 2: Stop one tablet server (simulate server crash during rolling upgrade).
         int stoppedServerId = 0;

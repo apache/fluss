@@ -15,13 +15,14 @@
  * limitations under the License.
  */
 
-package org.apache.fluss.flink.tiering.source.split;
+package org.apache.fluss.client.tiering;
 
 import org.apache.fluss.client.admin.Admin;
 import org.apache.fluss.client.initializer.BucketOffsetsRetrieverImpl;
 import org.apache.fluss.client.initializer.OffsetsInitializer.BucketOffsetsRetriever;
 import org.apache.fluss.client.metadata.KvSnapshots;
 import org.apache.fluss.client.metadata.LakeSnapshot;
+import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.exception.LakeTableSnapshotNotExistException;
 import org.apache.fluss.exception.PartitionNotExistException;
 import org.apache.fluss.metadata.PartitionInfo;
@@ -30,7 +31,6 @@ import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.utils.ExceptionUtils;
 
-import org.apache.flink.util.FlinkRuntimeException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -78,7 +78,7 @@ public class TieringSplitGenerator {
             if (t instanceof LakeTableSnapshotNotExistException) {
                 lakeSnapshotInfo = null;
             } else {
-                throw new FlinkRuntimeException(
+                throw new FlussRuntimeException(
                         String.format(
                                 "Failed to get table snapshot for table %s",
                                 tableInfo.getTablePath()),
@@ -141,7 +141,8 @@ public class TieringSplitGenerator {
                     LOG.warn(
                             "Partition {} of table {} was removed while generating tiering splits. Skipping it.",
                             partitionName,
-                            tableInfo.getTablePath());
+                            tableInfo.getTablePath(),
+                            e);
                     continue;
                 }
                 throw e;
@@ -165,7 +166,7 @@ public class TieringSplitGenerator {
                                                 tableInfo.getTablePath(), partitionName)
                                         .get();
                     } catch (Exception e) {
-                        throw new FlinkRuntimeException(
+                        throw new FlussRuntimeException(
                                 String.format(
                                         "Failed to get table snapshot for table %s and partition %s",
                                         tableInfo.getTablePath(), partitionName),
@@ -202,7 +203,7 @@ public class TieringSplitGenerator {
             try {
                 latestKvSnapshots = flussAdmin.getLatestKvSnapshots(tableInfo.getTablePath()).get();
             } catch (Exception e) {
-                throw new FlinkRuntimeException(
+                throw new FlussRuntimeException(
                         String.format(
                                 "Failed to get table snapshot for table %s",
                                 tableInfo.getTablePath()),

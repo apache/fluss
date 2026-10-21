@@ -18,11 +18,12 @@
 package org.apache.fluss.flink.tiering.source.enumerator;
 
 import org.apache.fluss.client.admin.Admin;
+import org.apache.fluss.client.tiering.TieringLogSplit;
+import org.apache.fluss.client.tiering.TieringSplit;
+import org.apache.fluss.client.tiering.TieringSplitGenerator;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.flink.tiering.TestingLakeTieringFactory;
-import org.apache.fluss.flink.tiering.source.split.TieringLogSplit;
-import org.apache.fluss.flink.tiering.source.split.TieringSplit;
-import org.apache.fluss.flink.tiering.source.split.TieringSplitGenerator;
+import org.apache.fluss.flink.tiering.source.split.FlinkTieringSplit;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableDescriptor;
@@ -58,15 +59,16 @@ class TieringSourceEnumeratorSchedulingTest {
     @Test
     void testPendingSplitsAssignedInOrder() throws Exception {
         try (Fixture fixture = new Fixture()) {
-            List<TieringSplit> splits = new ArrayList<>();
+            List<FlinkTieringSplit> splits = new ArrayList<>();
             for (int bucket = 0; bucket < 4; bucket++) {
                 splits.add(
-                        new TieringLogSplit(
-                                TablePath.of("db", "table"),
-                                new TableBucket(1, bucket),
-                                null,
-                                0,
-                                1));
+                        new FlinkTieringSplit(
+                                new TieringLogSplit(
+                                        TablePath.of("db", "table"),
+                                        new TableBucket(1, bucket),
+                                        null,
+                                        0,
+                                        1)));
             }
             fixture.enumerator.addSplitsBack(splits.subList(0, 2), 0);
             // Returned splits join the tail of the remaining queue.
@@ -75,7 +77,7 @@ class TieringSourceEnumeratorSchedulingTest {
                 fixture.requestTable();
             }
 
-            List<TieringSplit> assignedSplits =
+            List<FlinkTieringSplit> assignedSplits =
                     fixture.context.getSplitsAssignmentSequence().stream()
                             .flatMap(assignment -> assignment.assignment().get(0).stream())
                             .collect(Collectors.toList());
@@ -126,7 +128,10 @@ class TieringSourceEnumeratorSchedulingTest {
                             assignment ->
                                     assertThat(assignment.assignment().get(0))
                                             .extracting(
-                                                    split -> split.getTableBucket().getTableId())
+                                                    split ->
+                                                            split.unwrap()
+                                                                    .getTableBucket()
+                                                                    .getTableId())
                                             .containsExactly(4L));
             assertThat(fixture.context.getOneTimeCallables()).isEmpty();
         }
@@ -155,7 +160,10 @@ class TieringSourceEnumeratorSchedulingTest {
                             assignment ->
                                     assertThat(assignment.assignment().get(0))
                                             .extracting(
-                                                    split -> split.getTableBucket().getTableId())
+                                                    split ->
+                                                            split.unwrap()
+                                                                    .getTableBucket()
+                                                                    .getTableId())
                                             .containsExactly(2L));
         }
     }
@@ -334,7 +342,7 @@ class TieringSourceEnumeratorSchedulingTest {
         }
     }
 
-    private static class TestingContext extends FlussMockSplitEnumeratorContext<TieringSplit> {
+    private static class TestingContext extends FlussMockSplitEnumeratorContext<FlinkTieringSplit> {
         private final Queue<Runnable> coordinatorCalls = new ArrayDeque<>();
 
         private TestingContext(int parallelism) {

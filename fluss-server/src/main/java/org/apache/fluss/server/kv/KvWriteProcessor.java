@@ -20,6 +20,7 @@ package org.apache.fluss.server.kv;
 import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.compression.ArrowCompressionInfo;
 import org.apache.fluss.exception.DeletionDisabledException;
+import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.exception.SchemaNotExistException;
 import org.apache.fluss.memory.MemorySegmentPool;
 import org.apache.fluss.metadata.ChangelogImage;
@@ -111,6 +112,7 @@ public final class KvWriteProcessor {
     private final ValueDecoder lakeValueDecoder;
     @Nullable private final RowTtlTimestampProvider rowTtlTimestampProvider;
     private final Clock clock;
+    private final boolean skipUnchangedUpsert;
 
     /** Creates a KV write processor. */
     public KvWriteProcessor(
@@ -127,7 +129,8 @@ public final class KvWriteProcessor {
             KvStateValueEncoder stateValueEncoder,
             ValueDecoder valueDecoder,
             @Nullable RowTtlTimestampProvider rowTtlTimestampProvider,
-            Clock clock) {
+            Clock clock,
+            boolean skipUnchangedUpsert) {
         this.tableBucket = tableBucket;
         this.logTablet = logTablet;
         this.arrowWriterProvider = arrowWriterProvider;
@@ -147,6 +150,7 @@ public final class KvWriteProcessor {
         this.lakeValueDecoder = new ValueDecoder(schemaGetter, kvFormat, KvValueLayout.PLAIN);
         this.rowTtlTimestampProvider = rowTtlTimestampProvider;
         this.clock = clock;
+        this.skipUnchangedUpsert = skipUnchangedUpsert;
     }
 
     /** Processes a KV batch against the supplied state and appends its WAL. */
@@ -267,6 +271,11 @@ public final class KvWriteProcessor {
 
     private WriteContext createWriteContext(
             KvRecordBatch kvRecords, @Nullable int[] targetColumns, MergeMode mergeMode) {
+        if (skipUnchangedUpsert && mergeMode == MergeMode.OVERWRITE) {
+            throw new InvalidTableException(
+                    "MergeMode.OVERWRITE cannot be used with table.upsert.skip-unchanged enabled.");
+        }
+
         SchemaInfo schemaInfo = schemaGetter.getLatestSchemaInfo();
         Schema latestSchema = schemaInfo.getSchema();
         short latestSchemaId = (short) schemaInfo.getSchemaId();
@@ -374,6 +383,14 @@ public final class KvWriteProcessor {
 
         BinaryValue newValue = currentMerger.delete(oldValue);
 
+        boolean skipWrite =
+                skipUnchangedUpsert
+                        && newValue != null
+                        && BytewiseRowEqualizer.equals(oldValue, newValue);
+        if (skipWrite) {
+            return logOffset;
+        }
+
         // if newValue is null, it means the row should be deleted
         if (newValue == null) {
             return applyDelete(
@@ -417,7 +434,11 @@ public final class KvWriteProcessor {
 
         BinaryValue newValue = currentMerger.merge(oldValue, currentValue);
 
-        if (newValue == oldValue) {
+        boolean skipWrite =
+                skipUnchangedUpsert
+                        ? BytewiseRowEqualizer.equals(oldValue, newValue)
+                        : newValue == oldValue;
+        if (skipWrite) {
             // no actual change, skip this record
             return logOffset;
         }

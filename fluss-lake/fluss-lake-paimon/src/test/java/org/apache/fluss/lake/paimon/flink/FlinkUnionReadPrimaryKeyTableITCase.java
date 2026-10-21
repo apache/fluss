@@ -1127,7 +1127,6 @@ class FlinkUnionReadPrimaryKeyTableITCase extends FlinkUnionReadTestBase {
         // 3. Start tiering job
         JobClient jobClient = buildTieringJob(execEnv);
 
-        boolean tieringCancelled = false;
         try {
             // 4. Wait for data to snapshot to Paimon
             assertReplicaStatus(tableBucket, 2);
@@ -1165,9 +1164,7 @@ class FlinkUnionReadPrimaryKeyTableITCase extends FlinkUnionReadTestBase {
             // 9. Add Column "c4" (Schema V3)
             // Verify union read reconciles tiered data (V1) with a fluss log
             // containing multiple schema versions (V2 and V3).
-            // The per-job MiniCluster shuts down with the job, so cancel exactly once.
             jobClient.cancel().get();
-            tieringCancelled = true;
             addColumnChanges =
                     Collections.singletonList(
                             TableChange.addColumn(
@@ -1195,10 +1192,7 @@ class FlinkUnionReadPrimaryKeyTableITCase extends FlinkUnionReadTestBase {
                             "+I[2, v2_updated_again, 20, 30]",
                             "+I[3, v3_update, 30, 40]");
         } finally {
-            // only cancel here if the test failed before the intended cancel above
-            if (!tieringCancelled) {
-                jobClient.cancel().get();
-            }
+            jobClient.cancel().get();
         }
     }
 

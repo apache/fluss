@@ -55,6 +55,93 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class TableDescriptorValidationTest {
 
     @Test
+    void testSkipUnchangedUpsertsWithDefaultMergeBehavior() {
+        TableDescriptorValidation.validateTableDescriptor(
+                pkTableWithProperty(ConfigOptions.TABLE_UPSERT_SKIP_UNCHANGED.key(), "true"),
+                100,
+                null);
+    }
+
+    @Test
+    void testSkipUnchangedUpsertsRequiresPrimaryKey() {
+        assertThatThrownBy(
+                        () ->
+                                TableDescriptorValidation.validateTableDescriptor(
+                                        logTableWithProperty(
+                                                ConfigOptions.TABLE_UPSERT_SKIP_UNCHANGED.key(),
+                                                "true"),
+                                        100,
+                                        null))
+                .isInstanceOf(InvalidConfigException.class)
+                .hasMessageContaining(ConfigOptions.TABLE_UPSERT_SKIP_UNCHANGED.key())
+                .hasMessageContaining("primary key");
+    }
+
+    @Test
+    void testSkipUnchangedUpsertsRejectsMergeEngine() {
+        assertThatThrownBy(
+                        () ->
+                                TableDescriptorValidation.validateTableDescriptor(
+                                        pkTableWithProperties(
+                                                ConfigOptions.TABLE_UPSERT_SKIP_UNCHANGED.key(),
+                                                "true",
+                                                ConfigOptions.TABLE_MERGE_ENGINE.key(),
+                                                "first_row"),
+                                        100,
+                                        null))
+                .isInstanceOf(InvalidConfigException.class)
+                .hasMessageContaining(ConfigOptions.TABLE_UPSERT_SKIP_UNCHANGED.key())
+                .hasMessageContaining(ConfigOptions.TABLE_MERGE_ENGINE.key());
+    }
+
+    @Test
+    void testSkipUnchangedUpsertsRejectsWalImage() {
+        assertThatThrownBy(
+                        () ->
+                                TableDescriptorValidation.validateTableDescriptor(
+                                        pkTableWithProperties(
+                                                ConfigOptions.TABLE_UPSERT_SKIP_UNCHANGED.key(),
+                                                "true",
+                                                ConfigOptions.TABLE_CHANGELOG_IMAGE.key(),
+                                                "WAL"),
+                                        100,
+                                        null))
+                .isInstanceOf(InvalidConfigException.class)
+                .hasMessageContaining(ConfigOptions.TABLE_UPSERT_SKIP_UNCHANGED.key())
+                .hasMessageContaining(ConfigOptions.TABLE_CHANGELOG_IMAGE.key())
+                .hasMessageContaining("FULL");
+    }
+
+    @Test
+    void testSkipUnchangedUpsertsRejectsKvTtl() {
+        assertThatThrownBy(
+                        () ->
+                                TableDescriptorValidation.validateTableDescriptor(
+                                        pkTableWithProperties(
+                                                ConfigOptions.TABLE_UPSERT_SKIP_UNCHANGED.key(),
+                                                "true",
+                                                ConfigOptions.TABLE_KV_TTL.key(),
+                                                "1 h"),
+                                        100,
+                                        null))
+                .isInstanceOf(InvalidConfigException.class)
+                .hasMessageContaining(ConfigOptions.TABLE_UPSERT_SKIP_UNCHANGED.key())
+                .hasMessageContaining(ConfigOptions.TABLE_KV_TTL.key());
+    }
+
+    @Test
+    void testSkipUnchangedUpsertsCannotBeAltered() {
+        assertThatThrownBy(
+                        () ->
+                                TableDescriptorValidation.validateAlterTableProperties(
+                                        plainTableInfo(),
+                                        Collections.singleton(
+                                                ConfigOptions.TABLE_UPSERT_SKIP_UNCHANGED.key())))
+                .isInstanceOf(InvalidAlterTableException.class)
+                .hasMessageContaining(ConfigOptions.TABLE_UPSERT_SKIP_UNCHANGED.key());
+    }
+
+    @Test
     void testCreateLogTableWithKvTTLFails() {
         assertThatThrownBy(
                         () ->

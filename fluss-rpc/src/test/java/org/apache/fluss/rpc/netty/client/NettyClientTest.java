@@ -23,7 +23,6 @@ import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.DisconnectException;
-import org.apache.fluss.exception.NetworkException;
 import org.apache.fluss.metrics.groups.MetricGroup;
 import org.apache.fluss.metrics.util.NOPMetricsGroup;
 import org.apache.fluss.rpc.TestingGatewayService;
@@ -54,7 +53,6 @@ import java.util.List;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
-import java.util.concurrent.TimeUnit;
 
 import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.apache.fluss.utils.NetUtils.getAvailablePort;
@@ -257,30 +255,6 @@ final class NettyClientTest {
                                         .sendRequest(serverNode, ApiKeys.API_VERSIONS, request)
                                         .get())
                 .hasMessageContaining("Disconnected from node");
-        assertThat(nettyClient.connections()).isEmpty();
-    }
-
-    /**
-     * A request whose closed check passed right before the client closed must fail instead of
-     * hanging: close() may have finished before the request created its connection, so the
-     * connection is created on an already terminated event loop.
-     */
-    @Test
-    void testConnectionCreatedAfterCloseFailsRequests() throws Exception {
-        nettyClient.close();
-
-        // simulates a sendRequest that passed the isClosed check right before close() started
-        ServerConnection connection = nettyClient.getOrCreateConnection(serverNode);
-        CompletableFuture<ApiMessage> response =
-                connection.send(
-                        ApiKeys.API_VERSIONS,
-                        new ApiVersionsRequest()
-                                .setClientSoftwareName("test")
-                                .setClientSoftwareVersion("1.0"));
-
-        assertThatThrownBy(() -> response.get(1, TimeUnit.MINUTES))
-                .isInstanceOf(ExecutionException.class)
-                .hasCauseInstanceOf(NetworkException.class);
         assertThat(nettyClient.connections()).isEmpty();
     }
 

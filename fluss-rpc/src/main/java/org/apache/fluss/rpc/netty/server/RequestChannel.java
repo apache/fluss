@@ -28,7 +28,6 @@ import java.util.Set;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.LinkedBlockingQueue;
-import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.ReentrantLock;
 
@@ -225,18 +224,18 @@ public class RequestChannel {
         for (Channel channel : associatedChannels) {
             if (channel.isActive()) {
                 // Submit to the channel's EventLoop to ensure thread safety
-                executeOnEventLoop(
-                        channel,
-                        () -> {
-                            if (channel.isActive() && channel.config().isAutoRead()) {
-                                channel.config().setAutoRead(false);
-                                LOG.warn(
-                                        "Queue size ({}) reached backpressure threshold ({}), paused channel: {}",
-                                        queueSize,
-                                        backpressureThreshold,
-                                        channel.remoteAddress());
-                            }
-                        });
+                channel.eventLoop()
+                        .execute(
+                                () -> {
+                                    if (channel.isActive() && channel.config().isAutoRead()) {
+                                        channel.config().setAutoRead(false);
+                                        LOG.warn(
+                                                "Queue size ({}) reached backpressure threshold ({}), paused channel: {}",
+                                                queueSize,
+                                                backpressureThreshold,
+                                                channel.remoteAddress());
+                                    }
+                                });
             }
         }
     }
@@ -245,40 +244,19 @@ public class RequestChannel {
         for (Channel channel : associatedChannels) {
             if (channel.isActive()) {
                 // Submit resume task to the channel's EventLoop to ensure thread safety
-                executeOnEventLoop(
-                        channel,
-                        () -> {
-                            if (channel.isActive() && !channel.config().isAutoRead()) {
-                                channel.config().setAutoRead(true);
-                                LOG.info(
-                                        "Queue size ({}) reached resume threshold ({}), resumed channel: {}",
-                                        queueSize,
-                                        resumeThreshold,
-                                        channel.remoteAddress());
-                            }
-                        });
+                channel.eventLoop()
+                        .execute(
+                                () -> {
+                                    if (channel.isActive() && !channel.config().isAutoRead()) {
+                                        channel.config().setAutoRead(true);
+                                        LOG.info(
+                                                "Queue size ({}) reached resume threshold ({}), resumed channel: {}",
+                                                queueSize,
+                                                resumeThreshold,
+                                                channel.remoteAddress());
+                                    }
+                                });
             }
-        }
-    }
-
-    /**
-     * Executes the task on the channel's EventLoop. The EventLoop may already be shutting down
-     * (e.g. during server shutdown) even though the channel was still active when checked; in that
-     * case the task is skipped, because the channel is about to be closed anyway. Letting the
-     * rejection propagate would kill the calling request processor thread, and its shutdown future
-     * would never complete.
-     *
-     * <p>A skipped task leaves {@link #isBackpressureActive} out of sync with the channel's actual
-     * auto-read state. This is harmless, as the channel is closed together with its EventLoop.
-     */
-    private static void executeOnEventLoop(Channel channel, Runnable task) {
-        try {
-            channel.eventLoop().execute(task);
-        } catch (RejectedExecutionException e) {
-            LOG.debug(
-                    "Skip backpressure task for channel {} because its event loop is shutting down.",
-                    channel.remoteAddress(),
-                    e);
         }
     }
 }

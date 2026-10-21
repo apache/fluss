@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-package org.apache.fluss.flink.tiering.source.split;
+package org.apache.fluss.client.tiering;
 
 import org.apache.fluss.client.admin.Admin;
 import org.apache.fluss.client.admin.ListOffsetsResult;
@@ -34,7 +34,6 @@ import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.types.DataTypes;
 
-import org.apache.flink.util.FlinkRuntimeException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -64,8 +63,8 @@ class TieringSplitGeneratorTest {
     private static final long TABLE_ID = 1L;
     private static final long DELETED_PARTITION_ID = 1L;
     private static final long HEALTHY_PARTITION_ID = 2L;
-    private static final String DELETED_PARTITION = "20261019";
-    private static final String HEALTHY_PARTITION = "20261020";
+    private static final String DELETED_PARTITION_VALUE = "removed";
+    private static final String HEALTHY_PARTITION_VALUE = "retained";
     private static final List<Integer> BUCKETS = Collections.singletonList(0);
 
     private Admin admin;
@@ -83,14 +82,14 @@ class TieringSplitGeneratorTest {
                 .thenReturn(
                         CompletableFuture.completedFuture(
                                 Arrays.asList(
-                                        partition(DELETED_PARTITION_ID, DELETED_PARTITION),
-                                        partition(HEALTHY_PARTITION_ID, HEALTHY_PARTITION))));
+                                        partition(DELETED_PARTITION_ID, DELETED_PARTITION_VALUE),
+                                        partition(HEALTHY_PARTITION_ID, HEALTHY_PARTITION_VALUE))));
         when(admin.listOffsets(
                         eq(TABLE_PATH), anyString(), eq(BUCKETS), isA(OffsetSpec.LatestSpec.class)))
                 .thenReturn(offsetsResult(CompletableFuture.completedFuture(10L)));
-        when(admin.getLatestKvSnapshots(TABLE_PATH, DELETED_PARTITION))
+        when(admin.getLatestKvSnapshots(TABLE_PATH, DELETED_PARTITION_VALUE))
                 .thenReturn(emptySnapshots(DELETED_PARTITION_ID));
-        when(admin.getLatestKvSnapshots(TABLE_PATH, HEALTHY_PARTITION))
+        when(admin.getLatestKvSnapshots(TABLE_PATH, HEALTHY_PARTITION_VALUE))
                 .thenReturn(emptySnapshots(HEALTHY_PARTITION_ID));
     }
 
@@ -105,7 +104,7 @@ class TieringSplitGeneratorTest {
             // case does not assert that every server reports partition deletion in this form.
             when(admin.listOffsets(
                             eq(TABLE_PATH),
-                            eq(DELETED_PARTITION),
+                            eq(DELETED_PARTITION_VALUE),
                             eq(BUCKETS),
                             isA(OffsetSpec.LatestSpec.class)))
                     .thenReturn(offsetsResult(failedFuture(failure)));
@@ -116,7 +115,7 @@ class TieringSplitGeneratorTest {
                     .when(admin)
                     .listOffsets(
                             eq(TABLE_PATH),
-                            eq(DELETED_PARTITION),
+                            eq(DELETED_PARTITION_VALUE),
                             eq(BUCKETS),
                             isA(OffsetSpec.LatestSpec.class));
         }
@@ -139,7 +138,7 @@ class TieringSplitGeneratorTest {
                         new TableBucket(TABLE_ID, DELETED_PARTITION_ID, 0),
                         new TableBucket(TABLE_ID, HEALTHY_PARTITION_ID, 0));
         assertThat(splits)
-                .filteredOn(split -> HEALTHY_PARTITION.equals(split.getPartitionName()))
+                .filteredOn(split -> HEALTHY_PARTITION_VALUE.equals(split.getPartitionName()))
                 .singleElement()
                 .satisfies(TieringSplitGeneratorTest::assertHealthySplit);
     }
@@ -150,7 +149,7 @@ class TieringSplitGeneratorTest {
         NetworkException failure = new NetworkException("coordinator disconnected");
         when(admin.listOffsets(
                         eq(TABLE_PATH),
-                        eq(DELETED_PARTITION),
+                        eq(DELETED_PARTITION_VALUE),
                         eq(BUCKETS),
                         isA(OffsetSpec.LatestSpec.class)))
                 .thenReturn(offsetsResult(failedFuture(failure)));
@@ -163,18 +162,18 @@ class TieringSplitGeneratorTest {
     @Test
     void testPropagateUnrelatedKvSnapshotFailure() {
         NetworkException failure = new NetworkException("coordinator disconnected");
-        when(admin.getLatestKvSnapshots(TABLE_PATH, DELETED_PARTITION))
+        when(admin.getLatestKvSnapshots(TABLE_PATH, DELETED_PARTITION_VALUE))
                 .thenReturn(failedFuture(failure));
 
         assertThatThrownBy(() -> generator.generateTableSplits(tableInfo(true)))
-                .isInstanceOf(FlinkRuntimeException.class)
+                .isInstanceOf(FlussRuntimeException.class)
                 .hasRootCause(failure);
     }
 
     private static void assertHealthySplit(TieringSplit split) {
         assertThat(split.getTableBucket())
                 .isEqualTo(new TableBucket(TABLE_ID, HEALTHY_PARTITION_ID, 0));
-        assertThat(split.getPartitionName()).isEqualTo(HEALTHY_PARTITION);
+        assertThat(split.getPartitionName()).isEqualTo(HEALTHY_PARTITION_VALUE);
         assertThat(split).isInstanceOf(TieringLogSplit.class);
         TieringLogSplit logSplit = (TieringLogSplit) split;
         assertThat(logSplit.getStartingOffset()).isEqualTo(EARLIEST_OFFSET);

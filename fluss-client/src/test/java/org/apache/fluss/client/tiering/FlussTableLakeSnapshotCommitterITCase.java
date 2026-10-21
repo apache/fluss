@@ -15,12 +15,12 @@
  * limitations under the License.
  */
 
-package org.apache.fluss.flink.tiering.committer;
+package org.apache.fluss.client.tiering;
 
+import org.apache.fluss.client.admin.ClientToServerITCaseBase;
 import org.apache.fluss.client.metadata.LakeSnapshot;
 import org.apache.fluss.exception.ApiException;
 import org.apache.fluss.exception.LakeTableSnapshotNotExistException;
-import org.apache.fluss.flink.utils.FlinkTestBase;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.lake.committer.LakeCommitResult;
 import org.apache.fluss.metadata.TableBucket;
@@ -51,7 +51,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Test for {@link FlussTableLakeSnapshotCommitter}. */
-class FlussTableLakeSnapshotCommitterTest extends FlinkTestBase {
+class FlussTableLakeSnapshotCommitterITCase extends ClientToServerITCaseBase {
 
     private FlussTableLakeSnapshotCommitter flussTableLakeSnapshotCommitter;
 
@@ -174,7 +174,7 @@ class FlussTableLakeSnapshotCommitterTest extends FlinkTestBase {
     @Test
     void testCommitCurrentCompactWithSeparateReadableOffsets() throws Exception {
         TablePath tablePath = TablePath.of("fluss", "test_current_compact_readable");
-        long tableId = createTable(tablePath, DATA1_TABLE_DESCRIPTOR);
+        long tableId = createTable(tablePath, DATA1_TABLE_DESCRIPTOR, true);
         TableBucket bucket = new TableBucket(tableId, 0);
         long previousSnapshotId = 1L;
         long compactSnapshotId = 2L;
@@ -326,9 +326,8 @@ class FlussTableLakeSnapshotCommitterTest extends FlinkTestBase {
         long tableId =
                 createTable(
                         tablePath,
-                        isPartitioned
-                                ? DATA1_PARTITIONED_TABLE_DESCRIPTOR
-                                : DATA1_TABLE_DESCRIPTOR);
+                        isPartitioned ? DATA1_PARTITIONED_TABLE_DESCRIPTOR : DATA1_TABLE_DESCRIPTOR,
+                        true);
         Collection<Long> partitions;
         if (!isPartitioned) {
             partitions = Collections.singletonList(null);
