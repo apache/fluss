@@ -21,30 +21,15 @@ import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.rpc.entity.ResultForBucket;
 import org.apache.fluss.rpc.protocol.ApiError;
 
-/** The offsets of a bucket after its leader has frozen writes for partition retention. */
+/** The result of freezing a bucket's writes for partition retention. */
 public class FreezePartitionResultForBucket extends ResultForBucket {
 
-    private final long highWatermark;
-    private final long logEndOffset;
-
-    public FreezePartitionResultForBucket(
-            TableBucket tableBucket, long highWatermark, long logEndOffset) {
+    /** Creates a successful freeze result. */
+    public FreezePartitionResultForBucket(TableBucket tableBucket) {
         super(tableBucket);
-        this.highWatermark = highWatermark;
-        this.logEndOffset = logEndOffset;
     }
 
     public FreezePartitionResultForBucket(TableBucket tableBucket, ApiError error) {
         super(tableBucket, error);
-        this.highWatermark = -1L;
-        this.logEndOffset = -1L;
-    }
-
-    public long getHighWatermark() {
-        return highWatermark;
-    }
-
-    public long getLogEndOffset() {
-        return logEndOffset;
     }
 }

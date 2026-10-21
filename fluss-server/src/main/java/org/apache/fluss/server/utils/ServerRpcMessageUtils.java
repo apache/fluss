@@ -977,10 +977,6 @@ public class ServerRpcMessageUtils {
                             .setTableBucket(fromTableBucket(result.getTableBucket()));
             if (result.failed()) {
                 bucketResponse.setError(result.getErrorCode(), result.getErrorMessage());
-            } else {
-                bucketResponse
-                        .setHighWatermark(result.getHighWatermark())
-                        .setLogEndOffset(result.getLogEndOffset());
             }
             bucketResponses.add(bucketResponse);
         }

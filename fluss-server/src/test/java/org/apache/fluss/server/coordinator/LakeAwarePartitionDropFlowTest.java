@@ -21,14 +21,17 @@ import org.apache.fluss.config.AutoPartitionTimeUnit;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.MemorySize;
+import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.ResolvedPartitionSpec;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
+import org.apache.fluss.metadata.TablePartition;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.rpc.messages.FreezePartitionRequest;
 import org.apache.fluss.rpc.messages.FreezePartitionResponse;
+import org.apache.fluss.rpc.messages.ReportFrozenBucketsTieredRequest;
 import org.apache.fluss.rpc.protocol.ApiKeys;
 import org.apache.fluss.server.coordinator.remote.RemoteDirDynamicLoader;
 import org.apache.fluss.server.entity.FreezePartitionResultForBucket;
@@ -66,9 +69,12 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 
+import static org.apache.fluss.server.utils.ServerRpcMessageUtils.fromTableBucket;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getFreezePartitionData;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeFreezePartitionResponse;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 /** End-to-end component test for lake-aware auto-partition dropping. */
 class LakeAwarePartitionDropFlowTest {
@@ -98,7 +104,7 @@ class LakeAwarePartitionDropFlowTest {
     }
 
     @Test
-    void testExpiredPartitionIsDroppedAfterFrozenOffsetsAreTiered() throws Exception {
+    void testExpiredPartitionIsDroppedOnlyAfterBucketReportsTiered() throws Exception {
         MetadataManager metadataManager =
                 new MetadataManager(
                         zooKeeperClient,
@@ -111,7 +117,7 @@ class LakeAwarePartitionDropFlowTest {
                 new TableBucket(TABLE_ID, partitionRegistration.getPartitionId(), 0);
         registerLeader(tableBucket);
 
-        StableFreezeGateway freezeGateway = new StableFreezeGateway(FROZEN_OFFSET);
+        FreezeGateway freezeGateway = new FreezeGateway();
         TestCoordinatorChannelManager channelManager =
                 new TestCoordinatorChannelManager(Collections.singletonMap(0, freezeGateway));
         LakeAwarePartitionDropManager dropManager =
@@ -163,8 +169,26 @@ class LakeAwarePartitionDropFlowTest {
             periodicExecutor.triggerPeriodicScheduledTasks();
 
             assertThat(zooKeeperClient.getPartition(tableInfo.getTablePath(), EXPIRED_PARTITION))
+                    .isPresent();
+            CoordinatorContext context = mock(CoordinatorContext.class);
+            when(context.getCoordinatorEpoch()).thenReturn(1);
+            when(context.containsPartitionId(tableBucket.getPartitionId())).thenReturn(true);
+            when(context.getPhysicalTablePath(tableBucket.getPartitionId()))
+                    .thenReturn(
+                            Optional.of(
+                                    PhysicalTablePath.of(
+                                            tableInfo.getTablePath(), EXPIRED_PARTITION)));
+            when(context.getPartitionAssignment(
+                            new TablePartition(TABLE_ID, tableBucket.getPartitionId())))
+                    .thenReturn(Collections.singletonMap(0, Collections.singletonList(0)));
+            when(context.getBucketLeaderAndIsr(tableBucket))
+                    .thenReturn(zooKeeperClient.getLeaderAndIsr(tableBucket));
+            ReportFrozenBucketsTieredRequest tiered = new ReportFrozenBucketsTieredRequest();
+            tiered.setServerId(0).setCoordinatorEpoch(1);
+            tiered.addBucket().setTableBucket(fromTableBucket(tableBucket)).setLeaderEpoch(1);
+            dropManager.reportTiered(tiered, context);
+            assertThat(zooKeeperClient.getPartition(tableInfo.getTablePath(), EXPIRED_PARTITION))
                     .isEmpty();
-            assertThat(freezeGateway.getFreezeRequests()).hasSize(1);
         } finally {
             autoPartitionManager.close();
             channelManager.close();
@@ -237,13 +261,11 @@ class LakeAwarePartitionDropFlowTest {
         return new ReplicaCapacityController(configuration, new CoordinatorMetadataCache());
     }
 
-    private static final class StableFreezeGateway extends TestTabletServerGateway {
-        private final long frozenOffset;
+    private static final class FreezeGateway extends TestTabletServerGateway {
         private final List<FreezePartitionRequest> freezeRequests = new ArrayList<>();
 
-        private StableFreezeGateway(long frozenOffset) {
+        private FreezeGateway() {
             super(false, Collections.<ApiKeys>emptySet());
-            this.frozenOffset = frozenOffset;
         }
 
         @Override
@@ -252,9 +274,7 @@ class LakeAwarePartitionDropFlowTest {
             freezeRequests.add(request);
             List<FreezePartitionResultForBucket> results = new ArrayList<>();
             for (TableBucket tableBucket : getFreezePartitionData(request).keySet()) {
-                results.add(
-                        new FreezePartitionResultForBucket(
-                                tableBucket, frozenOffset, frozenOffset));
+                results.add(new FreezePartitionResultForBucket(tableBucket));
             }
             return CompletableFuture.completedFuture(makeFreezePartitionResponse(results));
         }

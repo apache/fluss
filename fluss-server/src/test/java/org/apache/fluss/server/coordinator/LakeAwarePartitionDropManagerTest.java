@@ -17,304 +17,221 @@
 
 package org.apache.fluss.server.coordinator;
 
-import org.apache.fluss.config.ConfigOptions;
+import org.apache.fluss.exception.CoordinatorEpochFencedException;
+import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
+import org.apache.fluss.metadata.TablePartition;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.rpc.messages.FreezePartitionRequest;
 import org.apache.fluss.rpc.messages.FreezePartitionResponse;
-import org.apache.fluss.server.entity.FreezePartitionResultForBucket;
+import org.apache.fluss.rpc.messages.ReportFrozenBucketsTieredRequest;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.BucketAssignment;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
 import org.apache.fluss.server.zk.data.PartitionAssignment;
 import org.apache.fluss.server.zk.data.PartitionRegistration;
-import org.apache.fluss.server.zk.data.lake.LakeTableSnapshot;
 import org.apache.fluss.types.DataTypes;
 
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 
-import java.time.Duration;
-import java.util.ArrayList;
 import java.util.Collections;
-import java.util.LinkedHashMap;
-import java.util.List;
+import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.Executor;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
+import static org.apache.fluss.server.utils.ServerRpcMessageUtils.fromTableBucket;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getFreezePartitionData;
-import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeFreezePartitionResponse;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyCollection;
 import static org.mockito.ArgumentMatchers.eq;
-import static org.mockito.ArgumentMatchers.isNull;
+import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-/** Tests for {@link LakeAwarePartitionDropManager}. */
+/** Tests freezing, report fencing, aggregation, and recovery without coordinator offset polling. */
 class LakeAwarePartitionDropManagerTest {
-
-    private static final TablePath TABLE_PATH = TablePath.of("test_db", "test_table");
+    private static final TablePath TABLE_PATH = TablePath.of("db", "table");
     private static final String PARTITION_NAME = "20260806";
     private static final long TABLE_ID = 11L;
     private static final long PARTITION_ID = 22L;
     private static final int SERVER_ID = 1;
     private static final int LEADER_EPOCH = 7;
-    private static final long FROZEN_OFFSET = 10L;
-    private static final long DEFAULT_FREEZE_TIMEOUT_MS = 5_000L;
-    private static final TableInfo TABLE_INFO = createTableInfo();
+    private static final int COORDINATOR_EPOCH = 3;
     private static final TableBucket BUCKET_0 = new TableBucket(TABLE_ID, PARTITION_ID, 0);
     private static final TableBucket BUCKET_1 = new TableBucket(TABLE_ID, PARTITION_ID, 1);
 
     @Test
-    void testDropsUnfrozenPartitionAfterFreezeAndTiering() throws Exception {
-        try (TestContext context = new TestContext()) {
-            context.returnStableFreezeResponse();
-            context.returnLakeSnapshotAt(FROZEN_OFFSET);
-
-            context.manager.tryDrop(TABLE_INFO, PARTITION_NAME);
-
-            verify(context.metadataManager)
-                    .markPartitionFrozen(TABLE_PATH, PARTITION_NAME, TABLE_ID, PARTITION_ID);
-            ArgumentCaptor<FreezePartitionRequest> requestCaptor =
+    void testFreezeDoesNotDeleteUntilAllLeadersReportTiered() throws Exception {
+        try (TestContext c = new TestContext()) {
+            c.freeze();
+            ArgumentCaptor<FreezePartitionRequest> request =
                     ArgumentCaptor.forClass(FreezePartitionRequest.class);
-            verify(context.channelManager)
-                    .sendFreezePartitionRequest(eq(SERVER_ID), requestCaptor.capture());
-            assertThat(getFreezePartitionData(requestCaptor.getValue()))
-                    .containsExactlyInAnyOrderEntriesOf(context.expectedLeaderEpochs());
-            verify(context.zooKeeperClient).getLakeTableSnapshot(TABLE_ID, null);
-            verify(context.metadataManager)
+            verify(c.channelManager).sendFreezePartitionRequest(eq(SERVER_ID), request.capture());
+            assertThat(getFreezePartitionData(request.getValue()))
+                    .containsEntry(BUCKET_0, LEADER_EPOCH)
+                    .containsEntry(BUCKET_1, LEADER_EPOCH);
+            assertThat(c.registration.get().isFrozen()).isTrue();
+            c.report(BUCKET_0, LEADER_EPOCH);
+            c.report(BUCKET_0, LEADER_EPOCH);
+            assertThat(c.registration.get()).isNotNull();
+            c.report(BUCKET_1, LEADER_EPOCH);
+            assertThat(c.registration.get()).isNull();
+            // Duplicate delivery after deletion is harmless.
+            c.report(BUCKET_1, LEADER_EPOCH);
+            verify(c.metadataManager, times(1))
                     .dropFrozenPartition(TABLE_PATH, PARTITION_NAME, TABLE_ID, PARTITION_ID);
-            assertThat(context.currentRegistration.get()).isNull();
+            verify(c.zooKeeperClient, never()).getLakeTableSnapshot(TABLE_ID, null);
         }
     }
 
     @Test
-    void testAlreadyFrozenPartitionSkipsRegistrationUpdate() throws Exception {
-        try (TestContext context = new TestContext()) {
-            context.currentRegistration.set(context.frozenRegistration);
-            context.returnStableFreezeResponse();
-            context.returnLakeSnapshotAt(FROZEN_OFFSET);
+    void testLeaderChangeInvalidatesPreviouslyAcceptedReport() throws Exception {
+        try (TestContext c = new TestContext()) {
+            c.freeze();
+            c.report(BUCKET_0, LEADER_EPOCH);
+            c.leaders.put(BUCKET_0, leader(LEADER_EPOCH + 1));
+            c.report(BUCKET_1, LEADER_EPOCH);
+            c.report(BUCKET_0, LEADER_EPOCH);
+            assertThat(c.registration.get()).isNotNull();
+            c.report(BUCKET_0, LEADER_EPOCH + 1);
+            assertThat(c.registration.get()).isNull();
+        }
+    }
 
-            context.manager.tryDrop(TABLE_INFO, PARTITION_NAME);
+    @Test
+    void testStaleBucketInBatchDoesNotDiscardOtherReports() throws Exception {
+        try (TestContext c = new TestContext()) {
+            c.freeze();
+            ReportFrozenBucketsTieredRequest request = report(BUCKET_0, LEADER_EPOCH - 1);
+            request.addBucket()
+                    .setTableBucket(fromTableBucket(BUCKET_1))
+                    .setLeaderEpoch(LEADER_EPOCH);
+            c.manager.reportTiered(request, c.context);
+            assertThat(c.registration.get()).isNotNull();
+            c.report(BUCKET_0, LEADER_EPOCH);
+            assertThat(c.registration.get()).isNull();
+        }
+    }
 
-            verify(context.metadataManager, never())
-                    .markPartitionFrozen(any(), any(), eq(TABLE_ID), eq(PARTITION_ID));
-            verify(context.channelManager)
-                    .sendFreezePartitionRequest(eq(SERVER_ID), any(FreezePartitionRequest.class));
-            verify(context.metadataManager)
+    @Test
+    void testRejectsWrongServerAndCoordinatorEpoch() throws Exception {
+        try (TestContext c = new TestContext()) {
+            c.freeze();
+            ReportFrozenBucketsTieredRequest report = report(BUCKET_0, LEADER_EPOCH);
+            report.setServerId(SERVER_ID + 1);
+            c.manager.reportTiered(report, c.context);
+            c.report(BUCKET_1, LEADER_EPOCH);
+            assertThat(c.registration.get()).isNotNull();
+            report.setServerId(SERVER_ID).setCoordinatorEpoch(COORDINATOR_EPOCH - 1);
+            assertThatThrownBy(() -> c.manager.reportTiered(report, c.context))
+                    .isInstanceOf(CoordinatorEpochFencedException.class);
+            c.report(BUCKET_0, LEADER_EPOCH);
+            assertThat(c.registration.get()).isNull();
+        }
+    }
+
+    @Test
+    void testIgnoresUnfrozenAndRecreatedPartitions() throws Exception {
+        try (TestContext c = new TestContext()) {
+            c.report(BUCKET_0, LEADER_EPOCH);
+            c.report(BUCKET_1, LEADER_EPOCH);
+            assertThat(c.registration.get().isFrozen()).isFalse();
+            c.freeze();
+            c.report(BUCKET_0, LEADER_EPOCH);
+            c.registration.set(
+                    new PartitionRegistration(TABLE_ID, PARTITION_ID + 1, "/remote", 2)
+                            .withFrozen());
+            c.report(BUCKET_1, LEADER_EPOCH);
+            assertThat(c.registration.get().getPartitionId()).isEqualTo(PARTITION_ID + 1);
+            verify(c.metadataManager, never())
                     .dropFrozenPartition(TABLE_PATH, PARTITION_NAME, TABLE_ID, PARTITION_ID);
         }
     }
 
     @Test
-    void testRetriesFreezeUntilHighWatermarkReachesLogEndOffset() throws Exception {
-        try (TestContext context = new TestContext()) {
-            when(context.channelManager.sendFreezePartitionRequest(
-                            eq(SERVER_ID), any(FreezePartitionRequest.class)))
+    void testRecoveryFromReportsDoesNotNeedRetentionToRunAgain() throws Exception {
+        try (TestContext c = new TestContext()) {
+            // Simulate a new coordinator discovering the durable frozen state through reports.
+            c.registration.set(c.registration.get().withFrozen());
+            c.report(BUCKET_1, LEADER_EPOCH);
+            c.report(BUCKET_0, LEADER_EPOCH);
+            assertThat(c.registration.get()).isNull();
+            verify(c.channelManager, never()).sendFreezePartitionRequest(any(Integer.class), any());
+        }
+    }
+
+    @Test
+    void testRepeatedReportRetriesFailedDeletion() throws Exception {
+        try (TestContext c = new TestContext()) {
+            c.freeze();
+            doReturn(false, true)
+                    .when(c.metadataManager)
+                    .dropFrozenPartition(TABLE_PATH, PARTITION_NAME, TABLE_ID, PARTITION_ID);
+            c.report(BUCKET_0, LEADER_EPOCH);
+            c.report(BUCKET_1, LEADER_EPOCH);
+            c.report(BUCKET_1, LEADER_EPOCH);
+            verify(c.metadataManager, times(2))
+                    .dropFrozenPartition(TABLE_PATH, PARTITION_NAME, TABLE_ID, PARTITION_ID);
+        }
+    }
+
+    @Test
+    void testFreezeFailureIsRetriedWithoutClearingFence() throws Exception {
+        try (TestContext c = new TestContext()) {
+            CompletableFuture<FreezePartitionResponse> failure = new CompletableFuture<>();
+            failure.completeExceptionally(new RuntimeException("unavailable"));
+            when(c.channelManager.sendFreezePartitionRequest(eq(SERVER_ID), any()))
                     .thenReturn(
-                            CompletableFuture.completedFuture(
-                                    freezeResponse(FROZEN_OFFSET - 1, FROZEN_OFFSET)),
-                            CompletableFuture.completedFuture(
-                                    freezeResponse(FROZEN_OFFSET, FROZEN_OFFSET)));
-            context.returnLakeSnapshotAt(FROZEN_OFFSET);
-
-            context.manager.tryDrop(TABLE_INFO, PARTITION_NAME);
-
-            verify(context.zooKeeperClient, never()).getLakeTableSnapshot(TABLE_ID, null);
-            verify(context.metadataManager, never())
-                    .dropFrozenPartition(TABLE_PATH, PARTITION_NAME, TABLE_ID, PARTITION_ID);
-
-            context.manager.tryDrop(TABLE_INFO, PARTITION_NAME);
-
-            verify(context.channelManager, times(2))
-                    .sendFreezePartitionRequest(eq(SERVER_ID), any(FreezePartitionRequest.class));
-            verify(context.metadataManager, times(1))
+                            failure,
+                            CompletableFuture.completedFuture(new FreezePartitionResponse()));
+            c.freeze();
+            c.freeze();
+            assertThat(c.registration.get().isFrozen()).isTrue();
+            verify(c.metadataManager, times(1))
                     .markPartitionFrozen(TABLE_PATH, PARTITION_NAME, TABLE_ID, PARTITION_ID);
-            verify(context.metadataManager)
-                    .dropFrozenPartition(TABLE_PATH, PARTITION_NAME, TABLE_ID, PARTITION_ID);
+            verify(c.channelManager, times(2)).sendFreezePartitionRequest(eq(SERVER_ID), any());
         }
     }
 
     @Test
-    void testRetriesLakeCheckWithoutFreezingAgain() throws Exception {
-        try (TestContext context = new TestContext()) {
-            context.returnStableFreezeResponse();
-            when(context.zooKeeperClient.getLakeTableSnapshot(eq(TABLE_ID), isNull()))
-                    .thenReturn(
-                            Optional.of(lakeSnapshotAt(FROZEN_OFFSET - 1)),
-                            Optional.of(lakeSnapshotAt(FROZEN_OFFSET)));
-
-            context.manager.tryDrop(TABLE_INFO, PARTITION_NAME);
-
-            verify(context.metadataManager, never())
-                    .dropFrozenPartition(TABLE_PATH, PARTITION_NAME, TABLE_ID, PARTITION_ID);
-
-            context.manager.tryDrop(TABLE_INFO, PARTITION_NAME);
-
-            verify(context.channelManager, times(1))
-                    .sendFreezePartitionRequest(eq(SERVER_ID), any(FreezePartitionRequest.class));
-            verify(context.zooKeeperClient, times(2)).getLakeTableSnapshot(TABLE_ID, null);
-            verify(context.metadataManager)
-                    .dropFrozenPartition(TABLE_PATH, PARTITION_NAME, TABLE_ID, PARTITION_ID);
+    void testCloseIgnoresLateReportsAndFreezeRequests() throws Exception {
+        try (TestContext c = new TestContext()) {
+            c.freeze();
+            c.manager.close();
+            c.report(BUCKET_0, LEADER_EPOCH);
+            c.report(BUCKET_1, LEADER_EPOCH);
+            c.freeze();
+            assertThat(c.registration.get()).isNotNull();
+            verify(c.channelManager, times(1)).sendFreezePartitionRequest(eq(SERVER_ID), any());
         }
     }
 
-    @Test
-    void testRetriesAfterFreezeRpcFailure() throws Exception {
-        try (TestContext context = new TestContext()) {
-            CompletableFuture<FreezePartitionResponse> failedFreeze = new CompletableFuture<>();
-            failedFreeze.completeExceptionally(new RuntimeException("expected RPC failure"));
-            when(context.channelManager.sendFreezePartitionRequest(
-                            eq(SERVER_ID), any(FreezePartitionRequest.class)))
-                    .thenReturn(
-                            failedFreeze,
-                            CompletableFuture.completedFuture(
-                                    freezeResponse(FROZEN_OFFSET, FROZEN_OFFSET)));
-            context.returnLakeSnapshotAt(FROZEN_OFFSET);
-
-            context.manager.tryDrop(TABLE_INFO, PARTITION_NAME);
-
-            verify(context.metadataManager, never())
-                    .dropFrozenPartition(TABLE_PATH, PARTITION_NAME, TABLE_ID, PARTITION_ID);
-
-            context.manager.tryDrop(TABLE_INFO, PARTITION_NAME);
-
-            verify(context.channelManager, times(2))
-                    .sendFreezePartitionRequest(eq(SERVER_ID), any(FreezePartitionRequest.class));
-            verify(context.metadataManager)
-                    .dropFrozenPartition(TABLE_PATH, PARTITION_NAME, TABLE_ID, PARTITION_ID);
-        }
+    private static ReportFrozenBucketsTieredRequest report(TableBucket bucket, int epoch) {
+        ReportFrozenBucketsTieredRequest request = new ReportFrozenBucketsTieredRequest();
+        request.setServerId(SERVER_ID).setCoordinatorEpoch(COORDINATOR_EPOCH);
+        request.addBucket().setTableBucket(fromTableBucket(bucket)).setLeaderEpoch(epoch);
+        return request;
     }
 
-    @Test
-    void testRetriesAfterFreezeRpcTimeout() throws Exception {
-        try (TestContext context = new TestContext(Runnable::run, 20L)) {
-            CompletableFuture<FreezePartitionResponse> pendingFreeze = new CompletableFuture<>();
-            when(context.channelManager.sendFreezePartitionRequest(
-                            eq(SERVER_ID), any(FreezePartitionRequest.class)))
-                    .thenReturn(
-                            pendingFreeze,
-                            CompletableFuture.completedFuture(
-                                    freezeResponse(FROZEN_OFFSET, FROZEN_OFFSET)));
-            context.returnLakeSnapshotAt(FROZEN_OFFSET);
-
-            context.manager.tryDrop(TABLE_INFO, PARTITION_NAME);
-
-            verify(context.metadataManager, never())
-                    .dropFrozenPartition(TABLE_PATH, PARTITION_NAME, TABLE_ID, PARTITION_ID);
-
-            context.manager.tryDrop(TABLE_INFO, PARTITION_NAME);
-
-            verify(context.channelManager, times(2))
-                    .sendFreezePartitionRequest(eq(SERVER_ID), any(FreezePartitionRequest.class));
-            verify(context.metadataManager)
-                    .dropFrozenPartition(TABLE_PATH, PARTITION_NAME, TABLE_ID, PARTITION_ID);
-        }
-    }
-
-    @Test
-    void testConcurrentTryDropForSamePartitionIsSuppressed() throws Exception {
-        ExecutorService executorService = Executors.newFixedThreadPool(2);
-        CountDownLatch secondTaskFinished = new CountDownLatch(1);
-        CountDownLatch firstTaskFinished = new CountDownLatch(1);
-        AtomicInteger taskIds = new AtomicInteger();
-        Executor trackingExecutor =
-                command -> {
-                    int taskId = taskIds.incrementAndGet();
-                    executorService.execute(
-                            () -> {
-                                try {
-                                    command.run();
-                                } finally {
-                                    if (taskId == 1) {
-                                        firstTaskFinished.countDown();
-                                    } else if (taskId == 2) {
-                                        secondTaskFinished.countDown();
-                                    }
-                                }
-                            });
-                };
-
-        try (TestContext context = new TestContext(trackingExecutor, DEFAULT_FREEZE_TIMEOUT_MS)) {
-            CountDownLatch firstRequestStarted = new CountDownLatch(1);
-            AtomicReference<FreezePartitionRequest> firstRequest = new AtomicReference<>();
-            CompletableFuture<FreezePartitionResponse> pendingFreeze = new CompletableFuture<>();
-            when(context.channelManager.sendFreezePartitionRequest(
-                            eq(SERVER_ID), any(FreezePartitionRequest.class)))
-                    .thenAnswer(
-                            invocation -> {
-                                firstRequest.set(invocation.getArgument(1));
-                                firstRequestStarted.countDown();
-                                return pendingFreeze;
-                            });
-            context.returnLakeSnapshotAt(FROZEN_OFFSET);
-
-            context.manager.tryDrop(TABLE_INFO, PARTITION_NAME);
-            assertThat(firstRequestStarted.await(5, TimeUnit.SECONDS)).isTrue();
-
-            context.manager.tryDrop(TABLE_INFO, PARTITION_NAME);
-            assertThat(secondTaskFinished.await(5, TimeUnit.SECONDS)).isTrue();
-            verify(context.channelManager, times(1))
-                    .sendFreezePartitionRequest(eq(SERVER_ID), any(FreezePartitionRequest.class));
-
-            pendingFreeze.complete(freezeResponse(FROZEN_OFFSET, FROZEN_OFFSET));
-            assertThat(firstTaskFinished.await(5, TimeUnit.SECONDS)).isTrue();
-            assertThat(getFreezePartitionData(firstRequest.get()))
-                    .containsExactlyInAnyOrderEntriesOf(context.expectedLeaderEpochs());
-            verify(context.metadataManager)
-                    .dropFrozenPartition(TABLE_PATH, PARTITION_NAME, TABLE_ID, PARTITION_ID);
-        } finally {
-            executorService.shutdownNow();
-            assertThat(executorService.awaitTermination(5, TimeUnit.SECONDS)).isTrue();
-        }
-    }
-
-    private static TableInfo createTableInfo() {
-        TableDescriptor tableDescriptor =
-                TableDescriptor.builder()
-                        .schema(Schema.newBuilder().column("c1", DataTypes.INT()).build())
-                        .property(ConfigOptions.TABLE_DATALAKE_ENABLED, true)
-                        .property(ConfigOptions.TABLE_DATALAKE_FRESHNESS, Duration.ZERO)
-                        .distributedBy(2)
-                        .build();
-        return TableInfo.of(
-                TABLE_PATH,
-                TABLE_ID,
-                1,
-                tableDescriptor,
-                "/remote",
-                System.currentTimeMillis(),
-                System.currentTimeMillis());
-    }
-
-    private static FreezePartitionResponse freezeResponse(long highWatermark, long logEndOffset) {
-        List<FreezePartitionResultForBucket> results = new ArrayList<>();
-        results.add(new FreezePartitionResultForBucket(BUCKET_0, highWatermark, logEndOffset));
-        results.add(new FreezePartitionResultForBucket(BUCKET_1, highWatermark, logEndOffset));
-        return makeFreezePartitionResponse(results);
-    }
-
-    private static LakeTableSnapshot lakeSnapshotAt(long offset) {
-        Map<TableBucket, Long> bucketOffsets = new LinkedHashMap<>();
-        bucketOffsets.put(BUCKET_0, offset);
-        bucketOffsets.put(BUCKET_1, offset);
-        return new LakeTableSnapshot(1L, bucketOffsets);
+    private static LeaderAndIsr leader(int epoch) {
+        return new LeaderAndIsr(
+                SERVER_ID,
+                epoch,
+                Collections.singletonList(SERVER_ID),
+                Collections.emptyList(),
+                COORDINATOR_EPOCH,
+                epoch);
     }
 
     private static final class TestContext implements AutoCloseable {
@@ -322,81 +239,70 @@ class LakeAwarePartitionDropManagerTest {
         private final ZooKeeperClient zooKeeperClient = mock(ZooKeeperClient.class);
         private final CoordinatorChannelManager channelManager =
                 mock(CoordinatorChannelManager.class);
-        private final PartitionRegistration unfrozenRegistration =
-                new PartitionRegistration(TABLE_ID, PARTITION_ID, "/remote", 2);
-        private final PartitionRegistration frozenRegistration = unfrozenRegistration.withFrozen();
-        private final AtomicReference<PartitionRegistration> currentRegistration =
-                new AtomicReference<>(unfrozenRegistration);
-        private final LakeAwarePartitionDropManager manager;
+        private final CoordinatorContext context = mock(CoordinatorContext.class);
+        private final Map<TableBucket, LeaderAndIsr> leaders = new HashMap<>();
+        private final AtomicReference<PartitionRegistration> registration =
+                new AtomicReference<>(
+                        new PartitionRegistration(TABLE_ID, PARTITION_ID, "/remote", 2));
+        private final LakeAwarePartitionDropManager manager =
+                new LakeAwarePartitionDropManager(
+                        metadataManager, zooKeeperClient, channelManager, Runnable::run, 100L);
 
         private TestContext() throws Exception {
-            this(Runnable::run, DEFAULT_FREEZE_TIMEOUT_MS);
-        }
-
-        private TestContext(Executor executor, long freezeTimeoutMs) throws Exception {
-            manager =
-                    new LakeAwarePartitionDropManager(
-                            metadataManager,
-                            zooKeeperClient,
-                            channelManager,
-                            executor,
-                            freezeTimeoutMs);
-
             when(metadataManager.getOptionalPartitionRegistration(TABLE_PATH, PARTITION_NAME))
-                    .thenAnswer(ignored -> Optional.ofNullable(currentRegistration.get()));
+                    .thenAnswer(ignored -> Optional.ofNullable(registration.get()));
             when(metadataManager.markPartitionFrozen(
                             TABLE_PATH, PARTITION_NAME, TABLE_ID, PARTITION_ID))
                     .thenAnswer(
                             ignored -> {
-                                currentRegistration.set(frozenRegistration);
-                                return Optional.of(frozenRegistration);
+                                registration.set(registration.get().withFrozen());
+                                return Optional.of(registration.get());
                             });
             when(metadataManager.dropFrozenPartition(
                             TABLE_PATH, PARTITION_NAME, TABLE_ID, PARTITION_ID))
                     .thenAnswer(
                             ignored -> {
-                                currentRegistration.set(null);
+                                registration.set(null);
                                 return true;
                             });
-
-            Map<Integer, BucketAssignment> bucketAssignments = new LinkedHashMap<>();
-            bucketAssignments.put(0, BucketAssignment.of(SERVER_ID));
-            bucketAssignments.put(1, BucketAssignment.of(SERVER_ID));
+            Map<Integer, BucketAssignment> assignment = new HashMap<>();
+            assignment.put(0, BucketAssignment.of(SERVER_ID));
+            assignment.put(1, BucketAssignment.of(SERVER_ID));
             when(zooKeeperClient.getPartitionAssignment(PARTITION_ID))
-                    .thenReturn(Optional.of(new PartitionAssignment(TABLE_ID, bucketAssignments)));
-
-            LeaderAndIsr leaderAndIsr =
-                    new LeaderAndIsr(
-                            SERVER_ID,
-                            LEADER_EPOCH,
-                            Collections.singletonList(SERVER_ID),
-                            Collections.emptyList(),
-                            1,
-                            1);
-            Map<TableBucket, LeaderAndIsr> leaders = new LinkedHashMap<>();
-            leaders.put(BUCKET_0, leaderAndIsr);
-            leaders.put(BUCKET_1, leaderAndIsr);
+                    .thenReturn(Optional.of(new PartitionAssignment(TABLE_ID, assignment)));
+            leaders.put(BUCKET_0, leader(LEADER_EPOCH));
+            leaders.put(BUCKET_1, leader(LEADER_EPOCH));
             when(zooKeeperClient.getLeaderAndIsrs(anyCollection())).thenReturn(leaders);
+            when(channelManager.sendFreezePartitionRequest(eq(SERVER_ID), any()))
+                    .thenReturn(CompletableFuture.completedFuture(new FreezePartitionResponse()));
+            when(context.getCoordinatorEpoch()).thenReturn(COORDINATOR_EPOCH);
+            when(context.containsPartitionId(PARTITION_ID)).thenReturn(true);
+            when(context.getPhysicalTablePath(PARTITION_ID))
+                    .thenReturn(Optional.of(PhysicalTablePath.of(TABLE_PATH, PARTITION_NAME)));
+            when(context.getBucketLeaderAndIsr(any()))
+                    .thenAnswer(
+                            invocation ->
+                                    Optional.ofNullable(leaders.get(invocation.getArgument(0))));
+            Map<Integer, java.util.List<Integer>> contextAssignment = new HashMap<>();
+            contextAssignment.put(0, Collections.singletonList(SERVER_ID));
+            contextAssignment.put(1, Collections.singletonList(SERVER_ID));
+            when(context.getPartitionAssignment(new TablePartition(TABLE_ID, PARTITION_ID)))
+                    .thenReturn(contextAssignment);
         }
 
-        private void returnStableFreezeResponse() {
-            when(channelManager.sendFreezePartitionRequest(
-                            eq(SERVER_ID), any(FreezePartitionRequest.class)))
-                    .thenReturn(
-                            CompletableFuture.completedFuture(
-                                    freezeResponse(FROZEN_OFFSET, FROZEN_OFFSET)));
+        private void freeze() {
+            TableDescriptor descriptor =
+                    TableDescriptor.builder()
+                            .schema(Schema.newBuilder().column("id", DataTypes.INT()).build())
+                            .distributedBy(2)
+                            .build();
+            manager.tryDrop(
+                    TableInfo.of(TABLE_PATH, TABLE_ID, 1, descriptor, "/remote", 0L, 0L),
+                    PARTITION_NAME);
         }
 
-        private void returnLakeSnapshotAt(long offset) throws Exception {
-            when(zooKeeperClient.getLakeTableSnapshot(eq(TABLE_ID), isNull()))
-                    .thenReturn(Optional.of(lakeSnapshotAt(offset)));
-        }
-
-        private Map<TableBucket, Integer> expectedLeaderEpochs() {
-            Map<TableBucket, Integer> expected = new LinkedHashMap<>();
-            expected.put(BUCKET_0, LEADER_EPOCH);
-            expected.put(BUCKET_1, LEADER_EPOCH);
-            return expected;
+        private void report(TableBucket bucket, int epoch) {
+            manager.reportTiered(LakeAwarePartitionDropManagerTest.report(bucket, epoch), context);
         }
 
         @Override

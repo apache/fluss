@@ -122,6 +122,8 @@ import org.apache.fluss.rpc.messages.RemoveServerTagByRackRequest;
 import org.apache.fluss.rpc.messages.RemoveServerTagByRackResponse;
 import org.apache.fluss.rpc.messages.RemoveServerTagRequest;
 import org.apache.fluss.rpc.messages.RemoveServerTagResponse;
+import org.apache.fluss.rpc.messages.ReportFrozenBucketsTieredRequest;
+import org.apache.fluss.rpc.messages.ReportFrozenBucketsTieredResponse;
 import org.apache.fluss.rpc.messages.TableExistsRequest;
 import org.apache.fluss.rpc.messages.TableExistsResponse;
 import org.apache.fluss.rpc.protocol.ApiError;
@@ -368,6 +370,12 @@ public class TestCoordinatorGateway implements CoordinatorGateway {
     public CompletableFuture<CommitKvSnapshotResponse> commitKvSnapshot(
             CommitKvSnapshotRequest request) {
         throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public CompletableFuture<ReportFrozenBucketsTieredResponse> reportFrozenBucketsTiered(
+            ReportFrozenBucketsTieredRequest request) {
+        return CompletableFuture.completedFuture(new ReportFrozenBucketsTieredResponse());
     }
 
     @Override

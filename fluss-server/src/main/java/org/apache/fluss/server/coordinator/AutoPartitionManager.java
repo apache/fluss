@@ -782,6 +782,10 @@ public class AutoPartitionManager implements AutoCloseable {
                 });
     }
 
+    LakeAwarePartitionDropManager getLakeAwarePartitionDropManager() {
+        return checkNotNull(lakeAwarePartitionDropManager);
+    }
+
     @Override
     public void close() throws Exception {
         if (isClosed.compareAndSet(false, true)) {

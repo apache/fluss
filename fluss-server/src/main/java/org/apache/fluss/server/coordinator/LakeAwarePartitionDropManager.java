@@ -17,26 +17,24 @@
 
 package org.apache.fluss.server.coordinator;
 
-import org.apache.fluss.exception.FlussRuntimeException;
+import org.apache.fluss.exception.CoordinatorEpochFencedException;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePartition;
-import org.apache.fluss.rpc.messages.FreezePartitionRequest;
 import org.apache.fluss.rpc.messages.FreezePartitionResponse;
-import org.apache.fluss.rpc.messages.PbFreezePartitionRespForBucket;
+import org.apache.fluss.rpc.messages.PbFrozenBucketTiered;
+import org.apache.fluss.rpc.messages.ReportFrozenBucketsTieredRequest;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
 import org.apache.fluss.server.zk.data.PartitionAssignment;
 import org.apache.fluss.server.zk.data.PartitionRegistration;
-import org.apache.fluss.server.zk.data.lake.LakeTableSnapshot;
 import org.apache.fluss.utils.concurrent.FutureUtils;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -51,7 +49,10 @@ import java.util.concurrent.locks.ReentrantLock;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeFreezePartitionRequest;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toTableBucket;
 
-/** Coordinates freezing, lake tiering verification, and dropping expired partitions. */
+/**
+ * Freezes expired partitions and deletes them after all bucket leaders report completed lake
+ * tiering.
+ */
 public class LakeAwarePartitionDropManager implements AutoCloseable {
 
     private static final Logger LOG = LoggerFactory.getLogger(LakeAwarePartitionDropManager.class);
@@ -61,8 +62,9 @@ public class LakeAwarePartitionDropManager implements AutoCloseable {
     private final CoordinatorChannelManager coordinatorChannelManager;
     private final Executor executor;
     private final long freezeTimeoutMs;
-    private final ConcurrentMap<PhysicalTablePath, PartitionDropState> partitionDropStates =
+    private final ConcurrentMap<TablePartition, PartitionDropState> partitionDropStates =
             new ConcurrentHashMap<>();
+    private volatile boolean closed;
 
     public LakeAwarePartitionDropManager(
             MetadataManager metadataManager,
@@ -77,373 +79,240 @@ public class LakeAwarePartitionDropManager implements AutoCloseable {
         this.freezeTimeoutMs = freezeTimeoutMs;
     }
 
-    /** Try to drop an expired partition after its data has been tiered to the lake. */
+    /**
+     * Initiates an idempotent freeze; tablet servers subsequently report completed lake tiering.
+     */
     public void tryDrop(TableInfo tableInfo, String partitionName) {
-        PhysicalTablePath physicalTablePath =
-                PhysicalTablePath.of(tableInfo.getTablePath(), partitionName);
-        PartitionDropState dropState =
-                partitionDropStates.computeIfAbsent(
-                        physicalTablePath, ignored -> new PartitionDropState(physicalTablePath));
-        submitAsync(dropState);
-    }
-
-    private void submitAsync(PartitionDropState dropState) {
+        if (closed) {
+            return;
+        }
         try {
-            executor.execute(() -> runInternal(dropState));
+            executor.execute(
+                    () -> {
+                        try {
+                            PhysicalTablePath path =
+                                    PhysicalTablePath.of(tableInfo.getTablePath(), partitionName);
+                            Optional<PartitionRegistration> registration =
+                                    metadataManager.getOptionalPartitionRegistration(
+                                            path.getTablePath(), partitionName);
+                            if (!registration.isPresent()
+                                    || registration.get().getTableId() != tableInfo.getTableId()) {
+                                return;
+                            }
+                            PartitionDropState state = getOrCreateState(registration.get());
+                            if (!state.lock.tryLock()) {
+                                return;
+                            }
+                            try {
+                                if (!closed) {
+                                    freezePartition(path, registration.get());
+                                }
+                            } finally {
+                                state.lock.unlock();
+                            }
+                        } catch (Exception e) {
+                            LOG.warn(
+                                    "Failed to freeze partition {} of table {}.",
+                                    partitionName,
+                                    tableInfo.getTablePath(),
+                                    e);
+                        }
+                    });
         } catch (RuntimeException e) {
             LOG.warn(
-                    "Failed to submit lake-aware drop for partition {} of table {}.",
-                    dropState.physicalTablePath.getPartitionName(),
-                    dropState.physicalTablePath.getTablePath(),
+                    "Failed to submit freeze for partition {} of table {}.",
+                    partitionName,
+                    tableInfo.getTablePath(),
                     e);
         }
     }
 
-    private void runInternal(PartitionDropState dropState) {
-        if (!dropState.lock.tryLock()) {
-            LOG.debug(
-                    "Skip dropping partition {} of table {} because another operation is running.",
-                    dropState.physicalTablePath.getPartitionName(),
-                    dropState.physicalTablePath.getTablePath());
-            return;
-        }
-
-        try {
-            // Ignore a queued task after its drop state has been removed or replaced.
-            if (partitionDropStates.get(dropState.physicalTablePath) != dropState) {
-                return;
-            }
-
-            // Check the partition existence from metadata.
-            Optional<PartitionRegistration> registration = getPartitionRegistration(dropState);
-            if (!registration.isPresent()) {
-                removeDropState(dropState);
-                return;
-            }
-
-            toNext(dropState, registration.get());
-        } finally {
-            dropState.lock.unlock();
-        }
-    }
-
-    private void toNext(PartitionDropState dropState, PartitionRegistration partitionRegistration) {
-        PartitionStatus status = dropState.status;
-        switch (status) {
-            case FREEZING:
-                freezePartition(dropState, partitionRegistration);
-                break;
-            case FROZEN:
-                checkLakeTiered(dropState, partitionRegistration);
-                break;
-            case LAKE_TIERED:
-                dropPartition(dropState, partitionRegistration);
-                break;
-            default:
-                throw new FlussRuntimeException("Unknown partition status " + status);
-        }
-    }
-
-    private void freezePartition(
-            PartitionDropState dropState, PartitionRegistration partitionRegistration) {
-        try {
-            // Update the partition registration in ZooKeeper before fencing replica writes.
-            if (!partitionRegistration.isFrozen()) {
-                Optional<PartitionRegistration> frozenRegistration =
-                        metadataManager.markPartitionFrozen(
-                                dropState.physicalTablePath.getTablePath(),
-                                dropState.physicalTablePath.getPartitionName(),
-                                partitionRegistration.getTableId(),
-                                partitionRegistration.getPartitionId());
-                if (!frozenRegistration.isPresent()) {
-                    LOG.info(
-                            "Stop dropping partition {} because its registration no longer matches.",
-                            dropState);
-                    removeDropState(dropState);
-                    return;
-                }
-                partitionRegistration = frozenRegistration.get();
-            }
-
-            // Send freeze requests to the partition's replica leaders.
-            freezeReplicaLeaders(dropState, partitionRegistration);
-        } catch (Exception e) {
-            LOG.warn(
-                    "Failed to prepare partition {} of table {} for lake-aware drop.",
-                    dropState.physicalTablePath.getPartitionName(),
-                    dropState.physicalTablePath.getTablePath(),
-                    e);
-        }
-    }
-
-    private void freezeReplicaLeaders(
-            PartitionDropState dropState, PartitionRegistration partitionRegistration) {
-        try {
-            PartitionAssignment partitionAssignment =
-                    zooKeeperClient
-                            .getPartitionAssignment(partitionRegistration.getPartitionId())
-                            .orElse(null);
-            if (partitionAssignment == null) {
-                LOG.info(
-                        "Waiting to drop partition {} of table {} because its assignment is unavailable.",
-                        dropState.physicalTablePath.getPartitionName(),
-                        dropState.physicalTablePath.getTablePath());
-                return;
-            }
-
-            List<TableBucket> tableBuckets = new ArrayList<>();
-            for (Integer bucketId : partitionAssignment.getBucketAssignments().keySet()) {
-                tableBuckets.add(
-                        new TableBucket(
-                                partitionRegistration.getTableId(),
-                                partitionRegistration.getPartitionId(),
-                                bucketId));
-            }
-            Map<TableBucket, LeaderAndIsr> leaders = zooKeeperClient.getLeaderAndIsrs(tableBuckets);
-            if (leaders.size() != tableBuckets.size()
-                    || leaders.values().stream()
-                            .anyMatch(
-                                    leaderAndIsr ->
-                                            leaderAndIsr.leader() == LeaderAndIsr.NO_LEADER)) {
-                LOG.info(
-                        "Waiting to drop partition {} of table {} because not all bucket leaders are available.",
-                        dropState.physicalTablePath.getPartitionName(),
-                        dropState.physicalTablePath.getTablePath());
-                return;
-            }
-
-            Map<Integer, Map<TableBucket, Integer>> leaderEpochsByServer = new HashMap<>();
-            leaders.forEach(
-                    (tableBucket, leaderAndIsr) ->
-                            leaderEpochsByServer
-                                    .computeIfAbsent(
-                                            leaderAndIsr.leader(), ignored -> new HashMap<>())
-                                    .put(tableBucket, leaderAndIsr.leaderEpoch()));
-
-            List<CompletableFuture<FreezePartitionResponse>> freezeFutures = new ArrayList<>();
-            for (Map.Entry<Integer, Map<TableBucket, Integer>> entry :
-                    leaderEpochsByServer.entrySet()) {
-                FreezePartitionRequest request = makeFreezePartitionRequest(entry.getValue());
-                freezeFutures.add(
-                        coordinatorChannelManager.sendFreezePartitionRequest(
-                                entry.getKey(), request));
-            }
-
-            CompletableFuture<Void> allFreezeFutures =
-                    CompletableFuture.allOf(
-                            freezeFutures.toArray(new CompletableFuture[freezeFutures.size()]));
-            FutureUtils.orTimeout(
-                            allFreezeFutures,
-                            freezeTimeoutMs,
-                            TimeUnit.MILLISECONDS,
-                            String.format(
-                                    "Timed out after %s ms while freezing partition %s.",
-                                    freezeTimeoutMs, dropState.physicalTablePath))
-                    .join();
-            finishFreeze(dropState, partitionRegistration, leaders, freezeFutures);
-        } catch (Exception e) {
-            LOG.warn(
-                    "Failed to freeze partition {} of table {} before dropping it.",
-                    dropState.physicalTablePath.getPartitionName(),
-                    dropState.physicalTablePath.getTablePath(),
-                    e);
-        }
-    }
-
-    private void finishFreeze(
-            PartitionDropState dropState,
-            PartitionRegistration partitionRegistration,
-            Map<TableBucket, LeaderAndIsr> expectedLeaders,
-            List<CompletableFuture<FreezePartitionResponse>> freezeFutures) {
-        Optional<Map<Integer, Long>> frozenOffsets =
-                collectStableFrozenOffsets(expectedLeaders, freezeFutures);
-        if (!frozenOffsets.isPresent()) {
-            LOG.info(
-                    "Partition {} of table {} is frozen and waiting for all bucket writes to become committed.",
-                    dropState.physicalTablePath.getPartitionName(),
-                    dropState.physicalTablePath.getTablePath());
-            return;
-        }
-
-        dropState.frozenOffsets = frozenOffsets.get();
-        dropState.status = PartitionStatus.FROZEN;
-        LOG.info(
-                "Partition {} of table {} is frozen and ready for the lake tiering check.",
-                dropState.physicalTablePath.getPartitionName(),
-                dropState.physicalTablePath.getTablePath());
-        toNext(dropState, partitionRegistration);
-    }
-
-    private void checkLakeTiered(PartitionDropState dropState, PartitionRegistration registration) {
-        try {
-            if (!registration.isFrozen()) {
-                dropState.status = PartitionStatus.FREEZING;
-                toNext(dropState, registration);
-                return;
-            }
-
-            Map<Integer, Long> frozenOffsets = dropState.frozenOffsets;
-            TablePartition tablePartition = registration.toTablePartition();
-            if (frozenOffsets.isEmpty()) {
-                removeDropState(dropState);
-                return;
-            }
-
-            if (!isFullyTiered(tablePartition, frozenOffsets)) {
-                LOG.info(
-                        "Partition {} of table {} is frozen and waiting for lake tiering.",
-                        dropState.physicalTablePath.getPartitionName(),
-                        dropState.physicalTablePath.getTablePath());
-                return;
-            }
-
-            dropState.status = PartitionStatus.LAKE_TIERED;
-            toNext(dropState, registration);
-        } catch (Exception e) {
-            LOG.warn(
-                    "Failed to check lake tiering for partition {} of table {}.",
-                    dropState.physicalTablePath.getPartitionName(),
-                    dropState.physicalTablePath.getTablePath(),
-                    e);
-        }
-    }
-
-    private void dropPartition(PartitionDropState dropState, PartitionRegistration registration) {
-        String partitionName = dropState.physicalTablePath.getPartitionName();
-
-        try {
-            if (!registration.isFrozen()) {
-                dropState.status = PartitionStatus.FREEZING;
-                toNext(dropState, registration);
-                return;
-            }
-            boolean dropped =
-                    metadataManager.dropFrozenPartition(
-                            dropState.physicalTablePath.getTablePath(),
-                            dropState.physicalTablePath.getPartitionName(),
+    private void freezePartition(PhysicalTablePath path, PartitionRegistration registration)
+            throws Exception {
+        if (!registration.isFrozen()) {
+            Optional<PartitionRegistration> frozenRegistration =
+                    metadataManager.markPartitionFrozen(
+                            path.getTablePath(),
+                            path.getPartitionName(),
                             registration.getTableId(),
                             registration.getPartitionId());
-            if (dropped) {
-                LOG.info(
-                        "Deleted partition {} of table {} after all frozen offsets were committed to the lake.",
-                        partitionName,
-                        dropState.physicalTablePath.getTablePath());
-                removeDropState(dropState);
-            } else {
-                LOG.warn(
-                        "Failed to drop partition {} of table {}.",
-                        partitionName,
-                        dropState.physicalTablePath.getTablePath());
-            }
-        } catch (Exception e) {
-            LOG.error(
-                    "Failed to drop partition {} of table {}.",
-                    partitionName,
-                    dropState.physicalTablePath.getTablePath(),
-                    e);
-        }
-    }
-
-    private Optional<PartitionRegistration> getPartitionRegistration(PartitionDropState dropState) {
-        return metadataManager.getOptionalPartitionRegistration(
-                dropState.physicalTablePath.getTablePath(),
-                dropState.physicalTablePath.getPartitionName());
-    }
-
-    private void removeDropState(PartitionDropState dropState) {
-        partitionDropStates.remove(dropState.physicalTablePath, dropState);
-    }
-
-    private Optional<Map<Integer, Long>> collectStableFrozenOffsets(
-            Map<TableBucket, LeaderAndIsr> expectedLeaders,
-            List<CompletableFuture<FreezePartitionResponse>> freezeFutures) {
-        Map<Integer, Long> frozenOffsets = new HashMap<>();
-        boolean allWritesCommitted = true;
-        for (CompletableFuture<FreezePartitionResponse> freezeFuture : freezeFutures) {
-            FreezePartitionResponse response = freezeFuture.join();
-            for (PbFreezePartitionRespForBucket bucketResponse : response.getBucketsRespsList()) {
-                TableBucket tableBucket = toTableBucket(bucketResponse.getTableBucket());
-                LeaderAndIsr leaderAndIsr = expectedLeaders.get(tableBucket);
-                if (leaderAndIsr == null
-                        || bucketResponse.hasErrorCode()
-                        || !bucketResponse.hasHighWatermark()
-                        || !bucketResponse.hasLogEndOffset()) {
-                    throw new FlussRuntimeException(
-                            "Failed to freeze bucket "
-                                    + tableBucket
-                                    + ": "
-                                    + (bucketResponse.hasErrorMessage()
-                                            ? bucketResponse.getErrorMessage()
-                                            : "invalid response"));
-                }
-                if (bucketResponse.getHighWatermark() != bucketResponse.getLogEndOffset()) {
-                    allWritesCommitted = false;
-                }
-                frozenOffsets.put(tableBucket.getBucket(), bucketResponse.getLogEndOffset());
+            if (!frozenRegistration.isPresent()) {
+                return;
             }
         }
-        if (frozenOffsets.size() != expectedLeaders.size()) {
-            throw new FlussRuntimeException(
-                    String.format(
-                            "Only %s of %s partition buckets were frozen.",
-                            frozenOffsets.size(), expectedLeaders.size()));
+        Optional<PartitionAssignment> assignment =
+                zooKeeperClient.getPartitionAssignment(registration.getPartitionId());
+        if (!assignment.isPresent()) {
+            return;
         }
-        return allWritesCommitted
-                ? Optional.of(Collections.unmodifiableMap(frozenOffsets))
-                : Optional.empty();
-    }
-
-    private boolean isFullyTiered(TablePartition tablePartition, Map<Integer, Long> frozenOffsets)
-            throws Exception {
-        Optional<LakeTableSnapshot> lakeSnapshot =
-                zooKeeperClient.getLakeTableSnapshot(tablePartition.getTableId(), null);
-        if (!lakeSnapshot.isPresent()) {
-            return false;
-        }
-        for (Map.Entry<Integer, Long> entry : frozenOffsets.entrySet()) {
-            TableBucket tableBucket =
+        List<TableBucket> buckets = new ArrayList<>();
+        for (Integer bucketId : assignment.get().getBucketAssignments().keySet()) {
+            buckets.add(
                     new TableBucket(
-                            tablePartition.getTableId(),
-                            tablePartition.getPartitionId(),
-                            entry.getKey());
-            long tieredOffset = lakeSnapshot.get().getLogEndOffset(tableBucket).orElse(0L);
-            if (tieredOffset < entry.getValue()) {
-                return false;
+                            registration.getTableId(), registration.getPartitionId(), bucketId));
+        }
+        Map<Integer, Map<TableBucket, Integer>> requests = new HashMap<>();
+        zooKeeperClient
+                .getLeaderAndIsrs(buckets)
+                .forEach(
+                        (bucket, leader) -> {
+                            if (leader.leader() != LeaderAndIsr.NO_LEADER) {
+                                requests.computeIfAbsent(
+                                                leader.leader(), ignored -> new HashMap<>())
+                                        .put(bucket, leader.leaderEpoch());
+                            }
+                        });
+        for (Map.Entry<Integer, Map<TableBucket, Integer>> entry : requests.entrySet()) {
+            CompletableFuture<FreezePartitionResponse> response =
+                    coordinatorChannelManager.sendFreezePartitionRequest(
+                            entry.getKey(), makeFreezePartitionRequest(entry.getValue()));
+            FutureUtils.orTimeout(
+                            response,
+                            freezeTimeoutMs,
+                            TimeUnit.MILLISECONDS,
+                            "Freeze partition request timed out")
+                    .whenComplete(
+                            (result, error) -> {
+                                if (error != null) {
+                                    LOG.warn(
+                                            "Failed to freeze partition {} on server {}.",
+                                            path,
+                                            entry.getKey(),
+                                            error);
+                                } else {
+                                    result.getBucketsRespsList()
+                                            .forEach(
+                                                    bucket -> {
+                                                        if (bucket.hasErrorCode()) {
+                                                            LOG.warn(
+                                                                    "Failed to freeze bucket {}: {}.",
+                                                                    toTableBucket(
+                                                                            bucket
+                                                                                    .getTableBucket()),
+                                                                    bucket.getErrorMessage());
+                                                        }
+                                                    });
+                                }
+                            });
+        }
+    }
+
+    /**
+     * Aggregates reports on the coordinator event thread, which serializes leader changes with
+     * validation and deletion. Reports are repeated until the partition disappears.
+     */
+    void reportTiered(ReportFrozenBucketsTieredRequest request, CoordinatorContext context) {
+        if (closed) {
+            return;
+        }
+        if (request.getCoordinatorEpoch() != context.getCoordinatorEpoch()) {
+            throw new CoordinatorEpochFencedException(
+                    "Stale coordinator epoch in frozen bucket report.");
+        }
+        // Forget reports for partitions removed independently of auto retention.
+        partitionDropStates
+                .keySet()
+                .removeIf(partition -> !context.containsPartitionId(partition.getPartitionId()));
+        Map<TablePartition, Map<Integer, Integer>> reportsByPartition = new HashMap<>();
+        for (PbFrozenBucketTiered report : request.getBucketsList()) {
+            TableBucket bucket = toTableBucket(report.getTableBucket());
+            Optional<LeaderAndIsr> leader = context.getBucketLeaderAndIsr(bucket);
+            if (bucket.getPartitionId() == null
+                    || !leader.isPresent()
+                    || context.isToBeDeleted(bucket)) {
+                continue;
+            }
+            if (leader.get().leader() != request.getServerId()
+                    || leader.get().leaderEpoch() != report.getLeaderEpoch()) {
+                // A stale item must not prevent other buckets in the batch from progressing.
+                LOG.debug(
+                        "Ignoring stale tiering report for bucket {} from server {}.",
+                        bucket,
+                        request.getServerId());
+                continue;
+            }
+            reportsByPartition
+                    .computeIfAbsent(
+                            new TablePartition(bucket.getTableId(), bucket.getPartitionId()),
+                            ignored -> new HashMap<>())
+                    .put(bucket.getBucket(), report.getLeaderEpoch());
+        }
+        for (Map.Entry<TablePartition, Map<Integer, Integer>> entry :
+                reportsByPartition.entrySet()) {
+            TablePartition partition = entry.getKey();
+            Optional<PhysicalTablePath> path =
+                    context.getPhysicalTablePath(partition.getPartitionId());
+            if (!path.isPresent()) {
+                continue;
+            }
+            Optional<PartitionRegistration> registration =
+                    metadataManager.getOptionalPartitionRegistration(
+                            path.get().getTablePath(), path.get().getPartitionName());
+            if (!registration.isPresent()
+                    || !registration.get().isFrozen()
+                    || registration.get().getTableId() != partition.getTableId()
+                    || registration.get().getPartitionId() != partition.getPartitionId()) {
+                continue;
+            }
+            PartitionDropState state = getOrCreateState(registration.get());
+            state.lock.lock();
+            try {
+                if (closed) {
+                    return;
+                }
+                state.tieredLeaderEpochs.putAll(entry.getValue());
+                Map<Integer, List<Integer>> assignment = context.getPartitionAssignment(partition);
+                if (assignment.isEmpty()) {
+                    continue;
+                }
+                boolean allTiered = true;
+                for (Integer bucketId : assignment.keySet()) {
+                    Optional<LeaderAndIsr> currentLeader =
+                            context.getBucketLeaderAndIsr(
+                                    new TableBucket(
+                                            partition.getTableId(),
+                                            partition.getPartitionId(),
+                                            bucketId));
+                    if (!currentLeader.isPresent()
+                            || currentLeader.get().leader() == LeaderAndIsr.NO_LEADER
+                            || !Integer.valueOf(currentLeader.get().leaderEpoch())
+                                    .equals(state.tieredLeaderEpochs.get(bucketId))) {
+                        state.tieredLeaderEpochs.remove(bucketId);
+                        allTiered = false;
+                    }
+                }
+                if (allTiered
+                        && metadataManager.dropFrozenPartition(
+                                path.get().getTablePath(), path.get().getPartitionName(),
+                                partition.getTableId(), partition.getPartitionId())) {
+                    partitionDropStates.remove(partition, state);
+                    LOG.info(
+                            "Deleted frozen partition {} after all bucket leaders reported completed lake tiering.",
+                            path.get());
+                }
+            } finally {
+                state.lock.unlock();
             }
         }
-        return true;
+    }
+
+    private PartitionDropState getOrCreateState(PartitionRegistration registration) {
+        return partitionDropStates.computeIfAbsent(
+                registration.toTablePartition(), ignored -> new PartitionDropState());
     }
 
     @Override
     public void close() {
-        List<PartitionDropState> dropStates = new ArrayList<>(partitionDropStates.values());
-        partitionDropStates.clear();
-        for (PartitionDropState dropState : dropStates) {
-            // Wait until any task that passed the map identity check has finished.
-            dropState.lock.lock();
-            dropState.lock.unlock();
+        closed = true;
+        for (PartitionDropState state : partitionDropStates.values()) {
+            state.lock.lock();
+            state.lock.unlock();
         }
-    }
-
-    private enum PartitionStatus {
-        FREEZING,
-        FROZEN,
-        LAKE_TIERED
+        partitionDropStates.clear();
     }
 
     private static final class PartitionDropState {
         private final ReentrantLock lock = new ReentrantLock();
-        private final PhysicalTablePath physicalTablePath;
-        private PartitionStatus status = PartitionStatus.FREEZING;
-        private Map<Integer, Long> frozenOffsets = Collections.emptyMap();
-
-        private PartitionDropState(PhysicalTablePath physicalTablePath) {
-            this.physicalTablePath = physicalTablePath;
-        }
-
-        @Override
-        public String toString() {
-            return physicalTablePath.toString();
-        }
+        private final Map<Integer, Integer> tieredLeaderEpochs = new HashMap<>();
     }
 }

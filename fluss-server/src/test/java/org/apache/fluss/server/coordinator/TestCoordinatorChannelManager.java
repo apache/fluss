@@ -20,12 +20,15 @@ package org.apache.fluss.server.coordinator;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.rpc.RpcClient;
 import org.apache.fluss.rpc.gateway.TabletServerGateway;
+import org.apache.fluss.rpc.messages.NotifyLakeTableOffsetRequest;
+import org.apache.fluss.rpc.messages.NotifyLakeTableOffsetResponse;
 import org.apache.fluss.rpc.metrics.TestingClientMetricGroup;
 import org.apache.fluss.server.metrics.group.TestingMetricGroups;
 
 import java.util.Collections;
 import java.util.Map;
 import java.util.Optional;
+import java.util.function.BiConsumer;
 
 /** A coordinator channel manager for test purpose which can set gateways manually. */
 public class TestCoordinatorChannelManager extends CoordinatorChannelManager {
@@ -47,6 +50,14 @@ public class TestCoordinatorChannelManager extends CoordinatorChannelManager {
 
     public void setGateways(Map<Integer, TabletServerGateway> gateways) {
         this.gateways = gateways;
+    }
+
+    @Override
+    public void sendNotifyLakeTableOffsetRequest(
+            int serverId,
+            NotifyLakeTableOffsetRequest request,
+            BiConsumer<NotifyLakeTableOffsetResponse, ? super Throwable> callback) {
+        sendRequest(serverId, request, TabletServerGateway::notifyLakeTableOffset, callback);
     }
 
     @Override

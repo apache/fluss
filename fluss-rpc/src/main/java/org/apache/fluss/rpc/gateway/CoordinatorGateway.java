@@ -32,6 +32,8 @@ import org.apache.fluss.rpc.messages.LakeTieringHeartbeatRequest;
 import org.apache.fluss.rpc.messages.LakeTieringHeartbeatResponse;
 import org.apache.fluss.rpc.messages.PrepareLakeTableSnapshotRequest;
 import org.apache.fluss.rpc.messages.PrepareLakeTableSnapshotResponse;
+import org.apache.fluss.rpc.messages.ReportFrozenBucketsTieredRequest;
+import org.apache.fluss.rpc.messages.ReportFrozenBucketsTieredResponse;
 import org.apache.fluss.rpc.protocol.ApiKeys;
 import org.apache.fluss.rpc.protocol.RPC;
 
@@ -106,6 +108,11 @@ public interface CoordinatorGateway extends RpcGateway, AdminGateway {
     @RPC(api = ApiKeys.COMMIT_LAKE_TABLE_SNAPSHOT)
     CompletableFuture<CommitLakeTableSnapshotResponse> commitLakeTableSnapshot(
             CommitLakeTableSnapshotRequest request);
+
+    /** Reports frozen buckets whose data is fully committed to the lake. */
+    @RPC(api = ApiKeys.REPORT_FROZEN_BUCKETS_TIERED)
+    CompletableFuture<ReportFrozenBucketsTieredResponse> reportFrozenBucketsTiered(
+            ReportFrozenBucketsTieredRequest request);
 
     /** Report lake tiering heartbeats to Fluss for lake tiering service. */
     @RPC(api = ApiKeys.LAKE_TIERING_HEARTBEAT)

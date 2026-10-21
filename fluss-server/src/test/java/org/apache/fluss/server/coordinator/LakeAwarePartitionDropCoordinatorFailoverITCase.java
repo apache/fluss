@@ -67,7 +67,7 @@ class LakeAwarePartitionDropCoordinatorFailoverITCase {
                     .build();
 
     @Test
-    void testCoordinatorFailoverReacquiresFrozenOffsetsAndFinishesDrop() throws Exception {
+    void testCoordinatorFailoverCollectsTieredReportsAndFinishesDrop() throws Exception {
         TablePath tablePath = TablePath.of("lake_aware_drop_recovery", "log_table");
         TableDescriptor tableDescriptor =
                 TableDescriptor.builder()
@@ -136,15 +136,27 @@ class LakeAwarePartitionDropCoordinatorFailoverITCase {
         assertThat(frozenRegistration.getPartitionId()).isEqualTo(partitionId);
         assertThat(zooKeeperClient.getLakeTableSnapshot(tableId, null)).isEmpty();
 
+        // An already frozen partition must finish even when retention stops selecting it.
+        coordinatorGateway
+                .alterTable(
+                        RpcMessageTestUtils.newAlterTableRequest(
+                                tablePath,
+                                Collections.singletonMap(
+                                        ConfigOptions.TABLE_AUTO_PARTITION_NUM_RETENTION.key(),
+                                        "-1"),
+                                Collections.emptyList(),
+                                Collections.emptyList(),
+                                false))
+                .get();
+
         FLUSS_CLUSTER_EXTENSION.stopCoordinatorServer();
         FLUSS_CLUSTER_EXTENSION.startCoordinatorServer();
 
         commitLakeSnapshot(tableId, tableBucket, 1L, frozenOffset - 1);
         waitUntilLakeOffset(tableId, tableBucket, frozenOffset - 1);
 
-        // Let the recovered AutoPartitionManager run four 500 ms checks. The new drop manager must
-        // reacquire the frozen offset from the replica rather than treating the durable flag as an
-        // offset boundary, so an offset below it must not delete the partition.
+        // Allow repeated TS reports after coordinator recovery. A lake offset below the frozen
+        // log end must never make the replica report completed lake tiering.
         Thread.sleep(Duration.ofSeconds(2).toMillis());
         assertThat(zooKeeperClient.getPartition(tablePath, expiredPartition)).isPresent();
 

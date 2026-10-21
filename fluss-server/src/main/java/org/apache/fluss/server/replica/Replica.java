@@ -1516,9 +1516,9 @@ public final class Replica {
                 });
     }
 
-    /** Freeze leader writes and return their stable offset boundary. */
-    public FrozenOffsets freezeWrites(int expectedLeaderEpoch) {
-        return inWriteLock(
+    /** Freeze leader writes for partition retention. */
+    public void freezeWrites(int expectedLeaderEpoch) {
+        inWriteLock(
                 leaderIsrUpdateLock,
                 () -> {
                     if (!isLeader()) {
@@ -1534,8 +1534,6 @@ public final class Replica {
                                         expectedLeaderEpoch, tableBucket, leaderEpoch));
                     }
                     frozen = true;
-                    return new FrozenOffsets(
-                            logTablet.getHighWatermark(), logTablet.localLogEndOffset());
                 });
     }
 
@@ -1547,23 +1545,24 @@ public final class Replica {
         }
     }
 
-    /** High watermark and log end offset captured while leader writes are fenced. */
-    public static final class FrozenOffsets {
-        private final long highWatermark;
-        private final long logEndOffset;
-
-        private FrozenOffsets(long highWatermark, long logEndOffset) {
-            this.highWatermark = highWatermark;
-            this.logEndOffset = logEndOffset;
+    /**
+     * Returns the current leader epoch only while this frozen bucket's entire log is committed to
+     * the data lake.
+     */
+    Optional<Integer> getFrozenTieredLeaderEpoch() {
+        if (!frozen) {
+            return Optional.empty();
         }
-
-        public long getHighWatermark() {
-            return highWatermark;
-        }
-
-        public long getLogEndOffset() {
-            return logEndOffset;
-        }
+        return inReadLock(
+                leaderIsrUpdateLock,
+                () ->
+                        frozen
+                                        && isLeader()
+                                        && tableBucket.getPartitionId() != null
+                                        && logTablet.getLakeLogEndOffset()
+                                                >= logTablet.localLogEndOffset()
+                                ? Optional.of(leaderEpoch)
+                                : Optional.empty());
     }
 
     public LogReadInfo fetchRecords(FetchParams fetchParams) throws IOException {

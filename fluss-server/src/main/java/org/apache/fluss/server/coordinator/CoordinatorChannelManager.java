@@ -336,11 +336,18 @@ public class CoordinatorChannelManager {
             int receiveServerId,
             NotifyLakeTableOffsetRequest notifyLakeTableOffsetRequest,
             BiConsumer<NotifyLakeTableOffsetResponse, ? super Throwable> responseConsumer) {
-        sendRequest(
+        // Frozen leaders use this committed progress to decide when deletion is safe.
+        if (!enqueueRequest(
                 receiveServerId,
-                notifyLakeTableOffsetRequest,
-                TabletServerGateway::notifyLakeTableOffset,
-                responseConsumer);
+                ApiKeys.NOTIFY_LAKE_TABLE_OFFSET,
+                notifyLakeTableOffsetRequest.getCoordinatorEpoch(),
+                gateway -> gateway.notifyLakeTableOffset(notifyLakeTableOffsetRequest),
+                responseConsumer)) {
+            responseConsumer.accept(
+                    null,
+                    new TabletServerNotAvailableException(
+                            "Tablet server " + receiveServerId + " is not available."));
+        }
     }
 
     @VisibleForTesting
