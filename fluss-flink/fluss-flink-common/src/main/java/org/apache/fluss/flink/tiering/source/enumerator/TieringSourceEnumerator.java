@@ -80,7 +80,6 @@ import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
 import static org.apache.fluss.flink.tiering.source.enumerator.TieringSourceEnumerator.HeartBeatHelper.basicHeartBeat;
-import static org.apache.fluss.flink.tiering.source.enumerator.TieringSourceEnumerator.HeartBeatHelper.failedTableHeartBeat;
 import static org.apache.fluss.flink.tiering.source.enumerator.TieringSourceEnumerator.HeartBeatHelper.heartBeatWithRequestNewTieringTable;
 import static org.apache.fluss.flink.tiering.source.enumerator.TieringSourceEnumerator.HeartBeatHelper.tieringTableHeartBeat;
 import static org.apache.fluss.flink.tiering.source.enumerator.TieringSourceEnumerator.HeartBeatHelper.waitHeartbeatResponse;
@@ -622,12 +621,19 @@ public class TieringSourceEnumerator
         timerService.shutdownNow();
         try {
             if (coordinatorGateway != null) {
-                failedTableEpochs.putAll(tieringTableEpochs);
-                tieringTableEpochs.clear();
+                // Report from snapshots and drop the entries only after the heartbeat succeeds,
+                // the same way the periodic path does, so a failed close-time heartbeat does not
+                // silently discard the pending tables. The finally block below still closes the
+                // client either way: this is about not losing the state, not about retrying the
+                // report.
                 Map<Long, TieringFinishInfo> currentFinishedTables = new HashMap<>(finishedTables);
-                finishedTables.clear();
-                if (!failedTableEpochs.isEmpty() || !currentFinishedTables.isEmpty()) {
-                    reportTablesOnClose(currentFinishedTables, failedTableEpochs);
+                Map<Long, Long> currentFailedTableEpochs = new HashMap<>(failedTableEpochs);
+                currentFailedTableEpochs.putAll(tieringTableEpochs);
+                if (!currentFailedTableEpochs.isEmpty() || !currentFinishedTables.isEmpty()) {
+                    reportTablesOnClose(currentFinishedTables, currentFailedTableEpochs);
+                    currentFinishedTables.forEach(finishedTables::remove);
+                    currentFailedTableEpochs.forEach(failedTableEpochs::remove);
+                    currentFailedTableEpochs.forEach(tieringTableEpochs::remove);
                 }
             }
         } finally {
@@ -667,8 +673,8 @@ public class TieringSourceEnumerator
      * <p>The finished tables have to be flushed here: a table that produced no splits is removed
      * from the in-flight epochs as soon as it is marked as finished, so it is neither part of
      * {@code tieringTableEpochs} nor of {@code failedTableEpochs} at close time. Without flushing
-     * it explicitly, its completion would never reach the coordinator and the table would stay
-     * locked in the tiering state until the tiering service timeout expires.
+     * it explicitly, its completion would never reach the coordinator and the table remains in the
+     * Tiering state until the tiering service timeout expires.
      */
     private void reportTablesOnClose(
             Map<Long, TieringFinishInfo> finishedTables, Map<Long, Long> failedTableEpochs)
@@ -678,15 +684,16 @@ public class TieringSourceEnumerator
                     coordinatorGateway.lakeTieringHeartbeat(
                             tieringTableHeartBeat(
                                     basicHeartBeat(),
-                                    new HashMap<>(),
+                                    Collections.emptyMap(),
                                     finishedTables,
                                     failedTableEpochs,
                                     flussCoordinatorEpoch)));
             LOG.info("Report finished and failed tables to Fluss Coordinator success");
         } catch (Exception e) {
-            LOG.error("Errors happens when report finished/failed table to Fluss cluster.", e);
+            LOG.error(
+                    "An error occurred while reporting finished/failed tables to the cluster.", e);
             throw new FlinkRuntimeException(
-                    "Errors happens when report finished/failed table to Fluss cluster.", e);
+                    "An error occurred while reporting finished/failed tables to the cluster.", e);
         }
     }
 
