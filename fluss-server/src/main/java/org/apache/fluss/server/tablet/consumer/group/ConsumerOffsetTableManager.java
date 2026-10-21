@@ -18,26 +18,35 @@
 package org.apache.fluss.server.tablet.consumer.group;
 
 import org.apache.fluss.annotation.Internal;
-import org.apache.fluss.cluster.TabletServerInfo;
+import org.apache.fluss.cluster.ServerNode;
+import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.config.ConfigOptions;
+import org.apache.fluss.exception.ConsumerGroupOwnerLoadingException;
 import org.apache.fluss.exception.ConsumerGroupOwnerNotAvailableException;
 import org.apache.fluss.metadata.DatabaseDescriptor;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.row.encode.KvValueLayout;
+import org.apache.fluss.rpc.gateway.CoordinatorGateway;
+import org.apache.fluss.rpc.messages.CreateDatabaseRequest;
+import org.apache.fluss.rpc.messages.CreateTableRequest;
 import org.apache.fluss.server.coordinator.MetadataManager;
 import org.apache.fluss.server.metadata.BucketMetadata;
+import org.apache.fluss.server.metadata.ServerInfo;
+import org.apache.fluss.server.metadata.TableMetadata;
 import org.apache.fluss.server.metadata.TabletServerMetadataCache;
-import org.apache.fluss.server.utils.TableAssignmentUtils;
+import org.apache.fluss.server.metadata.TabletServerMetadataProvider;
 import org.apache.fluss.server.zk.ZooKeeperClient;
-import org.apache.fluss.server.zk.data.TableAssignment;
+import org.apache.fluss.server.zk.data.TabletServerRegistration;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.Collections;
+import java.util.List;
 import java.util.Optional;
-import java.util.Set;
+import java.util.OptionalInt;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.atomic.AtomicReference;
@@ -59,6 +68,8 @@ public final class ConsumerOffsetTableManager {
     private final ZooKeeperClient zkClient;
     private final MetadataManager metadataManager;
     private final TabletServerMetadataCache metadataCache;
+    private final TabletServerMetadataProvider metadataProvider;
+    private final CoordinatorGateway coordinatorGateway;
     private final ExecutorService ioExecutor;
     private final AtomicReference<CompletableFuture<Integer>> tableInitFuture =
             new AtomicReference<>();
@@ -68,11 +79,16 @@ public final class ConsumerOffsetTableManager {
             ZooKeeperClient zkClient,
             MetadataManager metadataManager,
             TabletServerMetadataCache metadataCache,
+            TabletServerMetadataProvider metadataProvider,
+            CoordinatorGateway coordinatorGateway,
             ExecutorService ioExecutor) {
         this.tableConfig = checkNotNull(tableConfig, "tableConfig must not be null");
         this.zkClient = checkNotNull(zkClient, "zkClient must not be null");
         this.metadataManager = checkNotNull(metadataManager, "metadataManager must not be null");
         this.metadataCache = checkNotNull(metadataCache, "metadataCache must not be null");
+        this.metadataProvider = checkNotNull(metadataProvider, "metadataProvider must not be null");
+        this.coordinatorGateway =
+                checkNotNull(coordinatorGateway, "coordinatorGateway must not be null");
         this.ioExecutor = checkNotNull(ioExecutor, "ioExecutor must not be null");
     }
 
@@ -80,9 +96,93 @@ public final class ConsumerOffsetTableManager {
         return CONSUMER_OFFSET_TABLE_PATH;
     }
 
-    /** Returns the requested bucket from the local metadata snapshot without accessing ZK. */
-    public Optional<BucketMetadata> getCachedBucketMetadata(int bucketId) {
-        return metadataCache.getCachedBucketMetadata(CONSUMER_OFFSET_TABLE_PATH, bucketId);
+    /**
+     * Resolves the owner of the requested bucket from the local metadata snapshot, falling back to
+     * ZooKeeper when the bucket, leader, or advertised server endpoint is not yet cached. A
+     * successful bucket fallback also refreshes the local metadata cache.
+     */
+    public CompletableFuture<ServerNode> resolveOwnerAsync(int bucketId, String listenerName) {
+        Optional<BucketMetadata> cachedBucket =
+                metadataCache.getCachedBucketMetadata(CONSUMER_OFFSET_TABLE_PATH, bucketId);
+        if (cachedBucket.isPresent() && cachedBucket.get().getLeaderId().isPresent()) {
+            Optional<ServerNode> cachedOwner =
+                    metadataCache.getTabletServer(
+                            cachedBucket.get().getLeaderId().getAsInt(), listenerName);
+            if (cachedOwner.isPresent()) {
+                return CompletableFuture.completedFuture(cachedOwner.get());
+            }
+        }
+
+        return CompletableFuture.supplyAsync(
+                () -> resolveOwnerFromZooKeeper(bucketId, listenerName), ioExecutor);
+    }
+
+    private ServerNode resolveOwnerFromZooKeeper(int bucketId, String listenerName) {
+        try {
+            List<TableMetadata> tableMetadataList =
+                    metadataProvider.getTablesMetadataFromZK(
+                            Collections.singleton(CONSUMER_OFFSET_TABLE_PATH));
+            BucketMetadata bucketMetadata =
+                    tableMetadataList.get(0).getBucketMetadataList().stream()
+                            .filter(metadata -> metadata.getBucketId() == bucketId)
+                            .findFirst()
+                            .orElseThrow(
+                                    () ->
+                                            new ConsumerGroupOwnerNotAvailableException(
+                                                    "Bucket "
+                                                            + bucketId
+                                                            + " is not available yet in "
+                                                            + CONSUMER_OFFSET_TABLE_PATH));
+            OptionalInt leaderIdOpt = bucketMetadata.getLeaderId();
+            if (!leaderIdOpt.isPresent()) {
+                throw new ConsumerGroupOwnerLoadingException(
+                        "No leader yet for bucket "
+                                + bucketId
+                                + " in "
+                                + CONSUMER_OFFSET_TABLE_PATH);
+            }
+
+            int leaderId = leaderIdOpt.getAsInt();
+            Optional<ServerNode> cachedOwner =
+                    metadataCache.getTabletServer(leaderId, listenerName);
+            if (cachedOwner.isPresent()) {
+                return cachedOwner.get();
+            }
+
+            TabletServerRegistration registration =
+                    zkClient.getTabletServer(leaderId)
+                            .orElseThrow(
+                                    () ->
+                                            new ConsumerGroupOwnerNotAvailableException(
+                                                    "Group owner node "
+                                                            + leaderId
+                                                            + " is not registered in ZooKeeper"));
+            ServerNode owner =
+                    new ServerInfo(
+                                    leaderId,
+                                    registration.getRack(),
+                                    registration.getEndpoints(),
+                                    ServerType.TABLET_SERVER,
+                                    registration.getResource())
+                            .node(listenerName);
+            if (owner == null) {
+                throw new ConsumerGroupOwnerNotAvailableException(
+                        "Group owner node "
+                                + leaderId
+                                + " is not advertised on listener "
+                                + listenerName);
+            }
+            return owner;
+        } catch (ConsumerGroupOwnerLoadingException | ConsumerGroupOwnerNotAvailableException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new ConsumerGroupOwnerNotAvailableException(
+                    "Failed to resolve the owner of "
+                            + CONSUMER_OFFSET_TABLE_PATH
+                            + " bucket "
+                            + bucketId,
+                    e);
+        }
     }
 
     /**
@@ -155,8 +255,12 @@ public final class ConsumerOffsetTableManager {
 
             String databaseName = CONSUMER_OFFSET_TABLE_PATH.getDatabaseName();
             if (!zkClient.databaseExists(databaseName)) {
-                metadataManager.createDatabase(
-                        databaseName, DatabaseDescriptor.builder().build(), true);
+                CreateDatabaseRequest createDatabaseRequest =
+                        new CreateDatabaseRequest()
+                                .setDatabaseName(databaseName)
+                                .setDatabaseJson(DatabaseDescriptor.builder().build().toJsonBytes())
+                                .setIgnoreIfExists(true);
+                coordinatorGateway.createDatabase(createDatabaseRequest).get();
             }
 
             int bucketCount = tableConfig.getOffsetsTableNumBuckets();
@@ -176,40 +280,15 @@ public final class ConsumerOffsetTableManager {
                             .withBucketCount(bucketCount)
                             .withReplicationFactor(replicationFactor);
 
-            Set<TabletServerInfo> serverInfos = metadataCache.getAliveTabletServerInfos();
-            TabletServerInfo[] servers = serverInfos.toArray(new TabletServerInfo[0]);
-            if (servers.length == 0) {
-                throw new ConsumerGroupOwnerNotAvailableException(
-                        "No alive tablet server is available to create "
-                                + CONSUMER_OFFSET_TABLE_PATH);
-            }
-            if (servers.length < replicationFactor) {
-                throw new ConsumerGroupOwnerNotAvailableException(
-                        "Not enough alive tablet servers to create "
-                                + CONSUMER_OFFSET_TABLE_PATH
-                                + ": required replication factor is "
-                                + replicationFactor
-                                + ", but only "
-                                + servers.length
-                                + " servers are available");
-            }
-            TableAssignment tableAssignment =
-                    TableAssignmentUtils.generateAssignment(
-                            bucketCount, replicationFactor, servers);
-
-            try {
-                metadataManager.createTable(
-                        CONSUMER_OFFSET_TABLE_PATH,
-                        zkClient.getDefaultRemoteDataDir(),
-                        tableDescriptor,
-                        tableAssignment,
-                        true);
-            } catch (Exception e) {
-                if (!zkClient.tableExist(CONSUMER_OFFSET_TABLE_PATH)) {
-                    throw e;
-                }
-                LOG.debug("System table {} was created concurrently.", CONSUMER_OFFSET_TABLE_PATH);
-            }
+            CreateTableRequest createTableRequest =
+                    new CreateTableRequest()
+                            .setTableJson(tableDescriptor.toJsonBytes())
+                            .setIgnoreIfExists(true);
+            createTableRequest
+                    .setTablePath()
+                    .setDatabaseName(CONSUMER_OFFSET_TABLE_PATH.getDatabaseName())
+                    .setTableName(CONSUMER_OFFSET_TABLE_PATH.getTableName());
+            coordinatorGateway.createTable(createTableRequest).get();
             return metadataManager.getTable(CONSUMER_OFFSET_TABLE_PATH).getNumBuckets();
         } catch (Exception e) {
             throw new ConsumerGroupOwnerNotAvailableException(

@@ -21,8 +21,6 @@ import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.exception.ApiException;
 import org.apache.fluss.exception.AuthorizationException;
-import org.apache.fluss.exception.ConsumerGroupOwnerLoadingException;
-import org.apache.fluss.exception.ConsumerGroupOwnerNotAvailableException;
 import org.apache.fluss.exception.InvalidScanRequestException;
 import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.exception.NotLeaderOrFollowerException;
@@ -124,7 +122,6 @@ import org.apache.fluss.server.log.FetchParams;
 import org.apache.fluss.server.log.FetchParamsBuilder;
 import org.apache.fluss.server.log.FilterInfo;
 import org.apache.fluss.server.log.ListOffsetsParam;
-import org.apache.fluss.server.metadata.BucketMetadata;
 import org.apache.fluss.server.metadata.ClusterMetadata;
 import org.apache.fluss.server.metadata.TabletServerMetadataCache;
 import org.apache.fluss.server.metadata.TabletServerMetadataProvider;
@@ -241,6 +238,8 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
                         zkClient,
                         metadataManager,
                         metadataCache,
+                        metadataFunctionProvider,
+                        coordinatorGateway,
                         ioExecutor);
     }
 
@@ -792,51 +791,25 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
         // method and the current session is bound to the RPC worker thread.
         final String groupId = request.getGroupId();
         final String listenerName = currentListenerName();
-        final TablePath tablePath = consumerOffsetTableManager.tablePath();
         groupManager.validateGroupId(groupId);
 
         return consumerOffsetTableManager
                 .ensureTableAsync()
-                .thenApply(
+                .thenCompose(
                         bucketCount -> {
                             int bucketId = groupManager.bucketFor(groupId, bucketCount);
-                            BucketMetadata bucketMetadata =
-                                    consumerOffsetTableManager
-                                            .getCachedBucketMetadata(bucketId)
-                                            .orElseThrow(
-                                                    () ->
-                                                            new ConsumerGroupOwnerNotAvailableException(
-                                                                    "Bucket "
-                                                                            + bucketId
-                                                                            + " is not available yet in "
-                                                                            + tablePath));
-                            if (!bucketMetadata.getLeaderId().isPresent()) {
-                                throw new ConsumerGroupOwnerLoadingException(
-                                        "No leader yet for bucket "
-                                                + bucketId
-                                                + " in "
-                                                + tablePath);
-                            }
-                            return buildFindConsumerGroupOwnerResponse(
-                                    bucketMetadata, listenerName);
-                        });
+                            return consumerOffsetTableManager.resolveOwnerAsync(
+                                    bucketId, listenerName);
+                        })
+                .thenApply(this::buildFindConsumerGroupOwnerResponse);
     }
 
     private FindConsumerGroupOwnerResponse buildFindConsumerGroupOwnerResponse(
-            BucketMetadata bucketMetadata, String listenerName) {
-        int leaderId = bucketMetadata.getLeaderId().getAsInt();
-        ServerNode leaderNode = metadataCache.getAllAliveTabletServers(listenerName).get(leaderId);
-        if (leaderNode == null) {
-            throw new ConsumerGroupOwnerNotAvailableException(
-                    "Group owner node "
-                            + leaderId
-                            + " is not advertised on listener "
-                            + listenerName);
-        }
+            ServerNode leaderNode) {
         return new FindConsumerGroupOwnerResponse()
                 .setOwner(
                         new PbServerNode()
-                                .setNodeId(leaderId)
+                                .setNodeId(leaderNode.id())
                                 .setHost(leaderNode.host())
                                 .setPort(leaderNode.port()));
     }
