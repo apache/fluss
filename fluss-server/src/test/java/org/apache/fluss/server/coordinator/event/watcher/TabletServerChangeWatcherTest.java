@@ -37,6 +37,7 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.concurrent.TimeUnit;
 
 import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -54,6 +55,8 @@ class TabletServerChangeWatcherTest {
                 ZOO_KEEPER_EXTENSION_WRAPPER
                         .getCustomExtension()
                         .getZooKeeperClient(NOPErrorHandler.INSTANCE);
+        assertThat(zookeeperClient.getCuratorClient().blockUntilConnected(30, TimeUnit.SECONDS))
+                .isTrue();
         TestingEventManager eventManager = new TestingEventManager();
         TabletServerChangeWatcher tabletServerChangeWatcher =
                 new TabletServerChangeWatcher(zookeeperClient, eventManager);

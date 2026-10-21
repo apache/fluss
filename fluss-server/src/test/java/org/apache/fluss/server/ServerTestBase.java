@@ -92,7 +92,7 @@ public abstract class ServerTestBase {
     }
 
     @Test
-    void registerServerNodeWhenZkClientReInitSession() throws Exception {
+    void handleZkClientReInitSession() throws Exception {
         ServerBase server = getServer();
         // get the EPHEMERAL node of server
         String path =
@@ -106,8 +106,15 @@ public abstract class ServerTestBase {
         retry(
                 Duration.ofMinutes(2),
                 () -> {
-                    Stat stat = zookeeperClient.getStat(path).get();
-                    assertThat(stat.getCtime()).isGreaterThan(oldNodeCtime);
+                    if (server instanceof CoordinatorServer) {
+                        Stat stat = zookeeperClient.getStat(path).get();
+                        assertThat(stat.getCtime()).isGreaterThan(oldNodeCtime);
+                    } else {
+                        assertThat(server.getTerminationFuture()).isDone();
+                        assertThat(server.getTerminationFuture().join())
+                                .isEqualTo(ServerBase.Result.FAILURE);
+                        assertThat(zookeeperClient.getStat(path)).isEmpty();
+                    }
                 });
     }
 

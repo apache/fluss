@@ -38,6 +38,7 @@ import org.slf4j.LoggerFactory;
 
 import java.util.Arrays;
 import java.util.Optional;
+import java.util.function.Consumer;
 import java.util.stream.Collectors;
 
 import static org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.common.ZKConfig.JUTE_MAXBUFFER;
@@ -173,20 +174,46 @@ public class ZooKeeperUtils {
                                 reInitSessionCallback, fatalErrorHandler));
     }
 
+    /** Registers session recovery plus an immediate connection-state callback. */
+    public static void registerZookeeperClientReInitSessionListener(
+            ZooKeeperClient zooKeeperClient,
+            ThrowingRunnable<Exception> reInitSessionCallback,
+            FatalErrorHandler fatalErrorHandler,
+            Consumer<ConnectionState> connectionStateCallback) {
+        zooKeeperClient
+                .getCuratorClient()
+                .getConnectionStateListenable()
+                .addListener(
+                        new ZookeeperClientSessionReInitListener(
+                                reInitSessionCallback, fatalErrorHandler, connectionStateCallback));
+    }
+
     private static class ZookeeperClientSessionReInitListener implements ConnectionStateListener {
         private final ThrowingRunnable<Exception> reInitSessionCallback;
         private final FatalErrorHandler fatalErrorHandler;
+        private final Consumer<ConnectionState> connectionStateCallback;
         private volatile boolean sessionExpired = false;
 
         public ZookeeperClientSessionReInitListener(
                 ThrowingRunnable<Exception> reInitSessionCallback,
                 FatalErrorHandler fatalErrorHandler) {
+            this(reInitSessionCallback, fatalErrorHandler, ignored -> {});
+        }
+
+        private ZookeeperClientSessionReInitListener(
+                ThrowingRunnable<Exception> reInitSessionCallback,
+                FatalErrorHandler fatalErrorHandler,
+                Consumer<ConnectionState> connectionStateCallback) {
             this.reInitSessionCallback = reInitSessionCallback;
             this.fatalErrorHandler = fatalErrorHandler;
+            this.connectionStateCallback = connectionStateCallback;
         }
 
         public void stateChanged(
                 CuratorFramework curatorFramework, ConnectionState connectionState) {
+            if (connectionState != ConnectionState.RECONNECTED) {
+                connectionStateCallback.accept(connectionState);
+            }
             switch (connectionState) {
                 case LOST:
                     sessionExpired = true;
@@ -200,6 +227,8 @@ public class ZooKeeperUtils {
                             fatalErrorHandler.onFatalError(e);
                         }
                         sessionExpired = false;
+                    } else {
+                        connectionStateCallback.accept(connectionState);
                     }
                     break;
                 default:

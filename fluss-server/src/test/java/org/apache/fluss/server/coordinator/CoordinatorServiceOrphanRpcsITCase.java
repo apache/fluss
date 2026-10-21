@@ -17,6 +17,8 @@
 
 package org.apache.fluss.server.coordinator;
 
+import org.apache.fluss.exception.InvalidBulkLoadRequestException;
+import org.apache.fluss.exception.TimeoutException;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;
@@ -38,10 +40,14 @@ import org.apache.fluss.server.kv.snapshot.SharedKvFileRegistry;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
 import org.apache.fluss.server.testutils.RpcMessageTestUtils;
 import org.apache.fluss.server.zk.ZooKeeperClient;
+import org.apache.fluss.server.zk.data.PartitionRegistration;
 import org.apache.fluss.server.zk.data.RemoteLogManifestHandle;
+import org.apache.fluss.server.zk.data.TableRegistration;
+import org.apache.fluss.server.zk.data.ZkData;
+import org.apache.fluss.server.zk.data.bulkload.BulkLoadDataState;
 import org.apache.fluss.types.DataTypes;
 
-import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 import org.junit.jupiter.api.io.TempDir;
@@ -83,8 +89,8 @@ class CoordinatorServiceOrphanRpcsITCase {
     private static long pkTableId;
     @TempDir static Path tempDir;
 
-    @BeforeAll
-    static void setupTables() throws Exception {
+    @BeforeEach
+    void setupTables() throws Exception {
         pkTableId =
                 RpcMessageTestUtils.createTable(
                         FLUSS_CLUSTER_EXTENSION, PK_TABLE_PATH, PK_TABLE_DESCRIPTOR);
@@ -188,6 +194,77 @@ class CoordinatorServiceOrphanRpcsITCase {
 
         assertThatThrownBy(() -> gateway.listKvSnapshots(request).get())
                 .isInstanceOf(ExecutionException.class);
+    }
+
+    @Test
+    void testSnapshotCleanupSkipsOwnedTargetsAndRejectsConcurrentBegin() throws Exception {
+        ZooKeeperClient zk = FLUSS_CLUSTER_EXTENSION.getZooKeeperClient();
+        String path = ZkData.TableZNode.path(PK_TABLE_PATH);
+        TableRegistration active = ZkData.TableZNode.decode(zk.getDataWithStat(path).getData());
+        for (BulkLoadDataState state : BulkLoadDataState.values()) {
+            zk.getCuratorClient()
+                    .setData()
+                    .forPath(
+                            path,
+                            ZkData.TableZNode.encode(
+                                    active.withDataState(
+                                            state, "550e8400-e29b-41d4-a716-446655440000")));
+            assertThatThrownBy(
+                            () ->
+                                    CoordinatorService.readWithoutBulkLoad(
+                                            zk,
+                                            pkTableId,
+                                            null,
+                                            path,
+                                            () -> {
+                                                throw new AssertionError("Must skip owned target");
+                                            }))
+                    .isInstanceOf(InvalidBulkLoadRequestException.class);
+        }
+        zk.getCuratorClient().setData().forPath(path, ZkData.TableZNode.encode(active));
+        assertThatThrownBy(
+                        () ->
+                                CoordinatorService.readWithoutBulkLoad(
+                                        zk,
+                                        pkTableId,
+                                        null,
+                                        path,
+                                        () -> {
+                                            zk.getCuratorClient()
+                                                    .setData()
+                                                    .forPath(
+                                                            path,
+                                                            ZkData.TableZNode.encode(
+                                                                    active.withDataState(
+                                                                            BulkLoadDataState
+                                                                                    .LOADING,
+                                                                            "550e8400-e29b-41d4-a716-446655440000")));
+                                            zk.getCuratorClient()
+                                                    .setData()
+                                                    .forPath(
+                                                            path, ZkData.TableZNode.encode(active));
+                                            return Collections.emptyMap();
+                                        }))
+                .isInstanceOf(TimeoutException.class);
+        assertThat(
+                        CoordinatorService.readWithoutBulkLoad(
+                                zk, pkTableId, null, path, () -> Collections.singleton(88L)))
+                .containsExactly(88L);
+        String partitionPath = path + "/cleanup-partition";
+        zk.getCuratorClient()
+                .create()
+                .forPath(
+                        partitionPath,
+                        ZkData.PartitionZNode.encode(
+                                new PartitionRegistration(pkTableId, 71L, "file:///warehouse", 1)
+                                        .withDataState(
+                                                BulkLoadDataState.ACTIVE,
+                                                "550e8400-e29b-41d4-a716-446655440000")));
+        assertThatThrownBy(
+                        () ->
+                                CoordinatorService.readWithoutBulkLoad(
+                                        zk, pkTableId, 71L, partitionPath, Collections::emptyMap))
+                .isInstanceOf(InvalidBulkLoadRequestException.class);
     }
 
     // -------------------------------------------------------------------------

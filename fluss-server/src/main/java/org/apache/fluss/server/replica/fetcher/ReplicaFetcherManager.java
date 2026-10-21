@@ -148,6 +148,14 @@ public class ReplicaFetcherManager {
         }
     }
 
+    /** Returns whether a replica fetcher currently owns the given table bucket. */
+    boolean hasFetcherForBucket(TableBucket tableBucket) {
+        synchronized (lock) {
+            return fetcherThreadMap.values().stream()
+                    .anyMatch(fetcher -> fetcher.fetchStatus(tableBucket).isPresent());
+        }
+    }
+
     public void shutdownIdleFetcherThreads() {
         synchronized (lock) {
             Set<ServerIdAndFetcherId> keysToBeRemoved = new HashSet<>();

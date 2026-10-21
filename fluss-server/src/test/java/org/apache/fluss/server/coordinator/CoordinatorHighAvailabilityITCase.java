@@ -43,6 +43,7 @@ import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.ZooKeeperExtension;
 import org.apache.fluss.server.zk.data.CoordinatorAddress;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
+import org.apache.fluss.server.zk.data.ZkData;
 import org.apache.fluss.shaded.curator5.org.apache.curator.framework.CuratorFramework;
 import org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.KeeperException;
 import org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.Watcher;
@@ -423,9 +424,17 @@ class CoordinatorHighAvailabilityITCase {
                         t ->
                                 assertThat(getRootCause(t))
                                         .isInstanceOf(KeeperException.BadVersionException.class));
-        standby.getZooKeeperClient()
-                .registerLeaderAndIsr(tableBucket, leaderAndIsr, newLeaderEpochZkVersion);
-        assertThat(zookeeperClient.getLeaderAndIsr(tableBucket)).hasValue(leaderAndIsr);
+        try {
+            standby.getZooKeeperClient()
+                    .registerLeaderAndIsr(tableBucket, leaderAndIsr, newLeaderEpochZkVersion);
+            assertThat(zookeeperClient.getLeaderAndIsr(tableBucket)).hasValue(leaderAndIsr);
+        } finally {
+            zookeeperClient
+                    .getCuratorClient()
+                    .delete()
+                    .deletingChildrenIfNeeded()
+                    .forPath(ZkData.TableIdZNode.path(tableBucket.getTableId()));
+        }
     }
 
     private TabletServerGateway createGatewayForTabletServer(TabletServer server) {

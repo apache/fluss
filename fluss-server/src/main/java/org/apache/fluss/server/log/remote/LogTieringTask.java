@@ -130,6 +130,8 @@ public class LogTieringTask implements Runnable {
         }
 
         try {
+            int leaderEpoch = replica.getLeaderEpoch();
+            int coordinatorEpoch = replica.getCoordinatorEpoch();
             LogTablet logTablet = replica.getLogTablet();
             TableMetricGroup metricGroup = replica.tableMetrics();
             maybeUpdateCopiedOffset(logTablet);
@@ -167,7 +169,9 @@ public class LogTieringTask implements Runnable {
                     deleteRemoteLogSegmentFiles(copiedSegments, metricGroup);
                     throw mergeError;
                 }
-                boolean success = tryToCommitRemoteLogManifest(remoteLog, newManifest);
+                boolean success =
+                        tryToCommitRemoteLogManifest(
+                                remoteLog, newManifest, coordinatorEpoch, leaderEpoch);
 
                 if (success) {
                     List<RemoteLogSegment> segmentsToDelete =
@@ -338,19 +342,16 @@ public class LogTieringTask implements Runnable {
         return endOffset;
     }
 
-    /**
-     * Try to commit remote log manifest. Including three steps.
-     *
-     * <pre>
-     *     1. apply the build snapshot method (may be copy to/delete from remote)
-     *     2. upload the remote log manifest file to remote storage.
-     *     3. sending the CommitRemoteLogManifestRequest to coordinator server to try to commit this snapshot.
-     *        - If commit success, we will apply the commit success action (e.g., delete expired remote segments), and return true.
-     *        - If commit failed, we will apply rollback action (i.e., delete the new added remote segments), and return false.
-     * </pre>
-     */
     private boolean tryToCommitRemoteLogManifest(
-            RemoteLogTablet remoteLogTablet, RemoteLogManifest newRemoteLogManifest) {
+            RemoteLogTablet remoteLogTablet,
+            RemoteLogManifest newRemoteLogManifest,
+            int coordinatorEpoch,
+            int leaderEpoch) {
+        // Cancellation may race with copying. Stop before the first commit attempt; once an
+        // attempt has been sent, retries must confirm it before any uploaded files are deleted.
+        if (isCancelled()) {
+            return false;
+        }
         FsPath remoteLogManifestPath;
         try {
             // 1. upload the remote log manifest file to remote storage.
@@ -381,11 +382,8 @@ public class LogTieringTask implements Runnable {
                                         newRemoteLogStartOffset,
                                         newRemoteLogEndOffset,
                                         newRemoteLogManifest.getHighestCopiedEndOffset(),
-                                        // TODO: manifest snapshot should include the epoch info,
-                                        //  and this should be moved into Replica under read lock of
-                                        //  leaderIsrUpdateLock, see FLUSS-56282058
-                                        replica.getCoordinatorEpoch(),
-                                        replica.getBucketEpoch()));
+                                        coordinatorEpoch,
+                                        leaderEpoch));
                 if (!success) {
                     // the commit failed, it means the commit snapshot is invalid or register zk
                     // failed, we will revert this commit and delete the remote log manifest

@@ -40,12 +40,33 @@ public class ZooKeeperOp {
         return zkClient.transactionOp().create().withMode(createMode).forPath(path, data);
     }
 
+    /** Builds a persistent node creation. */
+    public CuratorOp createOp(String path, byte[] data) throws Exception {
+        return createOp(path, data, CreateMode.PERSISTENT);
+    }
+
     public CuratorOp updateOp(String path, byte[] data) throws Exception {
         return zkClient.transactionOp().setData().forPath(path, data);
     }
 
     public CuratorOp deleteOp(String path) throws Exception {
         return zkClient.transactionOp().delete().forPath(path);
+    }
+
+    /** Builds a version-checked data replacement. */
+    public CuratorOp updateOp(String path, byte[] data, int version) throws Exception {
+        return zkClient.transactionOp().setData().withVersion(version).forPath(path, data);
+    }
+
+    /** Builds a version-checked deletion. */
+    public CuratorOp deleteOp(String path, int version) throws Exception {
+        return zkClient.transactionOp().delete().withVersion(version).forPath(path);
+    }
+
+    /** Atomically requires absence by creating and removing the node within the same multi. */
+    public void assertAbsent(List<CuratorOp> operations, String path) throws Exception {
+        operations.add(createOp(path, new byte[0], CreateMode.PERSISTENT));
+        operations.add(deleteOp(path, 0));
     }
 
     public static List<CuratorOp> multiRequest(CuratorOp op1, CuratorOp op2) {

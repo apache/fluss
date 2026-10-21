@@ -98,6 +98,11 @@ public class ReplicaStateMachine {
         LOG.info("Shutdown replica state machine.");
     }
 
+    /** Discards requests left by a state transition that failed before sending its batch. */
+    public void discardIncompleteBatch() {
+        coordinatorRequestBatch.discardIncompleteBatch();
+    }
+
     private Tuple2<Set<TableBucketReplica>, Set<TableBucketReplica>> initializeReplicaState() {
         Set<TableBucketReplica> onlineReplicas = new HashSet<>();
         Set<TableBucketReplica> offlineReplicas = new HashSet<>();

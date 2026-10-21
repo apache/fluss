@@ -159,11 +159,11 @@ class ClusterHealthTest {
         ctx.updateBucketReplicaAssignment(tb, Arrays.asList(0, 1));
         ctx.putBucketLeaderAndIsr(
                 tb, new LeaderAndIsr(0, 1, Arrays.asList(0, 1), Collections.emptyList(), 0, 1));
-        ctx.addPendingLeaderActivation(tb);
+        long activationId = ctx.addPendingLeaderActivationAndGetId(tb);
 
         assertThat(CoordinatorService.computeClusterHealth(ctx).getStatus()).isEqualTo(2 /* RED */);
 
-        ctx.clearPendingLeaderActivation(tb);
+        ctx.clearPendingLeaderActivation(tb, activationId);
 
         assertThat(CoordinatorService.computeClusterHealth(ctx).getStatus())
                 .isEqualTo(0 /* GREEN */);
@@ -293,43 +293,23 @@ class ClusterHealthTest {
     }
 
     @Test
-    void testLeaderChangedBetweenSendAndResponseStaysInactive() {
-        // Simulate processNotifyLeaderAndIsrResponseReceivedEvent: if the leader
-        // changed between send and response, the responding server is no longer
-        // the leader, so the bucket must stay inactive.
+    void testLeaderChangeRequiresCurrentRequestCompletion() {
         TableBucket tb = new TableBucket(1L, 0);
         ctx.updateBucketReplicaAssignment(tb, Arrays.asList(0, 1, 2));
         ctx.putBucketLeaderAndIsr(
                 tb, new LeaderAndIsr(0, 1, Arrays.asList(0, 1, 2), Collections.emptyList(), 0, 1));
-        ctx.addPendingLeaderActivation(tb);
+        long oldActivationId = ctx.addPendingLeaderActivationAndGetId(tb);
 
-        // Simulate: leader changed from server 0 to server 1 before server 0 responds
         ctx.putBucketLeaderAndIsr(
                 tb, new LeaderAndIsr(1, 2, Arrays.asList(0, 1, 2), Collections.emptyList(), 0, 1));
+        long currentActivationId = ctx.addPendingLeaderActivationAndGetId(tb);
 
-        // Server 0 responds successfully — but it's no longer the leader
-        int respondingServerId = 0;
-        ctx.getBucketLeaderAndIsr(tb)
-                .ifPresent(
-                        lai -> {
-                            if (lai.leader() == respondingServerId) {
-                                ctx.clearPendingLeaderActivation(tb);
-                            }
-                        });
+        ctx.clearPendingLeaderActivation(tb, oldActivationId);
 
-        // Bucket must stay inactive because the responding server (0) != current leader (1)
         assertThat(ctx.isLeaderActive(tb)).isFalse();
         assertThat(CoordinatorService.computeClusterHealth(ctx).getStatus()).isEqualTo(2 /* RED */);
 
-        // Now server 1 (the actual leader) responds → bucket becomes active
-        int actualLeaderServerId = 1;
-        ctx.getBucketLeaderAndIsr(tb)
-                .ifPresent(
-                        lai -> {
-                            if (lai.leader() == actualLeaderServerId) {
-                                ctx.clearPendingLeaderActivation(tb);
-                            }
-                        });
+        ctx.clearPendingLeaderActivation(tb, currentActivationId);
 
         assertThat(ctx.isLeaderActive(tb)).isTrue();
         assertThat(CoordinatorService.computeClusterHealth(ctx).getStatus())
