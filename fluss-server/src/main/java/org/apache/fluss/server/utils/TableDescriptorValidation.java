@@ -876,4 +876,25 @@ public class TableDescriptorValidation {
                             option.key(), t.getMessage()));
         }
     }
+
+    /**
+     * Validates the bucket keys supported by Iceberg-compatible bucketing.
+     *
+     * <p>Iceberg currently supports only one bucket key in Fluss, regardless of whether lake
+     * storage is enabled.
+     */
+    public static void validateIcebergBucketKeys(TableDescriptor tableDescriptor) {
+        TableConfig tableConfig =
+                new TableConfig(Configuration.fromMap(tableDescriptor.getProperties()));
+
+        if (tableConfig.getDataLakeFormat().orElse(null) != DataLakeFormat.ICEBERG) {
+            return;
+        }
+
+        List<String> bucketKeys = tableDescriptor.getBucketKeys();
+        if (bucketKeys.size() > 1) {
+            throw new InvalidTableException(
+                    "Only one bucket key is supported for Iceberg format, but got: " + bucketKeys);
+        }
+    }
 }

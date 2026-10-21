@@ -48,6 +48,7 @@ import java.util.Map;
 import java.util.stream.Stream;
 
 import static org.apache.fluss.config.ConfigOptions.KV_FORMAT_VERSION_2;
+import static org.apache.fluss.server.utils.TableDescriptorValidation.validateIcebergBucketKeys;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -402,6 +403,95 @@ class TableDescriptorValidationTest {
                 .isInstanceOf(InvalidConfigException.class)
                 .hasMessageContaining("events")
                 .hasMessageContaining("'size' is required");
+    }
+
+    @Test
+    void testIcebergCompositeBucketKeyRejected() {
+        TableDescriptor descriptor =
+                TableDescriptor.builder()
+                        .schema(
+                                Schema.newBuilder()
+                                        .column("a", DataTypes.INT())
+                                        .column("b", DataTypes.INT())
+                                        .build())
+                        .distributedBy(4, "a", "b")
+                        .property(ConfigOptions.TABLE_DATALAKE_FORMAT, DataLakeFormat.ICEBERG)
+                        .build();
+
+        assertThatThrownBy(() -> validateIcebergBucketKeys(descriptor))
+                .isInstanceOf(InvalidTableException.class)
+                .hasMessageContaining("Only one bucket key is supported for Iceberg")
+                .hasMessageContaining("[a, b]");
+    }
+
+    @Test
+    void testIcebergCompositePrimaryKeyRejected() {
+        TableDescriptor descriptor =
+                TableDescriptor.builder()
+                        .schema(
+                                Schema.newBuilder()
+                                        .column("a", DataTypes.INT())
+                                        .column("b", DataTypes.INT())
+                                        .primaryKey("a", "b")
+                                        .build())
+                        .distributedBy(4)
+                        .property(ConfigOptions.TABLE_DATALAKE_FORMAT, DataLakeFormat.ICEBERG)
+                        .build();
+
+        assertThatThrownBy(() -> validateIcebergBucketKeys(descriptor))
+                .isInstanceOf(InvalidTableException.class)
+                .hasMessageContaining("Only one bucket key is supported for Iceberg");
+    }
+
+    @Test
+    void testIcebergPartitionKeyExcludedFromDefaultBucketKey() {
+        TableDescriptor descriptor =
+                TableDescriptor.builder()
+                        .schema(
+                                Schema.newBuilder()
+                                        .column("region", DataTypes.STRING())
+                                        .column("id", DataTypes.INT())
+                                        .primaryKey("region", "id")
+                                        .build())
+                        .partitionedBy("region")
+                        .distributedBy(4)
+                        .property(ConfigOptions.TABLE_DATALAKE_FORMAT, DataLakeFormat.ICEBERG)
+                        .build();
+        validateIcebergBucketKeys(descriptor);
+    }
+
+    @Test
+    void testSupportedBucketKeyConfigurations() {
+        Schema schema =
+                Schema.newBuilder()
+                        .column("a", DataTypes.INT())
+                        .column("b", DataTypes.INT())
+                        .build();
+
+        TableDescriptor icebergSingleKey =
+                TableDescriptor.builder()
+                        .schema(schema)
+                        .distributedBy(4, "a")
+                        .property(ConfigOptions.TABLE_DATALAKE_FORMAT, DataLakeFormat.ICEBERG)
+                        .build();
+
+        TableDescriptor icebergWithoutBucketKey =
+                TableDescriptor.builder()
+                        .schema(schema)
+                        .distributedBy(4)
+                        .property(ConfigOptions.TABLE_DATALAKE_FORMAT, DataLakeFormat.ICEBERG)
+                        .build();
+
+        TableDescriptor paimonCompositeKey =
+                TableDescriptor.builder()
+                        .schema(schema)
+                        .distributedBy(4, "a", "b")
+                        .property(ConfigOptions.TABLE_DATALAKE_FORMAT, DataLakeFormat.PAIMON)
+                        .build();
+
+        validateIcebergBucketKeys(icebergSingleKey);
+        validateIcebergBucketKeys(icebergWithoutBucketKey);
+        validateIcebergBucketKeys(paimonCompositeKey);
     }
 
     private static TableDescriptor lastNTable(AggFunction lastN) {
