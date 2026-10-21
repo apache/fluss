@@ -17,11 +17,17 @@
 
 defmodule Fluss.Admin do
   @moduledoc """
-  Admin client for DDL operations (create/drop databases and tables).
+  Admin client for DDL operations (create/drop databases, tables and partitions).
 
-  `create_*` and `drop_*` default to ignoring an existing or missing database or table, and
-  return `:ok`; pass `false` as the last argument to get an error instead. `drop_database/3`
-  doesn't cascade: drop the tables first.
+  `create_*` and `drop_*` for databases and tables default to ignoring an existing or missing
+  one, and return `:ok`; pass `false` as the last argument to get an error instead. For
+  partitions the default is `false`, as in the Python and C++ clients. On a missing table,
+  `create_partition` and `drop_partition` return `:table_not_exist`, whatever the flag.
+  `drop_database/3` doesn't cascade: drop the tables first.
+
+  A partition spec maps partition columns (atoms or strings) to string values, e.g.
+  `%{region: "EU"}`. Partitions of a table that isn't auto-partitioned must be created before
+  writing to them.
 
   ## Examples
 
@@ -43,6 +49,9 @@ defmodule Fluss.Admin do
   alias Fluss.Native
 
   @type t :: reference()
+
+  @typedoc "Partition column (atom or string) to value."
+  @type partition_spec :: %{(atom() | String.t()) => String.t()}
 
   @spec new(Fluss.Connection.t()) :: {:ok, t()} | {:error, Fluss.Error.t()}
   def new(conn) do
@@ -212,4 +221,42 @@ defmodule Fluss.Admin do
       {:error, %Fluss.Error{} = err} -> raise err
     end
   end
+
+  @spec create_partition(t(), String.t(), String.t(), partition_spec(), boolean()) ::
+          :ok | {:error, Fluss.Error.t()}
+  def create_partition(admin, database, table, spec, ignore_if_exists \\ false) do
+    admin
+    |> Native.admin_create_partition(database, table, spec, ignore_if_exists)
+    |> await()
+  end
+
+  @spec drop_partition(t(), String.t(), String.t(), partition_spec(), boolean()) ::
+          :ok | {:error, Fluss.Error.t()}
+  def drop_partition(admin, database, table, spec, ignore_if_not_exists \\ false) do
+    admin
+    |> Native.admin_drop_partition(database, table, spec, ignore_if_not_exists)
+    |> await()
+  end
+
+  @doc "Lists the table's partitions, or only those matching a partial `spec`."
+  @spec list_partition_infos(t(), String.t(), String.t(), partition_spec() | nil) ::
+          {:ok, [Fluss.PartitionInfo.t()]} | {:error, Fluss.Error.t()}
+  def list_partition_infos(admin, database, table, spec \\ nil) do
+    admin
+    |> Native.admin_list_partition_infos(database, table, spec)
+    |> await()
+  end
+
+  @spec list_partition_infos!(t(), String.t(), String.t(), partition_spec() | nil) ::
+          [Fluss.PartitionInfo.t()]
+  def list_partition_infos!(admin, database, table, spec \\ nil) do
+    case list_partition_infos(admin, database, table, spec) do
+      {:ok, infos} -> infos
+      {:error, %Fluss.Error{} = err} -> raise err
+    end
+  end
+
+  # NIFs that validate the spec return its error directly, not a ref.
+  defp await({:error, _} = err), do: err
+  defp await(ref), do: Native.await_nif(ref)
 end

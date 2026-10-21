@@ -380,7 +380,7 @@ pub fn decode_list<'a>(term: Term<'a>, error: &str) -> Result<Vec<Term<'a>>, Str
     term.decode().map_err(|_| error.to_string())
 }
 
-fn is_nil(term: Term<'_>) -> bool {
+pub fn is_nil(term: Term<'_>) -> bool {
     term.is_atom()
         && term
             .decode::<rustler::Atom>()

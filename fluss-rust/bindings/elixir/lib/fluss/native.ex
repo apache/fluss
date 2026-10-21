@@ -60,6 +60,15 @@ defmodule Fluss.Native do
   def admin_get_table_schema(_admin, _database_name, _table_name, _schema_id),
     do: :erlang.nif_error(:nif_not_loaded)
 
+  def admin_create_partition(_admin, _database_name, _table_name, _spec, _ignore_if_exists),
+    do: :erlang.nif_error(:nif_not_loaded)
+
+  def admin_drop_partition(_admin, _database_name, _table_name, _spec, _ignore_if_not_exists),
+    do: :erlang.nif_error(:nif_not_loaded)
+
+  def admin_list_partition_infos(_admin, _database_name, _table_name, _spec),
+    do: :erlang.nif_error(:nif_not_loaded)
+
   # Schema / TableDescriptor
   def table_descriptor_new(_schema, _options),
     do: :erlang.nif_error(:nif_not_loaded)

@@ -90,6 +90,7 @@ defmodule Fluss.MixProject do
           Fluss.Admin,
           Fluss.DatabaseDescriptor,
           Fluss.DatabaseInfo,
+          Fluss.PartitionInfo,
           Fluss.Schema,
           Fluss.SchemaInfo,
           Fluss.ServerNode,
