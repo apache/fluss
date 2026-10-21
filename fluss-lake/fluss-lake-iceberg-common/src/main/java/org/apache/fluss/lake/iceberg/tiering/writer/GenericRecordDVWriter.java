@@ -37,6 +37,7 @@ import org.apache.iceberg.io.WriteResult;
 import org.apache.iceberg.util.StructLikeMap;
 import org.apache.iceberg.util.StructLikeUtil;
 import org.apache.iceberg.util.StructProjection;
+import org.apache.iceberg.util.Tasks;
 
 import javax.annotation.Nullable;
 
@@ -158,9 +159,11 @@ class GenericRecordDVWriter implements DeltaWriter {
     public void close() throws IOException {
         if (!closed) {
             closed = true;
-            closeWriter(dataWriter);
-            closeWriter(equalityWriter);
-            closeWriter(dvWriter);
+            Tasks.<Closeable>foreach(dataWriter, equalityWriter, dvWriter)
+                    .noRetry()
+                    .suppressFailureWhenFinished()
+                    .onFailure((writer, e) -> recordFailure(e))
+                    .run(Closeable::close, IOException.class);
             insertedRows.clear();
         }
         if (failure != null) {
@@ -189,24 +192,14 @@ class GenericRecordDVWriter implements DeltaWriter {
         }
     }
 
-    private void closeWriter(Closeable writer) {
-        try {
-            writer.close();
-        } catch (IOException | RuntimeException e) {
-            recordFailure(e);
-        }
-    }
-
     private void deleteOutputs() {
         // Track output creation, not just completed results: a failed Puffin close may leave
         // a partial file without any DeleteFile metadata. Shared Puffin files are deleted once.
-        for (String location : new ArrayList<>(io.outputs)) {
-            try {
-                io.deleteFile(location);
-            } catch (RuntimeException e) {
-                recordFailure(e);
-            }
-        }
+        Tasks.foreach(new ArrayList<>(io.outputs))
+                .noRetry()
+                .suppressFailureWhenFinished()
+                .onFailure((location, e) -> recordFailure(e))
+                .run(io::deleteFile);
     }
 
     private void recordFailure(Exception e) {
