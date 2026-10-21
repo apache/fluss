@@ -455,7 +455,7 @@
                                     <excludes>
                                         <exclude>org/apache/fluss/lake/iceberg/IcebergLakeStoragePlugin.class</exclude>
                                         <exclude>org/apache/fluss/lake/iceberg/source/IcebergSplitSerializer.class</exclude>
-                                        <exclude>org/apache/fluss/lake/iceberg/tiering/writer/TaskWriterFactory*.class</exclude>
+                                        <exclude>org/apache/fluss/lake/iceberg/tiering/writer/TaskWriterFactory.class</exclude>
                                         <exclude>org/apache/fluss/lake/iceberg/tiering/writer/GenericRecordAppendOnlyWriter*.class</exclude>
                                         <exclude>org/apache/fluss/lake/iceberg/tiering/writer/GenericRecordDeltaWriter*.class</exclude>
                                     </excludes>
