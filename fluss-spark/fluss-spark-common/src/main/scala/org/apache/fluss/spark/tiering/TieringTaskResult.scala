@@ -17,6 +17,8 @@
 
 package org.apache.fluss.spark.tiering
 
+import org.apache.fluss.client.tiering.TableBucketWriteResult
+import org.apache.fluss.lake.serializer.SimpleVersionedSerializer
 import org.apache.fluss.metadata.{TableBucket, TablePath}
 
 /**
@@ -52,4 +54,40 @@ case class SerializedTaskResult(
     logEndOffset: Long,
     maxTimestamp: Long,
     numberOfSplits: Int)
-  extends Serializable
+  extends Serializable {
+
+  def toWriteResult(
+      serializer: SimpleVersionedSerializer[AnyRef]): TableBucketWriteResult[AnyRef] = {
+    val result = if (serializedWriteResult == null) {
+      null
+    } else {
+      serializer.deserialize(writeResultVersion, serializedWriteResult)
+    }
+    new TableBucketWriteResult(
+      tablePath,
+      tableBucket,
+      partitionName.orNull,
+      result,
+      logEndOffset,
+      maxTimestamp,
+      numberOfSplits)
+  }
+}
+
+object SerializedTaskResult {
+  def fromWriteResult(
+      result: TableBucketWriteResult[AnyRef],
+      serializer: SimpleVersionedSerializer[AnyRef]): SerializedTaskResult = {
+    val bytes = Option(result.writeResult()).map(serializer.serialize).orNull
+    SerializedTaskResult(
+      result.tablePath(),
+      result.tableBucket(),
+      Option(result.partitionName()),
+      bytes,
+      serializer.getVersion,
+      result.logEndOffset(),
+      result.maxTimestamp(),
+      result.numberOfWriteResults()
+    )
+  }
+}

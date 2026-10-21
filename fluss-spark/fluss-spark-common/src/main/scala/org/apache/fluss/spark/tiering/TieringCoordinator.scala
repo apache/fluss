@@ -17,7 +17,6 @@
 
 package org.apache.fluss.spark.tiering
 
-import org.apache.fluss.client.{Connection, ConnectionFactory}
 import org.apache.fluss.client.metadata.MetadataUpdater
 import org.apache.fluss.config.Configuration
 import org.apache.fluss.lake.committer.TieringStats
@@ -25,7 +24,7 @@ import org.apache.fluss.metadata.TablePath
 import org.apache.fluss.metrics.registry.MetricRegistry
 import org.apache.fluss.rpc.{GatewayClientProxy, RpcClient}
 import org.apache.fluss.rpc.gateway.CoordinatorGateway
-import org.apache.fluss.rpc.messages._
+import org.apache.fluss.rpc.messages.{LakeTieringHeartbeatRequest, LakeTieringHeartbeatResponse, PbHeartbeatReqForTable, PbLakeTieringStats}
 import org.apache.fluss.rpc.metrics.ClientMetricGroup
 
 import org.apache.spark.internal.Logging
@@ -34,18 +33,18 @@ import java.util.concurrent.TimeUnit
 
 import scala.collection.JavaConverters._
 
-// TODO: This logic is duplicated from
-//  org.apache.fluss.flink.tiering.source.TieringSourceFunction (heartbeat protocol).
-//  Consider extracting to a shared module (e.g., fluss-tiering-common) in the future.
-
 /** Manages heartbeat communication with the Fluss coordinator for the Spark tiering service. */
-class TieringCoordinator(flussConfig: Configuration) extends AutoCloseable with Logging {
+class TieringCoordinator(
+    flussConfig: Configuration,
+    private var coordinatorGateway: CoordinatorGateway = null)
+  extends AutoCloseable
+  with Logging {
 
   import TieringCoordinator._
 
-  private var connection: Connection = _
+  private var metricRegistry: MetricRegistry = _
   private var rpcClient: RpcClient = _
-  private var coordinatorGateway: CoordinatorGateway = _
+  private var closed = false
   private var coordinatorEpoch: Int = 0
 
   // State maps (immutable maps, updated via var)
@@ -55,18 +54,17 @@ class TieringCoordinator(flussConfig: Configuration) extends AutoCloseable with 
 
   @volatile var tableCancelled: Boolean = false
 
-  def open(): Unit = {
-    connection = ConnectionFactory.createConnection(flussConfig)
-    val metricRegistry = MetricRegistry.create(flussConfig, null)
-    val clientMetricGroup = new ClientMetricGroup(metricRegistry, "SparkLakeTieringService")
-    rpcClient = RpcClient.create(flussConfig, clientMetricGroup)
-    val metadataUpdater = new MetadataUpdater(flussConfig, rpcClient)
-    coordinatorGateway = GatewayClientProxy.createGatewayProxy(
-      () => metadataUpdater.getCoordinatorServer,
-      rpcClient,
-      classOf[CoordinatorGateway])
-
-    logInfo("Registering Spark Tiering Service with Fluss Coordinator...")
+  def open(): Unit = synchronized {
+    if (coordinatorGateway == null) {
+      metricRegistry = MetricRegistry.create(flussConfig, null)
+      val clientMetricGroup = new ClientMetricGroup(metricRegistry, "SparkLakeTieringService")
+      rpcClient = RpcClient.create(flussConfig, clientMetricGroup)
+      val metadataUpdater = new MetadataUpdater(flussConfig, rpcClient)
+      coordinatorGateway = GatewayClientProxy.createGatewayProxy(
+        () => metadataUpdater.getCoordinatorServer,
+        rpcClient,
+        classOf[CoordinatorGateway])
+    }
     val response = waitHeartbeatResponse(coordinatorGateway.lakeTieringHeartbeat(basicHeartBeat()))
     coordinatorEpoch = response.getCoordinatorEpoch
     logInfo(s"Registered with Fluss Coordinator (epoch=$coordinatorEpoch).")
@@ -78,7 +76,7 @@ class TieringCoordinator(flussConfig: Configuration) extends AutoCloseable with 
    * @return
    *   Some((tableId, tieringEpoch, tablePath)) if a table is assigned, None otherwise
    */
-  def heartbeatAndRequestTable(): Option[(Long, Long, TablePath)] = {
+  def heartbeatAndRequestTable(): Option[(Long, Long, TablePath)] = synchronized {
     val currentFinished = finishedTables
     val currentFailed = failedTableEpochs
 
@@ -91,6 +89,8 @@ class TieringCoordinator(flussConfig: Configuration) extends AutoCloseable with 
         s"failed=$currentFailed")
 
     val response = waitHeartbeatResponse(coordinatorGateway.lakeTieringHeartbeat(request))
+
+    handleHeartbeatResponse(response)
 
     // Clear reported finished/failed tables
     finishedTables = finishedTables -- currentFinished.keys
@@ -112,44 +112,71 @@ class TieringCoordinator(flussConfig: Configuration) extends AutoCloseable with 
   }
 
   /** Sends a keepalive heartbeat with currently tiering tables (no table request). */
-  def sendKeepAliveHeartbeat(): Unit = {
+  def sendKeepAliveHeartbeat(): Unit = synchronized {
     val request =
       buildTieringHeartBeat(tieringTableEpochs, finishedTables, failedTableEpochs, coordinatorEpoch)
-    waitHeartbeatResponse(coordinatorGateway.lakeTieringHeartbeat(request))
+    handleHeartbeatResponse(waitHeartbeatResponse(coordinatorGateway.lakeTieringHeartbeat(request)))
   }
 
-  def registerTiering(tableId: Long, tieringEpoch: Long): Unit = {
+  private def handleHeartbeatResponse(response: LakeTieringHeartbeatResponse): Unit = {
+    if (response.getCoordinatorEpoch != coordinatorEpoch) {
+      // Old assignments are fenced after coordinator failover. Do not re-label their epochs.
+      tableCancelled = tieringTableEpochs.nonEmpty
+      tieringTableEpochs = Map.empty
+      finishedTables = Map.empty
+      failedTableEpochs = Map.empty
+      coordinatorEpoch = response.getCoordinatorEpoch
+    }
+    response.getTieringTableRespsList.asScala.foreach {
+      result =>
+        if (result.hasError && tieringTableEpochs.contains(result.getTableId)) {
+          logWarning(
+            s"Tiering assignment rejected for table ${result.getTableId}: ${result.getError}")
+          tableCancelled = true
+        }
+    }
+  }
+
+  def registerTiering(tableId: Long, tieringEpoch: Long): Unit = synchronized {
+    tableCancelled = false
     tieringTableEpochs = tieringTableEpochs + (tableId -> tieringEpoch)
   }
 
-  def markTableFinished(tableId: Long, tieringEpoch: Long, stats: TieringStats): Unit = {
-    tieringTableEpochs = tieringTableEpochs - tableId
-    finishedTables = finishedTables + (tableId -> TieringFinishInfo(tieringEpoch, stats))
-  }
-
-  def markTableFailed(tableId: Long, tieringEpoch: Long): Unit = {
-    tieringTableEpochs = tieringTableEpochs - tableId
-    failedTableEpochs = failedTableEpochs + (tableId -> tieringEpoch)
-  }
-
-  override def close(): Unit = {
-    // Report all tiering tables as failed before shutdown
-    if (tieringTableEpochs.nonEmpty) {
-      failedTableEpochs = failedTableEpochs ++ tieringTableEpochs
-      tieringTableEpochs = Map.empty
-      try {
-        val request = basicHeartBeat()
-        addFailedTables(request, failedTableEpochs, coordinatorEpoch)
-        waitHeartbeatResponse(coordinatorGateway.lakeTieringHeartbeat(request))
-        logInfo(s"Reported failed tables on shutdown: $failedTableEpochs")
-      } catch {
-        case e: Exception =>
-          logWarning("Failed to report failed tables on shutdown", e)
+  def markTableFinished(tableId: Long, tieringEpoch: Long, stats: TieringStats): Unit =
+    synchronized {
+      if (tieringTableEpochs.get(tableId).contains(tieringEpoch)) {
+        tieringTableEpochs = tieringTableEpochs - tableId
+        finishedTables = finishedTables + (tableId -> TieringFinishInfo(tieringEpoch, stats))
       }
     }
 
-    closeQuietly(rpcClient, "RpcClient")
-    closeQuietly(connection, "Connection")
+  def markTableFailed(tableId: Long, tieringEpoch: Long): Unit = synchronized {
+    if (tieringTableEpochs.get(tableId).contains(tieringEpoch)) {
+      tieringTableEpochs = tieringTableEpochs - tableId
+      failedTableEpochs = failedTableEpochs + (tableId -> tieringEpoch)
+    }
+  }
+
+  override def close(): Unit = synchronized {
+    if (closed) {
+      return
+    }
+    closed = true
+    failedTableEpochs = failedTableEpochs ++ tieringTableEpochs
+    tieringTableEpochs = Map.empty
+    try {
+      // Flush completed reports too: stop may follow the final commit immediately.
+      if (coordinatorGateway != null && (finishedTables.nonEmpty || failedTableEpochs.nonEmpty)) {
+        val request =
+          buildTieringHeartBeat(Map.empty, finishedTables, failedTableEpochs, coordinatorEpoch)
+        waitHeartbeatResponse(coordinatorGateway.lakeTieringHeartbeat(request))
+      }
+    } catch {
+      case e: Exception => logWarning("Failed to report tiering status on shutdown", e)
+    } finally {
+      closeQuietly(rpcClient, "RpcClient")
+      closeQuietly(metricRegistry, "MetricRegistry")
+    }
   }
 }
 
@@ -183,8 +210,12 @@ object TieringCoordinator extends Logging {
           val stats = finishInfo.stats
           if (stats != null && stats.isAvailableStats) {
             val pbStats = new PbLakeTieringStats()
-            if (stats.getFileSize != null) pbStats.setFileSize(stats.getFileSize)
-            if (stats.getRecordCount != null) pbStats.setRecordCount(stats.getRecordCount)
+            if (stats.getFileSize != null) {
+              pbStats.setFileSize(stats.getFileSize)
+            }
+            if (stats.getRecordCount != null) {
+              pbStats.setRecordCount(stats.getRecordCount)
+            }
             req.setLakeTieringStats(pbStats)
           }
           req

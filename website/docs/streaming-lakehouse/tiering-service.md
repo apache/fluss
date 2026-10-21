@@ -9,7 +9,7 @@ The Tiering Service continuously compacts real-time data from Fluss into the con
 
 ## Overview
 
-The Tiering Service is implemented as an Apache Flink job that:
+The Tiering Service runs as an Apache Flink job or a standalone Apache Spark application that:
 - Reads records from Fluss tables with lakehouse storage enabled
 - Writes data to the configured data lake format (Paimon, Iceberg, Hudi, or Lance)
 - Maintains exactly-once semantics between Fluss and the data lake
@@ -29,7 +29,7 @@ For deployment instructions, see [Deploying Lakestream](../install-deploy/deploy
 
 ## Architecture
 
-The Tiering Service consists of three Flink operators:
+The Flink Tiering Service consists of three operators:
 
 | Operator | Description |
 |----------|-------------|
@@ -83,6 +83,39 @@ The following `--lake.tiering.*` options are set when starting the tiering job:
 | `lake.tiering.auto-expire-snapshot` | Boolean | false | Auto-trigger snapshot expiration on commit |
 | `lake.tiering.partition.mark-done.enabled` | Boolean | false | Enable [partition mark-done](#partition-mark-done) using the actual lake table's options |
 | `lake.tiering.io.tmp.dirs` | String | Flink temporary directories | Local directories used for temporary I/O files. If not configured, a `fluss` child directory under each Flink temporary directory is used. Separate multiple directories with commas or the system path separator |
+
+### Spark Tiering Service
+
+Build the `fluss-spark-tiering` module and submit its jar with Spark 3.5 (Scala 2.12).
+Supply the lake connector and its runtime dependencies with `--jars` so they are available on both
+the driver and executors. For Paimon, include `fluss-lake-paimon` and `paimon-bundle`:
+
+```shell
+${SPARK_HOME}/bin/spark-submit \
+    --class org.apache.fluss.spark.tiering.SparkLakeTiering \
+    --jars /path/to/fluss-lake-paimon-$FLUSS_VERSION$.jar,/path/to/paimon-bundle-$PAIMON_VERSION$.jar \
+    /path/to/fluss-spark-tiering_2.12-$FLUSS_VERSION$.jar \
+    --fluss.bootstrap.servers localhost:9123 \
+    --datalake.format paimon \
+    --datalake.paimon.metastore filesystem \
+    --datalake.paimon.warehouse hdfs:///warehouse/paimon \
+    --lake.tiering.auto-expire-snapshot true
+```
+
+The Spark service processes one table at a time and runs its bucket splits in parallel Spark tasks.
+It uses the shared lake commit protocol to recover interrupted commits and advance Fluss lake offsets.
+The driver keeps the table assignment alive while generating splits, writing data, and committing.
+After repeated heartbeat failures, the application fails so its deployment manager can restart it.
+
+The same `--fluss.*`, `--datalake.*`, and `--lake.tiering.*` argument groups apply.
+Spark service options are passed as Fluss client arguments:
+
+| Argument | Default | Description |
+|----------|---------|-------------|
+| `--fluss.spark.tiering.poll.table.interval` | 30 s | Delay before requesting another table when none is available |
+| `--fluss.spark.tiering.heartbeat.interval` | 10 s | Heartbeat interval while processing a table |
+| `--fluss.spark.tiering.poll.timeout` | 10 s | Executor log scanner poll timeout |
+| `--fluss.spark.tiering.heartbeat.max.failures` | 10 | Consecutive heartbeat failures before the application fails |
 
 ### Table-Level Options
 

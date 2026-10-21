@@ -20,35 +20,31 @@ package org.apache.fluss.spark.tiering
 import org.apache.fluss.client.{Connection, ConnectionFactory}
 import org.apache.fluss.client.admin.Admin
 import org.apache.fluss.client.tiering.{FlussTableLakeSnapshotCommitter, TableBucketWriteResult, TieringCommitter, TieringSplit, TieringSplitGenerator}
-import org.apache.fluss.config.Configuration
+import org.apache.fluss.config.{ConfigOptions, Configuration}
 import org.apache.fluss.lake.committer.TieringStats
 import org.apache.fluss.lake.lakestorage.LakeStoragePluginSetUp
-import org.apache.fluss.lake.writer.LakeTieringFactory
+import org.apache.fluss.lake.writer.{LakeTieringFactory, TieringTableValidator}
 import org.apache.fluss.metadata.TablePath
-import org.apache.fluss.spark.tiering.SparkTieringJobRunner.submit
 
 import org.apache.spark.SparkContext
 import org.apache.spark.internal.Logging
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.SparkSession
 
-import java.util.concurrent.{Executors, ScheduledExecutorService, ScheduledFuture, TimeUnit}
+import java.io.File
+import java.util.UUID
+import java.util.concurrent.{Executors, TimeUnit}
 import java.util.concurrent.atomic.{AtomicBoolean, AtomicInteger}
+import java.util.regex.Pattern
 
 import scala.collection.JavaConverters._
 import scala.concurrent.{Await, ExecutionContext, Future, Promise}
 import scala.concurrent.duration.{Duration => ScalaDuration}
+import scala.util.control.NonFatal
 
 /**
- * Main driver loop for the Spark tiering service.
- *
- * Orchestrates a long-running loop: heartbeat -> request table -> generate splits -> parallel RDD
- * job -> commit. Processes one table at a time. The loop runs asynchronously via [[startAsync()]]
- * on a dedicated daemon thread and terminates cooperatively when [[stop()]] is called.
- *
- * The [[LakeTieringFactory]] is created internally from `dataLakeFormat` and `lakeConfig`. Tiering
- * options (poll interval, heartbeat interval, poll timeout, max heartbeat failures) are read from
- * `flussConfig` via [[SparkTieringOptions]].
+ * Runs one table tiering round at a time, keeping its assignment alive through split generation,
+ * executor writes and the lake/Fluss commit. The service stops on repeated heartbeat failures.
  */
 class SparkTieringJobRunner(
     spark: SparkSession,
@@ -60,293 +56,197 @@ class SparkTieringJobRunner(
     snapshotCommitterFactory: Configuration => FlussTableLakeSnapshotCommitter =
       new FlussTableLakeSnapshotCommitter(_),
     connectionFactory: Configuration => Connection = ConnectionFactory.createConnection,
-    splitGeneratorFactory: Admin => TieringSplitGenerator = new TieringSplitGenerator(_))
+    splitGeneratorFactory: Admin => TieringSplitGenerator = new TieringSplitGenerator(_),
+    lakeTieringFactoryProvider: (String, Configuration) => LakeTieringFactory[AnyRef, AnyRef] =
+      SparkTieringJobRunner.createLakeTieringFactory)
   extends Logging {
 
-  // Read tiering options
   private val pollIntervalMs =
     flussConfig.get(SparkTieringOptions.POLL_TIERING_TABLE_INTERVAL).toMillis
   private val heartbeatIntervalMs =
     flussConfig.get(SparkTieringOptions.HEARTBEAT_INTERVAL).toMillis
-  private val pollTimeoutMs =
-    flussConfig.get(SparkTieringOptions.POLL_TIMEOUT).toMillis
+  private val pollTimeoutMs = flussConfig.get(SparkTieringOptions.POLL_TIMEOUT).toMillis
   private val maxHeartbeatFailures =
     flussConfig.get(SparkTieringOptions.MAX_HEARTBEAT_FAILURES).intValue()
+  require(pollIntervalMs > 0, "Tiering table poll interval must be positive")
+  require(heartbeatIntervalMs > 0, "Tiering heartbeat interval must be positive")
+  require(pollTimeoutMs > 0, "Tiering log poll timeout must be positive")
+  require(maxHeartbeatFailures > 0, "Maximum heartbeat failures must be positive")
 
-  private val lakeStoragePlugin = LakeStoragePluginSetUp.fromDataLakeFormat(dataLakeFormat, null)
-  private val lakeStorage = lakeStoragePlugin.createLakeStorage(lakeConfig)
-  private val lakeTieringFactory = lakeStorage
-    .createLakeTieringFactory()
-    .asInstanceOf[LakeTieringFactory[AnyRef, AnyRef]]
+  private val lakeTieringFactory = lakeTieringFactoryProvider(dataLakeFormat, lakeConfig)
 
-  private val stopped: AtomicBoolean = new AtomicBoolean(false)
-  private val terminationPromise: Promise[Unit] = Promise[Unit]()
+  private val ioTmpDirs = {
+    val configured = lakeTieringConfig.getOptional(ConfigOptions.LAKE_TIERING_IO_TMP_DIRS)
+    if (configured.isPresent) {
+      configured
+        .get()
+        .split(",|" + Pattern.quote(File.pathSeparator))
+        .map(_.trim)
+        .filter(_.nonEmpty)
+    } else {
+      null
+    }
+  }
 
-  private val loopExecutionContext: ExecutionContext = ExecutionContext.fromExecutorService(
+  private val started = new AtomicBoolean(false)
+  private val stopped = new AtomicBoolean(false)
+  private val stopSignal = new Object
+  private val terminationPromise = Promise[Unit]()
+  @volatile private var activeJobGroup: String = _
+  @volatile private var heartbeatFailure: Throwable = _
+
+  private val loopExecutionContext = ExecutionContext.fromExecutorService(
     Executors.newSingleThreadExecutor(
       (r: Runnable) => {
-        val t = new Thread(r, "SparkTiering-MainLoop")
-        t.setDaemon(true)
-        t
-      })
-  )
+        val thread = new Thread(r, "SparkTiering-MainLoop")
+        thread.setDaemon(true)
+        thread
+      }))
 
-  /**
-   * Starts the tiering service loop asynchronously on a dedicated single-thread ExecutionContext.
-   *
-   * @return
-   *   a Future that completes when the loop exits normally or fails on exception
-   */
-  def startAsync(): Future[Unit] = {
-    val f = Future {
-      run()
-    }(loopExecutionContext)
-    terminationPromise.completeWith(f)
+  /** Starts the service once and returns its termination future on subsequent calls. */
+  def startAsync(): Future[Unit] = synchronized {
+    if (started.compareAndSet(false, true)) {
+      terminationPromise.completeWith(Future {
+        try run()
+        finally loopExecutionContext.shutdown()
+      }(loopExecutionContext))
+    }
     terminationPromise.future
   }
 
-  /**
-   * Blocks until the tiering loop finishes or the timeout expires.
-   *
-   * @throws java.util.concurrent.TimeoutException
-   *   if the loop has not terminated within the given timeout
-   */
+  /** Cancels the active Spark job and waits for the service to release its resources. */
   def stop(timeout: ScalaDuration = ScalaDuration(60, TimeUnit.SECONDS)): Unit = {
-    stopped.set(true)
-    try {
-      Await.result(terminationPromise.future, timeout)
-    } catch {
-      case _: Exception =>
-        logWarning("Timed out waiting for tiering loop to finish.")
+    synchronized {
+      stopped.set(true)
+      if (started.compareAndSet(false, true)) {
+        terminationPromise.trySuccess(())
+        loopExecutionContext.shutdown()
+      }
+    }
+    stopSignal.synchronized {
+      stopSignal.notifyAll()
+    }
+    val jobGroup = activeJobGroup
+    if (jobGroup != null) {
+      spark.sparkContext.cancelJobGroup(jobGroup)
+    }
+    Await.ready(terminationPromise.future, timeout)
+  }
+
+  private def pause(): Unit = stopSignal.synchronized {
+    if (!stopped.get()) {
+      stopSignal.wait(pollIntervalMs)
     }
   }
 
   private def run(): Unit = {
-    val sc = spark.sparkContext
-    val coordinator = coordinatorFactory(flussConfig)
-    val snapshotCommitter = snapshotCommitterFactory(flussConfig)
+    var coordinator: TieringCoordinator = null
+    var snapshotCommitter: FlussTableLakeSnapshotCommitter = null
     var connection: Connection = null
     var admin: Admin = null
-
     try {
+      coordinator = coordinatorFactory(flussConfig)
+      snapshotCommitter = snapshotCommitterFactory(flussConfig)
       coordinator.open()
       snapshotCommitter.open()
       connection = connectionFactory(flussConfig)
       admin = connection.getAdmin
-
-      val tieringCommitter = new TieringCommitter[AnyRef, AnyRef](
+      val committer = new TieringCommitter[AnyRef, AnyRef](
         admin,
         flussConfig,
         lakeTieringConfig,
         lakeTieringFactory,
         snapshotCommitter)
       val splitGenerator = splitGeneratorFactory(admin)
-      val consecutiveHeartbeatFailures = new AtomicInteger(0)
-
-      // Register shutdown hook to report all in-progress tables as failed
-      val shutdownHook = new Thread("SparkTiering-ShutdownHook") {
-        override def run(): Unit = {
-          logInfo("Shutdown hook triggered, stopping tiering service...")
-          stopped.set(true)
-          coordinator.close()
-        }
-      }
-      Runtime.getRuntime.addShutdownHook(shutdownHook)
-
-      logInfo("Spark tiering service started. Entering main loop.")
+      val failures = new AtomicInteger(0)
 
       while (!stopped.get()) {
         try {
-          val tableAssignment = coordinator.heartbeatAndRequestTable()
-          consecutiveHeartbeatFailures.set(0)
-
-          tableAssignment match {
+          val assignment = coordinator.heartbeatAndRequestTable()
+          failures.set(0)
+          assignment match {
             case Some((tableId, tieringEpoch, tablePath)) =>
               processTieringTable(
-                sc,
                 coordinator,
-                tieringCommitter,
+                committer,
                 admin,
                 splitGenerator,
-                consecutiveHeartbeatFailures,
+                failures,
                 tableId,
                 tieringEpoch,
                 tablePath)
-
-            case None =>
-              logInfo(s"No tiering table available, poll later after ${pollIntervalMs}ms.")
-              if (stopped.get()) {
-                logInfo("Stop was called while polling for table, exiting loop.")
-              }
-              Thread.sleep(pollIntervalMs)
+            case None => pause()
           }
         } catch {
-          case _: InterruptedException =>
-            logInfo("Main loop interrupted, stopping.")
+          case e: InterruptedException =>
+            Thread.currentThread().interrupt()
             stopped.set(true)
-          case e: Exception =>
-            val failures = consecutiveHeartbeatFailures.incrementAndGet()
-            logWarning(s"Heartbeat failed ($failures/$maxHeartbeatFailures)", e)
-            if (failures >= maxHeartbeatFailures) {
-              logError(
-                s"Max consecutive heartbeat failures ($maxHeartbeatFailures) exceeded." +
-                  " Failing job.")
+            throw new IllegalStateException("Spark tiering was interrupted", e)
+          case NonFatal(e) =>
+            val count = failures.incrementAndGet()
+            if (count >= maxHeartbeatFailures) {
               throw new IllegalStateException(
-                s"Spark tiering job failed: exceeded max heartbeat failures ($maxHeartbeatFailures)",
+                "Spark tiering exceeded maximum heartbeat failures",
                 e)
             }
-            Thread.sleep(pollIntervalMs)
+            logWarning(s"Tiering heartbeat failed ($count/$maxHeartbeatFailures)", e)
+            pause()
+        }
+        if (heartbeatFailure != null) {
+          throw new IllegalStateException(
+            "Spark tiering exceeded maximum background heartbeat failures",
+            heartbeatFailure)
         }
       }
-
-      logInfo("Spark tiering service main loop exited.")
     } finally {
-      closeQuietly(snapshotCommitter, "FlussTableLakeSnapshotCommitter")
       closeQuietly(coordinator, "TieringCoordinator")
+      closeQuietly(snapshotCommitter, "FlussTableLakeSnapshotCommitter")
       closeQuietly(admin, "Admin")
       closeQuietly(connection, "Connection")
     }
   }
 
   private def processTieringTable(
-      sc: SparkContext,
       coordinator: TieringCoordinator,
-      tieringCommitter: TieringCommitter[AnyRef, AnyRef],
+      committer: TieringCommitter[AnyRef, AnyRef],
       admin: Admin,
       splitGenerator: TieringSplitGenerator,
-      consecutiveHeartbeatFailures: AtomicInteger,
+      failures: AtomicInteger,
       tableId: Long,
       tieringEpoch: Long,
       tablePath: TablePath): Unit = {
-    logInfo(s"Starting tiering for table: tableId=$tableId, epoch=$tieringEpoch, path=$tablePath")
-
-    try {
-      // Get table info
-      val tableInfo = admin.getTableInfo(tablePath).get()
-
-      // Generate splits
-      val rawSplits = splitGenerator.generateTableSplits(tableInfo).asScala
-
-      if (rawSplits.isEmpty) {
-        logInfo(s"No splits generated for table $tablePath, marking as finished.")
-        coordinator.markTableFinished(tableId, tieringEpoch, TieringStats.UNKNOWN)
-        return
-      }
-
-      // Populate numberOfSplits, splitIndex and tieringRoundTimestamp on each split
-      val totalSplits = rawSplits.size
-      val tieringRoundTimestamp = System.currentTimeMillis()
-      val splits = rawSplits.zipWithIndex.map {
-        case (s, idx) => s.copy(totalSplits, idx, tieringRoundTimestamp)
-      }.toSeq
-
-      // Register tiering in coordinator state
-      coordinator.registerTiering(tableId, tieringEpoch)
-
-      // Run RDD job with background heartbeat
-      val results =
-        runTieringRddJob(sc, coordinator, consecutiveHeartbeatFailures, splits, tablePath, tableId)
-
-      // Check if table was cancelled (dropped/recreated detected by heartbeat thread)
-      if (coordinator.tableCancelled) {
-        logWarning(s"Table $tablePath was cancelled during tiering (likely dropped/recreated).")
-        coordinator.tableCancelled = false
-        coordinator.markTableFailed(tableId, tieringEpoch)
-        return
-      }
-
-      // Commit results
-      val commitResult =
-        tieringCommitter.commitWriteResults(tableId, tablePath, results.asJava)
-
-      val stats = Option(commitResult.getStats).getOrElse(TieringStats.UNKNOWN)
-      logInfo(s"Tiering completed for table $tablePath, stats=$stats")
-      coordinator.markTableFinished(tableId, tieringEpoch, stats)
-
-    } catch {
-      case e: Exception =>
-        logError(s"Tiering failed for table $tablePath (epoch=$tieringEpoch)", e)
-        coordinator.markTableFailed(tableId, tieringEpoch)
-    }
-  }
-
-  /**
-   * Runs the tiering RDD job with a background heartbeat thread.
-   *
-   * Delegates to [[SparkTieringJobRunner.submit()]] to create the RDD. Configs are captured in the
-   * closure and serialized to executors. Each executor task re-initializes the
-   * [[LakeTieringFactory]] from `dataLakeFormat` and `lakeConfig`. A background scheduled thread
-   * sends keepalive heartbeats to the coordinator during the RDD job; if max failures are exceeded,
-   * it cancels the Spark job group.
-   */
-  private def runTieringRddJob(
-      sc: SparkContext,
-      coordinator: TieringCoordinator,
-      consecutiveHeartbeatFailures: AtomicInteger,
-      splits: Seq[TieringSplit],
-      tablePath: TablePath,
-      tableId: Long): Seq[TableBucketWriteResult[AnyRef]] = {
-    val jobGroupId = s"tiering-${tablePath.getDatabaseName}-${tablePath.getTableName}-$tableId"
-    sc.setJobGroup(jobGroupId, s"Tiering table $tablePath")
-
-    // Start background heartbeat thread
-    val heartbeatScheduler = Executors.newSingleThreadScheduledExecutor(
+    val sc = spark.sparkContext
+    val jobGroupId = s"fluss-tiering-$tableId-${UUID.randomUUID()}"
+    coordinator.registerTiering(tableId, tieringEpoch)
+    activeJobGroup = jobGroupId
+    sc.setJobGroup(jobGroupId, s"Tiering table $tablePath", interruptOnCancel = true)
+    val scheduler = Executors.newSingleThreadScheduledExecutor(
       (r: Runnable) => {
-        val t = new Thread(r, "SparkTiering-Heartbeat")
-        t.setDaemon(true)
-        t
+        val thread = new Thread(r, "SparkTiering-Heartbeat")
+        thread.setDaemon(true)
+        thread
       })
-    val heartbeatFuture = startBackgroundHeartbeat(
-      heartbeatScheduler,
-      coordinator,
-      consecutiveHeartbeatFailures,
-      sc,
-      jobGroupId,
-      tablePath,
-      tableId)
-
-    try {
-      submit(sc, splits, flussConfig, dataLakeFormat, lakeConfig, pollTimeoutMs)
-        .collect()
-        .toSeq
-    } finally {
-      // Stop background heartbeat
-      heartbeatFuture.cancel(false)
-      heartbeatScheduler.shutdownNow()
-      sc.clearJobGroup()
-    }
-  }
-
-  /**
-   * Starts a background scheduled task that sends keepalive heartbeats and checks for table
-   * drop/recreation during RDD job execution.
-   */
-  private def startBackgroundHeartbeat(
-      scheduler: ScheduledExecutorService,
-      coordinator: TieringCoordinator,
-      consecutiveHeartbeatFailures: AtomicInteger,
-      sc: SparkContext,
-      jobGroupId: String,
-      tablePath: TablePath,
-      expectedTableId: Long): ScheduledFuture[_] = {
-    coordinator.tableCancelled = false
-
-    scheduler.scheduleAtFixedRate(
+    val heartbeatStopped = new AtomicBoolean(false)
+    val heartbeat = scheduler.scheduleAtFixedRate(
       new Runnable {
         override def run(): Unit = {
-          try {
-            coordinator.sendKeepAliveHeartbeat()
-            consecutiveHeartbeatFailures.set(0)
-          } catch {
-            case e: Exception =>
-              val failures = consecutiveHeartbeatFailures.incrementAndGet()
-              logWarning(s"Background heartbeat failed ($failures/$maxHeartbeatFailures)", e)
-              if (failures >= maxHeartbeatFailures) {
-                logError("Max heartbeat failures exceeded during RDD job. Cancelling job group.")
-                coordinator.tableCancelled = true
-                sc.cancelJobGroup(jobGroupId)
-                return
-              }
+          if (!heartbeatStopped.get() && !coordinator.tableCancelled && !stopped.get()) {
+            try {
+              coordinator.sendKeepAliveHeartbeat()
+              failures.set(0)
+            } catch {
+              case NonFatal(e) if !heartbeatStopped.get() =>
+                val count = failures.incrementAndGet()
+                logWarning(s"Background heartbeat failed ($count/$maxHeartbeatFailures)", e)
+                if (count >= maxHeartbeatFailures) {
+                  heartbeatFailure = e
+                  coordinator.tableCancelled = true
+                }
+              case NonFatal(_) => // The round is shutting down its heartbeat thread.
+            }
+            if (coordinator.tableCancelled || heartbeatFailure != null) {
+              sc.cancelJobGroup(jobGroupId)
+            }
           }
         }
       },
@@ -354,19 +254,99 @@ class SparkTieringJobRunner(
       heartbeatIntervalMs,
       TimeUnit.MILLISECONDS
     )
+
+    var finished = false
+    var stats = TieringStats.UNKNOWN
+    try {
+      val tableInfo = admin.getTableInfo(tablePath).get()
+      require(tableInfo.getTableId == tableId, s"Table $tablePath was dropped and recreated")
+      lakeTieringFactory match {
+        case validator: TieringTableValidator => validator.validateTable(tableInfo)
+        case _ =>
+      }
+      val rawSplits = splitGenerator.generateTableSplits(tableInfo).asScala
+      val roundTimestamp = System.currentTimeMillis()
+      val splits = rawSplits.zipWithIndex.map {
+        case (split, index) => split.copy(rawSplits.size, index, roundTimestamp)
+      }.toSeq
+      checkAssignment(coordinator)
+      val results = if (splits.isEmpty) {
+        Seq.empty[TableBucketWriteResult[AnyRef]]
+      } else {
+        SparkTieringJobRunner
+          .submit(sc, splits, flussConfig, dataLakeFormat, lakeConfig, pollTimeoutMs, ioTmpDirs)
+          .collect()
+          .toSeq
+          .map(_.toWriteResult(lakeTieringFactory.getWriteResultSerializer))
+      }
+      checkAssignment(coordinator)
+      // Confirm ownership immediately before committing, including for empty rounds.
+      coordinator.sendKeepAliveHeartbeat()
+      checkAssignment(coordinator)
+      val result = committer.commitWriteResults(tableId, tablePath, results.asJava)
+      checkAssignment(coordinator)
+      stats = Option(result.getStats).getOrElse(TieringStats.UNKNOWN)
+      finished = true
+    } catch {
+      case NonFatal(e) => logWarning(s"Tiering failed for $tablePath (epoch=$tieringEpoch)", e)
+    } finally {
+      heartbeatStopped.set(true)
+      heartbeat.cancel(true)
+      scheduler.shutdownNow()
+      // No heartbeat may race the transition to finished/failed or the next assignment.
+      scheduler.awaitTermination(60, TimeUnit.SECONDS)
+      activeJobGroup = null
+      sc.clearJobGroup()
+      if (finished) {
+        coordinator.markTableFinished(tableId, tieringEpoch, stats)
+      } else {
+        coordinator.markTableFailed(tableId, tieringEpoch)
+      }
+    }
+  }
+
+  private def checkAssignment(coordinator: TieringCoordinator): Unit = {
+    checkAssignmentState(!stopped.get(), "Spark tiering service is stopping")
+    checkAssignmentState(heartbeatFailure == null, "Spark tiering heartbeat failed")
+    checkAssignmentState(!coordinator.tableCancelled, "Spark tiering assignment was cancelled")
+  }
+
+  private def checkAssignmentState(valid: Boolean, message: String): Unit = {
+    if (!valid) {
+      throw new IllegalStateException(message)
+    }
   }
 }
 
+/** Creates executor jobs without capturing driver-side resources in the Spark closure. */
 object SparkTieringJobRunner {
+  private[tiering] def createLakeTieringFactory(
+      dataLakeFormat: String,
+      lakeConfig: Configuration): LakeTieringFactory[AnyRef, AnyRef] = {
+    LakeStoragePluginSetUp
+      .fromDataLakeFormat(dataLakeFormat, null)
+      .createLakeStorage(lakeConfig)
+      .createLakeTieringFactory()
+      .asInstanceOf[LakeTieringFactory[AnyRef, AnyRef]]
+  }
+
   def submit(
       sparkContext: SparkContext,
       splits: Seq[TieringSplit],
       flussConfig: Configuration,
       dataLakeFormat: String,
       lakeConfig: Configuration,
-      pollTimeoutMs: Long): RDD[TableBucketWriteResult[AnyRef]] = {
+      pollTimeoutMs: Long,
+      ioTmpDirs: Array[String] = null): RDD[SerializedTaskResult] = {
     sparkContext.parallelize(splits, splits.size).map {
-      split => TieringTask.process(split, flussConfig, dataLakeFormat, lakeConfig, pollTimeoutMs)
+      split =>
+        TieringTask.process(
+          split,
+          flussConfig,
+          dataLakeFormat,
+          lakeConfig,
+          pollTimeoutMs,
+          ioTmpDirs)
     }
   }
 }

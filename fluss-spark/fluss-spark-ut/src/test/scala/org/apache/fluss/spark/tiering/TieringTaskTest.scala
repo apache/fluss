@@ -19,14 +19,17 @@ package org.apache.fluss.spark.tiering
 
 import org.apache.fluss.client.table.Table
 import org.apache.fluss.client.table.scanner.{Scan, ScanRecord}
+import org.apache.fluss.client.table.scanner.batch.BatchScanner
 import org.apache.fluss.client.table.scanner.log.{LogScanner, ScanRecords}
-import org.apache.fluss.client.tiering.TieringLogSplit
+import org.apache.fluss.client.tiering.{TieringLogSplit, TieringSnapshotSplit}
 import org.apache.fluss.lake.writer.LakeWriter
 import org.apache.fluss.metadata.{TableBucket, TablePath}
+import org.apache.fluss.row.InternalRow
+import org.apache.fluss.utils.CloseableIterator
 
 import org.assertj.core.api.Assertions.assertThat
 import org.mockito.ArgumentMatchers.any
-import org.mockito.Mockito.{mock, never, verify, when}
+import org.mockito.Mockito.{doThrow, mock, never, verify, when}
 import org.scalatest.funsuite.AnyFunSuite
 
 import java.time.Duration
@@ -62,4 +65,40 @@ class TieringTaskTest extends AnyFunSuite {
     verify(writer).complete()
     verify(scanner).close()
   }
+
+  test("an empty log range finishes without polling") {
+    val table = mock(classOf[Table])
+    val scan = mock(classOf[Scan])
+    val scanner = mock(classOf[LogScanner])
+    val writer = mock(classOf[LakeWriter[AnyRef]])
+    when(table.newScan()).thenReturn(scan)
+    when(scan.createLogScanner()).thenReturn(scanner)
+    val split =
+      new TieringLogSplit(TablePath.of("db", "table"), new TableBucket(1L, 0), null, 5L, 5L, 1)
+    val result = TieringTask.processLogSplit(table, writer, split, 1L)
+    assertThat(result.logEndOffset()).isEqualTo(5L)
+    verify(scanner, never()).poll(any(classOf[Duration]))
+    verify(writer).complete()
+    verify(scanner).close()
+  }
+
+  test("snapshot batch and scanner close when writing fails") {
+    val table = mock(classOf[Table])
+    val scan = mock(classOf[Scan])
+    val scanner = mock(classOf[BatchScanner])
+    val batch = mock(classOf[CloseableIterator[InternalRow]])
+    val writer = mock(classOf[LakeWriter[AnyRef]])
+    val bucket = new TableBucket(1L, 0)
+    when(table.newScan()).thenReturn(scan)
+    when(scan.createBatchScanner(bucket, 7L)).thenReturn(scanner)
+    when(scanner.pollBatch(Duration.ofMillis(1))).thenReturn(batch)
+    when(batch.hasNext).thenReturn(true)
+    doThrow(new IllegalStateException("write failed")).when(writer).write(any(classOf[ScanRecord]))
+    val split = new TieringSnapshotSplit(TablePath.of("db", "table"), bucket, null, 7L, 10L, 1)
+    intercept[IllegalStateException](TieringTask.processSnapshotSplit(table, writer, split, 1L))
+    verify(batch).close()
+    verify(scanner).close()
+    verify(writer, never()).complete()
+  }
+
 }

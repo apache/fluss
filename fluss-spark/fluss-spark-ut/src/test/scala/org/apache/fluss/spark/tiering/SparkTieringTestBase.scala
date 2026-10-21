@@ -23,6 +23,7 @@ import org.apache.fluss.metadata.{DataLakeFormat, TableBucket}
 import org.apache.fluss.spark.FlussSparkTestBase
 
 import org.apache.spark.internal.Logging
+import org.assertj.core.api.Assertions.assertThat
 
 import java.time.Duration
 
@@ -92,8 +93,8 @@ abstract class SparkTieringTestBase extends FlussSparkTestBase with Logging {
         lakeConfig)
 
     try {
-      runner.startAsync()
-      waitForLakeSnapshotSync(tableInfo, expectedOffsets)
+      val termination = runner.startAsync()
+      waitForLakeSnapshotSync(tableInfo, expectedOffsets, termination)
     } finally {
       runner.stop()
     }
@@ -103,13 +104,15 @@ abstract class SparkTieringTestBase extends FlussSparkTestBase with Logging {
   /** Polls replicas until their lake offsets cover the writes made before this tiering round. */
   private def waitForLakeSnapshotSync(
       tableInfo: org.apache.fluss.metadata.TableInfo,
-      expectedOffsets: Map[TableBucket, Long]): Unit = {
+      expectedOffsets: Map[TableBucket, Long],
+      termination: scala.concurrent.Future[Unit]): Unit = {
     val tableBuckets = expectedOffsets.filter { case (_, offset) => offset > 0 }.keySet
 
     val deadline = System.currentTimeMillis() + SYNC_TIMEOUT.toMillis
     val syncedBuckets = scala.collection.mutable.Set[TableBucket]()
 
     while (syncedBuckets.size < tableBuckets.size && System.currentTimeMillis() < deadline) {
+      termination.value.foreach(_.get)
       tableBuckets.foreach {
         tableBucket =>
           if (!syncedBuckets.contains(tableBucket)) {
@@ -131,11 +134,9 @@ abstract class SparkTieringTestBase extends FlussSparkTestBase with Logging {
       }
     }
 
-    assert(
-      syncedBuckets.size == tableBuckets.size,
-      s"Not all buckets synced to lake within $SYNC_TIMEOUT. " +
-        s"Synced: ${syncedBuckets.size}, Total: ${tableBuckets.size}"
-    )
+    assertThat(syncedBuckets.size)
+      .withFailMessage(s"Not all buckets synced to lake within $SYNC_TIMEOUT")
+      .isEqualTo(tableBuckets.size)
     logInfo(s"${tableInfo.getTablePath} synced to lake")
   }
 }

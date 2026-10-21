@@ -87,20 +87,33 @@ object SparkLakeTiering extends Logging {
       .getOrCreate()
 
     logInfo(s"Starting Fluss Lake Tiering Service with Spark (format=$dataLakeFormat).")
-    logInfo(s"Parsed CLI args: ${paramsMap.map { case (k, v) => s"$k=$v" }.mkString(", ")}")
 
+    var runner: SparkTieringJobRunner = null
+    val shutdownHook = new Thread("SparkTiering-ShutdownHook") {
+      override def run(): Unit = {
+        if (runner != null) {
+          runner.stop()
+        }
+      }
+    }
     try {
-      val runner = new SparkTieringJobRunner(
-        spark,
-        flussConfig,
-        lakeTieringConfig,
-        dataLakeFormat,
-        lakeConfig
-      )
-      val future = runner.startAsync()
-      Await.result(future, Duration.Inf)
+      runner =
+        new SparkTieringJobRunner(spark, flussConfig, lakeTieringConfig, dataLakeFormat, lakeConfig)
+      Runtime.getRuntime.addShutdownHook(shutdownHook)
+      Await.result(runner.startAsync(), Duration.Inf)
     } finally {
-      spark.stop()
+      try {
+        if (runner != null) {
+          runner.stop()
+        }
+      } finally {
+        spark.stop()
+        try {
+          Runtime.getRuntime.removeShutdownHook(shutdownHook)
+        } catch {
+          case _: IllegalStateException => // JVM shutdown is already in progress.
+        }
+      }
     }
   }
 
@@ -108,21 +121,23 @@ object SparkLakeTiering extends Logging {
    * Parses command line arguments in the format `--key value` or `--key=value` into a map of
    * key-value pairs.
    */
-  private def parseArgs(args: Array[String]): Map[String, String] = {
+  private[tiering] def parseArgs(args: Array[String]): Map[String, String] = {
     var result = Map.empty[String, String]
     var i = 0
     while (i < args.length) {
       val arg = args(i)
-      if (arg.startsWith("--")) {
-        val keyValue = arg.substring(2)
-        val eqIdx = keyValue.indexOf('=')
-        if (eqIdx >= 0) {
-          result = result + (keyValue.substring(0, eqIdx) -> keyValue.substring(eqIdx + 1))
-        } else if (i + 1 < args.length) {
-          result = result + (keyValue -> args(i + 1))
-          i += 1
-        }
+      require(arg.startsWith("--"), s"Expected --key value or --key=value, got: $arg")
+      val keyValue = arg.substring(2)
+      val eqIdx = keyValue.indexOf('=')
+      val (key, value) = if (eqIdx >= 0) {
+        keyValue.substring(0, eqIdx) -> keyValue.substring(eqIdx + 1)
+      } else {
+        require(i + 1 < args.length && !args(i + 1).startsWith("--"), s"Missing value for $arg")
+        i += 1
+        keyValue -> args(i)
       }
+      require(key.nonEmpty && value.nonEmpty, s"Empty key or value for $arg")
+      result += key -> value
       i += 1
     }
     result

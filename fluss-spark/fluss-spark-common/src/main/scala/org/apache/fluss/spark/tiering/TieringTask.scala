@@ -41,12 +41,19 @@ object TieringTask extends Logging {
 
   private val UNKNOWN_BUCKET_TIMESTAMP = -1L
 
+  private def checkInterrupted(): Unit = {
+    if (Thread.currentThread().isInterrupted) {
+      throw new InterruptedException("Spark tiering task was cancelled")
+    }
+  }
+
   def process(
       split: TieringSplit,
       flussConfig: Configuration,
       dataLakeFormat: String,
       lakeConfig: Configuration,
-      pollTimeoutMs: Long): TableBucketWriteResult[AnyRef] = {
+      pollTimeoutMs: Long,
+      ioTmpDirs: Array[String] = null): SerializedTaskResult = {
     val tablePath = split.getTablePath
     val tableBucket = split.getTableBucket
     val partitionName = Option(split.getPartitionName)
@@ -91,14 +98,15 @@ object TieringTask extends Logging {
           split.getSplitIndex,
           split.getTieringRoundTimestamp,
           partitionBucketCount,
-          null)
+          ioTmpDirs)
       lakeWriter = lakeTieringFactory.createLakeWriter(writerInitContext)
 
-      if (split.isTieringLogSplit) {
+      val result = if (split.isTieringLogSplit) {
         processLogSplit(table, lakeWriter, split.asTieringLogSplit(), pollTimeoutMs)
       } else {
         processSnapshotSplit(table, lakeWriter, split.asTieringSnapshotSplit(), pollTimeoutMs)
       }
+      SerializedTaskResult.fromWriteResult(result, lakeTieringFactory.getWriteResultSerializer)
     } finally {
       closeQuietly(lakeWriter, "LakeWriter")
       closeQuietly(table, "Table")
@@ -135,9 +143,10 @@ object TieringTask extends Logging {
       val stoppingOffset = split.getStoppingOffset
       val pollTimeout = Duration.ofMillis(pollTimeoutMs)
       var maxTimestamp = UNKNOWN_BUCKET_TIMESTAMP
-      var finished = false
+      var finished = split.getStartingOffset >= stoppingOffset
 
       while (!finished) {
+        checkInterrupted()
         val scanRecords = logScanner.poll(pollTimeout)
         val records = scanRecords.records(tableBucket)
         if (records != null) {
@@ -180,7 +189,7 @@ object TieringTask extends Logging {
     }
   }
 
-  private def processSnapshotSplit(
+  private[tiering] def processSnapshotSplit(
       table: Table,
       lakeWriter: LakeWriter[AnyRef],
       split: TieringSnapshotSplit,
@@ -194,13 +203,16 @@ object TieringTask extends Logging {
       val pollTimeout = Duration.ofMillis(pollTimeoutMs)
       var batch = batchScanner.pollBatch(pollTimeout)
       while (batch != null) {
-        while (batch.hasNext) {
-          val row = batch.next()
-          // Wrap InternalRow as ScanRecord with INSERT change type for snapshot data
-          val scanRecord = new ScanRecord(row)
-          lakeWriter.write(scanRecord)
+        try {
+          while (batch.hasNext) {
+            checkInterrupted()
+            val row = batch.next()
+            // Snapshot rows represent inserts at the snapshot's log offset.
+            lakeWriter.write(new ScanRecord(row))
+          }
+        } finally {
+          batch.close()
         }
-        batch.close()
         batch = batchScanner.pollBatch(pollTimeout)
       }
 

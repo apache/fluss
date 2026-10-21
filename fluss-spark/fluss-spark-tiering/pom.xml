@@ -37,21 +37,18 @@
             <groupId>org.apache.fluss</groupId>
             <artifactId>fluss-spark-common_${scala.binary.version}</artifactId>
             <version>${project.version}</version>
-            <scope>provided</scope>
         </dependency>
 
         <dependency>
             <groupId>org.apache.fluss</groupId>
             <artifactId>fluss-client</artifactId>
             <version>${project.version}</version>
-            <scope>provided</scope>
         </dependency>
 
         <dependency>
             <groupId>org.apache.fluss</groupId>
             <artifactId>fluss-common</artifactId>
             <version>${project.version}</version>
-            <scope>provided</scope>
         </dependency>
 
         <dependency>
@@ -82,6 +79,14 @@
                             <goal>shade</goal>
                         </goals>
                         <configuration>
+                            <artifactSet>
+                                <includes combine.children="append">
+                                    <include>org.apache.fluss:fluss-spark-common_${scala.binary.version}</include>
+                                    <include>org.apache.fluss:fluss-client</include>
+                                    <include>org.apache.fluss:fluss-common</include>
+                                    <include>org.apache.fluss:fluss-rpc</include>
+                                </includes>
+                            </artifactSet>
                             <transformers>
                                 <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
                                     <mainClass>org.apache.fluss.spark.tiering.SparkLakeTiering</mainClass>
