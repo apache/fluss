@@ -952,6 +952,7 @@ mod tests {
                 remote_data_dir: None,
                 bucket_count_epoch: None,
                 bucket_count: None,
+                deleted_table_id: None,
             }],
             partition_metadata: vec![PbPartitionMetadata {
                 table_id,
@@ -1026,6 +1027,7 @@ mod tests {
                 remote_data_dir: None,
                 bucket_count_epoch: Some(2),
                 bucket_count: None,
+                deleted_table_id: None,
             }],
             partition_metadata: vec![],
         };
