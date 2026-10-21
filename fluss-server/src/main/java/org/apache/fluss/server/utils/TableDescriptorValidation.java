@@ -132,6 +132,7 @@ public class TableDescriptorValidation {
         checkReplicationFactor(tableConf);
         checkLogFormat(tableConf, hasPrimaryKey);
         checkArrowCompression(tableConf);
+        checkCompactedCompression(tableConf);
         checkMergeEngine(tableConf, hasPrimaryKey, schema);
         checkUpsertSkipUnchanged(tableConf, hasPrimaryKey);
         checkDeleteBehavior(tableConf, hasPrimaryKey);
@@ -539,9 +540,18 @@ public class TableDescriptorValidation {
     }
 
     private static void checkArrowCompression(Configuration tableConf) {
-        if (tableConf.containsKey(ConfigOptions.TABLE_LOG_ARROW_COMPRESSION_ZSTD_LEVEL.key())) {
-            int compressionLevel =
-                    tableConf.get(ConfigOptions.TABLE_LOG_ARROW_COMPRESSION_ZSTD_LEVEL);
+        checkZstdCompressionLevel(tableConf, ConfigOptions.TABLE_LOG_ARROW_COMPRESSION_ZSTD_LEVEL);
+    }
+
+    private static void checkCompactedCompression(Configuration tableConf) {
+        checkZstdCompressionLevel(
+                tableConf, ConfigOptions.TABLE_LOG_COMPACTED_COMPRESSION_ZSTD_LEVEL);
+    }
+
+    private static void checkZstdCompressionLevel(
+            Configuration tableConf, ConfigOption<Integer> levelOption) {
+        if (tableConf.containsKey(levelOption.key())) {
+            int compressionLevel = tableConf.get(levelOption);
             if (compressionLevel < 1 || compressionLevel > 22) {
                 throw new InvalidConfigException(
                         "Invalid ZSTD compression level: "

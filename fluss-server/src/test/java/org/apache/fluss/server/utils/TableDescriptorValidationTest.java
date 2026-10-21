@@ -63,6 +63,27 @@ class TableDescriptorValidationTest {
     }
 
     @Test
+    void testCompactedCompressionZstdLevel() {
+        TableDescriptorValidation.validateTableDescriptor(
+                logTableWithProperty(
+                        ConfigOptions.TABLE_LOG_COMPACTED_COMPRESSION_ZSTD_LEVEL.key(), "22"),
+                100,
+                null);
+        assertThatThrownBy(
+                        () ->
+                                TableDescriptorValidation.validateTableDescriptor(
+                                        logTableWithProperty(
+                                                ConfigOptions
+                                                        .TABLE_LOG_COMPACTED_COMPRESSION_ZSTD_LEVEL
+                                                        .key(),
+                                                "0"),
+                                        100,
+                                        null))
+                .isInstanceOf(InvalidConfigException.class)
+                .hasMessageContaining("Invalid ZSTD compression level: 0");
+    }
+
+    @Test
     void testSkipUnchangedUpsertsRequiresPrimaryKey() {
         assertThatThrownBy(
                         () ->

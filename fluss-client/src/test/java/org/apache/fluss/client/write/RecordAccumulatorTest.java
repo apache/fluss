@@ -22,9 +22,11 @@ import org.apache.fluss.cluster.BucketLocation;
 import org.apache.fluss.cluster.Cluster;
 import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.cluster.ServerType;
+import org.apache.fluss.compression.LogCompressionType;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.MemorySize;
+import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.SchemaGetter;
 import org.apache.fluss.metadata.SchemaInfo;
@@ -36,6 +38,7 @@ import org.apache.fluss.metrics.Gauge;
 import org.apache.fluss.metrics.MetricNames;
 import org.apache.fluss.record.ChangeType;
 import org.apache.fluss.record.DefaultKvRecord;
+import org.apache.fluss.record.DefaultLogRecordBatch;
 import org.apache.fluss.record.IndexedLogRecord;
 import org.apache.fluss.record.LogRecord;
 import org.apache.fluss.record.LogRecordBatch;
@@ -45,6 +48,7 @@ import org.apache.fluss.record.TestingSchemaGetter;
 import org.apache.fluss.row.BinaryRow;
 import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.row.arrow.ArrowWriter;
+import org.apache.fluss.row.compacted.CompactedRow;
 import org.apache.fluss.row.indexed.IndexedRow;
 import org.apache.fluss.rpc.GatewayClientProxy;
 import org.apache.fluss.rpc.RpcClient;
@@ -81,6 +85,7 @@ import static org.apache.fluss.record.TestData.DATA1_TABLE_ID;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_INFO;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_PATH;
 import static org.apache.fluss.record.TestData.DEFAULT_REMOTE_DATA_DIR;
+import static org.apache.fluss.testutils.DataTestUtils.compactedRow;
 import static org.apache.fluss.testutils.DataTestUtils.indexedRow;
 import static org.apache.fluss.testutils.DataTestUtils.row;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -100,6 +105,24 @@ class RecordAccumulatorTest {
                             .schema(DATA1_SCHEMA)
                             .distributedBy(10)
                             .property(ConfigOptions.TABLE_LOG_ARROW_COMPRESSION_TYPE.key(), "zstd")
+                            .build(),
+                    DEFAULT_REMOTE_DATA_DIR,
+                    System.currentTimeMillis(),
+                    System.currentTimeMillis());
+
+    private static final long COMPACTED_ZSTD_TABLE_ID = 16002L;
+    private static final TableInfo COMPACTED_ZSTD_TABLE_INFO =
+            TableInfo.of(
+                    TablePath.of("test_db_1", "test_compacted_zstd_table_1"),
+                    COMPACTED_ZSTD_TABLE_ID,
+                    1,
+                    TableDescriptor.builder()
+                            .schema(DATA1_SCHEMA)
+                            .distributedBy(1)
+                            .logFormat(LogFormat.COMPACTED)
+                            .property(
+                                    ConfigOptions.TABLE_LOG_COMPACTED_COMPRESSION_TYPE.key(),
+                                    "zstd")
                             .build(),
                     DEFAULT_REMOTE_DATA_DIR,
                     System.currentTimeMillis(),
@@ -294,6 +317,46 @@ class RecordAccumulatorTest {
                                 .sum()
                         / (batchCount * 1.0);
         assertThat(averageBatchSize).isBetween(batchSize * 0.8, batchSize * 1.1);
+    }
+
+    @Test
+    void testDrainCompressedCompactedBatches() throws Exception {
+        int batchSize = 10 * 1024;
+        RecordAccumulator accum =
+                createTestRecordAccumulator(
+                        Integer.MAX_VALUE, batchSize, batchSize, Integer.MAX_VALUE);
+        PhysicalTablePath tablePath =
+                PhysicalTablePath.of(COMPACTED_ZSTD_TABLE_INFO.getTablePath());
+        cluster =
+                updateCluster(
+                        Collections.singletonList(
+                                new BucketLocation(
+                                        tablePath,
+                                        COMPACTED_ZSTD_TABLE_ID,
+                                        0,
+                                        node1.id(),
+                                        serverNodes)));
+
+        int rowCount = 100;
+        for (int i = 0; i < rowCount; i++) {
+            CompactedRow row = compactedRow(DATA1_ROW_TYPE, new Object[] {i, "value-" + (i % 3)});
+            WriteRecord record =
+                    WriteRecord.forCompactedAppend(COMPACTED_ZSTD_TABLE_INFO, tablePath, row, null);
+            accum.append(record, writeCallback, cluster);
+        }
+        accum.beginFlush();
+
+        Map<Integer, List<ReadyWriteBatch>> batches =
+                accum.drain(cluster, Collections.singleton(node1.id()), Integer.MAX_VALUE);
+        assertThat(batches.get(node1.id())).hasSize(1);
+        WriteBatch writeBatch = batches.get(node1.id()).get(0).writeBatch();
+        MemoryLogRecords records = MemoryLogRecords.pointToBytesView(writeBatch.build());
+        DefaultLogRecordBatch batch = (DefaultLogRecordBatch) records.batches().iterator().next();
+        batch.ensureValid();
+        assertThat(batch.magic()).isEqualTo(LogRecordBatch.CURRENT_LOG_MAGIC_VALUE);
+        assertThat(batch.compressionType()).isEqualTo(LogCompressionType.ZSTD);
+        assertThat(batch.getRecordCount()).isEqualTo(rowCount);
+        assertThat(batch.sizeInBytes()).isLessThan(writeBatch.estimatedSizeInBytes());
     }
 
     private void appendUntilCompressionRatioStable(RecordAccumulator accum, int batchSize)
