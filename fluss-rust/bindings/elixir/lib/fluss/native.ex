@@ -69,6 +69,19 @@ defmodule Fluss.Native do
   def admin_list_partition_infos(_admin, _database_name, _table_name, _spec),
     do: :erlang.nif_error(:nif_not_loaded)
 
+  def admin_list_offsets(_admin, _database_name, _table_name, _bucket_ids, _spec),
+    do: :erlang.nif_error(:nif_not_loaded)
+
+  def admin_list_partition_offsets(
+        _admin,
+        _database_name,
+        _table_name,
+        _partition,
+        _bucket_ids,
+        _spec
+      ),
+      do: :erlang.nif_error(:nif_not_loaded)
+
   # Schema / TableDescriptor
   def table_descriptor_new(_schema, _options),
     do: :erlang.nif_error(:nif_not_loaded)
