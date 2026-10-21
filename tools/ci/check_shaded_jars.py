@@ -296,6 +296,12 @@ def dangling_relocations(path: str, limit: int = 12) -> List[Tuple[str, int]]:
     leaves links to org/apache/fluss/shaded/org/apache/commons/cli/... that
     resolve nowhere, and the failure only shows up at runtime.
 
+    Resource paths in string constants are matched too, but RELOCATED_REF stops
+    at the first ``.`` or ``%``: commons-codec's ``.../language/dmrules.txt``
+    comes out as ``.../language/dmrules`` and its ``.../bm/%s_lang.txt``
+    template as ``.../bm/``. Such a reference counts as present when a jar
+    entry carries it as a file stem or a directory.
+
     Returns (missing class name, reference count), most referenced first.
     """
     missing: Dict[str, int] = {}
@@ -309,12 +315,15 @@ def dangling_relocations(path: str, limit: int = 12) -> List[Tuple[str, int]]:
             except (OSError, zipfile.BadZipFile):
                 continue
             for raw in set(RELOCATED_REF.findall(blob)):
-                ref = raw.decode("utf-8", "replace")
+                ref = raw.decode("utf-8", "replace").rstrip("/")
                 # inner classes and array/descriptor noise resolve via the
                 # outer name; only flag when nothing plausible is present
                 if ref + ".class" in names:
                     continue
-                if any(n.startswith(ref + "$") or n.startswith(ref + "/") for n in names):
+                if any(
+                    n.startswith(ref + "$") or n.startswith(ref + "/") or n.startswith(ref + ".")
+                    for n in names
+                ):
                     continue
                 missing[ref] = missing.get(ref, 0) + 1
     return sorted(missing.items(), key=lambda kv: (-kv[1], kv[0]))[:limit]
