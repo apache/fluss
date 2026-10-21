@@ -464,6 +464,56 @@ final class SenderTest {
     }
 
     @Test
+    void testBatchForBucketMissingFromLatestMetadataStopsWriter() throws Exception {
+        sender.destroyResources();
+        TableInfo tableInfo = createPartitionedTableInfo(AutoPartitionTimeUnit.DAY, 7, false);
+        PhysicalTablePath partitionPath =
+                PhysicalTablePath.of(tableInfo.getTablePath(), "20990101");
+        TableBucket staleBucket = new TableBucket(tableInfo.getTableId(), 21L, 3);
+        Map<TableOrPartition, Integer> bucketCounts = new HashMap<>();
+        bucketCounts.put(TableOrPartition.ofPartition(staleBucket.getPartitionId()), 4);
+        metadataUpdater.updateCluster(
+                partitionedCluster(
+                        tableInfo,
+                        Collections.singletonMap(partitionPath, staleBucket),
+                        bucketCounts));
+        sender = setupWithIdempotenceState();
+
+        accumulator.checkAndCacheHistoricalPartitionEnabled(tableInfo);
+        BinaryRow row =
+                compactedRow(
+                        tableInfo.getRowType(), new Object[] {1, partitionPath.getPartitionName()});
+        byte[] key =
+                new CompactedKeyEncoder(
+                                tableInfo.getRowType(),
+                                tableInfo.getSchema().getPrimaryKeyIndexes())
+                        .encodeKey(row);
+        CompletableFuture<Exception> future = new CompletableFuture<>();
+        bucketAssigner.setBucketId(staleBucket.getBucket());
+        accumulator.append(
+                WriteRecord.forUpsert(
+                        tableInfo, partitionPath, row, key, key, WriteFormat.COMPACTED_KV, null),
+                (tableBucket, logEndOffset, error) -> future.complete(error),
+                metadataUpdater.getCluster());
+
+        // Refreshed metadata shows a single bucket, so bucket 3 will never get a leader.
+        bucketCounts.put(TableOrPartition.ofPartition(staleBucket.getPartitionId()), 1);
+        TableBucket currentBucket = new TableBucket(tableInfo.getTableId(), 21L, 0);
+        metadataUpdater.updateCluster(
+                partitionedCluster(
+                        tableInfo,
+                        Collections.singletonMap(partitionPath, currentBucket),
+                        bucketCounts));
+        sender.runOnce();
+        assertThat(sender.isRunning()).isFalse();
+        sender.runOnce();
+        assertThat(future.get())
+                .isInstanceOf(InvalidBucketRoutingException.class)
+                .hasMessageContaining(staleBucket.toString());
+        assertThat(accumulator.hasIncomplete()).isFalse();
+    }
+
+    @Test
     void testAbortsOnlyMissingPartitionWhenRerouteIsUnsafe() throws Exception {
         sender.destroyResources();
         TableInfo tableInfo = createHistoricalTableInfo();

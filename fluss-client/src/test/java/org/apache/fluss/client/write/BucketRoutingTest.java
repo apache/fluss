@@ -415,6 +415,39 @@ class BucketRoutingTest {
         }
     }
 
+    @Test
+    void testReportsBucketsMissingFromLatestMetadata() throws Exception {
+        // Metadata briefly reports 10 buckets, e.g. the layout of a dropped table re-created
+        // under the same path, before refreshed metadata shows the actual single bucket.
+        TableInfo table = tableInfo(1, true, false);
+        RecordAccumulator accumulator = accumulator(ConfigOptions.NoKeyAssigner.STICKY);
+        try {
+            for (int key = 0; key < 10; key++) {
+                accumulator.append(
+                        record(table, WriteFormat.INDEXED_LOG, key, 1),
+                        (bucket, offset, error) -> {},
+                        cluster(10, true));
+            }
+            List<TableBucket> missingBuckets = new ArrayList<>();
+            for (int bucket = 1; bucket < 10; bucket++) {
+                if (accumulator.getReadyDeque(PATH, bucket) != null) {
+                    missingBuckets.add(new TableBucket(10, PARTITION_ID, bucket));
+                }
+            }
+            assertThat(missingBuckets).isNotEmpty();
+
+            // Refreshing metadata can never reveal a leader for these buckets.
+            RecordAccumulator.ReadyCheckResult result = accumulator.ready(cluster(1, true));
+            assertThat(result.unknownLeaderTables).isEmpty();
+            assertThat(result.nonexistentBuckets)
+                    .containsExactlyInAnyOrderElementsOf(missingBuckets);
+        } finally {
+            accumulator.close();
+            accumulator.abortAllBatches(new RuntimeException("test cleanup"));
+            accumulator.destroyResources();
+        }
+    }
+
     @ParameterizedTest
     @EnumSource(ConfigOptions.NoKeyAssigner.class)
     void testAssignerCountChanges(ConfigOptions.NoKeyAssigner strategy) {

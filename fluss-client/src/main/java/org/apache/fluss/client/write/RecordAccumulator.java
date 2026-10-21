@@ -394,6 +394,7 @@ public final class RecordAccumulator {
         Set<Integer> readyNodes = new HashSet<>();
         long nextReadyCheckDelayMs = Long.MAX_VALUE;
         Set<PhysicalTablePath> unknownLeaderTables = new HashSet<>();
+        Set<TableBucket> nonexistentBuckets = new HashSet<>();
         // Go table by table so that we can get queue sizes for buckets in a table and calculate
         // cumulative frequency table (used in bucket assigner).
 
@@ -403,6 +404,7 @@ public final class RecordAccumulator {
                             bucketAndWriteBatches,
                             readyNodes,
                             unknownLeaderTables,
+                            nonexistentBuckets,
                             cluster,
                             nextReadyCheckDelayMs);
         }
@@ -416,7 +418,8 @@ public final class RecordAccumulator {
             nextReadyCheckDelayMs = Math.min(nextReadyCheckDelayMs, batchTimeoutMs);
         }
 
-        return new ReadyCheckResult(readyNodes, nextReadyCheckDelayMs, unknownLeaderTables);
+        return new ReadyCheckResult(
+                readyNodes, nextReadyCheckDelayMs, unknownLeaderTables, nonexistentBuckets);
     }
 
     /**
@@ -802,6 +805,7 @@ public final class RecordAccumulator {
             BucketAndWriteBatches bucketAndWriteBatches,
             Set<Integer> readyNodes,
             Set<PhysicalTablePath> unknownLeaderTables,
+            Set<TableBucket> nonexistentBuckets,
             Cluster cluster,
             long nextReadyCheckDelayMs) {
         PhysicalTablePath targetPath = bucketAndWriteBatches.targetPath;
@@ -826,6 +830,8 @@ public final class RecordAccumulator {
             applyNewBucketCount(bucketAndWriteBatches, partitionId, actualBucketCount);
         }
 
+        // Looked up lazily, only for buckets without a known leader.
+        Integer currentBucketCount = null;
         Map<Integer, Deque<WriteBatch>> batches = bucketAndWriteBatches.batches;
         // Collect the queue sizes for available buckets to be used in adaptive bucket allocate.
         boolean exhausted = writerBufferPool.queued() > 0;
@@ -858,6 +864,15 @@ public final class RecordAccumulator {
 
             Integer leader = cluster.leaderFor(tableBucket);
             if (leader == null) {
+                if (currentBucketCount == null) {
+                    currentBucketCount =
+                            cluster.getBucketCount(TableOrPartition.of(tableId, partitionId))
+                                    .orElse(Integer.MAX_VALUE);
+                }
+                if (bucketId >= currentBucketCount) {
+                    nonexistentBuckets.add(tableBucket);
+                    continue;
+                }
                 // This is a bucket for which leader is not known, but messages are
                 // available to send. Note that entries are currently not removed from
                 // batches when deque is empty. Reported regardless of any pending throttle gate:
@@ -1612,13 +1627,21 @@ public final class RecordAccumulator {
         public final long nextReadyCheckDelayMs;
         public final Set<PhysicalTablePath> unknownLeaderTables;
 
+        /**
+         * Buckets with queued batches whose bucket ID is outside the bucket count in the latest
+         * metadata. These batches can never be sent.
+         */
+        public final Set<TableBucket> nonexistentBuckets;
+
         public ReadyCheckResult(
                 Set<Integer> readyNodes,
                 long nextReadyCheckDelayMs,
-                Set<PhysicalTablePath> unknownLeaderTables) {
+                Set<PhysicalTablePath> unknownLeaderTables,
+                Set<TableBucket> nonexistentBuckets) {
             this.readyNodes = readyNodes;
             this.nextReadyCheckDelayMs = nextReadyCheckDelayMs;
             this.unknownLeaderTables = unknownLeaderTables;
+            this.nonexistentBuckets = nonexistentBuckets;
         }
     }
 
