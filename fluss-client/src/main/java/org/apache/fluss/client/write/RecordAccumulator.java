@@ -377,7 +377,8 @@ public final class RecordAccumulator {
      * Get a list of nodes whose buckets are ready to be sent.
      *
      * <p>Also return the flag for whether there are any unknown leaders for the accumulated bucket
-     * batches.
+     * batches. Paused targets are included so the Sender can continue resolving missing partitions
+     * before draining.
      *
      * <p>A destination node is ready to send data if:
      *
@@ -397,7 +398,14 @@ public final class RecordAccumulator {
         // Go table by table so that we can get queue sizes for buckets in a table and calculate
         // cumulative frequency table (used in bucket assigner).
 
-        for (BucketAndWriteBatches bucketAndWriteBatches : writeBatches.values()) {
+        for (Map.Entry<PhysicalTablePath, BucketAndWriteBatches> entry : writeBatches.entrySet()) {
+            BucketAndWriteBatches bucketAndWriteBatches = entry.getValue();
+            if (bucketAndWriteBatches.paused) {
+                // Keep the original queue key so the Sender can finish its missing-partition
+                // handling once all requests to that target have completed.
+                unknownLeaderTables.add(entry.getKey());
+                continue;
+            }
             nextReadyCheckDelayMs =
                     bucketReady(
                             bucketAndWriteBatches,
@@ -474,14 +482,16 @@ public final class RecordAccumulator {
      *
      * <p>A normal target can be replaced by the historical target only while the original path has
      * no incomplete batch. This method never moves queued or inflight batches between physical
-     * partitions.
+     * partitions. If original writes remain incomplete, their queues are paused until the Sender
+     * can reroute them.
      *
      * <p>Tables with historical partition support cannot be rescaled, so every target uses the
      * table's fixed bucket count.
      *
+     * @return false if pending original writes must first be rerouted by the Sender
      * @throws FlussRuntimeException if a different target was fixed previously
      */
-    void routeWritesTo(
+    boolean routeWritesTo(
             TableInfo tableInfo,
             PhysicalTablePath originalPath,
             PhysicalTablePath targetPath,
@@ -498,28 +508,28 @@ public final class RecordAccumulator {
         // Install the route atomically before append can create the first queue for this path.
         BucketAndWriteBatches existing = writeBatches.putIfAbsent(originalPath, resolvedTarget);
         if (existing == null) {
-            return;
+            return true;
         }
 
         // Pair with appendNewBatch(). For a historical route change, either a normal batch is
-        // registered as incomplete first and rejects the switch, or batch creation observes the
+        // registered as incomplete first and defers the switch, or batch creation observes the
         // historical target.
         synchronized (existing) {
+            if (existing.paused) {
+                return false;
+            }
             if (existing.targetPath.equals(targetPath)) {
                 existing.partitionId = targetPartitionId;
-                return;
+                return true;
             }
             if (!existing.isHistoricalWriteTarget() && resolvedTarget.isHistoricalWriteTarget()) {
                 if (hasIncompleteBatchFor(originalPath)) {
-                    throw new FlussRuntimeException(
-                            String.format(
-                                    "Cannot route writes for %s to %s while this writer has "
-                                            + "incomplete writes to %s.",
-                                    originalPath, targetPath, existing.targetPath));
+                    existing.paused = true;
+                    return false;
                 }
                 existing.switchToHistoricalTarget(targetPath, targetPartitionId);
                 existing.bucketCount = bucketCount;
-                return;
+                return true;
             }
 
             throw new FlussRuntimeException(
@@ -543,6 +553,21 @@ public final class RecordAccumulator {
     boolean hasHistoricalWriteTarget(PhysicalTablePath originalPath) {
         BucketAndWriteBatches writeTarget = writeBatches.get(originalPath);
         return writeTarget != null && writeTarget.isHistoricalWriteTarget();
+    }
+
+    /** Updates the drain pause while switching an original target to the historical partition. */
+    void setWriteTargetPaused(PhysicalTablePath originalPath, boolean paused) {
+        BucketAndWriteBatches writeTarget = writeBatches.get(originalPath);
+        if (writeTarget != null) {
+            synchronized (writeTarget) {
+                writeTarget.paused = paused;
+            }
+        }
+    }
+
+    boolean isWriteTargetPaused(PhysicalTablePath originalPath) {
+        BucketAndWriteBatches writeTarget = writeBatches.get(originalPath);
+        return writeTarget != null && writeTarget.paused;
     }
 
     /**
@@ -1238,6 +1263,10 @@ public final class RecordAccumulator {
             List<WriteBatch> staleBatches = null;
             long oldStaleTableId = -1L;
             synchronized (deque) {
+                // WriterClient may have paused this target after the bucket list was built.
+                if (isWriteTargetPaused(physicalTablePath)) {
+                    continue;
+                }
                 WriteBatch first = deque.peekFirst();
                 if (first == null) {
                     continue;
@@ -1455,6 +1484,9 @@ public final class RecordAccumulator {
         Set<PhysicalTablePath> physicalTablePaths = cluster.getBucketLocationsByPath().keySet();
         for (PhysicalTablePath path : physicalTablePaths) {
             BucketAndWriteBatches bucketAndWriteBatches = writeBatches.get(path);
+            if (bucketAndWriteBatches != null && bucketAndWriteBatches.paused) {
+                continue;
+            }
             // A historical route uses the original path only as the accumulator queue key. Its
             // actual bucket locations come from the historical target and are added below.
             if (bucketAndWriteBatches != null && bucketAndWriteBatches.isHistoricalWriteTarget()) {
@@ -1476,7 +1508,7 @@ public final class RecordAccumulator {
         for (Map.Entry<PhysicalTablePath, BucketAndWriteBatches> entry : writeBatches.entrySet()) {
             BucketAndWriteBatches bucketAndWriteBatches = entry.getValue();
             PhysicalTablePath originalPath = entry.getKey();
-            if (!bucketAndWriteBatches.isHistoricalWriteTarget()) {
+            if (bucketAndWriteBatches.paused || !bucketAndWriteBatches.isHistoricalWriteTarget()) {
                 continue;
             }
             for (BucketLocation bucketLocation :
@@ -1677,6 +1709,8 @@ public final class RecordAccumulator {
 
         /** The physical partition used for metadata lookup, leader discovery, and write RPCs. */
         private volatile PhysicalTablePath targetPath;
+
+        private volatile boolean paused;
 
         /** Null until every queued batch agrees with the authoritative layout. */
         private volatile @Nullable Integer bucketCount;

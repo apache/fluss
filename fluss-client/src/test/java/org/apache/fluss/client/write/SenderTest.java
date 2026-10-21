@@ -38,6 +38,7 @@ import org.apache.fluss.exception.TimeoutException;
 import org.apache.fluss.exception.TooManyPartitionsException;
 import org.apache.fluss.exception.UnknownWriterIdException;
 import org.apache.fluss.metadata.DataLakeFormat;
+import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;
@@ -45,7 +46,9 @@ import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TableOrPartition;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.record.KvRecordReadContext;
 import org.apache.fluss.record.MemoryLogRecords;
+import org.apache.fluss.record.TestingSchemaGetter;
 import org.apache.fluss.row.BinaryRow;
 import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.row.encode.CompactedKeyEncoder;
@@ -73,10 +76,13 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
+import javax.annotation.Nullable;
+
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.Deque;
 import java.util.HashMap;
@@ -119,7 +125,7 @@ import static org.apache.fluss.utils.PartitionUtils.HISTORICAL_PARTITION_VALUE;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-/** ITCase for {@link Sender}. */
+/** Tests for {@link Sender} with controlled RPC responses. */
 final class SenderTest {
     private static final int TOTAL_MEMORY_SIZE = 1024 * 1024;
     private static final int MAX_REQUEST_SIZE = 1024 * 1024;
@@ -241,6 +247,105 @@ final class SenderTest {
                                 PutKvResultForBucket.historicalSuccess(
                                         historicalBucket, 1L, originalPath.getPartitionName()))));
         assertThat(future.get()).isNull();
+    }
+
+    @Test
+    void testWaitsForInflightBeforeReroutingToHistorical() throws Exception {
+        sender.destroyResources();
+        TableInfo tableInfo = createHistoricalTableInfo();
+        PhysicalTablePath originalPath = PhysicalTablePath.of(tableInfo.getTablePath(), "20000101");
+        PhysicalTablePath historicalPath =
+                PhysicalTablePath.of(tableInfo.getTablePath(), HISTORICAL_PARTITION_VALUE);
+        TableBucket originalBucket = new TableBucket(tableInfo.getTableId(), 21L, 0);
+        TableBucket historicalBucket = new TableBucket(tableInfo.getTableId(), 22L, 0);
+        // The original route is cached, but B's precheck will find that it has expired.
+        metadataUpdater = missingPartitionMetadataUpdater(tableInfo, originalPath);
+        Map<PhysicalTablePath, TableBucket> tableBucketsByPath = new HashMap<>();
+        tableBucketsByPath.put(originalPath, originalBucket);
+        tableBucketsByPath.put(historicalPath, historicalBucket);
+        metadataUpdater.updateCluster(partitionedCluster(tableInfo, tableBucketsByPath));
+        IdempotenceManager idempotenceManager = createIdempotenceManager(true);
+        idempotenceManager.setWriterId(0L);
+        sender = setupWithIdempotenceState(idempotenceManager);
+
+        // A was sent before the original partition expired and is still in flight.
+        CompletableFuture<Exception> first =
+                appendKvRecord(tableInfo, originalPath, 1, metadataUpdater.getCluster());
+        sender.runOnce();
+
+        // Resolve B's target as WriterClient does before appending it. A prevents an immediate
+        // switch.
+        metadataUpdater.invalidPhysicalTableBucketAndPartitionMeta(
+                Collections.singleton(originalPath));
+        assertThatThrownBy(() -> metadataUpdater.checkAndUpdatePartitionMetadata(originalPath))
+                .isInstanceOf(PartitionNotExistException.class);
+        assertThat(metadataUpdater.checkAndUpdatePartitionMetadata(historicalPath)).isTrue();
+        assertThat(
+                        accumulator.routeWritesTo(
+                                tableInfo,
+                                originalPath,
+                                historicalPath,
+                                historicalBucket.getPartitionId()))
+                .isFalse();
+        assertThat(accumulator.isWriteTargetPaused(originalPath)).isTrue();
+        assertThat(accumulator.ready(metadataUpdater.getCluster()).unknownLeaderTables)
+                .containsExactly(originalPath);
+
+        // B and C stay queued while paused; A keeps its original target and sequence.
+        CompletableFuture<Exception> second =
+                appendKvRecord(tableInfo, originalPath, 2, metadataUpdater.getCluster());
+        sender.runOnce();
+        // Keep B and C in separate batches to check their historical sequence order.
+        accumulator.getReadyDeque(originalPath, 0).peekLast().close();
+        CompletableFuture<Exception> third =
+                appendKvRecord(tableInfo, originalPath, 3, metadataUpdater.getCluster());
+        sender.runOnce();
+        TestTabletServerGateway gateway = node1Gateway();
+        assertThat(gateway.pendingRequestSize()).isOne();
+        PutKvRequest oldInFlightRequest = (PutKvRequest) gateway.getRequest(0);
+        assertThat(oldInFlightRequest.getBucketsReqAt(0).getPartitionId())
+                .isEqualTo(originalBucket.getPartitionId());
+        assertThat(toPutKvDataForBuckets(oldInFlightRequest).get(0).records().batchSequence())
+                .isZero();
+        assertPutKvRecordIds(oldInFlightRequest, tableInfo, 1);
+        assertThat(first).isNotDone();
+        assertThat(second).isNotDone();
+        assertThat(third).isNotDone();
+
+        // Completing A allows the queued B and C to switch to the historical target.
+        gateway.response(0, createPutKvResponse(originalBucket, 1L));
+        assertThat(first.get()).isNull();
+        sender.runOnce();
+        assertThat(accumulator.isWriteTargetPaused(originalPath)).isFalse();
+        // The next ready check sends B with a fresh sequence for the historical bucket.
+        sender.runOnce();
+        PutKvRequest secondRequest = (PutKvRequest) gateway.getRequest(0);
+        assertThat(secondRequest.getBucketsReqAt(0).getPartitionId())
+                .isEqualTo(historicalBucket.getPartitionId());
+        assertThat(toPutKvDataForBuckets(secondRequest).get(0).records().batchSequence()).isZero();
+        assertPutKvRecordIds(secondRequest, tableInfo, 2);
+        gateway.response(
+                0,
+                makePutKvResponse(
+                        Collections.singletonList(
+                                PutKvResultForBucket.historicalSuccess(
+                                        historicalBucket, 1L, originalPath.getPartitionName()))));
+        assertThat(second.get()).isNull();
+
+        // C must keep its position after B and use the historical bucket's next sequence.
+        sender.runOnce();
+        PutKvRequest thirdRequest = (PutKvRequest) gateway.getRequest(0);
+        assertThat(thirdRequest.getBucketsReqAt(0).getPartitionId())
+                .isEqualTo(historicalBucket.getPartitionId());
+        assertThat(toPutKvDataForBuckets(thirdRequest).get(0).records().batchSequence()).isOne();
+        assertPutKvRecordIds(thirdRequest, tableInfo, 3);
+        gateway.response(
+                0,
+                makePutKvResponse(
+                        Collections.singletonList(
+                                PutKvResultForBucket.historicalSuccess(
+                                        historicalBucket, 2L, originalPath.getPartitionName()))));
+        assertThat(third.get()).isNull();
     }
 
     @ParameterizedTest
@@ -464,10 +569,11 @@ final class SenderTest {
     }
 
     @Test
-    void testAbortsOnlyMissingPartitionWhenRerouteIsUnsafe() throws Exception {
+    void testReroutesRejectedBatchesInSequenceOrderWhileOtherPartitionProgresses()
+            throws Exception {
         sender.destroyResources();
         TableInfo tableInfo = createHistoricalTableInfo();
-        PhysicalTablePath missingPath = PhysicalTablePath.of(tableInfo.getTablePath(), "20990101");
+        PhysicalTablePath missingPath = PhysicalTablePath.of(tableInfo.getTablePath(), "20000101");
         PhysicalTablePath activePath = PhysicalTablePath.of(tableInfo.getTablePath(), "20990102");
         PhysicalTablePath historicalPath =
                 PhysicalTablePath.of(tableInfo.getTablePath(), HISTORICAL_PARTITION_VALUE);
@@ -480,7 +586,9 @@ final class SenderTest {
         tableBucketsByPath.put(activePath, activeBucket);
         tableBucketsByPath.put(historicalPath, historicalBucket);
         metadataUpdater.updateCluster(partitionedCluster(tableInfo, tableBucketsByPath));
-        sender = setupWithIdempotenceState();
+        IdempotenceManager idempotenceManager = createIdempotenceManager(true);
+        idempotenceManager.setWriterId(0L);
+        sender = setupWithIdempotenceState(idempotenceManager);
 
         CompletableFuture<Exception> firstMissingFuture =
                 appendKvRecord(tableInfo, missingPath, 1, metadataUpdater.getCluster());
@@ -491,30 +599,67 @@ final class SenderTest {
         sender.runOnce();
 
         TestTabletServerGateway gateway = node1Gateway();
-        // Reject the first request while the second one is still awaiting a response.
+        // Reject the second request first to exercise re-enqueueing out-of-order responses.
         gateway.response(
-                0, createPutKvResponse(missingBucket, Errors.UNKNOWN_TABLE_OR_BUCKET_EXCEPTION));
+                1, createPutKvResponse(missingBucket, Errors.UNKNOWN_TABLE_OR_BUCKET_EXCEPTION));
+        sender.runOnce();
+        assertThat(accumulator.isWriteTargetPaused(missingPath)).isFalse();
         assertThat(firstMissingFuture).isNotDone();
         assertThat(secondMissingFuture).isNotDone();
 
-        // A write to another partition verifies that abort remains scoped to the missing target.
+        // Pause only after a subsequent write resolves the historical target while A is in flight.
+        assertThat(
+                        accumulator.routeWritesTo(
+                                tableInfo,
+                                missingPath,
+                                historicalPath,
+                                historicalBucket.getPartitionId()))
+                .isFalse();
+        // The missing target pauses while another partition can still make progress.
         CompletableFuture<Exception> activeFuture =
                 appendKvRecord(tableInfo, activePath, 3, metadataUpdater.getCluster());
         sender.runOnce();
 
-        assertThat(firstMissingFuture.get())
-                .isInstanceOf(PartitionNotExistException.class)
-                .hasMessageContaining(missingPath.toString());
-        assertThat(secondMissingFuture.get())
-                .isInstanceOf(PartitionNotExistException.class)
-                .hasMessageContaining(missingPath.toString());
-        assertThat(activeFuture).isNotDone();
+        assertThat(accumulator.isWriteTargetPaused(missingPath)).isTrue();
+        assertThat(gateway.pendingRequestSize()).isEqualTo(2);
+        // Complete the healthy partition while the first missing-target request is still pending.
+        gateway.response(1, createPutKvResponse(activeBucket, 1L));
+        assertThat(activeFuture.get()).isNull();
+        assertThat(firstMissingFuture).isNotDone();
+        assertThat(secondMissingFuture).isNotDone();
 
-        // Complete the request that was still in flight when its batches were aborted.
         gateway.response(
                 0, createPutKvResponse(missingBucket, Errors.UNKNOWN_TABLE_OR_BUCKET_EXCEPTION));
-        gateway.response(0, createPutKvResponse(activeBucket, 1L));
-        assertThat(activeFuture.get()).isNull();
+        sender.runOnce();
+
+        sender.runOnce();
+        PutKvRequest firstHistoricalRequest = (PutKvRequest) gateway.getRequest(0);
+        assertThat(firstHistoricalRequest.getBucketsReqAt(0).getPartitionId())
+                .isEqualTo(historicalBucket.getPartitionId());
+        assertThat(toPutKvDataForBuckets(firstHistoricalRequest).get(0).records().batchSequence())
+                .isZero();
+        assertPutKvRecordIds(firstHistoricalRequest, tableInfo, 1);
+        gateway.response(
+                0,
+                makePutKvResponse(
+                        Collections.singletonList(
+                                PutKvResultForBucket.historicalSuccess(
+                                        historicalBucket, 1L, missingPath.getPartitionName()))));
+        assertThat(firstMissingFuture.get()).isNull();
+        assertThat(secondMissingFuture).isNotDone();
+
+        sender.runOnce();
+        PutKvRequest secondHistoricalRequest = (PutKvRequest) gateway.getRequest(0);
+        assertThat(toPutKvDataForBuckets(secondHistoricalRequest).get(0).records().batchSequence())
+                .isEqualTo(1);
+        assertPutKvRecordIds(secondHistoricalRequest, tableInfo, 2);
+        gateway.response(
+                0,
+                makePutKvResponse(
+                        Collections.singletonList(
+                                PutKvResultForBucket.historicalSuccess(
+                                        historicalBucket, 2L, missingPath.getPartitionName()))));
+        assertThat(secondMissingFuture.get()).isNull();
     }
 
     @ParameterizedTest
@@ -2148,21 +2293,19 @@ final class SenderTest {
                 1L);
     }
 
-    private static TestingMetadataUpdater missingPartitionMetadataUpdater(
+    private TestingMetadataUpdater missingPartitionMetadataUpdater(
             TableInfo tableInfo, PhysicalTablePath missingPath) {
         return new TestingMetadataUpdater(
                 Collections.singletonMap(tableInfo.getTablePath(), tableInfo)) {
             @Override
-            public void updatePhysicalTableMetadata(Set<PhysicalTablePath> physicalTablePaths) {
+            public void updateMetadata(
+                    @Nullable Set<TablePath> tablePaths,
+                    @Nullable Collection<PhysicalTablePath> tablePartitionNames,
+                    @Nullable Collection<Long> tablePartitionIds) {
+                // Keep the real cache checks; only simulate the metadata server's missing response.
+                assertThat(tablePartitionNames).contains(missingPath);
+                assertThat(accumulator.isWriteTargetPaused(missingPath)).isFalse();
                 throw new PartitionNotExistException("Partition does not exist.");
-            }
-
-            @Override
-            public boolean checkAndUpdatePartitionMetadata(PhysicalTablePath physicalTablePath) {
-                if (physicalTablePath.equals(missingPath)) {
-                    throw new PartitionNotExistException("Partition does not exist.");
-                }
-                return getCluster().getPartitionId(physicalTablePath).isPresent();
             }
         };
     }
@@ -2205,6 +2348,19 @@ final class SenderTest {
                 Collections.singletonMap(tableInfo.getTablePath(), tableInfo.getTableId()),
                 partitionIdsByPath,
                 bucketCountByTableOrPartition);
+    }
+
+    private static void assertPutKvRecordIds(
+            PutKvRequest request, TableInfo tableInfo, Integer... expectedIds) {
+        List<PutKvDataForBucket> buckets = toPutKvDataForBuckets(request);
+        assertThat(buckets).hasSize(1);
+        KvRecordReadContext readContext =
+                KvRecordReadContext.createReadContext(
+                        KvFormat.COMPACTED,
+                        new TestingSchemaGetter(tableInfo.getSchemaId(), tableInfo.getSchema()));
+        assertThat(buckets.get(0).records().records(readContext))
+                .extracting(record -> record.getRow().getInt(0))
+                .containsExactly(expectedIds);
     }
 
     private CompletableFuture<Exception> appendKvRecord(

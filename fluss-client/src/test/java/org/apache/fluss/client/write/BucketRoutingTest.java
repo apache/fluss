@@ -29,7 +29,6 @@ import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.MemorySize;
 import org.apache.fluss.exception.BucketRescaleException;
-import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;
@@ -949,6 +948,59 @@ class BucketRoutingTest {
         }
     }
 
+    @Test
+    void testHistoricalRoutingPausesDrainAfterBucketDiscovery() throws Exception {
+        TableInfo table = tableInfo(1, true, true, true);
+        RecordAccumulator accumulator = accumulator(ConfigOptions.NoKeyAssigner.STICKY);
+        Cluster metadata = cluster(1, true);
+        ExecutorService executor = Executors.newSingleThreadExecutor();
+        AtomicReference<Thread> drainThread = new AtomicReference<>();
+        try {
+            accumulator.append(
+                    record(table, WriteFormat.COMPACTED_KV, 0, 1),
+                    (bucket, offset, error) -> {},
+                    metadata);
+            Deque<WriteBatch> deque = accumulator.getReadyDeque(PATH, 0);
+            Future<Map<Integer, List<ReadyWriteBatch>>> drain;
+            synchronized (deque) {
+                drain =
+                        executor.submit(
+                                () -> {
+                                    drainThread.set(Thread.currentThread());
+                                    return accumulator.drain(
+                                            metadata,
+                                            Collections.singleton(NODE.id()),
+                                            Integer.MAX_VALUE);
+                                });
+                // Let drain discover the original bucket, then block it before taking a batch.
+                retry(
+                        Duration.ofSeconds(10),
+                        () -> {
+                            assertThat(drainThread.get()).isNotNull();
+                            assertThat(drainThread.get().getState())
+                                    .isEqualTo(Thread.State.BLOCKED);
+                        });
+                assertThat(
+                                accumulator.routeWritesTo(
+                                        table,
+                                        PATH,
+                                        PhysicalTablePath.of(
+                                                PATH.getTablePath(), HISTORICAL_PARTITION_VALUE),
+                                        PARTITION_ID + 1))
+                        .isFalse();
+                assertThat(accumulator.isWriteTargetPaused(PATH)).isTrue();
+            }
+            // The stale bucket list must not allow a batch to escape the pause.
+            assertThat(drain.get(10, TimeUnit.SECONDS)).isEmpty();
+            assertThat(deque).hasSize(1);
+        } finally {
+            executor.shutdownNow();
+            assertThat(executor.awaitTermination(10, TimeUnit.SECONDS)).isTrue();
+            accumulator.abortAllBatches(new RuntimeException("test cleanup"));
+            accumulator.destroyResources();
+        }
+    }
+
     @ParameterizedTest
     @ValueSource(booleans = {false, true})
     void testBatchRegistrationBlocksCloseOrHistoricalRouting(boolean historicalRouting)
@@ -1009,13 +1061,15 @@ class BucketRoutingTest {
                             () -> {
                                 barrierThread.set(Thread.currentThread());
                                 if (historicalRouting) {
-                                    accumulator.routeWritesTo(
-                                            table,
-                                            PATH,
-                                            PhysicalTablePath.of(
-                                                    PATH.getTablePath(),
-                                                    HISTORICAL_PARTITION_VALUE),
-                                            PARTITION_ID + 1);
+                                    assertThat(
+                                                    accumulator.routeWritesTo(
+                                                            table,
+                                                            PATH,
+                                                            PhysicalTablePath.of(
+                                                                    PATH.getTablePath(),
+                                                                    HISTORICAL_PARTITION_VALUE),
+                                                            PARTITION_ID + 1))
+                                            .isFalse();
                                 } else {
                                     accumulator.close();
                                 }
@@ -1030,10 +1084,9 @@ class BucketRoutingTest {
             resumeAppend.complete(null);
             append.get(10, TimeUnit.SECONDS);
             if (historicalRouting) {
-                assertThatThrownBy(() -> barrier.get(10, TimeUnit.SECONDS))
-                        .hasRootCauseInstanceOf(FlussRuntimeException.class)
-                        .hasStackTraceContaining("incomplete writes");
+                barrier.get(10, TimeUnit.SECONDS);
                 assertThat(accumulator.hasHistoricalWriteTarget(PATH)).isFalse();
+                assertThat(accumulator.isWriteTargetPaused(PATH)).isTrue();
                 accumulator.close();
             } else {
                 barrier.get(10, TimeUnit.SECONDS);

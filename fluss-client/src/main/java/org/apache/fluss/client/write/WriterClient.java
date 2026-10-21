@@ -268,7 +268,8 @@ public class WriterClient {
         // be detected before more records are appended to the stale route. Ideally, the Client
         // should learn the server-authoritative partition status without synchronously refreshing
         // metadata on the per-record path; see https://github.com/apache/fluss/issues/4161.
-        if (accumulator.hasHistoricalWriteTarget(originalPath)) {
+        if (accumulator.hasHistoricalWriteTarget(originalPath)
+                || accumulator.isWriteTargetPaused(originalPath)) {
             return;
         }
 

@@ -49,6 +49,7 @@ import javax.annotation.Nullable;
 import javax.annotation.concurrent.GuardedBy;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -250,23 +251,35 @@ public class Sender implements Runnable {
         // get the list of buckets with data ready to send.
         ReadyCheckResult readyCheckResult = accumulator.ready(clusterSnapshot);
 
-        // if there are any buckets whose leaders are not known yet, force metadata update
+        // Resolve unknown leaders and paused write targets before draining.
         if (!readyCheckResult.unknownLeaderTables.isEmpty()) {
-            try {
-                metadataUpdater.updatePhysicalTableMetadata(readyCheckResult.unknownLeaderTables);
-            } catch (Exception e) {
-                // TODO: this try-catch is not needed when we don't update metadata for
-                //  unready partitions
-                Throwable t = ExceptionUtils.stripExecutionException(e);
-                if (t instanceof PartitionNotExistException) {
-                    handlePartitionNotExistException(readyCheckResult.unknownLeaderTables);
+            Set<PhysicalTablePath> tablesToUpdate = new HashSet<>();
+            for (PhysicalTablePath path : readyCheckResult.unknownLeaderTables) {
+                if (accumulator.isWriteTargetPaused(path)) {
+                    // This target is already known to be missing. Wait for its responses
+                    // without fetching its metadata again.
+                    handleMissingPartition(path, null);
                 } else {
-                    throw e;
+                    tablesToUpdate.add(path);
                 }
             }
-            LOG.debug(
-                    "Client update metadata due to unknown leader tables from the batched records: {}",
-                    readyCheckResult.unknownLeaderTables);
+            if (!tablesToUpdate.isEmpty()) {
+                try {
+                    metadataUpdater.updatePhysicalTableMetadata(tablesToUpdate);
+                } catch (Exception e) {
+                    // TODO: this try-catch is not needed when we don't update metadata for
+                    //  unready partitions
+                    Throwable t = ExceptionUtils.stripExecutionException(e);
+                    if (t instanceof PartitionNotExistException) {
+                        handlePartitionNotExistException(tablesToUpdate);
+                    } else {
+                        throw e;
+                    }
+                }
+                LOG.debug(
+                        "Client update metadata due to unknown leader tables from the batched records: {}",
+                        tablesToUpdate);
+            }
         }
 
         Set<Integer> readyNodes = readyCheckResult.readyNodes;
@@ -389,14 +402,20 @@ public class Sender implements Runnable {
     }
 
     private void maybeRemoveFromInflightBatches(ReadyWriteBatch batch) {
+        boolean removedFromInFlight = false;
         synchronized (inFlightBatchesLock) {
             List<ReadyWriteBatch> batches = inFlightBatches.get(batch.tableBucket());
             if (batches != null) {
-                batches.remove(batch);
+                removedFromInFlight = batches.remove(batch);
                 if (batches.isEmpty()) {
                     inFlightBatches.remove(batch.tableBucket());
                 }
             }
+        }
+        if (removedFromInFlight
+                && accumulator.isWriteTargetPaused(batch.writeBatch().physicalTablePath())) {
+            // Recheck the paused target through the normal ready and metadata-update flow.
+            wakeup();
         }
     }
 
@@ -852,6 +871,9 @@ public class Sender implements Runnable {
             if (!accumulator.isHistoricalPartitionEnabled(targetPath.getTablePath())) {
                 continue;
             }
+            // The bulk refresh may have failed while the old partition ID remained cached.
+            metadataUpdater.invalidPhysicalTableBucketAndPartitionMeta(
+                    Collections.singleton(targetPath));
             try {
                 metadataUpdater.checkAndUpdatePartitionMetadata(targetPath);
             } catch (Exception e) {
@@ -870,7 +892,9 @@ public class Sender implements Runnable {
      *
      * <p>A missing historical target has no further fallback and is aborted. An original target is
      * rerouted only after all requests to it have left the in-flight set, so no response from the
-     * old physical target can race with resetting its queued batches to the historical target.
+     * old physical target can race with resetting its queued batches to the historical target. The
+     * handoff provides at-least-once delivery: an old attempt whose response was lost may be
+     * replayed on the historical target, which has separate idempotence state.
      */
     private void handleMissingPartition(PhysicalTablePath targetPath, Throwable cause) {
         if (HISTORICAL_PARTITION_VALUE.equals(targetPath.getPartitionName())) {
@@ -886,28 +910,9 @@ public class Sender implements Runnable {
         }
 
         if (hasInFlightBatches(targetPath)) {
-            // Supporting this case requires waiting for the outstanding responses, detaching the
-            // batches from the original TableBucket's idempotence state, preserving their order,
-            // and assigning new sequences for the historical TableBucket. Keep this transition
-            // simple by failing only the affected target.
-            // TODO: If this race occurs frequently in practice, implement the coordinated
-            // in-flight handoff instead of aborting the batches.
-            abortBatches(
-                    targetPath,
-                    newPartitionNotExistException(
-                            "Cannot safely reroute writes from missing partition "
-                                    + targetPath
-                                    + " while requests to it are still in flight because rerouting "
-                                    + "them to the historical partition could break idempotence.",
-                            cause));
             return;
         }
 
-        // TODO: No current in-flight request does not rule out an earlier attempt that was
-        // accepted while its response was lost. Rerouting such a batch can duplicate the write;
-        // target-scoped abort only exposes the ambiguity and cannot prevent an upper-layer replay
-        // from duplicating it. Resolve this with the durable FREEZING/RETIRED handoff; see
-        // https://github.com/apache/fluss/issues/4166.
         PhysicalTablePath historicalPath =
                 PhysicalTablePath.of(targetPath.getTablePath(), HISTORICAL_PARTITION_VALUE);
         @Nullable Throwable historicalTargetCause = null;
@@ -917,6 +922,9 @@ public class Sender implements Runnable {
                         metadataUpdater.getCluster().getPartitionIdOrElseThrow(historicalPath);
                 accumulator.rerouteQueuedWritesToHistorical(
                         targetPath, historicalPath, historicalPartitionId);
+                accumulator.setWriteTargetPaused(targetPath, false);
+                // The current ready check still describes the original target.
+                wakeup();
                 LOG.info(
                         "Rerouted writes from partition {} to historical partition {}.",
                         targetPath,
@@ -936,6 +944,7 @@ public class Sender implements Runnable {
                                 + historicalPath
                                 + " does not exist according to refreshed metadata.",
                         historicalTargetCause));
+        accumulator.setWriteTargetPaused(targetPath, false);
     }
 
     /** Returns whether a request to {@code targetPath} is still awaiting a response. */
