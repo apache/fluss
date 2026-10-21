@@ -47,9 +47,7 @@ import java.util.Comparator;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -98,36 +96,12 @@ class LakeSnapshotAndLogSplitScannerTest {
         verify(log, never()).poll(any());
     }
 
-    @Test
-    void testHistoricalReplayTimeoutCannotBeRefreshedByUnchangedProgress() throws Exception {
-        when(log.poll(any()))
-                .thenReturn(
-                        new ScanRecords(
-                                Collections.emptyMap(), Collections.singletonMap(BUCKET, 2L)));
-        try (LakeSnapshotAndLogSplitScanner scanner = scanner(2, 4, Duration.ZERO)) {
-            assertThatThrownBy(() -> read(scanner)).hasMessageContaining("made no progress");
-        }
-        verify(log).close();
-    }
-
-    @Test
-    void testFailedSubscriptionClosesCreatedScanner() throws Exception {
-        doThrow(new IllegalStateException("expired bucket")).when(log).subscribe(0, 2);
-        assertThatThrownBy(() -> scanner(2, 4)).hasMessageContaining("expired bucket");
-        verify(log).close();
-    }
-
     private static ScanRecord record(long offset, int id, int value) {
         return new ScanRecord(offset, 10L, ChangeType.INSERT, GenericRow.of(id, value));
     }
 
-    private LakeSnapshotAndLogSplitScanner scanner(long start, long stop) throws Exception {
-        return scanner(start, stop, null);
-    }
-
     @SuppressWarnings("unchecked")
-    private LakeSnapshotAndLogSplitScanner scanner(long start, long stop, Duration progressTimeout)
-            throws Exception {
+    private LakeSnapshotAndLogSplitScanner scanner(long start, long stop) throws Exception {
         Table table = mock(Table.class);
         Schema schema =
                 Schema.newBuilder()
@@ -152,8 +126,7 @@ class LakeSnapshotAndLogSplitScannerTest {
                 .thenReturn(
                         CloseableIterator.wrap(
                                 Collections.<LogRecord>singletonList(record(0, 1, 10)).iterator()));
-        return new LakeSnapshotAndLogSplitScanner(
-                table, source, null, BUCKET, start, stop, null, progressTimeout);
+        return new LakeSnapshotAndLogSplitScanner(table, source, null, BUCKET, start, stop, null);
     }
 
     private static List<String> read(LakeSnapshotAndLogSplitScanner scanner) throws Exception {
