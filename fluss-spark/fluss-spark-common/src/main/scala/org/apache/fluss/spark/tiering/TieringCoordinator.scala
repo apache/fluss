@@ -26,6 +26,7 @@ import org.apache.fluss.rpc.{GatewayClientProxy, RpcClient}
 import org.apache.fluss.rpc.gateway.CoordinatorGateway
 import org.apache.fluss.rpc.messages.{LakeTieringHeartbeatRequest, LakeTieringHeartbeatResponse, PbHeartbeatReqForTable, PbLakeTieringStats}
 import org.apache.fluss.rpc.metrics.ClientMetricGroup
+import org.apache.fluss.utils.IOUtils.closeQuietly
 
 import org.apache.spark.internal.Logging
 

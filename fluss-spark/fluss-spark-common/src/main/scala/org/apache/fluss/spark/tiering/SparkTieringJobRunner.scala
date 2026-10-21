@@ -25,6 +25,8 @@ import org.apache.fluss.lake.committer.TieringStats
 import org.apache.fluss.lake.lakestorage.LakeStoragePluginSetUp
 import org.apache.fluss.lake.writer.{LakeTieringFactory, TieringTableValidator}
 import org.apache.fluss.metadata.TablePath
+import org.apache.fluss.utils.IOUtils.closeQuietly
+import org.apache.fluss.utils.Preconditions.checkState
 
 import org.apache.spark.SparkContext
 import org.apache.spark.internal.Logging
@@ -306,15 +308,9 @@ class SparkTieringJobRunner(
   }
 
   private def checkAssignment(coordinator: TieringCoordinator): Unit = {
-    checkAssignmentState(!stopped.get(), "Spark tiering service is stopping")
-    checkAssignmentState(heartbeatFailure == null, "Spark tiering heartbeat failed")
-    checkAssignmentState(!coordinator.tableCancelled, "Spark tiering assignment was cancelled")
-  }
-
-  private def checkAssignmentState(valid: Boolean, message: String): Unit = {
-    if (!valid) {
-      throw new IllegalStateException(message)
-    }
+    checkState(!stopped.get(), "Spark tiering service is stopping": Any)
+    checkState(heartbeatFailure == null, "Spark tiering heartbeat failed": Any)
+    checkState(!coordinator.tableCancelled, "Spark tiering assignment was cancelled": Any)
   }
 }
 

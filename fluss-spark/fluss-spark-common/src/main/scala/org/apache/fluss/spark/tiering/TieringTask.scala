@@ -22,8 +22,9 @@ import org.apache.fluss.client.table.Table
 import org.apache.fluss.client.table.scanner.ScanRecord
 import org.apache.fluss.client.tiering.{TableBucketWriteResult, TieringLogSplit, TieringSnapshotSplit, TieringSplit, TieringWriterInitContext}
 import org.apache.fluss.config.Configuration
-import org.apache.fluss.lake.lakestorage.LakeStoragePluginSetUp
-import org.apache.fluss.lake.writer.{LakeTieringFactory, LakeWriter}
+import org.apache.fluss.lake.writer.LakeWriter
+import org.apache.fluss.spark.tiering.SparkTieringJobRunner.createLakeTieringFactory
+import org.apache.fluss.utils.IOUtils.closeQuietly
 
 import org.apache.spark.internal.Logging
 
@@ -112,15 +113,6 @@ object TieringTask extends Logging {
       closeQuietly(table, "Table")
       closeQuietly(connection, "Connection")
     }
-  }
-
-  /** Creates a [[LakeTieringFactory]] from the data lake format and config. */
-  private def createLakeTieringFactory(
-      dataLakeFormat: String,
-      lakeConfig: Configuration): LakeTieringFactory[AnyRef, AnyRef] = {
-    val lakeStoragePlugin = LakeStoragePluginSetUp.fromDataLakeFormat(dataLakeFormat, null)
-    val lakeStorage = lakeStoragePlugin.createLakeStorage(lakeConfig)
-    lakeStorage.createLakeTieringFactory().asInstanceOf[LakeTieringFactory[AnyRef, AnyRef]]
   }
 
   private[tiering] def processLogSplit(
