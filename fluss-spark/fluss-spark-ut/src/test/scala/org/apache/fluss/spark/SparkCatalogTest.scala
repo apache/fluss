@@ -199,6 +199,90 @@ class SparkCatalogTest extends FlussSparkTestBase {
     checkAnswer(sql("SHOW DATABASES"), Row(DEFAULT_DATABASE) :: Nil)
   }
 
+  test("Catalog: show table properties created by admin") {
+    withTable("table_properties") {
+      val tablePath = createTablePath("table_properties")
+      val descriptor = TableDescriptor
+        .builder()
+        .schema(Schema.newBuilder().column("id", DataTypes.INT()).primaryKey("id").build())
+        .distributedBy(3, "id")
+        .comment("created by admin")
+        .property("table.log.ttl", "3d")
+        .customProperty("custom.key", "custom value")
+        .customProperty("primary.key", "wrong_key")
+        .customProperty("bucket.num", "99")
+        .customProperty("bucket.key", "wrong_key")
+        .customProperty("comment", "wrong comment")
+        .build()
+      admin.createTable(tablePath, descriptor, false).get()
+
+      checkAnswer(
+        sql("SHOW TBLPROPERTIES table_properties ('table.log.ttl')"),
+        Row("table.log.ttl", "3d"))
+      checkAnswer(
+        sql("SHOW TBLPROPERTIES table_properties ('custom.key')"),
+        Row("custom.key", "custom value"))
+      checkAnswer(
+        sql("SHOW TBLPROPERTIES table_properties ('primary.key')"),
+        Row("primary.key", "id"))
+      checkAnswer(sql("SHOW TBLPROPERTIES table_properties ('bucket.num')"), Row("bucket.num", "3"))
+      checkAnswer(
+        sql("SHOW TBLPROPERTIES table_properties ('bucket.key')"),
+        Row("bucket.key", "id"))
+
+      val catalog = spark.sessionState.catalogManager.currentCatalog.asInstanceOf[SparkCatalog]
+      val table = catalog.loadTable(Identifier.of(Array(DEFAULT_DATABASE), "table_properties"))
+      val properties = table.properties()
+      assertThat(properties).containsEntry("comment", "created by admin")
+      properties.put("table.log.ttl", "1h")
+      assertThat(table.properties()).containsEntry("table.log.ttl", "3d")
+
+      sql("ALTER TABLE table_properties SET TBLPROPERTIES ('table.log.ttl' = '36 h')")
+      checkAnswer(
+        sql("SHOW TBLPROPERTIES table_properties ('table.log.ttl')"),
+        Row("table.log.ttl", "36 h"))
+      assertThat(sql("SHOW CREATE TABLE table_properties").head().getString(0))
+        .contains("'table.log.ttl' = '36 h'", "'primary.key' = 'id'", "COMMENT 'created by admin'")
+      val description = sql("DESC FORMATTED table_properties").collect()
+      assertThat(description.find(_.getString(0) == "Table Properties").get.getString(1))
+        .contains("table.log.ttl=36 h", "bucket.num=3", "custom.key=custom value")
+
+      sql("ALTER TABLE table_properties UNSET TBLPROPERTIES ('custom.key', 'table.log.ttl')")
+      assertThatList(
+        sql("SHOW TBLPROPERTIES table_properties").collect().map(_.getString(0)).toList.asJava)
+        .doesNotContain("custom.key", "table.log.ttl")
+    }
+  }
+
+  test("Catalog: log table properties omit absent structural metadata") {
+    withTable("log_properties") {
+      val descriptor = TableDescriptor
+        .builder()
+        .schema(Schema.newBuilder().column("id", DataTypes.INT()).build())
+        .distributedBy(1)
+        .customProperty("primary.key", "wrong_key")
+        .customProperty("PRIMARY.KEY", "wrong_key")
+        .customProperty("bucket.key", "wrong_key")
+        .customProperty("Bucket.Key", "wrong_key")
+        .customProperty("comment", "wrong comment")
+        .customProperty("COMMENT", "wrong comment")
+        .build()
+      admin.createTable(createTablePath("log_properties"), descriptor, false).get()
+
+      val catalog = spark.sessionState.catalogManager.currentCatalog.asInstanceOf[SparkCatalog]
+      val table = catalog.loadTable(Identifier.of(Array(DEFAULT_DATABASE), "log_properties"))
+      assertThat(table.properties()).containsEntry("bucket.num", "1")
+      assertThat(table.properties())
+        .doesNotContainKeys(
+          "primary.key",
+          "PRIMARY.KEY",
+          "bucket.key",
+          "Bucket.Key",
+          "comment",
+          "COMMENT")
+    }
+  }
+
   protected def modifyTablePropertiesWithCheck(): Unit = {
     withTable("t") {
       sql(
