@@ -245,7 +245,7 @@ tests:
       uniqueResourceNames: true
     asserts:
       - failedTemplate:
-          errorPattern: "must stay within 63"
+          errorPattern: "must stay within 52"
 
   - it: should accept a release name that fits
     release:
@@ -255,24 +255,26 @@ tests:
     asserts:
       - notFailedTemplate: {}
 
-  # 34 characters, which the "-fluss" suffix takes to the 40 character maximum.
+  # 27 characters, which the "-fluss" suffix takes to the 33 character maximum,
+  # giving a 52 character coordinator StatefulSet name.
   - it: should accept a release name at the limit
     release:
-      name: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      name: rrrrrrrrrrrrrrrrrrrrrrrrrrr
     set:
       uniqueResourceNames: true
     asserts:
       - notFailedTemplate: {}
 
-  # One character more, which pushes the prefix to 41.
+  # One character more, which pushes the StatefulSet name to 53 and stops the
+  # controller creating pods at all.
   - it: should reject a release name one character over the limit
     release:
-      name: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      name: rrrrrrrrrrrrrrrrrrrrrrrrrrrr
     set:
       uniqueResourceNames: true
     asserts:
       - failedTemplate:
-          errorPattern: "prefix must be at most 40"
+          errorPattern: "prefix must be at most 33"
 
   - it: should not apply the length check with fixed names
     release:

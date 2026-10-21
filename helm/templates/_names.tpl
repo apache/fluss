@@ -117,20 +117,23 @@ naming scheme leaves it alone.
 {{- end -}}
 
 {{/*
-Validates that the generated resource names stay within the 63 character limit
-Kubernetes imposes on DNS labels. Only applies with uniqueResourceNames. The
-longest generated name is a coordinator pod, which adds 19 characters for the
-StatefulSet name plus up to 4 for the ordinal suffix.
+Validates that the generated names stay within the limits Kubernetes imposes.
+Only applies with uniqueResourceNames. The binding limit is the StatefulSet
+name rather than the 63 characters of a DNS label: every pod carries a
+controller-revision-hash label holding "<statefulset>-<hash>", the hash is 10
+characters, and a label value may not exceed 63 -- so a StatefulSet name may
+not exceed 52. The longest StatefulSet suffix here is "-coordinator-server",
+at 19 characters.
 Usage:
   include "fluss.names.validateError" .
 */}}
 {{- define "fluss.names.validateError" -}}
 {{- if .Values.uniqueResourceNames -}}
 {{- $prefix := include "fluss.fullname" . -}}
-{{- $longestSuffix := 23 -}}
-{{- $maxPrefix := sub 63 $longestSuffix -}}
+{{- $longestSuffix := 19 -}}
+{{- $maxPrefix := sub 52 $longestSuffix -}}
 {{- if gt (len $prefix) (int $maxPrefix) -}}
-{{- printf "resource name prefix %q is %d characters, but generated names must stay within 63, so the prefix must be at most %d. Shorten the release name or set fullnameOverride." $prefix (len $prefix) (int $maxPrefix) -}}
+{{- printf "resource name prefix %q is %d characters, but a StatefulSet name must stay within 52, so the prefix must be at most %d. Shorten the release name or set fullnameOverride." $prefix (len $prefix) (int $maxPrefix) -}}
 {{- end -}}
 {{- end -}}
 {{- end -}}

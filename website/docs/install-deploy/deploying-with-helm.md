@@ -597,8 +597,10 @@ Two things still need attention:
 - The release name becomes part of every generated name through
   `fluss.fullname`, which is the release name plus `-fluss`, or the release
   name on its own when it already contains `fluss`. That prefix has to stay
-  within 40 characters, so a release name without `fluss` in it is limited to
-  34. Set `fullnameOverride` for anything longer. The chart fails the render
+  within 33 characters — a StatefulSet name cannot exceed 52, because each pod
+  labels itself with the StatefulSet name plus a 10 character revision hash —
+  so a release name without `fluss` in it is limited to 27. Set
+  `fullnameOverride` for anything longer. The chart fails the render
   with an explicit message when the prefix is too long. That check covers the
   resources named after `fluss.fullname`; the metrics Services are named from
   the release name alone and are not covered by it.
