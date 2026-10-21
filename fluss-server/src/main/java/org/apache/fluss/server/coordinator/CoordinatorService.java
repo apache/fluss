@@ -24,7 +24,6 @@ import org.apache.fluss.cluster.rebalance.GoalType;
 import org.apache.fluss.cluster.rebalance.ServerTag;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
-import org.apache.fluss.config.FlussConfigUtils;
 import org.apache.fluss.config.cluster.AlterConfig;
 import org.apache.fluss.config.cluster.AlterConfigOpType;
 import org.apache.fluss.exception.ApiException;
@@ -314,8 +313,7 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         this.metadataCache = metadataCache;
         this.lakeCatalogDynamicLoader = lakeCatalogDynamicLoader;
         this.ioExecutor = ioExecutor;
-        this.lakeTableHelper =
-                new LakeTableHelper(zkClient, FlussConfigUtils.getDefaultRemoteDataDir(conf));
+        this.lakeTableHelper = new LakeTableHelper(zkClient);
         this.remoteDirDynamicLoader = remoteDirDynamicLoader;
 
         // Initialize and start the producer snapshot manager
@@ -1260,9 +1258,19 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                                     }
                                 }
                                 TablePath tablePath = toTablePath(bucketOffsets.getTablePath());
+                                Optional<TableRegistration> tableRegistration =
+                                        zkClient.getTable(tablePath);
+                                if (!tableRegistration.isPresent()) {
+                                    throw new TableNotExistException(
+                                            String.format(
+                                                    "Try to prepare lake table snapshot for table %s, but table not exist.",
+                                                    tablePath));
+                                }
                                 FsPath fsPath =
                                         lakeTableHelper.storeLakeTableOffsetsFile(
-                                                tablePath, tableBucketOffsets);
+                                                tableRegistration.get().remoteDataDir,
+                                                tablePath,
+                                                tableBucketOffsets);
                                 pbPrepareLakeTableRespForTable.setTableId(tableId);
                                 pbPrepareLakeTableRespForTable.setLakeTableOffsetsPath(
                                         fsPath.toString());
