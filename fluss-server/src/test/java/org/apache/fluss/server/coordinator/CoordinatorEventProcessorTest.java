@@ -129,7 +129,7 @@ import static org.apache.fluss.server.coordinator.statemachine.BucketState.Offli
 import static org.apache.fluss.server.coordinator.statemachine.BucketState.OnlineBucket;
 import static org.apache.fluss.server.coordinator.statemachine.ReplicaState.OfflineReplica;
 import static org.apache.fluss.server.coordinator.statemachine.ReplicaState.OnlineReplica;
-import static org.apache.fluss.server.metadata.PartitionMetadata.DELETED_PARTITION_ID;
+import static org.apache.fluss.server.metadata.PartitionMetadata.DELETED_PARTITION_NAME;
 import static org.apache.fluss.server.testutils.KvTestUtils.mockCompletedSnapshot;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getAdjustIsrResponseData;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getUpdateMetadataRequestData;
@@ -764,14 +764,6 @@ class CoordinatorEventProcessorTest extends CoordinatorEventProcessorTestBase {
         long tableId =
                 metadataManager.createTable(
                         tablePath, remoteDataDir, getPartitionedTable(), null, false);
-        failingChannelManager.failNextUpdateMetadata(
-                request ->
-                        request.getPartitionMetadatasList().stream()
-                                .anyMatch(
-                                        partitionMetadata ->
-                                                partitionMetadata.getTableId() == tableId
-                                                        && partitionMetadata.getPartitionId()
-                                                                == DELETED_PARTITION_ID));
         Map<Integer, BucketAssignment> assignments =
                 generateAssignment(
                                 N_BUCKETS,
@@ -785,6 +777,16 @@ class CoordinatorEventProcessorTest extends CoordinatorEventProcessorTestBase {
         PartitionAssignment partitionAssignment = new PartitionAssignment(tableId, assignments);
         PartitionIdName partition =
                 preparePartitionAssignment(tablePath, tableId, partitionAssignment).f0;
+        failingChannelManager.failNextUpdateMetadata(
+                request ->
+                        request.getPartitionMetadatasList().stream()
+                                .anyMatch(
+                                        metadata ->
+                                                metadata.getTableId() == tableId
+                                                        && metadata.getPartitionId()
+                                                                == partition.partitionId
+                                                        && DELETED_PARTITION_NAME.equals(
+                                                                metadata.getPartitionName())));
         verifyPartitionCreated(
                 new TablePartition(tableId, partition.partitionId),
                 partitionAssignment,

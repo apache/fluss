@@ -18,20 +18,31 @@
 package org.apache.fluss.server.coordinator;
 
 import org.apache.fluss.exception.NetworkException;
+import org.apache.fluss.metadata.PartitionInfo;
 import org.apache.fluss.metadata.PhysicalTablePath;
+import org.apache.fluss.metadata.ResolvedPartitionSpec;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
+import org.apache.fluss.metadata.TablePartition;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.rpc.messages.NotifyLeaderAndIsrRequest;
 import org.apache.fluss.rpc.messages.NotifyLeaderAndIsrResponse;
 import org.apache.fluss.rpc.messages.PbNotifyLeaderAndIsrReqForBucket;
+import org.apache.fluss.rpc.messages.PbTableMetadata;
+import org.apache.fluss.rpc.messages.UpdateMetadataRequest;
+import org.apache.fluss.rpc.messages.UpdateMetadataResponse;
 import org.apache.fluss.server.coordinator.event.AccessContextEvent;
 import org.apache.fluss.server.coordinator.event.EventManager;
+import org.apache.fluss.server.metadata.ClusterMetadata;
 import org.apache.fluss.server.zk.ZkEpoch;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
+
+import javax.annotation.Nullable;
 
 import java.util.Arrays;
 import java.util.Collections;
@@ -40,6 +51,10 @@ import java.util.function.BiConsumer;
 
 import static org.apache.fluss.record.TestData.DATA1_TABLE_DESCRIPTOR;
 import static org.apache.fluss.record.TestData.DEFAULT_REMOTE_DATA_DIR;
+import static org.apache.fluss.server.metadata.PartitionMetadata.DELETED_PARTITION_NAME;
+import static org.apache.fluss.server.metadata.TableMetadata.DELETED_TABLE_ID;
+import static org.apache.fluss.server.metadata.TableMetadata.DELETED_TABLE_PATH;
+import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getUpdateMetadataRequestData;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** Test for the {@link CoordinatorRequestBatch}. */
@@ -191,6 +206,95 @@ class CoordinatorRequestBatchTest {
         assertThat(bucketRequest.hasBucketCount()).isFalse();
         assertThat(bucketRequest.hasBucketCountEpoch()).isFalse();
         assertThat(coordinatorContext.getPendingLeaderActivationBuckets()).isEmpty();
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void testTableDeletionPreservesOriginalId(boolean tableInfoPresent) throws Exception {
+        long tableId = 100L;
+        TablePath path = TablePath.of("db", "orders");
+        if (tableInfoPresent) {
+            putTableInfo(tableId, path);
+        }
+        coordinatorContext.queueTableDeletion(Collections.singleton(tableId));
+
+        UpdateMetadataRequest request = sendMetadataUpdate(tableId, null);
+        PbTableMetadata wire = request.getTableMetadatasList().get(0);
+        // Older tablet servers still see the deletion marker they understand.
+        assertThat(wire.hasDeletedTableId()).isEqualTo(tableInfoPresent);
+        assertThat(wire.getTableId()).isEqualTo(tableInfoPresent ? DELETED_TABLE_ID : tableId);
+        assertThat(wire.getTablePath().getTableName())
+                .isEqualTo((tableInfoPresent ? path : DELETED_TABLE_PATH).getTableName());
+        TableInfo deleted =
+                getUpdateMetadataRequestData(request).getTableMetadataList().get(0).getTableInfo();
+        assertThat(deleted.getTableId()).isEqualTo(tableId);
+        assertThat(deleted.getTablePath()).isEqualTo(DELETED_TABLE_PATH);
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void testPartitionDeletionPreservesOriginalId(boolean nameInContext) throws Exception {
+        long tableId = 100L;
+        long partitionId = 200L;
+        TablePath path = TablePath.of("db", "orders");
+        putTableInfo(tableId, path);
+        if (nameInContext) {
+            ResolvedPartitionSpec spec =
+                    new ResolvedPartitionSpec(
+                            Collections.singletonList("region"), Collections.singletonList("west"));
+            coordinatorContext.putPartition(
+                    partitionId,
+                    PhysicalTablePath.of(path, spec.getPartitionName()),
+                    new PartitionInfo(partitionId, spec, DEFAULT_REMOTE_DATA_DIR, 1));
+        }
+        coordinatorContext.queuePartitionDeletion(
+                Collections.singleton(new TablePartition(tableId, partitionId)));
+
+        ClusterMetadata update =
+                getUpdateMetadataRequestData(sendMetadataUpdate(tableId, partitionId));
+        assertThat(update.getPartitionMetadataList())
+                .singleElement()
+                .satisfies(
+                        deleted -> {
+                            assertThat(deleted.getTableId()).isEqualTo(tableId);
+                            assertThat(deleted.getPartitionId()).isEqualTo(partitionId);
+                            assertThat(deleted.getPartitionName())
+                                    .isEqualTo(DELETED_PARTITION_NAME);
+                        });
+        // A delayed partition deletion must not re-publish a previously dropped parent table.
+        assertThat(update.getTableMetadataList()).isEmpty();
+    }
+
+    private UpdateMetadataRequest sendMetadataUpdate(long tableId, @Nullable Long partitionId)
+            throws Exception {
+        AtomicReference<UpdateMetadataRequest> sent = new AtomicReference<>();
+        TestCoordinatorChannelManager channel =
+                new TestCoordinatorChannelManager() {
+                    @Override
+                    public void sendUpdateMetadataRequest(
+                            int serverId,
+                            UpdateMetadataRequest request,
+                            BiConsumer<UpdateMetadataResponse, ? super Throwable> callback) {
+                        sent.set(request);
+                        callback.accept(new UpdateMetadataResponse(), null);
+                    }
+                };
+        try {
+            CoordinatorRequestBatch batch =
+                    new CoordinatorRequestBatch(
+                            channel,
+                            newSynchronousAccessContextEventManager(),
+                            coordinatorContext,
+                            ignored -> null);
+            batch.addUpdateMetadataRequestForTabletServers(
+                    Collections.singleton(0), tableId, partitionId, Collections.emptySet());
+            batch.sendUpdateMetadataRequest();
+            UpdateMetadataRequest received = new UpdateMetadataRequest();
+            received.parseFrom(sent.get().toByteArray());
+            return received;
+        } finally {
+            channel.close();
+        }
     }
 
     /** Registers table metadata so normal notifications carry the bucket layout epoch. */

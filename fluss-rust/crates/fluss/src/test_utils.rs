@@ -324,6 +324,7 @@ pub(crate) fn pb_table_metadata(
         remote_data_dir: None,
         bucket_count_epoch: None,
         bucket_count: None,
+        deleted_table_id: None,
     }
 }
 

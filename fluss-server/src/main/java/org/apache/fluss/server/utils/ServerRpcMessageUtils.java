@@ -704,6 +704,9 @@ public class ServerRpcMessageUtils {
                 .setTableName(tablePath.getTableName());
         pbTableMetadata.addAllBucketMetadatas(
                 toPbBucketMetadata(tableMetadata.getBucketMetadataList()));
+        if (tableMetadata.getDeletedTableId() != null) {
+            pbTableMetadata.setDeletedTableId(tableMetadata.getDeletedTableId());
+        }
         return pbTableMetadata;
     }
 
@@ -758,8 +761,16 @@ public class ServerRpcMessageUtils {
     }
 
     private static TableMetadata toTableMetaData(PbTableMetadata pbTableMetadata) {
-        TablePath tablePath = toTablePath(pbTableMetadata.getTablePath());
-        long tableId = pbTableMetadata.getTableId();
+        // Decode an identified deletion into the existing ID-based tombstone that all
+        // tablet-side metadata consumers understand.
+        TablePath tablePath =
+                pbTableMetadata.hasDeletedTableId()
+                        ? TableMetadata.DELETED_TABLE_PATH
+                        : toTablePath(pbTableMetadata.getTablePath());
+        long tableId =
+                pbTableMetadata.hasDeletedTableId()
+                        ? pbTableMetadata.getDeletedTableId()
+                        : pbTableMetadata.getTableId();
         TableInfo tableInfo =
                 TableInfo.of(
                         tablePath,

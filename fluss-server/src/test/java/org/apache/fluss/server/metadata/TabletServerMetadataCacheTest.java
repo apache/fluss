@@ -68,6 +68,8 @@ import static org.apache.fluss.server.metadata.PartitionMetadata.DELETED_PARTITI
 import static org.apache.fluss.server.metadata.PartitionMetadata.DELETED_PARTITION_NAME;
 import static org.apache.fluss.server.metadata.TableMetadata.DELETED_TABLE_ID;
 import static org.apache.fluss.server.metadata.TableMetadata.DELETED_TABLE_PATH;
+import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getUpdateMetadataRequestData;
+import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeUpdateMetadataRequest;
 import static org.apache.fluss.server.zk.data.LeaderAndIsr.NO_LEADER;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -721,6 +723,74 @@ public class TabletServerMetadataCacheTest {
     }
 
     @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void testDelayedDeletionDoesNotRemoveRecreatedTable(boolean sameBatch) {
+        updateMetadata(tableMetadataList, partitionMetadataList);
+        long newId = partitionTableId + 1;
+        TableMetadata replacement =
+                new TableMetadata(
+                        TableInfo.of(
+                                partitionedTablePath,
+                                newId,
+                                0,
+                                DATA1_PARTITIONED_TABLE_DESCRIPTOR,
+                                DEFAULT_REMOTE_DATA_DIR,
+                                100L,
+                                100L),
+                        Collections.emptyList());
+        TableMetadata deletion =
+                new TableMetadata(
+                        TableInfo.of(
+                                partitionedTablePath,
+                                DELETED_TABLE_ID,
+                                0,
+                                DATA1_PARTITIONED_TABLE_DESCRIPTOR,
+                                DEFAULT_REMOTE_DATA_DIR,
+                                -1L,
+                                -1L),
+                        Collections.emptyList(),
+                        partitionTableId);
+        long newPartitionId = partitionId1 + 100;
+        PartitionMetadata newPartition =
+                new PartitionMetadata(
+                        newId,
+                        partitionName1,
+                        newPartitionId,
+                        initialBucketMetadata,
+                        initialBucketMetadata.size());
+
+        if (!sameBatch) {
+            updateMetadata(
+                    Collections.singletonList(replacement),
+                    Collections.singletonList(newPartition));
+        }
+        ClusterMetadata update =
+                getUpdateMetadataRequestData(
+                        makeUpdateMetadataRequest(
+                                coordinatorServer,
+                                0,
+                                aliveTableServers,
+                                sameBatch
+                                        ? Arrays.asList(replacement, deletion)
+                                        : Collections.singletonList(deletion),
+                                sameBatch
+                                        ? Collections.singletonList(newPartition)
+                                        : Collections.emptyList()));
+        assertThat(serverMetadataCache.updateClusterMetadata(update))
+                .containsExactly(partitionTableId);
+
+        assertThat(serverMetadataCache.getTableId(partitionedTablePath)).hasValue(newId);
+        assertPartitionsRemoved(partitionId1, partitionId2);
+        assertThat(
+                        serverMetadataCache.getPartitionMetadata(
+                                PhysicalTablePath.of(partitionedTablePath, partitionName1)))
+                .map(PartitionMetadata::getPartitionId)
+                .hasValue(newPartitionId);
+        assertThat(serverMetadataCache.contains(new TableBucket(newId, newPartitionId, 0)))
+                .isTrue();
+    }
+
+    @ParameterizedTest
     @CsvSource({"true, true", "false, true", "true, false", "false, false"})
     void testTableUpdateInvalidatesPartitionsOnlyWhenTableIdChanges(
             boolean refillFromZk, boolean changeTableId) {
@@ -809,7 +879,7 @@ public class TabletServerMetadataCacheTest {
     }
 
     @ParameterizedTest
-    @CsvSource({"true, false", "false, false", "false, true"})
+    @CsvSource({"true, false", "true, true", "false, false", "false, true"})
     void testReplacedPartitionRemovesOldBuckets(boolean refillFromZk, boolean deleteOldPartition) {
         updateMetadata(tableMetadataList, partitionMetadataList);
         long replacementPartitionId = partitionId1 + 100;
@@ -821,21 +891,24 @@ public class TabletServerMetadataCacheTest {
                         initialBucketMetadata,
                         initialBucketMetadata.size());
 
+        PartitionMetadata deletion =
+                new PartitionMetadata(
+                        partitionTableId,
+                        DELETED_PARTITION_NAME,
+                        partitionId1,
+                        Collections.emptyList(),
+                        null);
         if (refillFromZk) {
             serverMetadataCache.updatePartitionMetadata(
                     Collections.singletonList(replacement), serverMetadataCache.getSnapshot());
+            if (deleteOldPartition) {
+                updateMetadata(Collections.emptyList(), Collections.singletonList(deletion));
+            }
         } else {
             updateMetadata(
                     Collections.emptyList(),
                     deleteOldPartition
-                            ? Arrays.asList(
-                                    replacement,
-                                    new PartitionMetadata(
-                                            partitionTableId,
-                                            DELETED_PARTITION_NAME,
-                                            partitionId1,
-                                            Collections.emptyList(),
-                                            null))
+                            ? Arrays.asList(replacement, deletion)
                             : Collections.singletonList(replacement));
         }
 
