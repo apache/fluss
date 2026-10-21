@@ -401,6 +401,30 @@ message StopReplicaResponse {
   repeated PbStopReplicaRespForBucket stop_replicas_resp = 1;
 }
 
+// Freeze writes to partition bucket leaders before lake-aware retention.
+message FreezePartitionRequest {
+  repeated PbFreezePartitionReqForBucket buckets_req = 1;
+}
+
+message FreezePartitionResponse {
+  repeated PbFreezePartitionRespForBucket buckets_resp = 1;
+}
+
+// Reports frozen buckets whose entire log has been committed to the data lake.
+// Repeated by frozen leaders until their partition has been deleted.
+message ReportFrozenBucketsTieredRequest {
+  required int32 server_id = 1;
+  required int32 coordinator_epoch = 2;
+  repeated PbFrozenBucketTiered buckets = 3;
+}
+
+message PbFrozenBucketTiered {
+  required PbTableBucket table_bucket = 1;
+  required int32 leader_epoch = 2;
+}
+
+message ReportFrozenBucketsTieredResponse {}
+
 // adjust isr request and response
 message AdjustIsrRequest {
   required int32 serverId = 1;
@@ -1236,6 +1260,17 @@ message PbStopReplicaReqForBucket {
 }
 
 message PbStopReplicaRespForBucket {
+  required PbTableBucket table_bucket = 1;
+  optional int32 error_code = 2;
+  optional string error_message = 3;
+}
+
+message PbFreezePartitionReqForBucket {
+  required PbTableBucket table_bucket = 1;
+  required int32 leader_epoch = 2;
+}
+
+message PbFreezePartitionRespForBucket {
   required PbTableBucket table_bucket = 1;
   optional int32 error_code = 2;
   optional string error_message = 3;

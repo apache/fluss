@@ -71,12 +71,14 @@ import org.apache.fluss.rpc.gateway.CoordinatorGateway;
 import org.apache.fluss.rpc.messages.NotifyKvSnapshotOffsetResponse;
 import org.apache.fluss.rpc.messages.NotifyLakeTableOffsetResponse;
 import org.apache.fluss.rpc.messages.NotifyRemoteLogOffsetsResponse;
+import org.apache.fluss.rpc.messages.ReportFrozenBucketsTieredRequest;
 import org.apache.fluss.rpc.protocol.ApiError;
 import org.apache.fluss.rpc.protocol.ApiKeys;
 import org.apache.fluss.rpc.protocol.Errors;
 import org.apache.fluss.rpc.protocol.MergeMode;
 import org.apache.fluss.server.coordinator.CoordinatorContext;
 import org.apache.fluss.server.entity.FetchReqInfo;
+import org.apache.fluss.server.entity.FreezePartitionResultForBucket;
 import org.apache.fluss.server.entity.LakeBucketOffset;
 import org.apache.fluss.server.entity.LookupDataForBucket;
 import org.apache.fluss.server.entity.NotifyKvSnapshotOffsetData;
@@ -158,6 +160,8 @@ import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.Lock;
@@ -170,6 +174,7 @@ import static org.apache.fluss.config.ConfigOptions.KV_FORMAT_VERSION_2;
 import static org.apache.fluss.server.TabletManagerBase.getPartitionRegistration;
 import static org.apache.fluss.server.TabletManagerBase.getSchemaInfo;
 import static org.apache.fluss.server.TabletManagerBase.getTableRegistration;
+import static org.apache.fluss.server.utils.ServerRpcMessageUtils.fromTableBucket;
 import static org.apache.fluss.utils.Preconditions.checkArgument;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 import static org.apache.fluss.utils.Preconditions.checkState;
@@ -249,6 +254,9 @@ public class ReplicaManager implements ServerReconfigurable {
     private final ScannerManager scannerManager;
 
     private final HistoricalPartitionManager historicalPartitionManager;
+    private final CoordinatorGateway coordinatorGateway;
+    private final AtomicBoolean tieredReportInFlight = new AtomicBoolean();
+    private ScheduledFuture<?> tieredReportTask;
 
     public ReplicaManager(
             Configuration conf,
@@ -357,6 +365,7 @@ public class ReplicaManager implements ServerReconfigurable {
                         this,
                         (nodeId) -> metadataCache.getTabletServer(nodeId, internalListenerName));
         this.adjustIsrManager = new AdjustIsrManager(scheduler, coordinatorGateway, serverId);
+        this.coordinatorGateway = coordinatorGateway;
         this.fatalErrorHandler = fatalErrorHandler;
 
         // for kv snapshot
@@ -388,6 +397,14 @@ public class ReplicaManager implements ServerReconfigurable {
 
     public void startup() {
         historicalPartitionManager.startup(scheduler);
+        // Repeat even acknowledged reports: a new coordinator must rebuild its set of fully tiered
+        // buckets.
+        tieredReportTask =
+                scheduler.schedule(
+                        "report-frozen-buckets-tiered",
+                        this::reportFrozenBucketsTiered,
+                        0L,
+                        1_000L);
 
         // start up ISR expiration thread.
         // A follower can log behind leader for up tp configOptions#LOG_REPLICA_MAX_LAG_TIME x 1.5
@@ -753,6 +770,94 @@ public class ReplicaManager implements ServerReconfigurable {
         }
         FutureUtils.combineAll(resultFutures)
                 .thenAccept(results -> responseCallback.accept(new ArrayList<>(results)));
+    }
+
+    /** Freeze writes to partition bucket leaders and restore their committed lake progress. */
+    public void freezePartitions(
+            Map<TableBucket, Integer> leaderEpochs,
+            Consumer<List<FreezePartitionResultForBucket>> responseCallback) {
+        List<FreezePartitionResultForBucket> results = new ArrayList<>();
+        Map<Long, LakeTableSnapshot> lakeSnapshots = new HashMap<>();
+        inLock(
+                replicaStateChangeLock,
+                () -> {
+                    for (Map.Entry<TableBucket, Integer> entry : leaderEpochs.entrySet()) {
+                        TableBucket tableBucket = entry.getKey();
+                        try {
+                            Replica replica = getReplicaOrException(tableBucket);
+                            replica.freezeWrites(entry.getValue());
+                            if (replica.isDataLakeEnabled()) {
+                                long tableId = tableBucket.getTableId();
+                                if (!lakeSnapshots.containsKey(tableId)) {
+                                    lakeSnapshots.put(
+                                            tableId,
+                                            zkClient.getLakeTableSnapshot(tableId, null)
+                                                    .orElse(null));
+                                }
+                                LakeTableSnapshot snapshot = lakeSnapshots.get(tableId);
+                                if (snapshot != null) {
+                                    replica.getLogTablet()
+                                            .updateLakeTableSnapshotId(snapshot.getSnapshotId());
+                                    snapshot.getLogEndOffset(tableBucket)
+                                            .ifPresent(
+                                                    replica.getLogTablet()::updateLakeLogEndOffset);
+                                }
+                            }
+                            results.add(new FreezePartitionResultForBucket(tableBucket));
+                        } catch (Exception e) {
+                            results.add(
+                                    new FreezePartitionResultForBucket(
+                                            tableBucket, ApiError.fromThrowable(e)));
+                        }
+                    }
+                });
+        responseCallback.accept(results);
+    }
+
+    @VisibleForTesting
+    void reportFrozenBucketsTiered() {
+        if (!tieredReportInFlight.compareAndSet(false, true)) {
+            return;
+        }
+        try {
+            ReportFrozenBucketsTieredRequest request = new ReportFrozenBucketsTieredRequest();
+            inLock(
+                    replicaStateChangeLock,
+                    () -> {
+                        request.setServerId(serverId).setCoordinatorEpoch(coordinatorEpoch);
+                        for (Replica replica : getOnlineReplicaList()) {
+                            replica.getFrozenTieredLeaderEpoch()
+                                    .ifPresent(
+                                            epoch ->
+                                                    request.addBucket()
+                                                            .setTableBucket(
+                                                                    fromTableBucket(
+                                                                            replica
+                                                                                    .getTableBucket()))
+                                                            .setLeaderEpoch(epoch));
+                        }
+                    });
+            if (request.getBucketsCount() == 0) {
+                tieredReportInFlight.set(false);
+                return;
+            }
+            FutureUtils.orTimeout(
+                            coordinatorGateway.reportFrozenBucketsTiered(request),
+                            conf.get(ConfigOptions.CLIENT_REQUEST_TIMEOUT).toMillis(),
+                            TimeUnit.MILLISECONDS,
+                            "Frozen bucket report timed out")
+                    .whenComplete(
+                            (response, error) -> {
+                                tieredReportInFlight.set(false);
+                                if (error != null) {
+                                    LOG.debug(
+                                            "Failed to report frozen buckets; will retry.", error);
+                                }
+                            });
+        } catch (Exception e) {
+            tieredReportInFlight.set(false);
+            LOG.warn("Failed to report frozen buckets; will retry.", e);
+        }
     }
 
     /**
@@ -1464,6 +1569,7 @@ public class ReplicaManager implements ServerReconfigurable {
                         .map(NotifyLeaderAndIsrData::getTableBucket)
                         .collect(Collectors.toSet()));
 
+        Map<PhysicalTablePath, Boolean> frozenPartitions = new HashMap<>();
         for (NotifyLeaderAndIsrData data : replicasToBeLeader) {
             TableBucket tb = data.getTableBucket();
             try {
@@ -1471,13 +1577,20 @@ public class ReplicaManager implements ServerReconfigurable {
                 // register replica to remote log manager first.
                 remoteLogManager.registerReplica(replica);
 
-                // Load the latest lake progress before leader activation. Historical KV recovery
-                // requires its lake log end offset, while failures remain best effort for normal
-                // replicas.
-                if (replica.isDataLakeEnabled()) {
-                    updateWithLakeTableSnapshot(replica);
+                // check the partition frozen status
+                PhysicalTablePath tablePath = data.getPhysicalTablePath();
+                Boolean isFrozen = frozenPartitions.get(tablePath);
+                if (isFrozen == null) {
+                    isFrozen = isPartitionFrozen(tablePath);
+                    frozenPartitions.put(tablePath, isFrozen);
                 }
-                replica.makeLeader(data);
+
+                // Frozen leaders must recover lake progress even if no new commits arrive.
+                // Historical KV recovery also requires its lake log end offset.
+                if (replica.isDataLakeEnabled()) {
+                    updateWithLakeTableSnapshot(replica, isFrozen);
+                }
+                replica.makeLeader(data, isFrozen);
 
                 // start the remote log tiering tasks for leaders
                 remoteLogManager.startLogTiering(replica);
@@ -1490,8 +1603,14 @@ public class ReplicaManager implements ServerReconfigurable {
         }
     }
 
-    // NOTE: This method can be removed when fetchFromLake is deprecated
-    private void updateWithLakeTableSnapshot(Replica replica) throws Exception {
+    private boolean isPartitionFrozen(PhysicalTablePath tablePath) throws Exception {
+        return zkClient.getPartition(tablePath.getTablePath(), tablePath.getPartitionName())
+                .map(PartitionRegistration::isFrozen)
+                .orElse(false);
+    }
+
+    // Restore the committed progress needed by historical recovery and frozen bucket lake tiering.
+    private void updateWithLakeTableSnapshot(Replica replica, boolean frozen) throws Exception {
         TableBucket tb = replica.getTableBucket();
         try {
             Optional<LakeTableSnapshot> optLakeTableSnapshot =
@@ -1512,10 +1631,9 @@ public class ReplicaManager implements ServerReconfigurable {
                 }
             }
         } catch (Exception e) {
-            if (replica.isHistoricalPartition()) {
-                // Historical recovery uses the lake offset as its durable base and replays the
-                // retained WAL from that offset. Reject leader activation if the latest lake
-                // progress cannot be loaded, instead of rebuilding local KV from stale state.
+            if (replica.isHistoricalPartition() || frozen) {
+                // Frozen buckets may never receive another lake update; retry recovery rather
+                // than waiting indefinitely. Historical recovery also requires a durable base.
                 throw e;
             }
             // Lake commit cleanup can race with this best-effort refresh and remove the
@@ -2703,6 +2821,9 @@ public class ReplicaManager implements ServerReconfigurable {
     public static final class OfflineReplica implements HostedReplica {}
 
     public void shutdown() throws InterruptedException {
+        if (tieredReportTask != null) {
+            tieredReportTask.cancel(false);
+        }
         // Close the resources for snapshot kv
         kvSnapshotResource.close();
         historicalPartitionManager.close();

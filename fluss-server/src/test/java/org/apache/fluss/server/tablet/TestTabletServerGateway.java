@@ -40,6 +40,8 @@ import org.apache.fluss.rpc.messages.FetchLogRequest;
 import org.apache.fluss.rpc.messages.FetchLogResponse;
 import org.apache.fluss.rpc.messages.FindConsumerGroupOwnerRequest;
 import org.apache.fluss.rpc.messages.FindConsumerGroupOwnerResponse;
+import org.apache.fluss.rpc.messages.FreezePartitionRequest;
+import org.apache.fluss.rpc.messages.FreezePartitionResponse;
 import org.apache.fluss.rpc.messages.GetClusterHealthRequest;
 import org.apache.fluss.rpc.messages.GetClusterHealthResponse;
 import org.apache.fluss.rpc.messages.GetConsumerOffsetsRequest;
@@ -367,6 +369,14 @@ public class TestTabletServerGateway implements TabletServerGateway {
     public CompletableFuture<NotifyRemoteLogOffsetsResponse> notifyRemoteLogOffsets(
             NotifyRemoteLogOffsetsRequest request) {
         CompletableFuture<NotifyRemoteLogOffsetsResponse> response = new CompletableFuture<>();
+        requests.add(Tuple2.of(request, response));
+        return response;
+    }
+
+    @Override
+    public CompletableFuture<FreezePartitionResponse> freezePartition(
+            FreezePartitionRequest request) {
+        CompletableFuture<FreezePartitionResponse> response = new CompletableFuture<>();
         requests.add(Tuple2.of(request, response));
         return response;
     }

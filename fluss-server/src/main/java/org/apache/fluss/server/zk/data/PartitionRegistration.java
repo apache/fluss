@@ -52,15 +52,28 @@ public class PartitionRegistration {
      */
     private final @Nullable Integer bucketCount;
 
+    /** Whether writes to the partition have been permanently frozen. */
+    private final boolean frozen;
+
     public PartitionRegistration(
             long tableId,
             long partitionId,
             @Nullable String remoteDataDir,
             @Nullable Integer bucketCount) {
+        this(tableId, partitionId, remoteDataDir, bucketCount, false);
+    }
+
+    PartitionRegistration(
+            long tableId,
+            long partitionId,
+            @Nullable String remoteDataDir,
+            @Nullable Integer bucketCount,
+            boolean frozen) {
         this.tableId = tableId;
         this.partitionId = partitionId;
         this.remoteDataDir = remoteDataDir;
         this.bucketCount = bucketCount;
+        this.frozen = frozen;
     }
 
     public long getTableId() {
@@ -111,6 +124,10 @@ public class PartitionRegistration {
                         + "; the ALTER bucket.num backfill invariant was broken.");
     }
 
+    public boolean isFrozen() {
+        return frozen;
+    }
+
     public TablePartition toTablePartition() {
         return new TablePartition(tableId, partitionId);
     }
@@ -124,7 +141,14 @@ public class PartitionRegistration {
      * @return a new registration with the given remote data directory
      */
     public PartitionRegistration newRemoteDataDir(String remoteDataDir) {
-        return new PartitionRegistration(tableId, partitionId, remoteDataDir, bucketCount);
+        return new PartitionRegistration(tableId, partitionId, remoteDataDir, bucketCount, frozen);
+    }
+
+    /** Returns a new registration whose partition is permanently frozen. */
+    public PartitionRegistration withFrozen() {
+        return frozen
+                ? this
+                : new PartitionRegistration(tableId, partitionId, remoteDataDir, bucketCount, true);
     }
 
     @Override
@@ -135,13 +159,14 @@ public class PartitionRegistration {
         PartitionRegistration that = (PartitionRegistration) o;
         return tableId == that.tableId
                 && partitionId == that.partitionId
+                && frozen == that.frozen
                 && Objects.equals(remoteDataDir, that.remoteDataDir)
                 && Objects.equals(bucketCount, that.bucketCount);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(tableId, partitionId, remoteDataDir, bucketCount);
+        return Objects.hash(tableId, partitionId, remoteDataDir, bucketCount, frozen);
     }
 
     @Override
@@ -156,6 +181,8 @@ public class PartitionRegistration {
                 + '\''
                 + ", bucketCount="
                 + bucketCount
+                + ", frozen="
+                + frozen
                 + '}';
     }
 }

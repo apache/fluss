@@ -61,6 +61,7 @@ import org.apache.fluss.rpc.messages.PbCommitLakeTableSnapshotRespForTable;
 import org.apache.fluss.rpc.messages.RebalanceResponse;
 import org.apache.fluss.rpc.messages.RemoveServerTagByRackResponse;
 import org.apache.fluss.rpc.messages.RemoveServerTagResponse;
+import org.apache.fluss.rpc.messages.ReportFrozenBucketsTieredResponse;
 import org.apache.fluss.rpc.protocol.ApiError;
 import org.apache.fluss.server.coordinator.event.AccessContextEvent;
 import org.apache.fluss.server.coordinator.event.AddServerTagByRackEvent;
@@ -93,6 +94,7 @@ import org.apache.fluss.server.coordinator.event.RebalanceTaskTimeoutEvent;
 import org.apache.fluss.server.coordinator.event.RecoverRebalanceEvent;
 import org.apache.fluss.server.coordinator.event.RemoveServerTagByRackEvent;
 import org.apache.fluss.server.coordinator.event.RemoveServerTagEvent;
+import org.apache.fluss.server.coordinator.event.ReportFrozenBucketsTieredEvent;
 import org.apache.fluss.server.coordinator.event.ResumeDropEvent;
 import org.apache.fluss.server.coordinator.event.RetryOfflineLeaderEvent;
 import org.apache.fluss.server.coordinator.event.SchemaChangeEvent;
@@ -725,6 +727,16 @@ public class CoordinatorEventProcessor implements EventProcessor {
             processNotifyKvSnapshotOffsetEvent((NotifyKvSnapshotOffsetEvent) event);
         } else if (event instanceof NotifyLakeTableOffsetEvent) {
             processNotifyLakeTableOffsetEvent((NotifyLakeTableOffsetEvent) event);
+        } else if (event instanceof ReportFrozenBucketsTieredEvent) {
+            ReportFrozenBucketsTieredEvent report = (ReportFrozenBucketsTieredEvent) event;
+            completeFromCallable(
+                    report.getResponse(),
+                    () -> {
+                        autoPartitionManager
+                                .getLakeAwarePartitionDropManager()
+                                .reportTiered(report.getRequest(), coordinatorContext);
+                        return new ReportFrozenBucketsTieredResponse();
+                    });
         } else if (event instanceof CommitRemoteLogManifestEvent) {
             CommitRemoteLogManifestEvent commitRemoteLogManifestEvent =
                     (CommitRemoteLogManifestEvent) event;

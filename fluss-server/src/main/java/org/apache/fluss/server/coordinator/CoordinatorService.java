@@ -142,6 +142,8 @@ import org.apache.fluss.rpc.messages.RemoveServerTagByRackRequest;
 import org.apache.fluss.rpc.messages.RemoveServerTagByRackResponse;
 import org.apache.fluss.rpc.messages.RemoveServerTagRequest;
 import org.apache.fluss.rpc.messages.RemoveServerTagResponse;
+import org.apache.fluss.rpc.messages.ReportFrozenBucketsTieredRequest;
+import org.apache.fluss.rpc.messages.ReportFrozenBucketsTieredResponse;
 import org.apache.fluss.rpc.netty.server.Session;
 import org.apache.fluss.rpc.protocol.ApiError;
 import org.apache.fluss.rpc.protocol.Errors;
@@ -169,6 +171,7 @@ import org.apache.fluss.server.coordinator.event.ListRebalanceProgressEvent;
 import org.apache.fluss.server.coordinator.event.RebalanceEvent;
 import org.apache.fluss.server.coordinator.event.RemoveServerTagByRackEvent;
 import org.apache.fluss.server.coordinator.event.RemoveServerTagEvent;
+import org.apache.fluss.server.coordinator.event.ReportFrozenBucketsTieredEvent;
 import org.apache.fluss.server.coordinator.lease.KvSnapshotLeaseHandler;
 import org.apache.fluss.server.coordinator.lease.KvSnapshotLeaseManager;
 import org.apache.fluss.server.coordinator.producer.ProducerOffsetsManager;
@@ -1194,6 +1197,14 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                         request.getCoordinatorEpoch(),
                         request.getBucketLeaderEpoch());
         eventManagerSupplier.get().put(new CommitKvSnapshotEvent(commitKvSnapshotData, response));
+        return response;
+    }
+
+    @Override
+    public CompletableFuture<ReportFrozenBucketsTieredResponse> reportFrozenBucketsTiered(
+            ReportFrozenBucketsTieredRequest request) {
+        CompletableFuture<ReportFrozenBucketsTieredResponse> response = new CompletableFuture<>();
+        eventManagerSupplier.get().put(new ReportFrozenBucketsTieredEvent(request, response));
         return response;
     }
 

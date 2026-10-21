@@ -892,6 +892,24 @@ class AlterBucketNumTest {
     }
 
     @Test
+    void testBackfillPreservesFrozenPartition() throws Exception {
+        TablePath tablePath = TablePath.of(DEFAULT_DB, "test_backfill_frozen_partition");
+        String partitionName = "2024-02";
+        createTableWithLegacyPartition(tablePath, partitionName);
+        PartitionRegistration registration =
+                zookeeperClient.getPartition(tablePath, partitionName).get();
+        zookeeperClient.updatePartitionRegistration(
+                tablePath, partitionName, registration.withFrozen());
+
+        alterBucketNum(metadataManager, tablePath, 8);
+
+        PartitionRegistration updated =
+                zookeeperClient.getPartition(tablePath, partitionName).get();
+        assertThat(updated.isFrozen()).isTrue();
+        assertThat(updated.getBucketCount()).isEqualTo(4);
+    }
+
+    @Test
     void testAlterBackfillUsesOldTableCountWithoutAssignmentLookup() throws Exception {
         TablePath tablePath = TablePath.of(DEFAULT_DB, "test_alter_bucket_num_no_assign_lookup");
         int originalBucketCount = 4;

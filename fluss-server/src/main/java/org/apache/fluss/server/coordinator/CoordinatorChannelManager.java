@@ -21,11 +21,14 @@ import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.exception.TabletServerNotAvailableException;
 import org.apache.fluss.metrics.MetricNames;
 import org.apache.fluss.metrics.groups.MetricGroup;
 import org.apache.fluss.rpc.RpcClient;
 import org.apache.fluss.rpc.gateway.TabletServerGateway;
 import org.apache.fluss.rpc.messages.ApiMessage;
+import org.apache.fluss.rpc.messages.FreezePartitionRequest;
+import org.apache.fluss.rpc.messages.FreezePartitionResponse;
 import org.apache.fluss.rpc.messages.NotifyKvSnapshotOffsetRequest;
 import org.apache.fluss.rpc.messages.NotifyKvSnapshotOffsetResponse;
 import org.apache.fluss.rpc.messages.NotifyLakeTableOffsetRequest;
@@ -48,6 +51,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import javax.annotation.Nullable;
+import javax.annotation.concurrent.NotThreadSafe;
 
 import java.util.Collection;
 import java.util.HashMap;
@@ -68,6 +72,7 @@ import static org.apache.fluss.utils.Preconditions.checkState;
  * sizes. Mirrors Kafka's {@code ControllerChannelManager} which uses a {@code brokerLock} for the
  * same purpose.
  */
+@NotThreadSafe
 public class CoordinatorChannelManager {
 
     private static final Logger LOG = LoggerFactory.getLogger(CoordinatorChannelManager.class);
@@ -277,6 +282,20 @@ public class CoordinatorChannelManager {
         }
     }
 
+    /** Send a request to freeze partition writes on a tablet server. */
+    public CompletableFuture<FreezePartitionResponse> sendFreezePartitionRequest(
+            int receiveServerId, FreezePartitionRequest request) {
+        Optional<TabletServerGateway> gateway = getTabletServerGateway(receiveServerId);
+        if (gateway.isPresent()) {
+            return gateway.get().freezePartition(request);
+        }
+        CompletableFuture<FreezePartitionResponse> response = new CompletableFuture<>();
+        response.completeExceptionally(
+                new TabletServerNotAvailableException(
+                        "Tablet server " + receiveServerId + " is not available."));
+        return response;
+    }
+
     /** Send UpdateMetadataRequest to the server and handle the response. */
     public void sendUpdateMetadataRequest(
             int receiveServerId,
@@ -317,11 +336,18 @@ public class CoordinatorChannelManager {
             int receiveServerId,
             NotifyLakeTableOffsetRequest notifyLakeTableOffsetRequest,
             BiConsumer<NotifyLakeTableOffsetResponse, ? super Throwable> responseConsumer) {
-        sendRequest(
+        // Frozen leaders use this committed progress to decide when deletion is safe.
+        if (!enqueueRequest(
                 receiveServerId,
-                notifyLakeTableOffsetRequest,
-                TabletServerGateway::notifyLakeTableOffset,
-                responseConsumer);
+                ApiKeys.NOTIFY_LAKE_TABLE_OFFSET,
+                notifyLakeTableOffsetRequest.getCoordinatorEpoch(),
+                gateway -> gateway.notifyLakeTableOffset(notifyLakeTableOffsetRequest),
+                responseConsumer)) {
+            responseConsumer.accept(
+                    null,
+                    new TabletServerNotAvailableException(
+                            "Tablet server " + receiveServerId + " is not available."));
+        }
     }
 
     @VisibleForTesting

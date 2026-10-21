@@ -35,6 +35,8 @@ import org.apache.fluss.rpc.messages.FetchLogRequest;
 import org.apache.fluss.rpc.messages.FetchLogResponse;
 import org.apache.fluss.rpc.messages.FindConsumerGroupOwnerRequest;
 import org.apache.fluss.rpc.messages.FindConsumerGroupOwnerResponse;
+import org.apache.fluss.rpc.messages.FreezePartitionRequest;
+import org.apache.fluss.rpc.messages.FreezePartitionResponse;
 import org.apache.fluss.rpc.messages.GetClusterHealthRequest;
 import org.apache.fluss.rpc.messages.GetClusterHealthResponse;
 import org.apache.fluss.rpc.messages.GetConsumerOffsetsRequest;
@@ -125,6 +127,12 @@ public class TestingTabletGatewayService extends TestingGatewayService
     @Override
     public CompletableFuture<StopReplicaResponse> stopReplica(
             StopReplicaRequest stopBucketReplicaRequest) {
+        return null;
+    }
+
+    @Override
+    public CompletableFuture<FreezePartitionResponse> freezePartition(
+            FreezePartitionRequest request) {
         return null;
     }
 

@@ -227,6 +227,8 @@ public final class Replica {
     private volatile int coordinatorEpoch = CoordinatorContext.INITIAL_COORDINATOR_EPOCH;
     private volatile boolean isStandbyReplica = false;
 
+    private volatile boolean frozen = false;
+
     // null if table without pk or haven't become leader
     private volatile @Nullable KvTablet kvTablet;
     private volatile @Nullable CloseableRegistry closeableRegistryForKv;
@@ -488,6 +490,10 @@ public final class Replica {
     }
 
     public void makeLeader(NotifyLeaderAndIsrData data) throws IOException {
+        makeLeader(data, false);
+    }
+
+    void makeLeader(NotifyLeaderAndIsrData data, boolean frozen) throws IOException {
         boolean leaderHWIncremented =
                 inWriteLock(
                         leaderIsrUpdateLock,
@@ -517,6 +523,9 @@ public final class Replica {
                             if (requestLeaderEpoch > leaderEpoch) {
                                 boolean isNewLeader = !isLeader();
                                 leaderEpoch = requestLeaderEpoch;
+                                // The write fence is monotonic and must never be cleared by a later
+                                // or duplicate leader notification.
+                                this.frozen |= frozen;
                                 onBecomeNewLeader(recovery);
                                 leaderReplicaIdOpt.set(localTabletServerId);
                                 // onBecomeNewLeader may recover a KV snapshot, so start the ISR lag
@@ -537,6 +546,8 @@ public final class Replica {
                                         localTabletServerId,
                                         tableBucket);
                             } else if (requestLeaderEpoch == leaderEpoch) {
+                                // Also restore the fence when replaying the current leader state.
+                                this.frozen |= frozen;
                                 LOG.info(
                                         "Skipped the become-leader state change for bucket {} since "
                                                 + "it's already the leader with leader epoch {}",
@@ -1287,6 +1298,7 @@ public final class Replica {
                         throw new InvalidPartitionException(
                                 "Produce-log request must not target a primary-key table.");
                     }
+                    checkNotFrozen();
 
                     validateInSyncReplicaSize(requiredAcks);
 
@@ -1351,6 +1363,7 @@ public final class Replica {
                         throw new InvalidPartitionException(
                                 "Normal write request must not target a historical partition.");
                     }
+                    checkNotFrozen();
 
                     validateInSyncReplicaSize(requiredAcks);
                     KvTablet kv = this.kvTablet;
@@ -1501,6 +1514,55 @@ public final class Replica {
                     }
                     return results;
                 });
+    }
+
+    /** Freeze leader writes for partition retention. */
+    public void freezeWrites(int expectedLeaderEpoch) {
+        inWriteLock(
+                leaderIsrUpdateLock,
+                () -> {
+                    if (!isLeader()) {
+                        throw new NotLeaderOrFollowerException(
+                                String.format(
+                                        "Leader not local for bucket %s on tabletServer %d",
+                                        tableBucket, localTabletServerId));
+                    }
+                    if (leaderEpoch != expectedLeaderEpoch) {
+                        throw new FencedLeaderEpochException(
+                                String.format(
+                                        "Expected leader epoch %s for bucket %s, but current epoch is %s.",
+                                        expectedLeaderEpoch, tableBucket, leaderEpoch));
+                    }
+                    frozen = true;
+                });
+    }
+
+    private void checkNotFrozen() {
+        if (frozen) {
+            throw new InvalidPartitionException(
+                    String.format(
+                            "Partition %s is frozen and no longer accepts writes.", physicalPath));
+        }
+    }
+
+    /**
+     * Returns the current leader epoch only while this frozen bucket's entire log is committed to
+     * the data lake.
+     */
+    Optional<Integer> getFrozenTieredLeaderEpoch() {
+        if (!frozen) {
+            return Optional.empty();
+        }
+        return inReadLock(
+                leaderIsrUpdateLock,
+                () ->
+                        frozen
+                                        && isLeader()
+                                        && tableBucket.getPartitionId() != null
+                                        && logTablet.getLakeLogEndOffset()
+                                                >= logTablet.localLogEndOffset()
+                                ? Optional.of(leaderEpoch)
+                                : Optional.empty());
     }
 
     public LogReadInfo fetchRecords(FetchParams fetchParams) throws IOException {
