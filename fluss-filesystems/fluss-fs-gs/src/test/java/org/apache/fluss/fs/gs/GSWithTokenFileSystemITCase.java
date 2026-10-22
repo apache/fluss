@@ -44,8 +44,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 /**
- * Verifies a real Cloud Storage bucket accepts the access token minted from a service account key.
- * The client filesystem is created without that key.
+ * Verifies a real Cloud Storage bucket accepts the read-only access token minted from a service
+ * account key. The client filesystem is created without that key.
  */
 @ResourceLock("gs-security-token")
 class GSWithTokenFileSystemITCase {
@@ -56,7 +56,7 @@ class GSWithTokenFileSystemITCase {
     }
 
     @Test
-    void refreshedTokenCanReadAndWriteWithoutTheServiceAccountKey() throws Exception {
+    void refreshedTokenCanReadWithoutTheServiceAccountKey() throws Exception {
         String keyFile = System.getenv("GS_SA_JSON");
         String bucket = System.getenv("GS_BUCKET");
         assumeTrue(
@@ -94,13 +94,29 @@ class GSWithTokenFileSystemITCase {
         FileSystem clientFs = plugin.create(bucketUri, client);
         FsPath path = new FsPath("gs://" + bucket + "/fluss-token-it/" + UUID.randomUUID());
         byte[] payload = "hello".getBytes(StandardCharsets.UTF_8);
-        write(clientFs, path, "hello");
-        try (FSDataInputStream inputStream = clientFs.open(path)) {
-            byte[] read = new byte[payload.length];
-            assertThat(inputStream.read(read)).isEqualTo(payload.length);
-            assertThat(read).isEqualTo(payload);
+        boolean written = false;
+        try {
+            // The service account key can write. The token issued to clients cannot.
+            write(serverFs, path, "hello");
+            written = true;
+            try (FSDataInputStream inputStream = clientFs.open(path)) {
+                byte[] read = new byte[payload.length];
+                assertThat(inputStream.read(read)).isEqualTo(payload.length);
+                assertThat(read).isEqualTo(payload);
+            }
+            assertThatThrownBy(() -> write(clientFs, rejectedPath, "nope"))
+                    .isInstanceOf(IOException.class)
+                    .satisfies(
+                            thrown -> {
+                                GoogleJsonResponseException response =
+                                        (GoogleJsonResponseException) thrown.getCause();
+                                assertThat(response.getStatusCode()).isEqualTo(403);
+                            });
+        } finally {
+            if (written) {
+                serverFs.delete(path, false);
+            }
         }
-        assertThat(clientFs.delete(path, false)).isTrue();
     }
 
     private static void installToken(String tokenValue) throws Exception {
