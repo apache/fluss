@@ -38,6 +38,8 @@ import org.apache.fluss.types.DataTypes;
 
 import org.apache.flink.util.FlinkRuntimeException;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.io.IOException;
 import java.lang.reflect.Field;
@@ -55,7 +57,6 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doAnswer;
-import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -232,47 +233,34 @@ class TieringSourceEnumeratorSchedulingTest {
         }
     }
 
-    @Test
-    void testCloseFlushesFinishedEmptyTable() throws Exception {
+    @ParameterizedTest(name = "withInFlightTable={0}")
+    @ValueSource(booleans = {false, true})
+    void testCloseReportsPendingTables(boolean withInFlightTable) throws Exception {
         try (Fixture fixture = new Fixture()) {
-            fixture.addTable(1, true);
-            fixture.requestTable();
+            if (withInFlightTable) {
+                // Table 1 produces a split, so it is still in flight when the enumerator closes.
+                fixture.addTable(1, false);
+                fixture.requestTable();
 
-            // The empty table is marked finished as soon as it produces no splits, but that
-            // completion is only carried back by the delayed continuation poll, which never runs
-            // once the enumerator is closed. Closing has to flush it explicitly, otherwise the
-            // coordinator never learns about it and the table remains in the Tiering state
-            // until the tiering service timeout expires.
-            fixture.closeEnumerator();
-
-            assertThat(fixture.finishedTableReports())
-                    .singleElement()
-                    .satisfies(
-                            request ->
-                                    assertThat(request.getFinishedTablesList())
-                                            .singleElement()
-                                            .extracting(
-                                                    table -> table.getTableId(),
-                                                    table -> table.getTieringEpoch())
-                                            .containsExactly(1L, 101L));
-        }
-    }
-
-    @Test
-    void testCloseFlushesFinishedAndInFlightTables() throws Exception {
-        try (Fixture fixture = new Fixture()) {
-            // Table 1 produces a split, so it is still in flight when the enumerator closes.
-            fixture.addTable(1, false);
-            fixture.requestTable();
-
-            // Table 2 produces no split. It is marked finished while the heartbeat that requested
-            // it only carried a snapshot taken beforehand, so it is still pending at close time:
-            // both maps have to be flushed together in this single heartbeat.
-            fixture.addTable(2, true);
-            fixture.requestTable();
+                // Table 2 produces no split. It is marked finished while the heartbeat that
+                // requested it only carried a snapshot taken beforehand, so it is still pending at
+                // close time: both maps have to be reported together in this single heartbeat.
+                fixture.addTable(2, true);
+                fixture.requestTable();
+            } else {
+                // The empty table is marked finished as soon as it produces no splits, but that
+                // completion is only carried back by the delayed continuation poll, which never
+                // runs once the enumerator is closed. Closing has to flush it explicitly,
+                // otherwise the coordinator never learns about it and the table remains in the
+                // Tiering state until the tiering service timeout expires.
+                fixture.addTable(1, true);
+                fixture.requestTable();
+            }
 
             fixture.closeEnumerator();
 
+            long expectedFinishedTableId = withInFlightTable ? 2L : 1L;
+            long expectedTieringEpoch = expectedFinishedTableId + 100;
             assertThat(fixture.finishedTableReports())
                     .singleElement()
                     .satisfies(
@@ -282,47 +270,24 @@ class TieringSourceEnumeratorSchedulingTest {
                                         .extracting(
                                                 table -> table.getTableId(),
                                                 table -> table.getTieringEpoch())
-                                        .containsExactly(2L, 102L);
-                                assertThat(request.getFailedTablesList())
-                                        .singleElement()
-                                        .extracting(
-                                                table -> table.getTableId(),
-                                                table -> table.getTieringEpoch())
-                                        .containsExactly(1L, 101L);
-                            });
-        }
-    }
-
-    @Test
-    void testFailedCloseKeepsPendingTablesForALaterAttempt() throws Exception {
-        try (Fixture fixture = new Fixture()) {
-            fixture.addTable(1, true);
-            fixture.requestTable();
-
-            CompletableFuture<LakeTieringHeartbeatResponse> failed = new CompletableFuture<>();
-            failed.completeExceptionally(new IOException("coordinator unavailable"));
-            fixture.respondWith(failed);
-
-            assertThatThrownBy(fixture::closeEnumerator).isInstanceOf(FlinkRuntimeException.class);
-
-            // The pending tables are kept, so a later close reports them again. This asserts that
-            // the state survives a failed close; it is not a claim that the retried heartbeat
-            // would succeed in production, where the client has already been closed by then.
-            fixture.respondWith(
-                    CompletableFuture.completedFuture(
-                            new LakeTieringHeartbeatResponse().setCoordinatorEpoch(1)));
-            fixture.closeEnumerator();
-
-            assertThat(fixture.finishedTableReports())
-                    .hasSize(2)
-                    .allSatisfy(
-                            request ->
-                                    assertThat(request.getFinishedTablesList())
+                                        .containsExactly(
+                                                expectedFinishedTableId, expectedTieringEpoch);
+                                if (withInFlightTable) {
+                                    assertThat(request.getFailedTablesList())
                                             .singleElement()
                                             .extracting(
                                                     table -> table.getTableId(),
                                                     table -> table.getTieringEpoch())
-                                            .containsExactly(1L, 101L));
+                                            .containsExactly(1L, 101L);
+                                } else {
+                                    assertThat(request.getFailedTablesList()).isEmpty();
+                                }
+                            });
+
+            // A repeated close is a no-op: it must not send a second heartbeat.
+            int heartbeatCount = fixture.heartbeatCount();
+            fixture.closeEnumerator();
+            assertThat(fixture.heartbeatCount()).isEqualTo(heartbeatCount);
         }
     }
 
@@ -342,12 +307,17 @@ class TieringSourceEnumeratorSchedulingTest {
             IOException failure = new IOException("coordinator unavailable");
             CompletableFuture<LakeTieringHeartbeatResponse> response = new CompletableFuture<>();
             response.completeExceptionally(failure);
-            doReturn(response).when(fixture.gateway).lakeTieringHeartbeat(any());
+            fixture.respondWith(response);
 
             assertThatThrownBy(fixture::closeEnumerator)
                     .isInstanceOf(FlinkRuntimeException.class)
                     .hasRootCause(failure);
 
+            // A repeated close is a no-op: no further heartbeat, and the resources are released
+            // once (the verifications below use the default times(1)).
+            int heartbeatCount = fixture.heartbeatCount();
+            fixture.closeEnumerator();
+            assertThat(fixture.heartbeatCount()).isEqualTo(heartbeatCount);
             verify(rpcClient).close();
             verify(fixture.admin).close();
             verify(connection).close();
@@ -369,7 +339,6 @@ class TieringSourceEnumeratorSchedulingTest {
         private final Queue<LakeTieringHeartbeatResponse> tables = new ArrayDeque<>();
         private final List<LakeTieringHeartbeatRequest> requests = new ArrayList<>();
         private final TieringSourceEnumerator enumerator;
-        private boolean enumeratorClosed;
 
         private Fixture() {
             this(1);
@@ -474,19 +443,19 @@ class TieringSourceEnumeratorSchedulingTest {
                     .lakeTieringHeartbeat(any());
         }
 
+        private int heartbeatCount() {
+            return requests.size();
+        }
+
         private void closeEnumerator() throws IOException {
-            enumeratorClosed = true;
             enumerator.close();
         }
 
         @Override
         public void close() throws Exception {
-            // Tests that exercise close() explicitly must not be closed a second time here:
-            // the pending entries are kept until the heartbeat succeeds, so a second close
-            // would report them again and skew the verifications.
-            if (!enumeratorClosed) {
-                enumerator.close();
-            }
+            // close() is idempotent, so calling it again for tests that already closed the
+            // enumerator reports nothing and releases nothing.
+            enumerator.close();
             context.close();
         }
     }

@@ -48,6 +48,7 @@ import org.apache.fluss.rpc.messages.PbLakeTieringStats;
 import org.apache.fluss.rpc.messages.PbLakeTieringTableInfo;
 import org.apache.fluss.rpc.metrics.ClientMetricGroup;
 import org.apache.fluss.utils.ExceptionUtils;
+import org.apache.fluss.utils.IOUtils;
 
 import org.apache.flink.api.connector.source.ReaderInfo;
 import org.apache.flink.api.connector.source.SourceEvent;
@@ -617,83 +618,40 @@ public class TieringSourceEnumerator
 
     @Override
     public void close() throws IOException {
+        // Repeated lifecycle calls are a no-op: the final report is attempted once and the
+        // resources are released once.
+        if (closed) {
+            return;
+        }
         closed = true;
         timerService.shutdownNow();
         try {
             if (coordinatorGateway != null) {
-                // Report from snapshots and drop the entries only after the heartbeat succeeds,
-                // the same way the periodic path does, so a failed close-time heartbeat does not
-                // silently discard the pending tables. The finally block below still closes the
-                // client either way: this is about not losing the state, not about retrying the
-                // report.
+                // The finished tables have to be flushed here: a table that produced no splits is
+                // removed from the in-flight epochs as soon as it is marked as finished, so it is
+                // neither part of tieringTableEpochs nor of failedTableEpochs at close time.
+                // Without flushing it explicitly, its completion would never reach the coordinator
+                // and the table remains in the Tiering state until the tiering service timeout
+                // expires. Tables that are still in flight are reported as failed so that the
+                // coordinator reschedules them.
                 Map<Long, TieringFinishInfo> currentFinishedTables = new HashMap<>(finishedTables);
                 Map<Long, Long> currentFailedTableEpochs = new HashMap<>(failedTableEpochs);
                 currentFailedTableEpochs.putAll(tieringTableEpochs);
-                if (!currentFailedTableEpochs.isEmpty() || !currentFinishedTables.isEmpty()) {
-                    reportTablesOnClose(currentFinishedTables, currentFailedTableEpochs);
-                    currentFinishedTables.forEach(finishedTables::remove);
-                    currentFailedTableEpochs.forEach(failedTableEpochs::remove);
-                    currentFailedTableEpochs.forEach(tieringTableEpochs::remove);
+                if (!currentFinishedTables.isEmpty() || !currentFailedTableEpochs.isEmpty()) {
+                    waitHeartbeatResponse(
+                            coordinatorGateway.lakeTieringHeartbeat(
+                                    tieringTableHeartBeat(
+                                            basicHeartBeat(),
+                                            Collections.emptyMap(),
+                                            currentFinishedTables,
+                                            currentFailedTableEpochs,
+                                            flussCoordinatorEpoch)));
                 }
             }
         } finally {
-            if (rpcClient != null) {
-                try {
-                    LOG.info(
-                            "Closing Tiering Source Enumerator of at {}.",
-                            System.currentTimeMillis());
-                    rpcClient.close();
-                } catch (Exception e) {
-                    LOG.error("Failed to close Tiering Source enumerator.", e);
-                }
-            }
-            try {
-                if (flussAdmin != null) {
-                    LOG.info("Closing Fluss Admin client...");
-                    flussAdmin.close();
-                }
-            } catch (Exception e) {
-                LOG.error("Failed to close Fluss Admin client.", e);
-            }
-            try {
-                if (connection != null) {
-                    LOG.info("Closing Fluss connection...");
-                    connection.close();
-                }
-            } catch (Exception e) {
-                LOG.error("Failed to close Fluss connection.", e);
-            }
-        }
-    }
-
-    /**
-     * Report both finished and failed tables to Fluss coordinator via HeartBeat. This method is
-     * called when {@link TieringSourceEnumerator} is closed.
-     *
-     * <p>The finished tables have to be flushed here: a table that produced no splits is removed
-     * from the in-flight epochs as soon as it is marked as finished, so it is neither part of
-     * {@code tieringTableEpochs} nor of {@code failedTableEpochs} at close time. Without flushing
-     * it explicitly, its completion would never reach the coordinator and the table remains in the
-     * Tiering state until the tiering service timeout expires.
-     */
-    private void reportTablesOnClose(
-            Map<Long, TieringFinishInfo> finishedTables, Map<Long, Long> failedTableEpochs)
-            throws FlinkRuntimeException {
-        try {
-            waitHeartbeatResponse(
-                    coordinatorGateway.lakeTieringHeartbeat(
-                            tieringTableHeartBeat(
-                                    basicHeartBeat(),
-                                    Collections.emptyMap(),
-                                    finishedTables,
-                                    failedTableEpochs,
-                                    flussCoordinatorEpoch)));
-            LOG.info("Report finished and failed tables to Fluss Coordinator success");
-        } catch (Exception e) {
-            LOG.error(
-                    "An error occurred while reporting finished/failed tables to the cluster.", e);
-            throw new FlinkRuntimeException(
-                    "An error occurred while reporting finished/failed tables to the cluster.", e);
+            IOUtils.closeQuietly(rpcClient, "tiering RPC client");
+            IOUtils.closeQuietly(flussAdmin, "Fluss admin client");
+            IOUtils.closeQuietly(connection, "Fluss connection");
         }
     }
 
