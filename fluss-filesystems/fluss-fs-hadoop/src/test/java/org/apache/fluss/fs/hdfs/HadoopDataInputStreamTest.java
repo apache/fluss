@@ -22,6 +22,7 @@ import org.apache.hadoop.fs.PositionedReadable;
 import org.apache.hadoop.fs.Seekable;
 import org.junit.jupiter.api.Test;
 
+import java.io.EOFException;
 import java.io.IOException;
 import java.io.InputStream;
 
@@ -67,6 +68,18 @@ class HadoopDataInputStreamTest {
 
         assertThatThrownBy(() -> seekAndAssert(-HadoopDataInputStream.MIN_SKIP_BYTES - 1))
                 .isInstanceOf(Exception.class);
+    }
+
+    @Test
+    void testSeekPastEndOfStreamThrowsEOFException() {
+        ZeroSkipSeekableInputStream input = new ZeroSkipSeekableInputStream(1);
+        testInputStream = new HadoopDataInputStream(new FSDataInputStream(input));
+
+        assertThatThrownBy(() -> testInputStream.seek(2))
+                .isInstanceOf(EOFException.class)
+                .hasMessageContaining("Premature EOF");
+        assertThat(input.skipCalls).isOne();
+        assertThat(input.readCalls).isOne();
     }
 
     private void seekAndAssert(long seekPos) throws IOException {
@@ -132,6 +145,64 @@ class HadoopDataInputStreamTest {
         @Override
         public int read() {
             return (position < count) ? 0xFF & (buffer[position++]) : -1;
+        }
+
+        @Override
+        public int read(long position, byte[] buffer, int offset, int length) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public void readFully(long position, byte[] buffer, int offset, int length) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public void readFully(long position, byte[] buffer) {
+            throw new UnsupportedOperationException();
+        }
+    }
+
+    private static final class ZeroSkipSeekableInputStream extends InputStream
+            implements Seekable, PositionedReadable {
+        private final int count;
+        private int position;
+        private int skipCalls;
+        private int readCalls;
+
+        private ZeroSkipSeekableInputStream(int count) {
+            this.count = count;
+        }
+
+        @Override
+        public void seek(long pos) {
+            checkArgument(pos >= 0 && pos <= count, "Position out of bounds.");
+            this.position = (int) pos;
+        }
+
+        @Override
+        public long getPos() {
+            return position;
+        }
+
+        @Override
+        public boolean seekToNewSource(long targetPos) {
+            return false;
+        }
+
+        @Override
+        public long skip(long n) {
+            skipCalls++;
+            if (skipCalls > 1) {
+                throw new AssertionError("skip was retried after making no progress");
+            }
+            return 0;
+        }
+
+        @Override
+        public int read() {
+            readCalls++;
+            return -1;
         }
 
         @Override
