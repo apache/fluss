@@ -31,7 +31,7 @@
     <name>Fluss : FileSystems : COS FS</name>
 
     <properties>
-        <fs.hadoop.cos.version>3.3.5</fs.hadoop.cos.version>
+        <fs.hadoop.cos.version>3.5.0</fs.hadoop.cos.version>
         <fs.cos.api.version>5.6.139</fs.cos.api.version>
         <fs.cos.sts.sdk.version>3.1.678</fs.cos.sts.sdk.version>
     </properties>
