@@ -30,6 +30,7 @@ import javax.annotation.Nullable;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
@@ -96,13 +97,21 @@ public class LakeTable {
 
     @Nullable
     public LakeSnapshotMetadata getLatestLakeSnapshotMetadata() {
-        if (lakeSnapshotMetadatas != null && !lakeSnapshotMetadatas.isEmpty()) {
-            // the last one snapshot may be a compacted snapshot which is
-            // not latest snapshot. todo: fix to return the real latest snapshot in
-            // #2625
-            return lakeSnapshotMetadatas.get(lakeSnapshotMetadatas.size() - 1);
+        if (lakeSnapshotMetadatas == null || lakeSnapshotMetadatas.isEmpty()) {
+            return null;
         }
-        return null;
+        // Pick the entry with the largest commitTimestamp to handle out-of-order
+        // commits. When readable/tiered snapshots arrive in wrong order, use
+        // commitTimestamp to identify the real latest snapshot. Legacy entries
+        // without timestamp fall back to list order for compatibility.
+        LakeSnapshotMetadata best = lakeSnapshotMetadatas.get(0);
+        for (int i = 1; i < lakeSnapshotMetadatas.size(); i++) {
+            LakeSnapshotMetadata cur = lakeSnapshotMetadatas.get(i);
+            if (cur.getCommitTimestamp() >= best.getCommitTimestamp()) {
+                best = cur;
+            }
+        }
+        return best;
     }
 
     @Nullable
@@ -182,8 +191,27 @@ public class LakeTable {
         // flink connector upgrade, and call getOrReadLatestReadableTableSnapshot
         // will always get null.
         // todo: do we need to consider such case?
-        for (int i = checkNotNull(lakeSnapshotMetadatas).size() - 1; i >= 0; i--) {
-            LakeSnapshotMetadata snapshotMetadata = lakeSnapshotMetadatas.get(i);
+        //
+        // Sort by commit_timestamp to get the latest readable snapshot regardless
+        // of physical list order. Handles out-of-order RPCs and maintains
+        // compatibility with legacy entries that lack timestamps.
+        List<LakeSnapshotMetadata> snapshots = checkNotNull(lakeSnapshotMetadatas);
+        Integer[] order = new Integer[snapshots.size()];
+        for (int i = 0; i < order.length; i++) {
+            order[i] = i;
+        }
+        Arrays.sort(
+                order,
+                (i, j) -> {
+                    int cmp =
+                            Long.compare(
+                                    snapshots.get(j).getCommitTimestamp(),
+                                    snapshots.get(i).getCommitTimestamp());
+                    // tie on timestamp: later original index first
+                    return cmp != 0 ? cmp : Integer.compare(j, i);
+                });
+        for (int idx : order) {
+            LakeSnapshotMetadata snapshotMetadata = snapshots.get(idx);
             if (snapshotMetadata.readableOffsetsFilePath != null) {
                 return toLakeTableSnapshot(
                         snapshotMetadata.snapshotId, snapshotMetadata.readableOffsetsFilePath);
@@ -211,6 +239,9 @@ public class LakeTable {
 
     /** The lake snapshot metadata entry stored in zk lake table. */
     public static class LakeSnapshotMetadata {
+        // Sentinel value for unknown commit timestamps in legacy entries.
+        public static final long UNKNOWN_COMMIT_TIMESTAMP = 0L;
+
         private final long snapshotId;
 
         // the file path to file storing the tiered offsets,
@@ -221,13 +252,31 @@ public class LakeTable {
         // will be null if we don't now the readable offsets for this snapshot
         @Nullable private final FsPath readableOffsetsFilePath;
 
+        // Server-side timestamp to determine the real latest snapshot regardless of list order.
+        // Legacy entries without timestamp fall back to list order.
+        private final long commitTimestamp;
+
+        // Legacy constructor kept for backward compatibility.
         public LakeSnapshotMetadata(
                 long snapshotId,
                 FsPath tieredOffsetsFilePath,
                 @Nullable FsPath readableOffsetsFilePath) {
+            this(
+                    snapshotId,
+                    tieredOffsetsFilePath,
+                    readableOffsetsFilePath,
+                    UNKNOWN_COMMIT_TIMESTAMP);
+        }
+
+        public LakeSnapshotMetadata(
+                long snapshotId,
+                FsPath tieredOffsetsFilePath,
+                @Nullable FsPath readableOffsetsFilePath,
+                long commitTimestamp) {
             this.snapshotId = snapshotId;
             this.tieredOffsetsFilePath = tieredOffsetsFilePath;
             this.readableOffsetsFilePath = readableOffsetsFilePath;
+            this.commitTimestamp = commitTimestamp;
         }
 
         public long getSnapshotId() {
@@ -240,6 +289,10 @@ public class LakeTable {
 
         public FsPath getReadableOffsetsFilePath() {
             return readableOffsetsFilePath;
+        }
+
+        public long getCommitTimestamp() {
+            return commitTimestamp;
         }
 
         public void discard() {
@@ -273,13 +326,15 @@ public class LakeTable {
             }
             LakeSnapshotMetadata that = (LakeSnapshotMetadata) o;
             return snapshotId == that.snapshotId
+                    && commitTimestamp == that.commitTimestamp
                     && Objects.equals(tieredOffsetsFilePath, that.tieredOffsetsFilePath)
                     && Objects.equals(readableOffsetsFilePath, that.readableOffsetsFilePath);
         }
 
         @Override
         public int hashCode() {
-            return Objects.hash(snapshotId, tieredOffsetsFilePath, readableOffsetsFilePath);
+            return Objects.hash(
+                    snapshotId, tieredOffsetsFilePath, readableOffsetsFilePath, commitTimestamp);
         }
     }
 
