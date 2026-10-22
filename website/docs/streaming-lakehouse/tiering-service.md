@@ -57,7 +57,7 @@ The Flink Tiering Service consists of three operators:
 
 ### Tiering Service Options
 
-The tiering job is a standalone Flink job, and its arguments fall into three groups:
+The Flink tiering job is a standalone job, and its arguments fall into three groups:
 
 - `--fluss.*` — Fluss client configuration, e.g. `--fluss.bootstrap.servers localhost:9123`
 - `--datalake.<format>.*` — lake catalog/storage configuration; Fluss strips the `datalake.<format>.` prefix before passing the remaining keys to the lake connector
@@ -112,10 +112,10 @@ Spark service options are passed as Fluss client arguments:
 
 | Argument | Default | Description |
 |----------|---------|-------------|
-| `--fluss.spark.tiering.poll.table.interval` | 30 s | Delay before requesting another table when none is available |
-| `--fluss.spark.tiering.heartbeat.interval` | 10 s | Heartbeat interval while processing a table |
-| `--fluss.spark.tiering.poll.timeout` | 10 s | Executor log scanner poll timeout |
-| `--fluss.spark.tiering.heartbeat.max.failures` | 10 | Consecutive heartbeat failures before the application fails |
+| `--fluss.tiering.poll.table.interval` | 30 s | Delay before requesting another table when none is available |
+| `--fluss.tiering.heartbeat.interval` | 10 s | Heartbeat interval while processing a table |
+| `--fluss.tiering.poll.timeout` | 10 s | Executor log scanner poll timeout |
+| `--fluss.tiering.heartbeat.max.failures` | 10 | Consecutive heartbeat failures before the application fails |
 
 ### Table-Level Options
 
@@ -149,7 +149,7 @@ ALTER TABLE events SET (
 
 ## Scaling
 
-The Tiering Service is stateless and can be scaled by adjusting Flink parallelism:
+The Flink Tiering Service is stateless and can be scaled by adjusting Flink parallelism:
 
 ```shell
 ${FLINK_HOME}/bin/flink run \
@@ -163,4 +163,4 @@ Multiple tiering service jobs can run simultaneously. They are coordinated by th
 
 ## Monitoring
 
-Key metrics for monitoring the Tiering Service are available through Flink's metrics system. See [Monitoring Metrics](../maintenance/observability/monitor-metrics.md#tiering-service-metrics) for details on lakehouse tiering metrics.
+Key metrics for monitoring the Flink Tiering Service are available through Flink's metrics system. See [Monitoring Metrics](../maintenance/observability/monitor-metrics.md#tiering-service-metrics) for details on lakehouse tiering metrics.

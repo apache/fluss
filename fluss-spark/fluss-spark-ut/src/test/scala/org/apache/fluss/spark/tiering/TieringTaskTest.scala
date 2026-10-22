@@ -17,35 +17,31 @@
 
 package org.apache.fluss.spark.tiering
 
+import org.apache.fluss.client.lookup.Lookup
 import org.apache.fluss.client.table.Table
 import org.apache.fluss.client.table.scanner.{Scan, ScanRecord}
 import org.apache.fluss.client.table.scanner.batch.BatchScanner
-import org.apache.fluss.client.table.scanner.log.{LogScanner, ScanRecords}
+import org.apache.fluss.client.table.scanner.log.{LogScanner, ScanRecords, TypedLogScanner}
+import org.apache.fluss.client.table.writer.{Append, Upsert}
 import org.apache.fluss.client.tiering.{TieringLogSplit, TieringSnapshotSplit}
 import org.apache.fluss.lake.writer.LakeWriter
-import org.apache.fluss.metadata.{TableBucket, TablePath}
+import org.apache.fluss.metadata.{TableBucket, TableInfo, TablePath}
+import org.apache.fluss.predicate.Predicate
 import org.apache.fluss.record.{ChangeType, LogRecord}
 import org.apache.fluss.row.{GenericRow, InternalRow}
 import org.apache.fluss.utils.CloseableIterator
 
 import org.assertj.core.api.Assertions.assertThat
-import org.mockito.ArgumentCaptor
-import org.mockito.ArgumentMatchers.any
-import org.mockito.Mockito.{doThrow, mock, never, times, verify, when}
 import org.scalatest.funsuite.AnyFunSuite
 
 import java.time.Duration
-import java.util.{Arrays, Collections}
+import java.util.{ArrayList, Arrays, Collections, List => JList}
 
 /** Regression tests for executor-side Spark tiering. */
 class TieringTaskTest extends AnyFunSuite {
 
   // Basic log and snapshot cases mirror Flink's TieringSplitReaderTest.
   test("log split writes changelog records only before its stopping offset") {
-    val table = mock(classOf[Table])
-    val scan = mock(classOf[Scan])
-    val scanner = mock(classOf[LogScanner])
-    val writer = mock(classOf[LakeWriter[AnyRef]])
     val bucket = new TableBucket(1L, 0)
     val first = new ScanRecord(2L, 20L, ChangeType.INSERT, GenericRow.of(Int.box(1)))
     val second = new ScanRecord(3L, 30L, ChangeType.DELETE, GenericRow.of(Int.box(2)))
@@ -53,122 +49,214 @@ class TieringTaskTest extends AnyFunSuite {
     val records = new ScanRecords(
       Collections.singletonMap(bucket, Arrays.asList(first, second, beyondEnd)),
       Collections.singletonMap[TableBucket, java.lang.Long](bucket, 5L))
+    val scanner = new TestingLogScanner(Seq(records))
+    val table = new TestingTable(new TestingScan(logScanner = scanner))
     val writeResult = new Object()
-    when(table.newScan()).thenReturn(scan)
-    when(scan.createLogScanner()).thenReturn(scanner)
-    when(scanner.poll(Duration.ofMillis(1))).thenReturn(records)
-    when(writer.complete()).thenAnswer(_ => writeResult)
+    val writer = new TestingLakeWriter(writeResult)
     val split = new TieringLogSplit(TablePath.of("db", "table"), bucket, null, 2L, 4L, 3)
 
     val result = TieringTask.processLogSplit(table, writer, split, 1L)
 
-    val written = ArgumentCaptor.forClass(classOf[LogRecord])
-    verify(writer, times(2)).write(written.capture())
-    assertThat(written.getAllValues.get(0)).isSameAs(first)
-    assertThat(written.getAllValues.get(1)).isSameAs(second)
+    assertThat[LogRecord](writer.records).containsExactly(first, second)
     assertThat(result.writeResult()).isSameAs(writeResult)
     assertThat(result.logEndOffset()).isEqualTo(4L)
     assertThat(result.maxTimestamp()).isEqualTo(30L)
     assertThat(result.numberOfWriteResults()).isEqualTo(3)
-    verify(scanner).subscribe(0, 2L)
-    verify(scanner).close()
+    assertThat(scanner.subscription.contains((0, 2L))).isTrue()
+    assertThat(scanner.pollCount).isEqualTo(1)
+    assertThat(scanner.closed).isTrue()
+    assertThat(writer.completeCount).isEqualTo(1)
   }
 
   test("snapshot split writes snapshot rows as inserts and preserves its log offset") {
-    val table = mock(classOf[Table])
-    val scan = mock(classOf[Scan])
-    val scanner = mock(classOf[BatchScanner])
-    val batch = mock(classOf[CloseableIterator[InternalRow]])
-    val writer = mock(classOf[LakeWriter[AnyRef]])
     val bucket = new TableBucket(1L, 0)
     val first = GenericRow.of(Int.box(1))
     val second = GenericRow.of(Int.box(2))
+    val batch = new TestingRowIterator(Seq(first, second))
+    val scanner = new TestingBatchScanner(Seq(batch))
+    val scan = new TestingScan(batchScanner = scanner)
+    val table = new TestingTable(scan)
     val writeResult = new Object()
-    when(table.newScan()).thenReturn(scan)
-    when(scan.createBatchScanner(bucket, 7L)).thenReturn(scanner)
-    when(scanner.pollBatch(Duration.ofMillis(1))).thenReturn(batch).thenReturn(null)
-    when(batch.hasNext).thenReturn(true).thenReturn(true).thenReturn(false)
-    when(batch.next()).thenReturn(first).thenReturn(second)
-    when(writer.complete()).thenAnswer(_ => writeResult)
+    val writer = new TestingLakeWriter(writeResult)
     val split = new TieringSnapshotSplit(TablePath.of("db", "table"), bucket, null, 7L, 17L, 3)
 
     val result = TieringTask.processSnapshotSplit(table, writer, split, 1L)
 
-    val written = ArgumentCaptor.forClass(classOf[LogRecord])
-    verify(writer, times(2)).write(written.capture())
-    assertThat(written.getAllValues.get(0).getRow).isSameAs(first)
-    assertThat(written.getAllValues.get(1).getRow).isSameAs(second)
-    written.getAllValues.forEach(
-      record => assertThat(record.getChangeType).isEqualTo(ChangeType.INSERT))
+    assertThat[LogRecord](writer.records).hasSize(2)
+    assertThat(writer.records.get(0).getRow).isSameAs(first)
+    assertThat(writer.records.get(1).getRow).isSameAs(second)
+    writer.records.forEach(record => assertThat(record.getChangeType).isEqualTo(ChangeType.INSERT))
     assertThat(result.writeResult()).isSameAs(writeResult)
     assertThat(result.logEndOffset()).isEqualTo(17L)
     assertThat(result.maxTimestamp()).isEqualTo(-1L)
     assertThat(result.numberOfWriteResults()).isEqualTo(3)
-    verify(batch).close()
-    verify(scanner).close()
+    assertThat(scan.snapshotRequest.contains((bucket, 7L))).isTrue()
+    assertThat(batch.closed).isTrue()
+    assertThat(scanner.closed).isTrue()
+    assertThat(writer.completeCount).isEqualTo(1)
   }
 
   test("log split finishes when empty WAL batches advance to the stopping offset") {
-    val table = mock(classOf[Table])
-    val scan = mock(classOf[Scan])
-    val scanner = mock(classOf[LogScanner])
-    val writer = mock(classOf[LakeWriter[AnyRef]])
     val tablePath = TablePath.of("fluss", "empty_wal")
     val tableBucket = new TableBucket(1L, 0)
     val split = new TieringLogSplit(tablePath, tableBucket, null, 0L, 5L, 1)
-    val timeout = Duration.ofMillis(1)
     val progress = new ScanRecords(
-      Collections.emptyMap[TableBucket, java.util.List[ScanRecord]](),
+      Collections.emptyMap[TableBucket, JList[ScanRecord]](),
       Collections.singletonMap[TableBucket, java.lang.Long](tableBucket, 5L))
-    when(table.newScan()).thenReturn(scan)
-    when(scan.createLogScanner()).thenReturn(scanner)
-    when(scanner.poll(timeout))
-      .thenReturn(progress)
-      .thenThrow(new IllegalStateException("The split should finish after the first poll"))
+    val scanner = new TestingLogScanner(Seq(progress))
+    val table = new TestingTable(new TestingScan(logScanner = scanner))
+    val writer = new TestingLakeWriter()
 
-    val result = TieringTask.processLogSplit(table, writer, split, timeout.toMillis)
+    val result = TieringTask.processLogSplit(table, writer, split, 1L)
 
     assertThat(result.logEndOffset()).isEqualTo(5L)
     assertThat(result.writeResult()).isNull()
     assertThat(result.numberOfWriteResults()).isEqualTo(1)
-    verify(writer, never()).write(any(classOf[ScanRecord]))
-    verify(writer).complete()
-    verify(scanner).close()
+    assertThat[LogRecord](writer.records).isEmpty()
+    assertThat(writer.completeCount).isEqualTo(1)
+    assertThat(scanner.pollCount).isEqualTo(1)
+    assertThat(scanner.closed).isTrue()
   }
 
   test("an empty log range finishes without polling") {
-    val table = mock(classOf[Table])
-    val scan = mock(classOf[Scan])
-    val scanner = mock(classOf[LogScanner])
-    val writer = mock(classOf[LakeWriter[AnyRef]])
-    when(table.newScan()).thenReturn(scan)
-    when(scan.createLogScanner()).thenReturn(scanner)
+    val scanner = new TestingLogScanner(Seq.empty)
+    val table = new TestingTable(new TestingScan(logScanner = scanner))
+    val writer = new TestingLakeWriter()
     val split =
       new TieringLogSplit(TablePath.of("db", "table"), new TableBucket(1L, 0), null, 5L, 5L, 1)
+
     val result = TieringTask.processLogSplit(table, writer, split, 1L)
+
     assertThat(result.logEndOffset()).isEqualTo(5L)
-    verify(scanner, never()).poll(any(classOf[Duration]))
-    verify(writer).complete()
-    verify(scanner).close()
+    assertThat(scanner.pollCount).isZero()
+    assertThat(writer.completeCount).isEqualTo(1)
+    assertThat(scanner.closed).isTrue()
   }
 
   test("snapshot batch and scanner close when writing fails") {
-    val table = mock(classOf[Table])
-    val scan = mock(classOf[Scan])
-    val scanner = mock(classOf[BatchScanner])
-    val batch = mock(classOf[CloseableIterator[InternalRow]])
-    val writer = mock(classOf[LakeWriter[AnyRef]])
     val bucket = new TableBucket(1L, 0)
-    when(table.newScan()).thenReturn(scan)
-    when(scan.createBatchScanner(bucket, 7L)).thenReturn(scanner)
-    when(scanner.pollBatch(Duration.ofMillis(1))).thenReturn(batch)
-    when(batch.hasNext).thenReturn(true)
-    doThrow(new IllegalStateException("write failed")).when(writer).write(any(classOf[ScanRecord]))
+    val batch = new TestingRowIterator(Seq(GenericRow.of(Int.box(1))))
+    val scanner = new TestingBatchScanner(Seq(batch))
+    val table = new TestingTable(new TestingScan(batchScanner = scanner))
+    val writer = new TestingLakeWriter(writeFailure = new IllegalStateException("write failed"))
     val split = new TieringSnapshotSplit(TablePath.of("db", "table"), bucket, null, 7L, 10L, 1)
-    intercept[IllegalStateException](TieringTask.processSnapshotSplit(table, writer, split, 1L))
-    verify(batch).close()
-    verify(scanner).close()
-    verify(writer, never()).complete()
+
+    val failure =
+      intercept[IllegalStateException](TieringTask.processSnapshotSplit(table, writer, split, 1L))
+
+    assertThat(failure).hasMessage("write failed")
+    assertThat(batch.closed).isTrue()
+    assertThat(scanner.closed).isTrue()
+    assertThat(writer.completeCount).isZero()
   }
 
+  private class TestingTable(scan: Scan) extends Table {
+    override def newScan(): Scan = scan
+    override def getTableInfo: TableInfo = throw new UnsupportedOperationException
+    override def newLookup(): Lookup = throw new UnsupportedOperationException
+    override def newAppend(): Append = throw new UnsupportedOperationException
+    override def newUpsert(): Upsert = throw new UnsupportedOperationException
+    override def close(): Unit = {}
+  }
+
+  private class TestingScan(logScanner: LogScanner = null, batchScanner: BatchScanner = null)
+    extends Scan {
+    var snapshotRequest: Option[(TableBucket, Long)] = None
+
+    override def createLogScanner(): LogScanner = {
+      require(logScanner != null, "No log scanner configured")
+      logScanner
+    }
+
+    override def createBatchScanner(bucket: TableBucket, snapshotId: Long): BatchScanner = {
+      require(batchScanner != null, "No batch scanner configured")
+      snapshotRequest = Some((bucket, snapshotId))
+      batchScanner
+    }
+
+    override def project(columns: Array[Int]): Scan = throw new UnsupportedOperationException
+    override def project(columns: JList[String]): Scan = throw new UnsupportedOperationException
+    override def limit(rowNumber: Int): Scan = throw new UnsupportedOperationException
+    override def filter(predicate: Predicate): Scan = throw new UnsupportedOperationException
+    override def createTypedLogScanner[T](pojoClass: Class[T]): TypedLogScanner[T] =
+      throw new UnsupportedOperationException
+    override def createBatchScanner(bucket: TableBucket): BatchScanner =
+      throw new UnsupportedOperationException
+    override def createBatchScanner(): BatchScanner = throw new UnsupportedOperationException
+  }
+
+  private class TestingLogScanner(batches: Seq[ScanRecords]) extends LogScanner {
+    private val remaining = batches.iterator
+    var subscription: Option[(Int, Long)] = None
+    var pollCount = 0
+    var closed = false
+
+    override def subscribe(bucket: Int, offset: Long): Unit = {
+      subscription = Some((bucket, offset))
+    }
+
+    override def poll(timeout: Duration): ScanRecords = {
+      assertThat(timeout).isEqualTo(Duration.ofMillis(1))
+      pollCount += 1
+      require(remaining.hasNext, "Unexpected log scanner poll")
+      remaining.next()
+    }
+
+    override def subscribe(partitionId: Long, bucket: Int, offset: Long): Unit =
+      throw new UnsupportedOperationException
+    override def unsubscribe(partitionId: Long, bucket: Int): Unit =
+      throw new UnsupportedOperationException
+    override def unsubscribe(bucket: Int): Unit = throw new UnsupportedOperationException
+    override def wakeup(): Unit = throw new UnsupportedOperationException
+    override def close(): Unit = { closed = true }
+  }
+
+  private class TestingBatchScanner(batches: Seq[CloseableIterator[InternalRow]])
+    extends BatchScanner {
+    private val remaining = batches.iterator
+    private var finished = false
+    var closed = false
+
+    override def pollBatch(timeout: Duration): CloseableIterator[InternalRow] = {
+      assertThat(timeout).isEqualTo(Duration.ofMillis(1))
+      require(!finished, "Unexpected batch scanner poll after end of input")
+      if (remaining.hasNext) {
+        remaining.next()
+      } else {
+        finished = true
+        null
+      }
+    }
+
+    override def close(): Unit = { closed = true }
+  }
+
+  private class TestingRowIterator(rows: Seq[InternalRow]) extends CloseableIterator[InternalRow] {
+    private val remaining = rows.iterator
+    var closed = false
+
+    override def hasNext: Boolean = remaining.hasNext
+    override def next(): InternalRow = remaining.next()
+    override def close(): Unit = { closed = true }
+  }
+
+  private class TestingLakeWriter(writeResult: AnyRef = null, writeFailure: RuntimeException = null)
+    extends LakeWriter[AnyRef] {
+    val records = new ArrayList[LogRecord]()
+    var completeCount = 0
+
+    override def write(record: LogRecord): Unit = {
+      if (writeFailure != null) {
+        throw writeFailure
+      }
+      records.add(record)
+    }
+
+    override def complete(): AnyRef = {
+      completeCount += 1
+      writeResult
+    }
+
+    override def close(): Unit = {}
+  }
 }

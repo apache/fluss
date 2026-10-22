@@ -26,7 +26,7 @@ object SparkTieringOptions {
 
   val POLL_TIERING_TABLE_INTERVAL: ConfigOption[Duration] =
     ConfigBuilder
-      .key("spark.tiering.poll.table.interval")
+      .key("tiering.poll.table.interval")
       .durationType()
       .defaultValue(Duration.ofSeconds(30))
       .withDescription(
@@ -34,7 +34,7 @@ object SparkTieringOptions {
 
   val HEARTBEAT_INTERVAL: ConfigOption[Duration] =
     ConfigBuilder
-      .key("spark.tiering.heartbeat.interval")
+      .key("tiering.heartbeat.interval")
       .durationType()
       .defaultValue(Duration.ofSeconds(10))
       .withDescription(
@@ -42,7 +42,7 @@ object SparkTieringOptions {
 
   val POLL_TIMEOUT: ConfigOption[Duration] =
     ConfigBuilder
-      .key("spark.tiering.poll.timeout")
+      .key("tiering.poll.timeout")
       .durationType()
       .defaultValue(Duration.ofSeconds(10))
       .withDescription(
@@ -50,7 +50,7 @@ object SparkTieringOptions {
 
   val MAX_HEARTBEAT_FAILURES: ConfigOption[Integer] =
     ConfigBuilder
-      .key("spark.tiering.heartbeat.max.failures")
+      .key("tiering.heartbeat.max.failures")
       .intType()
       .defaultValue(10)
       .withDescription(
