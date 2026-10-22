@@ -64,13 +64,16 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
   cancel-in-progress: true
 
+# At peak hours ubuntu-latest jobs wait over an hour, while ubuntu-24.04 jobs
+# start within minutes on the same image. So jobs here name a label directly.
 jobs:
   # Decide which client suites to run, mirroring the per-binding scoping the
   # standalone fluss-rust repo had: a client suite runs only when its own
   # sources, the core fluss-rs crate, or the server/proto changed. On non-PR
-  # events (push to main, manual) everything runs.
+  # events (push to main, manual) everything runs. It only needs git and grep,
+  # so the small ubuntu-slim runner is enough.
   detect-changes:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     outputs:
       rust: ${{ steps.filter.outputs.rust }}
       python: ${{ steps.filter.outputs.python }}
@@ -116,7 +119,7 @@ jobs:
   build-server-image:
     needs: detect-changes
     if: needs.detect-changes.outputs.rust == 'true' || needs.detect-changes.outputs.python == 'true' || needs.detect-changes.outputs.cpp == 'true' || needs.detect-changes.outputs.elixir == 'true' || needs.detect-changes.outputs.gateway == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v6
 
@@ -160,7 +163,7 @@ jobs:
     needs: [detect-changes, build-server-image]
     if: needs.detect-changes.outputs.rust == 'true'
     timeout-minutes: 60
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     defaults:
       run:
         working-directory: fluss-rust
@@ -189,7 +192,7 @@ jobs:
     needs: [detect-changes, build-server-image]
     if: needs.detect-changes.outputs.gateway == 'true'
     timeout-minutes: 60
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     defaults:
       run:
         working-directory: fluss-gateway
@@ -224,7 +227,7 @@ jobs:
     needs: [detect-changes, build-server-image]
     if: needs.detect-changes.outputs.python == 'true'
     timeout-minutes: 60
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     strategy:
       matrix:
         python: ["3.9", "3.10", "3.11", "3.12"]
@@ -288,7 +291,7 @@ jobs:
     needs: [detect-changes]
     if: needs.detect-changes.outputs.python == 'true'
     timeout-minutes: 30
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     defaults:
       run:
         working-directory: fluss-rust
@@ -320,7 +323,7 @@ jobs:
     needs: [detect-changes, build-server-image]
     if: needs.detect-changes.outputs.cpp == 'true'
     timeout-minutes: 60
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     defaults:
       run:
         working-directory: fluss-rust
@@ -374,7 +377,7 @@ jobs:
     needs: [detect-changes, build-server-image]
     if: needs.detect-changes.outputs.elixir == 'true'
     timeout-minutes: 60
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     defaults:
       run:
         working-directory: fluss-rust

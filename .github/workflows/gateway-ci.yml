@@ -65,6 +65,8 @@ defaults:
   run:
     working-directory: fluss-gateway
 
+# At peak hours ubuntu-latest jobs wait over an hour, while ubuntu-24.04 jobs
+# start within minutes on the same image. So jobs here name a label directly.
 jobs:
   build-and-unit-test:
     name: "Gateway Build and Tests"
@@ -73,7 +75,7 @@ jobs:
     strategy:
       matrix:
         os:
-          - ubuntu-latest
+          - ubuntu-24.04
           - macos-latest
     steps:
       - uses: actions/checkout@v6
@@ -107,7 +109,7 @@ jobs:
     # rust-toolchain.toml floats to stable, so a plain build never catches features newer
     # than the declared rust-version; `+toolchain` overrides the file here.
     timeout-minutes: 60
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v6
 
@@ -124,7 +126,7 @@ jobs:
 
   check-license-and-formatting:
     name: "Gateway License and Formatting Check"
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v6
 
