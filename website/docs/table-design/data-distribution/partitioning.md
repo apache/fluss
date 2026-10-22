@@ -90,8 +90,8 @@ ALTER TABLE my_partitioned_table SET (
 
 :::warning
 After enabling or disabling `table.datalake.historical-partition.enabled`, restart any existing
-writer and lookup jobs that require historical partition access so that their clients reload the
-updated table configuration.
+writer, lookup, and Flink streaming read jobs that require historical partition access so that they
+reload the updated table configuration.
 :::
 
 When enabled, the Coordinator creates and retains an internal `__historical__` system partition:
@@ -100,7 +100,8 @@ When enabled, the Coordinator creates and retains an internal `__historical__` s
   system partition while preserving each record's original partition name. The tiering service
   writes the records back to their original Paimon partitions.
 - **Reads:** Primary-key point lookups continue to resolve rows after the original Fluss partition
-  no longer exists. Historical reads currently support only primary-key point lookups.
+  no longer exists. [Flink streaming reads](../../engine-flink/reads.md#streaming-read)
+  also consume historical changelogs for both log tables and primary-key tables.
 
 For primary-key tables, `table.datalake.historical-partition.lookup-mode` selects how historical
 partition lookups read Paimon when `table.datalake.historical-partition.enabled` is `true`.
