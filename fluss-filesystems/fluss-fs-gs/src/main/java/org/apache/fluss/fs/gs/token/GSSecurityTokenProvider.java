@@ -39,8 +39,13 @@ import java.util.List;
 import static com.google.cloud.hadoop.util.HadoopCredentialConfiguration.SERVICE_ACCOUNT_JSON_KEYFILE_SUFFIX;
 
 /**
- * Mints a short-lived Cloud Storage access token from the server's service account key or Compute
- * Engine identity. Clients receive that bearer token and do not need the key file.
+ * Mints a short-lived Cloud Storage access token from the server identity. Clients receive that
+ * bearer token and do not need the key file.
+ *
+ * <p>Choose one value of {@code fs.gs.auth.type}. {@code APPLICATION_DEFAULT} is also used when the
+ * key is unset, and calls {@link GoogleCredentials#getApplicationDefault()}. {@code COMPUTE_ENGINE}
+ * reads the instance metadata server. {@code SERVICE_ACCOUNT_JSON_KEYFILE} exchanges a JWT at the
+ * key's {@code token_uri}. The bundled GCS connector does not read {@code fs.gs.auth.type}.
  */
 public class GSSecurityTokenProvider {
 
@@ -50,11 +55,20 @@ public class GSSecurityTokenProvider {
 
     private static final String JSON_KEYFILE_KEY = "fs.gs.auth.service.account.json.keyfile";
 
+    private static final String AUTH_TYPE_APPLICATION_DEFAULT = "APPLICATION_DEFAULT";
+
+    private static final String AUTH_TYPE_COMPUTE_ENGINE = "COMPUTE_ENGINE";
+
+    private static final String AUTH_TYPE_SERVICE_ACCOUNT_JSON_KEYFILE =
+            "SERVICE_ACCOUNT_JSON_KEYFILE";
+
+    private static final String AUTH_TYPE_UNAUTHENTICATED = "UNAUTHENTICATED";
+
     /**
-     * Cloud Storage read/write scope. This stays on the storage API instead of cloud-platform,
-     * which would authorize every Google API the account can call.
+     * Cloud Storage read-only scope. This stays on the storage API instead of cloud-platform, which
+     * would authorize every Google API the account can call.
      */
-    static final String STORAGE_SCOPE = "https://www.googleapis.com/auth/devstorage.read_write";
+    static final String STORAGE_SCOPE = "https://www.googleapis.com/auth/devstorage.read_only";
 
     private final String scheme;
 
@@ -112,18 +126,32 @@ public class GSSecurityTokenProvider {
 
     private static GoogleCredentials extractProvider(Configuration conf) {
         final String authType = conf.get(AUTH_TYPE_KEY);
-        if (authType == null) {
-            throw new IllegalArgumentException(
-                    "fs.gs.auth.type must be set to obtain a security token.");
-        } else if (authType.equals("COMPUTE_ENGINE")) {
+        if (authType == null
+                || authType.isEmpty()
+                || AUTH_TYPE_APPLICATION_DEFAULT.equals(authType)) {
+            return applicationDefaultCredentials();
+        } else if (AUTH_TYPE_COMPUTE_ENGINE.equals(authType)) {
             return ComputeEngineCredentials.newBuilder().build();
-        } else if (authType.equals("SERVICE_ACCOUNT_JSON_KEYFILE")) {
+        } else if (AUTH_TYPE_SERVICE_ACCOUNT_JSON_KEYFILE.equals(authType)) {
             return getServiceAccountCredentials(conf);
-        } else if (authType.equals("UNAUTHENTICATED")) {
+        } else if (AUTH_TYPE_UNAUTHENTICATED.equals(authType)) {
             throw new IllegalArgumentException(
                     "UNAUTHENTICATED cannot obtain a Google Cloud Storage security token.");
         } else {
             throw new IllegalArgumentException("Unsupported authentication type: " + authType);
+        }
+    }
+
+    private static GoogleCredentials applicationDefaultCredentials() {
+        try {
+            return GoogleCredentials.getApplicationDefault();
+        } catch (IOException e) {
+            throw new IllegalArgumentException(
+                    "Application default credentials are not available. "
+                            + "Run where Application Default Credentials can be resolved, "
+                            + "set fs.gs.auth.type to COMPUTE_ENGINE on a GCE instance, "
+                            + "or set fs.gs.auth.type to SERVICE_ACCOUNT_JSON_KEYFILE.",
+                    e);
         }
     }
 

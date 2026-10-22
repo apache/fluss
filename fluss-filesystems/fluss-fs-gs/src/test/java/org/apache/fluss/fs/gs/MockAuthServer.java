@@ -32,6 +32,7 @@ import org.apache.fluss.shaded.netty4.io.netty.handler.logging.LogLevel;
 import org.apache.fluss.shaded.netty4.io.netty.handler.logging.LoggingHandler;
 
 import java.io.Closeable;
+import java.net.InetSocketAddress;
 
 /** Mock Netty Auth Server for facilitating the Google auth token generation. */
 public class MockAuthServer implements Closeable {
@@ -41,10 +42,18 @@ public class MockAuthServer implements Closeable {
 
     private ChannelFuture channelFuture;
 
+    private final int port;
+
     MockAuthServer(EventLoopGroup bossGroup, EventLoopGroup workerGroup) {
         this.bossGroup = bossGroup;
         this.workerGroup = workerGroup;
         this.channelFuture = run();
+        this.port = ((InetSocketAddress) channelFuture.channel().localAddress()).getPort();
+    }
+
+    /** Port the mock token server is bound to on {@code 127.0.0.1}. */
+    public int getPort() {
+        return port;
     }
 
     public ChannelFuture run() {
@@ -65,7 +74,9 @@ public class MockAuthServer implements Closeable {
                                 }
                             });
 
-            channelFuture = b.bind(8080).sync();
+            // Bind the loopback interface on an ephemeral port. A fixed port 8080 collides on
+            // shared CI runners, and "localhost" may resolve to IPv6 while this channel is IPv4.
+            channelFuture = b.bind(new InetSocketAddress("127.0.0.1", 0)).sync();
             return channelFuture;
         } catch (InterruptedException e) {
             throw new RuntimeException(e);
