@@ -34,7 +34,8 @@ public class TieringSourceOptions {
                     .stringType()
                     .defaultValue(ConfigOptions.TABLE_DATALAKE_TIERING_GROUP.defaultValue())
                     .withDescription(
-                            "The tiering group of tables handled by this tiering service.");
+                            "The tiering group of tables handled by this tiering service. "
+                                    + "Group names must follow Fluss table name rules.");
 
     public static final ConfigOption<Duration> POLL_TIERING_TABLE_INTERVAL =
             key("tiering.poll.table.interval")

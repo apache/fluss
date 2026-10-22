@@ -133,7 +133,7 @@ Multiple tiering service jobs can run simultaneously. Jobs in the same tiering g
 ALTER TABLE large_table SET ('table.datalake.tiering-group' = 'large');
 ```
 
-Tables and jobs without an explicit group use `default`. Group names are case-sensitive and cannot be empty or contain leading or trailing whitespace. A table waits if no service in its group is available; it is not assigned to another group.
+Tables and jobs without an explicit group use `default`. Group names are case-sensitive and follow Fluss table name rules: they must be 1 to 200 ASCII letters, digits, `_` or `-`, and cannot start with `__`. A table waits if no service in its group is available; it is not assigned to another group.
 
 Group changes take effect asynchronously after the Coordinator processes the table metadata update. An already assigned tiering round can finish in its original group; subsequent rounds use the updated group. `ALTER TABLE large_table RESET ('table.datalake.tiering-group')` restores the default group. Changing the group follows the existing lake catalog property update path. For legacy log tables without a recorded lake format, primary key, or bucket key, first enable datalake and then change the group in a separate ALTER.
 

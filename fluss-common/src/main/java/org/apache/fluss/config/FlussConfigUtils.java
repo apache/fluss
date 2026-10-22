@@ -20,7 +20,9 @@ package org.apache.fluss.config;
 import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.exception.IllegalConfigurationException;
+import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.fs.FsPath;
+import org.apache.fluss.metadata.TablePath;
 
 import java.lang.reflect.Field;
 import java.time.Duration;
@@ -79,9 +81,13 @@ public class FlussConfigUtils {
 
     /** Validates a tiering group shared by table configuration and tiering service heartbeats. */
     public static void validateTieringGroup(String group) {
-        if (group == null || group.isEmpty() || !group.equals(group.trim())) {
+        try {
+            TablePath.validateTableName(group);
+        } catch (InvalidTableException e) {
             throw new IllegalConfigurationException(
-                    "Tiering group must not be empty or have leading or trailing whitespace.");
+                    "Invalid tiering group. Tiering group names must follow Fluss table name rules: "
+                            + "use 1 to 200 ASCII letters, digits, '_' or '-', and do not start "
+                            + "with '__'.");
         }
     }
 
