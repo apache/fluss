@@ -518,7 +518,7 @@ public class ServerConnectionTest {
     }
 
     @Test
-    void testDeadlineCompletionIsNotBlockedByAnotherConnectionCallback() throws Exception {
+    void testDeadlineCompletionIsNotBlockedByCallbackOnAnotherEventLoop() throws Exception {
         nettyServer.close();
         buildNettyServer(new NeverRespondingGatewayService());
         EventLoopGroup blockedEventLoopGroup =
@@ -553,8 +553,8 @@ public class ServerConnectionTest {
             CompletableFuture<ApiMessage> blockedFuture =
                     blockedConnection.send(ApiKeys.PRODUCE_LOG, produceLogRequest(null));
             assertThat(blockedFuture).isNotDone();
-            // Simulate a consumer whose completion callback stalls: it must only stall the
-            // connection owning the expired deadline, never any other connection.
+            // Simulate a consumer whose completion callback stalls: it must not delay deadlines
+            // on another event loop. Connections sharing its event loop may still be delayed.
             blockedFuture.whenComplete(
                     (response, throwable) -> {
                         blockedCallbackThread.set(Thread.currentThread());
@@ -578,7 +578,8 @@ public class ServerConnectionTest {
             // The bounded get below fails on a plain timeout of the get itself as well, so a
             // delayed deadline of the free connection cannot be mistaken for a passing test.
             assertThatThrownBy(() -> freeFuture.get(5, TimeUnit.SECONDS))
-                    .as("a blocked deadline callback must not delay another connection's deadline")
+                    .as(
+                            "a blocked deadline callback must not delay a deadline on another event loop")
                     .isInstanceOf(ExecutionException.class)
                     .hasCauseInstanceOf(TimeoutException.class);
             assertThat(blockedCallbackExited.get()).isFalse();

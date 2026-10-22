@@ -760,9 +760,9 @@ final class ServerConnection {
      *
      * <p>It runs on the event loop of the connection it belongs to, so the completion callbacks of
      * a request never run on a shared timer thread and a blocking callback can only delay the
-     * deadlines of its own connection. The deadline only completes the request if it wins the
-     * removal of the inflight request, so a response that is delivered at the same time is never
-     * dropped silently.
+     * deadlines of connections sharing the same event loop. The deadline only completes the request
+     * if it wins the removal of the inflight request, so a response that is delivered at the same
+     * time is never dropped silently.
      */
     private final class RequestTimeoutTask implements Runnable {
 
