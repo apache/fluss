@@ -271,7 +271,7 @@ For more details about Fluss partitioned table, see [Partitioned Tables](table-d
 
 ## Lookup Shuffle
 
-For Flink 2.2, lookup custom shuffle can be enabled with the standard Flink lookup hint:
+For Flink 2.2 and later, lookup custom shuffle can be enabled with the standard Flink lookup hint:
 
 ```sql title="Flink SQL"
 SELECT /*+ LOOKUP('table' = 'c', 'shuffle' = 'true') */ *
@@ -297,6 +297,33 @@ of Fluss tablets.
 Bucket custom shuffle applies to hash-distributed tables with bucket keys. Tables without bucket
 keys use Flink's default lookup distribution. Fluss Catalog tables expose the resolved `bucket.num`
 automatically, including when `bucket.num` is omitted from the table DDL.
+
+## Full Lookup Cache
+
+Set `'lookup.cache' = 'FULL'` to serve lookups from a local RocksDB cache. Each lookup subtask loads the buckets assigned to it from a snapshot, catches up with the changelog, and then continuously applies inserts, updates, and deletes. Lookups wait until this initial load and catch-up finish. Subsequent lookups read the local cache, so results may lag behind recent writes while changelog updates are being applied.
+
+FULL caching requires Flink 2.2 or later and custom lookup shuffle. Enable shuffle with the standard Flink `LOOKUP` hint so each probe row reaches a subtask that caches its bucket:
+
+```sql title="Flink SQL"
+INSERT INTO lookup_join_sink
+SELECT /*+ LOOKUP('table' = 'c', 'shuffle' = 'true') */
+       o.o_orderkey, o.o_totalprice, c.c_name, c.c_address
+FROM (SELECT orders.*, PROCTIME() AS ptime FROM orders) AS o
+LEFT JOIN customer /*+ OPTIONS('lookup.cache' = 'FULL') */
+FOR SYSTEM_TIME AS OF o.ptime AS c
+ON o.o_custkey = c.c_custkey;
+```
+
+The `table` value in the `LOOKUP` hint must match the dimension table alias (`c` in this example). FULL caching fails validation if custom shuffle is not enabled. FULL mode uses synchronous local lookups regardless of the `lookup.async` setting.
+
+The following restrictions apply:
+
+- The job must run in streaming mode, and the dimension table must be a non-partitioned primary key table with bucket keys.
+- Data lake integration, row-level TTL, and `lookup.insert-if-not-exists` are not supported.
+- Point lookups and prefix lookups follow the join-key requirements described above. Prefix lookups must include the bucket keys.
+- `lookup.partial-cache.*` options do not apply to FULL caching. The cache retains all rows in its assigned buckets.
+
+Provide sufficient TaskManager disk space under `client.scanner.io.tmpdir` for the cached buckets. When lookup parallelism exceeds the bucket count, a bucket may be cached by more than one subtask. The cache is rebuilt on task restart and removed when the task closes. Size the changelog retention to cover the initial snapshot load and any catch-up lag.
 
 ## Insert If Not Exists
 

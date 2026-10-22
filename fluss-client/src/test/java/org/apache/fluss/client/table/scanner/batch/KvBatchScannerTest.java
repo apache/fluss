@@ -152,6 +152,83 @@ class KvBatchScannerTest {
     }
 
     @Test
+    void testSnapshotLogOffsetForEmptyBucket() throws Exception {
+        RecordingGateway gateway = new RecordingGateway();
+        gateway.enqueue(parseFromWire(emptyTerminalResponse(SCANNER_ID).setLogOffset(42L)));
+
+        try (KvBatchScanner scanner = newScanner(gateway)) {
+            assertThat(scanner.getSnapshotLogOffset()).isEmpty();
+            assertThat(scanner.pollBatch(POLL_TIMEOUT)).isNull();
+            assertThat(scanner.getSnapshotLogOffset()).hasValue(42L);
+            assertThat(scanner.pollBatch(POLL_TIMEOUT)).isNull();
+            assertThat(scanner.getSnapshotLogOffset()).hasValue(42L);
+        }
+    }
+
+    @Test
+    void testSnapshotLogOffsetWithDelayedOpenResponse() throws Exception {
+        RecordingGateway gateway = new RecordingGateway();
+        CompletableFuture<ScanKvResponse> response = new CompletableFuture<>();
+        gateway.enqueue(response);
+
+        try (KvBatchScanner scanner = newScanner(gateway)) {
+            assertThat(scanner.pollBatch(Duration.ZERO)).isNotNull();
+            assertThat(scanner.getSnapshotLogOffset()).isEmpty();
+            response.complete(parseFromWire(emptyTerminalResponse(SCANNER_ID)));
+            assertThat(scanner.pollBatch(POLL_TIMEOUT)).isNull();
+            assertThat(scanner.getSnapshotLogOffset()).hasValue(0L);
+        }
+        assertThat(gateway.requests).hasSize(1);
+    }
+
+    @Test
+    void testSnapshotLogOffsetIsNotOverwrittenByContinuations() throws Exception {
+        RecordingGateway gateway = new RecordingGateway();
+        gateway.enqueue(recordsResponse(true, 1).setLogOffset(42L));
+        gateway.enqueue(recordsResponse(true, 2));
+        gateway.enqueue(recordsResponse(false, 3).setLogOffset(99L));
+
+        try (KvBatchScanner scanner = newScanner(gateway)) {
+            for (int id = 1; id <= 3; id++) {
+                try (CloseableIterator<InternalRow> rows = scanner.pollBatch(POLL_TIMEOUT)) {
+                    assertThat(rows).isNotNull();
+                    assertThat(rows.next().getInt(0)).isEqualTo(id);
+                    assertThat(rows.hasNext()).isFalse();
+                }
+                assertThat(scanner.getSnapshotLogOffset()).hasValue(42L);
+            }
+        }
+    }
+
+    @Test
+    void testMissingSnapshotLogOffsetIsNotFilledByContinuation() throws Exception {
+        RecordingGateway gateway = new RecordingGateway();
+        gateway.enqueue(parseFromWire(emptyContinuationResponse(SCANNER_ID)));
+        gateway.enqueue(parseFromWire(emptyTerminalResponse(SCANNER_ID).setLogOffset(99L)));
+
+        try (KvBatchScanner scanner = newScanner(gateway)) {
+            scanner.pollBatch(POLL_TIMEOUT);
+            assertThat(scanner.getSnapshotLogOffset()).isEmpty();
+            assertThat(scanner.pollBatch(POLL_TIMEOUT)).isNull();
+            assertThat(scanner.getSnapshotLogOffset()).isEmpty();
+        }
+    }
+
+    @Test
+    void testSnapshotLogOffsetAfterOpenRetry() throws Exception {
+        RecordingGateway gateway = new RecordingGateway();
+        gateway.enqueue(parseFromWire(errorResponse(Errors.TOO_MANY_SCANNERS).setLogOffset(99L)));
+        gateway.enqueue(parseFromWire(emptyTerminalResponse(SCANNER_ID).setLogOffset(42L)));
+
+        try (KvBatchScanner scanner = newScanner(gateway)) {
+            scanner.pollBatch(POLL_TIMEOUT);
+            assertThat(scanner.getSnapshotLogOffset()).isEmpty();
+            assertThat(scanner.pollBatch(POLL_TIMEOUT)).isNull();
+            assertThat(scanner.getSnapshotLogOffset()).hasValue(42L);
+        }
+    }
+
+    @Test
     void pipelinesNextRequestImmediatelyAfterResponse() throws Exception {
         RecordingGateway gateway = new RecordingGateway();
         gateway.enqueue(emptyContinuationResponse(SCANNER_ID));
