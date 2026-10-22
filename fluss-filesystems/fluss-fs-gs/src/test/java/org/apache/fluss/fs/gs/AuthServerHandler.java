@@ -112,7 +112,7 @@ public class AuthServerHandler extends SimpleChannelInboundHandler<HttpObject> {
                         req.protocolVersion(), status, Unpooled.wrappedBuffer(bytes));
         response.headers()
                 .set(CONTENT_TYPE, contentType)
-                .set("Location", "http://localhost:8080/resumbable-upload")
+                .set("Metadata-Flavor", "Google")
                 .setInt(CONTENT_LENGTH, response.content().readableBytes());
 
         response.headers().remove(CONTENT_ENCODING);

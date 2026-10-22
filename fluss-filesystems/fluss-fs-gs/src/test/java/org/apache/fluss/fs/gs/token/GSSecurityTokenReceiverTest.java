@@ -93,13 +93,6 @@ class GSSecurityTokenReceiverTest {
     }
 
     @Test
-    void missingAuthTypeIsRejected() {
-        assertThatThrownBy(() -> new GSSecurityTokenProvider("gs", new Configuration(false)))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("fs.gs.auth.type");
-    }
-
-    @Test
     void missingServiceAccountKeyFileIsRejected() {
         Configuration configuration = new Configuration(false);
         configuration.set("fs.gs.auth.type", "SERVICE_ACCOUNT_JSON_KEYFILE");
