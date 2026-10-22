@@ -466,10 +466,8 @@ public class ServerConnectionTest {
     }
 
     /**
-     * Forces the RPC deadline to win in the window between the response path's removal of the
-     * inflight request and its {@code isDone()} guard. In that window the response path can no
-     * longer be the one to update the metrics and the deadline callback finds the entry gone, so
-     * the metrics and the inflight bookkeeping must still be balanced exactly once.
+     * Completes the future during response removal to check that in-flight metrics are updated
+     * once.
      */
     private void assertInFlightMetricsUpdatedOnce(boolean deliverFailure) throws Exception {
         nettyServer.close();
@@ -491,8 +489,8 @@ public class ServerConnectionTest {
             assertThat(inflightRequests.awaitRegistration(30, TimeUnit.SECONDS))
                     .as("the produce request must be registered as inflight")
                     .isTrue();
-            // The entry is registered before the request is accounted for and written, so wait for
-            // the sending event loop to drain before the response is simulated.
+            // Registration precedes accounting; drain the sending event loop before simulating
+            // the response.
             awaitClientHandlerIdle(connection);
             int requestId = inflightRequests.registeredRequestId();
             inflightRequests.completeOnRemove(requestId);
@@ -575,8 +573,8 @@ public class ServerConnectionTest {
             CompletableFuture<ApiMessage> freeFuture =
                     freeConnection.send(ApiKeys.PRODUCE_LOG, produceLogRequest(null));
 
-            // The bounded get below fails on a plain timeout of the get itself as well, so a
-            // delayed deadline of the free connection cannot be mistaken for a passing test.
+            // A timeout of get() must fail the test; only a Fluss timeout proves the deadline
+            // fired.
             assertThatThrownBy(() -> freeFuture.get(5, TimeUnit.SECONDS))
                     .as(
                             "a blocked deadline callback must not delay a deadline on another event loop")
@@ -622,12 +620,7 @@ public class ServerConnectionTest {
                 LazyDropCause.REMOVED_AFTER_RESPONSE_LOOKUP);
     }
 
-    /**
-     * A lazily parsed response owns the buffer it was parsed from, so a dropped delivery must
-     * release that buffer. The response is read through the real client handler, which resolves the
-     * response type from the inflight request before the delivery happens, and each drop cause
-     * below removes the window in which the response could still be delivered.
-     */
+    /** Checks lazy-response buffer cleanup for failed-delivery races. */
     private void assertLazyResponseBufferReleasedWhenDeliveryDropped(LazyDropCause dropCause)
             throws Exception {
         nettyServer.close();
@@ -651,7 +644,7 @@ public class ServerConnectionTest {
                     .isTrue();
             awaitClientHandlerIdle(connection);
 
-            // a request id that is not used by the requests of the connection itself
+            // Keep the synthetic response separate from the connection's live request.
             int requestId = 4242;
             CompletableFuture<ApiMessage> responseFuture = new CompletableFuture<>();
             if (dropCause == LazyDropCause.FUTURE_ALREADY_DONE) {
@@ -714,10 +707,7 @@ public class ServerConnectionTest {
         REMOVED_AFTER_RESPONSE_LOOKUP
     }
 
-    /**
-     * Waits until the work queued on the connection's event loop has been drained, i.e. until a
-     * request that has just been registered as inflight is also accounted for and written.
-     */
+    /** Waits for the event loop to account for and write the registered request. */
     private static void awaitClientHandlerIdle(ServerConnection connection) throws Exception {
         CountDownLatch idle = new CountDownLatch(1);
         clientHandlerContext(connection).executor().execute(idle::countDown);
@@ -726,17 +716,14 @@ public class ServerConnectionTest {
                 .isTrue();
     }
 
-    /**
-     * Closes the connection without letting a close failure mask the failure of an assertion, and
-     * without blocking the test for longer than the bounded wait.
-     */
+    /** Closes within a bounded wait without hiding the test's assertion failure. */
     private static void closeQuietly(ServerConnection connection) {
         try {
             connection.close().get(30, TimeUnit.SECONDS);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         } catch (ExecutionException | java.util.concurrent.TimeoutException e) {
-            // the assertions of the test report the request failure, the close does not add to it
+            // Preserve assertion failures if cleanup fails.
         }
     }
 
@@ -836,11 +823,7 @@ public class ServerConnectionTest {
         }
     }
 
-    /**
-     * An inflight request map that lets a test drive the interleavings the response path has to
-     * survive: the RPC deadline completing a response future while the response path removes its
-     * entry, or the entry being removed right after the response type has been resolved.
-     */
+    /** Injects deadline races during request lookup or removal. */
     private static class RacyInflightRequests extends ConcurrentHashMap<Integer, Object> {
 
         private final CompletableFuture<Void> registration = new CompletableFuture<>();
@@ -865,8 +848,7 @@ public class ServerConnectionTest {
             if (registered != null && isRaceTarget(key, removeOnGetRequestId)) {
                 // fire once, and only for the targeted request
                 removeOnGetRequestId = -1;
-                // the deadline wins here: the entry is gone while the response type has already
-                // been resolved from it and the response is still to be delivered
+                // Expire the request between lookup and delivery.
                 onGet.run();
             }
             return registered;
@@ -878,8 +860,7 @@ public class ServerConnectionTest {
             if (removed != null && isRaceTarget(key, completeOnRemoveRequestId)) {
                 // fire once, and only for the targeted request
                 completeOnRemoveRequestId = -1;
-                // the deadline wins here: the response future is completed before the response
-                // path checks whether it may still deliver its response and update the metrics
+                // Complete the future before response delivery checks it.
                 completeWithDeadline(removed);
             }
             return removed;

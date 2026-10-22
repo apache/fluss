@@ -236,17 +236,13 @@ final class ServerConnection {
 
         @Override
         public void onRequestResult(int requestId, ApiMessage response) {
-            // the removal decides who is responsible for the request bookkeeping, a completed
-            // response future must not skip it, otherwise a deadline that already removed the
-            // request would leave the request counted as in flight forever
+            // Only the path that removes a request updates its completion metrics.
             InflightRequest request = removeInflightRequest(requestId, response.totalSize());
             if (request == null) {
-                // the request is gone (e.g. it timed out), the response can never be delivered
                 releaseDroppedResponse(response);
                 return;
             }
             if (!request.responseFuture.complete(response)) {
-                // the deadline completed the future in the meantime, the response is dropped
                 releaseDroppedResponse(response);
             }
         }
@@ -356,8 +352,7 @@ final class ServerConnection {
                         }
                     }
                 }
-                // the request metrics have not been increased yet, so they must not be updated
-                // here, but a deadline can never have been armed for this request either
+                // This path removes an unaccounted request without updating completion metrics.
                 inflightRequests.remove(inflight.requestId);
                 if (t instanceof Error) {
                     responseFuture.completeExceptionally(t);
@@ -380,8 +375,7 @@ final class ServerConnection {
                                         requestTimeoutMs,
                                         TimeUnit.MILLISECONDS);
             } catch (RejectedExecutionException t) {
-                // the event loop is shutting down and rejected the deadline, fail the request as
-                // retryable instead of letting it wait for a deadline which is never armed
+                // Fail retryably if the closing event loop cannot schedule the deadline.
                 LOG.debug("Failed to schedule request timeout for node {}.", node, t);
                 byteBuf.release();
                 InflightRequest removed = removeInflightRequest(inflight, 0);
@@ -397,8 +391,6 @@ final class ServerConnection {
             }
             inflight.responseFuture.whenComplete(
                     (ignored, throwable) -> {
-                        // a response, a failure and the deadline all cancel the timer before they
-                        // remove the request, so a completed request never keeps a timer around
                         cancelRequestTimeout(inflight);
                         removeInflightRequest(inflight, 0);
                     });
@@ -427,22 +419,13 @@ final class ServerConnection {
         }
     }
 
-    /**
-     * Atomically removes the inflight request with the given id and, if this caller won the
-     * removal, accounts for its response in the connection metrics.
-     *
-     * @return the removed request, or {@code null} if another path (e.g. the request deadline)
-     *     already removed and accounted for it.
-     */
+    /** Removes an inflight request and records its completion metrics only if removal succeeds. */
     @Nullable
     private InflightRequest removeInflightRequest(int requestId, int responseSize) {
         return updateMetricsAfterRemoval(inflightRequests.remove(requestId), responseSize);
     }
 
-    /**
-     * Same as {@link #removeInflightRequest(int, int)}, but only removes the given request and
-     * leaves the entry alone if it has already been replaced by another request.
-     */
+    /** Removes the request only if the entry still refers to the same instance. */
     @Nullable
     private InflightRequest removeInflightRequest(InflightRequest request, int responseSize) {
         InflightRequest removed =
@@ -450,13 +433,7 @@ final class ServerConnection {
         return updateMetricsAfterRemoval(removed, responseSize);
     }
 
-    /**
-     * Updates the metrics of a request which has just been removed from the inflight requests.
-     *
-     * <p>Only the path that successfully removed the request may call this, which is what keeps the
-     * in-flight bookkeeping balanced exactly once, no matter whether the response, the failure, the
-     * write failure or the deadline completes the request.
-     */
+    /** Records completion metrics only for the request removed by the winning path. */
     @Nullable
     private InflightRequest updateMetricsAfterRemoval(
             InflightRequest removedRequest, int responseSize) {
@@ -479,10 +456,8 @@ final class ServerConnection {
     }
 
     /**
-     * Releases the buffer of a response which is never handed over to the consumer. Responses which
-     * are not lazily parsed have already been released by the {@link NettyClientHandler}, and a
-     * delivered response stays owned by the consumer, which releases the buffer after the response
-     * has been fully consumed.
+     * Releases dropped lazy-response buffers. The handler releases eager responses; the consumer
+     * owns delivered lazy responses.
      */
     private static void releaseDroppedResponse(ApiMessage response) {
         if (response.isLazilyParsed()) {
@@ -730,10 +705,7 @@ final class ServerConnection {
         final long requestStartTime;
         final CompletableFuture<ApiMessage> responseFuture;
 
-        /**
-         * The deadline of this request, armed before the request is written. It is cancelled as
-         * soon as the request completes, whatever completes it.
-         */
+        /** Armed before writing the request and cancelled on completion. */
         private volatile ScheduledFuture<?> timeoutTask;
 
         InflightRequest(
@@ -756,13 +728,8 @@ final class ServerConnection {
     }
 
     /**
-     * The deadline of a single inflight request.
-     *
-     * <p>It runs on the event loop of the connection it belongs to, so the completion callbacks of
-     * a request never run on a shared timer thread and a blocking callback can only delay the
-     * deadlines of connections sharing the same event loop. The deadline only completes the request
-     * if it wins the removal of the inflight request, so a response that is delivered at the same
-     * time is never dropped silently.
+     * Runs deadlines on the connection's event loop. Blocking callbacks can delay connections
+     * sharing that loop. Only the removal winner may time out the request.
      */
     private final class RequestTimeoutTask implements Runnable {
 

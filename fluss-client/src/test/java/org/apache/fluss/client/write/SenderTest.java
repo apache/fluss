@@ -740,9 +740,7 @@ final class SenderTest {
     @ParameterizedTest
     @ValueSource(booleans = {true, false})
     void testWriteRetriesAfterActualRpcDeadline(boolean idempotenceEnabled) throws Exception {
-        // Derive the failure from a real client RPC deadline instead of hand building an already
-        // retriable exception, so this test fails while an expired deadline still surfaces a plain
-        // java.util.concurrent.TimeoutException that the writer cannot classify as retriable.
+        // Use a real RPC deadline to verify that writers recognize it as retryable.
         Throwable deadlineFailure = actualRpcDeadlineFailure();
 
         sender = setupWithIdempotenceState(createIdempotenceManager(idempotenceEnabled));
@@ -753,7 +751,6 @@ final class SenderTest {
 
         failRequest(tb1, 0, deadlineFailure);
 
-        // the batch must be retried rather than the write being failed
         assertThat(writeFuture).isNotDone();
         sender.runOnce();
         assertThat(sender.numOfInFlightBatches(tb1)).isOne();
@@ -2387,11 +2384,7 @@ final class SenderTest {
     }
 
     /**
-     * Derives the throwable that a real {@link RpcClient} reports when an RPC deadline expires
-     * against a server that accepts the request but never responds. Driving the writer level
-     * assertions from the production deadline path (instead of a hand built exception) keeps them
-     * honest: while an expired deadline still surfaces a plain {@link
-     * java.util.concurrent.TimeoutException} the writer cannot classify it as retriable.
+     * Returns the failure from a real {@link RpcClient} deadline against a non-responding server.
      */
     private static Throwable actualRpcDeadlineFailure() throws Exception {
         TestingTabletGatewayService neverRespondingGateway =
