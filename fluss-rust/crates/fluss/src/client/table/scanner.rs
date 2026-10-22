@@ -21,8 +21,8 @@ use crate::client::credentials::SecurityTokenManager;
 use crate::client::metadata::Metadata;
 use crate::client::table::batch_scanner::LimitBatchScanner;
 use crate::client::table::log_fetch_buffer::{
-    CompletedFetch, DefaultCompletedFetch, FetchErrorAction, FetchErrorContext, FetchErrorLogLevel,
-    FetchResult, LogFetchBuffer, NO_FILTERED_END_OFFSET, RemotePendingFetch,
+    CompletedFetch, DefaultCompletedFetch, FetchErrorAction, FetchErrorContext, FetchResult,
+    LogFetchBuffer, NO_FILTERED_END_OFFSET, RemotePendingFetch,
 };
 use crate::client::table::read_context_resolver::ReadContextResolver;
 use crate::client::table::remote_log::{RemoteLogDownloader, RemoteLogFetchInfo};
@@ -46,7 +46,7 @@ use crate::rpc::{RpcClient, RpcError, message};
 use crate::util::FairBucketStatusMap;
 use crate::{PartitionId, TableId};
 use arrow_schema::SchemaRef;
-use log::{debug, warn};
+use log::{debug, error, warn};
 use parking_lot::{Mutex, RwLock};
 use prost::Message;
 use std::{
@@ -1532,56 +1532,48 @@ impl LogFetcher {
             | FlussError::FencedLeaderEpochException
             | FlussError::LeaderNotAvailableException => FetchErrorContext {
                 action: FetchErrorAction::Ignore,
-                log_level: FetchErrorLogLevel::Debug,
                 log_message: format!(
-                    "Error in fetch for bucket {table_bucket}: {error:?}: {error_message}"
+                    "Error in fetch at offset {fetch_offset} for bucket {table_bucket}: {error:?}: {error_message}"
                 ),
             },
             FlussError::UnknownTableOrBucketException => FetchErrorContext {
                 action: FetchErrorAction::Ignore,
-                log_level: FetchErrorLogLevel::Warn,
                 log_message: format!(
-                    "Received unknown table or bucket error in fetch for bucket {table_bucket}"
+                    "Received unknown table or bucket error while fetching offset {fetch_offset} for bucket {table_bucket}: {error_message}"
                 ),
             },
             FlussError::InvalidBucketRouting => FetchErrorContext {
                 action: FetchErrorAction::Ignore,
-                log_level: FetchErrorLogLevel::Warn,
                 log_message: format!(
                     "Invalid bucket routing in fetch for bucket {table_bucket}, refreshing metadata: {error_message}"
                 ),
             },
             FlussError::LogOffsetOutOfRangeException => FetchErrorContext {
                 action: FetchErrorAction::LogOffsetOutOfRange,
-                log_level: FetchErrorLogLevel::Debug,
                 log_message: format!(
                     "The fetching offset {fetch_offset} is out of range for bucket {table_bucket}: {error_message}"
                 ),
             },
             FlussError::AuthorizationException => FetchErrorContext {
                 action: FetchErrorAction::Authorization,
-                log_level: FetchErrorLogLevel::Debug,
                 log_message: format!(
                     "Authorization error while fetching offset {fetch_offset} for bucket {table_bucket}: {error_message}"
                 ),
             },
             FlussError::UnknownServerError => FetchErrorContext {
                 action: FetchErrorAction::Ignore,
-                log_level: FetchErrorLogLevel::Warn,
                 log_message: format!(
                     "Unknown server error while fetching offset {fetch_offset} for bucket {table_bucket}: {error_message}"
                 ),
             },
             FlussError::CorruptMessage => FetchErrorContext {
                 action: FetchErrorAction::CorruptMessage,
-                log_level: FetchErrorLogLevel::Debug,
                 log_message: format!(
                     "Encountered corrupt message when fetching offset {fetch_offset} for bucket {table_bucket}: {error_message}"
                 ),
             },
             _ => FetchErrorContext {
                 action: FetchErrorAction::Unexpected,
-                log_level: FetchErrorLogLevel::Debug,
                 log_message: format!(
                     "Unexpected error code {error:?} while fetching at offset {fetch_offset} from bucket {table_bucket}: {error_message}"
                 ),
@@ -1688,7 +1680,7 @@ impl LogFetcher {
                 let con = match conns.get_connection(server_node).await {
                     Ok(con) => con,
                     Err(e) => {
-                        warn!("Retrying after error getting connection to destination node: {e:?}");
+                        error!("Failed to connect to fetch destination {server_node:?}: {e}");
                         Self::handle_fetch_failure(metadata, &leader, &fetch_request).await;
                         return;
                     }
@@ -1705,7 +1697,7 @@ impl LogFetcher {
                 {
                     Ok(resp) => resp,
                     Err(e) => {
-                        warn!(
+                        error!(
                             "Retrying after error fetching log from destination node {server_node:?}: {e:?}"
                         );
                         Self::handle_fetch_failure(metadata, &leader, &fetch_request).await;
@@ -1834,14 +1826,7 @@ impl LogFetcher {
                         api_error.message.as_str(),
                     );
                     log_scanner_status.move_bucket_to_end(table_bucket.clone());
-                    match error_context.log_level {
-                        FetchErrorLogLevel::Debug => {
-                            debug!("{}", error_context.log_message);
-                        }
-                        FetchErrorLogLevel::Warn => {
-                            warn!("{}", error_context.log_message);
-                        }
-                    }
+                    error!("{}", error_context.log_message);
                     log_fetch_buffer.add_api_error(
                         table_bucket.clone(),
                         api_error,

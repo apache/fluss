@@ -1085,6 +1085,10 @@ impl RecordAccumulator {
                             .idempotence_manager
                             .next_sequence_and_increment(&table_bucket);
                         batch.set_writer_state(writer_id, seq);
+                        log::debug!(
+                            "Assigned writer_id={writer_id}, sequence={seq} to batch_id={} for bucket {table_bucket}",
+                            batch.batch_id()
+                        );
                         self.idempotence_manager.add_in_flight_batch(
                             &table_bucket,
                             seq,

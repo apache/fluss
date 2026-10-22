@@ -32,10 +32,10 @@ use crate::error::{Error, FlussError, Result};
 use crate::metadata::{PhysicalTablePath, TableInfo, TablePath};
 use crate::metrics::WriterMetrics;
 use dashmap::DashMap;
-use log::warn;
+use log::{error, info, trace, warn};
 use parking_lot::Mutex;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
@@ -87,7 +87,7 @@ impl WriterClient {
 
         let join_handle = tokio::spawn(async move {
             if let Err(e) = sender.run_with_shutdown(shutdown_rx).await {
-                warn!("Sender loop exited with error: {e}");
+                error!("Sender loop exited with error: {e}");
             }
         });
 
@@ -183,7 +183,8 @@ impl WriterClient {
                 }
             }
 
-            let bucket_id = bucket_assigner.assign_bucket(bucket_key, &cluster, bucket_count)?;
+            let mut bucket_id =
+                bucket_assigner.assign_bucket(bucket_key, &cluster, bucket_count)?;
             let mut result = self.accumulate.append_with_bucket_count(
                 record,
                 bucket_id,
@@ -194,8 +195,12 @@ impl WriterClient {
 
             if result.abort_record_for_new_batch {
                 bucket_assigner.on_new_batch(&cluster, bucket_count, bucket_id);
-                let bucket_id =
-                    bucket_assigner.assign_bucket(bucket_key, &cluster, bucket_count)?;
+                let previous_bucket_id = bucket_id;
+                bucket_id = bucket_assigner.assign_bucket(bucket_key, &cluster, bucket_count)?;
+                trace!(
+                    "Retrying append due to new batch creation for table {physical_table_path}, \
+                     bucket {bucket_id}, previous bucket {previous_bucket_id}"
+                );
                 result = self.accumulate.append_with_bucket_count(
                     record,
                     bucket_id,
@@ -210,6 +215,11 @@ impl WriterClient {
             }
 
             if result.batch_is_full || result.new_batch_created {
+                trace!(
+                    "Waking up sender for table {physical_table_path}, bucket {bucket_id}: \
+                     batch_full={}, new_batch={}",
+                    result.batch_is_full, result.new_batch_created
+                );
                 self.accumulate.wakeup_sender();
             }
 
@@ -257,6 +267,8 @@ impl WriterClient {
             return Ok(());
         };
 
+        info!("Closing writer with timeout {timeout:?}");
+
         // Phase 1: Signal graceful shutdown.
         // Mark accumulator closed so all batches become immediately sendable.
         self.accumulate.close();
@@ -267,7 +279,7 @@ impl WriterClient {
         tokio::select! {
             result = &mut join_handle => {
                 if let Err(e) = result {
-                    warn!("Sender task panicked during shutdown: {e}");
+                    error!("Sender task failed during shutdown: {e}");
                 }
             }
             _ = tokio::time::sleep(timeout) => {
@@ -280,12 +292,19 @@ impl WriterClient {
                 });
             }
         }
+        info!("Writer closed");
         Ok(())
     }
 
     pub async fn flush(&self) -> Result<()> {
+        trace!("Flushing accumulated records in writer");
+        let start = Instant::now();
         self.accumulate.begin_flush();
         self.accumulate.await_flush_completion().await?;
+        trace!(
+            "Flushed accumulated records in writer in {:?}",
+            start.elapsed()
+        );
         Ok(())
     }
 

@@ -46,16 +46,9 @@ pub(crate) enum FetchErrorAction {
     Unexpected,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum FetchErrorLogLevel {
-    Debug,
-    Warn,
-}
-
 #[derive(Clone, Debug)]
 pub(crate) struct FetchErrorContext {
     pub(crate) action: FetchErrorAction,
-    pub(crate) log_level: FetchErrorLogLevel,
     pub(crate) log_message: String,
 }
 

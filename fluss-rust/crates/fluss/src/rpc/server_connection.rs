@@ -34,7 +34,7 @@ use crate::rpc::message::{
 };
 use crate::rpc::transport::Transport;
 use futures::future::BoxFuture;
-use log::warn;
+use log::{debug, error, warn};
 use parking_lot::{Mutex, RwLock};
 use std::collections::HashMap;
 use std::fmt;
@@ -249,10 +249,14 @@ impl RpcClient {
     }
 
     async fn connect(&self, server_node: &ServerNode) -> Result<ServerConnection, Error> {
+        debug!("Creating connection to server {server_node:?}");
         let url = server_node.url();
         let transport = Transport::connect(&url, self.timeout)
             .await
-            .map_err(|error| ConnectionError(error.to_string()))?;
+            .map_err(|error| {
+                error!("Failed to establish connection to server {server_node:?}: {error}");
+                ConnectionError(error.to_string())
+            })?;
 
         let messenger = ServerConnectionInner::new(
             BufStream::new(transport),
@@ -262,12 +266,22 @@ impl RpcClient {
         let connection = ServerConnection::new(messenger);
 
         // Negotiate API versions (must happen before authentication).
-        Self::check_api_versions(&connection, server_node.server_type()).await?;
+        Self::check_api_versions(&connection, server_node.server_type())
+            .await
+            .inspect_err(|e| {
+                error!("API version handshake failed for server {server_node:?}: {e}");
+            })?;
 
         if let Some(ref sasl) = self.sasl_config {
-            Self::authenticate(&connection, &sasl.username, &sasl.password).await?;
+            debug!("Beginning SASL/PLAIN authentication with server {server_node:?}");
+            Self::authenticate(&connection, &sasl.username, &sasl.password)
+                .await
+                .inspect_err(|e| {
+                    error!("Authentication failed for server {server_node:?}: {e}");
+                })?;
         }
 
+        debug!("Connection to server {server_node:?} is ready");
         Ok(connection)
     }
 

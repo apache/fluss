@@ -99,6 +99,20 @@ impl InnerWriteBatch {
         {
             return false;
         }
+        match &write_result {
+            Ok(()) => log::trace!(
+                "Successfully produced batch_id={} to table {}, table_id={}",
+                self.batch_id,
+                self.physical_table_path,
+                self.table_id
+            ),
+            Err(error) => log::trace!(
+                "Failed to produce batch_id={} to table {}, table_id={}: {error}",
+                self.batch_id,
+                self.physical_table_path,
+                self.table_id
+            ),
+        }
         self.results.broadcast(write_result);
         true
     }

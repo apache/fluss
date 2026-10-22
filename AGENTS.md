@@ -265,6 +265,10 @@ fluss/
 
 **Error propagation:** Async operations use `ExceptionUtils.wrapAsUnchecked()` to wrap checked exceptions; use `.exceptionally()` for CompletableFuture error handling
 
+### Rust Client Logging
+
+Use the shared `log` facade and the corresponding Java operation as the reference for log levels. Preserve error and retry semantics, avoid logging sensitive data, and leave logger installation and output configuration to the embedding application.
+
 ---
 
 ## 5. Concurrency & Thread Safety
