@@ -24,7 +24,6 @@ import org.apache.fluss.lake.serializer.SimpleVersionedSerializer;
 import org.apache.fluss.lake.source.LakeSource;
 import org.apache.fluss.lake.source.Planner;
 import org.apache.fluss.lake.source.RecordReader;
-import org.apache.fluss.lake.source.SupportsHistoricalSnapshot;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
@@ -54,13 +53,12 @@ import static org.apache.fluss.lake.paimon.utils.PaimonConversions.toPaimon;
  * Paimon Lake format implementation of {@link org.apache.fluss.lake.source.LakeSource} for reading
  * paimon table.
  */
-public class PaimonLakeSource implements LakeSource<PaimonSplit>, SupportsHistoricalSnapshot {
+public class PaimonLakeSource implements LakeSource<PaimonSplit> {
     private static final long serialVersionUID = 1L;
 
     private final Configuration paimonConfig;
     private final TablePath tablePath;
 
-    private @Nullable org.apache.fluss.types.RowType expectedSchema;
     private @Nullable int[][] project;
     private @Nullable org.apache.paimon.predicate.Predicate predicate;
 
@@ -73,13 +71,7 @@ public class PaimonLakeSource implements LakeSource<PaimonSplit>, SupportsHistor
         this.paimonConfig = new Configuration(source.paimonConfig);
         this.tablePath = source.tablePath;
         this.project = ArrayUtils.deepCopy(source.project);
-        this.expectedSchema = source.expectedSchema;
         this.predicate = source.predicate;
-    }
-
-    @Override
-    public void withExpectedSchema(org.apache.fluss.types.RowType expectedSchema) {
-        this.expectedSchema = expectedSchema;
     }
 
     @Override
@@ -148,13 +140,6 @@ public class PaimonLakeSource implements LakeSource<PaimonSplit>, SupportsHistor
     public RecordReader createRecordReader(ReaderContext<PaimonSplit> context) throws IOException {
         try (Catalog catalog = getCatalog()) {
             FileStoreTable fileStoreTable = getTable(catalog, tablePath);
-            if (expectedSchema != null
-                    && !org.apache.fluss.lake.paimon.utils.PaimonConversions.toFlussRowType(
-                                    fileStoreTable.rowType())
-                            .equals(expectedSchema)) {
-                throw new IOException(
-                        "Paimon schema changed during historical read for " + tablePath);
-            }
             if (fileStoreTable.primaryKeys().isEmpty()) {
                 return new PaimonRecordReader(
                         fileStoreTable, context.lakeSplit(), project, predicate);

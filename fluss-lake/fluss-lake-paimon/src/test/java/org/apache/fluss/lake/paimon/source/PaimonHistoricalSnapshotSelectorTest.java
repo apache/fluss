@@ -18,7 +18,7 @@
 
 package org.apache.fluss.lake.paimon.source;
 
-import org.apache.fluss.lake.source.SupportsHistoricalSnapshot.HistoricalSnapshot;
+import org.apache.fluss.lake.source.LakeSource.HistoricalSnapshot;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableDescriptor;

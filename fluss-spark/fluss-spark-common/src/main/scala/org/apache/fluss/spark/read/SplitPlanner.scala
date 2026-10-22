@@ -23,7 +23,7 @@ import org.apache.fluss.client.metadata.{KvSnapshots, LakeSnapshot}
 import org.apache.fluss.client.table.scanner.log.LogScanner
 import org.apache.fluss.config.Configuration
 import org.apache.fluss.exception.LakeTableSnapshotNotExistException
-import org.apache.fluss.lake.source.{LakeSource, LakeSplit, SupportsHistoricalSnapshot}
+import org.apache.fluss.lake.source.{LakeSource, LakeSplit}
 import org.apache.fluss.metadata.{LogFormat, PartitionInfo, ResolvedPartitionSpec, TableBucket, TableBucketSnapshot, TableInfo, TablePath}
 import org.apache.fluss.predicate.{Predicate => FlussPredicate}
 import org.apache.fluss.spark.SparkFlussConf
@@ -140,9 +140,6 @@ abstract class AbstractSplitPlanner(
     )
     val lake =
       FlussLakeUtils.createLakeSource(flussConfig.toMap, tableInfo.getProperties.toMap, tablePath)
-    require(
-      lake.isInstanceOf[SupportsHistoricalSnapshot],
-      "Snapshot-at-timestamp is only supported by Paimon historical lake sources.")
     val probeTable = connectionLease.connection.getTable(tablePath)
     val (earliest, target) =
       try {
@@ -155,12 +152,10 @@ abstract class AbstractSplitPlanner(
       } finally {
         probeTable.close()
       }
-    val selected = lake
-      .asInstanceOf[SupportsHistoricalSnapshot]
-      .findHistoricalSnapshot(
-        tableInfo,
-        earliest.mapValues(Long.box).toMap.asJava,
-        target.mapValues(Long.box).toMap.asJava)
+    val selected = lake.findHistoricalSnapshot(
+      tableInfo,
+      earliest.mapValues(Long.box).toMap.asJava,
+      target.mapValues(Long.box).toMap.asJava)
     require(
       selected.isPresent,
       s"No complete retained historical base for $tablePath (tableId=${tableInfo.getTableId}, T=${asOfTimestamp.get}, earliest=$earliest, target=$target)"

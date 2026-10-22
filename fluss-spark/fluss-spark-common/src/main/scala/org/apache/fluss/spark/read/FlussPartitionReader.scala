@@ -40,8 +40,7 @@ private[spark] case class HistoricalReadMetadata(
     tableId: Long,
     schemaId: Int,
     numBuckets: Int,
-    bucketCountEpoch: Long,
-    rowType: RowType)
+    bucketCountEpoch: Long)
   extends Serializable
 
 private[spark] object HistoricalReadMetadata {
@@ -50,8 +49,7 @@ private[spark] object HistoricalReadMetadata {
       info.getTableId,
       info.getSchemaId,
       info.getNumBuckets,
-      info.getBucketCountEpoch,
-      info.getRowType)
+      info.getBucketCountEpoch)
 }
 
 abstract class FlussPartitionReader(
