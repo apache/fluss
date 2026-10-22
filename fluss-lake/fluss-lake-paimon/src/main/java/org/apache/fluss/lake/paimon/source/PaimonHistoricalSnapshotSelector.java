@@ -20,7 +20,7 @@ package org.apache.fluss.lake.paimon.source;
 
 import org.apache.fluss.fs.FSDataInputStream;
 import org.apache.fluss.fs.FsPath;
-import org.apache.fluss.lake.source.SupportsHistoricalSnapshot.HistoricalSnapshot;
+import org.apache.fluss.lake.source.LakeSource.HistoricalSnapshot;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.utils.IOUtils;
