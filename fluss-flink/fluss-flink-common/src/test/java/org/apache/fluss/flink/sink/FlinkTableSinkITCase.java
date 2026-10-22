@@ -24,6 +24,7 @@ import org.apache.fluss.client.table.scanner.ScanRecord;
 import org.apache.fluss.client.table.scanner.log.LogScanner;
 import org.apache.fluss.client.table.scanner.log.ScanRecords;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.exception.InvalidConfigException;
 import org.apache.fluss.flink.sink.shuffle.DistributionMode;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TablePath;
@@ -247,6 +248,8 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
         String insertPlan = tEnv.explainSql(insertSql, ExplainDetail.JSON_EXECUTION_PLAN);
         if (distributionMode == DistributionMode.BUCKET) {
             assertThat(insertPlan).contains("\"ship_strategy\" : \"BUCKET\"");
+        } else if (distributionMode == DistributionMode.BUCKET_BALANCE) {
+            assertThat(insertPlan).contains("\"ship_strategy\" : \"BUCKET_BALANCE\"");
         } else {
             assertThat(insertPlan).contains("\"ship_strategy\" : \"FORWARD\"");
         }
@@ -390,10 +393,10 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
                         + "(11, 3511, 'stave'), "
                         + "(12, 3512, 'Tim')";
 
-        if (distributionMode == DistributionMode.BUCKET) {
+        if (distributionMode == DistributionMode.BUCKET
+                || distributionMode == DistributionMode.BUCKET_BALANCE) {
             assertThatThrownBy(() -> tEnv.explainSql(insertSql, ExplainDetail.JSON_EXECUTION_PLAN))
-                    .hasMessageContaining(
-                            "BUCKET mode is only supported for log tables with bucket keys");
+                    .hasMessageContaining("mode is only supported for log tables with bucket keys");
             return;
         }
 
@@ -457,6 +460,8 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
         String insertPlan = tEnv.explainSql(insertSql, ExplainDetail.JSON_EXECUTION_PLAN);
         if (distributionMode == DistributionMode.BUCKET) {
             assertThat(insertPlan).contains("\"ship_strategy\" : \"BUCKET\"");
+        } else if (distributionMode == DistributionMode.BUCKET_BALANCE) {
+            assertThat(insertPlan).contains("\"ship_strategy\" : \"BUCKET_BALANCE\"");
         } else if (distributionMode == DistributionMode.AUTO
                 || distributionMode == DistributionMode.NONE) {
             assertThat(insertPlan).contains("\"ship_strategy\" : \"FORWARD\"");
@@ -489,6 +494,25 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
                         "+I[13, 503, cony]", "+I[14, 504, jemmy]",
                         "+I[15, 505, pig]", "+I[16, 506, stephen]");
         assertResultsIgnoreOrder(rowIter, expectedRows, true);
+    }
+
+    @Test
+    @MultiVersionTest
+    void testAggregationMergeEngineRejectsBucketBalance() {
+        // Undo Recovery for aggregation tables assumes one writer per bucket, while
+        // bucket_balance may fan one bucket out to several subtasks, so the combination
+        // must be rejected when the sink is planned.
+        tEnv.executeSql(
+                "create table agg_bucket_balance_sink (a int not null primary key not enforced, "
+                        + "b int) "
+                        + "with('table.merge-engine' = 'aggregation', "
+                        + "'fields.b.agg' = 'sum', "
+                        + "'sink.distribution-mode' = 'bucket_balance')");
+
+        String insertSql = "INSERT INTO agg_bucket_balance_sink VALUES (1, 1)";
+        assertThatThrownBy(() -> tEnv.explainSql(insertSql, ExplainDetail.JSON_EXECUTION_PLAN))
+                .hasStackTraceContaining("is not supported when Undo Recovery is enabled")
+                .hasStackTraceContaining("Please use 'bucket' or 'auto'");
     }
 
     @Test
@@ -1320,6 +1344,73 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
     }
 
     @Test
+    @MultiVersionTest
+    void testSkipUnchangedUpsertsSupportsMutations() throws Exception {
+        String tableName = "skipUnchangedUpsertsTable";
+        tBatchEnv.executeSql(
+                String.format(
+                        "create table %s ("
+                                + " a int not null,"
+                                + " b bigint null, "
+                                + " c string null, "
+                                + " primary key (a) not enforced"
+                                + ") with ('table.upsert.skip-unchanged' = 'true')",
+                        tableName));
+
+        tBatchEnv
+                .executeSql(
+                        String.format(
+                                "INSERT INTO %s VALUES (1, 10, 'initial'), (2, 20, 'delete')",
+                                tableName))
+                .await();
+
+        // Verify that the Flink sink accepts partial updates with unchanged writes skipped.
+        tBatchEnv
+                .executeSql(String.format("INSERT INTO %s (a, c) VALUES (1, 'partial')", tableName))
+                .await();
+
+        // Verify that row-level UPDATE and DELETE statements are accepted as well.
+        tBatchEnv.executeSql(String.format("UPDATE %s SET b = 11 WHERE a = 1", tableName)).await();
+        tBatchEnv.executeSql(String.format("DELETE FROM %s WHERE a = 2", tableName)).await();
+
+        CloseableIterator<Row> rowIter =
+                tBatchEnv.executeSql(String.format("SELECT * FROM %s", tableName)).collect();
+        assertResultsIgnoreOrder(rowIter, Collections.singletonList("+I[1, 11, partial]"), true);
+    }
+
+    @Test
+    @MultiVersionTest
+    void testSkipUnchangedUpsertsRejectsWalImage() {
+        assertThatThrownBy(
+                        () ->
+                                tBatchEnv.executeSql(
+                                        "create table skip_unchanged_wal ("
+                                                + "a int not null, b string, primary key (a) not enforced"
+                                                + ") with ('table.upsert.skip-unchanged' = 'true', "
+                                                + "'table.changelog.image' = 'wal')"))
+                .rootCause()
+                .isInstanceOf(InvalidConfigException.class)
+                .hasMessageContaining("table.upsert.skip-unchanged")
+                .hasMessageContaining("table.changelog.image");
+    }
+
+    @Test
+    @MultiVersionTest
+    void testSkipUnchangedUpsertsRejectsKvTtl() {
+        assertThatThrownBy(
+                        () ->
+                                tBatchEnv.executeSql(
+                                        "create table skip_unchanged_ttl ("
+                                                + "a int not null, b string, primary key (a) not enforced"
+                                                + ") with ('table.upsert.skip-unchanged' = 'true', "
+                                                + "'table.kv.ttl' = '1 h')"))
+                .rootCause()
+                .isInstanceOf(InvalidConfigException.class)
+                .hasMessageContaining("table.upsert.skip-unchanged")
+                .hasMessageContaining("table.kv.ttl");
+    }
+
+    @Test
     void testVersionMergeEngineWithTypeBigint() throws Exception {
         tEnv.executeSql(
                 "create table merge_engine_with_version (a int not null primary key not enforced,"
@@ -1559,6 +1650,45 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
                         // listagg: alpha|beta|gamma
                         "+U[1, 6000, 61.5, 30, 200, 2024-02-01T18:00, 50.0, alpha, 100, 100, 300, 300, false, true, alpha|beta|gamma]");
 
+        assertResultsIgnoreOrder(rowIter, expectedRows, true);
+    }
+
+    @Test
+    void testLastNAggregation() throws Exception {
+        tEnv.executeSql(
+                "create table last_n_agg ("
+                        + "id int not null primary key not enforced, "
+                        + "events array<string>, "
+                        + "scores array<bigint>"
+                        + ") with ("
+                        + "'table.merge-engine' = 'aggregation', "
+                        + "'fields.events.agg' = 'last_n', "
+                        + "'fields.events.last_n.size' = '2', "
+                        + "'fields.scores.agg' = 'last_n', "
+                        + "'fields.scores.last_n.size' = '3')");
+
+        tEnv.executeSql("INSERT INTO last_n_agg VALUES (1, ARRAY['a'], ARRAY[CAST(1 AS BIGINT)])")
+                .await();
+        tEnv.executeSql("INSERT INTO last_n_agg VALUES (1, ARRAY['b'], ARRAY[CAST(2 AS BIGINT)])")
+                .await();
+        tEnv.executeSql(
+                        "INSERT INTO last_n_agg VALUES "
+                                + "(1, ARRAY['c', 'd'], CAST(NULL AS ARRAY<BIGINT>))")
+                .await();
+        tEnv.executeSql(
+                        "INSERT INTO last_n_agg VALUES "
+                                + "(2, ARRAY['x', 'y', 'z'], ARRAY[CAST(1 AS BIGINT)])")
+                .await();
+
+        CloseableIterator<Row> rowIter = tEnv.executeSql("SELECT * FROM last_n_agg").collect();
+        List<String> expectedRows =
+                Arrays.asList(
+                        "+I[1, [a], [1]]",
+                        "-U[1, [a], [1]]",
+                        "+U[1, [a, b], [1, 2]]",
+                        "-U[1, [a, b], [1, 2]]",
+                        "+U[1, [c, d], [1, 2]]",
+                        "+I[2, [y, z], [1]]");
         assertResultsIgnoreOrder(rowIter, expectedRows, true);
     }
 

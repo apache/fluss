@@ -18,14 +18,26 @@
 package org.apache.fluss.rpc.gateway;
 
 import org.apache.fluss.rpc.RpcGateway;
+import org.apache.fluss.rpc.messages.CommitConsumerOffsetsRequest;
+import org.apache.fluss.rpc.messages.CommitConsumerOffsetsResponse;
+import org.apache.fluss.rpc.messages.DeleteConsumerGroupsRequest;
+import org.apache.fluss.rpc.messages.DeleteConsumerGroupsResponse;
+import org.apache.fluss.rpc.messages.DeleteConsumerOffsetsRequest;
+import org.apache.fluss.rpc.messages.DeleteConsumerOffsetsResponse;
 import org.apache.fluss.rpc.messages.FetchLogRequest;
 import org.apache.fluss.rpc.messages.FetchLogResponse;
+import org.apache.fluss.rpc.messages.FindConsumerGroupOwnerRequest;
+import org.apache.fluss.rpc.messages.FindConsumerGroupOwnerResponse;
+import org.apache.fluss.rpc.messages.GetConsumerOffsetsRequest;
+import org.apache.fluss.rpc.messages.GetConsumerOffsetsResponse;
 import org.apache.fluss.rpc.messages.GetTableStatsRequest;
 import org.apache.fluss.rpc.messages.GetTableStatsResponse;
 import org.apache.fluss.rpc.messages.InitWriterRequest;
 import org.apache.fluss.rpc.messages.InitWriterResponse;
 import org.apache.fluss.rpc.messages.LimitScanRequest;
 import org.apache.fluss.rpc.messages.LimitScanResponse;
+import org.apache.fluss.rpc.messages.ListConsumerGroupsRequest;
+import org.apache.fluss.rpc.messages.ListConsumerGroupsResponse;
 import org.apache.fluss.rpc.messages.ListOffsetsRequest;
 import org.apache.fluss.rpc.messages.ListOffsetsResponse;
 import org.apache.fluss.rpc.messages.LookupRequest;
@@ -184,6 +196,41 @@ public interface TabletServerGateway extends RpcGateway, AdminReadOnlyGateway {
     @RPC(api = ApiKeys.NOTIFY_LAKE_TABLE_OFFSET)
     CompletableFuture<NotifyLakeTableOffsetResponse> notifyLakeTableOffset(
             NotifyLakeTableOffsetRequest request);
+
+    /** Find the tablet server that owns a consumer group. */
+    @RPC(api = ApiKeys.FIND_CONSUMER_GROUP_OWNER)
+    CompletableFuture<FindConsumerGroupOwnerResponse> findConsumerGroupOwner(
+            FindConsumerGroupOwnerRequest request);
+
+    /** Commit offsets for a consumer group. */
+    @RPC(api = ApiKeys.COMMIT_CONSUMER_OFFSETS)
+    CompletableFuture<CommitConsumerOffsetsResponse> commitConsumerOffsets(
+            CommitConsumerOffsetsRequest request);
+
+    /** Get committed offsets of a consumer group. */
+    @RPC(api = ApiKeys.GET_CONSUMER_OFFSETS)
+    CompletableFuture<GetConsumerOffsetsResponse> getConsumerOffsets(
+            GetConsumerOffsetsRequest request);
+
+    /** Delete committed offsets for selected buckets of a consumer group. */
+    @RPC(api = ApiKeys.DELETE_CONSUMER_OFFSETS)
+    CompletableFuture<DeleteConsumerOffsetsResponse> deleteConsumerOffsets(
+            DeleteConsumerOffsetsRequest request);
+
+    /**
+     * Lists consumer groups currently owned by this tablet server.
+     *
+     * <p>This is not a cluster-wide listing. Callers that need a cluster-wide view must query every
+     * tablet server and merge the responses.
+     */
+    @RPC(api = ApiKeys.LIST_CONSUMER_GROUPS)
+    CompletableFuture<ListConsumerGroupsResponse> listConsumerGroups(
+            ListConsumerGroupsRequest request);
+
+    /** Delete consumer groups and all of their committed offsets. */
+    @RPC(api = ApiKeys.DELETE_CONSUMER_GROUPS)
+    CompletableFuture<DeleteConsumerGroupsResponse> deleteConsumerGroups(
+            DeleteConsumerGroupsRequest request);
 
     /**
      * Perform a full KV scan over a primary key table bucket. The first request opens a server-side

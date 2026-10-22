@@ -137,6 +137,16 @@ public final class NettyServerHandler extends ChannelInboundHandlerAdapter {
                             ((InetSocketAddress) ctx.channel().remoteAddress()).getAddress(),
                             future);
 
+            // Reject requests from inactive connections before they enter the request queue. Lazy
+            // requests retain the underlying ByteBuf and rely on the request processor to release
+            // it after processing.
+            if (!state.isActive()) {
+                LOG.warn("Received a request on an inactive channel: {}", remoteAddress);
+                request.fail(new NetworkException("Channel is inactive"));
+                needRelease = true;
+                return;
+            }
+
             future.whenCompleteAsync((r, t) -> sendResponse(ctx, request), ctx.executor());
             if (apiKey == ApiKeys.AUTHENTICATE.id
                     || (state.isAuthenticating() && apiKey != ApiKeys.API_VERSIONS.id)) {
@@ -149,11 +159,6 @@ public final class NettyServerHandler extends ChannelInboundHandlerAdapter {
                 requestChannel.putRequest(request);
             }
 
-            if (!state.isActive()) {
-                LOG.warn("Received a request on an inactive channel: {}", remoteAddress);
-                request.fail(new NetworkException("Channel is inactive"));
-                needRelease = true;
-            }
         } catch (Throwable t) {
             needRelease = true;
             LOG.error("Error while parsing request.", t);

@@ -189,6 +189,126 @@ pub fn convert_value_of_type(value: &Datum, data_type: &DataType) -> Result<Stri
     }
 }
 
+/// Parses a non-null partition value using the format of [`convert_value_of_type`].
+/// Temporal values retain their full encoded precision; this does not apply
+/// column-precision rounding. Invalid encodings and unsupported types are errors.
+pub(crate) fn parse_value_of_type<'a>(value: &'a str, data_type: &DataType) -> Result<Datum<'a>> {
+    let parsed = (|| -> Option<Datum<'a>> {
+        Some(match data_type {
+            DataType::Char(_) | DataType::String(_) => Datum::String(value.into()),
+            DataType::Boolean(_) if value.eq_ignore_ascii_case("true") => Datum::Bool(true),
+            DataType::Boolean(_) if value.eq_ignore_ascii_case("false") => Datum::Bool(false),
+            DataType::TinyInt(_) => Datum::Int8(value.parse().ok()?),
+            DataType::SmallInt(_) => Datum::Int16(value.parse().ok()?),
+            DataType::Int(_) => Datum::Int32(value.parse().ok()?),
+            DataType::BigInt(_) => Datum::Int64(value.parse().ok()?),
+            DataType::Float(_) => {
+                Datum::Float32(value.replace('_', ".").parse::<f32>().ok()?.into())
+            }
+            DataType::Double(_) => {
+                Datum::Float64(value.replace('_', ".").parse::<f64>().ok()?.into())
+            }
+            DataType::Binary(_) | DataType::Bytes(_) => {
+                if value.len() % 2 != 0 {
+                    return None;
+                }
+                let bytes = value
+                    .as_bytes()
+                    .chunks_exact(2)
+                    .map(|pair| {
+                        let high = char::from(pair[0]).to_digit(16)?;
+                        let low = char::from(pair[1]).to_digit(16)?;
+                        Some((high * 16 + low) as u8)
+                    })
+                    .collect::<Option<Vec<_>>>()?;
+                Datum::Blob(bytes.into())
+            }
+            DataType::Date(_) => {
+                let date = value.parse::<jiff::civil::Date>().ok()?;
+                let days = UNIX_EPOCH_DATE.until(date).ok()?.get_days();
+                Datum::Date(Date::new(days))
+            }
+            DataType::Time(_) => {
+                let (time, millis) = value.split_once('_')?;
+                let parts = time
+                    .split('-')
+                    .map(str::parse::<i8>)
+                    .collect::<std::result::Result<Vec<_>, _>>()
+                    .ok()?;
+                let [hour, minute, second] = parts.as_slice() else {
+                    return None;
+                };
+                let millis: i32 = millis.parse().ok()?;
+                if !(0..1000).contains(&millis) {
+                    return None;
+                }
+                let time =
+                    jiff::civil::Time::new(*hour, *minute, *second, millis * 1_000_000).ok()?;
+                Datum::Time(Time::new(
+                    i32::from(time.hour()) * 3_600_000
+                        + i32::from(time.minute()) * 60_000
+                        + i32::from(time.second()) * 1000
+                        + millis,
+                ))
+            }
+            DataType::Timestamp(_) | DataType::TimestampLTz(_) => {
+                let (datetime, fraction) = value.split_once('_').unwrap_or((value, ""));
+                if fraction.len() > 9 || !fraction.bytes().all(|c| c.is_ascii_digit()) {
+                    return None;
+                }
+                let nanos = if fraction.is_empty() {
+                    0
+                } else {
+                    fraction.parse::<i32>().ok()? * 10_i32.pow(9 - fraction.len() as u32)
+                };
+                let negative_year = datetime.starts_with('-');
+                let parts = datetime
+                    .strip_prefix('-')
+                    .unwrap_or(datetime)
+                    .split('-')
+                    .map(str::parse::<i16>)
+                    .collect::<std::result::Result<Vec<_>, _>>()
+                    .ok()?;
+                let [year, month, day, time @ ..] = parts.as_slice() else {
+                    return None;
+                };
+                if time.len() > 3 {
+                    return None;
+                }
+                let year = if negative_year {
+                    year.checked_neg()?
+                } else {
+                    *year
+                };
+                let datetime = jiff::civil::DateTime::new(
+                    year,
+                    (*month).try_into().ok()?,
+                    (*day).try_into().ok()?,
+                    (*time.first().unwrap_or(&0)).try_into().ok()?,
+                    (*time.get(1).unwrap_or(&0)).try_into().ok()?,
+                    (*time.get(2).unwrap_or(&0)).try_into().ok()?,
+                    0,
+                )
+                .ok()?;
+                let instant = datetime.to_zoned(jiff::tz::TimeZone::UTC).ok()?.timestamp();
+                // Split the positive fraction from the whole second, matching
+                // Fluss's floor-based representation before the Unix epoch.
+                let millis = instant.as_millisecond() + i64::from(nanos / 1_000_000);
+                let nanos = nanos % 1_000_000;
+                if matches!(data_type, DataType::Timestamp(_)) {
+                    Datum::TimestampNtz(TimestampNtz::from_millis_nanos(millis, nanos).ok()?)
+                } else {
+                    Datum::TimestampLtz(TimestampLtz::from_millis_nanos(millis, nanos).ok()?)
+                }
+            }
+            _ => return None,
+        })
+    })();
+    parsed.ok_or_else(|| IllegalArgument {
+        message: format!("Invalid or unsupported partition value {value:?} for {data_type:?}"),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -13,6 +13,24 @@ Copyright 2012-2024 The Apache Software Foundation
 Apache Paimon
 Copyright 2023-2024 The Apache Software Foundation
 
+Apache Arrow Java
+Copyright 2016-2025 The Apache Software Foundation
+
+Apache Spark
+Copyright 2014 and onwards The Apache Software Foundation.
+
+----------------------------------------------------------
+
+The HeapPreferringCumulator in NettyChannelInitializer.java is derived from
+Netty 4.1's MERGE_CUMULATOR, with the following attribution:
+
+The Netty Project
+Copyright 2014 The Netty Project
+
+https://netty.io/
+
+Licensed under the Apache License, Version 2.0.
+
 ----------------------------------------------------------
 
 This project includes code from Project LightProto, developed at Splunk,

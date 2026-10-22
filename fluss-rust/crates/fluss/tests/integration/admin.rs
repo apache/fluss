@@ -17,14 +17,18 @@
 
 #[cfg(test)]
 mod admin_test {
-    use crate::integration::utils::get_shared_cluster;
-    use fluss::client::FlussConnection;
+    use crate::integration::utils::{
+        create_partitions, create_table, get_shared_cluster, wait_for_partitions_ready,
+        wait_for_table_buckets_ready,
+    };
+    use fluss::client::{FlussAdmin, FlussConnection};
     use fluss::config::Config;
     use fluss::error::FlussError;
     use fluss::metadata::{
-        DataTypes, DatabaseDescriptorBuilder, KvFormat, LogFormat, PartitionSpec, Schema,
-        TableDescriptor, TablePath,
+        BucketStatsRequest, DataTypes, DatabaseDescriptorBuilder, KvFormat, LogFormat,
+        PartitionSpec, Schema, TableDescriptor, TablePath,
     };
+    use fluss::row::GenericRow;
     use std::collections::HashMap;
 
     #[tokio::test]
@@ -683,5 +687,130 @@ mod admin_test {
         // cleanup
         admin.drop_table(&table_path, true).await.unwrap();
         admin.drop_database(db_name, true, true).await.unwrap();
+    }
+
+    async fn row_count(admin: &FlussAdmin, table_id: i64, buckets: Vec<BucketStatsRequest>) -> i64 {
+        let stats = admin
+            .get_table_stats(table_id, buckets, vec![])
+            .await
+            .expect("table stats");
+        stats
+            .buckets
+            .iter()
+            .map(|bucket| {
+                assert_eq!(bucket.error, None, "{bucket:?}");
+                bucket.row_count.expect("row count")
+            })
+            .sum()
+    }
+
+    fn id_row(id: i32, name: &str) -> GenericRow<'static> {
+        let mut row = GenericRow::new(2);
+        row.set_field(0, id);
+        row.set_field(1, name.to_string());
+        row
+    }
+
+    #[tokio::test]
+    async fn test_get_table_stats() {
+        let cluster = get_shared_cluster();
+        let connection = cluster.get_fluss_connection().await;
+        let admin = connection.get_admin().expect("should get admin");
+        let buckets = |partition_id| {
+            (0..3)
+                .map(|bucket| BucketStatsRequest::new(partition_id, bucket))
+                .collect::<Vec<_>>()
+        };
+
+        let log_path = TablePath::new("fluss", "test_table_stats_log");
+        let log_descriptor = TableDescriptor::builder()
+            .schema(
+                Schema::builder()
+                    .column("id", DataTypes::int())
+                    .column("name", DataTypes::string())
+                    .build()
+                    .unwrap(),
+            )
+            .distributed_by(Some(3), vec!["id".to_string()])
+            .build()
+            .unwrap();
+        create_table(&admin, &log_path, &log_descriptor).await;
+        wait_for_table_buckets_ready(&admin, &log_path, &[0, 1, 2]).await;
+        let log_table = connection.get_table(&log_path).await.unwrap();
+        let writer = log_table.new_append().unwrap().create_writer().unwrap();
+        for id in 0..7 {
+            writer.append(&id_row(id, "v")).unwrap();
+        }
+        writer.flush().await.unwrap();
+        let table_id = log_table.get_table_info().table_id;
+        assert_eq!(row_count(&admin, table_id, buckets(None)).await, 7);
+
+        let pk_path = TablePath::new("fluss", "test_table_stats_pk");
+        let pk_descriptor = TableDescriptor::builder()
+            .schema(
+                Schema::builder()
+                    .column("id", DataTypes::int())
+                    .column("name", DataTypes::string())
+                    .primary_key(vec!["id"])
+                    .unwrap()
+                    .build()
+                    .unwrap(),
+            )
+            .distributed_by(Some(3), vec![])
+            .build()
+            .unwrap();
+        create_table(&admin, &pk_path, &pk_descriptor).await;
+        wait_for_table_buckets_ready(&admin, &pk_path, &[0, 1, 2]).await;
+        let pk_table = connection.get_table(&pk_path).await.unwrap();
+        let writer = pk_table.new_upsert().unwrap().create_writer().unwrap();
+        for id in (0..10).chain(0..3) {
+            writer.upsert(&id_row(id, "v")).unwrap();
+        }
+        writer.flush().await.unwrap();
+        let table_id = pk_table.get_table_info().table_id;
+        assert_eq!(row_count(&admin, table_id, buckets(None)).await, 10);
+
+        let partitioned_path = TablePath::new("fluss", "test_table_stats_partitioned");
+        let partitioned_descriptor = TableDescriptor::builder()
+            .schema(
+                Schema::builder()
+                    .column("id", DataTypes::int())
+                    .column("name", DataTypes::string())
+                    .primary_key(vec!["id", "name"])
+                    .unwrap()
+                    .build()
+                    .unwrap(),
+            )
+            .partitioned_by(vec!["name"])
+            .distributed_by(Some(3), vec![])
+            .build()
+            .unwrap();
+        create_table(&admin, &partitioned_path, &partitioned_descriptor).await;
+        create_partitions(&admin, &partitioned_path, "name", &["a", "b"]).await;
+        wait_for_partitions_ready(&admin, &partitioned_path, &["a", "b"]).await;
+        let partitioned_table = connection.get_table(&partitioned_path).await.unwrap();
+        let writer = partitioned_table
+            .new_upsert()
+            .unwrap()
+            .create_writer()
+            .unwrap();
+        for id in 0..5 {
+            writer.upsert(&id_row(id, "a")).unwrap();
+            writer.upsert(&id_row(id, "b")).unwrap();
+        }
+        writer.flush().await.unwrap();
+        let table_id = partitioned_table.get_table_info().table_id;
+        let partition_buckets = admin
+            .list_partition_infos(&partitioned_path)
+            .await
+            .unwrap()
+            .iter()
+            .flat_map(|partition| buckets(Some(partition.get_partition_id())))
+            .collect();
+        assert_eq!(row_count(&admin, table_id, partition_buckets).await, 10);
+
+        for path in [&log_path, &pk_path, &partitioned_path] {
+            admin.drop_table(path, true).await.unwrap();
+        }
     }
 }

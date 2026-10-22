@@ -43,16 +43,28 @@ import org.apache.fluss.rpc.entity.ResultForBucket;
 import org.apache.fluss.rpc.entity.TableStatsResultForBucket;
 import org.apache.fluss.rpc.gateway.CoordinatorGateway;
 import org.apache.fluss.rpc.gateway.TabletServerGateway;
+import org.apache.fluss.rpc.messages.CommitConsumerOffsetsRequest;
+import org.apache.fluss.rpc.messages.CommitConsumerOffsetsResponse;
+import org.apache.fluss.rpc.messages.DeleteConsumerGroupsRequest;
+import org.apache.fluss.rpc.messages.DeleteConsumerGroupsResponse;
+import org.apache.fluss.rpc.messages.DeleteConsumerOffsetsRequest;
+import org.apache.fluss.rpc.messages.DeleteConsumerOffsetsResponse;
 import org.apache.fluss.rpc.messages.FetchLogRequest;
 import org.apache.fluss.rpc.messages.FetchLogResponse;
+import org.apache.fluss.rpc.messages.FindConsumerGroupOwnerRequest;
+import org.apache.fluss.rpc.messages.FindConsumerGroupOwnerResponse;
 import org.apache.fluss.rpc.messages.GetClusterHealthRequest;
 import org.apache.fluss.rpc.messages.GetClusterHealthResponse;
+import org.apache.fluss.rpc.messages.GetConsumerOffsetsRequest;
+import org.apache.fluss.rpc.messages.GetConsumerOffsetsResponse;
 import org.apache.fluss.rpc.messages.GetTableStatsRequest;
 import org.apache.fluss.rpc.messages.GetTableStatsResponse;
 import org.apache.fluss.rpc.messages.InitWriterRequest;
 import org.apache.fluss.rpc.messages.InitWriterResponse;
 import org.apache.fluss.rpc.messages.LimitScanRequest;
 import org.apache.fluss.rpc.messages.LimitScanResponse;
+import org.apache.fluss.rpc.messages.ListConsumerGroupsRequest;
+import org.apache.fluss.rpc.messages.ListConsumerGroupsResponse;
 import org.apache.fluss.rpc.messages.ListOffsetsRequest;
 import org.apache.fluss.rpc.messages.ListOffsetsResponse;
 import org.apache.fluss.rpc.messages.LookupRequest;
@@ -753,6 +765,60 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
             return failed;
         }
         return coordinatorGateway.getClusterHealth(request);
+    }
+
+    @Override
+    public CompletableFuture<FindConsumerGroupOwnerResponse> findConsumerGroupOwner(
+            FindConsumerGroupOwnerRequest request) {
+        CompletableFuture<FindConsumerGroupOwnerResponse> response = new CompletableFuture<>();
+        response.completeExceptionally(
+                new UnsupportedOperationException("findConsumerGroupOwner is not supported yet"));
+        return response;
+    }
+
+    @Override
+    public CompletableFuture<CommitConsumerOffsetsResponse> commitConsumerOffsets(
+            CommitConsumerOffsetsRequest request) {
+        CompletableFuture<CommitConsumerOffsetsResponse> response = new CompletableFuture<>();
+        response.completeExceptionally(
+                new UnsupportedOperationException("commitConsumerOffsets is not supported yet"));
+        return response;
+    }
+
+    @Override
+    public CompletableFuture<GetConsumerOffsetsResponse> getConsumerOffsets(
+            GetConsumerOffsetsRequest request) {
+        CompletableFuture<GetConsumerOffsetsResponse> response = new CompletableFuture<>();
+        response.completeExceptionally(
+                new UnsupportedOperationException("getConsumerOffsets is not supported yet"));
+        return response;
+    }
+
+    @Override
+    public CompletableFuture<DeleteConsumerOffsetsResponse> deleteConsumerOffsets(
+            DeleteConsumerOffsetsRequest request) {
+        CompletableFuture<DeleteConsumerOffsetsResponse> response = new CompletableFuture<>();
+        response.completeExceptionally(
+                new UnsupportedOperationException("deleteConsumerOffsets is not supported yet"));
+        return response;
+    }
+
+    @Override
+    public CompletableFuture<ListConsumerGroupsResponse> listConsumerGroups(
+            ListConsumerGroupsRequest request) {
+        CompletableFuture<ListConsumerGroupsResponse> response = new CompletableFuture<>();
+        response.completeExceptionally(
+                new UnsupportedOperationException("listConsumerGroups is not supported yet"));
+        return response;
+    }
+
+    @Override
+    public CompletableFuture<DeleteConsumerGroupsResponse> deleteConsumerGroups(
+            DeleteConsumerGroupsRequest request) {
+        CompletableFuture<DeleteConsumerGroupsResponse> response = new CompletableFuture<>();
+        response.completeExceptionally(
+                new UnsupportedOperationException("deleteConsumerGroups is not supported yet"));
+        return response;
     }
 
     @Override

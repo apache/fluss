@@ -23,6 +23,7 @@ import org.apache.fluss.metadata.ChangelogImage;
 import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.DeleteBehavior;
 import org.apache.fluss.metadata.KvFormat;
+import org.apache.fluss.metadata.LakeLookupMode;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.MergeEngineType;
 import org.apache.fluss.utils.AutoPartitionStrategy;
@@ -134,6 +135,11 @@ public class TableConfig {
         return config.get(ConfigOptions.TABLE_DATALAKE_HISTORICAL_PARTITION_ENABLED);
     }
 
+    /** Gets the lookup mode for historical partitions of the table. */
+    public LakeLookupMode getHistoricalLookupMode() {
+        return config.get(ConfigOptions.TABLE_DATALAKE_HISTORICAL_PARTITION_LOOKUP_MODE);
+    }
+
     /**
      * Return the data lake format of the table. It'll be the datalake format configured in Fluss
      * whiling creating the table. Return empty if no datalake format configured while creating.
@@ -163,6 +169,11 @@ public class TableConfig {
     /** Gets the optional merge engine type of the table. */
     public Optional<MergeEngineType> getMergeEngineType() {
         return config.getOptional(ConfigOptions.TABLE_MERGE_ENGINE);
+    }
+
+    /** Whether an unchanged upsert should skip the state write and changelog. */
+    public boolean isUpsertSkipUnchanged() {
+        return config.get(ConfigOptions.TABLE_UPSERT_SKIP_UNCHANGED);
     }
 
     /**

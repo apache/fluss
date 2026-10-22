@@ -24,6 +24,7 @@ import org.apache.fluss.client.table.writer.UpsertWriter;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.flink.lake.split.LakeSnapshotAndFlussLogSplit;
+import org.apache.fluss.flink.lake.split.LakeSnapshotSplit;
 import org.apache.fluss.flink.source.deserializer.DeserializerInitContextImpl;
 import org.apache.fluss.flink.source.deserializer.RowDataDeserializationSchema;
 import org.apache.fluss.flink.source.emitter.FlinkRecordEmitter;
@@ -34,6 +35,7 @@ import org.apache.fluss.flink.source.metrics.FlinkSourceReaderMetrics;
 import org.apache.fluss.flink.source.split.HybridSnapshotLogSplit;
 import org.apache.fluss.flink.source.split.LogSplit;
 import org.apache.fluss.flink.source.split.SourceSplitBase;
+import org.apache.fluss.flink.source.split.SourceSplitSerializer;
 import org.apache.fluss.flink.utils.FlinkTestBase;
 import org.apache.fluss.lake.source.LakeSource;
 import org.apache.fluss.lake.source.LakeSplit;
@@ -315,6 +317,82 @@ class FlinkSourceReaderTest extends FlinkTestBase {
             assertThat(restoredCheckpointSplit.getRecordsToSkip()).isEqualTo(1L);
             assertThat(restoredCheckpointSplit.getCurrentLakeSplitIndex()).isZero();
         }
+    }
+
+    @Test
+    void testRestorePartiallyConsumedLakeSnapshotSplit() throws Exception {
+        TablePath tablePath =
+                TablePath.of(DEFAULT_DB, "test_restore_partially_consumed_lake_snapshot_split");
+        TableDescriptor tableDescriptor =
+                TableDescriptor.builder().schema(DEFAULT_LOG_TABLE_SCHEMA).distributedBy(1).build();
+        long tableId = createTable(tablePath, tableDescriptor);
+        RowType rowType = tableDescriptor.getSchema().getRowType();
+
+        List<LogRecord> lakeRecords = new ArrayList<>();
+        for (int i = 1; i <= 3; i++) {
+            lakeRecords.add(new GenericRecord(-1L, -1L, ChangeType.APPEND_ONLY, row(i, "v" + i)));
+        }
+        LakeSnapshotSplit split =
+                new LakeSnapshotSplit(
+                        new TableBucket(tableId, 0),
+                        null,
+                        new TestingLakeSplit(0, Collections.emptyList()),
+                        0);
+
+        // consume the first record of the lake split, then checkpoint
+        TrackingLakeSource lakeSource = new TrackingLakeSource(lakeRecords);
+        SourceSplitSerializer splitSerializer = new SourceSplitSerializer(lakeSource);
+        TestingReaderOutput<RowData> output = new TestingReaderOutput<>();
+        SourceSplitBase restoredSplit;
+        try (FlinkSourceReader<RowData> reader =
+                createReader(
+                        clientConf, tablePath, rowType, new TestingReaderContext(), lakeSource)) {
+            reader.addSplits(Collections.singletonList(split));
+            // each poll emits at most one record
+            retry(
+                    Duration.ofMinutes(1),
+                    () -> {
+                        reader.pollNext(output);
+                        assertThat(output.getEmittedRecords()).hasSize(1);
+                    });
+
+            List<SourceSplitBase> checkpoint = reader.snapshotState(1L);
+            assertThat(checkpoint).hasSize(1);
+            LakeSnapshotSplit checkpointSplit = (LakeSnapshotSplit) checkpoint.get(0);
+            assertThat(checkpointSplit.getRecordsToSkip()).isEqualTo(1L);
+
+            // round trip through the split serializer, as Flink does when checkpointing
+            restoredSplit =
+                    splitSerializer.deserialize(
+                            splitSerializer.getVersion(),
+                            splitSerializer.serialize(checkpointSplit));
+        }
+        assertThat(((LakeSnapshotSplit) restoredSplit).getRecordsToSkip()).isEqualTo(1L);
+
+        // the restored reader must continue with the remaining records only
+        TestingReaderOutput<RowData> restoredOutput = new TestingReaderOutput<>();
+        try (FlinkSourceReader<RowData> restoredReader =
+                createReader(
+                        clientConf,
+                        tablePath,
+                        rowType,
+                        new TestingReaderContext(),
+                        new TrackingLakeSource(lakeRecords))) {
+            restoredReader.addSplits(Collections.singletonList(restoredSplit));
+            retry(
+                    Duration.ofMinutes(1),
+                    () -> {
+                        restoredReader.pollNext(restoredOutput);
+                        assertThat(restoredOutput.getEmittedRecords()).hasSize(2);
+                    });
+        }
+
+        assertThat(output.getEmittedRecords())
+                .extracting(record -> record.getInt(0))
+                .containsExactly(1);
+        assertThat(restoredOutput.getEmittedRecords())
+                .extracting(record -> record.getInt(0))
+                .containsExactly(2, 3);
     }
 
     @Test

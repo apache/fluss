@@ -105,28 +105,28 @@ public class TestingRemoteLogStorage extends DefaultRemoteLogStorage {
 
     @Override
     public void copyLogSegmentFiles(
-            RemoteLogSegment remoteLogSegment, LogSegmentFiles logSegmentFiles)
+            FsPath remoteLogDir, RemoteLogSegment remoteLogSegment, LogSegmentFiles logSegmentFiles)
             throws RemoteStorageException {
         int failAfter = copySegmentFailAfterNCopies.get();
         if (failAfter >= 0 && copySegmentCount.get() >= failAfter) {
             throw new RemoteStorageException(
                     "Simulated copy failure after " + failAfter + " successful copies");
         }
-        super.copyLogSegmentFiles(remoteLogSegment, logSegmentFiles);
+        super.copyLogSegmentFiles(remoteLogDir, remoteLogSegment, logSegmentFiles);
         copySegmentCount.incrementAndGet();
     }
 
     @Override
-    public FsPath writeRemoteLogManifestSnapshot(RemoteLogManifest manifest)
+    public FsPath writeRemoteLogManifestSnapshot(FsPath remoteLogDir, RemoteLogManifest manifest)
             throws RemoteStorageException {
         if (writeManifestFail.get()) {
             throw new RuntimeException("failed to upload remote log manifest snapshot");
         }
-        return super.writeRemoteLogManifestSnapshot(manifest);
+        return super.writeRemoteLogManifestSnapshot(remoteLogDir, manifest);
     }
 
     @Override
-    public InputStream fetchLogData(RemoteLogSegment remoteLogSegment)
+    public InputStream fetchLogData(FsPath remoteLogDir, RemoteLogSegment remoteLogSegment)
             throws RemoteStorageException {
         int idx = fetchLogDataCount.getAndIncrement();
         if (fetchLogDataAlwaysFail.get()) {
@@ -169,7 +169,7 @@ public class TestingRemoteLogStorage extends DefaultRemoteLogStorage {
                 throw new RemoteStorageException("Interrupted while simulating slow download", e);
             }
         }
-        return super.fetchLogData(remoteLogSegment);
+        return super.fetchLogData(remoteLogDir, remoteLogSegment);
     }
 
     /** Returns how many times {@link #fetchLogData} has been invoked since construction. */

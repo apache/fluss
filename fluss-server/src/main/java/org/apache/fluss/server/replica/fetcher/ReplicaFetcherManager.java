@@ -167,8 +167,9 @@ public class ReplicaFetcherManager {
         }
     }
 
-    private int getFetcherId(TableBucket tableBucket) {
-        return tableBucket.hashCode() % numFetchersPerServer;
+    @VisibleForTesting
+    int getFetcherId(TableBucket tableBucket) {
+        return Math.floorMod(tableBucket.hashCode(), numFetchersPerServer);
     }
 
     private ReplicaFetcherThread addAndStartFetcherThread(

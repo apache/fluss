@@ -19,7 +19,8 @@ defmodule Fluss.WriteHandle do
   @moduledoc """
   Handle for a pending write operation.
 
-  Returned by `Fluss.AppendWriter.append/2`. Drop for fire-and-forget,
+  Returned by `Fluss.AppendWriter.append/2`, `Fluss.UpsertWriter.upsert/2` and
+  `Fluss.UpsertWriter.delete/2`. Drop for fire-and-forget,
   or call `wait/1` for per-record server acknowledgment.
   """
 
@@ -29,9 +30,10 @@ defmodule Fluss.WriteHandle do
 
   @spec wait(t()) :: :ok | {:error, Fluss.Error.t()}
   def wait(handle) do
-    handle
-    |> Native.write_handle_wait()
-    |> Native.await_nif()
+    case Native.write_handle_wait(handle) do
+      {:error, _} = err -> err
+      ref -> Native.await_nif(ref)
+    end
   end
 
   @spec wait!(t()) :: :ok

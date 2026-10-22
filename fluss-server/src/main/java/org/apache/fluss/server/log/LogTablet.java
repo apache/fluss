@@ -68,8 +68,10 @@ import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 
+import static org.apache.fluss.utils.PartitionUtils.HISTORICAL_PARTITION_VALUE;
 import static org.apache.fluss.utils.Preconditions.checkArgument;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
+import static org.apache.fluss.utils.Preconditions.checkState;
 
 /* This file is based on source code of Apache Kafka Project (https://kafka.apache.org/), licensed by the Apache
  * Software Foundation (ASF) under the Apache License, Version 2.0. See the NOTICE file distributed with this work for
@@ -122,8 +124,8 @@ public final class LogTablet {
     /** The leader end offset snapshot when become leader. */
     private volatile long leaderEndOffsetSnapshot = -1L;
 
-    // The minimum offset that should be retained in the local log. This is used to ensure that,
-    // the offset of kv snapshot should be retained, otherwise, kv recovery will fail.
+    // The minimum offset needed for KV recovery: the KV snapshot offset for ordinary partitions,
+    // or the lake log end offset for historical partitions.
     private final AtomicLong minRetainOffset;
     // tracking the log start offset in remote storage
     private volatile long remoteLogStartOffset = Long.MAX_VALUE;
@@ -742,6 +744,11 @@ public final class LogTablet {
     public void updateLakeLogEndOffset(long lakeLogEndOffset) {
         if (lakeLogEndOffset > this.lakeLogEndOffset) {
             this.lakeLogEndOffset = lakeLogEndOffset;
+            if (HISTORICAL_PARTITION_VALUE.equals(physicalPath.getPartitionName())) {
+                // Historical replicas recover from lake progress and do not create KV snapshots
+                // that would otherwise advance the WAL retention boundary.
+                updateMinRetainOffset(lakeLogEndOffset);
+            }
             // Lake-tiering progress advanced via the end offset; re-estimate the pending start
             // time so the lag is corrected (and cleared once caught up) even when the lake max
             // timestamp is not updated in the same notification.
@@ -823,10 +830,12 @@ public final class LogTablet {
     }
 
     /**
-     * Deletes inactive local segments that have expired according to the local log TTL.
+     * Deletes inactive local segments and rolls eligible active segments that have expired
+     * according to the local log TTL.
      *
-     * <p>When remote log tiering is enabled, cleanup is bounded by the highest offset copied to
-     * remote storage. Otherwise, cleanup is bounded by the high watermark.
+     * <p>When remote log tiering is enabled, segment deletion is bounded by the highest offset
+     * copied to remote storage. Otherwise, segment deletion is bounded by the high watermark.
+     * Active-segment rolling does not require previous uploads.
      */
     public void deleteExpiredSegments() {
         long cleanupToOffset = remoteLogEnabled ? highestCopiedEndOffset : getHighWatermark();
@@ -849,18 +858,6 @@ public final class LogTablet {
 
     private void cleanupSegments(
             long requestedCleanupToOffset, SegmentCleanupAction cleanupAction) {
-        // cache to local variables
-        long localLogStartOffset = localLog.getLocalLogStartOffset();
-        if (requestedCleanupToOffset < localLogStartOffset) {
-            LOG.debug(
-                    "Ignore the delete segments action for bucket {} while the input cleanUpToOffset {} "
-                            + "is smaller than the current localLogStartOffset {}",
-                    getTableBucket(),
-                    requestedCleanupToOffset,
-                    localLogStartOffset);
-            return;
-        }
-
         if (requestedCleanupToOffset > getHighWatermark()) {
             LOG.warn(
                     "Ignore the delete segments action for bucket {} while the input cleanUpToOffset {} "
@@ -872,6 +869,9 @@ public final class LogTablet {
         }
 
         try {
+            // Cleanup actions enforce the deletion boundary per segment. Even when it is below
+            // the local start offset, TTL cleanup must be able to roll the first segment for
+            // upload.
             // shouldn't clean up segments that will be used by kv recovery.
             long effectiveCleanupToOffset =
                     Math.min(minRetainOffset.get(), requestedCleanupToOffset);
@@ -1191,6 +1191,25 @@ public final class LogTablet {
                                     getTableBucket(), targetOffset),
                             e);
                 }
+            }
+        }
+    }
+
+    /** Initializes an unused local log, or accepts a retry at the same empty boundary. */
+    void initializeEmptyLocalTail(long endOffset) {
+        synchronized (lock) {
+            checkArgument(endOffset >= 0L, "Invalid initial log offset %s.", endOffset);
+            long startOffset = localLogStartOffset();
+            long currentEndOffset = localLogEndOffset();
+            checkState(
+                    startOffset == currentEndOffset
+                            && getHighWatermark() == currentEndOffset
+                            && (currentEndOffset == 0L || currentEndOffset == endOffset),
+                    "Cannot initialize nonempty or conflicting local log for %s at offset %s.",
+                    getTableBucket(),
+                    endOffset);
+            if (currentEndOffset != endOffset) {
+                truncateFullyAndStartAt(endOffset);
             }
         }
     }

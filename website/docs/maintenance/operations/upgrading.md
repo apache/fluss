@@ -35,7 +35,7 @@ cd fluss-$FLUSS_VERSION$/
 ```
 
 2. If you want to enable [Lakehouse Storage](../tiered-storage/lakehouse-storage.md), you need to prepare the required JAR files for the datalake first. For more details,
-   see [Deploying Streaming Lakehouse](../../install-deploy/deploying-streaming-lakehouse.md).
+   see [Deploying Lakestream](../../install-deploy/deploying-streaming-lakehouse.md).
 
 3. Next, copy the configuration options from 0.6 (`fluss-0.6/conf/server.yaml`) to the new configuration
 file (`fluss-$FLUSS_VERSION$/conf/server.yaml`). Adding any new options introduced in version $FLUSS_VERSION$ as

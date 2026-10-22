@@ -18,12 +18,15 @@
 package org.apache.fluss.lake.committer;
 
 import org.apache.fluss.annotation.PublicEvolving;
+import org.apache.fluss.metadata.TableBucket;
 
 import javax.annotation.Nullable;
 
 import java.io.IOException;
 import java.util.List;
 import java.util.Map;
+
+import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
 /**
  * The LakeCommitter interface for committing write results. It extends the AutoCloseable interface
@@ -55,15 +58,44 @@ public interface LakeCommitter<WriteResult, CommittableT> extends AutoCloseable 
      * Commits the given committable object.
      *
      * @param committable the committable object
-     * @param snapshotProperties the properties that lake supported to store in snapshot
+     * @param context the snapshot properties and tiered log end offsets for this commit
      * @return the commit result, which always includes the latest committed snapshot ID and may
      *     optionally contain distinct readable snapshot information if the physical tiered offsets
      *     do not yet represent a consistent readable state (e.g., in Paimon DV tables where the
      *     tiered log records may still in level0 which is not readable).
      * @throws IOException if an I/O error occurs
      */
-    LakeCommitResult commit(CommittableT committable, Map<String, String> snapshotProperties)
-            throws IOException;
+    LakeCommitResult commit(CommittableT committable, CommitContext context) throws IOException;
+
+    /** Context for committing a lake snapshot. */
+    final class CommitContext {
+        private final Map<String, String> snapshotProperties;
+        private final Map<TableBucket, Long> tieredLogEndOffsets;
+
+        /**
+         * Creates a commit context.
+         *
+         * @param snapshotProperties the properties stored in the lake snapshot
+         * @param tieredLogEndOffsets the previous lake snapshot offsets merged with this commit's
+         *     log end offsets
+         */
+        public CommitContext(
+                Map<String, String> snapshotProperties,
+                Map<TableBucket, Long> tieredLogEndOffsets) {
+            this.snapshotProperties = checkNotNull(snapshotProperties);
+            this.tieredLogEndOffsets = checkNotNull(tieredLogEndOffsets);
+        }
+
+        /** Returns the properties stored in the lake snapshot. */
+        public Map<String, String> snapshotProperties() {
+            return snapshotProperties;
+        }
+
+        /** Returns the tiered log end offsets. */
+        public Map<TableBucket, Long> tieredLogEndOffsets() {
+            return tieredLogEndOffsets;
+        }
+    }
 
     /**
      * Aborts the given committable object.

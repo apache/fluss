@@ -201,6 +201,7 @@ async def test_partition_apis(admin):
     partitions = await admin.list_partition_infos(table_path)
     assert len(partitions) == 1
     assert partitions[0].partition_name == "2024-01-15$EMEA"
+    assert partitions[0].bucket_count == 3
 
     # Drop the partition
     await admin.drop_partition(

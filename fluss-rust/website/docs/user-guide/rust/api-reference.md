@@ -27,7 +27,7 @@ Complete API reference for the Fluss Rust client.
 | `scanner_log_fetch_min_bytes`         | `i32`           | `1`                | Minimum bytes the server must accumulate before returning a fetch response           |
 | `scanner_log_fetch_wait_max_time_ms`  | `i32`           | `500`              | Maximum time (ms) the server may wait to satisfy min-bytes                           |
 | `scanner_log_fetch_max_bytes_for_bucket`| `i32`         | `1048576` (1 MB)   | Maximum bytes per fetch response per bucket for LogScanner                           |
-| `connect_timeout_ms`                  | `u64`           | `120000`           | TCP connect timeout in milliseconds                                                  |
+| `connect_timeout_ms`                  | `u64`           | `15000`            | TCP connect timeout in milliseconds                                                  |
 | `security_protocol`                   | `String`        | `"PLAINTEXT"`      | `PLAINTEXT` (default) or `sasl` for SASL auth                                        |
 | `security_sasl_mechanism`             | `String`        | `"PLAIN"`          | SASL mechanism (only `PLAIN` is supported)                                           |
 | `security_sasl_username`              | `String`        | (empty)            | SASL username (required when protocol is `sasl`)                                     |
@@ -299,13 +299,18 @@ for record in records {
 
 ## `ScanBatch`
 
-| Method                             | Description                    |
-|------------------------------------|--------------------------------|
-| `fn bucket(&self) -> &TableBucket` | Bucket this batch belongs to   |
-| `fn batch(&self) -> &RecordBatch`  | Arrow RecordBatch data         |
-| `fn base_offset(&self) -> i64`     | First record offset            |
-| `fn last_offset(&self) -> i64`     | Last record offset             |
-| `fn num_records(&self) -> usize`   | Number of records in the batch |
+| Method                              | Description                       |
+|-------------------------------------|-----------------------------------|
+| `fn bucket(&self) -> &TableBucket`  | Bucket this batch belongs to      |
+| `fn batch(&self) -> &RecordBatch`   | Arrow RecordBatch data            |
+| `fn base_offset(&self) -> i64`      | First record offset               |
+| `fn last_offset(&self) -> i64`      | Last record offset                |
+| `fn commit_timestamp(&self) -> i64` | Commit time in epoch milliseconds |
+| `fn num_records(&self) -> usize`    | Number of records in the batch    |
+
+`commit_timestamp` is `fluss::record::NO_COMMIT_TIMESTAMP` (`-1`) when the batch
+carries no single timestamp, which is the case for a limit scan because it
+merges several log batches into one Arrow batch.
 
 ## `TableUpsert`
 
@@ -333,7 +338,7 @@ for record in records {
 
 | Method                                                                       |  Description                |
 |------------------------------------------------------------------------------|-----------------------------|
-| `async fn lookup(&mut self, key: &impl InternalRow) -> Result<LookupResult>` | Lookup a row by primary key |
+| `async fn lookup(&self, key: &impl InternalRow) -> Result<LookupResult>`     | Lookup a row by primary key |
 
 ## `LookupResult`
 
@@ -460,10 +465,11 @@ A schema together with its server-assigned version id. Returned by [`FlussAdmin:
 
 ## `PartitionInfo`
 
-| Method                                   |  Description       |
-|------------------------------------------|--------------------|
-| `fn get_partition_id(&self) -> i64`      | Get partition ID   |
-| `fn get_partition_name(&self) -> String` | Get partition name |
+| Method                                   |  Description               |
+|------------------------------------------|----------------------------|
+| `fn get_partition_id(&self) -> i64`      | Get partition ID           |
+| `fn get_partition_name(&self) -> String` | Get partition name         |
+| `fn get_bucket_count(&self) -> i32`      | Get partition bucket count |
 
 ## `DatabaseDescriptor`
 

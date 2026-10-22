@@ -19,12 +19,18 @@ package org.apache.fluss.lake.paimon.tiering;
 
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.exception.UnsupportedVersionException;
 import org.apache.fluss.lake.committer.CommittedLakeSnapshot;
 import org.apache.fluss.lake.committer.CommitterInitContext;
 import org.apache.fluss.lake.committer.LakeCommitResult;
 import org.apache.fluss.lake.committer.LakeCommitter;
+import org.apache.fluss.lake.committer.PartitionMarkDoneCommitter;
 import org.apache.fluss.lake.committer.TieringStats;
+import org.apache.fluss.lake.paimon.tiering.markdone.PaimonPartitionMarkDone;
+import org.apache.fluss.lake.paimon.tiering.markdone.PartitionMarkDoneState;
+import org.apache.fluss.lake.paimon.tiering.markdone.PartitionMarkDoneStateJsonSerde;
 import org.apache.fluss.lake.paimon.utils.DvTableReadableSnapshotRetriever;
+import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 
 import org.apache.paimon.CoreOptions;
@@ -43,7 +49,9 @@ import org.slf4j.LoggerFactory;
 
 import javax.annotation.Nullable;
 
+import java.io.FileNotFoundException;
 import java.io.IOException;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -55,16 +63,20 @@ import static org.apache.fluss.utils.Preconditions.checkNotNull;
 import static org.apache.paimon.table.sink.BatchWriteBuilder.COMMIT_IDENTIFIER;
 
 /** Implementation of {@link LakeCommitter} for Paimon. */
-public class PaimonLakeCommitter implements LakeCommitter<PaimonWriteResult, PaimonCommittable> {
+public class PaimonLakeCommitter
+        implements PartitionMarkDoneCommitter<PaimonWriteResult, PaimonCommittable> {
 
     private static final Logger LOG = LoggerFactory.getLogger(PaimonLakeCommitter.class);
 
     private final Catalog paimonCatalog;
     private final FileStoreTable fileStoreTable;
+    private final String commitUser;
     private final TablePath tablePath;
     private final TablePath lakeTablePath;
     private final long tableId;
     private final Configuration flussClientConfig;
+    private final TableInfo tableInfo;
+    private final boolean markDoneEnabled;
     private TableCommitImpl tableCommit;
 
     private static final ThreadLocal<Long> currentCommitSnapshotId = new ThreadLocal<>();
@@ -73,20 +85,24 @@ public class PaimonLakeCommitter implements LakeCommitter<PaimonWriteResult, Pai
             PaimonCatalogProvider paimonCatalogProvider, CommitterInitContext committerInitContext)
             throws IOException {
         this.paimonCatalog = paimonCatalogProvider.get();
+        this.tableInfo = committerInitContext.tableInfo();
         this.tablePath = committerInitContext.tablePath();
-        this.lakeTablePath = committerInitContext.tableInfo().getLakeTablePath();
-        this.tableId = committerInitContext.tableInfo().getTableId();
+        this.lakeTablePath = tableInfo.getLakeTablePath();
+        this.tableId = tableInfo.getTableId();
         this.flussClientConfig = committerInitContext.flussClientConfig();
         this.fileStoreTable =
                 getTable(
                         lakeTablePath,
-                        committerInitContext
-                                        .tableInfo()
-                                        .getTableConfig()
-                                        .isDataLakeAutoExpireSnapshot()
+                        tableInfo.getTableConfig().isDataLakeAutoExpireSnapshot()
                                 || committerInitContext
                                         .lakeTieringConfig()
                                         .get(ConfigOptions.LAKE_TIERING_AUTO_EXPIRE_SNAPSHOT));
+        this.commitUser = fileStoreTable.coreOptions().createCommitUser();
+        this.markDoneEnabled =
+                committerInitContext
+                                .lakeTieringConfig()
+                                .get(ConfigOptions.LAKE_TIERING_PARTITION_MARK_DONE_ENABLED)
+                        && PaimonPartitionMarkDone.isEnabled(fileStoreTable, tableInfo);
     }
 
     @Override
@@ -102,24 +118,14 @@ public class PaimonLakeCommitter implements LakeCommitter<PaimonWriteResult, Pai
     }
 
     @Override
-    public LakeCommitResult commit(
-            PaimonCommittable committable, Map<String, String> snapshotProperties)
+    public LakeCommitResult commit(PaimonCommittable committable, CommitContext context)
             throws IOException {
         ManifestCommittable manifestCommittable = committable.manifestCommittable();
-        snapshotProperties.forEach(manifestCommittable::addProperty);
+        context.snapshotProperties().forEach(manifestCommittable::addProperty);
 
+        currentCommitSnapshotId.remove();
         try {
-            tableCommit = fileStoreTable.newCommit(FLUSS_LAKE_TIERING_COMMIT_USER);
-            // don't skip empty commits: tiering relies on empty snapshots to persist bucket
-            // offsets when only empty WAL batches were consumed
-            tableCommit.ignoreEmptyCommit(false);
-            tableCommit.commit(manifestCommittable);
-
-            long committedSnapshotId =
-                    checkNotNull(
-                            currentCommitSnapshotId.get(),
-                            "Paimon committed snapshot id must be non-null.");
-            currentCommitSnapshotId.remove();
+            long committedSnapshotId = commit(manifestCommittable);
 
             // Collect cumulative table stats from the exact snapshot that was just committed.
             TieringStats stats = computeTableStats();
@@ -133,13 +139,14 @@ public class PaimonLakeCommitter implements LakeCommitter<PaimonWriteResult, Pai
                         new DvTableReadableSnapshotRetriever(
                                 tablePath, tableId, fileStoreTable, flussClientConfig)) {
                     DvTableReadableSnapshotRetriever.ReadableSnapshotResult readableSnapshotResult =
-                            retriever.getReadableSnapshotAndOffsets(committedSnapshotId);
+                            retriever.getReadableSnapshotAndOffsets(
+                                    committedSnapshotId, context.tieredLogEndOffsets());
                     if (readableSnapshotResult == null) {
                         return LakeCommitResult.unknownReadableSnapshot(committedSnapshotId, stats);
                     } else {
-                        long earliestSnapshotIdToKeep =
+                        Long earliestSnapshotIdToKeep =
                                 readableSnapshotResult.getEarliestSnapshotIdToKeep();
-                        if (earliestSnapshotIdToKeep >= 0) {
+                        if (earliestSnapshotIdToKeep != null && earliestSnapshotIdToKeep >= 0) {
                             LOG.info(
                                     "earliest snapshot ID to keep for table {} is {}. "
                                             + "Snapshots before this ID can be safely deleted from Fluss.",
@@ -156,9 +163,85 @@ public class PaimonLakeCommitter implements LakeCommitter<PaimonWriteResult, Pai
                     }
                 }
             }
-
         } catch (Throwable t) {
             throw new IOException(t);
+        } finally {
+            currentCommitSnapshotId.remove();
+        }
+    }
+
+    @Override
+    public boolean preparePartitionMarkDone(PaimonCommittable committable) {
+        if (!markDoneEnabled) {
+            return false;
+        }
+        ManifestCommittable manifestCommittable = committable.manifestCommittable();
+        String stateJson = null;
+        boolean stateChanged = false;
+        try (PaimonPartitionMarkDone partitionMarkDone =
+                new PaimonPartitionMarkDone(fileStoreTable, tableInfo)) {
+            CommittedLakeSnapshot latestCommit = loadLatestFlussCommit(null);
+            stateJson =
+                    latestCommit == null
+                            ? null
+                            : latestCommit
+                                    .getSnapshotProperties()
+                                    .get(PaimonPartitionMarkDone.MARK_DONE_STATE_PROPERTY);
+            PartitionMarkDoneState previousState = parseMarkDoneState(stateJson);
+            PartitionMarkDoneState newState =
+                    partitionMarkDone.markIdlePartitionsDone(
+                            previousState,
+                            partitionMarkDone.extractTieredPartitions(manifestCommittable));
+            stateChanged = !newState.equals(previousState);
+            stateJson = PartitionMarkDoneStateJsonSerde.toJson(newState);
+        } catch (Exception e) {
+            stateChanged = false;
+            LOG.warn(
+                    "Failed to prepare partition mark-done for table {}, will retry in a later round.",
+                    tablePath,
+                    e);
+        }
+        if (stateJson != null) {
+            manifestCommittable.addProperty(
+                    PaimonPartitionMarkDone.MARK_DONE_STATE_PROPERTY, stateJson);
+        }
+        return stateChanged;
+    }
+
+    private PartitionMarkDoneState parseMarkDoneState(@Nullable String markDoneStateJson) {
+        if (markDoneStateJson == null) {
+            return PartitionMarkDoneState.empty();
+        }
+        try {
+            return PartitionMarkDoneStateJsonSerde.fromJson(markDoneStateJson);
+        } catch (UnsupportedVersionException e) {
+            // The caller skips mark-done and retains the original JSON for data commits.
+            throw e;
+        } catch (Exception e) {
+            LOG.warn(
+                    "Corrupt mark-done state of table {}, re-initializing via cold start.",
+                    tablePath,
+                    e);
+            return PartitionMarkDoneState.empty();
+        }
+    }
+
+    /** Commits a Paimon snapshot and returns its ID recorded by {@link PaimonCommitCallback}. */
+    private long commit(ManifestCommittable manifestCommittable) throws Exception {
+        // clear any residue left by a previous failed commit on the same thread
+        currentCommitSnapshotId.remove();
+        try {
+            tableCommit = fileStoreTable.newCommit(commitUser);
+            // don't skip empty commits: tiering relies on empty snapshots to persist bucket
+            // offsets when only empty WAL batches were consumed, and partition mark-done
+            // commits properties-only snapshots
+            tableCommit.ignoreEmptyCommit(false);
+            tableCommit.commit(manifestCommittable);
+            return checkNotNull(
+                    currentCommitSnapshotId.get(),
+                    "Paimon committed snapshot id must be non-null.");
+        } finally {
+            currentCommitSnapshotId.remove();
         }
     }
 
@@ -190,7 +273,7 @@ public class PaimonLakeCommitter implements LakeCommitter<PaimonWriteResult, Pai
 
     @Override
     public void abort(PaimonCommittable committable) throws IOException {
-        tableCommit = fileStoreTable.newCommit(FLUSS_LAKE_TIERING_COMMIT_USER);
+        tableCommit = fileStoreTable.newCommit(commitUser);
         tableCommit.abort(committable.manifestCommittable().fileCommittables());
     }
 
@@ -198,36 +281,58 @@ public class PaimonLakeCommitter implements LakeCommitter<PaimonWriteResult, Pai
     @Override
     public CommittedLakeSnapshot getMissingLakeSnapshot(@Nullable Long latestLakeSnapshotIdOfFluss)
             throws IOException {
-        Snapshot latestLakeSnapshotOfLake =
-                getCommittedLatestSnapshotOfLake(FLUSS_LAKE_TIERING_COMMIT_USER);
-        if (latestLakeSnapshotOfLake == null) {
-            return null;
+        CommittedLakeSnapshot latestCommit = loadLatestFlussCommit(latestLakeSnapshotIdOfFluss);
+        if (latestCommit != null
+                && !latestCommit
+                        .getSnapshotProperties()
+                        .containsKey(FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY)) {
+            throw new IOException(
+                    String.format(
+                            "Cannot recover tiering offsets for Paimon table %s (Fluss table %s, tableId=%s): "
+                                    + "no recoverable snapshot containing required property '%s' was found. "
+                                    + "Latest Fluss-committed Paimon snapshot ID: %s; Fluss-known snapshot ID: %s.",
+                            lakeTablePath,
+                            tablePath,
+                            tableId,
+                            FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY,
+                            latestCommit.getLakeSnapshotId(),
+                            latestLakeSnapshotIdOfFluss));
         }
+        return latestCommit;
+    }
 
+    /**
+     * Loads the latest Fluss snapshot ID and its commit properties. An empty properties map means
+     * the commit exists but its metadata is unavailable; null means no newer Fluss commit exists.
+     */
+    @Nullable
+    private CommittedLakeSnapshot loadLatestFlussCommit(@Nullable Long knownSnapshotId)
+            throws IOException {
+        Snapshot latestSnapshot = getCommittedLatestSnapshotOfLake();
         // we get the latest snapshot committed by fluss,
-        // but the latest snapshot is not greater than latestLakeSnapshotIdOfFluss, no any missing
+        // but the latest snapshot is not greater than knownSnapshotId, no any missing
         // snapshot, return directly
-        if (latestLakeSnapshotIdOfFluss != null
-                && latestLakeSnapshotOfLake.id() <= latestLakeSnapshotIdOfFluss) {
+        if (latestSnapshot == null
+                || (knownSnapshotId != null && latestSnapshot.id() <= knownSnapshotId)) {
             return null;
         }
-
-        if (latestLakeSnapshotOfLake.properties() == null) {
-            throw new IOException("Failed to load committed lake snapshot properties from Paimon.");
-        }
-
+        Snapshot propertiesSnapshot = findLatestSnapshotWithOffsets(latestSnapshot);
         return new CommittedLakeSnapshot(
-                latestLakeSnapshotOfLake.id(), latestLakeSnapshotOfLake.properties());
+                latestSnapshot.id(),
+                propertiesSnapshot == null
+                        ? Collections.emptyMap()
+                        : propertiesSnapshot.properties());
     }
 
     @Nullable
-    private Snapshot getCommittedLatestSnapshotOfLake(String commitUser) throws IOException {
+    private Snapshot getCommittedLatestSnapshotOfLake() throws IOException {
         // get the latest snapshot committed by fluss or latest committed id
         SnapshotManager snapshotManager = fileStoreTable.snapshotManager();
         Long userCommittedSnapshotIdOrLatestCommitId =
                 fileStoreTable
                         .snapshotManager()
-                        .pickOrLatest((snapshot -> snapshot.commitUser().equals(commitUser)));
+                        .pickOrLatest(
+                                snapshot -> isFlussLakeTieringCommitUser(snapshot.commitUser()));
         // no any snapshot, return null directly
         if (userCommittedSnapshotIdOrLatestCommitId == null) {
             return null;
@@ -236,11 +341,47 @@ public class PaimonLakeCommitter implements LakeCommitter<PaimonWriteResult, Pai
         // pick the snapshot
         Snapshot snapshot = snapshotManager.tryGetSnapshot(userCommittedSnapshotIdOrLatestCommitId);
 
-        if (!snapshot.commitUser().equals(commitUser)) {
+        if (!isFlussLakeTieringCommitUser(snapshot.commitUser())) {
             // the snapshot is still not committed by Fluss, return directly
             return null;
         }
         return snapshot;
+    }
+
+    /**
+     * Every Fluss commit advancing tiering offsets persists the offsets property. Later Paimon
+     * maintenance snapshots do not advance those offsets and may omit the property.
+     */
+    @Nullable
+    private Snapshot findLatestSnapshotWithOffsets(Snapshot latestSnapshot) throws IOException {
+        SnapshotManager snapshotManager = fileStoreTable.snapshotManager();
+        Long earliestId = snapshotManager.earliestSnapshotId();
+        if (earliestId == null) {
+            return null;
+        }
+        for (long id = latestSnapshot.id(); id >= earliestId; id--) {
+            try {
+                Snapshot snapshot =
+                        id == latestSnapshot.id()
+                                ? latestSnapshot
+                                : snapshotManager.tryGetSnapshot(id);
+                if (!isFlussLakeTieringCommitUser(snapshot.commitUser())) {
+                    continue;
+                }
+                Map<String, String> properties = snapshot.properties();
+                if (properties != null
+                        && properties.containsKey(FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY)) {
+                    return snapshot;
+                }
+                // A legacy data commit without offsets must not borrow an older round's offsets.
+                if (snapshot.commitKind() == Snapshot.CommitKind.APPEND) {
+                    return null;
+                }
+            } catch (FileNotFoundException ignored) {
+                // The snapshot may have expired during the lookup.
+            }
+        }
+        return null;
     }
 
     @Override
@@ -266,6 +407,8 @@ public class PaimonLakeCommitter implements LakeCommitter<PaimonWriteResult, Pai
             dynamicOptions.put(
                     CoreOptions.COMMIT_CALLBACKS.key(),
                     PaimonLakeCommitter.PaimonCommitCallback.class.getName());
+            dynamicOptions.put(
+                    CoreOptions.COMMIT_USER_PREFIX.key(), FLUSS_LAKE_TIERING_COMMIT_USER);
 
             boolean writeOnly = !isAutoSnapshotExpiration;
             dynamicOptions.put(CoreOptions.WRITE_ONLY.key(), Boolean.toString(writeOnly));
@@ -286,6 +429,10 @@ public class PaimonLakeCommitter implements LakeCommitter<PaimonWriteResult, Pai
         } catch (Exception e) {
             throw new IOException("Failed to get table " + tablePath + " in Paimon.", e);
         }
+    }
+
+    private static boolean isFlussLakeTieringCommitUser(String commitUser) {
+        return commitUser.startsWith(FLUSS_LAKE_TIERING_COMMIT_USER);
     }
 
     /** A {@link CommitCallback} to save paimon commit snapshot info. */

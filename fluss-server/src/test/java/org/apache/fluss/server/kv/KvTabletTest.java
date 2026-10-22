@@ -56,6 +56,7 @@ import org.apache.fluss.row.BinaryRow;
 import org.apache.fluss.row.encode.KvValueLayout;
 import org.apache.fluss.row.encode.ValueDecoder;
 import org.apache.fluss.row.encode.ValueEncoder;
+import org.apache.fluss.rpc.protocol.MergeMode;
 import org.apache.fluss.server.kv.autoinc.AutoIncrementManager;
 import org.apache.fluss.server.kv.autoinc.TestingSequenceGeneratorFactory;
 import org.apache.fluss.server.kv.prewrite.KvPreWriteBuffer.Key;
@@ -87,14 +88,14 @@ import org.apache.fluss.utils.clock.ManualClock;
 import org.apache.fluss.utils.clock.SystemClock;
 import org.apache.fluss.utils.concurrent.FlussScheduler;
 
+import io.github.fluss_contrib.rocksdb.FlushOptions;
+import io.github.fluss_contrib.rocksdb.RocksDBException;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
-import org.rocksdb.FlushOptions;
-import org.rocksdb.RocksDBException;
 
 import javax.annotation.Nullable;
 
@@ -1890,6 +1891,88 @@ class KvTabletTest {
                 DEFAULT_COMPRESSION);
     }
 
+    @Test
+    void testSkipUnchangedUpsertAfterSchemaEvolution() throws Exception {
+        Map<String, String> tableConfig = new HashMap<>();
+        tableConfig.put(ConfigOptions.TABLE_UPSERT_SKIP_UNCHANGED.key(), "true");
+        initLogTabletAndKvTablet(DATA1_SCHEMA_PK, tableConfig);
+
+        kvTablet.putAsLeader(
+                kvRecordBatchFactory.ofRecords(
+                        kvRecordFactory.ofRecord("k1", new Object[] {1, "value"})),
+                null);
+
+        Schema newSchema =
+                Schema.newBuilder()
+                        .fromSchema(DATA1_SCHEMA_PK)
+                        .column("added", DataTypes.STRING())
+                        .build();
+        short newSchemaId = (short) (schemaId + 1);
+        schemaGetter.updateLatestSchemaInfo(new SchemaInfo(newSchema, newSchemaId));
+        KvRecordTestUtils.KvRecordFactory newRecordFactory =
+                KvRecordTestUtils.KvRecordFactory.of(newSchema.getRowType());
+        KvRecordTestUtils.KvRecordBatchFactory newBatchFactory =
+                KvRecordTestUtils.KvRecordBatchFactory.of(newSchemaId);
+        KvRecord newRecord = newRecordFactory.ofRecord("k1", new Object[] {1, "value", null});
+
+        long beforeUpdate = logTablet.localLogEndOffset();
+        kvTablet.putAsLeader(newBatchFactory.ofRecords(newRecord), null);
+        assertThatLogRecords(readLogRecords(beforeUpdate))
+                .withSchema(newSchema.getRowType())
+                .withSchemaGetter(schemaGetter)
+                .assertCheckSum(true)
+                .isEqualTo(
+                        logRecords(
+                                newSchema.getRowType(),
+                                beforeUpdate,
+                                Arrays.asList(ChangeType.UPDATE_BEFORE, ChangeType.UPDATE_AFTER),
+                                Arrays.asList(
+                                        new Object[] {1, "value", null},
+                                        new Object[] {1, "value", null}),
+                                newSchemaId));
+
+        long beforeUnchanged = logTablet.localLogEndOffset();
+        kvTablet.putAsLeader(newBatchFactory.ofRecords(newRecord), null);
+        int recordCount = 0;
+        for (LogRecordBatch batch : readLogRecords(beforeUnchanged).batches()) {
+            recordCount += batch.getRecordCount();
+        }
+        assertThat(recordCount).isZero();
+    }
+
+    @Test
+    void testSkipUnchangedUpsertsWithinBatch() throws Exception {
+        Map<String, String> tableConfig = new HashMap<>();
+        tableConfig.put(ConfigOptions.TABLE_UPSERT_SKIP_UNCHANGED.key(), "true");
+        initLogTabletAndKvTablet(DATA1_SCHEMA_PK, tableConfig);
+
+        KvRecord record = kvRecordFactory.ofRecord("k1", new Object[] {1, "value"});
+        kvTablet.putAsLeader(kvRecordBatchFactory.ofRecords(record, record), null);
+
+        int recordCount = 0;
+        for (LogRecordBatch batch : readLogRecords().batches()) {
+            recordCount += batch.getRecordCount();
+        }
+        assertThat(recordCount).isEqualTo(1);
+    }
+
+    @Test
+    void testSkipUnchangedUpsertRejectsOverwrite() throws Exception {
+        Map<String, String> tableConfig = new HashMap<>();
+        tableConfig.put(ConfigOptions.TABLE_UPSERT_SKIP_UNCHANGED.key(), "true");
+        initLogTabletAndKvTablet(DATA1_SCHEMA_PK, tableConfig);
+
+        KvRecord record = kvRecordFactory.ofRecord("k1", new Object[] {1, "value"});
+        assertThatThrownBy(
+                        () ->
+                                kvTablet.putAsLeader(
+                                        kvRecordBatchFactory.ofRecords(record),
+                                        null,
+                                        MergeMode.OVERWRITE))
+                .isInstanceOf(InvalidTableException.class)
+                .hasMessageContaining("MergeMode.OVERWRITE cannot be used");
+    }
+
     private void checkEqual(
             LogRecords actaulLogRecords, List<MemoryLogRecords> expectedLogs, RowType rowType) {
         LogTestBase.assertLogRecordsListEquals(
@@ -2285,7 +2368,7 @@ class KvTabletTest {
         assertThat(statistics).as("RocksDB statistics should be available").isNotNull();
 
         // Verify statistics is properly initialized
-        org.rocksdb.Statistics stats = kvTablet.getRocksDBKv().getStatistics();
+        io.github.fluss_contrib.rocksdb.Statistics stats = kvTablet.getRocksDBKv().getStatistics();
         assertThat(stats).as("RocksDB Statistics should be enabled").isNotNull();
 
         // All metrics should start at 0 for a fresh database

@@ -23,18 +23,15 @@ In this quickstart, you will:
     dark="gateway-lakehouse-dark.png"
 />
 
-:::caution Developer Preview - Fluss 1.0 (unreleased)
-Fluss Gateway is a preview feature in Fluss 1.0, which has not yet been
-released. This quickstart uses its unauthenticated `trust` mode and is
+:::caution Preview
+Fluss Gateway is a preview feature introduced in Fluss 1.0.
+This quickstart uses its unauthenticated `trust` mode and is
 intended only for local development. See
 [Fluss Gateway security](/docs/gateway/index.md#security) before planning
 a production deployment.
 
-No pre-built Docker Hub image is available yet – this guide requires
-building the Gateway image from source (see
-[Build the Gateway image](#build-the-gateway-image) below). The Gateway
-does not yet support reading records; this guide reads data back through
-Flink SQL.
+The Gateway does not yet support reading records; this guide reads data
+back through Flink SQL.
 :::
 
 ## Environment Setup
@@ -49,24 +46,6 @@ installed on your machine.
 We encourage you to use a recent version of Docker and [Compose v2](https://docs.docker.com/compose/releases/migrate/)
 (however, Compose v1 might work with a few adaptions).
 :::
-
-### Build the Gateway image
-
-:::note Fluss v1.0 developer preview 
-This guide covers a feature shipping in the upcoming Fluss 1.0 release.
-A pre-built Docker Hub image will be available at GA - until then,
-building it locally takes one extra step: run the script below from the
-root of your [Fluss source repository](https://github.com/apache/fluss)
-:::
-Run this from the root of your Fluss source checkout:
-```shell
-docker/fluss-gateway/build.sh
-```
-
-This compiles the Gateway inside a `rust:1.88-bookworm` builder container
-(no local Rust toolchain needed) and produces a local image tagged
-`fluss-gateway:dev`, which the Compose file below references directly. The
-first build may take several minutes.
 
 ### Starting required components
 
@@ -110,16 +89,16 @@ services:
       - rustfs-data:/data
     command: /data
   rustfs-init:
-    image: minio/mc
+    image: rustfs/rc:v0.1.36
     depends_on:
       - rustfs
     entrypoint: >
       /bin/sh -c "
-      until mc alias set rustfs http://rustfs:9000 rustfsadmin rustfsadmin; do
+      until rc alias set rustfs http://rustfs:9000 rustfsadmin rustfsadmin; do
         echo 'Waiting for RustFS...';
         sleep 1;
       done;
-      mc mb --ignore-existing rustfs/fluss;
+      rc mb --ignore-existing rustfs/fluss;
       "
   #end
   coordinator-server:
@@ -187,7 +166,7 @@ services:
     image: zookeeper:3.9.2
   #begin Fluss Gateway
   gateway:
-    image: fluss-gateway:dev
+    image: apache/fluss-gateway:$FLUSS_DOCKER_VERSION$
     depends_on:
       - coordinator-server
     ports:
@@ -256,13 +235,18 @@ for information on how to setup cloud file systems.
 
 ```shell
 docker compose up -d
-docker compose ps
+docker compose ps --status running --quiet \
+  rustfs coordinator-server tablet-server zookeeper gateway jobmanager taskmanager | wc -l
 ```
 
+The second command should output `7`. A lower number means that one or more
+long-running containers failed to start. Run `docker compose ps -a` to identify them.
+
 :::note
-The `sql-client` service may exit after `docker compose up -d` because no
-interactive terminal is attached. This is expected. You will start a new SQL
-client container with `docker compose run --rm sql-client` later in this guide.
+The count excludes the one-shot `rustfs-init` service and the interactive
+`sql-client` service. The `sql-client` service may exit after `docker compose up -d`
+because no interactive terminal is attached. This is expected. You will start a new
+SQL client container with `docker compose run --rm sql-client` later in this guide.
 :::
 
 5. Wait until the Gateway can reach Fluss:
@@ -385,8 +369,17 @@ CREATE CATALOG fluss_catalog WITH (
 
 ```sql title="Flink SQL"
 USE CATALOG fluss_catalog;
+```
+
+```sql title="Flink SQL"
 USE gateway_demo;
+```
+
+```sql title="Flink SQL"
 SET 'sql-client.execution.result-mode' = 'tableau';
+```
+
+```sql title="Flink SQL"
 SET 'execution.runtime-mode' = 'batch';
 ```
 Query the table immediately after writing – no need to wait for tiering:
@@ -411,7 +404,9 @@ and combines them with any data already tiered:
 
 ## Start the Lakehouse Tiering Service
 
-Submit the Lakehouse Tiering Service as a detached Flink job:
+Keep the SQL client open. In another terminal, change to the directory
+containing `docker-compose.yml` and submit the Lakehouse Tiering Service
+as a detached Flink job:
 
 ```shell
 docker compose exec jobmanager \
@@ -431,7 +426,8 @@ The [Flink Web UI](http://localhost:8083/) should show one running tiering job.
 
 ## Verify Data in Paimon
 
-After approximately 30 seconds, inspect the Paimon snapshots:
+Return to the SQL client opened earlier. After approximately 30 seconds,
+inspect the Paimon snapshots:
 
 ```sql title="Flink SQL"
 SELECT snapshot_id, total_record_count
@@ -465,9 +461,27 @@ curl -sS --fail-with-body -X POST \
   -d '{"entries": [{"id": "order-4", "upsert": {"order_id": 4, "customer": "Dave", "amount_cents": 2200, "status": "placed"}}]}'
 ```
 
-Re-run `SELECT ... FROM orders` in the SQL client – `order_id 4` appears
-immediately in the unified view. The lake-only view, `orders$lake`, will
-reflect it once the tiering service has processed it.
+Return to the SQL client opened earlier and query the unified view:
+
+```sql title="Flink SQL"
+SELECT order_id, customer, amount_cents, status
+FROM orders
+ORDER BY order_id;
+```
+
+`order_id = 4` appears immediately. At this point, the lake-only view is
+expected to still contain only the first three orders because the new record
+has not been tiered yet. Wait approximately 30 seconds for the next tiering
+cycle, then query the lake-only view:
+
+```sql title="Flink SQL"
+SELECT order_id, customer, amount_cents, status
+FROM orders$lake
+ORDER BY order_id;
+```
+
+After the tiering service commits the new data, the result includes
+`order_id = 4`.
 
 The two query forms serve different purposes:
 
@@ -523,5 +537,5 @@ docker compose down -v
 
 Now that you're up and running with the Fluss Gateway and a real-time
 lakehouse, check out the [Fluss Gateway reference](/docs/gateway/index.md)
-for the full REST API, or the [Streaming Lakehouse](lakehouse.md) guide for
+for the full REST API, or the [Lakestream](lakehouse.md) guide for
 the equivalent all-Flink-SQL workflow.

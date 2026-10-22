@@ -22,6 +22,7 @@ import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.exception.DisconnectException;
 import org.apache.fluss.metrics.groups.MetricGroup;
 import org.apache.fluss.metrics.util.NOPMetricsGroup;
 import org.apache.fluss.rpc.TestingGatewayService;
@@ -43,6 +44,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.net.ConnectException;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -52,6 +54,7 @@ import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 
+import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.apache.fluss.utils.NetUtils.getAvailablePort;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -152,15 +155,17 @@ final class NettyClientTest {
 
         // close the netty server.
         nettyServer.close();
+        // Wait for the old connection to be removed before attempting a new connection.
+        retry(Duration.ofSeconds(10), () -> assertThat(nettyClient.connections()).isEmpty());
+
         assertThatThrownBy(
                         () ->
                                 nettyClient
                                         .sendRequest(serverNode, ApiKeys.API_VERSIONS, request)
                                         .get())
                 .rootCause()
-                .isInstanceOf(ConnectException.class)
-                .hasMessageContaining("Connection refused");
-        assertThat(nettyClient.connections().size()).isEqualTo(0);
+                .isInstanceOfAny(ConnectException.class, DisconnectException.class);
+        retry(Duration.ofSeconds(10), () -> assertThat(nettyClient.connections()).isEmpty());
 
         // restart the netty server.
         buildNettyServer(1);

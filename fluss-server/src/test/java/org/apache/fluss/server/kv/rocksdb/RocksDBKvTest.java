@@ -21,13 +21,20 @@ import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.metrics.SimpleCounter;
 import org.apache.fluss.metrics.util.TestHistogram;
+import org.apache.fluss.row.BinaryString;
+import org.apache.fluss.row.GenericRow;
+import org.apache.fluss.row.encode.CompactedKeyEncoder;
 import org.apache.fluss.server.kv.KvCloseMode;
+import org.apache.fluss.types.DataTypes;
+import org.apache.fluss.types.RowType;
 
+import io.github.fluss_contrib.rocksdb.ColumnFamilyOptions;
+import io.github.fluss_contrib.rocksdb.FlushOptions;
+import io.github.fluss_contrib.rocksdb.RocksDBException;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
-import org.rocksdb.ColumnFamilyOptions;
-import org.rocksdb.FlushOptions;
-import org.rocksdb.RocksDBException;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.io.File;
 import java.nio.file.Path;
@@ -65,6 +72,155 @@ class RocksDBKvTest {
             rocksDBKv.put(key2, val2);
 
             assertThat(rocksDBKv.multiGet(Arrays.asList(key, key2))).containsExactly(null, val2);
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void testPrefixLookupByteBoundaries(boolean flush, @TempDir Path tempDir) throws Exception {
+        // Already in unsigned bytewise order, including exact prefixes and their upper bounds.
+        byte[][] keys = {
+            {},
+            {0},
+            {0, 0},
+            {0, (byte) 0xff},
+            {1},
+            {1, 0},
+            {1, (byte) 0xfe},
+            {1, (byte) 0xff},
+            {1, (byte) 0xff, 0},
+            {1, (byte) 0xff, (byte) 0xff},
+            {2},
+            {0x7f},
+            {0x7f, (byte) 0xff},
+            {(byte) 0x80},
+            {(byte) 0x80, 0},
+            {(byte) 0xfe},
+            {(byte) 0xff},
+            {(byte) 0xff, 0},
+            {(byte) 0xff, (byte) 0xff},
+            {(byte) 0xff, (byte) 0xff, (byte) 0xff}
+        };
+        byte[][] prefixes = {
+            {},
+            {0},
+            {0, (byte) 0xff},
+            {1},
+            {1, (byte) 0xff},
+            {1, (byte) 0xff, (byte) 0xff},
+            {1, (byte) 0xff, (byte) 0xff, 0},
+            {2},
+            {3},
+            {0x7f},
+            {0x7f, (byte) 0xff},
+            {(byte) 0x80},
+            {(byte) 0xff},
+            {(byte) 0xff, (byte) 0xff},
+            {(byte) 0xff, (byte) 0xff, (byte) 0xff, (byte) 0xff}
+        };
+        try (RocksDBKv kv = buildRocksDBKv(tempDir.toFile())) {
+            for (byte[] key : keys) {
+                kv.put(key, key);
+            }
+            if (flush) {
+                try (FlushOptions options = new FlushOptions().setWaitForFlush(true)) {
+                    kv.db.flush(options);
+                }
+            }
+            for (byte[] prefix : prefixes) {
+                byte[][] expected =
+                        Arrays.stream(keys)
+                                .filter(
+                                        key ->
+                                                key.length >= prefix.length
+                                                        && Arrays.equals(
+                                                                Arrays.copyOf(key, prefix.length),
+                                                                prefix))
+                                .toArray(byte[][]::new);
+                try (RocksDBKv.PrefixLookup lookup = kv.openPrefixLookup(prefix)) {
+                    assertThat(lookup.readAll())
+                            .as("prefix %s (flushed=%s)", Arrays.toString(prefix), flush)
+                            .containsExactly(expected);
+                }
+            }
+        }
+    }
+
+    @Test
+    void testPrefixLookupWithEncodedKeysAndMixedSstAndMemtable(@TempDir Path tempDir)
+            throws Exception {
+        RowType keyType = RowType.of(DataTypes.STRING(), DataTypes.INT());
+        CompactedKeyEncoder keyEncoder = new CompactedKeyEncoder(keyType);
+        CompactedKeyEncoder prefixEncoder = new CompactedKeyEncoder(keyType, new int[] {0});
+        byte[] prefix = prefixEncoder.encodeKey(GenericRow.of(BinaryString.fromString("ab"), 0));
+        byte[] key1 = keyEncoder.encodeKey(GenericRow.of(BinaryString.fromString("ab"), 1));
+        byte[] key2 = keyEncoder.encodeKey(GenericRow.of(BinaryString.fromString("ab"), 2));
+        byte[] key3 = keyEncoder.encodeKey(GenericRow.of(BinaryString.fromString("ab"), 3));
+        byte[] key4 = keyEncoder.encodeKey(GenericRow.of(BinaryString.fromString("ab"), 4));
+        byte[] other = keyEncoder.encodeKey(GenericRow.of(BinaryString.fromString("ac"), 1));
+        try (RocksDBKv kv = buildRocksDBKv(tempDir.toFile())) {
+            kv.put(key1, new byte[] {1});
+            kv.put(key2, new byte[] {2});
+            kv.put(key3, new byte[] {3});
+            kv.put(other, new byte[] {9});
+            try (FlushOptions options = new FlushOptions().setWaitForFlush(true)) {
+                kv.db.flush(options);
+                kv.put(key1, new byte[] {5});
+                kv.delete(key2);
+                kv.put(key4, new byte[] {4});
+                try (RocksDBKv.PrefixLookup lookup = kv.openPrefixLookup(prefix)) {
+                    assertThat(lookup.readAll())
+                            .containsExactly(new byte[] {5}, new byte[] {3}, new byte[] {4});
+                }
+                kv.db.flush(options);
+                try (RocksDBKv.PrefixLookup lookup = kv.openPrefixLookup(prefix)) {
+                    assertThat(lookup.readAll())
+                            .containsExactly(new byte[] {5}, new byte[] {3}, new byte[] {4});
+                }
+                kv.db.compactRange();
+                try (RocksDBKv.PrefixLookup lookup = kv.openPrefixLookup(prefix)) {
+                    assertThat(lookup.readAll())
+                            .containsExactly(new byte[] {5}, new byte[] {3}, new byte[] {4});
+                }
+            }
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void testPrefixReadViewSurvivesConcurrentMutations(boolean flush, @TempDir Path tempDir)
+            throws Exception {
+        try (RocksDBKv kv = buildRocksDBKv(tempDir.toFile())) {
+            kv.put(new byte[] {1, 0}, new byte[] {10});
+            kv.put(new byte[] {1, 1}, new byte[] {11});
+            kv.put(new byte[] {2}, new byte[] {20});
+            if (flush) {
+                try (FlushOptions options = new FlushOptions().setWaitForFlush(true)) {
+                    kv.db.flush(options);
+                }
+            }
+            byte[] prefix = {1};
+            try (RocksDBKv.PrefixLookup lookup = kv.openPrefixLookup(prefix)) {
+                prefix[0] = 2;
+                assertThat(kv.getResourceGuard().getLeaseCount()).isEqualTo(1);
+                kv.put(new byte[] {1, 0}, new byte[] {12});
+                kv.delete(new byte[] {1, 1});
+                kv.put(new byte[] {1, 2}, new byte[] {13});
+                try (FlushOptions options = new FlushOptions().setWaitForFlush(true)) {
+                    kv.db.flush(options);
+                }
+                kv.db.compactRange();
+                // Seek has not run yet: the view must date from opening, not the first seek.
+                assertThat(lookup.readAll()).containsExactly(new byte[] {10}, new byte[] {11});
+            }
+            assertThat(kv.getResourceGuard().getLeaseCount()).isZero();
+            try (RocksDBKv.PrefixLookup lookup = kv.openPrefixLookup(new byte[] {1})) {
+                assertThat(lookup.readAll()).containsExactly(new byte[] {12}, new byte[] {13});
+            }
+            try (RocksDBKv.PrefixLookup lookup = kv.openPrefixLookup(new byte[] {3})) {
+                assertThat(lookup.readAll()).isEmpty();
+            }
+            assertThat(kv.getResourceGuard().getLeaseCount()).isZero();
         }
     }
 
@@ -130,7 +286,7 @@ class RocksDBKvTest {
     }
 
     /**
-     * Verifies that the L0 property is actually readable on frocksdbjni 6.20.3-ververica-2.0.
+     * Verifies that the L0 property is actually readable on fluss-rocksdbjni 11.8.1-fluss-3.
      *
      * <p>This is a regression test: {@code getLongProperty("rocksdb.num-files-at-level0")} throws
      * {@code RocksDBException: NotFound} because the property is parametric (string-type), not an

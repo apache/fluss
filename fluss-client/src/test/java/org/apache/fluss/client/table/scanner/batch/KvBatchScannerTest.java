@@ -28,6 +28,7 @@ import org.apache.fluss.exception.UnknownScannerIdException;
 import org.apache.fluss.metadata.SchemaGetter;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.record.DefaultValueRecordBatch;
 import org.apache.fluss.record.TestingSchemaGetter;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.rpc.TestingTabletGatewayService;
@@ -35,8 +36,11 @@ import org.apache.fluss.rpc.gateway.TabletServerGateway;
 import org.apache.fluss.rpc.messages.ScanKvRequest;
 import org.apache.fluss.rpc.messages.ScanKvResponse;
 import org.apache.fluss.rpc.protocol.Errors;
+import org.apache.fluss.shaded.netty4.io.netty.buffer.ByteBuf;
+import org.apache.fluss.shaded.netty4.io.netty.buffer.Unpooled;
 import org.apache.fluss.utils.CloseableIterator;
 
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
 import javax.annotation.Nullable;
@@ -50,11 +54,17 @@ import java.util.Queue;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicInteger;
 
+import static org.apache.fluss.record.TestData.DATA1_ROW_TYPE;
 import static org.apache.fluss.record.TestData.DATA1_SCHEMA_PK;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_ID_PK;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_INFO_PK;
+import static org.apache.fluss.record.TestData.DEFAULT_SCHEMA_ID;
+import static org.apache.fluss.testutils.DataTestUtils.compactedRow;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.Mockito.spy;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 
 /** Protocol-level unit tests for {@link KvBatchScanner} against a recording fake gateway. */
 class KvBatchScannerTest {
@@ -64,6 +74,15 @@ class KvBatchScannerTest {
     private static final Duration POLL_TIMEOUT = Duration.ofSeconds(5);
     private static final SchemaGetter SCHEMA_GETTER =
             new TestingSchemaGetter((short) 1, DATA1_SCHEMA_PK);
+
+    private final List<ByteBuf> parsedBuffers = new ArrayList<>();
+
+    @AfterEach
+    void releaseParsedBuffers() {
+        for (ByteBuf parsedBuffer : parsedBuffers) {
+            releaseIfNeeded(parsedBuffer);
+        }
+    }
 
     @Test
     void firstPollOpensScannerWithCallSeqIdZero() throws Exception {
@@ -243,6 +262,286 @@ class KvBatchScannerTest {
     }
 
     // -------------------------------------------------------------------------
+    // ByteBuf ownership: every ScanKvResponse handed to KvBatchScanner carries a real,
+    // ref-counted, lazily-parsed ByteBuf (mirrors NettyClientHandler#channelRead); the scanner
+    // must release it exactly once on every exit path.
+    // -------------------------------------------------------------------------
+
+    @Test
+    void emptyEofResponseBufIsReleasedAfterDrainAndClose() throws Exception {
+        RecordingGateway gateway = new RecordingGateway();
+        ScanKvResponse response = parseFromWire(emptyTerminalResponse(SCANNER_ID));
+        ByteBuf buf = response.getParsedByteBuf();
+        assertThat(buf.refCnt()).isEqualTo(1);
+        gateway.enqueue(response);
+
+        KvBatchScanner scanner = newScanner(gateway);
+        assertThat(scanner.pollBatch(POLL_TIMEOUT)).isNull();
+        assertThat(buf.refCnt()).isEqualTo(0);
+
+        scanner.close();
+        assertThat(buf.refCnt()).isEqualTo(0);
+    }
+
+    @Test
+    void unknownScannerIdErrorResponseBufIsReleased() throws Exception {
+        RecordingGateway gateway = new RecordingGateway();
+        gateway.enqueue(emptyContinuationResponse(SCANNER_ID));
+        ScanKvResponse errorResponse = parseFromWire(errorResponse(Errors.UNKNOWN_SCANNER_ID));
+        ByteBuf buf = errorResponse.getParsedByteBuf();
+        assertThat(buf.refCnt()).isEqualTo(1);
+        gateway.enqueue(errorResponse);
+
+        KvBatchScanner scanner = newScanner(gateway);
+        scanner.pollBatch(POLL_TIMEOUT);
+        assertThatThrownBy(() -> scanner.pollBatch(POLL_TIMEOUT)).isInstanceOf(IOException.class);
+
+        assertThat(buf.refCnt()).isEqualTo(0);
+    }
+
+    @Test
+    void completedInFlightResponseBufIsReleasedOnClose() throws Exception {
+        RecordingGateway gateway = new RecordingGateway();
+        gateway.enqueue(parseFromWire(emptyContinuationResponse(SCANNER_ID)));
+        ScanKvResponse prefetched = parseFromWire(emptyTerminalResponse(SCANNER_ID));
+        ByteBuf prefetchedBuf = prefetched.getParsedByteBuf();
+        gateway.enqueue(prefetched);
+
+        KvBatchScanner scanner = newScanner(gateway);
+        // Consumes the open response and pipelines the continuation request;
+        // RecordingGateway resolves it synchronously so `prefetched` is already completed
+        // but unconsumed.
+        scanner.pollBatch(POLL_TIMEOUT);
+        assertThat(prefetchedBuf.refCnt()).isEqualTo(1);
+
+        scanner.close();
+        assertThat(prefetchedBuf.refCnt()).isEqualTo(0);
+    }
+
+    @Test
+    void closeScannerAckResponseBufIsReleased() throws Exception {
+        RecordingGateway gateway = new RecordingGateway();
+        gateway.enqueue(parseFromWire(emptyContinuationResponse(SCANNER_ID)));
+
+        KvBatchScanner scanner = newScanner(gateway);
+        scanner.pollBatch(POLL_TIMEOUT);
+        scanner.close();
+
+        assertThat(gateway.closeAckResponses).hasSize(1);
+        assertThat(gateway.closeAckResponses.get(0).getParsedByteBuf().refCnt()).isEqualTo(0);
+    }
+
+    @Test
+    void recordsAndIntermediateEmptyResponsesReleaseBufsAfterRowsAreMaterialized()
+            throws Exception {
+        RecordingGateway gateway = new RecordingGateway();
+        ScanKvResponse first = recordsResponse(true, 1);
+        ScanKvResponse empty = parseFromWire(emptyContinuationResponse(SCANNER_ID));
+        ScanKvResponse last = recordsResponse(false, 2);
+        gateway.enqueue(first);
+        gateway.enqueue(empty);
+        gateway.enqueue(last);
+
+        try (KvBatchScanner scanner = newScanner(gateway)) {
+            CloseableIterator<InternalRow> firstRows = scanner.pollBatch(POLL_TIMEOUT);
+            assertThat(first.getParsedByteBuf().refCnt()).isEqualTo(0);
+            assertThat(firstRows.hasNext()).isTrue();
+            InternalRow firstRow = firstRows.next();
+            assertThat(firstRow.getInt(0)).isEqualTo(1);
+            assertThat(firstRow.getString(1).toString()).isEqualTo("value-1");
+
+            CloseableIterator<InternalRow> intermediate = scanner.pollBatch(POLL_TIMEOUT);
+            assertThat(intermediate).isNotNull();
+            assertThat(intermediate.hasNext()).isFalse();
+            assertThat(empty.getParsedByteBuf().refCnt()).isEqualTo(0);
+
+            CloseableIterator<InternalRow> lastRows = scanner.pollBatch(POLL_TIMEOUT);
+            assertThat(last.getParsedByteBuf().refCnt()).isEqualTo(0);
+            assertThat(lastRows.hasNext()).isTrue();
+            InternalRow lastRow = lastRows.next();
+            assertThat(lastRow.getInt(0)).isEqualTo(2);
+            assertThat(lastRow.getString(1).toString()).isEqualTo("value-2");
+        }
+    }
+
+    @Test
+    void tooManyScannersRetryResponseBufIsReleased() throws Exception {
+        RecordingGateway gateway = new RecordingGateway();
+        ScanKvResponse tooMany = parseFromWire(errorResponse(Errors.TOO_MANY_SCANNERS));
+        ScanKvResponse terminal = parseFromWire(emptyTerminalResponse(SCANNER_ID));
+        gateway.enqueue(tooMany);
+        gateway.enqueue(terminal);
+
+        try (KvBatchScanner scanner = newScanner(gateway)) {
+            CloseableIterator<InternalRow> retried = scanner.pollBatch(POLL_TIMEOUT);
+            assertThat(retried).isNotNull();
+            assertThat(retried.hasNext()).isFalse();
+            assertThat(tooMany.getParsedByteBuf().refCnt()).isEqualTo(0);
+            assertThat(scanner.pollBatch(POLL_TIMEOUT)).isNull();
+            assertThat(terminal.getParsedByteBuf().refCnt()).isEqualTo(0);
+        }
+    }
+
+    @Test
+    void closeReleasesContinuationResponseCompletedAfterClose() throws Exception {
+        RecordingGateway gateway = new RecordingGateway();
+        gateway.enqueue(parseFromWire(emptyContinuationResponse(SCANNER_ID)));
+        CompletableFuture<ScanKvResponse> continuation = new CompletableFuture<>();
+        gateway.enqueue(continuation);
+        ScanKvResponse lateResponse = parseFromWire(emptyTerminalResponse(SCANNER_ID));
+
+        KvBatchScanner scanner = newScanner(gateway);
+        scanner.pollBatch(POLL_TIMEOUT);
+        scanner.close();
+        assertThat(continuation.isCancelled()).isFalse();
+
+        continuation.complete(lateResponse);
+        assertThat(lateResponse.getParsedByteBuf().refCnt()).isEqualTo(0);
+    }
+
+    @Test
+    void closeReleasesOpenResponseCompletedBeforeClose() throws Exception {
+        RecordingGateway gateway = new RecordingGateway();
+        CompletableFuture<ScanKvResponse> open = neverCompleting();
+        gateway.enqueue(open);
+        ScanKvResponse completed = parseFromWire(emptyTerminalResponse(SCANNER_ID));
+
+        KvBatchScanner scanner = newScanner(gateway);
+        assertThat(scanner.pollBatch(Duration.ZERO)).isNotNull();
+        open.complete(completed);
+        scanner.close();
+
+        assertThat(completed.getParsedByteBuf().refCnt()).isEqualTo(0);
+    }
+
+    @Test
+    void closeReleasesOpenResponseCompletedAfterCloseExactlyOnce() throws Exception {
+        RecordingGateway gateway = new RecordingGateway();
+        CompletableFuture<ScanKvResponse> open = neverCompleting();
+        gateway.enqueue(open);
+        ScanKvResponse lateResponse = parseFromWire(emptyTerminalResponse(SCANNER_ID), true);
+        ByteBuf lateBuffer = lateResponse.getParsedByteBuf();
+
+        KvBatchScanner scanner = newScanner(gateway);
+        assertThat(scanner.pollBatch(Duration.ZERO)).isNotNull();
+        scanner.close();
+        scanner.close();
+        open.complete(lateResponse);
+
+        assertThat(lateBuffer.refCnt()).isEqualTo(0);
+        verify(lateBuffer, times(1)).release();
+    }
+
+    @Test
+    void closeScannerBusinessErrorResponseBufIsReleased() throws Exception {
+        RecordingGateway gateway = new RecordingGateway();
+        gateway.enqueue(parseFromWire(emptyContinuationResponse(SCANNER_ID)));
+        ScanKvResponse closeAck = parseFromWire(errorResponse(Errors.INVALID_SCAN_REQUEST));
+        gateway.enqueueClose(closeAck);
+
+        KvBatchScanner scanner = newScanner(gateway);
+        scanner.pollBatch(POLL_TIMEOUT);
+        scanner.close();
+
+        assertThat(closeAck.getParsedByteBuf().refCnt()).isEqualTo(0);
+    }
+
+    @Test
+    void closeReleasesCloseAckCompletedAfterClose() throws Exception {
+        RecordingGateway gateway = new RecordingGateway();
+        gateway.enqueue(parseFromWire(emptyContinuationResponse(SCANNER_ID)));
+        gateway.enqueue(neverCompleting());
+        CompletableFuture<ScanKvResponse> closeAck = new CompletableFuture<>();
+        gateway.enqueueClose(closeAck);
+
+        KvBatchScanner scanner = newScanner(gateway);
+        scanner.pollBatch(POLL_TIMEOUT);
+        scanner.close();
+
+        ScanKvResponse lateCloseAck = parseFromWire(new ScanKvResponse().setHasMoreResults(false));
+        closeAck.complete(lateCloseAck);
+        assertThat(lateCloseAck.getParsedByteBuf().refCnt()).isEqualTo(0);
+    }
+
+    @Test
+    void parseFailureReleasesResponseAndCloseReleasesPrefetchedResponse() throws Exception {
+        RecordingGateway gateway = new RecordingGateway();
+        ScanKvResponse invalid =
+                parseFromWire(
+                        new ScanKvResponse()
+                                .setScannerId(SCANNER_ID)
+                                .setHasMoreResults(true)
+                                .setRecords(new byte[1]));
+        ScanKvResponse prefetched = parseFromWire(emptyTerminalResponse(SCANNER_ID));
+        gateway.enqueue(invalid);
+        gateway.enqueue(prefetched);
+
+        KvBatchScanner scanner = newScanner(gateway);
+        assertThatThrownBy(() -> scanner.pollBatch(POLL_TIMEOUT))
+                .isInstanceOf(RuntimeException.class);
+        assertThat(invalid.getParsedByteBuf().refCnt()).isEqualTo(0);
+        assertThat(prefetched.getParsedByteBuf().refCnt()).isEqualTo(1);
+
+        scanner.close();
+        assertThat(prefetched.getParsedByteBuf().refCnt()).isEqualTo(0);
+    }
+
+    @Test
+    void exceptionalOpenFutureWithoutResponseClosesScanner() throws Exception {
+        RecordingGateway gateway = new RecordingGateway();
+        CompletableFuture<ScanKvResponse> failed = new CompletableFuture<>();
+        failed.completeExceptionally(new IOException("expected"));
+        gateway.enqueue(failed);
+
+        KvBatchScanner scanner = newScanner(gateway);
+        assertThatThrownBy(() -> scanner.pollBatch(POLL_TIMEOUT)).isInstanceOf(IOException.class);
+        assertThat(scanner.isClosed()).isTrue();
+        assertThat(gateway.requests).hasSize(1);
+    }
+
+    private ScanKvResponse recordsResponse(boolean hasMore, int id) throws Exception {
+        DefaultValueRecordBatch.Builder builder = DefaultValueRecordBatch.builder();
+        builder.append(
+                DEFAULT_SCHEMA_ID, compactedRow(DATA1_ROW_TYPE, new Object[] {id, "value-" + id}));
+        DefaultValueRecordBatch batch = builder.build();
+        byte[] records = new byte[batch.sizeInBytes()];
+        batch.getSegment().get(batch.getPosition(), records);
+        return parseFromWire(
+                new ScanKvResponse()
+                        .setScannerId(SCANNER_ID)
+                        .setHasMoreResults(hasMore)
+                        .setRecords(records));
+    }
+
+    private ScanKvResponse parseFromWire(ScanKvResponse toSerialize) {
+        return parseFromWire(toSerialize, false);
+    }
+
+    private ScanKvResponse parseFromWire(ScanKvResponse toSerialize, boolean trackRelease) {
+        byte[] wireBytes = toSerialize.toByteArray();
+        ByteBuf buf = Unpooled.wrappedBuffer(wireBytes);
+        if (trackRelease) {
+            buf = spy(buf);
+        }
+        ScanKvResponse parsed = new ScanKvResponse();
+        parsed.parseFrom(buf, buf.readableBytes());
+        assertThat(buf.refCnt()).isEqualTo(1);
+        assertThat(parsed.getParsedByteBuf()).isSameAs(buf);
+        parsedBuffers.add(buf);
+        return parsed;
+    }
+
+    /**
+     * Drains any refcount left on {@code buf} so a failed assertion above does not leak a real
+     * buffer into later tests; called after assertions, never before.
+     */
+    private static void releaseIfNeeded(ByteBuf buf) {
+        while (buf.refCnt() > 0) {
+            buf.release();
+        }
+    }
+
+    // -------------------------------------------------------------------------
     // Other terminal errors
     // -------------------------------------------------------------------------
 
@@ -322,7 +621,8 @@ class KvBatchScannerTest {
     @Test
     void timeoutReturnsEmptyIteratorAndKeepsFutureInFlight() throws Exception {
         RecordingGateway gateway = new RecordingGateway();
-        gateway.enqueue(neverCompleting());
+        CompletableFuture<ScanKvResponse> responseFuture = neverCompleting();
+        gateway.enqueue(responseFuture);
 
         KvBatchScanner scanner = newScanner(gateway);
         CloseableIterator<InternalRow> first = scanner.pollBatch(Duration.ofMillis(50));
@@ -330,6 +630,10 @@ class KvBatchScannerTest {
         assertThat(first.hasNext()).isFalse();
 
         assertThat(gateway.requests).hasSize(1);
+        ScanKvResponse response = parseFromWire(emptyTerminalResponse(SCANNER_ID));
+        responseFuture.complete(response);
+        assertThat(scanner.pollBatch(POLL_TIMEOUT)).isNull();
+        assertThat(response.getParsedByteBuf().refCnt()).isEqualTo(0);
         scanner.close();
     }
 
@@ -372,9 +676,11 @@ class KvBatchScannerTest {
         return req.hasCloseScanner() && req.isCloseScanner();
     }
 
-    private static final class RecordingGateway extends TestingTabletGatewayService {
+    private final class RecordingGateway extends TestingTabletGatewayService {
         final List<ScanKvRequest> requests = new ArrayList<>();
+        final List<ScanKvResponse> closeAckResponses = new ArrayList<>();
         private final Queue<CompletableFuture<ScanKvResponse>> queued = new LinkedList<>();
+        private final Queue<CompletableFuture<ScanKvResponse>> closeQueued = new LinkedList<>();
 
         void enqueue(ScanKvResponse response) {
             queued.add(CompletableFuture.completedFuture(response));
@@ -384,12 +690,26 @@ class KvBatchScannerTest {
             queued.add(future);
         }
 
+        void enqueueClose(ScanKvResponse response) {
+            closeQueued.add(CompletableFuture.completedFuture(response));
+        }
+
+        void enqueueClose(CompletableFuture<ScanKvResponse> response) {
+            closeQueued.add(response);
+        }
+
         @Override
         public CompletableFuture<ScanKvResponse> scanKv(ScanKvRequest request) {
             requests.add(request);
             if (request.hasCloseScanner() && request.isCloseScanner()) {
-                return CompletableFuture.completedFuture(
-                        new ScanKvResponse().setHasMoreResults(false));
+                CompletableFuture<ScanKvResponse> closeResponse = closeQueued.poll();
+                if (closeResponse == null) {
+                    closeResponse =
+                            CompletableFuture.completedFuture(
+                                    parseFromWire(new ScanKvResponse().setHasMoreResults(false)));
+                }
+                closeResponse.thenAccept(closeAckResponses::add);
+                return closeResponse;
             }
             CompletableFuture<ScanKvResponse> next = queued.poll();
             if (next == null) {

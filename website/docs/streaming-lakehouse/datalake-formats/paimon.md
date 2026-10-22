@@ -8,7 +8,7 @@ sidebar_position: 1
 ## Introduction
 
 [Apache Paimon](https://paimon.apache.org/) innovatively combines a lake format with an LSM (Log-Structured Merge-tree) structure, bringing efficient updates into the lake architecture. 
-To integrate Fluss with Paimon, you must enable lakehouse storage and configure Paimon as the lakehouse storage. For more details, see [Deploying Streaming Lakehouse](../../install-deploy/deploying-streaming-lakehouse.md).
+To integrate Fluss with Paimon, you must enable lakehouse storage and configure Paimon as the lakehouse storage. For more details, see [Deploying Lakestream](../../install-deploy/deploying-streaming-lakehouse.md).
 
 ## Dependencies
 
@@ -32,15 +32,36 @@ Verify downloaded JARs using the [verification instructions](/downloads#verifyin
 
 ## Version Compatibility
 
-| Use Case        | Required/Tested Versions                                     |
-|-----------------|--------------------------------------------------------------|
-| Tiering Service | Paimon 1.4, 2.0 (tested and verified to work)                 |
-| Union Read      | Paimon 1.1, 1.2, 1.3, 1.4, 2.0 (tested and verified to work) |
-| Java Runtime    | Java 11 or later; Paimon 2.0 adds no higher requirement      |
+| Use Case              | Required/Tested Versions                                          |
+|-----------------------|-------------------------------------------------------------------|
+| Tiering Service       | Paimon 1.4, 2.0, 2.1 (tested and verified to work)                 |
+| Union Read            | Paimon 1.1, 1.2, 1.3, 1.4, 2.0, 2.1 (tested and verified to work) |
+| Historical SST Lookup | Paimon 2.1.0 or later (required for concurrent lookup)             |
+| Java Runtime          | Java 11 or later; Paimon 2.1 adds no higher requirement             |
 
 ## Configure Paimon as LakeHouse Storage
 
-For general guidance on configuring Paimon as the lakehouse storage, you can refer to [Deploying Streaming Lakehouse](../../install-deploy/deploying-streaming-lakehouse.md) documentation. When starting the tiering service, make sure to use Paimon-specific configurations as parameters.
+For general guidance on configuring Paimon as the lakehouse storage, you can refer to [Deploying Lakestream](../../install-deploy/deploying-streaming-lakehouse.md) documentation. When starting the tiering service, make sure to use Paimon-specific configurations as parameters.
+
+### Historical Partition Access Setup
+
+Historical partition access supports both lookups and writes. Configure `datalake.format` and the
+related `datalake.paimon.*` options on every TabletServer, using the same Paimon catalog and
+warehouse as the tiering service, for example:
+
+```yaml title="server.yaml"
+datalake.enabled: true
+datalake.format: paimon
+datalake.paimon.metastore: filesystem
+datalake.paimon.warehouse: /path/to/paimon/warehouse
+```
+
+Download the [Fluss Paimon lake connector](#dependencies) and
+[paimon-bundle-$PAIMON_VERSION$.jar](https://repo.maven.apache.org/maven2/org/apache/paimon/paimon-bundle/$PAIMON_VERSION$/paimon-bundle-$PAIMON_VERSION$.jar),
+and place them in `${FLUSS_HOME}/plugins/paimon/` on every TabletServer. Add any
+[required catalog or storage JARs](../../install-deploy/deploying-streaming-lakehouse.md#fluss-server-jars)
+to the same directory. For example, when using OSS, add `paimon-oss-<version>.jar` matching your
+Paimon version. Restart the TabletServers after changing the configuration or JARs.
 
 ### Create a Paimon Table
 

@@ -32,6 +32,11 @@ pub enum NifNoKeyAssigner {
 pub struct NifConfig {
     pub bootstrap_servers: String,
     pub connect_timeout_ms: Option<u64>,
+    pub lookup_batch_timeout_ms: Option<u64>,
+    pub lookup_max_batch_size: Option<u64>,
+    pub lookup_max_inflight_requests: Option<u64>,
+    pub lookup_max_retries: Option<i32>,
+    pub lookup_queue_size: Option<u64>,
     pub remote_file_download_thread_num: Option<u64>,
     pub scanner_log_fetch_max_bytes: Option<i32>,
     pub scanner_log_fetch_max_bytes_for_bucket: Option<i32>,
@@ -57,6 +62,8 @@ pub struct NifConfig {
     pub writer_max_inflight_requests_per_bucket: Option<u64>,
     pub writer_request_max_size: Option<i32>,
     pub writer_retries: Option<i32>,
+    pub writer_retry_backoff_ms: Option<u64>,
+    pub writer_retry_max_backoff_ms: Option<u64>,
 }
 
 impl NifConfig {
@@ -145,6 +152,27 @@ impl NifConfig {
         }
         if let Some(retries) = self.writer_retries {
             config.writer_retries = retries;
+        }
+        if let Some(backoff) = self.writer_retry_backoff_ms {
+            config.writer_retry_backoff_ms = backoff;
+        }
+        if let Some(backoff) = self.writer_retry_max_backoff_ms {
+            config.writer_retry_max_backoff_ms = backoff;
+        }
+        if let Some(timeout_ms) = self.lookup_batch_timeout_ms {
+            config.lookup_batch_timeout_ms = timeout_ms;
+        }
+        if let Some(size) = self.lookup_max_batch_size {
+            config.lookup_max_batch_size = size as usize;
+        }
+        if let Some(requests_limit) = self.lookup_max_inflight_requests {
+            config.lookup_max_inflight_requests = requests_limit as usize;
+        }
+        if let Some(retries) = self.lookup_max_retries {
+            config.lookup_max_retries = retries;
+        }
+        if let Some(size) = self.lookup_queue_size {
+            config.lookup_queue_size = size as usize;
         }
         config
     }

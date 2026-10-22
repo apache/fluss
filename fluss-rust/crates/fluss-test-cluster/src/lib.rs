@@ -132,6 +132,12 @@ impl FlussTestingClusterBuilder {
 
     pub fn with_remote_data_dir(mut self, dir: std::path::PathBuf) -> Self {
         std::fs::create_dir_all(&dir).expect("Failed to create remote data directory");
+        // The coordinator assigns this directory to tables and partitions, so it must
+        // use the same host-accessible directory as the tablet servers.
+        self.cluster_conf.insert(
+            "remote.data.dir".to_string(),
+            dir.to_string_lossy().to_string(),
+        );
         self.remote_data_dir = Some(dir);
         self
     }
@@ -446,12 +452,6 @@ impl FlussTestingClusterBuilder {
         tablet_server_confs.insert("internal.listener.name", "INTERNAL".to_string());
         tablet_server_confs.insert("tablet-server.id", tablet_server_id);
 
-        if let Some(remote_data_dir) = &self.remote_data_dir {
-            tablet_server_confs.insert(
-                "remote.data.dir",
-                remote_data_dir.to_string_lossy().to_string(),
-            );
-        }
         let mut image = GenericImage::new(&self.image, &self.image_tag)
             .with_cmd(vec!["tabletServer"])
             .with_mapped_port(expose_host_port, ContainerPort::Tcp(port))
@@ -658,6 +658,35 @@ async fn stop_cluster_async(name: &str) {
             if is_cluster_container_name(cname, name) {
                 force_remove_container(&docker, cname).await;
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::FlussTestingClusterBuilder;
+    use std::collections::HashMap;
+
+    #[test]
+    fn remote_data_dir_is_shared_by_server_configurations() {
+        let configured_dir = "/configured-remote-data";
+        let conf = HashMap::from([("remote.data.dir".to_string(), configured_dir.to_string())]);
+        let remote_dir = std::env::temp_dir();
+        let builder = FlussTestingClusterBuilder::new_with_cluster_conf("remote-dir", &conf)
+            .with_remote_data_dir(remote_dir.clone());
+        let expected_property = format!("remote.data.dir: {}", remote_dir.to_string_lossy());
+
+        // Both server roles receive their common configuration through this path.
+        for extra_properties in [
+            HashMap::from([("internal.listener.name", "INTERNAL".to_string())]),
+            HashMap::from([("tablet-server.id", "0".to_string())]),
+        ] {
+            let properties = builder.to_fluss_properties_with(extra_properties);
+            let remote_properties: Vec<_> = properties
+                .lines()
+                .filter(|line| line.starts_with("remote.data.dir:"))
+                .collect();
+            assert_eq!(remote_properties, vec![expected_property.as_str()]);
         }
     }
 }

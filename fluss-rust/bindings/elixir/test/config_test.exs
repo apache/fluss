@@ -31,6 +31,46 @@ defmodule Fluss.ConfigTest do
     assert config.connect_timeout_ms == 30_000
   end
 
+  test "set_lookup_batch_timeout_ms/2 sets the lookup batch timeout" do
+    config =
+      Fluss.Config.new("localhost:9123")
+      |> Fluss.Config.set_lookup_batch_timeout_ms(200)
+
+    assert config.lookup_batch_timeout_ms == 200
+  end
+
+  test "set_lookup_max_batch_size/2 sets the lookup max batch size" do
+    config =
+      Fluss.Config.new("localhost:9123")
+      |> Fluss.Config.set_lookup_max_batch_size(64)
+
+    assert config.lookup_max_batch_size == 64
+  end
+
+  test "set_lookup_max_inflight_requests/2 sets the lookup max in-flight requests" do
+    config =
+      Fluss.Config.new("localhost:9123")
+      |> Fluss.Config.set_lookup_max_inflight_requests(32)
+
+    assert config.lookup_max_inflight_requests == 32
+  end
+
+  test "set_lookup_max_retries/2 sets the lookup max retries" do
+    config =
+      Fluss.Config.new("localhost:9123")
+      |> Fluss.Config.set_lookup_max_retries(5)
+
+    assert config.lookup_max_retries == 5
+  end
+
+  test "set_lookup_queue_size/2 sets the lookup queue size" do
+    config =
+      Fluss.Config.new("localhost:9123")
+      |> Fluss.Config.set_lookup_queue_size(1_024)
+
+    assert config.lookup_queue_size == 1_024
+  end
+
   test "set_remote_file_download_thread_num/2 sets the download thread num" do
     config =
       Fluss.Config.new("localhost:9123")
@@ -220,6 +260,16 @@ defmodule Fluss.ConfigTest do
       |> Fluss.Config.set_writer_retries(5)
 
     assert config.writer_retries == 5
+  end
+
+  test "set_writer_retry_backoff_ms/2 sets the retry backoff" do
+    config =
+      Fluss.Config.new("localhost:9123")
+      |> Fluss.Config.set_writer_retry_backoff_ms(250)
+      |> Fluss.Config.set_writer_retry_max_backoff_ms(5_000)
+
+    assert config.writer_retry_backoff_ms == 250
+    assert config.writer_retry_max_backoff_ms == 5_000
   end
 
   test "set_writer_batch_size/2 rejects negative integers" do

@@ -20,6 +20,7 @@ package org.apache.fluss.server;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.KvStorageException;
 import org.apache.fluss.exception.LogStorageException;
+import org.apache.fluss.exception.PartitionNotExistException;
 import org.apache.fluss.exception.SchemaNotExistException;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.SchemaInfo;
@@ -29,10 +30,12 @@ import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.server.kv.KvManager;
 import org.apache.fluss.server.log.LogManager;
 import org.apache.fluss.server.zk.ZooKeeperClient;
+import org.apache.fluss.server.zk.data.PartitionRegistration;
 import org.apache.fluss.server.zk.data.TableRegistration;
 import org.apache.fluss.utils.FileUtils;
 import org.apache.fluss.utils.FlussPaths;
 import org.apache.fluss.utils.concurrent.ExecutorThreadFactory;
+import org.apache.fluss.utils.function.SupplierWithException;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -51,9 +54,8 @@ import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-import java.util.concurrent.locks.Lock;
-import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Consumer;
+import java.util.function.Predicate;
 import java.util.stream.Collectors;
 
 import static org.apache.fluss.utils.FlussPaths.HISTORICAL_LOOKUP_CACHE_DIR_NAME;
@@ -79,8 +81,6 @@ public abstract class TabletManagerBase {
     protected final List<File> dataDirs;
 
     protected final Configuration conf;
-
-    protected final Lock tabletCreationOrDeletionLock = new ReentrantLock();
 
     // TODO make this parameter configurable.
     private final int recoveryThreads;
@@ -113,45 +113,54 @@ public abstract class TabletManagerBase {
 
     /** Returns the tablet directories to be loaded from a single configured data directory. */
     protected List<File> listTabletsToLoad(File dataDir) {
-        List<File> tabletsToLoad = new ArrayList<>();
-        // Get all database directory.
-        File[] dbDirs = FileUtils.listDirectories(dataDir);
-        for (File dbDir : dbDirs) {
-            if (dbDir.getName().equals(HISTORICAL_LOOKUP_CACHE_DIR_NAME)
-                    || dbDir.getName().equals(REMOTE_LOG_INDEX_LOCAL_CACHE)) {
-                continue;
-            }
-            // Get all table path directory.
-            File[] tableDirs = FileUtils.listDirectories(dbDir);
-            for (File tableDir : tableDirs) {
-                // maybe tablet directories or partition directories
-                File[] tabletOrPartitionDirs = FileUtils.listDirectories(tableDir);
+        return listTabletsToLoad(
+                dataDir,
+                (directory, nameFilter) ->
+                        Arrays.stream(FileUtils.listDirectories(directory))
+                                .filter(file -> nameFilter.test(file.getName()))
+                                .collect(Collectors.toList()));
+    }
 
-                List<File> tabletDirs = new ArrayList<>();
-                for (File tabletOrPartitionDir : tabletOrPartitionDirs) {
-                    // if not partition dir, consider it as a tablet dir
-                    if (!isPartitionDir(tabletOrPartitionDir.getName())) {
-                        tabletDirs.add(tabletOrPartitionDir);
+    /**
+     * Lists tablet directories using the common layout and cache exclusions, with a caller-supplied
+     * directory lister to control symbolic-link handling and listing failures.
+     */
+    protected <E extends Exception> List<File> listTabletsToLoad(
+            File dataDir, DirectoryLister<E> directoryLister) throws E {
+        List<File> tabletsToLoad = new ArrayList<>();
+        for (File dbDir :
+                directoryLister.listDirectories(
+                        dataDir,
+                        name ->
+                                !name.equals(HISTORICAL_LOOKUP_CACHE_DIR_NAME)
+                                        && !name.equals(REMOTE_LOG_INDEX_LOCAL_CACHE))) {
+            for (File tableDir : directoryLister.listDirectories(dbDir, name -> true)) {
+                for (File tabletOrPartitionDir :
+                        directoryLister.listDirectories(
+                                tableDir,
+                                name -> isPartitionDir(name) || name.startsWith(tabletDirPrefix))) {
+                    if (isPartitionDir(tabletOrPartitionDir.getName())) {
+                        tabletsToLoad.addAll(
+                                directoryLister.listDirectories(
+                                        tabletOrPartitionDir,
+                                        name -> name.startsWith(tabletDirPrefix)));
                     } else {
-                        // consider all dirs in partition as tablet dirs
-                        tabletDirs.addAll(
-                                Arrays.asList(FileUtils.listDirectories(tabletOrPartitionDir)));
+                        tabletsToLoad.add(tabletOrPartitionDir);
                     }
                 }
-
-                // it may contain the directory for kv tablet and log tablet
-                // filter out the directory for specific type tablet
-                // actually it identified by the prefix of the directory
-                tabletsToLoad.addAll(
-                        tabletDirs.stream()
-                                .filter(
-                                        tabletDir ->
-                                                tabletDir.getName().startsWith(tabletDirPrefix))
-                                .collect(Collectors.toList()));
             }
         }
-
         return tabletsToLoad;
+    }
+
+    /**
+     * Lists child directories whose names match a filter, optionally reporting listing failures.
+     */
+    @FunctionalInterface
+    protected interface DirectoryLister<E extends Exception> {
+
+        /** Returns the matching child directories. */
+        List<File> listDirectories(File parent, Predicate<String> nameFilter) throws E;
     }
 
     protected ExecutorService createThreadPool(String poolName) {
@@ -190,6 +199,42 @@ public abstract class TabletManagerBase {
                 CompletableFuture.allOf(
                         closingFutures.toArray(new CompletableFuture<?>[closingFutures.size()]));
         return closingFuture.whenComplete((ignored, throwable) -> closingPool.shutdown());
+    }
+
+    /**
+     * Executes an action under the bucket's lock and retires the lock if no tablet remains.
+     *
+     * @param tableBucket bucket to lock
+     * @param tabletLocks concurrent map of bucket locks owned by the manager
+     * @param currentTablets concurrent map of the manager's current tablets
+     * @param action action to execute while holding the lock
+     * @param <T> action result type
+     * @param <E> action exception type
+     * @return the action result
+     * @throws E if the action fails
+     */
+    protected static <T, E extends Exception> T inTabletLock(
+            TableBucket tableBucket,
+            Map<TableBucket, Object> tabletLocks,
+            Map<TableBucket, ?> currentTablets,
+            SupplierWithException<T, E> action)
+            throws E {
+        while (true) {
+            Object lock = tabletLocks.computeIfAbsent(tableBucket, ignored -> new Object());
+            synchronized (lock) {
+                if (tabletLocks.get(tableBucket) != lock) {
+                    continue;
+                }
+                try {
+                    return action.get();
+                } finally {
+                    if (!currentTablets.containsKey(tableBucket)) {
+                        // Waiters on a retired lock must retry with the replacement lock.
+                        tabletLocks.remove(tableBucket, lock);
+                    }
+                }
+            }
+        }
     }
 
     /**
@@ -234,6 +279,38 @@ public abstract class TabletManagerBase {
     // TODO: we should support get table info from local properties file instead of from zk
     public static TableInfo getTableInfo(ZooKeeperClient zkClient, TablePath tablePath)
             throws Exception {
+        SchemaInfo schemaInfo = getSchemaInfo(zkClient, tablePath);
+
+        TableRegistration tableRegistration = getTableRegistration(zkClient, tablePath);
+
+        return tableRegistration.toTableInfo(tablePath, schemaInfo);
+    }
+
+    /**
+     * Returns the table registration stored in ZooKeeper, including its remote data directory.
+     *
+     * @throws LogStorageException if the table registration does not exist
+     * @throws Exception if reading ZooKeeper metadata fails
+     */
+    public static TableRegistration getTableRegistration(
+            ZooKeeperClient zkClient, TablePath tablePath) throws Exception {
+        return zkClient.getTable(tablePath)
+                .orElseThrow(
+                        () ->
+                                new LogStorageException(
+                                        String.format(
+                                                "Failed to load table '%s': table info not found in zookeeper metadata.",
+                                                tablePath)));
+    }
+
+    /**
+     * Returns the latest schema of the table from ZooKeeper.
+     *
+     * @throws SchemaNotExistException if the latest schema does not exist
+     * @throws Exception if reading ZooKeeper metadata fails
+     */
+    public static SchemaInfo getSchemaInfo(ZooKeeperClient zkClient, TablePath tablePath)
+            throws Exception {
         int schemaId = zkClient.getCurrentSchemaId(tablePath);
         Optional<SchemaInfo> schemaInfoOpt = zkClient.getSchemaById(tablePath, schemaId);
         SchemaInfo schemaInfo;
@@ -245,17 +322,26 @@ public abstract class TabletManagerBase {
         } else {
             schemaInfo = schemaInfoOpt.get();
         }
+        return schemaInfo;
+    }
 
-        TableRegistration tableRegistration =
-                zkClient.getTable(tablePath)
-                        .orElseThrow(
-                                () ->
-                                        new LogStorageException(
-                                                String.format(
-                                                        "Failed to load table '%s': table info not found in zookeeper metadata.",
-                                                        tablePath)));
-
-        return tableRegistration.toTableInfo(tablePath, schemaInfo);
+    /**
+     * Returns the partition registration stored in ZooKeeper for the given physical table path.
+     *
+     * @throws PartitionNotExistException if the partition registration does not exist
+     * @throws Exception if reading ZooKeeper metadata fails
+     */
+    public static PartitionRegistration getPartitionRegistration(
+            ZooKeeperClient zkClient, PhysicalTablePath physicalTablePath) throws Exception {
+        return zkClient.getPartition(
+                        physicalTablePath.getTablePath(), physicalTablePath.getPartitionName())
+                .orElseThrow(
+                        () ->
+                                new PartitionNotExistException(
+                                        String.format(
+                                                "Failed to load partition '%s' for table %s: partition info not found in zookeeper metadata.",
+                                                physicalTablePath.getPartitionName(),
+                                                physicalTablePath.getTablePath())));
     }
 
     /** Create a tablet directory in the given dir. */

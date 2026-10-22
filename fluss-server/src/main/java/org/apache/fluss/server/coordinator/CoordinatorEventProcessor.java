@@ -27,6 +27,7 @@ import org.apache.fluss.cluster.rebalance.RebalanceStatus;
 import org.apache.fluss.cluster.rebalance.ServerTag;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.config.FlussConfigUtils;
 import org.apache.fluss.exception.FencedLeaderEpochException;
 import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.exception.IneligibleReplicaException;
@@ -294,7 +295,8 @@ public class CoordinatorEventProcessor implements EventProcessor {
         this.scheduler = scheduler;
         this.ioExecutor = ioExecutor;
         this.lakeTableHelper =
-                new LakeTableHelper(zooKeeperClient, conf.getString(ConfigOptions.REMOTE_DATA_DIR));
+                new LakeTableHelper(
+                        zooKeeperClient, FlussConfigUtils.getDefaultRemoteDataDir(conf));
     }
 
     public CoordinatorEventManager getCoordinatorEventManager() {
@@ -1201,6 +1203,11 @@ public class CoordinatorEventProcessor implements EventProcessor {
                 deleteReplicaResultForBuckets) {
             TableBucketReplica tableBucketReplica =
                     deleteReplicaResultForBucket.getTableBucketReplica();
+            // A server-down event may have made deletion ineligible, or a newer retry may
+            // already have completed it. Such responses must not retry or recreate replicas.
+            if (coordinatorContext.getReplicaState(tableBucketReplica) != ReplicaDeletionStarted) {
+                continue;
+            }
             if (deleteReplicaResultForBucket.succeeded()) {
                 successDeletedReplicas.add(tableBucketReplica);
             } else {
@@ -1243,9 +1250,14 @@ public class CoordinatorEventProcessor implements EventProcessor {
                 notifyLeaderAndIsrResultForBuckets) {
             // if the error code is not none, we will consider it as offline
             if (notifyLeaderAndIsrResultForBucket.failed()) {
-                offlineReplicas.add(
-                        new TableBucketReplica(
-                                notifyLeaderAndIsrResultForBucket.getTableBucket(), serverId));
+                TableBucket tableBucket = notifyLeaderAndIsrResultForBucket.getTableBucket();
+                if (coordinatorContext.isToBeDeleted(tableBucket)
+                        || !coordinatorContext.getAssignment(tableBucket).contains(serverId)) {
+                    // A late activation failure must not reset a deletion state to OfflineReplica
+                    // or recreate a replica that has already been deleted or migrated away.
+                    continue;
+                }
+                offlineReplicas.add(new TableBucketReplica(tableBucket, serverId));
             } else {
                 succeededBuckets.add(notifyLeaderAndIsrResultForBucket.getTableBucket());
             }
@@ -1380,6 +1392,8 @@ public class CoordinatorEventProcessor implements EventProcessor {
                 null,
                 coordinatorContext.bucketLeaderAndIsr().keySet());
 
+        tableManager.resumeReplicaDeletion(tabletServerId);
+
         // when a new tablet server comes up, we need to get all replicas of the server
         // and transmit them to online
         Set<TableBucketReplica> replicas =
@@ -1415,6 +1429,8 @@ public class CoordinatorEventProcessor implements EventProcessor {
         coordinatorContext.removeLiveTabletServer(tabletServerId);
         coordinatorContext.shuttingDownTabletServers().remove(tabletServerId);
         coordinatorChannelManager.removeTabletServer(tabletServerId);
+
+        tableManager.failReplicaDeletion(tabletServerId);
 
         // Here, we will first update alive tabletServer info for all tabletServers and
         // coordinatorServer metadata. The purpose of this approach is to prevent the scenario where

@@ -112,6 +112,7 @@ public class RebalanceManagerTest {
     private ManualClock metricClock;
     private KvSnapshotLeaseManager kvSnapshotLeaseManager;
     private Scheduler scheduler;
+    private Configuration conf;
 
     @BeforeAll
     static void baseBeforeAll() throws Exception {
@@ -127,7 +128,7 @@ public class RebalanceManagerTest {
         serverMetadataCache = new CoordinatorMetadataCache();
         testCoordinatorChannelManager = new TestCoordinatorChannelManager();
         String remoteDataDir = "/tmp/fluss/remote-data";
-        Configuration conf = new Configuration();
+        conf = new Configuration();
         conf.set(ConfigOptions.REMOTE_DATA_DIR, remoteDataDir);
 
         kvSnapshotLeaseManager =
@@ -154,7 +155,7 @@ public class RebalanceManagerTest {
                         replicaCapacityController);
         lakeTableTieringManager =
                 new LakeTableTieringManager(TestingMetricGroups.LAKE_TIERING_METRICS);
-        CoordinatorEventProcessor eventProcessor = buildCoordinatorEventProcessor(conf);
+        CoordinatorEventProcessor eventProcessor = buildCoordinatorEventProcessor();
         RecordingEventManager recordingEventManager = new RecordingEventManager();
         metricRegistry = mock(MetricRegistry.class);
         coordinatorMetricGroup =
@@ -211,8 +212,7 @@ public class RebalanceManagerTest {
         ManualClock clock = new ManualClock(0L);
         RecordingEventManager eventManager = new RecordingEventManager();
         NoOpScheduledExecutor executor = new NoOpScheduledExecutor();
-        CoordinatorEventProcessor eventProcessor =
-                buildCoordinatorEventProcessor(new Configuration());
+        CoordinatorEventProcessor eventProcessor = buildCoordinatorEventProcessor();
 
         Map<TableBucket, RebalancePlanForBucket> plan = createRebalancePlan(2);
         RebalanceTask rebalanceTask = new RebalanceTask("recover-test", NOT_STARTED, plan);
@@ -257,8 +257,7 @@ public class RebalanceManagerTest {
         ManualClock clock = new ManualClock(0L);
         RecordingEventManager eventManager = new RecordingEventManager();
         NoOpScheduledExecutor executor = new NoOpScheduledExecutor();
-        CoordinatorEventProcessor eventProcessor =
-                buildCoordinatorEventProcessor(new Configuration());
+        CoordinatorEventProcessor eventProcessor = buildCoordinatorEventProcessor();
 
         RebalanceManager manager =
                 new RebalanceManager(
@@ -314,8 +313,7 @@ public class RebalanceManagerTest {
         ManualClock clock = new ManualClock(0L);
         RecordingEventManager eventManager = new RecordingEventManager();
         NoOpScheduledExecutor executor = new NoOpScheduledExecutor();
-        CoordinatorEventProcessor eventProcessor =
-                buildCoordinatorEventProcessor(new Configuration());
+        CoordinatorEventProcessor eventProcessor = buildCoordinatorEventProcessor();
 
         RebalanceManager manager =
                 new RebalanceManager(
@@ -356,8 +354,7 @@ public class RebalanceManagerTest {
         ManualClock clock = new ManualClock(0L);
         RecordingEventManager eventManager = new RecordingEventManager();
         NoOpScheduledExecutor executor = new NoOpScheduledExecutor();
-        CoordinatorEventProcessor eventProcessor =
-                buildCoordinatorEventProcessor(new Configuration());
+        CoordinatorEventProcessor eventProcessor = buildCoordinatorEventProcessor();
 
         RebalanceManager manager =
                 new RebalanceManager(
@@ -734,7 +731,7 @@ public class RebalanceManagerTest {
     @Test
     void testFailedProcessorConstructionDoesNotReplaceCurrentManager() {
         rebalanceManager.registerRebalance("current", createRebalancePlan(1), NOT_STARTED);
-        Configuration conf = new Configuration();
+        Configuration conf = new Configuration(this.conf);
         conf.set(ConfigOptions.COORDINATOR_OFFLINE_LEADER_RETRY_DELAY, Duration.ZERO);
 
         assertThatThrownBy(() -> buildCoordinatorEventProcessor(conf, coordinatorMetricGroup))
@@ -771,7 +768,7 @@ public class RebalanceManagerTest {
         return new CoordinatorMetricGroup(NOPMetricRegistry.INSTANCE, "cluster", "host", "0");
     }
 
-    private CoordinatorEventProcessor buildCoordinatorEventProcessor(Configuration conf) {
+    private CoordinatorEventProcessor buildCoordinatorEventProcessor() {
         return buildCoordinatorEventProcessor(conf, createCoordinatorMetricGroup());
     }
 

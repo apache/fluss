@@ -110,6 +110,7 @@ impl LookupClient {
     /// # Arguments
     /// * `table_path` - The table path
     /// * `table_bucket` - The table bucket
+    /// * `routing_bucket_count` - The bucket count `table_bucket` was computed with
     /// * `key_bytes` - The encoded primary key bytes
     ///
     /// # Returns
@@ -120,6 +121,7 @@ impl LookupClient {
         &self,
         table_path: TablePath,
         table_bucket: TableBucket,
+        routing_bucket_count: i32,
         key_bytes: Bytes,
     ) -> Result<Option<Vec<u8>>> {
         if self.closed.load(Ordering::Acquire) {
@@ -133,6 +135,7 @@ impl LookupClient {
         let query = QueuedLookup::Primary(PrimaryLookupQuery::new(
             table_path,
             table_bucket,
+            routing_bucket_count,
             key_bytes,
             result_tx,
         ));
@@ -155,6 +158,7 @@ impl LookupClient {
     /// # Arguments
     /// * `table_path` - The table path
     /// * `table_bucket` - The table bucket computed from the bucket key part of the prefix
+    /// * `routing_bucket_count` - The bucket count `table_bucket` was computed with
     /// * `key_bytes` - The encoded prefix key bytes
     ///
     /// # Returns
@@ -164,6 +168,7 @@ impl LookupClient {
         &self,
         table_path: TablePath,
         table_bucket: TableBucket,
+        routing_bucket_count: i32,
         key_bytes: Bytes,
     ) -> Result<Vec<Vec<u8>>> {
         if self.closed.load(Ordering::Acquire) {
@@ -177,6 +182,7 @@ impl LookupClient {
         let query = QueuedLookup::Prefix(PrefixLookupQuery::new(
             table_path,
             table_bucket,
+            routing_bucket_count,
             key_bytes,
             result_tx,
         ));

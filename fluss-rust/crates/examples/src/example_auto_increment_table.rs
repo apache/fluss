@@ -82,7 +82,7 @@ pub async fn main() -> Result<()> {
     }
     upsert_writer.flush().await?;
 
-    let mut lookuper = table.new_lookup()?.create_lookuper()?;
+    let lookuper = table.new_lookup()?.create_lookuper()?;
     let mut assigned = Vec::new();
     for uid in ["alice", "bob", "carol"] {
         let mut key = GenericRow::new(1);

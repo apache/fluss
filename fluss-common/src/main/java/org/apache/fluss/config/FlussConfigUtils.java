@@ -47,8 +47,13 @@ public class FlussConfigUtils {
         CLIENT_OPTIONS = extractConfigOptions("client.");
         ALTERABLE_TABLE_OPTIONS =
                 Arrays.asList(
+                        ConfigOptions.TABLE_KAFKA_ENABLED.key(),
+                        ConfigOptions.TABLE_KAFKA_CONVERT_VALUE_TYPE.key(),
+                        ConfigOptions.TABLE_KAFKA_CONVERT_VALUE_LAYOUT.key(),
+                        ConfigOptions.TABLE_KAFKA_CONVERT_KEY_TYPE.key(),
                         ConfigOptions.TABLE_DATALAKE_ENABLED.key(),
                         ConfigOptions.TABLE_DATALAKE_HISTORICAL_PARTITION_ENABLED.key(),
+                        ConfigOptions.TABLE_DATALAKE_HISTORICAL_PARTITION_LOOKUP_MODE.key(),
                         ConfigOptions.TABLE_DATALAKE_DATABASE_NAME.key(),
                         ConfigOptions.TABLE_DATALAKE_TABLE_NAME.key(),
                         ConfigOptions.TABLE_DATALAKE_FRESHNESS.key(),

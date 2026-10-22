@@ -20,9 +20,9 @@ use crate::rpc::frame::ReadError;
 
 use crate::rpc::api_key::ApiKey;
 use crate::rpc::frame::WriteError;
+use crate::rpc::message::BucketLookupKeys;
 use crate::rpc::message::{ReadType, RequestBody, WriteType};
-use crate::{BucketId, PartitionId, TableId, impl_read_type, impl_write_type, proto};
-use bytes::Bytes;
+use crate::{TableId, impl_read_type, impl_write_type, proto};
 use prost::Message;
 
 use bytes::{Buf, BufMut};
@@ -32,20 +32,17 @@ pub struct PrefixLookupRequest {
 }
 
 impl PrefixLookupRequest {
-    pub fn new_batched(
-        table_id: TableId,
-        buckets: Vec<(BucketId, Option<PartitionId>, Vec<Bytes>)>,
-    ) -> Self {
+    pub fn new_batched(table_id: TableId, buckets: Vec<BucketLookupKeys>) -> Self {
         let buckets_req: Vec<proto::PbPrefixLookupReqForBucket> = buckets
             .into_iter()
-            .map(
-                |(bucket_id, partition_id, keys)| proto::PbPrefixLookupReqForBucket {
+            .map(|(bucket_id, partition_id, routing_bucket_count, keys)| {
+                proto::PbPrefixLookupReqForBucket {
                     partition_id,
                     bucket_id,
                     keys,
-                    routing_bucket_count: None,
-                },
-            )
+                    routing_bucket_count,
+                }
+            })
             .collect();
 
         let request = proto::PrefixLookupRequest {

@@ -126,6 +126,9 @@ pub struct RecordBatch {
     base_offset: i64,
     #[pyo3(get)]
     last_offset: i64,
+    /// Server-side commit timestamp in epoch milliseconds, or -1 if unavailable.
+    #[pyo3(get)]
+    commit_timestamp: i64,
 }
 
 #[pymethods]
@@ -143,10 +146,11 @@ impl RecordBatch {
 
     fn __str__(&self) -> String {
         format!(
-            "RecordBatch(bucket={}, base_offset={}, last_offset={}, rows={})",
+            "RecordBatch(bucket={}, base_offset={}, last_offset={}, commit_timestamp={}, rows={})",
             self.bucket.__str__(),
             self.base_offset,
             self.last_offset,
+            self.commit_timestamp,
             self.batch.num_rows()
         )
     }
@@ -159,10 +163,12 @@ impl RecordBatch {
 impl RecordBatch {
     /// Create a RecordBatch from core ScanBatch
     pub fn from_scan_batch(scan_batch: fcore::record::ScanBatch) -> Self {
+        let commit_timestamp = scan_batch.commit_timestamp();
         RecordBatch {
             bucket: TableBucket::from_core(scan_batch.bucket().clone()),
             base_offset: scan_batch.base_offset(),
             last_offset: scan_batch.last_offset(),
+            commit_timestamp,
             batch: Arc::new(scan_batch.into_batch()),
         }
     }

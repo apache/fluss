@@ -27,6 +27,21 @@ use std::hash::Hash;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+/// Java Float/Double comparison treats every NaN as one largest value while
+/// distinguishing signed zeros. Widening an f32 to f64 preserves this ordering.
+pub(crate) fn compare_floats(a: f64, b: f64) -> std::cmp::Ordering {
+    canonicalize_nan(a).total_cmp(&canonicalize_nan(b))
+}
+
+/// Canonicalizes comparison/hash keys only; stored values retain their bits.
+pub(crate) fn canonicalize_nan(value: f64) -> f64 {
+    if value.is_nan() {
+        f64::from_bits(0x7ff8_0000_0000_0000)
+    } else {
+        value
+    }
+}
+
 pub fn current_time_ms() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)

@@ -90,6 +90,11 @@ impl ListOffsetsRequest {
             },
         }
     }
+
+    pub fn with_routing_bucket_count(mut self, routing_bucket_count: Option<i32>) -> Self {
+        self.inner_request.routing_bucket_count = routing_bucket_count;
+        self
+    }
 }
 
 impl RequestBody for ListOffsetsRequest {

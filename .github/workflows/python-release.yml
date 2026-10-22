@@ -48,6 +48,18 @@ jobs:
     needs: [version-check]
     steps:
       - uses: actions/checkout@v6
+      - name: Set Python release version
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: python tools/releasing/set_python_release_version.py "$RELEASE_TAG"
+
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+        with:
+          toolchain: stable
+
+      - name: Check generated binary licenses
+        run: python fluss-rust/bindings/python/generate_binary_license.py --check
 
       - uses: PyO3/maturin-action@v1
         with:
@@ -67,48 +79,63 @@ jobs:
     strategy:
       matrix:
         include:
-          - { os: windows-latest }
-          - { os: macos-15-intel, target: "x86_64-apple-darwin" }
-          - { os: macos-15, target: "aarch64-apple-darwin" }
-          - { os: ubuntu-latest, target: "x86_64" }
-          - { os: ubuntu-latest, target: "aarch64", manylinux: "manylinux_2_28" }
+          - { os: windows-latest, license-target: "x86_64-pc-windows-msvc" }
+          - { os: macos-15-intel, target: "x86_64-apple-darwin", license-target: "x86_64-apple-darwin" }
+          - { os: macos-15, target: "aarch64-apple-darwin", license-target: "aarch64-apple-darwin" }
+          - { os: ubuntu-latest, target: "x86_64", license-target: "x86_64-unknown-linux-gnu" }
+          - { os: ubuntu-latest, target: "aarch64", manylinux: "manylinux_2_28", license-target: "aarch64-unknown-linux-gnu" }
     steps:
       - uses: actions/checkout@v6
+      - name: Set Python release version
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: python tools/releasing/set_python_release_version.py "$RELEASE_TAG"
+
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+        with:
+          toolchain: stable
+
+      - name: Generate licenses for this wheel target
+        run: python fluss-rust/bindings/python/generate_binary_license.py --target "${{ matrix.license-target }}"
 
       - uses: PyO3/maturin-action@v1
         with:
           working-directory: fluss-rust/bindings/python
           target: ${{ matrix.target }}
           command: build
-          args: --release -o dist -i python3.9
+          args: --locked --release -o dist -i python3.9
           manylinux: ${{ matrix.manylinux || 'auto' }}
       - uses: PyO3/maturin-action@v1
         with:
           working-directory: fluss-rust/bindings/python
           target: ${{ matrix.target }}
           command: build
-          args: --release -o dist -i python3.10
+          args: --locked --release -o dist -i python3.10
           manylinux: ${{ matrix.manylinux || 'auto' }}
       - uses: PyO3/maturin-action@v1
         with:
           working-directory: fluss-rust/bindings/python
           target: ${{ matrix.target }}
           command: build
-          args: --release -o dist -i python3.11
+          args: --locked --release -o dist -i python3.11
           manylinux: ${{ matrix.manylinux || 'auto' }}
       - uses: PyO3/maturin-action@v1
         with:
           working-directory: fluss-rust/bindings/python
           target: ${{ matrix.target }}
           command: build
-          args: --release -o dist -i python3.12
+          args: --locked --release -o dist -i python3.12
           manylinux: ${{ matrix.manylinux || 'auto' }}
 
       - name: Upload wheels
         uses: actions/upload-artifact@v7
         with:
           name: wheels-${{ matrix.os }}-${{ matrix.target || 'native' }}
-          path: fluss-rust/bindings/python/dist
+          path: |
+            fluss-rust/bindings/python/dist/*.whl
+            fluss-rust/bindings/python/LICENSE-bin
+            fluss-rust/bindings/python/NOTICE-bin
 
   verify-license:
     name: Verify LICENSE and NOTICE
@@ -118,24 +145,31 @@ jobs:
       - uses: actions/download-artifact@v8
         with:
           pattern: wheels-*
-          merge-multiple: true
-          path: dist
+          merge-multiple: false
+          path: artifacts
 
       # maturin ships these only when [project].license-files lists them.
       - name: Check the sdist and every wheel
         run: |
-          SDIST=$(ls dist/*.tar.gz)
+          SDIST=$(ls artifacts/wheels-sdist/*.tar.gz)
           PREFIX=$(basename "$SDIST" .tar.gz)
-          for f in LICENSE NOTICE; do
+          for f in LICENSE NOTICE LICENSE-bin NOTICE-bin; do
             if [ -z "$(tar -xzOf "$SDIST" "${PREFIX}/${f}" 2>/dev/null)" ]; then
               echo "Error: ${f} is missing or empty at the root of ${SDIST}"
               exit 1
             fi
           done
-          for whl in dist/*.whl; do
-            for f in LICENSE NOTICE; do
-              if ! unzip -p "$whl" "*.dist-info/licenses/${f}" 2>/dev/null | grep -q .; then
+          for whl in artifacts/wheels-*/dist/*.whl; do
+            artifact_dir=$(dirname "$(dirname "$whl")")
+            for f in LICENSE NOTICE LICENSE-bin NOTICE-bin; do
+              if ! unzip -p "$whl" "*.dist-info/licenses/${f}" 2>/dev/null | grep . >/dev/null; then
                 echo "Error: ${f} is missing or empty in ${whl}"
+                exit 1
+              fi
+            done
+            for f in LICENSE-bin NOTICE-bin; do
+              if ! unzip -p "$whl" "*.dist-info/licenses/${f}" | diff -u "${artifact_dir}/${f}" -; then
+                echo "Error: packaged ${f} differs from the generated file in ${whl}"
                 exit 1
               fi
             done
@@ -153,8 +187,13 @@ jobs:
       - uses: actions/download-artifact@v8
         with:
           pattern: wheels-*
-          merge-multiple: true
-          path: fluss-rust/bindings/python/dist
+          merge-multiple: false
+          path: artifacts
+
+      - name: Collect distributions for publishing
+        run: |
+          mkdir -p fluss-rust/bindings/python/dist
+          cp artifacts/wheels-sdist/*.tar.gz artifacts/wheels-*/dist/*.whl fluss-rust/bindings/python/dist/
 
       - name: Publish to TestPyPI
         if: contains(github.ref, '-')

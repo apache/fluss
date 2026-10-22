@@ -74,7 +74,6 @@ class ReplicaFetcherManagerTest extends ReplicaTestBase {
 
     @Test
     void testAddAndRemoveBucket() {
-        int numFetchers = 2;
         ReplicaFetcherManager fetcherManager =
                 new TestingReplicaFetcherManager(TABLET_SERVER_ID, replicaManager, fetcherThread);
 
@@ -111,20 +110,39 @@ class ReplicaFetcherManagerTest extends ReplicaTestBase {
                 fetcherManager.getFetcherThreadMap();
         assertThat(fetcherThreadMap.size()).isEqualTo(1);
         ReplicaFetcherThread thread =
-                fetcherThreadMap.get(new ServerIdAndFetcherId(1, tb.hashCode() % numFetchers));
+                fetcherThreadMap.get(new ServerIdAndFetcherId(1, fetcherManager.getFetcherId(tb)));
         assertThat(thread).isEqualTo(fetcherThread);
         assertThat(fetcherThread.fetchStatus(tb).isPresent()).isTrue();
 
         fetcherManager.removeFetcherForBuckets(Collections.singleton(tb));
         // the fetcher thread will not be moved out from the map.
         assertThat(fetcherThreadMap.size()).isEqualTo(1);
-        thread = fetcherThreadMap.get(new ServerIdAndFetcherId(1, tb.hashCode() % numFetchers));
+        thread = fetcherThreadMap.get(new ServerIdAndFetcherId(1, fetcherManager.getFetcherId(tb)));
 
         assertThat(thread).isEqualTo(fetcherThread);
         assertThat(fetcherThread.fetchStatus(tb).isPresent()).isFalse();
 
         fetcherManager.shutdownIdleFetcherThreads();
         assertThat(fetcherThreadMap.size()).isEqualTo(0);
+    }
+
+    @Test
+    void testFetcherIdWithinConfiguredRange() {
+        int numFetchers = 2;
+        conf.set(ConfigOptions.LOG_REPLICA_FETCHER_NUMBER, numFetchers);
+        ReplicaFetcherManager fetcherManager =
+                new ReplicaFetcherManager(
+                        conf, null, TABLET_SERVER_ID, replicaManager, id -> Optional.of(leader));
+
+        TableBucket positiveHashBucket = new TableBucket(0L, 0);
+        TableBucket negativeHashBucket = new TableBucket(Integer.MAX_VALUE, 1);
+        TableBucket evenHashBucket = new TableBucket(0L, 1);
+        assertThat(positiveHashBucket.hashCode()).isPositive();
+        assertThat(negativeHashBucket.hashCode()).isNegative();
+
+        assertThat(fetcherManager.getFetcherId(positiveHashBucket)).isEqualTo(1);
+        assertThat(fetcherManager.getFetcherId(negativeHashBucket)).isEqualTo(1);
+        assertThat(fetcherManager.getFetcherId(evenHashBucket)).isZero();
     }
 
     @Test

@@ -18,6 +18,7 @@
 use crate::error::Error::IllegalArgument;
 use crate::error::Result;
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use std::fmt::{Display, Formatter};
 
 /// Data type for Fluss table.
@@ -67,6 +68,47 @@ impl DataType {
             DataType::Map(v) => v.nullable,
             DataType::Row(v) => v.nullable,
             DataType::Bytes(v) => v.nullable,
+        }
+    }
+
+    /// Validates the names of fields in every nested [`RowType`].
+    ///
+    /// Returns an error if a row contains a blank field name or duplicate field names.
+    pub fn validate_row_field_names(&self) -> Result<()> {
+        match self {
+            DataType::Array(array) => array.get_element_type().validate_row_field_names(),
+            DataType::Map(map) => {
+                map.key_type().validate_row_field_names()?;
+                map.value_type().validate_row_field_names()
+            }
+            DataType::Row(row) => {
+                let mut seen = HashSet::with_capacity(row.fields().len());
+                let mut duplicates = HashSet::new();
+                for field in row.fields() {
+                    if field.name().trim().is_empty() {
+                        return Err(IllegalArgument {
+                            message:
+                                "Field names must contain at least one non-whitespace character."
+                                    .to_string(),
+                        });
+                    }
+                    if !seen.insert(field.name()) {
+                        duplicates.insert(field.name());
+                    }
+                }
+                if !duplicates.is_empty() {
+                    return Err(IllegalArgument {
+                        message: format!(
+                            "Field names must be unique. Found duplicates: {duplicates:?}"
+                        ),
+                    });
+                }
+                for field in row.fields() {
+                    field.data_type().validate_row_field_names()?;
+                }
+                Ok(())
+            }
+            _ => Ok(()),
         }
     }
 
@@ -1543,6 +1585,52 @@ fn test_row_display() {
     let fields_non_null = vec![DataTypes::field("age", DataTypes::bigint())];
     let row_type_non_null = RowType::with_nullable(false, fields_non_null);
     assert_eq!(row_type_non_null.to_string(), "ROW<age BIGINT> NOT NULL");
+}
+
+#[test]
+fn test_validate_row_field_names() {
+    DataTypes::row(vec![
+        DataTypes::field("id", DataTypes::int()),
+        DataTypes::field(
+            "payload",
+            DataTypes::array(DataTypes::row(vec![DataTypes::field(
+                "value",
+                DataTypes::string(),
+            )])),
+        ),
+    ])
+    .validate_row_field_names()
+    .expect("valid ROW field names");
+
+    for (data_type, expected_message) in [
+        (
+            DataTypes::row(vec![DataTypes::field(" \t", DataTypes::int())]),
+            "Field names must contain at least one non-whitespace character.",
+        ),
+        (
+            DataTypes::row(vec![
+                DataTypes::field("id", DataTypes::int()),
+                DataTypes::field("id", DataTypes::string()),
+            ]),
+            "Field names must be unique. Found duplicates:",
+        ),
+        (
+            DataTypes::array(DataTypes::map(
+                DataTypes::string(),
+                DataTypes::row(vec![
+                    DataTypes::field("value", DataTypes::int()),
+                    DataTypes::field("value", DataTypes::bigint()),
+                ]),
+            )),
+            "Field names must be unique. Found duplicates:",
+        ),
+    ] {
+        let err = data_type.validate_row_field_names().unwrap_err();
+        assert!(
+            err.to_string().contains(expected_message),
+            "unexpected error: {err}"
+        );
+    }
 }
 
 #[test]
