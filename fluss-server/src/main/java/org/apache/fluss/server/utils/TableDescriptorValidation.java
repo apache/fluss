@@ -868,10 +868,11 @@ public class TableDescriptorValidation {
 
     private static void validateOptionValue(ReadableConfig options, ConfigOption<?> option) {
         try {
-            options.get(option);
-            if (option == ConfigOptions.TABLE_DATALAKE_TIERING_GROUP) {
+            if (ConfigOptions.TABLE_DATALAKE_TIERING_GROUP.key().equals(option.key())) {
                 FlussConfigUtils.validateTieringGroup(
                         options.get(ConfigOptions.TABLE_DATALAKE_TIERING_GROUP));
+            } else {
+                options.get(option);
             }
         } catch (Throwable t) {
             throw new InvalidConfigException(

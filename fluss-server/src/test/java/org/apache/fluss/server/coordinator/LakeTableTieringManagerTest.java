@@ -39,6 +39,7 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
@@ -291,6 +292,47 @@ class LakeTableTieringManagerTest {
         manualClock.advanceTime(Duration.ofSeconds(10));
         assertRequestTable(3L, groupPath2, 1L, "large");
         assertThat(tableTieringManager.requestTable("large")).isNull();
+    }
+
+    @Test
+    void testPendingGroupQueuesAfterMoveAndRemoval() {
+        List<Tuple2<TableInfo, Long>> tables = new ArrayList<>();
+        for (long tableId = 1; tableId <= 5; tableId++) {
+            tables.add(
+                    Tuple2.of(
+                            createTableInfo(
+                                    tableId,
+                                    TablePath.of("db", "table" + tableId),
+                                    Duration.ofSeconds(10),
+                                    tableId <= 3 ? "large" : "small"),
+                            -10_000L));
+        }
+        tableTieringManager.initWithLakeTables(tables);
+        waitValue(
+                () ->
+                        tableTieringManager.getPendingTablesCount() == 5
+                                ? Optional.of(true)
+                                : Optional.empty(),
+                Duration.ofSeconds(10),
+                "All tables should be pending before moving or removing them");
+        assertThat(tableTieringManager.getPendingTablesCount()).isEqualTo(5);
+
+        tableTieringManager.updateTableTieringGroup(2L, "small");
+        tableTieringManager.updateTableTieringGroup(2L, "small");
+        assertThat(tableTieringManager.getPendingTablesCount()).isEqualTo(5);
+        tableTieringManager.removeLakeTable(1L);
+        assertThat(tableTieringManager.getPendingTablesCount()).isEqualTo(4);
+
+        assertRequestTable(3L, TablePath.of("db", "table3"), 1L, "large");
+        assertThat(tableTieringManager.requestTable("large")).isNull();
+        assertThat(tableTieringManager.getPendingTablesCount()).isEqualTo(3);
+
+        tableTieringManager.removeLakeTable(4L);
+        assertThat(tableTieringManager.getPendingTablesCount()).isEqualTo(2);
+        assertRequestTable(5L, TablePath.of("db", "table5"), 1L, "small");
+        assertRequestTable(2L, TablePath.of("db", "table2"), 1L, "small");
+        assertThat(tableTieringManager.requestTable("small")).isNull();
+        assertThat(tableTieringManager.getPendingTablesCount()).isZero();
     }
 
     @Test

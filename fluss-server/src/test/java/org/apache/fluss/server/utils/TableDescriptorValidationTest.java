@@ -57,10 +57,11 @@ class TableDescriptorValidationTest {
     @Test
     void testTieringGroupValidation() {
         String key = ConfigOptions.TABLE_DATALAKE_TIERING_GROUP.key();
-        for (String group : new String[] {"default", "large", "Large"}) {
+        for (String group : new String[] {"default", "large", "Large", "Large_1-small"}) {
             validate(logTableWithProperty(key, group), null);
         }
-        for (String group : new String[] {"", " ", " large", "large "}) {
+        for (String group :
+                new String[] {"", " ", " large", "large ", "a\nb", "a\0b", "__reserved"}) {
             assertThatThrownBy(() -> validate(logTableWithProperty(key, group), null))
                     .isInstanceOf(InvalidConfigException.class)
                     .hasMessageContaining(key);

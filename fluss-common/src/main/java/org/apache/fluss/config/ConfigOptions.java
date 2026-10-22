@@ -2229,7 +2229,7 @@ public class ConfigOptions {
                     .withDescription(
                             "The tiering service group responsible for this table. "
                                     + "Only tiering services in the same group receive the table. "
-                                    + "Group names are case-sensitive and must not be empty or have leading or trailing whitespace. "
+                                    + "Group names are case-sensitive and must follow Fluss table name rules. "
                                     + "Changes through ALTER TABLE apply asynchronously to subsequent tiering rounds.");
 
     public static final ConfigOption<Duration> TABLE_DATALAKE_FRESHNESS =
