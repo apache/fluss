@@ -72,6 +72,7 @@ import org.apache.fluss.server.entity.NotifyLeaderAndIsrData;
 import org.apache.fluss.server.entity.NotifyLeaderAndIsrResultForBucket;
 import org.apache.fluss.server.log.ListOffsetsParam;
 import org.apache.fluss.server.metadata.ServerInfo;
+import org.apache.fluss.server.metadata.SystemTables;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
 import org.apache.fluss.server.utils.ServerRpcMessageUtils;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
@@ -181,7 +182,7 @@ public class TabletServiceITCase {
         TableRegistration consumerOffsetsTable =
                 FLUSS_CLUSTER_EXTENSION
                         .getZooKeeperClient()
-                        .getTable(TablePath.of("sys", "consumer_offsets"))
+                        .getTable(SystemTables.CONSUMER_OFFSETS)
                         .get();
         assertThat(consumerOffsetsTable.remoteDataDir)
                 .isEqualTo(FLUSS_CLUSTER_EXTENSION.getRemoteDataDir());

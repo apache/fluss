@@ -34,6 +34,7 @@ import org.apache.fluss.rpc.messages.CreateTableRequest;
 import org.apache.fluss.server.coordinator.MetadataManager;
 import org.apache.fluss.server.metadata.BucketMetadata;
 import org.apache.fluss.server.metadata.ServerInfo;
+import org.apache.fluss.server.metadata.SystemTables;
 import org.apache.fluss.server.metadata.TableMetadata;
 import org.apache.fluss.server.metadata.TabletServerMetadataCache;
 import org.apache.fluss.server.metadata.TabletServerMetadataProvider;
@@ -58,11 +59,6 @@ import static org.apache.fluss.utils.Preconditions.checkNotNull;
 public final class ConsumerOffsetTableManager {
 
     private static final Logger LOG = LoggerFactory.getLogger(ConsumerOffsetTableManager.class);
-
-    private static final TablePath CONSUMER_OFFSET_TABLE_PATH =
-            new TablePath(
-                    ConsumerOffsetTableConfig.SYSTEM_DATABASE,
-                    ConsumerOffsetTableConfig.CONSUMER_OFFSET_TABLE_NAME);
 
     private final ConsumerOffsetTableConfig tableConfig;
     private final ZooKeeperClient zkClient;
@@ -93,7 +89,7 @@ public final class ConsumerOffsetTableManager {
     }
 
     public TablePath tablePath() {
-        return CONSUMER_OFFSET_TABLE_PATH;
+        return SystemTables.CONSUMER_OFFSETS;
     }
 
     /**
@@ -103,7 +99,7 @@ public final class ConsumerOffsetTableManager {
      */
     public CompletableFuture<ServerNode> resolveOwnerAsync(int bucketId, String listenerName) {
         Optional<BucketMetadata> cachedBucket =
-                metadataCache.getCachedBucketMetadata(CONSUMER_OFFSET_TABLE_PATH, bucketId);
+                metadataCache.getCachedBucketMetadata(SystemTables.CONSUMER_OFFSETS, bucketId);
         if (cachedBucket.isPresent() && cachedBucket.get().getLeaderId().isPresent()) {
             Optional<ServerNode> cachedOwner =
                     metadataCache.getTabletServer(
@@ -121,7 +117,7 @@ public final class ConsumerOffsetTableManager {
         try {
             List<TableMetadata> tableMetadataList =
                     metadataProvider.getTablesMetadataFromZK(
-                            Collections.singleton(CONSUMER_OFFSET_TABLE_PATH));
+                            Collections.singleton(SystemTables.CONSUMER_OFFSETS));
             BucketMetadata bucketMetadata =
                     tableMetadataList.get(0).getBucketMetadataList().stream()
                             .filter(metadata -> metadata.getBucketId() == bucketId)
@@ -132,14 +128,14 @@ public final class ConsumerOffsetTableManager {
                                                     "Bucket "
                                                             + bucketId
                                                             + " is not available yet in "
-                                                            + CONSUMER_OFFSET_TABLE_PATH));
+                                                            + SystemTables.CONSUMER_OFFSETS));
             OptionalInt leaderIdOpt = bucketMetadata.getLeaderId();
             if (!leaderIdOpt.isPresent()) {
                 throw new ConsumerGroupOwnerLoadingException(
                         "No leader yet for bucket "
                                 + bucketId
                                 + " in "
-                                + CONSUMER_OFFSET_TABLE_PATH);
+                                + SystemTables.CONSUMER_OFFSETS);
             }
 
             int leaderId = leaderIdOpt.getAsInt();
@@ -178,7 +174,7 @@ public final class ConsumerOffsetTableManager {
         } catch (Exception e) {
             throw new ConsumerGroupOwnerNotAvailableException(
                     "Failed to resolve the owner of "
-                            + CONSUMER_OFFSET_TABLE_PATH
+                            + SystemTables.CONSUMER_OFFSETS
                             + " bucket "
                             + bucketId,
                     e);
@@ -235,8 +231,8 @@ public final class ConsumerOffsetTableManager {
                 cause instanceof ConsumerGroupOwnerNotAvailableException
                         ? (ConsumerGroupOwnerNotAvailableException) cause
                         : new ConsumerGroupOwnerNotAvailableException(
-                                "Failed to initialize " + CONSUMER_OFFSET_TABLE_PATH, cause);
-        LOG.warn("Failed to initialize {}.", CONSUMER_OFFSET_TABLE_PATH, cause);
+                                "Failed to initialize " + SystemTables.CONSUMER_OFFSETS, cause);
+        LOG.warn("Failed to initialize {}.", SystemTables.CONSUMER_OFFSETS, cause);
         initializationFuture.completeExceptionally(exception);
     }
 
@@ -248,12 +244,12 @@ public final class ConsumerOffsetTableManager {
 
     private int createOrResolveTableBucketCount() {
         try {
-            if (zkClient.tableExist(CONSUMER_OFFSET_TABLE_PATH)) {
-                LOG.debug("System table {} already exists.", CONSUMER_OFFSET_TABLE_PATH);
-                return metadataManager.getTable(CONSUMER_OFFSET_TABLE_PATH).getNumBuckets();
+            if (zkClient.tableExist(SystemTables.CONSUMER_OFFSETS)) {
+                LOG.debug("System table {} already exists.", SystemTables.CONSUMER_OFFSETS);
+                return metadataManager.getTable(SystemTables.CONSUMER_OFFSETS).getNumBuckets();
             }
 
-            String databaseName = CONSUMER_OFFSET_TABLE_PATH.getDatabaseName();
+            String databaseName = SystemTables.CONSUMER_OFFSETS.getDatabaseName();
             if (!zkClient.databaseExists(databaseName)) {
                 CreateDatabaseRequest createDatabaseRequest =
                         new CreateDatabaseRequest()
@@ -286,13 +282,13 @@ public final class ConsumerOffsetTableManager {
                             .setIgnoreIfExists(true);
             createTableRequest
                     .setTablePath()
-                    .setDatabaseName(CONSUMER_OFFSET_TABLE_PATH.getDatabaseName())
-                    .setTableName(CONSUMER_OFFSET_TABLE_PATH.getTableName());
+                    .setDatabaseName(SystemTables.CONSUMER_OFFSETS.getDatabaseName())
+                    .setTableName(SystemTables.CONSUMER_OFFSETS.getTableName());
             coordinatorGateway.createTable(createTableRequest).get();
-            return metadataManager.getTable(CONSUMER_OFFSET_TABLE_PATH).getNumBuckets();
+            return metadataManager.getTable(SystemTables.CONSUMER_OFFSETS).getNumBuckets();
         } catch (Exception e) {
             throw new ConsumerGroupOwnerNotAvailableException(
-                    "Failed to get or create system table: " + CONSUMER_OFFSET_TABLE_PATH, e);
+                    "Failed to get or create system table: " + SystemTables.CONSUMER_OFFSETS, e);
         }
     }
 }

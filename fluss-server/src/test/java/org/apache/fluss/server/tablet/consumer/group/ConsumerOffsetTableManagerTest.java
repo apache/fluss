@@ -32,6 +32,7 @@ import org.apache.fluss.rpc.messages.CreateTableRequest;
 import org.apache.fluss.rpc.messages.CreateTableResponse;
 import org.apache.fluss.server.coordinator.MetadataManager;
 import org.apache.fluss.server.metadata.BucketMetadata;
+import org.apache.fluss.server.metadata.SystemTables;
 import org.apache.fluss.server.metadata.TableMetadata;
 import org.apache.fluss.server.metadata.TabletServerMetadataCache;
 import org.apache.fluss.server.metadata.TabletServerMetadataProvider;
@@ -62,7 +63,7 @@ import static org.mockito.Mockito.when;
 class ConsumerOffsetTableManagerTest {
 
     private static final int BUCKET_COUNT = 1;
-    private static final TablePath TABLE_PATH = TablePath.of("sys", "consumer_offsets");
+    private static final TablePath TABLE_PATH = SystemTables.CONSUMER_OFFSETS;
 
     private ZooKeeperClient zkClient;
     private MetadataManager metadataManager;
