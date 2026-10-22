@@ -614,4 +614,79 @@ class SparkLakePaimonPrimaryKeyTableReadTest extends SparkLakePrimaryKeyTableRea
       assertPushedNames(query, Set(">="))
     }
   }
+
+  test("Spark Lake Read: custom PK path filtered fallback before lake snapshot") {
+    withTable("t_custom_pk_filtered_fallback") {
+      sql(s"""
+             |CREATE TABLE $DEFAULT_DATABASE.t_custom_pk_filtered_fallback
+             |  (id INT, name STRING, score INT)
+             | TBLPROPERTIES (
+             |  '${ConfigOptions.TABLE_DATALAKE_ENABLED.key()}' = true,
+             |  '${ConfigOptions.TABLE_DATALAKE_DATABASE_NAME.key()}' = 'custom_pk_db',
+             |  '${ConfigOptions.TABLE_DATALAKE_TABLE_NAME.key()}' = 'mapped_pk_fallback',
+             |  '${ConfigOptions.TABLE_DATALAKE_FRESHNESS.key()}' = '1s',
+             |  '${PRIMARY_KEY.key()}' = 'id',
+             |  '${BUCKET_NUMBER.key()}' = 1)
+             |""".stripMargin)
+
+      sql(s"""
+             |INSERT INTO $DEFAULT_DATABASE.t_custom_pk_filtered_fallback VALUES
+             |(1, 'alice', 90), (2, 'bob', 85), (3, 'charlie', 95)
+             |""".stripMargin)
+
+      // No lake snapshot has been created.
+      checkAnswer(
+        sql(s"SELECT id, score FROM $DEFAULT_DATABASE.t_custom_pk_filtered_fallback ORDER BY id"),
+        Row(1, 90) :: Row(2, 85) :: Row(3, 95) :: Nil
+      )
+
+      val filtered =
+        sql(
+          s"SELECT id, score FROM $DEFAULT_DATABASE.t_custom_pk_filtered_fallback " +
+            "WHERE score >= 90 ORDER BY id")
+
+      checkAnswer(filtered, Row(1, 90) :: Row(3, 95) :: Nil)
+    }
+  }
+
+  test("Spark Lake Read: custom PK path filters updated values across lake union") {
+    withTable("t_custom_pk_filter_updates") {
+      sql(s"""
+             |CREATE TABLE $DEFAULT_DATABASE.t_custom_pk_filter_updates
+             |  (id INT, name STRING, score INT)
+             | TBLPROPERTIES (
+             |  '${ConfigOptions.TABLE_DATALAKE_ENABLED.key()}' = true,
+             |  '${ConfigOptions.TABLE_DATALAKE_DATABASE_NAME.key()}' = 'custom_update_db',
+             |  '${ConfigOptions.TABLE_DATALAKE_TABLE_NAME.key()}' = 'mapped_update_table',
+             |  '${ConfigOptions.TABLE_DATALAKE_FRESHNESS.key()}' = '1s',
+             |  '${PRIMARY_KEY.key()}' = 'id',
+             |  '${BUCKET_NUMBER.key()}' = 1)
+             |""".stripMargin)
+
+      sql(s"""
+             |INSERT INTO $DEFAULT_DATABASE.t_custom_pk_filter_updates VALUES
+             |(1, 'alice', 95), (2, 'bob', 80), (3, 'charlie', 91)
+             |""".stripMargin)
+
+      tierToLake("t_custom_pk_filter_updates")
+
+      sql(s"""
+             |INSERT INTO $DEFAULT_DATABASE.t_custom_pk_filter_updates VALUES
+             |(1, 'alice_updated', 70), (2, 'bob_updated', 98)
+             |""".stripMargin)
+
+      checkAnswer(
+        sql(s"SELECT id, score FROM $DEFAULT_DATABASE.t_custom_pk_filter_updates ORDER BY id"),
+        Row(1, 70) :: Row(2, 98) :: Row(3, 91) :: Nil
+      )
+
+      val filtered =
+        sql(
+          s"SELECT id, score FROM $DEFAULT_DATABASE.t_custom_pk_filter_updates " +
+            "WHERE score >= 90 ORDER BY id")
+
+      checkAnswer(filtered, Row(2, 98) :: Row(3, 91) :: Nil)
+      assertPushedNames(filtered, Set(">="))
+    }
+  }
 }
