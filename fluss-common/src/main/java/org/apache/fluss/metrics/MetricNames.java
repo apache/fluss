@@ -53,7 +53,8 @@ public class MetricNames {
     public static final String REBALANCE_BUCKETS_FAILED = "rebalanceBucketsFailed";
     public static final String REBALANCE_BUCKETS_TIMED_OUT = "rebalanceBucketsTimedOut";
     public static final String REBALANCE_DURATION_MS = "rebalanceDurationMs";
-    public static final String INFLIGHT_BUCKET_DURATION_MS = "inflightBucketDurationMs";
+    public static final String REBALANCE_INFLIGHT_BUCKET_DURATION_MS =
+            "rebalanceInflightBucketDurationMs";
     public static final String REBALANCES_COMPLETED_TOTAL = "rebalancesCompletedTotal";
     public static final String REBALANCES_FAILED_TOTAL = "rebalancesFailedTotal";
     public static final String REBALANCES_CANCELED_TOTAL = "rebalancesCanceledTotal";
