@@ -102,11 +102,11 @@ public class PaimonSplitPlanner implements Planner<PaimonSplit> {
 
     private FileStoreTable getTable(Catalog catalog, TablePath tablePath, long snapshotId)
             throws Exception {
-        return (FileStoreTable)
-                catalog.getTable(toPaimon(tablePath))
-                        .copy(
-                                Collections.singletonMap(
-                                        CoreOptions.SCAN_SNAPSHOT_ID.key(),
-                                        String.valueOf(snapshotId)));
+        FileStoreTable table = (FileStoreTable) catalog.getTable(toPaimon(tablePath));
+        // Filters are built with the current schema. Keep it when selecting an older snapshot so
+        // Paimon can evolve the file statistics to match the predicates.
+        return table.copyWithoutTimeTravel(
+                Collections.singletonMap(
+                        CoreOptions.SCAN_SNAPSHOT_ID.key(), String.valueOf(snapshotId)));
     }
 }
