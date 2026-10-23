@@ -19,6 +19,7 @@ package org.apache.fluss.spark.utils
 
 import org.apache.fluss.predicate.{Predicate => FlussPredicate, PredicateBuilder, UnsupportedExpression}
 import org.apache.fluss.row.{BinaryString, Decimal, TimestampLtz, TimestampNtz}
+import org.apache.fluss.spark.types.SparkTypeChecks
 import org.apache.fluss.types._
 
 import org.apache.spark.sql.connector.expressions.{Expression, Literal, NamedReference}
@@ -182,7 +183,8 @@ object SparkPredicateConverter {
     literalFrom(rowType.getTypeAt(fieldIdx), predicate.children()(childIdx))
 
   private def literalFrom(fieldType: DataType, expr: Expression): Object = expr match {
-    case lit: Literal[_] => toFlussLiteral(fieldType, lit.value())
+    case lit: Literal[_] if !SparkTypeChecks.hasUnsupportedCollation(lit.dataType()) =>
+      toFlussLiteral(fieldType, lit.value())
     case _ => throw new UnsupportedExpression
   }
 
