@@ -35,6 +35,7 @@ import java.util.List;
 import java.util.Queue;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Test for {@link CompositeBatchScanner}. */
 class CompositeBatchScannerTest {
@@ -120,6 +121,20 @@ class CompositeBatchScannerTest {
         composite.close(); // should not throw
     }
 
+    @Test
+    void testLimitPollClosesRemainingScannersWhenOneFails() {
+        StubBatchScanner s1 = scanner(1);
+        FailingStubBatchScanner s2 = new FailingStubBatchScanner();
+        StubBatchScanner s3 = scanner(3);
+
+        CompositeBatchScanner composite = new CompositeBatchScanner(Arrays.asList(s1, s2, s3), 10);
+
+        assertThatThrownBy(() -> composite.pollBatch(TIMEOUT)).isInstanceOf(RuntimeException.class);
+        assertThat(s1.closed).isTrue();
+        assertThat(s2.closed).isTrue();
+        assertThat(s3.closed).isTrue();
+    }
+
     // -------------------------------------------------------------------------
     // Helpers
     // -------------------------------------------------------------------------
@@ -179,6 +194,22 @@ class CompositeBatchScannerTest {
             }
             GenericRow row = GenericRow.of(values.poll());
             return CloseableIterator.wrap(Collections.<InternalRow>singletonList(row).iterator());
+        }
+
+        @Override
+        public void close() {
+            closed = true;
+        }
+    }
+
+    /** A stub {@link BatchScanner} that fails on {@link #pollBatch(Duration)}. */
+    private static class FailingStubBatchScanner implements BatchScanner {
+        boolean closed = false;
+
+        @Nullable
+        @Override
+        public CloseableIterator<InternalRow> pollBatch(Duration timeout) throws IOException {
+            throw new IOException("injected poll failure");
         }
 
         @Override
