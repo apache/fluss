@@ -68,6 +68,14 @@ object SparkFlussConf {
           "'scan.incremental.start.timestamp' fails fast, as does a window whose start is not " +
           "strictly before its end.")
 
+  /** Query-local transport for the snapshot TVF's exclusive commit-time boundary. */
+  private[spark] val SCAN_AS_OF_TIMESTAMP: ConfigOption[String] =
+    ConfigBuilder
+      .key("scan.as-of.timestamp")
+      .stringType()
+      .noDefaultValue()
+      .withDescription("Reads complete table state strictly before this commit timestamp.")
+
   val SCAN_POLL_TIMEOUT: ConfigOption[Duration] =
     ConfigBuilder
       .key("scan.poll.timeout")

@@ -21,7 +21,7 @@ import org.apache.fluss.config.Configuration
 import org.apache.fluss.lake.source.{LakeSource, LakeSplit}
 import org.apache.fluss.metadata.TablePath
 import org.apache.fluss.record.LogRecord
-import org.apache.fluss.spark.read.FlussPartitionReader
+import org.apache.fluss.spark.read.{FlussPartitionReader, HistoricalReadMetadata}
 import org.apache.fluss.types.RowType
 import org.apache.fluss.utils.CloseableIterator
 
@@ -34,8 +34,9 @@ class FlussLakeAppendPartitionReader(
     lakeSource: LakeSource[LakeSplit],
     projection: Array[Int],
     limit: Option[Int],
-    flussConfig: Configuration)
-  extends FlussPartitionReader(tablePath, flussConfig, limit)
+    flussConfig: Configuration,
+    expectedTableInfo: Option[HistoricalReadMetadata] = None)
+  extends FlussPartitionReader(tablePath, flussConfig, limit, expectedTableInfo)
   with Logging {
 
   private var recordIterator: CloseableIterator[LogRecord] = _
@@ -43,6 +44,9 @@ class FlussLakeAppendPartitionReader(
   initializeResources(initialize())
 
   private def initialize(): Unit = {
+    if (expectedTableInfo.isDefined) {
+      tableInfo
+    }
     logInfo(s"Reading lake split for table $tablePath $partition")
 
     recordIterator = lakeSource

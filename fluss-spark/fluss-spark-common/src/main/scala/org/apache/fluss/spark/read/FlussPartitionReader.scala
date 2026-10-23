@@ -35,10 +35,28 @@ import org.apache.spark.sql.connector.read.PartitionReader
 
 import java.time.Duration
 
+/** Serializable identity and schema pinned by a historical scan on the driver. */
+private[spark] case class HistoricalReadMetadata(
+    tableId: Long,
+    schemaId: Int,
+    numBuckets: Int,
+    bucketCountEpoch: Long)
+  extends Serializable
+
+private[spark] object HistoricalReadMetadata {
+  def from(info: TableInfo): HistoricalReadMetadata =
+    HistoricalReadMetadata(
+      info.getTableId,
+      info.getSchemaId,
+      info.getNumBuckets,
+      info.getBucketCountEpoch)
+}
+
 abstract class FlussPartitionReader(
     tablePath: TablePath,
     flussConfig: Configuration,
-    limit: Option[Int])
+    limit: Option[Int],
+    expectedTableInfo: Option[HistoricalReadMetadata] = None)
   extends PartitionReader[InternalRow]
   with Logging {
 
@@ -55,6 +73,17 @@ abstract class FlussPartitionReader(
     val (lease, acquiredTable) = FlussConnectionCache.acquireWithTable(flussConfig, tablePath)
     connectionLease = lease
     openedTable = acquiredTable
+    expectedTableInfo.foreach {
+      expected =>
+        val actual = lease.connection.getAdmin.getTableInfo(tablePath).get()
+        require(
+          actual.getTableId == expected.tableId &&
+            actual.getSchemaId == expected.schemaId &&
+            actual.getNumBuckets == expected.numBuckets &&
+            actual.getBucketCountEpoch == expected.bucketCountEpoch,
+          s"Historical table identity/schema/buckets changed during execution for $tablePath"
+        )
+    }
     openedTable
   }
   protected lazy val tableInfo: TableInfo = table.getTableInfo
