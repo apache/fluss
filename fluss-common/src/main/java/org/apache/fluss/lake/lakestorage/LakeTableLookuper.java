@@ -18,6 +18,7 @@
 package org.apache.fluss.lake.lakestorage;
 
 import org.apache.fluss.annotation.PublicEvolving;
+import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.metadata.ResolvedPartitionSpec;
 import org.apache.fluss.types.RowType;
 
@@ -78,6 +79,18 @@ public interface LakeTableLookuper extends AutoCloseable {
         private final short schemaId;
         private final RowType valueRowType;
         private final LookupMetricRecorder lookupMetricRecorder;
+        private final @Nullable Long lakeSnapshotId;
+
+        /** Creates a lookup context when the lake snapshot is unknown. */
+        @VisibleForTesting
+        public LookupContext(
+                ResolvedPartitionSpec partitionSpec,
+                @Nullable Integer bucketId,
+                short schemaId,
+                RowType valueRowType,
+                LookupMetricRecorder lookupMetricRecorder) {
+            this(partitionSpec, bucketId, schemaId, valueRowType, lookupMetricRecorder, null);
+        }
 
         /**
          * Creates a lookup context.
@@ -88,19 +101,22 @@ public interface LakeTableLookuper extends AutoCloseable {
          * @param schemaId schema id to encode the returned Fluss value with
          * @param valueRowType row type to encode the returned Fluss value with
          * @param lookupMetricRecorder recorder for lake table point lookup metrics
+         * @param lakeSnapshotId known lake snapshot ID, or null if unknown
          */
         public LookupContext(
                 ResolvedPartitionSpec partitionSpec,
                 @Nullable Integer bucketId,
                 short schemaId,
                 RowType valueRowType,
-                LookupMetricRecorder lookupMetricRecorder) {
+                LookupMetricRecorder lookupMetricRecorder,
+                @Nullable Long lakeSnapshotId) {
             this.partitionSpec = checkNotNull(partitionSpec, "partitionSpec must not be null.");
             this.bucketId = bucketId;
             this.schemaId = schemaId;
             this.valueRowType = checkNotNull(valueRowType, "valueRowType must not be null.");
             this.lookupMetricRecorder =
                     checkNotNull(lookupMetricRecorder, "lookupMetricRecorder must not be null.");
+            this.lakeSnapshotId = lakeSnapshotId;
         }
 
         /** Returns the resolved Fluss partition spec for the lookup. */
@@ -129,6 +145,11 @@ public interface LakeTableLookuper extends AutoCloseable {
         /** Returns the recorder for lake table point lookup metrics. */
         public LookupMetricRecorder lookupMetricRecorder() {
             return lookupMetricRecorder;
+        }
+
+        /** Returns the known lake snapshot ID, or null if unknown. */
+        public @Nullable Long lakeSnapshotId() {
+            return lakeSnapshotId;
         }
     }
 }
