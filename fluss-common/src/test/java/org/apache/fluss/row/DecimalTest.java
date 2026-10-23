@@ -21,6 +21,8 @@ import org.assertj.core.data.Offset;
 import org.junit.jupiter.api.Test;
 
 import java.math.BigDecimal;
+import java.util.Arrays;
+import java.util.HashSet;
 import java.util.Objects;
 
 import static org.apache.fluss.utils.DecimalUtils.add;
@@ -120,6 +122,39 @@ public class DecimalTest {
         Decimal decimal4 = Decimal.fromBigDecimal(new BigDecimal(15), 18, 0);
         assertThat(compare(subtract(decimal3, decimal4, 19, 0), -5)).isEqualTo(0);
         assertThat(compare(add(decimal3, decimal4, 19, 0), 25)).isEqualTo(0);
+    }
+
+    @Test
+    public void testHashCodeConsistentWithEquals() {
+        // Same value, different scales and compact/non-compact representations.
+        Decimal[] tens = {
+            Decimal.fromBigDecimal(new BigDecimal("10"), 5, 0),
+            Decimal.fromBigDecimal(new BigDecimal("10.0"), 5, 1),
+            Decimal.fromBigDecimal(new BigDecimal("10.00"), 18, 2),
+            Decimal.fromBigDecimal(new BigDecimal("10.000"), 20, 3),
+            Decimal.fromUnscaledLong(100000, 10, 4)
+        };
+        for (Decimal a : tens) {
+            for (Decimal b : tens) {
+                assertThat(a).isEqualTo(b);
+                assertThat(a.hashCode()).isEqualTo(b.hashCode());
+            }
+        }
+        assertThat(new HashSet<>(Arrays.asList(tens))).hasSize(1);
+
+        Decimal[] zeros = {
+            Decimal.zero(5, 0), Decimal.zero(5, 2), Decimal.zero(20, 0), Decimal.zero(20, 5)
+        };
+        for (Decimal a : zeros) {
+            for (Decimal b : zeros) {
+                assertThat(a).isEqualTo(b);
+                assertThat(a.hashCode()).isEqualTo(b.hashCode());
+            }
+        }
+
+        Decimal negative = Decimal.fromBigDecimal(new BigDecimal("-1.50"), 5, 2);
+        assertThat(negative.hashCode())
+                .isEqualTo(Decimal.fromBigDecimal(new BigDecimal("-1.5"), 5, 1).hashCode());
     }
 
     @Test
