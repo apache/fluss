@@ -73,6 +73,7 @@ import org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.ZooDefs;
 import org.apache.fluss.types.DataTypeChecks;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.types.RowType;
+import org.apache.fluss.utils.IndexTableUtils;
 import org.apache.fluss.utils.json.DataTypeJsonSerde;
 import org.apache.fluss.utils.json.JsonSerdeUtils;
 
@@ -286,7 +287,8 @@ class TableManagerITCase {
         assertThatThrownBy(() -> adminGateway.dropTable(newDropTableRequest(db1, tb1, false)).get())
                 .cause()
                 .isInstanceOf(TableNotExistException.class)
-                .hasMessageContaining(String.format("Table %s does not exist.", tablePath));
+                .hasMessageContaining(tablePath.toString())
+                .hasMessageContaining("does not exist");
 
         // drop a not exist table with ignore if not exists shouldn't throw exception
         adminGateway.dropTable(newDropTableRequest(db1, tb1, true)).get();
@@ -1140,6 +1142,56 @@ class TableManagerITCase {
 
             assertThat(gateway.tableExists(newTableExistsRequest(secondTablePath)).get().isExists())
                     .isTrue();
+        } finally {
+            limitedCluster.close();
+        }
+    }
+
+    @Test
+    void testIndexBucketsIncludedInKvLeaderReplicaCapacity() throws Exception {
+        Configuration conf = initConf();
+        conf.set(ConfigOptions.KV_LEADER_REPLICA_MEMORY_RESERVED, new MemorySize(1));
+        conf.set(ConfigOptions.TABLET_SERVER_ADVERTISED_RESOURCE_MEMORY_SIZE, new MemorySize(3));
+        FlussClusterExtension limitedCluster =
+                FlussClusterExtension.builder()
+                        .setNumOfTabletServers(1)
+                        .setClusterConf(conf)
+                        .build();
+
+        try {
+            limitedCluster.start();
+
+            AdminGateway gateway = limitedCluster.newCoordinatorClient();
+            TablePath mainPath = TablePath.of("fluss", "index_capacity");
+            TablePath indexPath =
+                    TablePath.of(
+                            "fluss",
+                            IndexTableUtils.indexTableName(mainPath.getTableName(), "idx_b"));
+            Schema schema =
+                    Schema.newBuilder()
+                            .column("a", DataTypes.INT())
+                            .column("b", DataTypes.STRING())
+                            .primaryKey("a")
+                            .index("idx_b", "b")
+                            .build();
+            TableDescriptor descriptor =
+                    TableDescriptor.builder().schema(schema).distributedBy(3, "a").build();
+
+            assertThatThrownBy(
+                            () ->
+                                    gateway.createTable(
+                                                    newCreateTableRequest(
+                                                            mainPath, descriptor, false))
+                                            .get())
+                    .cause()
+                    .isInstanceOf(InsufficientKvLeaderReplicaCapacityException.class)
+                    .hasMessageContaining("requestedKvLeaderReplicaCount=6")
+                    .hasMessageContaining("kvLeaderReplicaCapacity=3");
+
+            assertThat(gateway.tableExists(newTableExistsRequest(mainPath)).get().isExists())
+                    .isFalse();
+            assertThat(gateway.tableExists(newTableExistsRequest(indexPath)).get().isExists())
+                    .isFalse();
         } finally {
             limitedCluster.close();
         }

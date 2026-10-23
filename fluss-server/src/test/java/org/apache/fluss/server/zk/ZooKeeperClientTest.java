@@ -24,6 +24,7 @@ import org.apache.fluss.cluster.rebalance.ServerTag;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.fs.FsPath;
+import org.apache.fluss.metadata.DatabaseDescriptor;
 import org.apache.fluss.metadata.DatabaseSummary;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.Schema;
@@ -37,12 +38,14 @@ import org.apache.fluss.server.zk.ZkAsyncResponse.ZkGetDataResponse;
 import org.apache.fluss.server.zk.data.BucketAssignment;
 import org.apache.fluss.server.zk.data.BucketSnapshot;
 import org.apache.fluss.server.zk.data.CoordinatorAddress;
+import org.apache.fluss.server.zk.data.DatabaseRegistration;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
 import org.apache.fluss.server.zk.data.PartitionAssignment;
 import org.apache.fluss.server.zk.data.PartitionRegistration;
 import org.apache.fluss.server.zk.data.RebalanceTask;
 import org.apache.fluss.server.zk.data.ServerTags;
 import org.apache.fluss.server.zk.data.TableAssignment;
+import org.apache.fluss.server.zk.data.TableMetadataRegistration;
 import org.apache.fluss.server.zk.data.TableRegistration;
 import org.apache.fluss.server.zk.data.TabletServerRegistration;
 import org.apache.fluss.server.zk.data.ZkData.BucketIdZNode;
@@ -74,6 +77,11 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
 import static org.apache.fluss.cluster.rebalance.RebalanceStatus.COMPLETED;
@@ -457,10 +465,11 @@ class ZooKeeperClientTest {
                 .containsValues(tableReg1, tableReg2);
 
         // update table.
+        long tableIdToUpdate = tableReg1.tableId;
         currentMillis = System.currentTimeMillis();
         tableReg1 =
                 new TableRegistration(
-                        13,
+                        tableIdToUpdate,
                         "third table",
                         Arrays.asList("a", "b"),
                         new TableDescriptor.TableDistribution(16, Collections.singletonList("a")),
@@ -477,6 +486,49 @@ class ZooKeeperClientTest {
         // delete table.
         zookeeperClient.deleteTable(tablePath1);
         assertThat(zookeeperClient.getTable(tablePath1)).isEmpty();
+    }
+
+    private static void registerDatabase(String database) throws Exception {
+        zookeeperClient.registerDatabase(
+                database, DatabaseRegistration.of(DatabaseDescriptor.builder().build()));
+    }
+
+    private static TableRegistration tableRegistration(
+            long tableId, Schema schema, int bucketCount) {
+        return TableRegistration.newTable(
+                tableId,
+                remoteDataDir,
+                TableDescriptor.builder()
+                        .schema(schema)
+                        .distributedBy(bucketCount, schema.getPrimaryKeyColumnNames().get(0))
+                        .build());
+    }
+
+    @Test
+    void testRegisterTablesAtomically() throws Exception {
+        String database = "atomic_create_db";
+        TablePath mainPath = TablePath.of(database, "main");
+        TablePath indexPath = TablePath.of(database, "index");
+        Schema schema = Schema.newBuilder().column("id", DataTypes.INT()).primaryKey("id").build();
+        registerDatabase(database);
+        TableRegistration existingIndex = tableRegistration(3, schema, 1);
+        zookeeperClient.registerTable(indexPath, existingIndex);
+
+        List<TableMetadataRegistration> registrations =
+                Arrays.asList(
+                        new TableMetadataRegistration(
+                                mainPath, tableRegistration(1, schema, 1), schema, null),
+                        new TableMetadataRegistration(
+                                indexPath, tableRegistration(2, schema, 1), schema, null));
+        assertThatThrownBy(
+                        () ->
+                                zookeeperClient.registerTablesAtomically(
+                                        registrations, zkEpoch.getCoordinatorEpochZkVersion()))
+                .isInstanceOf(KeeperException.NodeExistsException.class);
+
+        assertThat(zookeeperClient.getTable(mainPath)).isEmpty();
+        assertThat(zookeeperClient.getSchemaById(mainPath, 1)).isEmpty();
+        assertThat(zookeeperClient.getTable(indexPath)).contains(existingIndex);
     }
 
     @Test
@@ -513,6 +565,8 @@ class ZooKeeperClientTest {
                         .primaryKey("a")
                         .build();
         int registeredSchemaId = zookeeperClient.registerFirstSchema(tablePath, schema);
+        long tableId = 1L;
+        zookeeperClient.registerTable(tablePath, tableRegistration(tableId, schema, 1), false);
         assertThat(registeredSchemaId).isEqualTo(schemaId);
         assertThat(zookeeperClient.getCurrentSchemaId(tablePath)).isEqualTo(schemaId);
 
@@ -658,6 +712,12 @@ class ZooKeeperClientTest {
                 .isEqualTo(expectedSnapshots);
 
         long partitionId = 2L;
+        TablePath partitionedTablePath = TablePath.of("db", "partitioned_table");
+        registerDatabase(partitionedTablePath.getDatabaseName());
+        Schema partitionedSchema =
+                Schema.newBuilder().column("id", DataTypes.INT()).primaryKey("id").build();
+        zookeeperClient.registerTable(
+                partitionedTablePath, tableRegistration(tableId, partitionedSchema, 1));
         Map<Integer, BucketAssignment> partitionBucketAssignments =
                 Collections.singletonMap(0, BucketAssignment.of(0));
         zookeeperClient.registerPartitionAssignmentAndMetadata(
@@ -665,7 +725,7 @@ class ZooKeeperClientTest {
                 "p1",
                 new PartitionAssignment(tableId, partitionBucketAssignments),
                 remoteDataDir,
-                TablePath.of("db", "partitioned_table"),
+                partitionedTablePath,
                 tableId,
                 partitionBucketAssignments.size());
         TableBucket partitionBucket = new TableBucket(tableId, partitionId, 0);
@@ -881,6 +941,66 @@ class ZooKeeperClientTest {
                 .containsOnlyKeys("p2");
         partitions = zookeeperClient.getPartitions(tablePath);
         assertThat(partitions).containsExactly("p2");
+    }
+
+    @Test
+    void testConcurrentFirstPartitionsAreAllRegistered() throws Exception {
+        TablePath tablePath = TablePath.of("db", "concurrent_partitions");
+        long tableId = 12;
+        zookeeperClient.registerTable(
+                tablePath,
+                new TableRegistration(
+                        tableId,
+                        "partitioned table",
+                        Arrays.asList("a", "b"),
+                        new TableDescriptor.TableDistribution(1, Collections.singletonList("a")),
+                        Collections.emptyMap(),
+                        Collections.emptyMap(),
+                        remoteDataDir,
+                        System.currentTimeMillis(),
+                        System.currentTimeMillis()));
+
+        int partitionCount = 16;
+        PartitionAssignment assignment =
+                new PartitionAssignment(
+                        tableId, Collections.singletonMap(0, BucketAssignment.of(0)));
+        ExecutorService executor = Executors.newFixedThreadPool(partitionCount);
+        CountDownLatch ready = new CountDownLatch(partitionCount);
+        CountDownLatch start = new CountDownLatch(1);
+        List<CompletableFuture<Void>> registrations = new ArrayList<>(partitionCount);
+        try {
+            for (int i = 0; i < partitionCount; i++) {
+                long partitionId = i + 1L;
+                String partitionName = "p" + partitionId;
+                registrations.add(
+                        CompletableFuture.runAsync(
+                                () -> {
+                                    ready.countDown();
+                                    try {
+                                        start.await();
+                                        zookeeperClient.registerPartitionAssignmentAndMetadata(
+                                                partitionId,
+                                                partitionName,
+                                                assignment,
+                                                remoteDataDir,
+                                                tablePath,
+                                                tableId,
+                                                assignment.getBucketAssignments().size());
+                                    } catch (Exception e) {
+                                        throw new RuntimeException(e);
+                                    }
+                                },
+                                executor));
+            }
+            assertThat(ready.await(30, TimeUnit.SECONDS)).isTrue();
+            start.countDown();
+            CompletableFuture.allOf(registrations.toArray(new CompletableFuture[0]))
+                    .get(30, TimeUnit.SECONDS);
+        } finally {
+            executor.shutdownNow();
+        }
+
+        assertThat(zookeeperClient.getPartitions(tablePath)).hasSize(partitionCount);
     }
 
     @Test

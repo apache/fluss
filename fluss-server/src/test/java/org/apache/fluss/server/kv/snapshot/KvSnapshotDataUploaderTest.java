@@ -285,6 +285,39 @@ class KvSnapshotDataUploaderTest {
         CLOSE
     }
 
+    @Test
+    void testUploadEmptyFileCreatesZeroLengthHandle() throws Exception {
+        File snapshotSharedFolder = new File(temporaryFolder.toFile(), "shared");
+        FsPath snapshotSharedDirectory = FsPath.fromLocalFile(snapshotSharedFolder);
+        SnapshotLocation snapshotLocation =
+                new SnapshotLocation(
+                        LocalFileSystem.getSharedInstance(),
+                        snapshotSharedDirectory,
+                        snapshotSharedDirectory,
+                        1024);
+
+        Path emptyFile = Files.createFile(temporaryFolder.resolve("empty"));
+        Counter counter = new ThreadSafeSimpleCounter();
+        KvSnapshotDataUploader snapshotUploader = new KvSnapshotDataUploader(uploaderThreadPool);
+        List<KvFileHandleAndLocalPath> uploadedFiles =
+                snapshotUploader.uploadFilesToSnapshotLocation(
+                        Collections.singletonList(emptyFile),
+                        snapshotLocation,
+                        SnapshotFileScope.SHARED,
+                        new CloseableRegistry(),
+                        new CloseableRegistry(),
+                        counter);
+
+        assertThat(uploadedFiles).hasSize(1);
+        assertThat(counter.getCount()).isZero();
+        KvFileHandle kvFileHandle = uploadedFiles.get(0).getKvFileHandle();
+        assertThat(kvFileHandle.getSize()).isEqualTo(0L);
+        FsPath uploadedPath = new FsPath(kvFileHandle.getFilePath());
+        try (FSDataInputStream inputStream = uploadedPath.getFileSystem().open(uploadedPath)) {
+            assertContentEqual(emptyFile, inputStream);
+        }
+    }
+
     private void assertContentEqual(Path stateFilePath, FSDataInputStream inputStream)
             throws IOException {
         byte[] expected = Files.readAllBytes(stateFilePath);

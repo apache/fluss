@@ -18,6 +18,8 @@
 package org.apache.fluss.utils.json;
 
 import org.apache.fluss.annotation.Internal;
+import org.apache.fluss.metadata.IndexType;
+import org.apache.fluss.metadata.IndexVisibility;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.core.JsonGenerator;
 import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.JsonNode;
@@ -39,6 +41,12 @@ public class SchemaJsonSerde implements JsonSerializer<Schema>, JsonDeserializer
     private static final String AUTO_INCREMENT_COLUMN_NAME = "auto_increment_column";
     private static final String VERSION_KEY = "version";
     private static final String HIGHEST_FIELD_ID = "highest_field_id";
+    private static final String INDEXES_NAME = "indexes";
+    private static final String INDEX_NAME = "name";
+    private static final String INDEX_COLUMNS_NAME = "columns";
+    private static final String INDEX_TYPE_NAME = "type";
+    private static final String INDEX_VISIBILITY_NAME = "visibility";
+    private static final String INDEX_BUCKET_NUM_NAME = "bucket_num";
     private static final int VERSION = 1;
 
     @Override
@@ -72,6 +80,27 @@ public class SchemaJsonSerde implements JsonSerializer<Schema>, JsonDeserializer
             generator.writeEndArray();
         }
 
+        List<Schema.Index> indexes = schema.getIndexes();
+        if (!indexes.isEmpty()) {
+            generator.writeArrayFieldStart(INDEXES_NAME);
+            for (Schema.Index index : indexes) {
+                generator.writeStartObject();
+                generator.writeStringField(INDEX_NAME, index.getIndexName());
+                generator.writeStringField(INDEX_TYPE_NAME, index.getIndexType().name());
+                generator.writeStringField(INDEX_VISIBILITY_NAME, index.getVisibility().name());
+                if (index.getBucketCount().isPresent()) {
+                    generator.writeNumberField(INDEX_BUCKET_NUM_NAME, index.getBucketCount().get());
+                }
+                generator.writeArrayFieldStart(INDEX_COLUMNS_NAME);
+                for (String columnName : index.getColumnNames()) {
+                    generator.writeString(columnName);
+                }
+                generator.writeEndArray();
+                generator.writeEndObject();
+            }
+            generator.writeEndArray();
+        }
+
         generator.writeNumberField(HIGHEST_FIELD_ID, schema.getHighestFieldId());
 
         generator.writeEndObject();
@@ -100,6 +129,33 @@ public class SchemaJsonSerde implements JsonSerializer<Schema>, JsonDeserializer
                     node.get(AUTO_INCREMENT_COLUMN_NAME).elements();
             while (autoIncrementColumnJsons.hasNext()) {
                 builder.enableAutoIncrement(autoIncrementColumnJsons.next().asText());
+            }
+        }
+
+        if (node.has(INDEXES_NAME)) {
+            Iterator<JsonNode> indexJsons = node.get(INDEXES_NAME).elements();
+            while (indexJsons.hasNext()) {
+                JsonNode indexNode = indexJsons.next();
+                String indexName = indexNode.get(INDEX_NAME).asText();
+                IndexType indexType = IndexType.SECONDARY;
+                if (indexNode.has(INDEX_TYPE_NAME)) {
+                    indexType = IndexType.valueOf(indexNode.get(INDEX_TYPE_NAME).asText());
+                }
+                Iterator<JsonNode> indexColumnJsons = indexNode.get(INDEX_COLUMNS_NAME).elements();
+                List<String> columnNames = new ArrayList<>();
+                while (indexColumnJsons.hasNext()) {
+                    columnNames.add(indexColumnJsons.next().asText());
+                }
+                IndexVisibility visibility = IndexVisibility.SYNC;
+                if (indexNode.has(INDEX_VISIBILITY_NAME)) {
+                    visibility =
+                            IndexVisibility.valueOf(indexNode.get(INDEX_VISIBILITY_NAME).asText());
+                }
+                Integer bucketCount = null;
+                if (indexNode.has(INDEX_BUCKET_NUM_NAME)) {
+                    bucketCount = indexNode.get(INDEX_BUCKET_NUM_NAME).asInt();
+                }
+                builder.index(indexName, indexType, columnNames, visibility, bucketCount);
             }
         }
 
