@@ -260,6 +260,15 @@ class FlussAsSparkArrayTest extends AnyFunSuite {
     assertThat(sparkArray.getBinary(2)).isEqualTo(Array[Byte](7, 8, 9))
   }
 
+  test("getBinary: read variable-length bytes and null array elements") {
+    val values = Array[Object](Array.empty[Byte], Array[Byte](1, 2, 3), null)
+    val sparkArray = new FlussAsSparkArray(DataTypes.BYTES).replace(new GenericArray(values))
+
+    assertThat(sparkArray.getBinary(0)).isEmpty()
+    assertThat(sparkArray.getBinary(1)).containsExactly(1.toByte, 2.toByte, 3.toByte)
+    assertThat(sparkArray.isNullAt(2)).isTrue()
+  }
+
   test("getStruct: read row array") {
     val rowType = RowType
       .builder()
