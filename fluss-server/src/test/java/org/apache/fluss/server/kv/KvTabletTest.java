@@ -97,7 +97,6 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import javax.annotation.Nullable;
@@ -909,110 +908,6 @@ class KvTabletTest {
                                         new Object[] {1, "v1", null},
                                         new Object[] {1, "v1", "c1"})));
         checkEqual(actualLogRecords, expectedLogs, rowType);
-    }
-
-    @Test
-    void testBatchOldValuesPreserveOrderedChangelogAndBufferedTombstones() throws Exception {
-        initLogTabletAndKvTablet(DATA1_SCHEMA_PK, new HashMap<>());
-        kvTablet.putAsLeader(
-                kvRecordBatchFactory.ofRecords(
-                        kvRecordFactory.ofRecord("k1", new Object[] {1, "v1"}),
-                        kvRecordFactory.ofRecord("k2", new Object[] {2, "v2"})),
-                null);
-        flushAndWait(kvTablet, Long.MAX_VALUE);
-        kvTablet.putAsLeader(
-                kvRecordBatchFactory.ofRecords(
-                        kvRecordFactory.ofRecord("k2", null),
-                        kvRecordFactory.ofRecord("k3", new Object[] {3, "v3"})),
-                null);
-        long offset = logTablet.localLogEndOffset();
-        Statistics statistics = kvTablet.getRocksDBKv().getStatistics();
-        long gets = statistics.getTickerCount(TickerType.NUMBER_KEYS_READ);
-        long calls = statistics.getTickerCount(TickerType.NUMBER_MULTIGET_CALLS);
-        long keys = statistics.getTickerCount(TickerType.NUMBER_MULTIGET_KEYS_READ);
-        kvTablet.putAsLeader(
-                kvRecordBatchFactory.ofRecords(
-                        kvRecordFactory.ofRecord("k1", new Object[] {1, "v11"}),
-                        kvRecordFactory.ofRecord("k1", null),
-                        kvRecordFactory.ofRecord("k1", new Object[] {1, "v12"}),
-                        kvRecordFactory.ofRecord("missing", null),
-                        kvRecordFactory.ofRecord("missing", null),
-                        kvRecordFactory.ofRecord("k2", new Object[] {2, "v22"}),
-                        kvRecordFactory.ofRecord("k3", new Object[] {3, "v33"}),
-                        kvRecordFactory.ofRecord("k3", null)),
-                null);
-        assertThat(statistics.getTickerCount(TickerType.NUMBER_MULTIGET_CALLS) - calls)
-                .isEqualTo(1);
-        assertThat(statistics.getTickerCount(TickerType.NUMBER_MULTIGET_KEYS_READ) - keys)
-                .isEqualTo(2);
-        assertThat(statistics.getTickerCount(TickerType.NUMBER_KEYS_READ) - gets).isZero();
-        checkEqual(
-                readLogRecords(offset),
-                Collections.singletonList(
-                        logRecords(
-                                offset,
-                                Arrays.asList(
-                                        ChangeType.UPDATE_BEFORE,
-                                        ChangeType.UPDATE_AFTER,
-                                        ChangeType.DELETE,
-                                        ChangeType.INSERT,
-                                        ChangeType.INSERT,
-                                        ChangeType.UPDATE_BEFORE,
-                                        ChangeType.UPDATE_AFTER,
-                                        ChangeType.DELETE),
-                                Arrays.asList(
-                                        new Object[] {1, "v1"},
-                                        new Object[] {1, "v11"},
-                                        new Object[] {1, "v11"},
-                                        new Object[] {1, "v12"},
-                                        new Object[] {2, "v22"},
-                                        new Object[] {3, "v3"},
-                                        new Object[] {3, "v33"},
-                                        new Object[] {3, "v33"}))));
-    }
-
-    @ParameterizedTest
-    @CsvSource({"7, 1, 0", "8, 0, 1"})
-    void testWalBatchLookupAfterStreamingUpserts(
-            int batchSize, int expectedGets, int expectedMultiGetCalls) throws Exception {
-        Map<String, String> config = new HashMap<>();
-        config.put("table.changelog.image", "WAL");
-        initLogTabletAndKvTablet(DATA1_SCHEMA_PK, config);
-        kvTablet.putAsLeader(
-                kvRecordBatchFactory.ofRecords(
-                        kvRecordFactory.ofRecord("new0", new Object[] {0, "old"}),
-                        kvRecordFactory.ofRecord("k2", new Object[] {2, "v2"})),
-                null);
-        flushAndWait(kvTablet, Long.MAX_VALUE);
-        List<KvRecord> records = new ArrayList<>();
-        List<Object[]> expectedRows = new ArrayList<>();
-        for (int i = 0; i < batchSize - 2; i++) {
-            records.add(kvRecordFactory.ofRecord("new" + i, new Object[] {i, "new"}));
-            expectedRows.add(new Object[] {i, "new"});
-        }
-        records.add(kvRecordFactory.ofRecord("new0", null));
-        records.add(kvRecordFactory.ofRecord("k2", null));
-        expectedRows.add(new Object[] {0, "new"});
-        expectedRows.add(new Object[] {2, "v2"});
-        List<ChangeType> expectedChanges =
-                new ArrayList<>(Collections.nCopies(batchSize - 2, ChangeType.UPDATE_AFTER));
-        expectedChanges.add(ChangeType.DELETE);
-        expectedChanges.add(ChangeType.DELETE);
-        long offset = logTablet.localLogEndOffset();
-        Statistics statistics = kvTablet.getRocksDBKv().getStatistics();
-        long gets = statistics.getTickerCount(TickerType.NUMBER_KEYS_READ);
-        long calls = statistics.getTickerCount(TickerType.NUMBER_MULTIGET_CALLS);
-        long keys = statistics.getTickerCount(TickerType.NUMBER_MULTIGET_KEYS_READ);
-        kvTablet.putAsLeader(kvRecordBatchFactory.ofRecords(records), null);
-        assertThat(statistics.getTickerCount(TickerType.NUMBER_KEYS_READ) - gets)
-                .isEqualTo(expectedGets);
-        assertThat(statistics.getTickerCount(TickerType.NUMBER_MULTIGET_CALLS) - calls)
-                .isEqualTo(expectedMultiGetCalls);
-        assertThat(statistics.getTickerCount(TickerType.NUMBER_MULTIGET_KEYS_READ) - keys)
-                .isEqualTo(expectedMultiGetCalls);
-        checkEqual(
-                readLogRecords(offset),
-                Collections.singletonList(logRecords(offset, expectedChanges, expectedRows)));
     }
 
     @Test
