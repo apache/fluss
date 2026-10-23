@@ -326,9 +326,9 @@ class SparkTieringJobRunner(
   }
 
   private def checkNotCancelled(coordinator: TieringCoordinator): Unit = {
-    checkState(!stopped.get(), "Spark tiering service is stopping")
-    checkState(heartbeatFailure == null, "Spark tiering heartbeat failed")
-    checkState(!coordinator.tableCancelled, "Spark tiering assignment was cancelled")
+    checkState(!stopped.get(), "Spark tiering service is stopping": Any)
+    checkState(heartbeatFailure == null, "Spark tiering heartbeat failed": Any)
+    checkState(!coordinator.tableCancelled, "Spark tiering assignment was cancelled": Any)
   }
 }
 
