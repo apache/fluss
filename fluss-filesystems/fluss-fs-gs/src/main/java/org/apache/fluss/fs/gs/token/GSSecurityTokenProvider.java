@@ -40,12 +40,20 @@ import static com.google.cloud.hadoop.util.HadoopCredentialConfiguration.SERVICE
 
 /**
  * Mints a short-lived Cloud Storage access token from the server identity. Clients receive that
- * bearer token and do not need the key file.
+ * bearer token and do not need the key file. The token uses the Cloud Storage read-only scope, and
+ * only a service account can mint it.
  *
- * <p>Choose one value of {@code fs.gs.auth.type}. {@code APPLICATION_DEFAULT} is also used when the
- * key is unset, and calls {@link GoogleCredentials#getApplicationDefault()}. {@code COMPUTE_ENGINE}
- * reads the instance metadata server. {@code SERVICE_ACCOUNT_JSON_KEYFILE} exchanges a JWT at the
- * key's {@code token_uri}. The bundled GCS connector does not read {@code fs.gs.auth.type}.
+ * <p>{@code SERVICE_ACCOUNT_JSON_KEYFILE} exchanges a JWT at the key's {@code token_uri}. {@code
+ * COMPUTE_ENGINE} reads the instance metadata server. {@code APPLICATION_DEFAULT} calls {@link
+ * GoogleCredentials#getApplicationDefault()} and accepts only {@link ServiceAccountCredentials} or
+ * {@link ComputeEngineCredentials}. User credentials, such as those from {@code gcloud auth
+ * application-default login}, are rejected because {@code createScoped} leaves their original
+ * scopes in place.
+ *
+ * <p>When {@code fs.gs.auth.type} is unset, a configured {@code
+ * fs.gs.auth.service.account.json.keyfile} is used. Application default credentials are used only
+ * when that key file is absent. The bundled GCS connector does not read {@code fs.gs.auth.type} and
+ * authenticates with the key file whenever one is set.
  */
 public class GSSecurityTokenProvider {
 
@@ -126,9 +134,15 @@ public class GSSecurityTokenProvider {
 
     private static GoogleCredentials extractProvider(Configuration conf) {
         final String authType = conf.get(AUTH_TYPE_KEY);
-        if (authType == null
-                || authType.isEmpty()
-                || AUTH_TYPE_APPLICATION_DEFAULT.equals(authType)) {
+        if (authType == null || authType.isEmpty()) {
+            // The bundled connector ignores fs.gs.auth.type and uses the key file when one is set.
+            // Minting from ADC here would hand clients a different identity than the server writes
+            // with.
+            if (isConfigured(serviceAccountKeyFile(conf))) {
+                return getServiceAccountCredentials(conf);
+            }
+            return applicationDefaultCredentials();
+        } else if (AUTH_TYPE_APPLICATION_DEFAULT.equals(authType)) {
             return applicationDefaultCredentials();
         } else if (AUTH_TYPE_COMPUTE_ENGINE.equals(authType)) {
             return ComputeEngineCredentials.newBuilder().build();
@@ -143,8 +157,9 @@ public class GSSecurityTokenProvider {
     }
 
     private static GoogleCredentials applicationDefaultCredentials() {
+        final GoogleCredentials credentials;
         try {
-            return GoogleCredentials.getApplicationDefault();
+            credentials = GoogleCredentials.getApplicationDefault();
         } catch (IOException e) {
             throw new IllegalArgumentException(
                     "Application default credentials are not available. "
@@ -153,16 +168,32 @@ public class GSSecurityTokenProvider {
                             + "or set fs.gs.auth.type to SERVICE_ACCOUNT_JSON_KEYFILE.",
                     e);
         }
+        return requireServiceAccount(credentials);
+    }
+
+    /**
+     * User credentials ignore {@code createScoped} and keep the scopes granted at login, usually
+     * {@code cloud-platform}. Distributing that bearer would give every client the server user's
+     * access. Service account and Compute Engine credentials honor the read-only scope.
+     */
+    private static GoogleCredentials requireServiceAccount(GoogleCredentials credentials) {
+        if (credentials instanceof ServiceAccountCredentials
+                || credentials instanceof ComputeEngineCredentials) {
+            return credentials;
+        }
+        throw new IllegalArgumentException(
+                "Only a service account can mint a Cloud Storage security token. "
+                        + "Application default credentials resolved to "
+                        + credentials.getClass().getSimpleName()
+                        + ", which cannot be limited to "
+                        + STORAGE_SCOPE
+                        + ". Use a service account JSON key file, or run where Application "
+                        + "Default Credentials are a service account (GCE or GKE Workload Identity).");
     }
 
     private static ServiceAccountCredentials getServiceAccountCredentials(Configuration conf) {
-        List<String> prefixes = new ArrayList<>();
-        // Suffixes already start with '.', so the prefix must not.
-        prefixes.add("fs.gs");
-
-        String keyFile =
-                SERVICE_ACCOUNT_JSON_KEYFILE_SUFFIX.withPrefixes(prefixes).get(conf, conf::get);
-        if (keyFile == null || keyFile.isEmpty()) {
+        String keyFile = serviceAccountKeyFile(conf);
+        if (!isConfigured(keyFile)) {
             throw new IllegalArgumentException(
                     JSON_KEYFILE_KEY + " must be set to obtain a security token.");
         }
@@ -171,5 +202,16 @@ public class GSSecurityTokenProvider {
         } catch (IOException e) {
             throw new FlussRuntimeException("Fail to read service account json file", e);
         }
+    }
+
+    private static String serviceAccountKeyFile(Configuration conf) {
+        List<String> prefixes = new ArrayList<>();
+        // Suffixes already start with '.', so the prefix must not.
+        prefixes.add("fs.gs");
+        return SERVICE_ACCOUNT_JSON_KEYFILE_SUFFIX.withPrefixes(prefixes).get(conf, conf::get);
+    }
+
+    private static boolean isConfigured(String value) {
+        return value != null && !value.isEmpty();
     }
 }
