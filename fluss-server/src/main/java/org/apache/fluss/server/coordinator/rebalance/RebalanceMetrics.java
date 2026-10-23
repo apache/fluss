@@ -71,7 +71,7 @@ public class RebalanceMetrics {
                 MetricNames.REBALANCE_DURATION_MS,
                 () -> readCurrent(RebalanceManager::rebalanceDurationMs));
         metricGroup.gauge(
-                MetricNames.INFLIGHT_BUCKET_DURATION_MS,
+                MetricNames.REBALANCE_INFLIGHT_BUCKET_DURATION_MS,
                 () -> readCurrent(RebalanceManager::inflightBucketDurationMs));
     }
 

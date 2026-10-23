@@ -434,14 +434,14 @@ public class RebalanceManagerTest {
 
         metricClock.advanceTime(Duration.ofMillis(500));
         assertThat(gaugeValue(MetricNames.REBALANCE_DURATION_MS)).isEqualTo(500);
-        assertThat(gaugeValue(MetricNames.INFLIGHT_BUCKET_DURATION_MS)).isEqualTo(500);
+        assertThat(gaugeValue(MetricNames.REBALANCE_INFLIGHT_BUCKET_DURATION_MS)).isEqualTo(500);
 
         rebalanceManager.finishRebalanceTask(buckets.get(0), COMPLETED);
         metricClock.advanceTime(Duration.ofMillis(200));
         assertThat(gaugeValue(MetricNames.REBALANCE_BUCKETS_PENDING)).isEqualTo(1);
         assertThat(gaugeValue(MetricNames.REBALANCE_BUCKETS_COMPLETED)).isEqualTo(1);
         assertThat(gaugeValue(MetricNames.REBALANCE_DURATION_MS)).isEqualTo(700);
-        assertThat(gaugeValue(MetricNames.INFLIGHT_BUCKET_DURATION_MS)).isEqualTo(200);
+        assertThat(gaugeValue(MetricNames.REBALANCE_INFLIGHT_BUCKET_DURATION_MS)).isEqualTo(200);
         assertThat(counterValue(MetricNames.REBALANCES_COMPLETED_TOTAL)).isZero();
 
         rebalanceManager.finishRebalanceTask(buckets.get(1), COMPLETED);
@@ -450,7 +450,7 @@ public class RebalanceManagerTest {
         assertThat(gaugeValue(MetricNames.REBALANCE_BUCKETS_PENDING)).isZero();
         assertThat(gaugeValue(MetricNames.REBALANCE_BUCKETS_COMPLETED)).isEqualTo(2);
         assertThat(gaugeValue(MetricNames.REBALANCE_DURATION_MS)).isZero();
-        assertThat(gaugeValue(MetricNames.INFLIGHT_BUCKET_DURATION_MS)).isZero();
+        assertThat(gaugeValue(MetricNames.REBALANCE_INFLIGHT_BUCKET_DURATION_MS)).isZero();
         assertThat(counterValue(MetricNames.REBALANCES_COMPLETED_TOTAL)).isEqualTo(1);
 
         rebalanceManager.registerRebalance("empty", Collections.emptyMap(), NOT_STARTED);
@@ -498,7 +498,7 @@ public class RebalanceManagerTest {
         metricClock.advanceTime(Duration.ofMinutes(3));
         rebalanceManager.checkTimeout();
 
-        assertThat(gaugeValue(MetricNames.INFLIGHT_BUCKET_DURATION_MS)).isZero();
+        assertThat(gaugeValue(MetricNames.REBALANCE_INFLIGHT_BUCKET_DURATION_MS)).isZero();
         assertThat(gaugeValue(MetricNames.REBALANCE_BUCKETS_PENDING)).isEqualTo(1);
         assertThat(gaugeValue(MetricNames.REBALANCE_DURATION_MS)).isEqualTo(180_000);
         rebalanceManager.finishRebalanceTask(bucket, TIMEOUT);
@@ -526,7 +526,7 @@ public class RebalanceManagerTest {
         assertThat(gaugeValue(MetricNames.REBALANCE_BUCKETS_PENDING)).isZero();
         assertThat(gaugeValue(MetricNames.REBALANCE_BUCKETS_COMPLETED)).isEqualTo(1);
         assertThat(gaugeValue(MetricNames.REBALANCE_DURATION_MS)).isZero();
-        assertThat(gaugeValue(MetricNames.INFLIGHT_BUCKET_DURATION_MS)).isZero();
+        assertThat(gaugeValue(MetricNames.REBALANCE_INFLIGHT_BUCKET_DURATION_MS)).isZero();
     }
 
     @ParameterizedTest
@@ -541,7 +541,7 @@ public class RebalanceManagerTest {
         assertThat(gaugeValue(MetricNames.REBALANCE_BUCKETS_FAILED)).isZero();
         assertThat(gaugeValue(MetricNames.REBALANCE_BUCKETS_TIMED_OUT)).isZero();
         assertThat(gaugeValue(MetricNames.REBALANCE_DURATION_MS)).isZero();
-        assertThat(gaugeValue(MetricNames.INFLIGHT_BUCKET_DURATION_MS)).isZero();
+        assertThat(gaugeValue(MetricNames.REBALANCE_INFLIGHT_BUCKET_DURATION_MS)).isZero();
         assertThat(counterValue(MetricNames.REBALANCES_COMPLETED_TOTAL)).isZero();
         assertThat(counterValue(MetricNames.REBALANCES_FAILED_TOTAL)).isZero();
         assertThat(counterValue(MetricNames.REBALANCES_CANCELED_TOTAL)).isZero();

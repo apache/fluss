@@ -505,7 +505,7 @@ rebalance is counted by the coordinator that observes its completion.
       <td>Gauge</td>
     </tr>
     <tr>
-      <td>inflightBucketDurationMs</td>
+      <td>rebalanceInflightBucketDurationMs</td>
       <td>Elapsed milliseconds for the currently running bucket; 0 when no bucket is running.</td>
       <td>Gauge</td>
     </tr>
