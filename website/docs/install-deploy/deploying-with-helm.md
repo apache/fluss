@@ -478,6 +478,10 @@ making rotation fully hands-off.
 | `resources.tabletServer.requests.memory` | Memory requests for tablet servers | Not set |
 | `resources.tabletServer.limits.cpu` | CPU limits for tablet servers | Not set |
 | `resources.tabletServer.limits.memory` | Memory limits for tablet servers | Not set |
+| `resources.jaasInitContainer.requests.cpu` | CPU requests for the `render-jaas-config` init container (SASL only) | Not set |
+| `resources.jaasInitContainer.requests.memory` | Memory requests for the `render-jaas-config` init container (SASL only) | Not set |
+| `resources.jaasInitContainer.limits.cpu` | CPU limits for the `render-jaas-config` init container (SASL only) | Not set |
+| `resources.jaasInitContainer.limits.memory` | Memory limits for the `render-jaas-config` init container (SASL only) | Not set |
 
 ### Pod Extension Parameters
 
