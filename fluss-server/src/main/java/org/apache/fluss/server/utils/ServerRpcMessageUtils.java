@@ -302,7 +302,6 @@ public class ServerRpcMessageUtils {
                 pbServerNode.hasRack() ? pbServerNode.getRack() : null);
     }
 
-
     public static DescribeClusterResponse buildDescribeClusterResponse(
             @Nullable ServerNode coordinatorServer, Collection<ServerNode> aliveTabletServers) {
         DescribeClusterResponse describeClusterResponse = new DescribeClusterResponse();
