@@ -105,6 +105,13 @@ class SparkTieringJobRunner(
         thread
       }))
 
+  private val heartbeatScheduler = Executors.newSingleThreadScheduledExecutor(
+    (r: Runnable) => {
+      val thread = new Thread(r, "SparkTiering-Heartbeat")
+      thread.setDaemon(true)
+      thread
+    })
+
   /** Starts the service once and returns its termination future on subsequent calls. */
   def startAsync(): Future[Unit] = synchronized {
     if (started.compareAndSet(false, true)) {
@@ -121,8 +128,9 @@ class SparkTieringJobRunner(
     synchronized {
       stopped.set(true)
       if (started.compareAndSet(false, true)) {
-        terminationPromise.trySuccess(())
+        heartbeatScheduler.shutdownNow()
         loopExecutionContext.shutdown()
+        terminationPromise.trySuccess(())
       }
     }
     stopSignal.synchronized {
@@ -201,10 +209,17 @@ class SparkTieringJobRunner(
         }
       }
     } finally {
-      closeQuietly(coordinator, "TieringCoordinator")
-      closeQuietly(snapshotCommitter, "FlussTableLakeSnapshotCommitter")
-      closeQuietly(admin, "Admin")
-      closeQuietly(connection, "Connection")
+      try {
+        heartbeatScheduler.shutdownNow()
+        if (!heartbeatScheduler.awaitTermination(60, TimeUnit.SECONDS)) {
+          logWarning("Spark tiering heartbeat executor did not terminate within 60 seconds")
+        }
+      } finally {
+        closeQuietly(coordinator, "TieringCoordinator")
+        closeQuietly(snapshotCommitter, "FlussTableLakeSnapshotCommitter")
+        closeQuietly(admin, "Admin")
+        closeQuietly(connection, "Connection")
+      }
     }
   }
 
@@ -222,29 +237,23 @@ class SparkTieringJobRunner(
     coordinator.registerTiering(tableId, tieringEpoch)
     activeJobGroup = jobGroupId
     sc.setJobGroup(jobGroupId, s"Tiering table $tablePath", interruptOnCancel = true)
-    val scheduler = Executors.newSingleThreadScheduledExecutor(
-      (r: Runnable) => {
-        val thread = new Thread(r, "SparkTiering-Heartbeat")
-        thread.setDaemon(true)
-        thread
-      })
+    val heartbeatLock = new Object
     val heartbeatStopped = new AtomicBoolean(false)
-    val heartbeat = scheduler.scheduleAtFixedRate(
+    val heartbeat = heartbeatScheduler.scheduleAtFixedRate(
       new Runnable {
-        override def run(): Unit = {
+        override def run(): Unit = heartbeatLock.synchronized {
           if (!heartbeatStopped.get() && !coordinator.tableCancelled && !stopped.get()) {
             try {
               coordinator.sendKeepAliveHeartbeat()
               failures.set(0)
             } catch {
-              case NonFatal(e) if !heartbeatStopped.get() =>
+              case NonFatal(e) =>
                 val count = failures.incrementAndGet()
                 logWarning(s"Background heartbeat failed ($count/$maxHeartbeatFailures)", e)
                 if (count >= maxHeartbeatFailures) {
                   heartbeatFailure = e
                   coordinator.tableCancelled = true
                 }
-              case NonFatal(_) => // The round is shutting down its heartbeat thread.
             }
             if (coordinator.tableCancelled || heartbeatFailure != null) {
               sc.cancelJobGroup(jobGroupId)
@@ -271,7 +280,7 @@ class SparkTieringJobRunner(
       val splits = rawSplits.zipWithIndex.map {
         case (split, index) => split.copy(rawSplits.size, index, roundTimestamp)
       }.toSeq
-      checkAssignment(coordinator)
+      checkNotCancelled(coordinator)
       val results = if (splits.isEmpty) {
         Seq.empty[TableBucketWriteResult[AnyRef]]
       } else {
@@ -281,36 +290,45 @@ class SparkTieringJobRunner(
           .toSeq
           .map(_.toWriteResult(lakeTieringFactory.getWriteResultSerializer))
       }
-      checkAssignment(coordinator)
       // Confirm ownership immediately before committing, including for empty rounds.
       coordinator.sendKeepAliveHeartbeat()
-      checkAssignment(coordinator)
+      checkNotCancelled(coordinator)
       val result = committer.commitWriteResults(tableId, tablePath, results.asJava)
-      checkAssignment(coordinator)
       stats = Option(result.getStats).getOrElse(TieringStats.UNKNOWN)
       finished = true
     } catch {
       case NonFatal(e) => logWarning(s"Tiering failed for $tablePath (epoch=$tieringEpoch)", e)
     } finally {
-      heartbeatStopped.set(true)
-      heartbeat.cancel(true)
-      scheduler.shutdownNow()
-      // No heartbeat may race the transition to finished/failed or the next assignment.
-      scheduler.awaitTermination(60, TimeUnit.SECONDS)
-      activeJobGroup = null
-      sc.clearJobGroup()
-      if (finished) {
-        coordinator.markTableFinished(tableId, tieringEpoch, stats)
-      } else {
-        coordinator.markTableFailed(tableId, tieringEpoch)
+      // Wait for any in-flight heartbeat and prevent it from racing the final status check.
+      heartbeatLock.synchronized {
+        try {
+          try {
+            checkNotCancelled(coordinator)
+          } catch {
+            case NonFatal(e) =>
+              finished = false
+              logWarning(s"Tiering cancelled for $tablePath (epoch=$tieringEpoch)", e)
+          }
+          if (finished) {
+            coordinator.markTableFinished(tableId, tieringEpoch, stats)
+          } else {
+            coordinator.markTableFailed(tableId, tieringEpoch)
+          }
+        } finally {
+          // A queued heartbeat must observe this flag before touching shared round state.
+          heartbeatStopped.set(true)
+          heartbeat.cancel(false)
+          activeJobGroup = null
+          sc.clearJobGroup()
+        }
       }
     }
   }
 
-  private def checkAssignment(coordinator: TieringCoordinator): Unit = {
-    checkState(!stopped.get(), "Spark tiering service is stopping": Any)
-    checkState(heartbeatFailure == null, "Spark tiering heartbeat failed": Any)
-    checkState(!coordinator.tableCancelled, "Spark tiering assignment was cancelled": Any)
+  private def checkNotCancelled(coordinator: TieringCoordinator): Unit = {
+    checkState(!stopped.get(), "Spark tiering service is stopping")
+    checkState(heartbeatFailure == null, "Spark tiering heartbeat failed")
+    checkState(!coordinator.tableCancelled, "Spark tiering assignment was cancelled")
   }
 }
 
