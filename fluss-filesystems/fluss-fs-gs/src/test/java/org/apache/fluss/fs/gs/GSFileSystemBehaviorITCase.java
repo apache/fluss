@@ -32,18 +32,21 @@ import org.apache.fluss.fs.token.ObtainedSecurityToken;
 import org.apache.fluss.testutils.common.CommonTestUtils;
 import org.apache.fluss.utils.IOUtils;
 
+import com.google.auth.oauth2.GoogleCredentials;
 import com.google.cloud.hadoop.gcsio.GoogleCloudStorageFileSystem;
 import com.google.cloud.hadoop.gcsio.GoogleCloudStorageFileSystemOptions;
 import com.google.cloud.hadoop.gcsio.testing.InMemoryGoogleCloudStorage;
 import org.apache.commons.lang3.reflect.FieldUtils;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.parallel.ResourceLock;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.lang.reflect.Field;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -54,10 +57,25 @@ import java.util.function.Supplier;
 
 import static org.apache.fluss.fs.FileSystem.WriteMode.NO_OVERWRITE;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Tests that validate the behavior of the Google Cloud Storage File System Plugin. */
 @ResourceLock("gs-security-token")
 class GSFileSystemBehaviorITCase extends FileSystemBehaviorTestSuite {
+
+    private static final String READ_ONLY_SCOPE =
+            "https://www.googleapis.com/auth/devstorage.read_only";
+
+    private static final String SERVICE_ACCOUNT_EMAIL =
+            "test-sa@test-project.iam.gserviceaccount.com";
+
+    private static final String USER_CREDENTIALS_JSON =
+            "{"
+                    + "\"type\":\"authorized_user\","
+                    + "\"client_id\":\"test-client.apps.googleusercontent.com\","
+                    + "\"client_secret\":\"test-secret\","
+                    + "\"refresh_token\":\"test-refresh-token\""
+                    + "}";
 
     private static MockAuthServer mockGSServer;
     private static FileSystem fileSystem;
@@ -83,11 +101,8 @@ class GSFileSystemBehaviorITCase extends FileSystemBehaviorTestSuite {
         String tokenEndpoint = "http://127.0.0.1:" + mockGSServer.getPort();
         serviceAccountKeyFile = serviceAccountKeyFile(tokenEndpoint);
 
-        Map<String, String> map = new HashMap<>();
-        map.put("GCE_METADATA_HOST", "127.0.0.1:" + mockGSServer.getPort());
         // ADC reads this env var. The service-account tests pass the same file explicitly.
-        map.put("GOOGLE_APPLICATION_CREDENTIALS", serviceAccountKeyFile.toString());
-        CommonTestUtils.setEnv(map);
+        CommonTestUtils.setEnv(testingEnvironment(serviceAccountKeyFile.toString()));
 
         GSFileSystemPlugin gsFileSystemPlugin = new GSFileSystemPlugin();
         Configuration configuration = new Configuration();
@@ -127,6 +142,11 @@ class GSFileSystemBehaviorITCase extends FileSystemBehaviorTestSuite {
         }
     }
 
+    @BeforeEach
+    void clearRecordedTokenRequests() {
+        mockGSServer.clearRecordedTokenRequests();
+    }
+
     @AfterAll
     static void tearDown() throws IOException {
         GSSecurityTokenReceiver.reset();
@@ -137,6 +157,11 @@ class GSFileSystemBehaviorITCase extends FileSystemBehaviorTestSuite {
     }
 
     private static Path serviceAccountKeyFile(String tokenEndpoint) throws IOException {
+        return serviceAccountKeyFile(tokenEndpoint, SERVICE_ACCOUNT_EMAIL);
+    }
+
+    private static Path serviceAccountKeyFile(String tokenEndpoint, String clientEmail)
+            throws IOException {
         InputStream input =
                 GSFileSystemBehaviorITCase.class
                         .getClassLoader()
@@ -145,10 +170,18 @@ class GSFileSystemBehaviorITCase extends FileSystemBehaviorTestSuite {
         IOUtils.copyBytes(input, buffer, true);
         String json =
                 new String(buffer.toByteArray(), StandardCharsets.UTF_8)
-                        .replace("http://localhost:8080", tokenEndpoint);
+                        .replace("http://localhost:8080", tokenEndpoint)
+                        .replace(SERVICE_ACCOUNT_EMAIL, clientEmail);
         Path keyFile = Files.createTempFile("fake-service-account", ".json");
         Files.write(keyFile, json.getBytes(StandardCharsets.UTF_8));
         return keyFile;
+    }
+
+    private static Map<String, String> testingEnvironment(String credentialsPath) {
+        Map<String, String> map = new HashMap<>();
+        map.put("GCE_METADATA_HOST", "127.0.0.1:" + mockGSServer.getPort());
+        map.put("GOOGLE_APPLICATION_CREDENTIALS", credentialsPath);
+        return map;
     }
 
     @Test
@@ -191,6 +224,8 @@ class GSFileSystemBehaviorITCase extends FileSystemBehaviorTestSuite {
         Credentials credentials = CredentialsJsonSerde.fromJson(obtained.getToken());
         assertThat(credentials.getSecurityToken()).isEqualTo("token");
         assertThat(obtained.getValidUntil().get()).isGreaterThan(System.currentTimeMillis());
+        assertReadOnlyScopeRequested();
+        assertThat(mockGSServer.requestedIssuers()).containsExactly(SERVICE_ACCOUNT_EMAIL);
 
         GSSecurityTokenReceiver.reset();
         new GSSecurityTokenReceiver().onNewTokensObtained(obtained);
@@ -207,11 +242,14 @@ class GSFileSystemBehaviorITCase extends FileSystemBehaviorTestSuite {
         Credentials credentials = CredentialsJsonSerde.fromJson(obtained.getToken());
         assertThat(credentials.getSecurityToken()).isEqualTo("token");
         assertThat(obtained.getValidUntil().get()).isGreaterThan(System.currentTimeMillis());
+        assertReadOnlyScopeRequested();
     }
 
     @Test
     void applicationDefaultRefreshesAnAccessToken() {
         assertThat(refreshedToken("APPLICATION_DEFAULT").getSecurityToken()).isEqualTo("token");
+        assertReadOnlyScopeRequested();
+        assertThat(mockGSServer.requestedIssuers()).containsExactly(SERVICE_ACCOUNT_EMAIL);
     }
 
     @Test
@@ -223,6 +261,76 @@ class GSFileSystemBehaviorITCase extends FileSystemBehaviorTestSuite {
         Credentials credentials = CredentialsJsonSerde.fromJson(obtained.getToken());
         assertThat(credentials.getSecurityToken()).isEqualTo("token");
         assertThat(obtained.getValidUntil().get()).isGreaterThan(System.currentTimeMillis());
+        assertReadOnlyScopeRequested();
+        assertThat(mockGSServer.requestedIssuers()).containsExactly(SERVICE_ACCOUNT_EMAIL);
+    }
+
+    @Test
+    void unsetAuthTypeUsesTheConfiguredKeyFile() throws Exception {
+        String keyFileEmail = "keyfile-sa@test-project.iam.gserviceaccount.com";
+        Path keyFile =
+                serviceAccountKeyFile("http://127.0.0.1:" + mockGSServer.getPort(), keyFileEmail);
+        try {
+            org.apache.hadoop.conf.Configuration hadoopConfig =
+                    new org.apache.hadoop.conf.Configuration(false);
+            hadoopConfig.set("fs.gs.auth.service.account.json.keyfile", keyFile.toString());
+            ObtainedSecurityToken obtained =
+                    new GSSecurityTokenProvider("gs", hadoopConfig).obtainSecurityToken();
+            Credentials credentials = CredentialsJsonSerde.fromJson(obtained.getToken());
+            assertThat(credentials.getSecurityToken()).isEqualTo("token");
+            assertReadOnlyScopeRequested();
+            // ADC is a different service account. The JWT issuer shows the key file was used.
+            assertThat(mockGSServer.requestedIssuers()).containsExactly(keyFileEmail);
+        } finally {
+            Files.deleteIfExists(keyFile);
+        }
+    }
+
+    @Test
+    void userApplicationDefaultCredentialsAreRejected() throws Exception {
+        Path userCredentials = Files.createTempFile("adc-user", ".json");
+        try {
+            Files.write(userCredentials, USER_CREDENTIALS_JSON.getBytes(StandardCharsets.UTF_8));
+            CommonTestUtils.setEnv(testingEnvironment(userCredentials.toString()));
+            clearApplicationDefaultCredentialCache();
+
+            org.apache.hadoop.conf.Configuration explicit =
+                    new org.apache.hadoop.conf.Configuration(false);
+            explicit.set("fs.gs.auth.type", "APPLICATION_DEFAULT");
+            assertThatThrownBy(() -> new GSSecurityTokenProvider("gs", explicit))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("service account")
+                    .hasMessageContaining("UserCredentials");
+
+            org.apache.hadoop.conf.Configuration unset =
+                    new org.apache.hadoop.conf.Configuration(false);
+            assertThatThrownBy(() -> new GSSecurityTokenProvider("gs", unset))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("UserCredentials");
+        } finally {
+            CommonTestUtils.setEnv(testingEnvironment(serviceAccountKeyFile.toString()));
+            clearApplicationDefaultCredentialCache();
+            Files.deleteIfExists(userCredentials);
+        }
+    }
+
+    private static void assertReadOnlyScopeRequested() {
+        assertThat(mockGSServer.requestedScopes()).containsExactly(READ_ONLY_SCOPE);
+    }
+
+    /**
+     * {@code GoogleCredentials.getApplicationDefault()} caches the first result. Tests that change
+     * {@code GOOGLE_APPLICATION_CREDENTIALS} have to drop that cache or they keep the previous
+     * identity.
+     */
+    private static void clearApplicationDefaultCredentialCache() throws Exception {
+        Field providerField =
+                GoogleCredentials.class.getDeclaredField("defaultCredentialsProvider");
+        providerField.setAccessible(true);
+        Object provider = providerField.get(null);
+        Field cached = provider.getClass().getDeclaredField("cachedCredentials");
+        cached.setAccessible(true);
+        cached.set(provider, null);
     }
 
     private static Credentials refreshedToken(String authType) {

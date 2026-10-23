@@ -26,6 +26,7 @@ import org.apache.fluss.shaded.netty4.io.netty.channel.EventLoopGroup;
 import org.apache.fluss.shaded.netty4.io.netty.channel.nio.NioEventLoopGroup;
 import org.apache.fluss.shaded.netty4.io.netty.channel.socket.SocketChannel;
 import org.apache.fluss.shaded.netty4.io.netty.channel.socket.nio.NioServerSocketChannel;
+import org.apache.fluss.shaded.netty4.io.netty.handler.codec.http.HttpObjectAggregator;
 import org.apache.fluss.shaded.netty4.io.netty.handler.codec.http.HttpServerCodec;
 import org.apache.fluss.shaded.netty4.io.netty.handler.codec.http.HttpServerExpectContinueHandler;
 import org.apache.fluss.shaded.netty4.io.netty.handler.logging.LogLevel;
@@ -33,6 +34,10 @@ import org.apache.fluss.shaded.netty4.io.netty.handler.logging.LoggingHandler;
 
 import java.io.Closeable;
 import java.net.InetSocketAddress;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+import java.util.concurrent.CopyOnWriteArrayList;
 
 /** Mock Netty Auth Server for facilitating the Google auth token generation. */
 public class MockAuthServer implements Closeable {
@@ -44,6 +49,14 @@ public class MockAuthServer implements Closeable {
 
     private final int port;
 
+    /**
+     * Scopes seen on token requests, in arrival order. An empty string means the scope was absent.
+     */
+    private final List<String> requestedScopes = new CopyOnWriteArrayList<>();
+
+    /** JWT {@code iss} values for the same token requests. Empty for Compute Engine metadata. */
+    private final List<String> requestedIssuers = new CopyOnWriteArrayList<>();
+
     MockAuthServer(EventLoopGroup bossGroup, EventLoopGroup workerGroup) {
         this.bossGroup = bossGroup;
         this.workerGroup = workerGroup;
@@ -54,6 +67,25 @@ public class MockAuthServer implements Closeable {
     /** Port the mock token server is bound to on {@code 127.0.0.1}. */
     public int getPort() {
         return port;
+    }
+
+    /** Drops recorded token requests so a test can assert only the calls it makes. */
+    void clearRecordedTokenRequests() {
+        requestedScopes.clear();
+        requestedIssuers.clear();
+    }
+
+    /** Scopes of token requests recorded since the last {@link #clearRecordedTokenRequests()}. */
+    List<String> requestedScopes() {
+        return Collections.unmodifiableList(new ArrayList<>(requestedScopes));
+    }
+
+    /**
+     * Service-account emails ({@code iss}) of token requests recorded since the last {@link
+     * #clearRecordedTokenRequests()}. Compute Engine requests contribute an empty string.
+     */
+    List<String> requestedIssuers() {
+        return Collections.unmodifiableList(new ArrayList<>(requestedIssuers));
     }
 
     public ChannelFuture run() {
@@ -70,7 +102,12 @@ public class MockAuthServer implements Closeable {
                                     ChannelPipeline p = ch.pipeline();
                                     p.addLast(new HttpServerCodec());
                                     p.addLast(new HttpServerExpectContinueHandler());
-                                    p.addLast(new AuthServerHandler());
+                                    // Aggregate the body so the JWT assertion, which carries the
+                                    // requested scope, is visible to the handler.
+                                    p.addLast(new HttpObjectAggregator(1024 * 1024));
+                                    p.addLast(
+                                            new AuthServerHandler(
+                                                    requestedScopes, requestedIssuers));
                                 }
                             });
 
