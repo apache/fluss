@@ -337,9 +337,17 @@ public class CoordinatorChannelManager {
                     "Can't not send {} to the tablet server {} as the server is offline.",
                     request.getClass().getSimpleName(),
                     targetServerId);
+            responseConsumer.accept(
+                    null,
+                    new IllegalStateException(
+                            "Tablet server gateway is unavailable for " + targetServerId + '.'));
         } else {
             TabletServerGateway tabletServerGateway = optionalTabletServerGateway.get();
-            requestFunction.apply(tabletServerGateway, request).whenComplete(responseConsumer);
+            try {
+                requestFunction.apply(tabletServerGateway, request).whenComplete(responseConsumer);
+            } catch (Throwable failure) {
+                responseConsumer.accept(null, failure);
+            }
         }
     }
 

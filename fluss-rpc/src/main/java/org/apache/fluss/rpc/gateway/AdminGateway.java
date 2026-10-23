@@ -17,6 +17,8 @@
 
 package org.apache.fluss.rpc.gateway;
 
+import org.apache.fluss.rpc.messages.AbortBulkLoadRequest;
+import org.apache.fluss.rpc.messages.AbortBulkLoadResponse;
 import org.apache.fluss.rpc.messages.AcquireKvSnapshotLeaseRequest;
 import org.apache.fluss.rpc.messages.AcquireKvSnapshotLeaseResponse;
 import org.apache.fluss.rpc.messages.AddServerTagByRackRequest;
@@ -29,8 +31,12 @@ import org.apache.fluss.rpc.messages.AlterDatabaseRequest;
 import org.apache.fluss.rpc.messages.AlterDatabaseResponse;
 import org.apache.fluss.rpc.messages.AlterTableRequest;
 import org.apache.fluss.rpc.messages.AlterTableResponse;
+import org.apache.fluss.rpc.messages.BeginBulkLoadRequest;
+import org.apache.fluss.rpc.messages.BeginBulkLoadResponse;
 import org.apache.fluss.rpc.messages.CancelRebalanceRequest;
 import org.apache.fluss.rpc.messages.CancelRebalanceResponse;
+import org.apache.fluss.rpc.messages.CommitBulkLoadRequest;
+import org.apache.fluss.rpc.messages.CommitBulkLoadResponse;
 import org.apache.fluss.rpc.messages.CreateAclsRequest;
 import org.apache.fluss.rpc.messages.CreateAclsResponse;
 import org.apache.fluss.rpc.messages.CreateDatabaseRequest;
@@ -53,6 +59,8 @@ import org.apache.fluss.rpc.messages.DropPartitionRequest;
 import org.apache.fluss.rpc.messages.DropPartitionResponse;
 import org.apache.fluss.rpc.messages.DropTableRequest;
 import org.apache.fluss.rpc.messages.DropTableResponse;
+import org.apache.fluss.rpc.messages.GetInProgressBulkLoadRequest;
+import org.apache.fluss.rpc.messages.GetInProgressBulkLoadResponse;
 import org.apache.fluss.rpc.messages.GetProducerOffsetsRequest;
 import org.apache.fluss.rpc.messages.GetProducerOffsetsResponse;
 import org.apache.fluss.rpc.messages.ListKvSnapshotsRequest;
@@ -78,6 +86,43 @@ import java.util.concurrent.CompletableFuture;
 
 /** The gateway interface between the client and the server for reading and writing metadata. */
 public interface AdminGateway extends AdminReadOnlyGateway {
+    /**
+     * Begin a BulkLoad transaction.
+     *
+     * @param request the begin BulkLoad request
+     * @return the begin BulkLoad response
+     */
+    @RPC(api = ApiKeys.BEGIN_BULK_LOAD)
+    CompletableFuture<BeginBulkLoadResponse> beginBulkLoad(BeginBulkLoadRequest request);
+
+    /**
+     * Gets the in-progress BulkLoad transaction accessible to the caller for a physical target.
+     *
+     * @param request the physical BulkLoad target
+     * @return the in-progress transaction status, if one exists
+     */
+    @RPC(api = ApiKeys.GET_IN_PROGRESS_BULK_LOAD)
+    CompletableFuture<GetInProgressBulkLoadResponse> getInProgressBulkLoad(
+            GetInProgressBulkLoadRequest request);
+
+    /**
+     * Commit a BulkLoad transaction.
+     *
+     * @param request the commit BulkLoad request
+     * @return the commit BulkLoad response
+     */
+    @RPC(api = ApiKeys.COMMIT_BULK_LOAD)
+    CompletableFuture<CommitBulkLoadResponse> commitBulkLoad(CommitBulkLoadRequest request);
+
+    /**
+     * Abort a BulkLoad transaction.
+     *
+     * @param request the abort BulkLoad request
+     * @return the abort BulkLoad response
+     */
+    @RPC(api = ApiKeys.ABORT_BULK_LOAD)
+    CompletableFuture<AbortBulkLoadResponse> abortBulkLoad(AbortBulkLoadRequest request);
+
     /**
      * Create a database.
      *

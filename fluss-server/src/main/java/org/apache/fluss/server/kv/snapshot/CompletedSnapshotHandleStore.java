@@ -43,6 +43,23 @@ public interface CompletedSnapshotHandleStore {
             throws Exception;
 
     /**
+     * Persists an ordinary snapshot commit with coordinator and target-metadata fences in the same
+     * coordination-system transaction.
+     */
+    default void add(
+            TableBucket tableBucket,
+            long snapshotId,
+            CompletedSnapshotHandle completedSnapshotHandle,
+            String sourceMetadataPath,
+            int sourceMetadataVersion,
+            int coordinatorZkVersion,
+            int leaderAndIsrZkVersion)
+            throws Exception {
+        throw new UnsupportedOperationException(
+                "Atomic metadata-fenced snapshot commits are not supported by this store.");
+    }
+
+    /**
      * Remove the snapshot handle for the given snapshot id of the given table bucket.
      *
      * @param tableBucket the table bucket the snapshot belongs to

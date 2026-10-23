@@ -52,8 +52,12 @@ import org.apache.fluss.server.metrics.group.TabletServerMetricGroup;
 import org.apache.fluss.server.replica.ReplicaManager;
 import org.apache.fluss.server.storage.LocalDiskManager;
 import org.apache.fluss.server.zk.ZooKeeperClient;
+import org.apache.fluss.server.zk.ZooKeeperClient.DataWithStat;
 import org.apache.fluss.server.zk.ZooKeeperUtils;
+import org.apache.fluss.server.zk.data.ServerProtocolVersion;
 import org.apache.fluss.server.zk.data.TabletServerRegistration;
+import org.apache.fluss.server.zk.data.ZkData;
+import org.apache.fluss.shaded.curator5.org.apache.curator.framework.state.ConnectionState;
 import org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.KeeperException;
 import org.apache.fluss.utils.ExceptionUtils;
 import org.apache.fluss.utils.ExecutorUtils;
@@ -116,6 +120,7 @@ public class TabletServer extends ServerBase {
     private final AtomicBoolean isShutDown = new AtomicBoolean(false);
     private final String interListenerName;
     private final Clock clock;
+    private final TabletServerAccessGate accessGate = new TabletServerAccessGate();
 
     @GuardedBy("lock")
     private RpcServer rpcServer;
@@ -325,7 +330,8 @@ public class TabletServer extends ServerBase {
                             replicaStateChangeExecutor,
                             scannerManager,
                             coordinatorGateway,
-                            interListenerName);
+                            interListenerName,
+                            accessGate);
 
             RequestsMetrics requestsMetrics =
                     RequestsMetrics.createTabletServerRequestMetrics(tabletServerMetricGroup);
@@ -355,10 +361,24 @@ public class TabletServer extends ServerBase {
 
             rpcServer.start();
 
-            registerTabletServer();
-            // when init session, register tablet server again
+            registerTabletServerForInitialSession();
             ZooKeeperUtils.registerZookeeperClientReInitSessionListener(
-                    zkClient, this::registerTabletServer, this);
+                    zkClient,
+                    this::rejectNewSession,
+                    this,
+                    state -> {
+                        if (state == ConnectionState.SUSPENDED) {
+                            accessGate.suspended();
+                        } else if (state == ConnectionState.LOST) {
+                            accessGate.lost();
+                            onFatalError(
+                                    new IllegalStateException(
+                                            "TabletServer ZooKeeper session was lost; the process "
+                                                    + "must not re-register with a new session."));
+                        } else if (state == ConnectionState.RECONNECTED) {
+                            validateRegistrationAfterReconnect();
+                        }
+                    });
         }
     }
 
@@ -388,6 +408,41 @@ public class TabletServer extends ServerBase {
         return terminationFuture;
     }
 
+    private void registerTabletServerForInitialSession() throws Exception {
+        TabletServerAccessGate.ValidationToken validationToken = accessGate.beginValidation();
+        registerTabletServer();
+        accessGate.validationSucceeded(validationToken);
+    }
+
+    private void rejectNewSession() {
+        throw new IllegalStateException(
+                "A TabletServer cannot re-register after losing its ZooKeeper session.");
+    }
+
+    private void validateRegistrationAfterReconnect() {
+        try {
+            TabletServerAccessGate.ValidationToken reconnectToken = accessGate.beginValidation();
+            DataWithStat registration =
+                    zkClient.getDataWithStat(ZkData.ServerIdZNode.path(serverId));
+            long sessionId =
+                    zkClient.getCuratorClient().getZookeeperClient().getZooKeeper().getSessionId();
+            if (sessionId == 0 || registration.getStat().getEphemeralOwner() != sessionId) {
+                throw new IllegalStateException(
+                        "TabletServer registration is not owned by the current ZooKeeper session.");
+            }
+            DataWithStat sessionFence =
+                    zkClient.getDataWithStat(
+                            ZkData.TabletServerSessionFenceZNode.path(serverId, sessionId));
+            if (sessionFence.getStat().getEphemeralOwner() != sessionId) {
+                throw new IllegalStateException(
+                        "TabletServer session fence is not owned by the current ZooKeeper session.");
+            }
+            accessGate.validationSucceeded(reconnectToken);
+        } catch (Exception e) {
+            onFatalError(e);
+        }
+    }
+
     private void registerTabletServer() throws Exception {
         long startTime = System.currentTimeMillis();
         List<Endpoint> bindEndpoints = rpcServer.getBindEndpoints();
@@ -397,7 +452,8 @@ public class TabletServer extends ServerBase {
                         rack,
                         Endpoint.loadAdvertisedEndpoints(bindEndpoints, conf),
                         startTime,
-                        tabletServerResource);
+                        tabletServerResource,
+                        ServerProtocolVersion.CURRENT);
 
         while (true) {
             try {
@@ -690,5 +746,15 @@ public class TabletServer extends ServerBase {
     @VisibleForTesting
     public RpcServer getRpcServer() {
         return rpcServer;
+    }
+
+    @VisibleForTesting
+    public TabletServerAccessGate getAccessGate() {
+        return accessGate;
+    }
+
+    @VisibleForTesting
+    public TabletService getTabletService() {
+        return tabletService;
     }
 }

@@ -41,6 +41,7 @@ import java.util.function.BiConsumer;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_DESCRIPTOR;
 import static org.apache.fluss.record.TestData.DEFAULT_REMOTE_DATA_DIR;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Test for the {@link CoordinatorRequestBatch}. */
 class CoordinatorRequestBatchTest {
@@ -89,6 +90,42 @@ class CoordinatorRequestBatchTest {
 
         // The failure callback must clear the pending entry that this request added.
         assertThat(coordinatorContext.getPendingLeaderActivationBuckets()).isEmpty();
+    }
+
+    @Test
+    void testNotifyLeaderAndIsrSendFailurePreservesOverlappingSameBucketPending() {
+        long tableId = 150L;
+        TableBucket tableBucket = new TableBucket(tableId, 0);
+        TablePath tablePath = TablePath.of("db1", "overlapping_pending");
+
+        coordinatorContext.putTablePath(tableId, tablePath);
+        coordinatorContext.setLiveTabletServers(
+                CoordinatorTestUtils.createServers(Collections.singletonList(0)));
+        coordinatorContext.updateBucketReplicaAssignment(tableBucket, Collections.singletonList(0));
+        LeaderAndIsr leaderAndIsr =
+                new LeaderAndIsr(0, 0, Collections.singletonList(0), Collections.emptyList(), 0, 0);
+        coordinatorContext.putBucketLeaderAndIsr(tableBucket, leaderAndIsr);
+
+        // An earlier in-flight role request already owns one pending activation for this bucket.
+        coordinatorContext.addPendingLeaderActivation(tableBucket);
+
+        CoordinatorRequestBatch batch =
+                new CoordinatorRequestBatch(
+                        newAlwaysFailingChannelManager(),
+                        newSynchronousAccessContextEventManager(),
+                        coordinatorContext);
+        batch.addNotifyLeaderRequestForTabletServers(
+                Collections.singleton(0),
+                PhysicalTablePath.of(tablePath),
+                tableBucket,
+                Collections.singletonList(0),
+                leaderAndIsr);
+
+        batch.sendRequestToTabletServers(0);
+
+        assertThat(coordinatorContext.getPendingLeaderActivationBuckets())
+                .containsExactly(tableBucket);
+        assertThat(coordinatorContext.isLeaderActive(tableBucket)).isFalse();
     }
 
     /**
@@ -201,6 +238,28 @@ class CoordinatorRequestBatchTest {
                         DEFAULT_REMOTE_DATA_DIR,
                         System.currentTimeMillis(),
                         System.currentTimeMillis()));
+    }
+
+    @Test
+    void testDiscardIncompleteBatchStartsWithNoPendingRequests() {
+        CoordinatorRequestBatch batch =
+                new CoordinatorRequestBatch(
+                        new TestCoordinatorChannelManager(), event -> {}, coordinatorContext);
+        TableBucket tableBucket = new TableBucket(3L, 0);
+        coordinatorContext.updateBucketReplicaAssignment(tableBucket, Collections.singletonList(1));
+
+        batch.addStopReplicaRequestForTabletServers(
+                Collections.singleton(1), tableBucket, false, false, 4);
+        batch.addUpdateMetadataRequestForTabletServers(
+                Collections.singleton(1), 3L, null, Collections.emptySet());
+        assertThatThrownBy(batch::newBatch).isInstanceOf(IllegalStateException.class);
+
+        batch.discardIncompleteBatch();
+
+        batch.newBatch();
+        assertThat(coordinatorContext.getAssignment(tableBucket)).containsExactly(1);
+        batch.addStopReplicaRequestForTabletServers(
+                Collections.singleton(1), tableBucket, true, true, 4);
     }
 
     private static TestCoordinatorChannelManager newAlwaysFailingChannelManager() {

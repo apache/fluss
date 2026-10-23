@@ -1297,6 +1297,27 @@ public final class KvTablet {
         return valueBodySlices;
     }
 
+    /** Returns whether the user column family is authoritatively empty. */
+    public boolean isUserDataEmpty() throws Exception {
+        return inReadLock(
+                kvLock,
+                () -> {
+                    rocksDBKv.checkIfRocksDBClosed();
+                    try (ResourceGuard.Lease ignored =
+                            rocksDBKv.getResourceGuard().acquireResource()) {
+                        try (RocksIterator iterator =
+                                rocksDBKv
+                                        .getDb()
+                                        .newIterator(rocksDBKv.getDefaultColumnFamilyHandle())) {
+                            iterator.seekToFirst();
+                            boolean empty = !iterator.isValid();
+                            iterator.status();
+                            return empty;
+                        }
+                    }
+                });
+    }
+
     /**
      * Opens a new full-scan session under the {@code kvLock} read lock. Returns an empty-bucket
      * result (context = {@code null}, all RocksDB resources released internally) when the bucket

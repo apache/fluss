@@ -42,6 +42,7 @@ import org.apache.fluss.metadata.DatabaseSummary;
 import org.apache.fluss.metadata.KafkaTableSchema;
 import org.apache.fluss.metadata.LakeTableUtil;
 import org.apache.fluss.metadata.MergeEngineType;
+import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.ResolvedPartitionSpec;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.SchemaInfo;
@@ -360,6 +361,12 @@ public class MetadataManager {
             throw new DatabaseNotEmptyException("Database " + name + " is not empty.");
         }
 
+        if (cascade) {
+            for (String tableName : listTables(name)) {
+                TablePath tablePath = TablePath.of(name, tableName);
+                validateTableDdl(tablePath, getTableRegistration(tablePath));
+            }
+        }
         uncheck(() -> zookeeperClient.deleteDatabase(name), "Fail to drop database: " + name);
     }
 
@@ -371,6 +378,8 @@ public class MetadataManager {
             }
             throw new TableNotExistException("Table " + tablePath + " does not exist.");
         }
+
+        validateTableDdl(tablePath, getTableRegistration(tablePath));
 
         // in here, we just delete the table node in zookeeper, which will then trigger
         // the physical deletion in tablet servers and assignments in zk
@@ -464,6 +473,7 @@ public class MetadataManager {
         try {
 
             TableInfo table = getTable(tablePath);
+            validateTableDdl(tablePath, getTableRegistration(tablePath));
             TableDescriptor tableDescriptor = table.toTableDescriptor();
 
             // validate the table column changes
@@ -703,6 +713,7 @@ public class MetadataManager {
                 ZooKeeperClient.VersionedData<TableRegistration> versionedTableReg =
                         getTableRegistrationWithVersion(tablePath);
                 TableRegistration tableReg = versionedTableReg.data();
+                validateTableDdl(tablePath, tableReg);
                 Map<String, String> defaultTableLakeOptions =
                         lakeCatalogDynamicLoader
                                 .getLakeCatalogContainer()
@@ -804,6 +815,7 @@ public class MetadataManager {
         ZooKeeperClient.VersionedData<TableRegistration> versionedTableReg =
                 getTableRegistrationWithVersion(tablePath);
         TableRegistration tableReg = versionedTableReg.data();
+        validateTableDdl(tablePath, tableReg);
         int tableZkVersion = versionedTableReg.zkVersion();
         SchemaInfo schemaInfo = getLatestSchema(tablePath);
         // we can't use MetadataManager#getTable here, because it will add the default
@@ -1323,8 +1335,18 @@ public class MetadataManager {
     public void dropPartition(
             TablePath tablePath, ResolvedPartitionSpec partition, boolean ignoreIfNotExists) {
         String partitionName = partition.getPartitionName();
-        Optional<PartitionRegistration> optionalPartitionRegistration =
-                getOptionalPartitionRegistration(tablePath, partitionName);
+        Optional<ZooKeeperClient.VersionedData<PartitionRegistration>>
+                optionalPartitionRegistration;
+        try {
+            optionalPartitionRegistration =
+                    zookeeperClient.getPartitionWithVersion(tablePath, partitionName);
+        } catch (Exception e) {
+            throw new FlussRuntimeException(
+                    String.format(
+                            "Fail to get partition '%s' of table %s from zookeeper.",
+                            partitionName, tablePath),
+                    e);
+        }
         if (!optionalPartitionRegistration.isPresent()) {
             if (ignoreIfNotExists) {
                 return;
@@ -1336,8 +1358,11 @@ public class MetadataManager {
                             partition.getPartitionQualifiedName(), tablePath));
         }
 
+        validateNoBulkLoad(optionalPartitionRegistration.get().data().getBulkLoadId());
+
         try {
-            zookeeperClient.deletePartition(tablePath, partitionName);
+            zookeeperClient.deletePartition(
+                    tablePath, partitionName, optionalPartitionRegistration.get().zkVersion());
         } catch (Exception e) {
             throw new FlussRuntimeException(
                     String.format(
@@ -1357,6 +1382,51 @@ public class MetadataManager {
                             "Fail to get partition '%s' of table %s from zookeeper.",
                             tablePath, partitionName),
                     e);
+        }
+    }
+
+    private void validateTableDdl(TablePath tablePath, TableRegistration registration) {
+        validateNoBulkLoad(registration.bulkLoadId);
+        if (registration.isPartitioned()) {
+            try {
+                for (PartitionRegistration partition :
+                        zookeeperClient.getPartitionRegistrations(tablePath).values()) {
+                    validateNoBulkLoad(partition.getBulkLoadId());
+                }
+            } catch (RuntimeException failure) {
+                throw failure;
+            } catch (Exception failure) {
+                throw new FlussRuntimeException(
+                        "Failed to validate BulkLoad state for table " + tablePath + ".", failure);
+            }
+        }
+    }
+
+    void validateNoBulkLoad(PhysicalTablePath path, long tableId, @Nullable Long partitionId) {
+        if (partitionId == null) {
+            TableRegistration registration = getTableRegistration(path.getTablePath());
+            if (registration.tableId != tableId) {
+                throw new InvalidAlterTableException("Physical target identity changed.");
+            }
+            validateNoBulkLoad(registration.bulkLoadId);
+        } else {
+            PartitionRegistration registration =
+                    getOptionalPartitionRegistration(path.getTablePath(), path.getPartitionName())
+                            .orElseThrow(
+                                    () ->
+                                            new InvalidAlterTableException(
+                                                    "Physical target registration is missing."));
+            if (registration.getTableId() != tableId
+                    || registration.getPartitionId() != partitionId) {
+                throw new InvalidAlterTableException("Physical target identity changed.");
+            }
+            validateNoBulkLoad(registration.getBulkLoadId());
+        }
+    }
+
+    private static void validateNoBulkLoad(@Nullable String bulkLoadId) {
+        if (bulkLoadId != null) {
+            throw new InvalidAlterTableException("BulkLoad still owns the physical target.");
         }
     }
 

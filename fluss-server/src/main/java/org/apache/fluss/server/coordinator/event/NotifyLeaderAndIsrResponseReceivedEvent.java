@@ -17,10 +17,14 @@
 
 package org.apache.fluss.server.coordinator.event;
 
+import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.rpc.messages.NotifyLeaderAndIsrRequest;
 import org.apache.fluss.server.entity.NotifyLeaderAndIsrResultForBucket;
 
+import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 /** An event for receive the response of {@link NotifyLeaderAndIsrRequest} from tablet server. */
 public class NotifyLeaderAndIsrResponseReceivedEvent implements CoordinatorEvent {
@@ -30,11 +34,22 @@ public class NotifyLeaderAndIsrResponseReceivedEvent implements CoordinatorEvent
     // the server id that return the response
     private final int responseServerId;
 
+    private final Map<TableBucket, Long> pendingLeaderActivationIds;
+
     public NotifyLeaderAndIsrResponseReceivedEvent(
             List<NotifyLeaderAndIsrResultForBucket> notifyLeaderAndIsrResultForBuckets,
             int responseServerId) {
+        this(notifyLeaderAndIsrResultForBuckets, responseServerId, Collections.emptyMap());
+    }
+
+    public NotifyLeaderAndIsrResponseReceivedEvent(
+            List<NotifyLeaderAndIsrResultForBucket> notifyLeaderAndIsrResultForBuckets,
+            int responseServerId,
+            Map<TableBucket, Long> pendingLeaderActivationIds) {
         this.notifyLeaderAndIsrResultForBuckets = notifyLeaderAndIsrResultForBuckets;
         this.responseServerId = responseServerId;
+        this.pendingLeaderActivationIds =
+                Collections.unmodifiableMap(new HashMap<>(pendingLeaderActivationIds));
     }
 
     public int getResponseServerId() {
@@ -43,5 +58,9 @@ public class NotifyLeaderAndIsrResponseReceivedEvent implements CoordinatorEvent
 
     public List<NotifyLeaderAndIsrResultForBucket> getNotifyLeaderAndIsrResultForBuckets() {
         return notifyLeaderAndIsrResultForBuckets;
+    }
+
+    public Map<TableBucket, Long> getPendingLeaderActivationIds() {
+        return pendingLeaderActivationIds;
     }
 }

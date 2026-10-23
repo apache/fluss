@@ -320,7 +320,7 @@ public class ReplicaFetcherITCase {
                         currentLeaderAndIsr.coordinatorEpoch(),
                         currentLeaderAndIsr.bucketEpoch());
         FLUSS_CLUSTER_EXTENSION.notifyLeaderAndIsr(
-                followerToStop, DATA1_TABLE_PATH, tb, newLeaderAndIsr, Arrays.asList(0, 1, 2));
+                followerToStop, tb, newLeaderAndIsr, Arrays.asList(0, 1, 2));
 
         // wait until the put future is done
         putResponse.get();

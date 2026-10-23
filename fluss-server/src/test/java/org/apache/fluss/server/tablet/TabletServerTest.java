@@ -21,6 +21,7 @@ import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.server.ServerBase;
 import org.apache.fluss.server.ServerTestBase;
+import org.apache.fluss.server.zk.data.ServerProtocolVersion;
 import org.apache.fluss.server.zk.data.TabletServerRegistration;
 
 import org.junit.jupiter.api.AfterEach;
@@ -88,5 +89,7 @@ class TabletServerTest extends ServerTestBase {
         assertThat(tabletServerRegistration.getRack()).isEqualTo(RACK);
         verifyEndpoint(
                 tabletServerRegistration.getEndpoints(), server.getRpcServer().getBindEndpoints());
+        assertThat(tabletServerRegistration.getServerProtocolVersion())
+                .isEqualTo(ServerProtocolVersion.CURRENT);
     }
 }

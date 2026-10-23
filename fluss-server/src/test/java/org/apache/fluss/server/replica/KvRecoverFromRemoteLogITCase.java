@@ -209,7 +209,13 @@ class KvRecoverFromRemoteLogITCase {
         waitUntil(
                 () -> leaderLogTablet.canFetchFromRemoteLog(snapshotLogOffset),
                 Duration.ofMinutes(2),
-                "Fail to wait for remote log to cover beyond snapshot offset " + snapshotLogOffset);
+                "Fail to wait for remote log to cover snapshot offset " + snapshotLogOffset);
+        leaderLogTablet.updateMinRetainOffset(leaderLogTablet.getHighWatermark());
+        waitUntil(
+                () -> leaderLogTablet.localLogStartOffset() > snapshotLogOffset,
+                Duration.ofMinutes(2),
+                "Fail to delete a non-empty local range after snapshot offset "
+                        + snapshotLogOffset);
 
         byte[] encodedKey = BytesUtils.toArray(allRecords.get(allRecords.size() - 1).getKey());
         assertThat(leaderReplica.getKvTablet()).isNotNull();
@@ -236,7 +242,7 @@ class KvRecoverFromRemoteLogITCase {
         // =====================================================================
         // Step 4: Assert the remote log recovery precondition
         // =====================================================================
-        // Verify: snapshotLogOffset < followerLocalLogStartOffset
+        // Verify a non-empty remote range rather than accepting only the boundary handoff.
         // This is the exact condition checked in Replica.recoverKvTablet():
         //   if (startRecoverLogOffset < logTablet.localLogStartOffset()) { ... }
         // When the follower becomes leader and downloads S1 (logOffset = snapshotLogOffset),
@@ -247,7 +253,7 @@ class KvRecoverFromRemoteLogITCase {
         long followerLocalLogStart = followerReplica.getLogTablet().localLogStartOffset();
         assertThat(snapshotLogOffset)
                 .as(
-                        "Snapshot log offset (%d) should be less than follower's "
+                        "Snapshot log offset (%d) should not exceed follower's "
                                 + "localLogStartOffset (%d) to trigger remote log recovery",
                         snapshotLogOffset, followerLocalLogStart)
                 .isLessThan(followerLocalLogStart);
@@ -267,7 +273,7 @@ class KvRecoverFromRemoteLogITCase {
                         currentLeaderAndIsr.bucketEpoch() + 1);
 
         FLUSS_CLUSTER_EXTENSION.notifyLeaderAndIsr(
-                followerToPromote, tablePath, tableBucket, newLeaderAndIsr, replicas);
+                followerToPromote, tableBucket, newLeaderAndIsr, replicas);
 
         // =====================================================================
         // Step 6: Verify the new leader recovers all data correctly

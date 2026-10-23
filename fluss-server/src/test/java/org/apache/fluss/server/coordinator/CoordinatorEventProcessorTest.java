@@ -113,14 +113,11 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BiConsumer;
 import java.util.function.Consumer;
-import java.util.function.Function;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
 import static org.apache.fluss.config.ConfigOptions.DEFAULT_LISTENER_NAME;
 import static org.apache.fluss.server.coordinator.CoordinatorTestUtils.checkLeaderAndIsr;
-import static org.apache.fluss.server.coordinator.CoordinatorTestUtils.makeSendLeaderAndStopRequestAlwaysSuccess;
-import static org.apache.fluss.server.coordinator.CoordinatorTestUtils.makeSendLeaderAndStopRequestFailContext;
 import static org.apache.fluss.server.coordinator.statemachine.BucketState.OfflineBucket;
 import static org.apache.fluss.server.coordinator.statemachine.BucketState.OnlineBucket;
 import static org.apache.fluss.server.coordinator.statemachine.ReplicaState.OfflineReplica;
@@ -262,6 +259,11 @@ class CoordinatorEventProcessorTest extends CoordinatorEventProcessorTestBase {
         long autoPartitionTableId =
                 metadataManager.createTable(
                         autoPartitionTablePath, remoteDataDir, getPartitionedTable(), null, false);
+        zookeeperClient
+                .getCuratorClient()
+                .create()
+                .creatingParentsIfNeeded()
+                .forPath(ZkData.PartitionsZNode.path(autoPartitionTablePath));
 
         eventProcessor.shutdown();
         autoPartitionManager.close();
@@ -390,14 +392,48 @@ class CoordinatorEventProcessorTest extends CoordinatorEventProcessorTestBase {
         // todo: may need to fix this case;
         retryVerifyContext(ctx -> assertThat(ctx.getTablePathById(t1Id)).isNotNull());
 
+        // A failed transition may already have removed the in-memory bucket states while the
+        // authoritative assignment and online replica states still exist. Drop must recover from
+        // the assignment instead of relying on the bucket-state map.
+        fromCtx(
+                ctx -> {
+                    Set<TableBucket> assignedBuckets = ctx.getAllBucketsForTable(t1Id);
+                    assertThat(assignedBuckets).hasSize(N_BUCKETS);
+                    Set<TableBucketReplica> assignedReplicas =
+                            ctx.getBucketReplicas(assignedBuckets);
+                    assignedReplicas.forEach(
+                            replica -> ctx.putReplicaState(replica, ReplicaState.OnlineReplica));
+                    assertThat(assignedReplicas)
+                            .allSatisfy(
+                                    replica ->
+                                            assertThat(ctx.getReplicaState(replica))
+                                                    .isEqualTo(ReplicaState.OnlineReplica));
+                    assignedBuckets.forEach(ctx::removeBucketState);
+                    assertThat(ctx.getBucketStates().keySet())
+                            .doesNotContainAnyElementsOf(assignedBuckets);
+                    return null;
+                });
+        assertThat(zookeeperClient.getTableAssignment(t1Id)).isPresent();
+
         // drop the table;
         metadataManager.dropTable(t1, false);
+
+        // The watcher-triggered drop must reach the event thread even when an earlier
+        // NotifyLeaderAndIsr response is still being handled.
+        retryVerifyContext(ctx -> assertThat(ctx.isTableQueuedForDeletion(t1Id)).isTrue());
 
         // retry until the assignment has been deleted from zk, then it means
         // the table has been deleted successfully
         retry(
                 Duration.ofMinutes(1),
-                () -> assertThat(zookeeperClient.getTableAssignment(t1Id)).isEmpty());
+                () ->
+                        assertThat(zookeeperClient.getTableAssignment(t1Id))
+                                .as(
+                                        "queued=%s replicaStates=%s bucketStates=%s",
+                                        fromCtx(ctx -> ctx.isTableQueuedForDeletion(t1Id)),
+                                        fromCtx(ctx -> new HashMap<>(ctx.getReplicaStates())),
+                                        fromCtx(ctx -> new HashMap<>(ctx.getBucketStates())))
+                                .isEmpty());
     }
 
     @Test
@@ -410,7 +446,8 @@ class CoordinatorEventProcessorTest extends CoordinatorEventProcessorTestBase {
                 ZOO_KEEPER_EXTENSION_WRAPPER
                         .getCustomExtension()
                         .createZooKeeperClient(NOPErrorHandler.INSTANCE);
-        int newlyServerId = 3;
+        assertThat(client.getCuratorClient().blockUntilConnected(30, TimeUnit.SECONDS)).isTrue();
+        int newlyServerId = 30;
         TabletServerRegistration tabletServerRegistration =
                 new TabletServerRegistration(
                         "rack3",
@@ -442,8 +479,8 @@ class CoordinatorEventProcessorTest extends CoordinatorEventProcessorTestBase {
                         new LakeCatalogDynamicLoader(new Configuration(), null, true));
         TableAssignment table1Assignment =
                 TableAssignment.builder()
-                        .add(0, BucketAssignment.of(0, 3, 2))
-                        .add(1, BucketAssignment.of(3, 2, 0))
+                        .add(0, BucketAssignment.of(0, newlyServerId, 2))
+                        .add(1, BucketAssignment.of(newlyServerId, 2, 0))
                         .build();
 
         TablePath table1Path = TablePath.of(defaultDatabase, "t1");
@@ -452,7 +489,7 @@ class CoordinatorEventProcessorTest extends CoordinatorEventProcessorTestBase {
                         table1Path, remoteDataDir, TEST_TABLE, table1Assignment, false);
 
         TableAssignment table2Assignment =
-                TableAssignment.builder().add(0, BucketAssignment.of(3)).build();
+                TableAssignment.builder().add(0, BucketAssignment.of(newlyServerId)).build();
         TablePath table2Path = TablePath.of(defaultDatabase, "t2");
         long table2Id =
                 metadataManager.createTable(
@@ -480,7 +517,7 @@ class CoordinatorEventProcessorTest extends CoordinatorEventProcessorTestBase {
         verifyBucketIsr(table1Id, 1, new int[] {2, 0});
         verifyReplicaOnlineOrOffline(
                 table2Id, table2Assignment, Collections.singleton(newlyServerId));
-        verifyBucketIsr(table2Id, 0, new int[] {3});
+        verifyBucketIsr(table2Id, 0, new int[] {newlyServerId});
 
         // now, check bucket state
         TableBucket t1Bucket0 = new TableBucket(table1Id, 0);
@@ -543,7 +580,9 @@ class CoordinatorEventProcessorTest extends CoordinatorEventProcessorTestBase {
         assertThat(t2Bucket0State).isEqualTo(OnlineBucket);
 
         // clean up the tablet server 3
-        ZOO_KEEPER_EXTENSION_WRAPPER.getCustomExtension().cleanupPath(ZkData.ServerIdZNode.path(3));
+        ZOO_KEEPER_EXTENSION_WRAPPER
+                .getCustomExtension()
+                .cleanupPath(ZkData.ServerIdZNode.path(newlyServerId));
     }
 
     @Test
@@ -1191,30 +1230,33 @@ class CoordinatorEventProcessorTest extends CoordinatorEventProcessorTestBase {
                         () -> fromCtx((ctx) -> ctx.getBucketLeaderAndIsr(tableBucket)),
                         Duration.ofMinutes(1),
                         "leader not elected");
-        // remove one follower from isr
+        // Shrinking ISR advances the bucket epoch without changing the leader epoch.
         int leader = leaderAndIsr.leader();
-        int bucketLeaderEpoch = leaderAndIsr.leaderEpoch();
         int coordinatorEpoch = leaderAndIsr.coordinatorEpoch();
-        List<Integer> newIsr = leaderAndIsr.isr();
+        List<Integer> newIsr = new ArrayList<>(leaderAndIsr.isr());
         Integer follower = newIsr.stream().filter(i -> i != leader).findFirst().get();
         newIsr.remove(follower);
-        // change isr in coordinator context
-        fromCtx(
-                ctx -> {
-                    ctx.putBucketLeaderAndIsr(
-                            tableBucket,
-                            new LeaderAndIsr(
-                                    leader,
-                                    leaderAndIsr.leaderEpoch(),
-                                    newIsr,
-                                    Collections.emptyList(),
-                                    coordinatorEpoch,
-                                    bucketLeaderEpoch));
-                    return null;
-                });
-
         CoordinatorEventManager coordinatorEventManager =
                 eventProcessor.getCoordinatorEventManager();
+        CompletableFuture<AdjustIsrResponse> adjustIsrResponse = new CompletableFuture<>();
+        coordinatorEventManager.put(
+                new AdjustIsrReceivedEvent(
+                        Collections.singletonMap(
+                                tableBucket,
+                                new LeaderAndIsr(
+                                        leader,
+                                        leaderAndIsr.leaderEpoch(),
+                                        newIsr,
+                                        Collections.emptyList(),
+                                        coordinatorEpoch,
+                                        leaderAndIsr.bucketEpoch())),
+                        adjustIsrResponse));
+        assertThat(getAdjustIsrResponseData(adjustIsrResponse.get()).get(tableBucket).succeeded())
+                .isTrue();
+        LeaderAndIsr updated = fromCtx(ctx -> ctx.getBucketLeaderAndIsr(tableBucket).get());
+        assertThat(updated.leaderEpoch()).isEqualTo(leaderAndIsr.leaderEpoch());
+        assertThat(updated.bucketEpoch()).isGreaterThan(updated.leaderEpoch());
+        int bucketLeaderEpoch = updated.leaderEpoch();
 
         // verify CommitRemoteLogManifest trigger notify offsets request
         CompletableFuture<CommitRemoteLogManifestResponse> responseCompletableFuture1 =
@@ -1229,7 +1271,7 @@ class CoordinatorEventProcessorTest extends CoordinatorEventProcessorTestBase {
                                 coordinatorEpoch,
                                 bucketLeaderEpoch),
                         responseCompletableFuture1));
-        responseCompletableFuture1.get();
+        assertThat(responseCompletableFuture1.get().isCommitSuccess()).isTrue();
         verifyReceiveRequestExceptFor(3, leader, NotifyRemoteLogOffsetsRequest.class);
 
         // verify CommitKvSnapshot trigger notify offsets request
@@ -1248,6 +1290,84 @@ class CoordinatorEventProcessorTest extends CoordinatorEventProcessorTestBase {
                 () ->
                         verifyReceiveRequestExceptFor(
                                 3, leader, NotifyKvSnapshotOffsetRequest.class));
+    }
+
+    @Test
+    void testRemoteLogCommitRejectsPreviousLeaderAfterIsrChanges(@TempDir Path tempDir)
+            throws Exception {
+        Map.Entry<TableBucket, LeaderAndIsr> entry =
+                createTableAndGetLeaderAndIsr("remote_commit_previous_leader");
+        TableBucket tableBucket = entry.getKey();
+        LeaderAndIsr original = entry.getValue();
+        List<Integer> replicas = new ArrayList<>(original.isr());
+        int nextLeader = replicas.stream().filter(id -> id != original.leader()).findFirst().get();
+        List<Integer> reducedIsr = new ArrayList<>(replicas);
+        reducedIsr.remove(Integer.valueOf(nextLeader));
+        assertThat(
+                        submitAdjustIsr(
+                                        tableBucket,
+                                        new LeaderAndIsr(
+                                                original.leader(),
+                                                original.leaderEpoch(),
+                                                reducedIsr,
+                                                Collections.emptyList(),
+                                                original.coordinatorEpoch(),
+                                                original.bucketEpoch()))
+                                .succeeded())
+                .isTrue();
+        LeaderAndIsr reduced = fromCtx(ctx -> ctx.getBucketLeaderAndIsr(tableBucket).get());
+        assertThat(
+                        submitAdjustIsr(
+                                        tableBucket,
+                                        new LeaderAndIsr(
+                                                reduced.leader(),
+                                                reduced.leaderEpoch(),
+                                                replicas,
+                                                Collections.emptyList(),
+                                                reduced.coordinatorEpoch(),
+                                                reduced.bucketEpoch()))
+                                .succeeded())
+                .isTrue();
+        LeaderAndIsr previous = fromCtx(ctx -> ctx.getBucketLeaderAndIsr(tableBucket).get());
+        List<Integer> reordered = new ArrayList<>(replicas);
+        reordered.remove(Integer.valueOf(nextLeader));
+        reordered.add(0, nextLeader);
+        eventProcessor
+                .getRebalanceManager()
+                .registerRebalance(
+                        "remote-commit-leader-change",
+                        Collections.singletonMap(
+                                tableBucket,
+                                new RebalancePlanForBucket(
+                                        tableBucket,
+                                        original.leader(),
+                                        nextLeader,
+                                        replicas,
+                                        reordered)),
+                        RebalanceStatus.NOT_STARTED);
+        retryVerifyContext(
+                ctx ->
+                        assertThat(ctx.getBucketLeaderAndIsr(tableBucket).get().leader())
+                                .isEqualTo(nextLeader));
+        LeaderAndIsr current = zookeeperClient.getLeaderAndIsr(tableBucket).get();
+        assertThat(current.leader()).isEqualTo(nextLeader);
+        assertThat(previous.bucketEpoch()).isGreaterThan(current.leaderEpoch());
+        for (int staleEpoch : new int[] {previous.leaderEpoch(), previous.bucketEpoch()}) {
+            CompletableFuture<CommitRemoteLogManifestResponse> response = new CompletableFuture<>();
+            eventProcessor
+                    .getCoordinatorEventManager()
+                    .put(
+                            new CommitRemoteLogManifestEvent(
+                                    new CommitRemoteLogManifestData(
+                                            tableBucket,
+                                            new FsPath(tempDir.toString()),
+                                            0,
+                                            0,
+                                            current.coordinatorEpoch(),
+                                            staleEpoch),
+                                    response));
+            assertThat(response.get().isCommitSuccess()).isFalse();
+        }
     }
 
     @Test
@@ -2290,28 +2410,12 @@ class CoordinatorEventProcessorTest extends CoordinatorEventProcessorTestBase {
         verifyIsr(tb0, 1, Arrays.asList(0, 1, 2));
     }
 
-    private void verifyIsr(TableBucket tb, int expectedLeader, List<Integer> expectedIsr)
-            throws Exception {
-        LeaderAndIsr leaderAndIsr =
-                waitValue(
-                        () -> fromCtx((ctx) -> ctx.getBucketLeaderAndIsr(tb)),
-                        Duration.ofMinutes(1),
-                        "leader not elected");
-        LeaderAndIsr newLeaderAndIsrOfZk = zookeeperClient.getLeaderAndIsr(tb).get();
-        assertThat(leaderAndIsr.leader())
-                .isEqualTo(newLeaderAndIsrOfZk.leader())
-                .isEqualTo(expectedLeader);
-        assertThat(leaderAndIsr.isr())
-                .isEqualTo(newLeaderAndIsrOfZk.isr())
-                .hasSameElementsAs(expectedIsr);
-    }
-
     private static class FailingUpdateMetadataChannelManager extends TestCoordinatorChannelManager {
 
-        private final CountDownLatch failureObserved = new CountDownLatch(1);
-        private volatile boolean failUpdateMetadata;
+        final CountDownLatch failureObserved = new CountDownLatch(1);
+        volatile boolean failUpdateMetadata;
 
-        private void failNextUpdateMetadata() {
+        void failNextUpdateMetadata() {
             failUpdateMetadata = true;
         }
 
@@ -2328,21 +2432,21 @@ class CoordinatorEventProcessorTest extends CoordinatorEventProcessorTestBase {
             super.sendUpdateMetadataRequest(serverId, request, responseConsumer);
         }
 
-        private void awaitFailure() throws InterruptedException {
+        void awaitFailure() throws InterruptedException {
             assertThat(failureObserved.await(30, TimeUnit.SECONDS)).isTrue();
         }
     }
 
     private static class RecordingAutoPartitionManager extends AutoPartitionManager {
 
-        private final CoordinatorMetadataCache metadataCache;
-        private final ReplicaCapacityController replicaCapacityController;
+        final CoordinatorMetadataCache metadataCache;
+        final ReplicaCapacityController replicaCapacityController;
 
-        private Set<Long> initializedTableIds = Collections.emptySet();
-        private long observedKvLeaderReplicaCountAtInit = -1;
-        private int liveTabletServerCountAtInit = -1;
+        Set<Long> initializedTableIds = Collections.emptySet();
+        long observedKvLeaderReplicaCountAtInit = -1;
+        int liveTabletServerCountAtInit = -1;
 
-        private RecordingAutoPartitionManager(
+        RecordingAutoPartitionManager(
                 CoordinatorMetadataCache metadataCache,
                 MetadataManager metadataManager,
                 String remoteDataDir,
@@ -2371,44 +2475,17 @@ class CoordinatorEventProcessorTest extends CoordinatorEventProcessorTestBase {
             liveTabletServerCountAtInit = metadataCache.getLiveTabletServerInfos().size();
         }
 
-        private Set<Long> getInitializedTableIds() {
+        Set<Long> getInitializedTableIds() {
             return initializedTableIds;
         }
 
-        private long getObservedKvLeaderReplicaCountAtInit() {
+        long getObservedKvLeaderReplicaCountAtInit() {
             return observedKvLeaderReplicaCountAtInit;
         }
 
-        private int getLiveTabletServerCountAtInit() {
+        int getLiveTabletServerCountAtInit() {
             return liveTabletServerCountAtInit;
         }
-    }
-
-    private void initCoordinatorChannel() throws Exception {
-        makeSendLeaderAndStopRequestAlwaysSuccess(
-                testCoordinatorChannelManager,
-                Arrays.stream(zookeeperClient.getSortedTabletServerList())
-                        .boxed()
-                        .collect(Collectors.toSet()),
-                Collections.emptySet());
-    }
-
-    private void initCoordinatorChannel(Set<ApiKeys> ignoreApiKeys) throws Exception {
-        makeSendLeaderAndStopRequestAlwaysSuccess(
-                testCoordinatorChannelManager,
-                Arrays.stream(zookeeperClient.getSortedTabletServerList())
-                        .boxed()
-                        .collect(Collectors.toSet()),
-                ignoreApiKeys);
-    }
-
-    private void initCoordinatorChannel(int failedServer) throws Exception {
-        makeSendLeaderAndStopRequestFailContext(
-                testCoordinatorChannelManager,
-                Arrays.stream(zookeeperClient.getSortedTabletServerList())
-                        .boxed()
-                        .collect(Collectors.toSet()),
-                Collections.singleton(failedServer));
     }
 
     private Tuple2<PartitionIdName, PartitionIdName> preparePartitionAssignment(
@@ -2429,7 +2506,7 @@ class CoordinatorEventProcessorTest extends CoordinatorEventProcessorTestBase {
                 remoteDataDir,
                 tablePath,
                 tableId,
-                partitionAssignment.getBucketAssignments().size());
+                partitionAssignment.getBuckets().size());
         zookeeperClient.registerPartitionAssignmentAndMetadata(
                 partition2Id,
                 partition2Name,
@@ -2437,7 +2514,7 @@ class CoordinatorEventProcessorTest extends CoordinatorEventProcessorTestBase {
                 remoteDataDir,
                 tablePath,
                 tableId,
-                partitionAssignment.getBucketAssignments().size());
+                partitionAssignment.getBuckets().size());
 
         return Tuple2.of(
                 new PartitionIdName(partition1Id, partition1Name),
@@ -2698,12 +2775,6 @@ class CoordinatorEventProcessorTest extends CoordinatorEventProcessorTestBase {
                 });
     }
 
-    private <T> T fromCtx(Function<CoordinatorContext, T> retrieveFunction) throws Exception {
-        AccessContextEvent<T> event = new AccessContextEvent<>(retrieveFunction);
-        eventProcessor.getCoordinatorEventManager().put(event);
-        return event.getResultFuture().get(30, TimeUnit.SECONDS);
-    }
-
     private Map.Entry<TableBucket, LeaderAndIsr> createTableAndGetLeaderAndIsr(String tableName)
             throws Exception {
         initCoordinatorChannel();
@@ -2743,17 +2814,6 @@ class CoordinatorEventProcessorTest extends CoordinatorEventProcessorTestBase {
                         new AdjustIsrReceivedEvent(
                                 Collections.singletonMap(tableBucket, newLeaderAndIsr), response));
         return getAdjustIsrResponseData(response.get()).get(tableBucket);
-    }
-
-    private long createTable(TablePath tablePath, TabletServerInfo[] servers) {
-        TableAssignment tableAssignment =
-                generateAssignment(N_BUCKETS, REPLICATION_FACTOR, servers);
-        return metadataManager.createTable(
-                tablePath,
-                remoteDataDir,
-                CoordinatorEventProcessorTest.TEST_TABLE,
-                tableAssignment,
-                false);
     }
 
     private void alterTable(TablePath tablePath, List<TableChange> schemaChanges) {
@@ -2833,7 +2893,7 @@ class CoordinatorEventProcessorTest extends CoordinatorEventProcessorTestBase {
     }
 
     private static class CountingFailingNotifyGateway extends TestTabletServerGateway {
-        private final AtomicInteger notifyLeaderAndIsrCount = new AtomicInteger();
+        final AtomicInteger notifyLeaderAndIsrCount = new AtomicInteger();
 
         CountingFailingNotifyGateway() {
             super(true, Collections.emptySet());
@@ -2858,9 +2918,9 @@ class CoordinatorEventProcessorTest extends CoordinatorEventProcessorTestBase {
      * before the response is delivered.
      */
     private static class ControlledNotifyGateway extends TestTabletServerGateway {
-        private volatile boolean controlMode = false;
-        private final int responseServerId;
-        private final ConcurrentLinkedDeque<ControlledNotifyTrigger> pendingTriggers;
+        volatile boolean controlMode = false;
+        final int responseServerId;
+        final ConcurrentLinkedDeque<ControlledNotifyTrigger> pendingTriggers;
 
         ControlledNotifyGateway(
                 int responseServerId,
@@ -2890,8 +2950,8 @@ class CoordinatorEventProcessorTest extends CoordinatorEventProcessorTestBase {
     }
 
     private static class ControlledNotifyTrigger {
-        private final int responseServerId;
-        private final CompletableFuture<Void> future = new CompletableFuture<>();
+        final int responseServerId;
+        final CompletableFuture<Void> future = new CompletableFuture<>();
 
         ControlledNotifyTrigger(int responseServerId) {
             this.responseServerId = responseServerId;
@@ -2907,16 +2967,6 @@ class CoordinatorEventProcessorTest extends CoordinatorEventProcessorTestBase {
 
         void complete(Void value) {
             future.complete(value);
-        }
-    }
-
-    private static class PartitionIdName {
-        private final long partitionId;
-        private final String partitionName;
-
-        private PartitionIdName(long partitionId, String partitionName) {
-            this.partitionId = partitionId;
-            this.partitionName = partitionName;
         }
     }
 }

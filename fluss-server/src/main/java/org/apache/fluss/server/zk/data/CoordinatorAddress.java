@@ -30,10 +30,18 @@ import java.util.Objects;
 public class CoordinatorAddress {
     private final String id;
     private final List<Endpoint> endpoints;
+    private final int serverProtocolVersion;
 
+    /** Creates a coordinator address advertising the legacy protocol version {@code 0}. */
     public CoordinatorAddress(String id, List<Endpoint> endpoints) {
+        this(id, endpoints, 0);
+    }
+
+    /** Creates a coordinator address advertising the given server protocol version. */
+    public CoordinatorAddress(String id, List<Endpoint> endpoints, int serverProtocolVersion) {
         this.id = id;
         this.endpoints = endpoints;
+        this.serverProtocolVersion = serverProtocolVersion;
     }
 
     public String getId() {
@@ -44,22 +52,37 @@ public class CoordinatorAddress {
         return endpoints;
     }
 
+    /** Returns the protocol version advertised by this coordinator. */
+    public int getServerProtocolVersion() {
+        return serverProtocolVersion;
+    }
+
     @Override
     public boolean equals(Object o) {
         if (o == null || getClass() != o.getClass()) {
             return false;
         }
         CoordinatorAddress that = (CoordinatorAddress) o;
-        return Objects.equals(id, that.id) && Objects.equals(endpoints, that.endpoints);
+        return serverProtocolVersion == that.serverProtocolVersion
+                && Objects.equals(id, that.id)
+                && Objects.equals(endpoints, that.endpoints);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(id, endpoints);
+        return Objects.hash(id, endpoints, serverProtocolVersion);
     }
 
     @Override
     public String toString() {
-        return "CoordinatorAddress{" + "id='" + id + '\'' + ", endpoints=" + endpoints + '}';
+        return "CoordinatorAddress{"
+                + "id='"
+                + id
+                + '\''
+                + ", endpoints="
+                + endpoints
+                + ", serverProtocolVersion="
+                + serverProtocolVersion
+                + '}';
     }
 }

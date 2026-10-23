@@ -86,6 +86,38 @@ public class ZooKeeperCompletedSnapshotHandleStore implements CompletedSnapshotH
     }
 
     @Override
+    public void add(
+            TableBucket tableBucket,
+            long snapshotId,
+            CompletedSnapshotHandle snapshotHandle,
+            String sourceMetadataPath,
+            int sourceMetadataVersion,
+            int coordinatorZkVersion,
+            int leaderAndIsrZkVersion)
+            throws Exception {
+        checkNotNull(snapshotHandle, "completed snapshot handle");
+
+        boolean success = false;
+        try {
+            client.registerTableBucketSnapshot(
+                    tableBucket,
+                    new BucketSnapshot(
+                            snapshotId,
+                            snapshotHandle.getLogOffset(),
+                            snapshotHandle.getMetadataFilePath().toString()),
+                    sourceMetadataPath,
+                    sourceMetadataVersion,
+                    coordinatorZkVersion,
+                    leaderAndIsrZkVersion);
+            success = true;
+        } finally {
+            if (!success) {
+                snapshotHandle.discard();
+            }
+        }
+    }
+
+    @Override
     public void remove(TableBucket tableBucket, long snapshotId) throws Exception {
         // TODO: it may bring concurrent delete operations when lost leadership and a new leadership
         // grant. the new leader may need to use the snapshot to restore, but the ex-leader is

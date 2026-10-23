@@ -18,6 +18,7 @@
 package org.apache.fluss.server;
 
 import org.apache.fluss.cluster.ServerNode;
+import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.rpc.GatewayClientProxy;
@@ -31,7 +32,9 @@ import org.apache.fluss.server.cli.CommandLineOptions;
 import org.apache.fluss.server.coordinator.CoordinatorServer;
 import org.apache.fluss.server.tablet.TabletServer;
 import org.apache.fluss.server.utils.TestProcessBuilder;
+import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.ZooKeeperExtension;
+import org.apache.fluss.server.zk.data.ServerProtocolVersion;
 import org.apache.fluss.testutils.common.AllCallbackWrapper;
 import org.apache.fluss.testutils.common.CommonTestUtils;
 
@@ -138,6 +141,29 @@ public abstract class ServerITCaseBase {
                             .get();
             ApiManager apiManager = new ApiManager(getServerNode().serverType());
             assertThat(response.getApiVersionsCount()).isEqualTo(apiManager.enabledApis().size());
+
+            // the server must advertise this build's protocol version in its own registration
+            ZooKeeperClient zkClient =
+                    ZOO_KEEPER_EXTENSION_WRAPPER
+                            .getCustomExtension()
+                            .getZooKeeperClient(exception -> {});
+            int advertisedProtocolVersion;
+            if (getServerNode().serverType() == ServerType.COORDINATOR) {
+                advertisedProtocolVersion =
+                        CommonTestUtils.waitValue(
+                                        zkClient::getCoordinatorLeaderAddress,
+                                        Duration.ofMinutes(1),
+                                        "Coordinator registration was not published to ZooKeeper.")
+                                .getServerProtocolVersion();
+            } else {
+                advertisedProtocolVersion =
+                        CommonTestUtils.waitValue(
+                                        () -> zkClient.getTabletServer(getServerNode().id()),
+                                        Duration.ofMinutes(1),
+                                        "Tablet server registration was not published to ZooKeeper.")
+                                .getServerProtocolVersion();
+            }
+            assertThat(advertisedProtocolVersion).isEqualTo(ServerProtocolVersion.CURRENT);
         }
     }
 

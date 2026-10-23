@@ -32,6 +32,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Test for {@link org.apache.fluss.server.zk.data.TableRegistrationJsonSerde}. */
 class TableRegistrationJsonSerdeTest extends JsonSerdeTestBase<TableRegistration> {
+
     TableRegistrationJsonSerdeTest() {
         super(TableRegistrationJsonSerde.INSTANCE);
     }

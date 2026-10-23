@@ -46,6 +46,7 @@ import org.apache.fluss.server.log.remote.LogSegmentFiles;
 import org.apache.fluss.server.log.remote.RemoteLogTablet;
 import org.apache.fluss.server.log.remote.RemoteLogTestBase;
 import org.apache.fluss.server.replica.Replica;
+import org.apache.fluss.server.tablet.TabletServerAccessGate;
 import org.apache.fluss.server.tablet.TabletService;
 import org.apache.fluss.utils.FlussPaths;
 import org.apache.fluss.utils.IOUtils;
@@ -297,6 +298,8 @@ class RemoteLogFetcherTest extends RemoteLogTestBase {
         ExecutorService executor = Executors.newSingleThreadExecutor();
         DynamicConfigManager dynamicConfigManager = new DynamicConfigManager(zkClient, conf);
         MetricGroup metricGroup = NOPMetricsGroup.newInstance();
+        TabletServerAccessGate accessGate = new TabletServerAccessGate();
+        accessGate.validationSucceeded(accessGate.beginValidation());
         TabletService service =
                 new TabletService(
                         TABLET_SERVER_ID,
@@ -312,7 +315,8 @@ class RemoteLogFetcherTest extends RemoteLogTestBase {
                         executor,
                         scannerManager,
                         testCoordinatorGateway,
-                        "CLIENT");
+                        "CLIENT",
+                        accessGate);
         try (RpcServer server =
                 RpcServer.create(
                         conf,

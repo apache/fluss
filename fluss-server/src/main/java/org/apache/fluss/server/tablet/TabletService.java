@@ -192,6 +192,7 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
     private final CoordinatorGateway coordinatorGateway;
     private final String interListenerName;
     private final ExecutorService replicaStateChangeExecutor;
+    private final TabletServerAccessGate accessGate;
 
     public TabletService(
             int serverId,
@@ -206,7 +207,8 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
             ExecutorService replicaStateChangeExecutor,
             ScannerManager scannerManager,
             CoordinatorGateway coordinatorGateway,
-            String interListenerName) {
+            String interListenerName,
+            TabletServerAccessGate accessGate) {
         super(
                 remoteFileSystem,
                 ServerType.TABLET_SERVER,
@@ -224,6 +226,7 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
         this.coordinatorGateway = coordinatorGateway;
         this.interListenerName = interListenerName;
         this.replicaStateChangeExecutor = replicaStateChangeExecutor;
+        this.accessGate = accessGate;
     }
 
     @Override
@@ -236,6 +239,7 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
 
     @Override
     public CompletableFuture<ProduceLogResponse> produceLog(ProduceLogRequest request) {
+        long generation = accessGate.captureAccessEpoch();
         authorizeTable(WRITE, request.getTableId());
         long tableId = request.getTableId();
         Map<TableBucket, ProduceLogResultForBucket> routingErrors = new HashMap<>();
@@ -285,7 +289,7 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
                     userContext,
                     responseCallback);
         }
-        return response;
+        return gateCompletion(generation, response);
     }
 
     /**
@@ -310,6 +314,7 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
 
     @Override
     public CompletableFuture<FetchLogResponse> fetchLog(FetchLogRequest request) {
+        long generation = accessGate.captureAccessEpoch();
         Map<TableBucket, FetchReqInfo> fetchLogData = getFetchLogData(request);
         Map<TableBucket, FetchLogResultForBucket> errorResponseMap = new HashMap<>();
         if (isFromClient(request.getFollowerServerId())) {
@@ -344,7 +349,9 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
                                 FetchLogResultForBucket::error)
                         : fetchLogData;
         if (interesting.isEmpty()) {
-            return CompletableFuture.completedFuture(makeFetchLogResponse(errorResponseMap));
+            return gateCompletion(
+                    generation,
+                    CompletableFuture.completedFuture(makeFetchLogResponse(errorResponseMap)));
         }
 
         CompletableFuture<FetchLogResponse> response = new CompletableFuture<>();
@@ -356,7 +363,7 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
                 fetchResponseMap ->
                         response.complete(
                                 makeFetchLogResponse(fetchResponseMap, errorResponseMap)));
-        return response;
+        return gateCompletion(generation, response);
     }
 
     private static FetchParams getFetchParams(FetchLogRequest request) {
@@ -390,6 +397,7 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
 
     @Override
     public CompletableFuture<PutKvResponse> putKv(PutKvRequest request) {
+        long generation = accessGate.captureAccessEpoch();
         authorizeTable(WRITE, request.getTableId());
         long tableId = request.getTableId();
         Map<TableBucket, PutKvResultForBucket> routingErrors = new HashMap<>();
@@ -444,12 +452,13 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
                     currentSession().getApiVersion(),
                     responseCallback);
         }
-        return response;
+        return gateCompletion(generation, response);
     }
 
     @Override
     public CompletableFuture<LookupResponse> lookup(LookupRequest request) {
         long tableId = request.getTableId();
+        long generation = accessGate.captureAccessEpoch();
         Map<TableBucket, LookupResultForBucket> errorResponseMap = new HashMap<>();
         collectRoutingErrors(
                 request.getBucketsReqsList(),
@@ -508,7 +517,10 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
                                 errorResponseMap,
                                 LookupResultForBucket::new);
                 if (interesting.isEmpty()) {
-                    return CompletableFuture.completedFuture(makeLookupResponse(errorResponseMap));
+                    return gateCompletion(
+                            generation,
+                            CompletableFuture.completedFuture(
+                                    makeLookupResponse(errorResponseMap)));
                 }
                 replicaManager.lookups(
                         interesting,
@@ -516,12 +528,13 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
                         value -> response.complete(makeLookupResponse(value, errorResponseMap)));
             }
         }
-        return response;
+        return gateCompletion(generation, response);
     }
 
     @Override
     public CompletableFuture<PrefixLookupResponse> prefixLookup(PrefixLookupRequest request) {
         long tableId = request.getTableId();
+        long generation = accessGate.captureAccessEpoch();
         Map<TableBucket, List<byte[]>> prefixLookupData = toPrefixLookupData(request);
         Map<TableBucket, PrefixLookupResultForBucket> errorResponseMap = new HashMap<>();
         collectRoutingErrors(
@@ -539,7 +552,9 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
                 authorizeRequestData(
                         READ, prefixLookupData, errorResponseMap, PrefixLookupResultForBucket::new);
         if (interesting.isEmpty()) {
-            return CompletableFuture.completedFuture(makePrefixLookupResponse(errorResponseMap));
+            return gateCompletion(
+                    generation,
+                    CompletableFuture.completedFuture(makePrefixLookupResponse(errorResponseMap)));
         }
 
         CompletableFuture<PrefixLookupResponse> response = new CompletableFuture<>();
@@ -547,11 +562,12 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
                 prefixLookupData,
                 currentSession().getApiVersion(),
                 value -> response.complete(makePrefixLookupResponse(value, errorResponseMap)));
-        return response;
+        return gateCompletion(generation, response);
     }
 
     @Override
     public CompletableFuture<LimitScanResponse> limitScan(LimitScanRequest request) {
+        long generation = accessGate.captureAccessEpoch();
         authorizeTable(READ, request.getTableId());
         validateRoutingBucketCountOrThrow(
                 new TableBucket(
@@ -568,11 +584,12 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
                         request.getBucketId()),
                 request.getLimit(),
                 value -> response.complete(makeLimitScanResponse(value)));
-        return response;
+        return gateCompletion(generation, response);
     }
 
     @Override
     public CompletableFuture<GetTableStatsResponse> getTableStats(GetTableStatsRequest request) {
+        long generation = accessGate.captureAccessEpoch();
         authorizeTable(READ, request.getTableId());
         long tableId = request.getTableId();
         Map<TableBucket, TableStatsResultForBucket> routingErrors = new HashMap<>();
@@ -603,7 +620,7 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
                         response.complete(
                                 makeGetTableStatsResponse(
                                         withRoutingErrors(result, routingErrors))));
-        return response;
+        return gateCompletion(generation, response);
     }
 
     @Override
@@ -668,6 +685,7 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
 
     @Override
     public CompletableFuture<ListOffsetsResponse> listOffsets(ListOffsetsRequest request) {
+        long generation = accessGate.captureAccessEpoch();
         authorizeTable(DESCRIBE, request.getTableId());
         if (isFromClient(request.getFollowerServerId())) {
             // Unlike the per-bucket requests, both the partition and the routing count are
@@ -691,11 +709,12 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
                         request.hasStartTimestamp() ? request.getStartTimestamp() : null),
                 tableBuckets,
                 (responseList) -> response.complete(makeListOffsetsResponse(responseList)));
-        return response;
+        return gateCompletion(generation, response);
     }
 
     @Override
     public CompletableFuture<InitWriterResponse> initWriter(InitWriterRequest request) {
+        long generation = accessGate.captureAccessEpoch();
         List<TablePath> tablePathsList =
                 request.getTablePathsList().stream()
                         .map(ServerRpcMessageUtils::toTablePath)
@@ -703,7 +722,7 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
         authorizeAnyTable(WRITE, tablePathsList);
         CompletableFuture<InitWriterResponse> response = new CompletableFuture<>();
         response.complete(makeInitWriterResponse(metadataManager.initWriterId()));
-        return response;
+        return gateCompletion(generation, response);
     }
 
     @Override
@@ -823,6 +842,7 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
 
     @Override
     public CompletableFuture<ScanKvResponse> scanKv(ScanKvRequest request) {
+        long generation = accessGate.captureAccessEpoch();
         ScanKvResponse response = new ScanKvResponse();
         ScannerContext openedContext = null;
         ScannerContext acquiredContext = null;
@@ -891,7 +911,7 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
                     // Empty bucket: no session registered; still return the captured offset.
                     response.setHasMoreResults(false);
                     response.setLogOffset(initialLogOffset);
-                    return CompletableFuture.completedFuture(response);
+                    return gateCompletion(generation, CompletableFuture.completedFuture(response));
                 }
                 openedContext = context;
             } else {
@@ -901,7 +921,8 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
                     if (isCloseRequest) {
                         response.setScannerId(scannerId);
                         response.setHasMoreResults(false);
-                        return CompletableFuture.completedFuture(response);
+                        return gateCompletion(
+                                generation, CompletableFuture.completedFuture(response));
                     }
                     if (scannerManager.isRecentlyExpired(scannerId)) {
                         throw new ScannerExpiredException(
@@ -933,7 +954,7 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
             if (isCloseRequest) {
                 response.setScannerId(context.getScannerId());
                 response.setHasMoreResults(false);
-                return CompletableFuture.completedFuture(response);
+                return gateCompletion(generation, CompletableFuture.completedFuture(response));
             }
 
             // Validate callSeqId for all data-fetching requests (open + continuation).
@@ -1029,7 +1050,16 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
             }
         }
 
-        return CompletableFuture.completedFuture(response);
+        return gateCompletion(generation, CompletableFuture.completedFuture(response));
+    }
+
+    private <T> CompletableFuture<T> gateCompletion(
+            long generation, CompletableFuture<T> response) {
+        return response.thenApply(
+                value -> {
+                    accessGate.ensureEnabled(generation);
+                    return value;
+                });
     }
 
     private <T> CompletableFuture<T> submitReplicaStateChange(
