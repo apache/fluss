@@ -73,7 +73,7 @@ tempfile = "3.23.0"
 snafu = "0.8.3"
 scopeguard = "1.2.0"
 delegate = "0.13.5"
-strum = "0.26"
+strum = "0.28"
 strum_macros = "0.26"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
