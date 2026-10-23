@@ -50,6 +50,8 @@ defaults:
   run:
     working-directory: fluss-rust
 
+# PRs run on arm64, whose queue stays short at peak hours. Pushes to main run
+# on x86, so a merge that breaks only x86 still shows up there.
 jobs:
   build-and-unit-test:
     timeout-minutes: 60
@@ -57,7 +59,7 @@ jobs:
     strategy:
       matrix:
         os:
-          - ubuntu-latest
+          - ${{ github.event_name == 'pull_request' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
           - macos-latest
     steps:
       - uses: actions/checkout@v6
@@ -78,7 +80,7 @@ jobs:
 
   proto-up-to-date:
     timeout-minutes: 15
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.event_name == 'pull_request' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
     steps:
       - uses: actions/checkout@v6
 
