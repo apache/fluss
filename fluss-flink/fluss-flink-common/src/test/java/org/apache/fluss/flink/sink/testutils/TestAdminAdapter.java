@@ -252,6 +252,16 @@ public class TestAdminAdapter implements Admin {
     }
 
     @Override
+    public ListOffsetsResult listOffsets(
+            TablePath tablePath,
+            long tableId,
+            @Nullable Long partitionId,
+            Collection<Integer> buckets,
+            OffsetSpec offsetSpec) {
+        throw new UnsupportedOperationException("Not implemented in TestAdminAdapter");
+    }
+
+    @Override
     public CompletableFuture<TableStats> getTableStats(TablePath tablePath) {
         throw new UnsupportedOperationException("Not implemented in TestAdminAdapter");
     }

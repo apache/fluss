@@ -36,6 +36,7 @@ import org.apache.fluss.config.cluster.ConfigEntry;
 import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.exception.LeaderNotAvailableException;
 import org.apache.fluss.exception.PartitionNotExistException;
+import org.apache.fluss.exception.TableNotExistException;
 import org.apache.fluss.metadata.BucketInfo;
 import org.apache.fluss.metadata.DatabaseChange;
 import org.apache.fluss.metadata.DatabaseDescriptor;
@@ -701,6 +702,33 @@ public class FlussAdmin implements Admin {
     }
 
     @Override
+    public ListOffsetsResult listOffsets(
+            TablePath tablePath,
+            long tableId,
+            @Nullable Long partitionId,
+            Collection<Integer> buckets,
+            OffsetSpec offsetSpec) {
+        checkNotNull(tablePath, "tablePath must not be null");
+        checkNotNull(buckets, "buckets must not be null");
+        checkNotNull(offsetSpec, "offsetSpec must not be null");
+
+        TableInfo tableInfo = getTableInfo(tablePath).join();
+        if (tableInfo.getTableId() != tableId) {
+            throw new TableNotExistException(
+                    String.format(
+                            "Table '%s' with ID %s no longer exists. "
+                                    + "The current table ID is %s.",
+                            tablePath, tableId, tableInfo.getTableId()));
+        }
+        checkArgument(
+                tableInfo.isPartitioned() == (partitionId != null),
+                "A partition ID must be specified for a partitioned table "
+                        + "and must be null for a non-partitioned table.");
+        metadataUpdater.updateTableOrPartitionMetadata(tablePath, partitionId);
+        return listOffsetsInternal(tablePath, tableId, partitionId, buckets, offsetSpec);
+    }
+
+    @Override
     public CompletableFuture<TableStats> getTableStats(TablePath tablePath) {
         metadataUpdater.updateTableOrPartitionMetadata(tablePath, null);
         TableInfo tableInfo = getTableInfo(tablePath).join();
@@ -754,14 +782,19 @@ public class FlussAdmin implements Admin {
             metadataUpdater.updatePhysicalTableMetadata(Collections.singleton(physicalTablePath));
             partitionId = metadataUpdater.getPartitionIdOrElseThrow(physicalTablePath);
         }
+        return listOffsetsInternal(
+                tableInfo.getTablePath(), tableInfo.getTableId(), partitionId, buckets, offsetSpec);
+    }
+
+    private ListOffsetsResult listOffsetsInternal(
+            TablePath tablePath,
+            long tableId,
+            @Nullable Long partitionId,
+            Collection<Integer> buckets,
+            OffsetSpec offsetSpec) {
         Map<Integer, ListOffsetsRequest> requestMap =
                 prepareListOffsetsRequests(
-                        metadataUpdater,
-                        tableInfo.getTableId(),
-                        partitionId,
-                        buckets,
-                        offsetSpec,
-                        tableInfo.getTablePath());
+                        metadataUpdater, tableId, partitionId, buckets, offsetSpec, tablePath);
 
         Map<Integer, CompletableFuture<Long>> resultMap = new ConcurrentHashMap<>();
         for (int bucket : buckets) {
