@@ -1101,6 +1101,11 @@ public class ServerRpcMessageUtils {
                         // TODO: set log start offset here if we support log clean.
                         .setLogStartOffset(0L);
 
+                if (bucketResult.hasResolvedEarliestOffset()) {
+                    fetchLogRespForBucket.setResolvedEarliestOffset(
+                            bucketResult.getResolvedEarliestOffset());
+                }
+
                 if (bucketResult.fetchFromRemote()) {
                     // set remote log fetch info.
                     RemoteLogFetchInfo rlfInfo = bucketResult.remoteLogFetchInfo();

@@ -22,14 +22,18 @@ import org.apache.fluss.client.metadata.MetadataUpdater;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.record.ArrowBatchData;
+import org.apache.fluss.utils.IOUtils;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import javax.annotation.concurrent.ThreadSafe;
 
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /** Collects Arrow batches from completed fetches. */
 @ThreadSafe
@@ -62,8 +66,48 @@ public class ArrowLogFetchCollector
     @Override
     protected ArrowScanRecords toResult(
             Map<TableBucket, List<ArrowBatchData>> fetchedRecords,
-            Map<TableBucket, Long> consumedUpToOffsets) {
-        return new ArrowScanRecords(fetchedRecords, consumedUpToOffsets);
+            Map<TableBucket, Long> consumedUpToOffsets,
+            Set<TableBucket> finishedBuckets) {
+        return new ArrowScanRecords(fetchedRecords, consumedUpToOffsets, finishedBuckets);
+    }
+
+    @Override
+    protected List<ArrowBatchData> trimFetchedRecords(
+            List<ArrowBatchData> fetchedRecords, long stoppingOffset) {
+        for (int i = 0; i < fetchedRecords.size(); i++) {
+            ArrowBatchData batch = fetchedRecords.get(i);
+            long batchBaseOffset = batch.getBaseLogOffset();
+            int batchRecordCount = batch.getRecordCount();
+
+            if (batchBaseOffset >= stoppingOffset) {
+                for (int j = i; j < fetchedRecords.size(); j++) {
+                    IOUtils.closeQuietly(fetchedRecords.get(j));
+                }
+
+                if (i == 0) {
+                    return Collections.emptyList();
+                }
+                return new ArrayList<>(fetchedRecords.subList(0, i));
+            }
+
+            long writableRowCount = stoppingOffset - batchBaseOffset;
+            if (writableRowCount < batchRecordCount) {
+                ArrowBatchData truncatedBatch =
+                        batch.truncateAndTransferOwnership((int) writableRowCount);
+
+                List<ArrowBatchData> trimmedRecords = new ArrayList<>(i + 1);
+                trimmedRecords.addAll(fetchedRecords.subList(0, i));
+                trimmedRecords.add(truncatedBatch);
+
+                for (int j = i + 1; j < fetchedRecords.size(); j++) {
+                    IOUtils.closeQuietly(fetchedRecords.get(j));
+                }
+
+                return trimmedRecords;
+            }
+        }
+
+        return fetchedRecords;
     }
 
     @Override
