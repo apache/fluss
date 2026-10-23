@@ -62,9 +62,12 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executor;
 import java.util.concurrent.ExecutorService;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Supplier;
@@ -75,6 +78,7 @@ import static org.apache.fluss.shaded.curator5.org.apache.curator.framework.Cura
 import static org.apache.fluss.shaded.curator5.org.apache.curator.framework.CuratorFrameworkFactory.builder;
 import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Test for {@link KvTabletSnapshotTarget}. */
 class KvTabletSnapshotTargetTest {
@@ -121,10 +125,10 @@ class KvTabletSnapshotTargetTest {
 
     @AfterEach
     void afterEach() throws Exception {
-        closeableRegistry.close();
         if (periodicSnapshotManager != null) {
-            periodicSnapshotManager.close();
+            periodicSnapshotManager.closeAsync().get(10, TimeUnit.SECONDS);
         }
+        closeableRegistry.close();
         ZOO_KEEPER_EXTENSION_WRAPPER.getCustomExtension().cleanupRoot();
     }
 
@@ -198,6 +202,50 @@ class KvTabletSnapshotTargetTest {
     }
 
     @Test
+    void testManualSnapshotWithUnchangedOffset(@TempDir Path directory) throws Exception {
+        CountDownLatch committing = new CountDownLatch(1);
+        CountDownLatch allowCommit = new CountDownLatch(1);
+        CompletedSnapshotHandleStore store =
+                new ZooKeeperCompletedSnapshotHandleStore(zooKeeperClient);
+        CompletedSnapshotStore completedStore =
+                new CompletedSnapshotStore(
+                        2,
+                        new SharedKvFileRegistry(),
+                        Collections.emptyList(),
+                        store,
+                        Executors.directExecutor(),
+                        bucket -> false);
+        KvTabletSnapshotTarget target =
+                createSnapshotTargetWithCustomCommitter(
+                        FsPath.fromLocalFile(directory.toFile()),
+                        (snapshot, coordinator, leader) -> {
+                            if (snapshot.getSnapshotID() == 2) {
+                                committing.countDown();
+                                assertThat(allowCommit.await(10, TimeUnit.SECONDS)).isTrue();
+                            }
+                            completedStore.add(snapshot);
+                        });
+        periodicSnapshotManager = createSnapshotManager(target);
+        CompletedSnapshotHandle previous =
+                periodicSnapshotManager.triggerSnapshotAfterCompaction().get(10, TimeUnit.SECONDS);
+        CompletableFuture<CompletedSnapshotHandle> manualFuture =
+                periodicSnapshotManager.triggerSnapshotAfterCompaction();
+        try {
+            assertThat(committing.await(10, TimeUnit.SECONDS)).isTrue();
+            assertThat(manualFuture).isNotDone();
+        } finally {
+            allowCommit.countDown();
+        }
+        CompletedSnapshotHandle committedHandle = manualFuture.get(10, TimeUnit.SECONDS);
+        assertThat(committedHandle.getSnapshotId()).isGreaterThan(previous.getSnapshotId());
+        assertThat(committedHandle.getLogOffset()).isEqualTo(previous.getLogOffset());
+        assertThat(store.get(tableBucket, committedHandle.getSnapshotId()))
+                .contains(committedHandle);
+        assertThat(committedHandle.retrieveCompleteSnapshot().getSnapshotID())
+                .isEqualTo(committedHandle.getSnapshotId());
+    }
+
+    @Test
     void testSnapshotFailure(@TempDir Path kvTabletDir) throws Exception {
         CompletedSnapshotHandleStore completedSnapshotHandleStore =
                 TestCompletedSnapshotHandleStore.newBuilder().build();
@@ -212,11 +260,17 @@ class KvTabletSnapshotTargetTest {
 
         periodicSnapshotManager = createSnapshotManager(kvTabletSnapshotTarget);
         periodicSnapshotManager.start();
-        periodicSnapshotManager.triggerSnapshot();
+        assertThatThrownBy(
+                        () ->
+                                periodicSnapshotManager
+                                        .triggerSnapshotAfterCompaction()
+                                        .get(10, TimeUnit.SECONDS))
+                .hasRootCauseInstanceOf(FlussRuntimeException.class);
 
         // the snapshot dir should be discarded
         FsPath snapshotPath1 = FlussPaths.remoteKvSnapshotDir(remoteKvTabletDir, snapshotId1);
         assertThat(snapshotPath1.getFileSystem().exists(snapshotPath1)).isFalse();
+        assertThat(new File(rocksDBExtension.getRockDbDir(), "snap-1")).doesNotExist();
 
         // test fail in the async phase of snapshot
         kvTabletSnapshotTarget =
@@ -243,6 +297,20 @@ class KvTabletSnapshotTargetTest {
                 });
         // minRetainOffset shouldn't updated
         assertThat(updateMinRetainOffsetConsumer.get()).isEqualTo(Long.MAX_VALUE);
+    }
+
+    @Test
+    void testClosedRegistryReleasesPreparedCheckpoint(@TempDir Path directory) throws Exception {
+        FsPath path = FsPath.fromLocalFile(directory.toFile());
+        KvTabletSnapshotTarget target =
+                createSnapshotTarget(path, TestCompletedSnapshotHandleStore.newBuilder().build());
+        CloseableRegistry registry = new CloseableRegistry();
+        registry.close();
+        SnapshotRunner runner = new SnapshotRunner(target.getRocksIncrementalSnapshot(), registry);
+        SnapshotLocation location = new SnapshotLocation(path.getFileSystem(), path, path, 1024);
+        assertThatThrownBy(() -> runner.snapshot(1, getCurrentTabletState(), location))
+                .isInstanceOf(IOException.class);
+        assertThat(new File(rocksDBExtension.getRockDbDir(), "snap-1")).doesNotExist();
     }
 
     @Test
@@ -327,18 +395,19 @@ class KvTabletSnapshotTargetTest {
                 new ZooKeeperCompletedSnapshotHandleStore(zooKeeperClient);
         FsPath remoteKvTabletDir = FsPath.fromLocalFile(kvTabletDir.toFile());
 
+        CompletedSnapshotStore completedStore =
+                new CompletedSnapshotStore(
+                        2,
+                        new SharedKvFileRegistry(),
+                        Collections.emptyList(),
+                        completedSnapshotHandleStore,
+                        Executors.directExecutor(),
+                        bucket -> false);
         // Create a committer that commits to ZK first, then throws exception
         // This simulates coordinator failover after ZK commit but before response
         CompletedKvSnapshotCommitter failingAfterZkCommitCommitter =
                 (snapshot, coordinatorEpoch, bucketLeaderEpoch) -> {
-                    // Always commit to ZK first
-                    CompletedSnapshotHandle handle =
-                            new CompletedSnapshotHandle(
-                                    snapshot.getSnapshotID(),
-                                    snapshot.getSnapshotLocation(),
-                                    snapshot.getLogOffset());
-                    completedSnapshotHandleStore.add(
-                            snapshot.getTableBucket(), snapshot.getSnapshotID(), handle);
+                    completedStore.add(snapshot);
 
                     // Then throw exception - simulating coordinator failover after ZK commit
                     throw new FlussException("Coordinator failover after ZK commit");
@@ -355,7 +424,11 @@ class KvTabletSnapshotTargetTest {
         rocksDB.put("key1".getBytes(), "val1".getBytes());
 
         // Trigger snapshot - will commit to ZK but throw exception
-        periodicSnapshotManager.triggerSnapshot();
+        CompletableFuture<CompletedSnapshotHandle> manual =
+                periodicSnapshotManager.triggerSnapshotAfterCompaction();
+        CompletedSnapshotHandle recovered = manual.get(10, TimeUnit.SECONDS);
+        assertThat(recovered.getSnapshotId()).isEqualTo(1);
+        assertThat(recovered.retrieveCompleteSnapshot().getSnapshotID()).isEqualTo(1);
         long snapshotId1 = 1;
 
         TestRocksIncrementalSnapshot rocksIncrementalSnapshot =
@@ -396,12 +469,15 @@ class KvTabletSnapshotTargetTest {
 
         RocksDB rocksDB = rocksDBExtension.getRocksDb();
         rocksDB.put("key1".getBytes(), "val1".getBytes());
-        periodicSnapshotManager.triggerSnapshot();
+        CompletableFuture<CompletedSnapshotHandle> manual =
+                periodicSnapshotManager.triggerSnapshotAfterCompaction();
 
         long snapshotId1 = 1;
         TestRocksIncrementalSnapshot rocksIncrementalSnapshot =
                 (TestRocksIncrementalSnapshot) kvTabletSnapshotTarget.getRocksIncrementalSnapshot();
 
+        assertThatThrownBy(() -> manual.get(10, TimeUnit.SECONDS))
+                .hasCauseInstanceOf(FlussException.class);
         // The snapshot should be aborted since it genuinely failed
         retry(
                 Duration.ofMinutes(1),
@@ -435,12 +511,15 @@ class KvTabletSnapshotTargetTest {
 
         RocksDB rocksDB = rocksDBExtension.getRocksDb();
         rocksDB.put("key1".getBytes(), "val1".getBytes());
-        periodicSnapshotManager.triggerSnapshot();
+        CompletableFuture<CompletedSnapshotHandle> manual =
+                periodicSnapshotManager.triggerSnapshotAfterCompaction();
 
         long snapshotId1 = 1;
         TestRocksIncrementalSnapshot rocksIncrementalSnapshot =
                 (TestRocksIncrementalSnapshot) kvTabletSnapshotTarget.getRocksIncrementalSnapshot();
 
+        assertThatThrownBy(() -> manual.get(10, TimeUnit.SECONDS))
+                .hasCauseInstanceOf(FlussException.class);
         // Wait for snapshot processing to complete
         // The snapshot should be created but commit will fail, then ZK query will fail
         // In this case, the new logic should preserve the snapshot files (no cleanup)
@@ -464,13 +543,11 @@ class KvTabletSnapshotTargetTest {
     }
 
     private PeriodicSnapshotManager createSnapshotManager(
-            PeriodicSnapshotManager.SnapshotTarget target) {
+            PeriodicSnapshotManager.SnapshotTarget target) throws IOException {
+        ExecutorService executor = java.util.concurrent.Executors.newFixedThreadPool(1);
+        closeableRegistry.registerCloseable(executor::shutdownNow);
         return new PeriodicSnapshotManager(
-                tableBucket,
-                target,
-                periodicMaterializeDelay,
-                java.util.concurrent.Executors.newFixedThreadPool(1),
-                scheduledExecutorService);
+                tableBucket, target, periodicMaterializeDelay, executor, scheduledExecutorService);
     }
 
     private KvTabletSnapshotTarget createSnapshotTarget(

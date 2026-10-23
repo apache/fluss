@@ -33,6 +33,7 @@ import java.nio.file.Paths;
 import java.text.NumberFormat;
 import java.util.UUID;
 
+import static org.apache.fluss.utils.Preconditions.checkArgument;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 import static org.apache.fluss.utils.Preconditions.checkState;
 
@@ -929,5 +930,11 @@ public class FlussPaths {
                     physicalPath,
                     new TablePartition(tableBucket.getTableId(), tableBucket.getPartitionId()));
         }
+    }
+
+    /** Returns the remote directory owned by one compaction operation. */
+    public static FsPath remoteCompactionDir(String remoteDataDir, String operationId) {
+        checkArgument(operationId.matches("[a-zA-Z0-9_-]+"), "Invalid operation ID");
+        return new FsPath(new FsPath(remoteDataDir, "compactions"), operationId);
     }
 }

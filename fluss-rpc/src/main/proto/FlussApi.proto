@@ -1710,3 +1710,113 @@ message PbLiteralValue {
   optional int32 timestamp_nano_of_millis_value = 12; // Nano of millis
   optional bytes decimal_bytes = 13;   // Serialized decimal (non-compact mode)
 }
+
+// Manual primary-key table compaction. All times are epoch milliseconds.
+// Scope levels are optional from cluster down to partition; each level requires its parent.
+message CompactRequest {
+  optional string database_name = 1;
+  optional string table_name = 2;
+  optional string partition_name = 3;
+  required string type = 4;
+}
+
+message CompactResponse {
+  required string operation_id = 1;
+}
+
+message ListCompactionsRequest {
+  optional string database_name = 1;
+  optional string table_name = 2;
+  optional string partition_name = 3;
+}
+
+message ListCompactionsResponse {
+  repeated PbCompactionInfo compactions = 1;
+}
+
+message GetCompactionRequest {
+  required string operation_id = 1;
+}
+
+message GetCompactionResponse {
+  required PbCompactionProgress progress = 1;
+}
+
+message CancelCompactionRequest {
+  required string operation_id = 1;
+}
+
+message CancelCompactionResponse {
+}
+
+message StartBucketCompactionRequest {
+  required string operation_id = 1;
+  required PbTableBucket table_bucket = 2;
+  required string type = 3;
+  required int32 coordinator_epoch = 4;
+  required int32 leader_epoch = 5;
+  // Effective cluster settings bound when the operation was submitted.
+  repeated PbKeyValue config_baseline = 6;
+  required int64 deadline = 7;
+}
+
+message StartBucketCompactionResponse {
+  required PbBucketCompactionStatus status = 1;
+}
+
+message CancelBucketCompactionRequest {
+  required string operation_id = 1;
+  required PbTableBucket table_bucket = 2;
+}
+
+message CancelBucketCompactionResponse {
+}
+
+message PbCompactionInfo {
+  required string operation_id = 1;
+  required string type = 2;
+  required string status = 3;
+  required int64 create_time = 4;
+  optional string database_name = 5;
+  optional string table_name = 6;
+  optional string partition_name = 7;
+}
+
+message PbCompactionProgress {
+  required PbCompactionInfo info = 1;
+  required int64 total = 2;
+  required int64 pending = 3;
+  required int64 running = 4;
+  required int64 succeeded = 5;
+  required int64 failed = 6;
+  required int64 cancelled = 7;
+  repeated PbCompactionExecution current_executions = 8;
+  optional string first_error = 9;
+  required int64 last_progress_time = 10;
+  required int64 observed_time = 11;
+  required int64 persisted_time = 12;
+}
+
+message PbCompactionExecution {
+  required int32 server_id = 1;
+  required PbTableBucket table_bucket = 2;
+  required int32 leader_epoch = 3;
+  // DISPATCHED, FLUSH, COMPACTION, or SNAPSHOT.
+  required string phase = 4;
+  required int64 phase_start_time = 5;
+  optional int64 snapshot_id = 6;
+  optional string reason = 7;
+}
+
+message PbBucketCompactionStatus {
+  required string operation_id = 1;
+  required PbTableBucket table_bucket = 2;
+  required string status = 3;
+  required string phase = 4;
+  required int64 phase_start_time = 5;
+  required int32 leader_epoch = 6;
+  // Captured from the original replica by the tablet server after accepting the command.
+  optional int64 covered_offset = 7;
+  optional int64 snapshot_id = 8;
+  optional string reason = 9;
+}

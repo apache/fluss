@@ -47,6 +47,7 @@ import org.apache.fluss.server.log.remote.RemoteLogTablet;
 import org.apache.fluss.server.log.remote.RemoteLogTestBase;
 import org.apache.fluss.server.replica.Replica;
 import org.apache.fluss.server.tablet.TabletService;
+import org.apache.fluss.server.tablet.compaction.BucketCompactionRunner;
 import org.apache.fluss.utils.FlussPaths;
 import org.apache.fluss.utils.IOUtils;
 
@@ -82,6 +83,7 @@ import static org.apache.fluss.server.testutils.RpcMessageTestUtils.newFetchLogR
 import static org.apache.fluss.testutils.DataTestUtils.genMemoryLogRecordsWithWriterId;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.Mockito.mock;
 
 /** Test for {@link RemoteLogFetcher}. */
 class RemoteLogFetcherTest extends RemoteLogTestBase {
@@ -312,7 +314,8 @@ class RemoteLogFetcherTest extends RemoteLogTestBase {
                         executor,
                         scannerManager,
                         testCoordinatorGateway,
-                        "CLIENT");
+                        "CLIENT",
+                        mock(BucketCompactionRunner.class));
         try (RpcServer server =
                 RpcServer.create(
                         conf,

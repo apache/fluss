@@ -18,6 +18,8 @@
 package org.apache.fluss.rpc.gateway;
 
 import org.apache.fluss.rpc.RpcGateway;
+import org.apache.fluss.rpc.messages.CancelBucketCompactionRequest;
+import org.apache.fluss.rpc.messages.CancelBucketCompactionResponse;
 import org.apache.fluss.rpc.messages.CommitConsumerOffsetsRequest;
 import org.apache.fluss.rpc.messages.CommitConsumerOffsetsResponse;
 import org.apache.fluss.rpc.messages.DeleteConsumerGroupsRequest;
@@ -58,6 +60,8 @@ import org.apache.fluss.rpc.messages.PutKvRequest;
 import org.apache.fluss.rpc.messages.PutKvResponse;
 import org.apache.fluss.rpc.messages.ScanKvRequest;
 import org.apache.fluss.rpc.messages.ScanKvResponse;
+import org.apache.fluss.rpc.messages.StartBucketCompactionRequest;
+import org.apache.fluss.rpc.messages.StartBucketCompactionResponse;
 import org.apache.fluss.rpc.messages.StopReplicaRequest;
 import org.apache.fluss.rpc.messages.StopReplicaResponse;
 import org.apache.fluss.rpc.messages.UpdateMetadataRequest;
@@ -241,4 +245,14 @@ public interface TabletServerGateway extends RpcGateway, AdminReadOnlyGateway {
      */
     @RPC(api = ApiKeys.SCAN_KV)
     CompletableFuture<ScanKvResponse> scanKv(ScanKvRequest request);
+
+    /** Handles startBucketCompaction. */
+    @RPC(api = ApiKeys.START_BUCKET_COMPACTION)
+    CompletableFuture<StartBucketCompactionResponse> startBucketCompaction(
+            StartBucketCompactionRequest request);
+
+    /** Handles cancelBucketCompaction. */
+    @RPC(api = ApiKeys.CANCEL_BUCKET_COMPACTION)
+    CompletableFuture<CancelBucketCompactionResponse> cancelBucketCompaction(
+            CancelBucketCompactionRequest request);
 }

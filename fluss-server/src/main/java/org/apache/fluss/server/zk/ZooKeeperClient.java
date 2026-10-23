@@ -110,6 +110,7 @@ import org.slf4j.LoggerFactory;
 import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
 
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
@@ -1901,6 +1902,14 @@ public class ZooKeeperClient implements AutoCloseable {
             zkClient.delete().forPath(path);
         } catch (KeeperException.NoNodeException ignored) {
         }
+    }
+
+    /** Reads the persistent active compaction pointer and its compare-and-set version. */
+    public VersionedData<String> getCompactionActive() throws Exception {
+        String path = ZkData.CompactionActiveZNode.path();
+        Stat stat = new Stat();
+        byte[] data = getCuratorClient().getData().storingStatIn(stat).forPath(path);
+        return new VersionedData<>(new String(data, StandardCharsets.UTF_8), stat.getVersion());
     }
 
     public CuratorFramework getCuratorClient() {

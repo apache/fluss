@@ -2309,3 +2309,168 @@ pub struct PbLiteralValue {
     #[prost(bytes = "vec", optional, tag = "13")]
     pub decimal_bytes: ::core::option::Option<::prost::alloc::vec::Vec<u8>>,
 }
+/// Manual primary-key table compaction. All times are epoch milliseconds.
+/// Scope levels are optional from cluster down to partition; each level requires its parent.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct CompactRequest {
+    #[prost(string, optional, tag = "1")]
+    pub database_name: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(string, optional, tag = "2")]
+    pub table_name: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(string, optional, tag = "3")]
+    pub partition_name: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(string, required, tag = "4")]
+    pub r#type: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct CompactResponse {
+    #[prost(string, required, tag = "1")]
+    pub operation_id: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ListCompactionsRequest {
+    #[prost(string, optional, tag = "1")]
+    pub database_name: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(string, optional, tag = "2")]
+    pub table_name: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(string, optional, tag = "3")]
+    pub partition_name: ::core::option::Option<::prost::alloc::string::String>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ListCompactionsResponse {
+    #[prost(message, repeated, tag = "1")]
+    pub compactions: ::prost::alloc::vec::Vec<PbCompactionInfo>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GetCompactionRequest {
+    #[prost(string, required, tag = "1")]
+    pub operation_id: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct GetCompactionResponse {
+    #[prost(message, required, tag = "1")]
+    pub progress: PbCompactionProgress,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct CancelCompactionRequest {
+    #[prost(string, required, tag = "1")]
+    pub operation_id: ::prost::alloc::string::String,
+}
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct CancelCompactionResponse {}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct StartBucketCompactionRequest {
+    #[prost(string, required, tag = "1")]
+    pub operation_id: ::prost::alloc::string::String,
+    #[prost(message, required, tag = "2")]
+    pub table_bucket: PbTableBucket,
+    #[prost(string, required, tag = "3")]
+    pub r#type: ::prost::alloc::string::String,
+    #[prost(int32, required, tag = "4")]
+    pub coordinator_epoch: i32,
+    #[prost(int32, required, tag = "5")]
+    pub leader_epoch: i32,
+    /// Effective cluster settings bound when the operation was submitted.
+    #[prost(message, repeated, tag = "6")]
+    pub config_baseline: ::prost::alloc::vec::Vec<PbKeyValue>,
+    #[prost(int64, required, tag = "7")]
+    pub deadline: i64,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct StartBucketCompactionResponse {
+    #[prost(message, required, tag = "1")]
+    pub status: PbBucketCompactionStatus,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct CancelBucketCompactionRequest {
+    #[prost(string, required, tag = "1")]
+    pub operation_id: ::prost::alloc::string::String,
+    #[prost(message, required, tag = "2")]
+    pub table_bucket: PbTableBucket,
+}
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct CancelBucketCompactionResponse {}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct PbCompactionInfo {
+    #[prost(string, required, tag = "1")]
+    pub operation_id: ::prost::alloc::string::String,
+    #[prost(string, required, tag = "2")]
+    pub r#type: ::prost::alloc::string::String,
+    #[prost(string, required, tag = "3")]
+    pub status: ::prost::alloc::string::String,
+    #[prost(int64, required, tag = "4")]
+    pub create_time: i64,
+    #[prost(string, optional, tag = "5")]
+    pub database_name: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(string, optional, tag = "6")]
+    pub table_name: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(string, optional, tag = "7")]
+    pub partition_name: ::core::option::Option<::prost::alloc::string::String>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PbCompactionProgress {
+    #[prost(message, required, tag = "1")]
+    pub info: PbCompactionInfo,
+    #[prost(int64, required, tag = "2")]
+    pub total: i64,
+    #[prost(int64, required, tag = "3")]
+    pub pending: i64,
+    #[prost(int64, required, tag = "4")]
+    pub running: i64,
+    #[prost(int64, required, tag = "5")]
+    pub succeeded: i64,
+    #[prost(int64, required, tag = "6")]
+    pub failed: i64,
+    #[prost(int64, required, tag = "7")]
+    pub cancelled: i64,
+    #[prost(message, repeated, tag = "8")]
+    pub current_executions: ::prost::alloc::vec::Vec<PbCompactionExecution>,
+    #[prost(string, optional, tag = "9")]
+    pub first_error: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(int64, required, tag = "10")]
+    pub last_progress_time: i64,
+    #[prost(int64, required, tag = "11")]
+    pub observed_time: i64,
+    #[prost(int64, required, tag = "12")]
+    pub persisted_time: i64,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct PbCompactionExecution {
+    #[prost(int32, required, tag = "1")]
+    pub server_id: i32,
+    #[prost(message, required, tag = "2")]
+    pub table_bucket: PbTableBucket,
+    #[prost(int32, required, tag = "3")]
+    pub leader_epoch: i32,
+    /// DISPATCHED, FLUSH, COMPACTION, or SNAPSHOT.
+    #[prost(string, required, tag = "4")]
+    pub phase: ::prost::alloc::string::String,
+    #[prost(int64, required, tag = "5")]
+    pub phase_start_time: i64,
+    #[prost(int64, optional, tag = "6")]
+    pub snapshot_id: ::core::option::Option<i64>,
+    #[prost(string, optional, tag = "7")]
+    pub reason: ::core::option::Option<::prost::alloc::string::String>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct PbBucketCompactionStatus {
+    #[prost(string, required, tag = "1")]
+    pub operation_id: ::prost::alloc::string::String,
+    #[prost(message, required, tag = "2")]
+    pub table_bucket: PbTableBucket,
+    #[prost(string, required, tag = "3")]
+    pub status: ::prost::alloc::string::String,
+    #[prost(string, required, tag = "4")]
+    pub phase: ::prost::alloc::string::String,
+    #[prost(int64, required, tag = "5")]
+    pub phase_start_time: i64,
+    #[prost(int32, required, tag = "6")]
+    pub leader_epoch: i32,
+    /// Captured from the original replica by the tablet server after accepting the command.
+    #[prost(int64, optional, tag = "7")]
+    pub covered_offset: ::core::option::Option<i64>,
+    #[prost(int64, optional, tag = "8")]
+    pub snapshot_id: ::core::option::Option<i64>,
+    #[prost(string, optional, tag = "9")]
+    pub reason: ::core::option::Option<::prost::alloc::string::String>,
+}

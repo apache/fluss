@@ -29,8 +29,12 @@ import org.apache.fluss.rpc.messages.AlterDatabaseRequest;
 import org.apache.fluss.rpc.messages.AlterDatabaseResponse;
 import org.apache.fluss.rpc.messages.AlterTableRequest;
 import org.apache.fluss.rpc.messages.AlterTableResponse;
+import org.apache.fluss.rpc.messages.CancelCompactionRequest;
+import org.apache.fluss.rpc.messages.CancelCompactionResponse;
 import org.apache.fluss.rpc.messages.CancelRebalanceRequest;
 import org.apache.fluss.rpc.messages.CancelRebalanceResponse;
+import org.apache.fluss.rpc.messages.CompactRequest;
+import org.apache.fluss.rpc.messages.CompactResponse;
 import org.apache.fluss.rpc.messages.CreateAclsRequest;
 import org.apache.fluss.rpc.messages.CreateAclsResponse;
 import org.apache.fluss.rpc.messages.CreateDatabaseRequest;
@@ -53,8 +57,12 @@ import org.apache.fluss.rpc.messages.DropPartitionRequest;
 import org.apache.fluss.rpc.messages.DropPartitionResponse;
 import org.apache.fluss.rpc.messages.DropTableRequest;
 import org.apache.fluss.rpc.messages.DropTableResponse;
+import org.apache.fluss.rpc.messages.GetCompactionRequest;
+import org.apache.fluss.rpc.messages.GetCompactionResponse;
 import org.apache.fluss.rpc.messages.GetProducerOffsetsRequest;
 import org.apache.fluss.rpc.messages.GetProducerOffsetsResponse;
+import org.apache.fluss.rpc.messages.ListCompactionsRequest;
+import org.apache.fluss.rpc.messages.ListCompactionsResponse;
 import org.apache.fluss.rpc.messages.ListKvSnapshotsRequest;
 import org.apache.fluss.rpc.messages.ListKvSnapshotsResponse;
 import org.apache.fluss.rpc.messages.ListRebalanceProgressRequest;
@@ -268,4 +276,20 @@ public interface AdminGateway extends AdminReadOnlyGateway {
      */
     @RPC(api = ApiKeys.LIST_KV_SNAPSHOTS)
     CompletableFuture<ListKvSnapshotsResponse> listKvSnapshots(ListKvSnapshotsRequest request);
+
+    /** Handles compact. */
+    @RPC(api = ApiKeys.COMPACT)
+    CompletableFuture<CompactResponse> compact(CompactRequest request);
+
+    /** Handles listCompactions. */
+    @RPC(api = ApiKeys.LIST_COMPACTIONS)
+    CompletableFuture<ListCompactionsResponse> listCompactions(ListCompactionsRequest request);
+
+    /** Handles getCompaction. */
+    @RPC(api = ApiKeys.GET_COMPACTION)
+    CompletableFuture<GetCompactionResponse> getCompaction(GetCompactionRequest request);
+
+    /** Handles cancelCompaction. */
+    @RPC(api = ApiKeys.CANCEL_COMPACTION)
+    CompletableFuture<CancelCompactionResponse> cancelCompaction(CancelCompactionRequest request);
 }

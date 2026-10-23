@@ -57,9 +57,15 @@ public class SnapshotRunner {
                 rocksIncrementalSnapshot.syncPrepareResources(snapshotId);
         logCompletedInternal(LOG_SYNC_COMPLETED_TEMPLATE, startTime);
 
-        SnapshotResultSupplier asyncSnapshot =
-                rocksIncrementalSnapshot.asyncSnapshot(
-                        snapshotResources, snapshotId, tabletState, snapshotLocation);
+        final SnapshotResultSupplier asyncSnapshot;
+        try {
+            asyncSnapshot =
+                    rocksIncrementalSnapshot.asyncSnapshot(
+                            snapshotResources, snapshotId, tabletState, snapshotLocation);
+        } catch (Throwable t) {
+            snapshotResources.release();
+            throw t;
+        }
 
         return new AsyncSnapshotCallable<SnapshotResult>() {
             @Override

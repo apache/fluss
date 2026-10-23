@@ -21,9 +21,9 @@ import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.fs.FileSystemSafetyNet;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.server.utils.CancellationToken;
 import org.apache.fluss.utils.MathUtils;
 import org.apache.fluss.utils.concurrent.Executors;
-import org.apache.fluss.utils.concurrent.FutureUtils;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -32,6 +32,7 @@ import javax.annotation.concurrent.NotThreadSafe;
 
 import java.io.Closeable;
 import java.util.Optional;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executor;
 import java.util.concurrent.ExecutorService;
@@ -47,7 +48,7 @@ import java.util.function.LongSupplier;
  * additional information regarding copyright ownership. */
 
 /**
- * Stateless snapshot manager which will trigger snapshot periodically. It'll use a {@link
+ * Snapshot manager that serializes periodic and explicit snapshots. It uses a {@link
  * ScheduledExecutorService} to schedule the snapshot initialization and a {@link ExecutorService}
  * to complete async phase of snapshot.
  */
@@ -83,6 +84,28 @@ public class PeriodicSnapshotManager implements Closeable {
 
     /** Whether snapshot is started. */
     private volatile boolean started = false;
+
+    private boolean closed;
+    private Execution active;
+    private Execution manual;
+    private final CompletableFuture<Void> closedFuture = new CompletableFuture<>();
+
+    private static class Execution {
+        private final boolean force;
+        private final CancellationToken cancellation = new CancellationToken();
+        private final CompletableFuture<CompletedSnapshotHandle> result = new CompletableFuture<>();
+        private final CompletableFuture<Void> exited = new CompletableFuture<>();
+        private volatile SnapshotRunnable snapshot;
+        private boolean started;
+        private boolean skipped;
+        private boolean cancellationScheduled;
+        private boolean cancellationStarted;
+        private CompletableFuture<Void> cancellationFinished;
+
+        private Execution(boolean force) {
+            this.force = force;
+        }
+    }
 
     /**
      * The scheduled snapshot task.
@@ -164,8 +187,8 @@ public class PeriodicSnapshotManager implements Closeable {
                 guardedExecutor);
     }
 
-    public void start() {
-        if (!started && snapshotIntervalSupplier.getAsLong() > 0) {
+    public synchronized void start() {
+        if (!closed && !started && snapshotIntervalSupplier.getAsLong() > 0) {
 
             started = true;
 
@@ -181,14 +204,27 @@ public class PeriodicSnapshotManager implements Closeable {
 
     // schedule thread and asyncOperationsThreadPool can access this method
     private synchronized void scheduleNextSnapshot(long delay) {
-        if (started && !periodicExecutor.isShutdown()) {
+        if (started
+                && !closed
+                && active == null
+                && manual == null
+                && snapshotIntervalSupplier.getAsLong() > 0
+                && !periodicExecutor.isShutdown()) {
+            if (scheduledTask != null && !scheduledTask.isDone()) {
+                scheduledTask.cancel(false);
+            }
 
             LOG.debug(
                     "TableBucket {} schedules the next snapshot in {} seconds",
                     tableBucket,
                     delay / 1000);
             scheduledTask =
-                    periodicExecutor.schedule(this::triggerSnapshot, delay, TimeUnit.MILLISECONDS);
+                    periodicExecutor.schedule(
+                            () -> {
+                                triggerSnapshot();
+                            },
+                            delay,
+                            TimeUnit.MILLISECONDS);
         }
     }
 
@@ -197,142 +233,268 @@ public class PeriodicSnapshotManager implements Closeable {
         return target.currentSnapshotId();
     }
 
-    public void triggerSnapshot() {
-        // todo: consider shrink the scope
-        // of using guardedExecutor
-        guardedExecutor.execute(
-                () -> {
-                    if (started) {
-                        LOG.debug("TableBucket {} triggers snapshot.", tableBucket);
-                        long triggerTime = System.currentTimeMillis();
-
-                        Optional<SnapshotRunnable> snapshotRunnableOptional;
-                        try {
-                            snapshotRunnableOptional = target.initSnapshot();
-                        } catch (Exception e) {
-                            LOG.error("Fail to init snapshot during triggering snapshot.", e);
-                            return;
-                        }
-                        if (snapshotRunnableOptional.isPresent()) {
-                            SnapshotRunnable runnable = snapshotRunnableOptional.get();
-                            asyncOperationsThreadPool.execute(
-                                    () ->
-                                            asyncSnapshotPhase(
-                                                    triggerTime,
-                                                    runnable.getSnapshotId(),
-                                                    runnable.getCoordinatorEpoch(),
-                                                    runnable.getBucketLeaderEpoch(),
-                                                    runnable.getSnapshotLocation(),
-                                                    runnable.getSnapshotRunnable()));
-                        } else {
-                            scheduleNextSnapshot();
-                            LOG.debug(
-                                    "TableBucket {} has no data updates since last snapshot, "
-                                            + "skip this one and schedule the next one in {} seconds",
-                                    tableBucket,
-                                    snapshotIntervalSupplier.getAsLong() / 1000);
-                        }
-                    }
-                });
-    }
-
-    private void asyncSnapshotPhase(
-            long triggerTime,
-            long snapshotId,
-            int coordinatorEpoch,
-            int bucketLeaderEpoch,
-            SnapshotLocation snapshotLocation,
-            RunnableFuture<SnapshotResult> snapshotedRunnableFuture) {
-        uploadSnapshot(snapshotedRunnableFuture)
-                .whenComplete(
-                        (snapshotResult, throwable) -> {
-                            // if succeed
-                            if (throwable == null) {
-                                numberOfConsecutiveFailures.set(0);
-
-                                try {
-                                    target.handleSnapshotResult(
-                                            snapshotId,
-                                            coordinatorEpoch,
-                                            bucketLeaderEpoch,
-                                            snapshotLocation,
-                                            snapshotResult);
-                                    LOG.info(
-                                            "TableBucket {} snapshot {} finished successfully, full size: {}, incremental size: {}, cost: {} ms.",
-                                            tableBucket,
-                                            snapshotId,
-                                            snapshotResult.getSnapshotSize(),
-                                            snapshotResult.getIncrementalSize(),
-                                            System.currentTimeMillis() - triggerTime);
-                                } catch (Throwable t) {
-                                    LOG.warn(
-                                            "Fail to handle snapshot result during snapshot of TableBucket {}",
-                                            tableBucket,
-                                            t);
-                                }
-                                scheduleNextSnapshot();
-                            } else {
-                                // if failed
-                                notifyFailureOrCancellation(
-                                        snapshotId, snapshotLocation, throwable);
-                                int retryTime = numberOfConsecutiveFailures.incrementAndGet();
-                                LOG.info(
-                                        "TableBucket {} asynchronous part of snapshot is not completed for the {} time.",
-                                        tableBucket,
-                                        retryTime,
-                                        throwable);
-
-                                scheduleNextSnapshot();
-                            }
-                        });
-    }
-
-    private void notifyFailureOrCancellation(
-            long snapshot, SnapshotLocation snapshotLocation, Throwable cause) {
-        LOG.warn("TableBucket {} snapshot {} failed.", tableBucket, snapshot, cause);
-        target.handleSnapshotFailure(snapshot, snapshotLocation, cause);
-    }
-
-    private CompletableFuture<SnapshotResult> uploadSnapshot(
-            RunnableFuture<SnapshotResult> snapshotedRunnableFuture) {
-
-        FileSystemSafetyNet.initializeSafetyNetForThread();
-        CompletableFuture<SnapshotResult> result = new CompletableFuture<>();
-        try {
-            FutureUtils.runIfNotDoneAndGet(snapshotedRunnableFuture);
-
-            LOG.debug("TableBucket {} finishes asynchronous part of snapshot.", tableBucket);
-
-            result.complete(snapshotedRunnableFuture.get());
-        } catch (Exception e) {
-            result.completeExceptionally(e);
-            discardFailedUploads(snapshotedRunnableFuture);
-        } finally {
-            FileSystemSafetyNet.closeSafetyNetAndGuardedResourcesForThread();
+    /** Requests a new snapshot even if the flushed offset has not advanced. */
+    public CompletableFuture<CompletedSnapshotHandle> triggerSnapshotAfterCompaction() {
+        Execution request = new Execution(true);
+        boolean launch = false;
+        synchronized (this) {
+            if (closed || manual != null) {
+                request.result.completeExceptionally(
+                        new IllegalStateException(
+                                closed
+                                        ? "Snapshot manager is closed."
+                                        : "An explicit snapshot is already pending."));
+                return request.result;
+            }
+            manual = request;
+            if (scheduledTask != null) {
+                scheduledTask.cancel(false);
+            }
+            if (active == null) {
+                active = request;
+                launch = true;
+            }
         }
-
-        return result;
+        if (launch) {
+            execute(request);
+        }
+        return request.result;
     }
 
-    private void discardFailedUploads(RunnableFuture<SnapshotResult> snapshotedRunnableFuture) {
-        LOG.info("TableBucket {} cleanup asynchronous runnable for snapshot.", tableBucket);
+    /**
+     * Cancels only the explicit request and returns its actual resource and commit exit.
+     *
+     * <p>Call outside replica and KV locks because result callbacks may run synchronously.
+     */
+    public CompletableFuture<Void> cancelSnapshotAfterCompaction() {
+        Execution request;
+        boolean waiting;
+        synchronized (this) {
+            request = manual;
+            if (request == null) {
+                return CompletableFuture.completedFuture(null);
+            }
+            waiting = request != active;
+            if (waiting) {
+                manual = null;
+            }
+            request.cancellation.cancel();
+            if (!waiting && !request.started) {
+                request.skipped = true;
+            }
+            prepareCancellation(request);
+        }
+        request.result.completeExceptionally(
+                new CancellationException("Explicit snapshot cancelled."));
+        if (waiting) {
+            request.exited.complete(null);
+        } else if (request.skipped) {
+            finish(request, null, new CancellationException("Explicit snapshot cancelled."));
+        } else {
+            cancelUpload(request);
+        }
+        return request.exited;
+    }
 
-        if (snapshotedRunnableFuture != null) {
-            // snapshot has started
-            if (!snapshotedRunnableFuture.cancel(true)) {
-                try {
-                    SnapshotResult snapshotResult = snapshotedRunnableFuture.get();
-                    if (snapshotResult != null) {
-                        snapshotResult.getKvSnapshotHandle().discard();
-                        FsPath remoteSnapshotPath = snapshotResult.getSnapshotPath();
-                        remoteSnapshotPath.getFileSystem().delete(remoteSnapshotPath, true);
+    /** Triggers a periodic snapshot whose result is null when no snapshot is admitted or needed. */
+    public CompletableFuture<CompletedSnapshotHandle> triggerSnapshot() {
+        Execution execution;
+        synchronized (this) {
+            if (!started || closed || active != null || manual != null) {
+                return CompletableFuture.completedFuture(null);
+            }
+            execution = new Execution(false);
+            active = execution;
+        }
+        execute(execution);
+        return execution.result;
+    }
+
+    private void execute(Execution execution) {
+        try {
+            asyncOperationsThreadPool.execute(() -> runSnapshot(execution));
+        } catch (RuntimeException e) {
+            finish(execution, null, e);
+        }
+    }
+
+    private void runSnapshot(Execution execution) {
+        synchronized (this) {
+            if (execution.skipped) {
+                return;
+            }
+            execution.started = true;
+        }
+        CompletedSnapshotHandle handle = null;
+        Throwable failure = null;
+        SnapshotRunnable snapshot = null;
+        boolean committing = false;
+        FileSystemSafetyNet.initializeSafetyNetForThread();
+        try {
+            execution.cancellation.checkCancelled();
+            Optional<SnapshotRunnable> initialized =
+                    target.initSnapshot(execution.force, guardedExecutor);
+            if (initialized.isPresent()) {
+                snapshot = initialized.get();
+                execution.snapshot = snapshot;
+                execution.cancellation.checkCancelled();
+                // run() returns only after the callable has exited, even when its Future was
+                // cancelled.
+                snapshot.getSnapshotRunnable().run();
+                SnapshotResult result = snapshot.getSnapshotRunnable().get();
+                execution.cancellation.checkCancelled();
+                committing = true;
+                target.handleSnapshotResult(
+                        snapshot.getSnapshotId(),
+                        snapshot.getCoordinatorEpoch(),
+                        snapshot.getBucketLeaderEpoch(),
+                        snapshot.getSnapshotLocation(),
+                        result);
+                handle =
+                        new CompletedSnapshotHandle(
+                                snapshot.getSnapshotId(),
+                                CompletedSnapshot.getMetadataFilePath(result.getSnapshotPath()),
+                                result.getTabletState().getFlushedLogOffset());
+                numberOfConsecutiveFailures.set(0);
+            } else if (execution.force) {
+                throw new IllegalStateException("Explicit snapshot did not produce a checkpoint.");
+            }
+        } catch (Throwable t) {
+            failure = t;
+            int failures = numberOfConsecutiveFailures.incrementAndGet();
+            LOG.warn(
+                    "Snapshot for TableBucket {} failed for the {} consecutive time.",
+                    tableBucket,
+                    failures,
+                    t);
+        } finally {
+            try {
+                if (snapshot != null) {
+                    if (!committing && failure != null) {
+                        discardFailedUploads(snapshot.getSnapshotRunnable());
                     }
-                } catch (Exception ex) {
-                    LOG.debug(
-                            "TableBucket {} cancelled execution of snapshot future runnable. Cancellation produced the following exception, which is expected and can be ignored.",
-                            tableBucket,
-                            ex);
+                    // Cancellation can complete FutureTask before the resource owner has exited.
+                    snapshot.resourcesReleased().join();
+                    if (!committing && failure != null) {
+                        target.handleSnapshotFailure(
+                                snapshot.getSnapshotId(), snapshot.getSnapshotLocation(), failure);
+                    }
                 }
+            } catch (Throwable cleanupFailure) {
+                if (failure == null) {
+                    failure = cleanupFailure;
+                } else {
+                    failure.addSuppressed(cleanupFailure);
+                }
+            } finally {
+                FileSystemSafetyNet.closeSafetyNetAndGuardedResourcesForThread();
+                finish(execution, handle, failure);
+            }
+        }
+    }
+
+    private void finish(Execution execution, CompletedSnapshotHandle handle, Throwable failure) {
+        Execution next = null;
+        boolean closeComplete = false;
+        CompletableFuture<Void> cancellationFinished;
+        synchronized (this) {
+            if (active != execution) {
+                return;
+            }
+            cancellationFinished = execution.cancellationFinished;
+            if (!execution.cancellationStarted) {
+                // The worker has exited; a queued cancellation must not keep shutdown waiting.
+                // In particular, executor shutdown may discard that queued callback entirely.
+                execution.cancellationFinished = null;
+                cancellationFinished = null;
+            }
+            if (cancellationFinished == null || cancellationFinished.isDone()) {
+                cancellationFinished = null;
+                if (manual == execution) {
+                    manual = null;
+                }
+                active = null;
+                if (!closed && manual != null) {
+                    next = manual;
+                    active = next;
+                }
+                closeComplete = closed;
+            }
+        }
+        if (cancellationFinished != null) {
+            cancellationFinished.whenComplete(
+                    (ignored, error) -> finish(execution, handle, failure));
+            return;
+        }
+        execution.exited.complete(null);
+        if (failure == null) {
+            execution.result.complete(handle);
+        } else {
+            execution.result.completeExceptionally(failure);
+        }
+        if (closeComplete) {
+            closedFuture.complete(null);
+        } else if (next != null) {
+            execute(next);
+        } else {
+            scheduleNextSnapshot();
+        }
+    }
+
+    private void prepareCancellation(Execution execution) {
+        if (execution.snapshot != null
+                && !execution.snapshot.getSnapshotRunnable().isDone()
+                && execution.cancellationFinished == null) {
+            execution.cancellationFinished = new CompletableFuture<>();
+        }
+    }
+
+    private void cancelUpload(Execution execution) {
+        CompletableFuture<Void> cancellationFinished;
+        synchronized (this) {
+            cancellationFinished = execution.cancellationFinished;
+            if (cancellationFinished == null || execution.cancellationScheduled) {
+                return;
+            }
+            execution.cancellationScheduled = true;
+        }
+        // Closing an upload stream can block. Never do it on the caller holding a replica lock.
+        try {
+            periodicExecutor.execute(
+                    () -> {
+                        synchronized (this) {
+                            if (execution.cancellationFinished == null) {
+                                return;
+                            }
+                            execution.cancellationStarted = true;
+                        }
+                        try {
+                            SnapshotRunnable snapshot = execution.snapshot;
+                            if (snapshot != null && !snapshot.getSnapshotRunnable().isDone()) {
+                                snapshot.getSnapshotRunnable().cancel(true);
+                            }
+                        } finally {
+                            cancellationFinished.complete(null);
+                        }
+                    });
+        } catch (RuntimeException e) {
+            // The worker also observes the token before upload and commit, and owns final cleanup.
+            cancellationFinished.complete(null);
+            LOG.debug("Snapshot cancellation executor is unavailable for {}.", tableBucket, e);
+        }
+    }
+
+    private void discardFailedUploads(RunnableFuture<SnapshotResult> future) {
+        if (!future.cancel(true)) {
+            try {
+                SnapshotResult result = future.get();
+                if (result != null) {
+                    result.getKvSnapshotHandle().discard();
+                    FsPath path = result.getSnapshotPath();
+                    path.getFileSystem().delete(path, true);
+                }
+            } catch (Exception e) {
+                LOG.debug("Snapshot upload did not produce a result for {}.", tableBucket, e);
             }
         }
     }
@@ -354,6 +516,26 @@ public class PeriodicSnapshotManager implements Closeable {
          * @return a tuple of - future snapshot result from the underlying KV.
          */
         Optional<SnapshotRunnable> initSnapshot() throws Exception;
+
+        /** Initializes a forced snapshot. */
+        default Optional<SnapshotRunnable> initSnapshot(boolean force) throws Exception {
+            return initSnapshot();
+        }
+
+        /** Captures local state using the supplied synchronous KV guard. */
+        default Optional<SnapshotRunnable> initSnapshot(boolean force, Executor guardedExecutor)
+                throws Exception {
+            CompletableFuture<Optional<SnapshotRunnable>> initialized = new CompletableFuture<>();
+            guardedExecutor.execute(
+                    () -> {
+                        try {
+                            initialized.complete(initSnapshot(force));
+                        } catch (Throwable t) {
+                            initialized.completeExceptionally(t);
+                        }
+                    });
+            return initialized.get();
+        }
 
         /**
          * Implementations should not trigger snapshot until the previous one has been confirmed or
@@ -381,16 +563,71 @@ public class PeriodicSnapshotManager implements Closeable {
         long getSnapshotSize();
     }
 
+    /** Rejects new snapshots and only signals cancellation while a replica changes state. */
+    public synchronized void requestClose() {
+        closed = true;
+        started = false;
+        if (scheduledTask != null) {
+            scheduledTask.cancel(false);
+        }
+        if (active != null) {
+            active.cancellation.cancel();
+        }
+        if (manual != null && manual != active) {
+            manual.cancellation.cancel();
+        }
+    }
+
     @Override
     public void close() {
+        closeAsync();
+    }
+
+    /**
+     * Rejects new work and completes after all snapshot resource users and commit calls exit.
+     *
+     * <p>Call outside replica and KV locks because result callbacks may run synchronously.
+     */
+    public CompletableFuture<Void> closeAsync() {
+        Execution running;
+        Execution waiting;
         synchronized (this) {
-            // do-nothing, please make the periodicExecutor will be closed by external
+            closed = true;
             started = false;
-            // cancel the scheduled task if not completed yet
-            if (scheduledTask != null && !scheduledTask.isDone()) {
-                scheduledTask.cancel(true);
+            if (scheduledTask != null) {
+                scheduledTask.cancel(false);
+            }
+            running = active;
+            waiting = manual != active ? manual : null;
+            if (waiting != null) {
+                manual = null;
+                waiting.cancellation.cancel();
+            }
+            if (running != null) {
+                running.cancellation.cancel();
+                if (!running.started) {
+                    running.skipped = true;
+                }
+                prepareCancellation(running);
             }
         }
+        if (waiting != null) {
+            waiting.result.completeExceptionally(
+                    new CancellationException("Snapshot manager closed."));
+            waiting.exited.complete(null);
+        }
+        if (running == null) {
+            closedFuture.complete(null);
+        } else {
+            running.result.completeExceptionally(
+                    new CancellationException("Snapshot manager closed."));
+            if (running.skipped) {
+                finish(running, null, new CancellationException("Snapshot manager closed."));
+            } else {
+                cancelUpload(running);
+            }
+        }
+        return closedFuture;
     }
 
     /** A {@link Runnable} representing the snapshot and the associated metadata. */
@@ -417,6 +654,14 @@ public class PeriodicSnapshotManager implements Closeable {
 
         RunnableFuture<SnapshotResult> getSnapshotRunnable() {
             return snapshotRunnable;
+        }
+
+        private CompletableFuture<Void> resourcesReleased() {
+            if (snapshotRunnable instanceof AsyncSnapshotCallable.AsyncSnapshotTask) {
+                return ((AsyncSnapshotCallable<?>.AsyncSnapshotTask) snapshotRunnable)
+                        .getResourcesReleasedFuture();
+            }
+            return CompletableFuture.completedFuture(null);
         }
 
         public long getSnapshotId() {

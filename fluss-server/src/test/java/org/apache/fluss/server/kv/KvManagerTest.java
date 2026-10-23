@@ -819,26 +819,20 @@ final class KvManagerTest {
                     Duration.ofSeconds(10),
                     "The drop should wait for the outstanding lease.");
 
-            AtomicReference<Thread> waitingThread = new AtomicReference<>();
-            Future<KvTablet> waitingCreation =
-                    executor.submit(
-                            () -> {
-                                waitingThread.set(Thread.currentThread());
-                                return getOrCreateKv(
-                                        tablePath1, null, tableBucket1, blockingSchemaGetter);
-                            });
-            waitUntil(
-                    () ->
-                            waitingThread.get() != null
-                                    && waitingThread.get().getState() == Thread.State.BLOCKED,
-                    Duration.ofSeconds(10),
-                    "The first creation should wait on the lock held by dropKv.");
+            assertThatThrownBy(() -> getOrCreateKv(tablePath1, null, tableBucket1))
+                    .hasMessageContaining("KV cleanup is pending");
+            assertThat(oldKv.getKvTabletDir()).exists();
 
             lease.close();
             drop.get(10, TimeUnit.SECONDS);
+            Future<KvTablet> waitingCreation =
+                    executor.submit(
+                            () ->
+                                    getOrCreateKv(
+                                            tablePath1, null, tableBucket1, blockingSchemaGetter));
             blockingSchemaGetter.awaitBlocked();
 
-            // This arrival must share the replacement lock with the waiter on the old lock.
+            // Concurrent creations after cleanup must share the same bucket lock.
             AtomicReference<Thread> concurrentThread = new AtomicReference<>();
             Future<KvTablet> concurrentCreation =
                     executor.submit(

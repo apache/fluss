@@ -46,11 +46,13 @@ import org.apache.fluss.server.storage.LocalDiskManager;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.BufferAllocator;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.BufferAllocatorUtil;
+import org.apache.fluss.utils.ExceptionUtils;
 import org.apache.fluss.utils.FileUtils;
 import org.apache.fluss.utils.FlussPaths;
 import org.apache.fluss.utils.IOUtils;
 import org.apache.fluss.utils.clock.Clock;
 import org.apache.fluss.utils.clock.SystemClock;
+import org.apache.fluss.utils.concurrent.FutureUtils;
 import org.apache.fluss.utils.function.SupplierWithException;
 import org.apache.fluss.utils.types.Tuple2;
 
@@ -83,8 +85,13 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Executor;
 import java.util.function.Predicate;
+import java.util.function.Supplier;
+import java.util.stream.Collectors;
 
 import static org.apache.fluss.utils.Preconditions.checkState;
 
@@ -141,6 +148,22 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
 
     private final Map<TableBucket, KvTablet> currentKvs = new ConcurrentHashMap<>();
 
+    private final Map<TableBucket, KvRetirement> closingKvs = new ConcurrentHashMap<>();
+
+    private static final class KvRetirement {
+        private final CompletableFuture<Void> future = new CompletableFuture<>();
+        private final KvCloseMode mode;
+        private final boolean delete;
+        @Nullable private KvTablet tablet;
+
+        private KvRetirement(KvCloseMode mode, boolean delete) {
+            this.mode = mode;
+            this.delete = delete;
+        }
+    }
+
+    @Nullable private final Executor cleanupExecutor;
+
     private final Map<TableBucket, Object> kvLocks = new ConcurrentHashMap<>();
 
     /**
@@ -181,7 +204,8 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
             LogManager logManager,
             TabletServerMetricGroup tabletServerMetricGroup,
             @Nullable KvFlushScheduler kvFlushScheduler,
-            Clock clock)
+            Clock clock,
+            @Nullable Executor cleanupExecutor)
             throws IOException {
         super(TabletType.KV, localDiskManager.dataDirs(), conf, recoveryThreadsPerDataDir);
         RocksDBResourceContainer.validateConfiguration(conf);
@@ -196,6 +220,7 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
         this.memorySegmentPool = LazyMemorySegmentPool.createServerBufferPool(conf);
         this.zkClient = zkClient;
         this.clock = clock;
+        this.cleanupExecutor = cleanupExecutor;
         this.serverMetricGroup = tabletServerMetricGroup;
         this.sharedRocksDBRateLimiter = createSharedRateLimiter(conf);
         this.sharedBlockCache = createSharedBlockCache(conf);
@@ -338,6 +363,28 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
             @Nullable KvFlushScheduler kvFlushScheduler,
             Clock clock)
             throws IOException {
+        return create(
+                conf,
+                zkClient,
+                logManager,
+                tabletServerMetricGroup,
+                localDiskManager,
+                kvFlushScheduler,
+                clock,
+                null);
+    }
+
+    /** Creates a manager using the server I/O executor for asynchronous retirement. */
+    public static KvManager create(
+            Configuration conf,
+            ZooKeeperClient zkClient,
+            LogManager logManager,
+            TabletServerMetricGroup tabletServerMetricGroup,
+            LocalDiskManager localDiskManager,
+            @Nullable KvFlushScheduler kvFlushScheduler,
+            Clock clock,
+            @Nullable Executor cleanupExecutor)
+            throws IOException {
         return new KvManager(
                 localDiskManager,
                 conf,
@@ -346,7 +393,8 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
                 logManager,
                 tabletServerMetricGroup,
                 kvFlushScheduler,
-                clock);
+                clock,
+                cleanupExecutor);
     }
 
     /**
@@ -494,20 +542,49 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
         Objects.requireNonNull(closeMode, "closeMode");
         LOG.info("Shutting down KvManager with close mode {}.", closeMode);
         isShutdown = true;
-        kvFlushScheduler.close();
-        List<KvTablet> kvs = new ArrayList<>(currentKvs.values());
-        closeTabletsConcurrently(
-                        kvs, "kv-tablet-closing", kvTablet -> closeKvTablet(kvTablet, closeMode))
-                .join();
-        IOUtils.closeQuietly(sharedWriteBufferManager);
-        IOUtils.closeQuietly(sharedWriteBufferAccountingCache);
-        arrowBufferAllocator.close();
-        memorySegmentPool.close();
-        if (sharedRocksDBRateLimiter != null) {
-            sharedRocksDBRateLimiter.close();
+        Exception exception = null;
+        try {
+            kvFlushScheduler.close();
+        } catch (Exception e) {
+            exception = e;
         }
-        if (sharedBlockCache != null) {
-            sharedBlockCache.close();
+        try {
+            FutureUtils.completeAll(
+                            closingKvs.values().stream()
+                                    .map(retirement -> retirement.future)
+                                    .collect(Collectors.toList()))
+                    .join();
+        } catch (Exception e) {
+            exception = ExceptionUtils.firstOrSuppressed(e, exception);
+        }
+        List<KvTablet> kvs = new ArrayList<>(currentKvs.values());
+        boolean tabletsClosed = false;
+        try {
+            closeTabletsConcurrently(
+                            kvs,
+                            "kv-tablet-closing",
+                            kvTablet -> closeKvTablet(kvTablet, closeMode))
+                    .join();
+            tabletsClosed = true;
+        } catch (Exception e) {
+            exception = ExceptionUtils.firstOrSuppressed(e, exception);
+        }
+        // Shared native resources must remain alive if a tablet could not physically close.
+        if (tabletsClosed) {
+            try {
+                IOUtils.closeAll(
+                        sharedWriteBufferManager,
+                        sharedWriteBufferAccountingCache,
+                        arrowBufferAllocator,
+                        memorySegmentPool,
+                        sharedRocksDBRateLimiter,
+                        sharedBlockCache);
+            } catch (Exception e) {
+                exception = ExceptionUtils.firstOrSuppressed(e, exception);
+            }
+        }
+        if (exception != null) {
+            ExceptionUtils.rethrow(exception);
         }
         LOG.info("Shut down KvManager complete.");
     }
@@ -516,10 +593,8 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
         try {
             kvTablet.close(closeMode);
         } catch (Exception e) {
-            LOG.warn(
-                    "Exception while closing kv tablet {} with mode {}.",
-                    kvTablet.getTableBucket(),
-                    closeMode,
+            throw new KvStorageException(
+                    "Failed to close KV tablet " + kvTablet.getTableBucket() + " with " + closeMode,
                     e);
         }
     }
@@ -551,6 +626,8 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
         return inKvLock(
                 tableBucket,
                 () -> {
+                    checkNotClosing(tableBucket);
+                    checkState(!isShutdown, "KV manager is shut down.");
                     if (currentKvs.containsKey(tableBucket)) {
                         return currentKvs.get(tableBucket);
                     }
@@ -610,56 +687,179 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
      */
     public File createTabletDir(
             File dataDir, PhysicalTablePath tablePath, TableBucket tableBucket) {
-        File tabletDir = getTabletDir(dataDir, tablePath, tableBucket);
-
-        // delete the tablet dir if exists
-        FileUtils.deleteDirectoryQuietly(tabletDir);
-        createTabletDirectory(tabletDir);
-        return tabletDir;
-    }
-
-    public Optional<KvTablet> getKv(TableBucket tableBucket) {
-        return Optional.ofNullable(currentKvs.get(tableBucket));
-    }
-
-    public void dropKv(TableBucket tableBucket) {
-        inKvLock(
+        return inKvLock(
                 tableBucket,
                 () -> {
-                    doDropKv(tableBucket);
-                    return null;
+                    checkNotClosing(tableBucket);
+                    checkState(
+                            !currentKvs.containsKey(tableBucket),
+                            "Cannot replace a live KV directory for %s",
+                            tableBucket);
+                    File tabletDir = getTabletDir(dataDir, tablePath, tableBucket);
+                    FileUtils.deleteDirectoryQuietly(tabletDir);
+                    createTabletDirectory(tabletDir);
+                    return tabletDir;
                 });
     }
 
-    private void doDropKv(TableBucket tableBucket) {
-        KvTablet dropKvTablet = currentKvs.remove(tableBucket);
-        if (dropKvTablet != null) {
-            TablePath tablePath = dropKvTablet.getTablePath();
-            try {
-                dropKvTablet.drop();
-                if (dropKvTablet.getPartitionName() == null) {
-                    LOG.info(
-                            "Deleted kv bucket {} for table {} in file path {}.",
-                            tableBucket.getBucket(),
-                            tablePath,
-                            dropKvTablet.getKvTabletDir().getAbsolutePath());
-                } else {
-                    LOG.info(
-                            "Deleted kv bucket {} for the partition {} of table {} in file path {}.",
-                            tableBucket.getBucket(),
-                            dropKvTablet.getPartitionName(),
-                            tablePath,
-                            dropKvTablet.getKvTabletDir().getAbsolutePath());
-                }
-            } catch (Exception e) {
-                throw new KvStorageException(
-                        String.format(
-                                "Exception while deleting kv for table %s, bucket %s in dir %s.",
-                                tablePath,
-                                tableBucket.getBucket(),
-                                dropKvTablet.getKvTabletDir().getAbsolutePath()),
-                        e);
+    public Optional<KvTablet> getKv(TableBucket tableBucket) {
+        return closingKvs.containsKey(tableBucket)
+                ? Optional.empty()
+                : Optional.ofNullable(currentKvs.get(tableBucket));
+    }
+
+    /** Fails while a bucket's resources are closing or its cleanup has failed. */
+    public void checkNotClosing(TableBucket bucket) {
+        KvRetirement closing = closingKvs.get(bucket);
+        if (closing != null) {
+            if (closing.future.isDone() && !closing.future.isCompletedExceptionally()) {
+                closingKvs.remove(bucket, closing);
+            } else {
+                throw new KvStorageException("KV cleanup is pending or failed for " + bucket);
             }
+        }
+    }
+
+    /** Returns the server executor used for blocking resource cleanup. */
+    public Executor getCleanupExecutor() {
+        checkState(cleanupExecutor != null, "Asynchronous KV cleanup requires an I/O executor.");
+        return cleanupExecutor;
+    }
+
+    /** Closes a bucket after existing database users exit. */
+    public CompletableFuture<Void> closeKvAsync(TableBucket bucket, KvCloseMode mode) {
+        return retireKvAsync(
+                bucket,
+                mode,
+                false,
+                () -> CompletableFuture.completedFuture(null),
+                getCleanupExecutor());
+    }
+
+    /** Drops a bucket after existing database users exit. */
+    public CompletableFuture<Void> dropKvAsync(TableBucket bucket) {
+        return dropKvAsync(bucket, () -> CompletableFuture.completedFuture(null));
+    }
+
+    /** Drops a bucket after its snapshot and scanner resources have been released. */
+    public CompletableFuture<Void> dropKvAsync(
+            TableBucket bucket, Supplier<CompletableFuture<Void>> releaseResources) {
+        return retireKvAsync(
+                bucket,
+                KvCloseMode.DISCARD_UNPERSISTED_STATE,
+                true,
+                releaseResources,
+                getCleanupExecutor());
+    }
+
+    /** Closes a bucket after its snapshot and scanner resources have been released. */
+    public CompletableFuture<Void> closeKvAsync(
+            TableBucket bucket,
+            KvCloseMode mode,
+            Supplier<CompletableFuture<Void>> releaseResources) {
+        return retireKvAsync(bucket, mode, false, releaseResources, getCleanupExecutor());
+    }
+
+    private CompletableFuture<Void> retireKvAsync(
+            TableBucket bucket,
+            KvCloseMode mode,
+            boolean delete,
+            Supplier<CompletableFuture<Void>> releaseResources,
+            Executor executor) {
+        Objects.requireNonNull(mode, "mode");
+        KvRetirement retiring = new KvRetirement(mode, delete);
+        CompletableFuture<Void> result = retiring.future;
+        KvRetirement existing;
+        try {
+            existing =
+                    inKvLock(
+                            bucket,
+                            () -> {
+                                KvRetirement pending = closingKvs.get(bucket);
+                                if (pending != null) {
+                                    if (!pending.future.isDone()
+                                            || pending.future.isCompletedExceptionally()) {
+                                        return pending;
+                                    }
+                                    closingKvs.remove(bucket, pending);
+                                }
+                                retiring.tablet = currentKvs.get(bucket);
+                                closingKvs.put(bucket, retiring);
+                                if (retiring.tablet != null) {
+                                    retiring.tablet.prepareClose();
+                                }
+                                return null;
+                            });
+        } catch (Exception e) {
+            result.completeExceptionally(e);
+            return result;
+        }
+        if (existing != null) {
+            if (existing.delete == delete && existing.mode == mode) {
+                return existing.future;
+            }
+            result.completeExceptionally(
+                    new KvStorageException("Conflicting KV cleanup request for " + bucket));
+            return result;
+        }
+        try {
+            CompletableFuture.supplyAsync(releaseResources, executor)
+                    .thenCompose(future -> future)
+                    .thenComposeAsync(
+                            ignored ->
+                                    retiring.tablet == null
+                                            ? CompletableFuture.completedFuture(null)
+                                            : retiring.tablet.closeAsync(mode, executor),
+                            executor)
+                    .thenRunAsync(
+                            () -> {
+                                try {
+                                    if (retiring.tablet != null) {
+                                        if (delete) {
+                                            retiring.tablet.drop();
+                                        }
+                                    }
+                                } catch (Exception e) {
+                                    throw new KvStorageException(
+                                            "Failed to retire KV for " + bucket, e);
+                                }
+                            },
+                            executor)
+                    .whenComplete(
+                            (ignored, error) -> {
+                                if (error == null) {
+                                    inKvLock(
+                                            bucket,
+                                            () -> {
+                                                if (retiring.tablet != null) {
+                                                    currentKvs.remove(bucket, retiring.tablet);
+                                                }
+                                                return null;
+                                            });
+                                    result.complete(null);
+                                    closingKvs.remove(bucket, retiring);
+                                } else {
+                                    result.completeExceptionally(error);
+                                }
+                            });
+        } catch (Exception e) {
+            result.completeExceptionally(e);
+        }
+        return result;
+    }
+
+    public void dropKv(TableBucket tableBucket) {
+        Executor executor = cleanupExecutor == null ? Runnable::run : cleanupExecutor;
+        try {
+            retireKvAsync(
+                            tableBucket,
+                            KvCloseMode.DISCARD_UNPERSISTED_STATE,
+                            true,
+                            () -> CompletableFuture.completedFuture(null),
+                            executor)
+                    .join();
+        } catch (CompletionException e) {
+            throw new KvStorageException("Failed to drop KV for " + tableBucket, e.getCause());
         }
     }
 
@@ -687,6 +887,7 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
             SchemaGetter schemaGetter,
             @Nullable Runnable flushCompleteListener)
             throws Exception {
+        checkNotClosing(tableBucket);
         KvTablet currentKv = currentKvs.get(tableBucket);
         if (currentKv != null) {
             throw new IllegalStateException(

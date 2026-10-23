@@ -30,8 +30,10 @@ import org.apache.fluss.rpc.RpcServer;
 import org.apache.fluss.rpc.gateway.CoordinatorGateway;
 import org.apache.fluss.rpc.messages.ControlledShutdownRequest;
 import org.apache.fluss.rpc.messages.ControlledShutdownResponse;
+import org.apache.fluss.rpc.messages.GetCompactionRequest;
 import org.apache.fluss.rpc.metrics.ClientMetricGroup;
 import org.apache.fluss.rpc.netty.server.RequestsMetrics;
+import org.apache.fluss.rpc.util.CommonRpcMessageUtils;
 import org.apache.fluss.server.DynamicConfigManager;
 import org.apache.fluss.server.ServerBase;
 import org.apache.fluss.server.authorizer.Authorizer;
@@ -51,12 +53,14 @@ import org.apache.fluss.server.metrics.UserMetrics;
 import org.apache.fluss.server.metrics.group.TabletServerMetricGroup;
 import org.apache.fluss.server.replica.ReplicaManager;
 import org.apache.fluss.server.storage.LocalDiskManager;
+import org.apache.fluss.server.tablet.compaction.BucketCompactionRunner;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.ZooKeeperUtils;
 import org.apache.fluss.server.zk.data.TabletServerRegistration;
 import org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.KeeperException;
 import org.apache.fluss.utils.ExceptionUtils;
 import org.apache.fluss.utils.ExecutorUtils;
+import org.apache.fluss.utils.IOUtils;
 import org.apache.fluss.utils.clock.Clock;
 import org.apache.fluss.utils.clock.SystemClock;
 import org.apache.fluss.utils.concurrent.ExecutorThreadFactory;
@@ -179,6 +183,9 @@ public class TabletServer extends ServerBase {
     private CoordinatorGateway coordinatorGateway;
 
     @GuardedBy("lock")
+    private BucketCompactionRunner compactionRunner;
+
+    @GuardedBy("lock")
     private ExecutorService ioExecutor;
 
     /**
@@ -252,6 +259,10 @@ public class TabletServer extends ServerBase {
                             localDiskManager);
             logManager.startup();
 
+            this.ioExecutor =
+                    Executors.newFixedThreadPool(
+                            conf.get(ConfigOptions.SERVER_IO_POOL_SIZE),
+                            new ExecutorThreadFactory("tablet-server-io"));
             this.kvManager =
                     KvManager.create(
                             conf,
@@ -259,7 +270,9 @@ public class TabletServer extends ServerBase {
                             logManager,
                             tabletServerMetricGroup,
                             localDiskManager,
-                            clock);
+                            null,
+                            clock,
+                            ioExecutor);
             kvManager.startup();
 
             this.authorizer = AuthorizerLoader.createAuthorizer(conf, zkClient, pluginManager);
@@ -278,10 +291,6 @@ public class TabletServer extends ServerBase {
                             rpcClient,
                             CoordinatorGateway.class);
 
-            this.ioExecutor =
-                    Executors.newFixedThreadPool(
-                            conf.get(ConfigOptions.SERVER_IO_POOL_SIZE),
-                            new ExecutorThreadFactory("tablet-server-io"));
             this.replicaStateChangeExecutor =
                     Executors.newSingleThreadExecutor(
                             new ExecutorThreadFactory("tablet-server-replica-state-change"));
@@ -311,6 +320,24 @@ public class TabletServer extends ServerBase {
                             pluginManager);
             replicaManager.startup();
 
+            this.compactionRunner =
+                    new BucketCompactionRunner(
+                            serverId,
+                            replicaManager::getReplicaOrException,
+                            operationId ->
+                                    coordinatorGateway
+                                            .getCompaction(
+                                                    new GetCompactionRequest()
+                                                            .setOperationId(operationId))
+                                            .thenApply(
+                                                    response ->
+                                                            CommonRpcMessageUtils
+                                                                    .toCompactionProgress(
+                                                                            response
+                                                                                    .getProgress())),
+                            scheduler,
+                            clock,
+                            replicaManager::ensureWritable);
             this.tabletService =
                     new TabletService(
                             serverId,
@@ -325,7 +352,8 @@ public class TabletServer extends ServerBase {
                             replicaStateChangeExecutor,
                             scannerManager,
                             coordinatorGateway,
-                            interListenerName);
+                            interListenerName,
+                            compactionRunner);
 
             RequestsMetrics requestsMetrics =
                     RequestsMetrics.createTabletServerRequestMetrics(tabletServerMetricGroup);
@@ -479,6 +507,14 @@ public class TabletServer extends ServerBase {
             }
 
             try {
+                if (compactionRunner != null) {
+                    compactionRunner.closeAsync().join();
+                }
+            } catch (Throwable t) {
+                exception = ExceptionUtils.firstOrSuppressed(t, exception);
+            }
+
+            try {
                 if (replicaStateChangeExecutor != null) {
                     ExecutorUtils.gracefulShutdown(5, TimeUnit.SECONDS, replicaStateChangeExecutor);
                 }
@@ -580,12 +616,27 @@ public class TabletServer extends ServerBase {
 
     @VisibleForTesting
     void shutdownTabletManagers() throws IOException {
-        shutdownKvManager(KvCloseMode.DISCARD_UNPERSISTED_STATE);
+        try {
+            IOUtils.closeAll(
+                    () -> shutdownKvManager(KvCloseMode.DISCARD_UNPERSISTED_STATE),
+                    this::shutdownRemoteLogManager,
+                    this::shutdownLogManager);
+        } catch (IOException e) {
+            throw e;
+        } catch (Exception e) {
+            ExceptionUtils.rethrow(e);
+        }
+    }
 
+    @VisibleForTesting
+    void shutdownRemoteLogManager() throws IOException {
         if (remoteLogManager != null) {
             remoteLogManager.close();
         }
+    }
 
+    @VisibleForTesting
+    void shutdownLogManager() {
         if (logManager != null) {
             logManager.shutdown();
         }

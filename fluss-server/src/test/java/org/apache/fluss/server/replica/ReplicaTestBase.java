@@ -185,6 +185,11 @@ public class ReplicaTestBase {
         return null;
     }
 
+    /** Creates the I/O executor used by snapshot uploads and replica cleanup. */
+    protected ExecutorService createIoExecutor() {
+        return Executors.newSingleThreadExecutor();
+    }
+
     @BeforeAll
     static void baseBeforeAll() {
         zkClient =
@@ -230,7 +235,7 @@ public class ReplicaTestBase {
 
         scheduler = new FlussScheduler(2);
         scheduler.startup();
-        ioExecutor = Executors.newSingleThreadExecutor();
+        ioExecutor = createIoExecutor();
 
         manualClock = new ManualClock(System.currentTimeMillis());
         localDiskManager = LocalDiskManager.create(conf);
@@ -252,7 +257,8 @@ public class ReplicaTestBase {
                         tabletServerMetricGroup,
                         localDiskManager,
                         createTestKvFlushScheduler(conf),
-                        manualClock);
+                        manualClock,
+                        ioExecutor);
         kvManager.startup();
 
         serverMetadataCache =
@@ -399,6 +405,10 @@ public class ReplicaTestBase {
 
     @AfterEach
     void tearDown() throws Exception {
+        if (replicaManager != null) {
+            replicaManager.shutdown();
+            replicaManager = null;
+        }
         closeableRegistry.close();
 
         if (logManager != null) {
@@ -537,6 +547,14 @@ public class ReplicaTestBase {
 
     protected void makeLeaderAndFollower(List<NotifyLeaderAndIsrData> notifyLeaderAndIsrDataList) {
         replicaManager.becomeLeaderOrFollower(0, notifyLeaderAndIsrDataList, result -> {});
+        for (NotifyLeaderAndIsrData data : notifyLeaderAndIsrDataList) {
+            Replica replica = replicaManager.getReplicaOrException(data.getTableBucket());
+            replica.getKvCloseFuture().join();
+            if (data.getLeader() == TABLET_SERVER_ID && !replica.isLeader()) {
+                replicaManager.becomeLeaderOrFollower(
+                        0, Collections.singletonList(data), result -> {});
+            }
+        }
     }
 
     protected void updateTableConfig(

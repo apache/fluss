@@ -20,6 +20,7 @@ package org.apache.fluss.server.coordinator;
 import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.cluster.TabletServerInfo;
+import org.apache.fluss.cluster.compaction.CompactionType;
 import org.apache.fluss.cluster.rebalance.GoalType;
 import org.apache.fluss.cluster.rebalance.ServerTag;
 import org.apache.fluss.config.ConfigOptions;
@@ -31,6 +32,7 @@ import org.apache.fluss.config.cluster.AlterConfigOpType;
 import org.apache.fluss.exception.ApiException;
 import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.exception.InvalidAlterTableException;
+import org.apache.fluss.exception.InvalidConfigException;
 import org.apache.fluss.exception.InvalidCoordinatorException;
 import org.apache.fluss.exception.InvalidDatabaseException;
 import org.apache.fluss.exception.InvalidPartitionException;
@@ -78,6 +80,9 @@ import org.apache.fluss.rpc.messages.AlterDatabaseRequest;
 import org.apache.fluss.rpc.messages.AlterDatabaseResponse;
 import org.apache.fluss.rpc.messages.AlterTableRequest;
 import org.apache.fluss.rpc.messages.AlterTableResponse;
+import org.apache.fluss.rpc.messages.ApiMessage;
+import org.apache.fluss.rpc.messages.CancelCompactionRequest;
+import org.apache.fluss.rpc.messages.CancelCompactionResponse;
 import org.apache.fluss.rpc.messages.CancelRebalanceRequest;
 import org.apache.fluss.rpc.messages.CancelRebalanceResponse;
 import org.apache.fluss.rpc.messages.CommitKvSnapshotRequest;
@@ -86,6 +91,8 @@ import org.apache.fluss.rpc.messages.CommitLakeTableSnapshotRequest;
 import org.apache.fluss.rpc.messages.CommitLakeTableSnapshotResponse;
 import org.apache.fluss.rpc.messages.CommitRemoteLogManifestRequest;
 import org.apache.fluss.rpc.messages.CommitRemoteLogManifestResponse;
+import org.apache.fluss.rpc.messages.CompactRequest;
+import org.apache.fluss.rpc.messages.CompactResponse;
 import org.apache.fluss.rpc.messages.ControlledShutdownRequest;
 import org.apache.fluss.rpc.messages.ControlledShutdownResponse;
 import org.apache.fluss.rpc.messages.CreateAclsRequest;
@@ -112,10 +119,14 @@ import org.apache.fluss.rpc.messages.DropTableRequest;
 import org.apache.fluss.rpc.messages.DropTableResponse;
 import org.apache.fluss.rpc.messages.GetClusterHealthRequest;
 import org.apache.fluss.rpc.messages.GetClusterHealthResponse;
+import org.apache.fluss.rpc.messages.GetCompactionRequest;
+import org.apache.fluss.rpc.messages.GetCompactionResponse;
 import org.apache.fluss.rpc.messages.GetProducerOffsetsRequest;
 import org.apache.fluss.rpc.messages.GetProducerOffsetsResponse;
 import org.apache.fluss.rpc.messages.LakeTieringHeartbeatRequest;
 import org.apache.fluss.rpc.messages.LakeTieringHeartbeatResponse;
+import org.apache.fluss.rpc.messages.ListCompactionsRequest;
+import org.apache.fluss.rpc.messages.ListCompactionsResponse;
 import org.apache.fluss.rpc.messages.ListKvSnapshotsRequest;
 import org.apache.fluss.rpc.messages.ListKvSnapshotsResponse;
 import org.apache.fluss.rpc.messages.ListRebalanceProgressRequest;
@@ -125,6 +136,7 @@ import org.apache.fluss.rpc.messages.ListRemoteLogManifestsResponse;
 import org.apache.fluss.rpc.messages.MetadataRequest;
 import org.apache.fluss.rpc.messages.MetadataResponse;
 import org.apache.fluss.rpc.messages.PbAlterConfig;
+import org.apache.fluss.rpc.messages.PbCompactionInfo;
 import org.apache.fluss.rpc.messages.PbHeartbeatReqForTable;
 import org.apache.fluss.rpc.messages.PbHeartbeatRespForTable;
 import org.apache.fluss.rpc.messages.PbKeyValue;
@@ -168,6 +180,7 @@ import org.apache.fluss.server.coordinator.event.CancelRebalanceEvent;
 import org.apache.fluss.server.coordinator.event.CommitKvSnapshotEvent;
 import org.apache.fluss.server.coordinator.event.CommitLakeTableSnapshotEvent;
 import org.apache.fluss.server.coordinator.event.CommitRemoteLogManifestEvent;
+import org.apache.fluss.server.coordinator.event.CompactionEvent;
 import org.apache.fluss.server.coordinator.event.ControlledShutdownEvent;
 import org.apache.fluss.server.coordinator.event.EventManager;
 import org.apache.fluss.server.coordinator.event.ListRebalanceProgressEvent;
@@ -273,6 +286,7 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
     private final boolean logTableAllowCreation;
     private final boolean kvTableAllowCreation;
     private final Supplier<EventManager> eventManagerSupplier;
+    private final Supplier<CoordinatorEventProcessor> compactionProcessorSupplier;
     private final Supplier<Integer> coordinatorEpochSupplier;
     private final Supplier<Integer> coordinatorZkVersionSupplier;
     private final CoordinatorMetadataCache metadataCache;
@@ -316,6 +330,7 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         this.defaultReplicationFactor = conf.getInt(ConfigOptions.DEFAULT_REPLICATION_FACTOR);
         this.logTableAllowCreation = conf.getBoolean(ConfigOptions.LOG_TABLE_ALLOW_CREATION);
         this.kvTableAllowCreation = conf.getBoolean(ConfigOptions.KV_TABLE_ALLOW_CREATION);
+        this.compactionProcessorSupplier = coordinatorEventProcessorSupplier;
         this.eventManagerSupplier =
                 () -> coordinatorEventProcessorSupplier.get().getCoordinatorEventManager();
         this.coordinatorEpochSupplier =
@@ -2205,5 +2220,136 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                     }
                 },
                 ioExecutor);
+    }
+
+    @Override
+    public CompletableFuture<CompactResponse> compact(CompactRequest request) {
+        try {
+            CompactionType.valueOf(request.getType());
+        } catch (IllegalArgumentException e) {
+            throw new InvalidConfigException("Unknown compaction type: " + request.getType());
+        }
+        validateCompactionScope(
+                request.hasDatabaseName() ? request.getDatabaseName() : null,
+                request.hasTableName() ? request.getTableName() : null,
+                request.hasPartitionName() ? request.getPartitionName() : null);
+        authorizeCompaction(
+                currentSession(),
+                OperationType.ALTER,
+                compactionResource(
+                        request.hasDatabaseName() ? request.getDatabaseName() : null,
+                        request.hasTableName() ? request.getTableName() : null));
+        return submitCompaction(new CompactRequest().copyFrom(request), CompactResponse.class);
+    }
+
+    @Override
+    public CompletableFuture<ListCompactionsResponse> listCompactions(
+            ListCompactionsRequest request) {
+        validateCompactionScope(
+                request.hasDatabaseName() ? request.getDatabaseName() : null,
+                request.hasTableName() ? request.getTableName() : null,
+                request.hasPartitionName() ? request.getPartitionName() : null);
+        Session session = currentSession();
+        authorizeCompaction(
+                session,
+                OperationType.DESCRIBE,
+                compactionResource(
+                        request.hasDatabaseName() ? request.getDatabaseName() : null,
+                        request.hasTableName() ? request.getTableName() : null));
+        return submitCompaction(
+                        new ListCompactionsRequest().copyFrom(request),
+                        ListCompactionsResponse.class)
+                .thenApply(
+                        result -> {
+                            ListCompactionsResponse filtered = new ListCompactionsResponse();
+                            for (PbCompactionInfo info : result.getCompactionsList()) {
+                                if (authorizer == null
+                                        || authorizer.isAuthorized(
+                                                session,
+                                                OperationType.DESCRIBE,
+                                                compactionResource(info))) {
+                                    filtered.addCompaction().copyFrom(info);
+                                }
+                            }
+                            return filtered;
+                        });
+    }
+
+    @Override
+    public CompletableFuture<GetCompactionResponse> getCompaction(GetCompactionRequest request) {
+        Session session = currentSession();
+        return submitCompaction(
+                        new GetCompactionRequest().copyFrom(request), GetCompactionResponse.class)
+                .thenApply(
+                        result -> {
+                            authorizeCompaction(
+                                    session,
+                                    OperationType.DESCRIBE,
+                                    compactionResource(result.getProgress().getInfo()));
+                            return result;
+                        });
+    }
+
+    @Override
+    public CompletableFuture<CancelCompactionResponse> cancelCompaction(
+            CancelCompactionRequest request) {
+        Session session = currentSession();
+        String operationId = request.getOperationId();
+        return submitCompaction(
+                        new GetCompactionRequest().setOperationId(operationId),
+                        GetCompactionResponse.class)
+                .thenCompose(
+                        result -> {
+                            authorizeCompaction(
+                                    session,
+                                    OperationType.ALTER,
+                                    compactionResource(result.getProgress().getInfo()));
+                            return submitCompaction(
+                                    new CancelCompactionRequest().setOperationId(operationId),
+                                    CancelCompactionResponse.class);
+                        });
+    }
+
+    private void authorizeCompaction(Session session, OperationType operation, Resource resource) {
+        if (authorizer != null) {
+            authorizer.authorize(session, operation, resource);
+        }
+    }
+
+    private static Resource compactionResource(PbCompactionInfo info) {
+        return compactionResource(
+                info.hasDatabaseName() ? info.getDatabaseName() : null,
+                info.hasTableName() ? info.getTableName() : null);
+    }
+
+    private static Resource compactionResource(@Nullable String database, @Nullable String table) {
+        if (table != null) {
+            return Resource.table(TablePath.of(database, table));
+        }
+        return database == null ? Resource.cluster() : Resource.database(database);
+    }
+
+    private <T extends ApiMessage> CompletableFuture<T> submitCompaction(
+            ApiMessage request, Class<T> responseClass) {
+        CompletableFuture<ApiMessage> response = new CompletableFuture<>();
+        compactionProcessorSupplier
+                .get()
+                .putCompactionEvent(new CompactionEvent(request, response));
+        return response.thenApply(responseClass::cast);
+    }
+
+    private static void validateCompactionScope(
+            @Nullable String database, @Nullable String table, @Nullable String partition) {
+        if (database != null && database.trim().isEmpty()) {
+            throw new InvalidDatabaseException("Compaction database must not be empty");
+        }
+        if (table != null && (database == null || table.trim().isEmpty())) {
+            throw new InvalidTableException(
+                    "Compaction table requires a database and nonempty table name");
+        }
+        if (partition != null && (table == null || partition.trim().isEmpty())) {
+            throw new InvalidPartitionException(
+                    "Compaction partition requires a table and nonempty partition name");
+        }
     }
 }

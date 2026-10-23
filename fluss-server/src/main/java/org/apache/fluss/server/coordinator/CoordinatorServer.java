@@ -370,6 +370,20 @@ public class CoordinatorServer extends ServerBase {
                             scheduler,
                             clock);
             coordinatorEventProcessor.startup();
+            coordinatorEventProcessor.startCompactionManager(
+                    rpcClient,
+                    () -> {
+                        Configuration effective = new Configuration(conf);
+                        dynamicConfigManager
+                                .describeConfigs()
+                                .forEach(
+                                        entry -> {
+                                            if (entry.value() != null) {
+                                                effective.setString(entry.key(), entry.value());
+                                            }
+                                        });
+                        return effective;
+                    });
 
             // As the active leader, this server is the sole writer of dynamic configs and holds the
             // latest values, so stop consuming change notifications to avoid rolling a value back.
@@ -603,6 +617,13 @@ public class CoordinatorServer extends ServerBase {
 
         synchronized (lock) {
             Throwable exception = leaderElectionException;
+            try {
+                if (coordinatorEventProcessor != null) {
+                    coordinatorEventProcessor.closeCompactionManager();
+                }
+            } catch (Throwable t) {
+                exception = ExceptionUtils.firstOrSuppressed(t, exception);
+            }
 
             try {
                 // We must shut down the scheduler early because otherwise, the scheduler could

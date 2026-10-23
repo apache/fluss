@@ -24,6 +24,9 @@ import org.apache.fluss.client.metadata.KvSnapshots;
 import org.apache.fluss.client.metadata.LakeSnapshot;
 import org.apache.fluss.client.metadata.RemoteLogManifestInfo;
 import org.apache.fluss.cluster.ServerNode;
+import org.apache.fluss.cluster.compaction.CompactionInfo;
+import org.apache.fluss.cluster.compaction.CompactionProgress;
+import org.apache.fluss.cluster.compaction.CompactionType;
 import org.apache.fluss.cluster.rebalance.GoalType;
 import org.apache.fluss.cluster.rebalance.RebalanceProgress;
 import org.apache.fluss.cluster.rebalance.ServerTag;
@@ -939,4 +942,36 @@ public interface Admin extends AutoCloseable {
      * @return per-bucket active snapshot ids grouped by bucket
      */
     CompletableFuture<ActiveKvSnapshots> listKvSnapshots(long tableId, @Nullable Long partitionId);
+
+    /** Submits cluster compaction. */
+    CompletableFuture<String> compact(CompactionType type);
+
+    /** Submits database compaction. */
+    CompletableFuture<String> compact(String databaseName, CompactionType type);
+
+    /** Submits table compaction. */
+    CompletableFuture<String> compact(TablePath tablePath, CompactionType type);
+
+    /** Submits partition compaction. */
+    CompletableFuture<String> compact(
+            TablePath tablePath, String partitionName, CompactionType type);
+
+    /** Lists cluster compactions. */
+    CompletableFuture<List<CompactionInfo>> listCompactions();
+
+    /** Lists compactions associated with a database. */
+    CompletableFuture<List<CompactionInfo>> listCompactions(String databaseName);
+
+    /** Lists compactions associated with a table. */
+    CompletableFuture<List<CompactionInfo>> listCompactions(TablePath tablePath);
+
+    /** Lists compactions associated with a partition. */
+    CompletableFuture<List<CompactionInfo>> listCompactions(
+            TablePath tablePath, String partitionName);
+
+    /** Returns progress of an operation. */
+    CompletableFuture<CompactionProgress> getCompaction(String operationId);
+
+    /** Cancels an operation; repeated cancellation is allowed. */
+    CompletableFuture<Void> cancelCompaction(String operationId);
 }

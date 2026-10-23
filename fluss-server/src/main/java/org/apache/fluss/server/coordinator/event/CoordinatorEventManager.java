@@ -219,21 +219,14 @@ public final class CoordinatorEventManager implements EventManager {
         inLock(
                 putLock,
                 () -> {
-                    try {
-                        QueuedEvent queuedEvent =
-                                new QueuedEvent(event, System.currentTimeMillis());
-                        queue.put(queuedEvent);
-                        coordinatorMetricGroup
-                                .getOrAddEventTypeMetricGroup(event.getClass())
-                                .queuedEventCount()
-                                .inc();
-                        LOG.debug(
-                                "Put coordinator event {} of event type {}.",
-                                event,
-                                event.getClass());
-                    } catch (InterruptedException e) {
-                        LOG.error("Fail to put coordinator event {}.", event, e);
-                    }
+                    QueuedEvent queuedEvent = new QueuedEvent(event, System.currentTimeMillis());
+                    queue.add(queuedEvent);
+                    coordinatorMetricGroup
+                            .getOrAddEventTypeMetricGroup(event.getClass())
+                            .queuedEventCount()
+                            .inc();
+                    LOG.debug(
+                            "Put coordinator event {} of event type {}.", event, event.getClass());
                 });
     }
 

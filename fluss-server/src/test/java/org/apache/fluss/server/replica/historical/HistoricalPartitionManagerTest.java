@@ -837,6 +837,7 @@ class HistoricalPartitionManagerTest extends ReplicaTestBase {
             // Both replica locks must be available while the lake lookup is blocked. Move the
             // replica away and back so the retry observes a different leader epoch.
             assertThat(replica.makeFollower(followerState())).isTrue();
+            replica.getKvCloseFuture().get(10, TimeUnit.SECONDS);
             replica.makeLeader(leaderStateAfterFollower());
             finishLakeLookup.countDown();
 
@@ -945,6 +946,7 @@ class HistoricalPartitionManagerTest extends ReplicaTestBase {
             // Dropping the leader KV tablet forces promotion to rebuild the historical overlay.
             assertThat(replica.makeFollower(followerState())).isTrue();
             assertThat(replica.getKvTablet()).isNull();
+            replica.getKvCloseFuture().get(10, TimeUnit.SECONDS);
             if (removeCoveredSegments) {
                 // Mark the WAL as uploaded, then let lake progress reclaim the covered segment
                 // on the follower before promotion. No remote WAL files are supplied for recovery.

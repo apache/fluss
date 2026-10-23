@@ -20,6 +20,8 @@ package org.apache.fluss.rpc.protocol;
 import org.apache.fluss.exception.ApiException;
 import org.apache.fluss.exception.AuthenticationException;
 import org.apache.fluss.exception.AuthorizationException;
+import org.apache.fluss.exception.CompactionInProgressException;
+import org.apache.fluss.exception.CompactionNotExistException;
 import org.apache.fluss.exception.ConfigException;
 import org.apache.fluss.exception.ConsumerGroupIdNotFoundException;
 import org.apache.fluss.exception.ConsumerGroupOwnerLoadingException;
@@ -319,7 +321,15 @@ public enum Errors {
     CONSUMER_OFFSET_METADATA_TOO_LARGE(
             80,
             "The metadata field of the consumer offset request is too large.",
-            ConsumerOffsetMetadataTooLargeException::new);
+            ConsumerOffsetMetadataTooLargeException::new),
+    COMPACTION_IN_PROGRESS(
+            81,
+            "Another manual compaction operation is in progress.",
+            CompactionInProgressException::new),
+    COMPACTION_NOT_EXIST(
+            82,
+            "The manual compaction operation does not exist or has expired.",
+            CompactionNotExistException::new);
 
     private static final Logger LOG = LoggerFactory.getLogger(Errors.class);
 

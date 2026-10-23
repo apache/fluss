@@ -18,18 +18,25 @@
 package org.apache.fluss.server.kv.rocksdb;
 
 import org.apache.fluss.annotation.VisibleForTesting;
+import org.apache.fluss.cluster.compaction.CompactionType;
 import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.metrics.Counter;
 import org.apache.fluss.metrics.Histogram;
 import org.apache.fluss.rocksdb.RocksDBOperationUtils;
 import org.apache.fluss.rocksdb.RocksIteratorWrapper;
 import org.apache.fluss.server.kv.KvCloseMode;
+import org.apache.fluss.server.utils.CancellationToken;
 import org.apache.fluss.server.utils.ResourceGuard;
 import org.apache.fluss.utils.IOUtils;
 
+import io.github.fluss_contrib.rocksdb.BlockBasedTableConfig;
 import io.github.fluss_contrib.rocksdb.Cache;
 import io.github.fluss_contrib.rocksdb.ColumnFamilyHandle;
 import io.github.fluss_contrib.rocksdb.ColumnFamilyOptions;
+import io.github.fluss_contrib.rocksdb.CompactRangeOptions;
+import io.github.fluss_contrib.rocksdb.CompactRangeOptions.BottommostLevelCompaction;
+import io.github.fluss_contrib.rocksdb.CompactionStyle;
+import io.github.fluss_contrib.rocksdb.IndexType;
 import io.github.fluss_contrib.rocksdb.MutableDBOptions;
 import io.github.fluss_contrib.rocksdb.ReadOptions;
 import io.github.fluss_contrib.rocksdb.RocksDB;
@@ -77,6 +84,9 @@ public class RocksDBKv implements AutoCloseable {
 
     /** The write options to use in the states. We disable write ahead logging. */
     private final WriteOptions writeOptions;
+
+    @Nullable private final IndexType indexType;
+    private final CompactionStyle compactionStyle;
 
     /**
      * We are not using the default column family for KV ops, but we still need to remember this
@@ -138,7 +148,8 @@ public class RocksDBKv implements AutoCloseable {
             int level0StopWritesTrigger,
             int maxWriteBufferNumber,
             long writeBufferSize,
-            int flussL0SlowdownTrigger) {
+            int flussL0SlowdownTrigger,
+            ColumnFamilyOptions columnFamilyOptions) {
         this.optionsContainer = optionsContainer;
         this.db = db;
         this.rocksDBResourceGuard = rocksDBResourceGuard;
@@ -150,6 +161,12 @@ public class RocksDBKv implements AutoCloseable {
         this.maxPendingFlushL0Files = maxWriteBufferNumber;
         this.writeBufferSize = writeBufferSize;
         this.flussL0SlowdownTrigger = flussL0SlowdownTrigger;
+        this.indexType =
+                columnFamilyOptions.tableFormatConfig() instanceof BlockBasedTableConfig
+                        ? ((BlockBasedTableConfig) columnFamilyOptions.tableFormatConfig())
+                                .indexType()
+                        : null;
+        this.compactionStyle = columnFamilyOptions.compactionStyle();
 
         // Validate configuration relationship: Fluss proactive threshold must be strictly below
         // RocksDB's own slowdown trigger, otherwise the ramp-up window is zero and proactive
@@ -170,6 +187,64 @@ public class RocksDBKv implements AutoCloseable {
 
     public ResourceGuard getResourceGuard() {
         return rocksDBResourceGuard;
+    }
+
+    /** Returns the index layout captured from the options used to open this database. */
+    public boolean isPartitionedIndexEnabled() {
+        return indexType == IndexType.kTwoLevelIndexSearch;
+    }
+
+    /** Reads the live SST layout. The caller must hold a resource lease. */
+    public SstProperties inspectSstProperties() throws IOException {
+        try {
+            return SstProperties.from(db.getPropertiesOfAllTables(defaultColumnFamilyHandle));
+        } catch (RocksDBException e) {
+            throw new IOException("Failed to inspect SST properties.", e);
+        }
+    }
+
+    /**
+     * Runs cancellable manual compaction. The caller must hold a resource lease and must not hold
+     * the KV lock while invoking this method.
+     */
+    public void compact(CompactionType type, CancellationToken cancellation) throws IOException {
+        Objects.requireNonNull(type);
+        cancellation.checkCancelled();
+        if (compactionStyle != CompactionStyle.LEVEL
+                || (indexType != IndexType.kBinarySearch
+                        && indexType != IndexType.kTwoLevelIndexSearch)) {
+            throw new IOException("Unsupported RocksDB layout for manual compaction.");
+        }
+        if (type == CompactionType.MIGRATE
+                && inspectSstProperties().matches(isPartitionedIndexEnabled())) {
+            cancellation.checkCancelled();
+            return;
+        }
+        try (CompactRangeOptions options = new CompactRangeOptions()) {
+            options.setCanceled(false);
+            options.setExclusiveManualCompaction(false);
+            options.setAllowWriteStall(false);
+            options.setChangeLevel(false);
+            options.setBottommostLevelCompaction(
+                    type == CompactionType.OPTIMIZE
+                            ? BottommostLevelCompaction.kIfHaveCompactionFilter
+                            : BottommostLevelCompaction.kForceOptimized);
+            try (AutoCloseable ignored = cancellation.register(() -> options.setCanceled(true))) {
+                cancellation.checkCancelled();
+                db.compactRange(defaultColumnFamilyHandle, null, null, options);
+                cancellation.checkCancelled();
+            }
+        } catch (IOException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new IOException("Failed to compact RocksDB.", e);
+        }
+        if (type == CompactionType.MIGRATE
+                && !inspectSstProperties().matches(isPartitionedIndexEnabled())) {
+            throw new IOException(
+                    "SST index layout does not match the opened database configuration.");
+        }
+        cancellation.checkCancelled();
     }
 
     public RocksDBWriteBatchWrapper newWriteBatch(

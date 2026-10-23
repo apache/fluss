@@ -42,10 +42,12 @@ import org.apache.fluss.record.MemoryLogRecords;
 import org.apache.fluss.record.ProjectionPushdownCache;
 import org.apache.fluss.rpc.protocol.MergeMode;
 import org.apache.fluss.server.entity.NotifyLeaderAndIsrData;
+import org.apache.fluss.server.kv.KvCloseMode;
 import org.apache.fluss.server.kv.KvFlushScheduler;
 import org.apache.fluss.server.kv.KvTablet;
 import org.apache.fluss.server.kv.TestingHoldableKvFlushScheduler;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshot;
+import org.apache.fluss.server.kv.snapshot.CompletedSnapshotHandle;
 import org.apache.fluss.server.kv.snapshot.KvSnapshotDataDownloader;
 import org.apache.fluss.server.kv.snapshot.KvSnapshotDownloadSpec;
 import org.apache.fluss.server.kv.snapshot.TestingCompletedKvSnapshotCommitter;
@@ -54,6 +56,7 @@ import org.apache.fluss.server.log.ListOffsetsParam;
 import org.apache.fluss.server.log.LogAppendInfo;
 import org.apache.fluss.server.log.LogReadInfo;
 import org.apache.fluss.server.testutils.KvTestUtils;
+import org.apache.fluss.server.utils.CancellationToken;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
 import org.apache.fluss.testutils.DataTestUtils;
@@ -79,6 +82,8 @@ import java.util.Collections;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -843,6 +848,70 @@ final class ReplicaTest extends ReplicaTestBase {
     }
 
     @Test
+    void testCompactionBindingInvalidatedBeforeNativeEntry() throws Exception {
+        Replica replica =
+                makeKvReplica(DATA1_PHYSICAL_TABLE_PATH_PK, new TableBucket(DATA1_TABLE_ID_PK, 1));
+        makeKvReplicaAsLeader(replica, 0);
+        KvTablet original = replica.getKvTablet();
+        CancellationToken cancellation = new CancellationToken();
+        try (AutoCloseable ignored = replica.registerCompaction(original, 0, cancellation)) {
+            assertThat(replica.flushForCompaction(original, 0, replica.getLogHighWatermark()))
+                    .isCompleted();
+            assertThat(replica.flushForCompaction(original, 0, replica.getLogHighWatermark() + 1))
+                    .isCompletedExceptionally();
+            makeKvReplicaAsLeader(replica, 1);
+            assertThat(cancellation.isCancelled()).isTrue();
+            assertThat(replica.flushForCompaction(original, 0, 0)).isCompletedExceptionally();
+        }
+        CancellationToken replacement = new CancellationToken();
+        try (AutoCloseable ignored =
+                replica.registerCompaction(replica.getKvTablet(), 1, replacement)) {
+            assertThat(
+                            replica.flushForCompaction(
+                                    replica.getKvTablet(), 1, replica.getLogHighWatermark()))
+                    .isCompleted();
+            assertThat(replacement.isCancelled()).isFalse();
+        }
+        replica.closeKvAsync(KvCloseMode.DISCARD_UNPERSISTED_STATE).get(10, TimeUnit.SECONDS);
+        assertThat(replacement.isCancelled()).isFalse();
+    }
+
+    @Test
+    void testExplicitSnapshotRejectsPreviousKvAndLeaderEpoch(@TempDir File snapshotDirectory)
+            throws Exception {
+        ManuallyTriggeredScheduledExecutorService snapshots =
+                new ManuallyTriggeredScheduledExecutorService();
+        TestSnapshotContext context =
+                new TestSnapshotContext(snapshotDirectory.getPath()) {
+                    @Override
+                    public ExecutorService getAsyncOperationsThreadPool() {
+                        return snapshots;
+                    }
+                };
+        TableBucket bucket = new TableBucket(DATA1_TABLE_ID_PK, 1);
+        Replica replica = makeKvReplica(DATA1_PHYSICAL_TABLE_PATH_PK, bucket, context);
+        makeKvReplicaAsLeader(replica, 0);
+        KvTablet previous = replica.getKvTablet();
+        CompletableFuture<CompletedSnapshotHandle> pending =
+                replica.snapshotAfterCompaction(previous, 0);
+        makeKvReplicaAsLeader(replica, 1);
+        assertThat(pending).isCancelled();
+        assertThat(replica.getKvTablet()).isNotSameAs(previous);
+        assertThatThrownBy(() -> replica.snapshotAfterCompaction(previous, 1).join())
+                .hasCauseInstanceOf(NotLeaderOrFollowerException.class);
+        assertThatThrownBy(() -> replica.snapshotAfterCompaction(replica.getKvTablet(), 0).join())
+                .hasCauseInstanceOf(NotLeaderOrFollowerException.class);
+        CompletableFuture<CompletedSnapshotHandle> current =
+                replica.snapshotAfterCompaction(replica.getKvTablet(), 1);
+        snapshots.triggerAll();
+        CompletedSnapshotHandle handle = current.get(10, TimeUnit.SECONDS);
+        assertThat(
+                        context.testKvSnapshotStore.getSnapshotLeaderEpoch(
+                                bucket, (int) handle.getSnapshotId()))
+                .isEqualTo(1);
+    }
+
+    @Test
     void testSnapshotUseLatestLeaderEpoch(@TempDir File snapshotKvTabletDir) throws Exception {
         TableBucket tableBucket = new TableBucket(DATA1_TABLE_ID_PK, 1);
         // create test context
@@ -1323,12 +1392,13 @@ final class ReplicaTest extends ReplicaTestBase {
                                 leaderEpoch),
                         3,
                         0L));
+        replica.getKvCloseFuture().join();
     }
 
     private void makeLeaderReplica(
             Replica replica, TablePath tablePath, TableBucket tableBucket, int leaderEpoch)
             throws Exception {
-        replica.makeLeader(
+        NotifyLeaderAndIsrData notification =
                 new NotifyLeaderAndIsrData(
                         PhysicalTablePath.of(tablePath),
                         tableBucket,
@@ -1342,7 +1412,16 @@ final class ReplicaTest extends ReplicaTestBase {
                                 // we also use the leader epoch as bucket epoch
                                 leaderEpoch),
                         3,
-                        0L));
+                        0L);
+        try {
+            replica.makeLeader(notification);
+        } catch (KvStorageException e) {
+            if (!e.getMessage().contains("cleanup is pending")) {
+                throw e;
+            }
+            replica.getKvCloseFuture().get(10, TimeUnit.SECONDS);
+            replica.makeLeader(notification);
+        }
     }
 
     private static LogRecords fetchRecords(Replica replica) throws IOException {

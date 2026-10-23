@@ -30,6 +30,9 @@ import org.apache.fluss.server.zk.ZkEpoch;
 import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
@@ -106,6 +109,54 @@ class CoordinatorEventManagerTest {
                     Duration.ofMinutes(1),
                     () -> assertThat(activeTabletServerCount.getValue()).isEqualTo(2));
         } finally {
+            manager.close();
+            metricGroup.close();
+        }
+    }
+
+    @Test
+    void testInterruptedCallerAdmitsCallbackWithoutClearingInterrupt() throws Exception {
+        CoordinatorContext context = new CoordinatorContext(ZkEpoch.INITIAL_EPOCH);
+        CoordinatorMetricGroup metricGroup =
+                new CoordinatorMetricGroup(NOPMetricRegistry.INSTANCE, "cluster1", "host", "0");
+        CoordinatorEventManager manager =
+                new CoordinatorEventManager(
+                        event -> {
+                            if (event instanceof AccessContextEvent) {
+                                processAccessContext((AccessContextEvent<?>) event, context);
+                            } else if (event instanceof CompactionEvent) {
+                                ((CompactionEvent) event).callback().run();
+                            }
+                        },
+                        metricGroup);
+        CountDownLatch entered = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        CompletableFuture<Void> acknowledged = new CompletableFuture<>();
+        manager.start();
+        try {
+            manager.put(
+                    new CompactionEvent(
+                            () -> {
+                                entered.countDown();
+                                try {
+                                    release.await();
+                                } catch (InterruptedException e) {
+                                    Thread.currentThread().interrupt();
+                                }
+                            }));
+            assertThat(entered.await(10, TimeUnit.SECONDS)).isTrue();
+            try {
+                Thread.currentThread().interrupt();
+                manager.put(new CompactionEvent(() -> acknowledged.complete(null)));
+                assertThat(Thread.currentThread().isInterrupted()).isTrue();
+                assertThat(acknowledged).isNotDone();
+            } finally {
+                Thread.interrupted();
+                release.countDown();
+            }
+            acknowledged.get(10, TimeUnit.SECONDS);
+        } finally {
+            release.countDown();
             manager.close();
             metricGroup.close();
         }

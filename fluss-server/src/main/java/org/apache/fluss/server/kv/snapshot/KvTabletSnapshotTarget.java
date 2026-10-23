@@ -38,6 +38,7 @@ import javax.annotation.concurrent.NotThreadSafe;
 
 import java.io.IOException;
 import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executor;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
@@ -168,37 +169,72 @@ public class KvTabletSnapshotTarget implements PeriodicSnapshotManager.SnapshotT
 
     @Override
     public Optional<PeriodicSnapshotManager.SnapshotRunnable> initSnapshot() throws Exception {
-        TabletState tabletState = tabletStateSupplier.get();
-        long logOffset = tabletState.getFlushedLogOffset();
-        if (logOffset <= logOffsetOfLatestSnapshot) {
-            LOG.debug(
-                    "The current offset for the log whose kv data is flushed is {}, "
-                            + "which is not greater than the log offset in the latest snapshot {}, "
-                            + "so skip one snapshot for it.",
-                    logOffset,
-                    logOffsetOfLatestSnapshot);
-            return Optional.empty();
+        return initSnapshot(false);
+    }
+
+    @Override
+    public Optional<PeriodicSnapshotManager.SnapshotRunnable> initSnapshot(boolean force)
+            throws Exception {
+        return initSnapshot(force, Runnable::run);
+    }
+
+    @Override
+    public Optional<PeriodicSnapshotManager.SnapshotRunnable> initSnapshot(
+            boolean force, Executor guardedExecutor) throws Exception {
+        if (!force) {
+            CompletableFuture<Boolean> hasUpdates = new CompletableFuture<>();
+            guardedExecutor.execute(
+                    () -> {
+                        try {
+                            hasUpdates.complete(
+                                    tabletStateSupplier.get().getFlushedLogOffset()
+                                            > logOffsetOfLatestSnapshot);
+                        } catch (Throwable t) {
+                            hasUpdates.completeExceptionally(t);
+                        }
+                    });
+            if (!hasUpdates.get()) {
+                return Optional.empty();
+            }
         }
-        // init snapshot stream factory for this snapshot
-        long currentSnapshotId = snapshotIdCounter.getAndIncrement();
-        // get the bucket leader and coordinator epoch when the snapshot is triggered
-        int bucketLeaderEpoch = bucketLeaderEpochSupplier.get();
-        int coordinatorEpoch = coordinatorEpochSupplier.get();
-        SnapshotLocation snapshotLocation = initSnapshotLocation(currentSnapshotId);
+        // ID allocation and remote directory creation can block and must precede the KV guard.
+        long snapshotId = snapshotIdCounter.getAndIncrement();
+        SnapshotLocation location = initSnapshotLocation(snapshotId);
+        CompletableFuture<Optional<PeriodicSnapshotManager.SnapshotRunnable>> initialized =
+                new CompletableFuture<>();
         try {
-            PeriodicSnapshotManager.SnapshotRunnable snapshotRunnable =
-                    new PeriodicSnapshotManager.SnapshotRunnable(
-                            snapshotRunner.snapshot(
-                                    currentSnapshotId, tabletState, snapshotLocation),
-                            currentSnapshotId,
-                            coordinatorEpoch,
-                            bucketLeaderEpoch,
-                            snapshotLocation);
-            return Optional.of(snapshotRunnable);
-        } catch (Exception t) {
-            // dispose the snapshot location
-            snapshotLocation.disposeOnFailure();
-            throw t;
+            guardedExecutor.execute(
+                    () -> {
+                        try {
+                            TabletState state = tabletStateSupplier.get();
+                            if (!force
+                                    && state.getFlushedLogOffset() <= logOffsetOfLatestSnapshot) {
+                                initialized.complete(Optional.empty());
+                            } else {
+                                int bucketEpoch = bucketLeaderEpochSupplier.get();
+                                int coordinatorEpoch = coordinatorEpochSupplier.get();
+                                initialized.complete(
+                                        Optional.of(
+                                                new PeriodicSnapshotManager.SnapshotRunnable(
+                                                        snapshotRunner.snapshot(
+                                                                snapshotId, state, location),
+                                                        snapshotId,
+                                                        coordinatorEpoch,
+                                                        bucketEpoch,
+                                                        location)));
+                            }
+                        } catch (Throwable t) {
+                            initialized.completeExceptionally(t);
+                        }
+                    });
+            Optional<PeriodicSnapshotManager.SnapshotRunnable> result = initialized.get();
+            if (!result.isPresent()) {
+                location.disposeOnFailure();
+            }
+            return result;
+        } catch (Exception e) {
+            location.disposeOnFailure();
+            throw e;
         }
     }
 

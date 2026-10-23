@@ -80,6 +80,10 @@ public class ProcedureManager {
         ADD_SERVER_TAG_BY_RACK("sys.add_server_tag_by_rack", AddServerTagByRackProcedure.class),
         REMOVE_SERVER_TAG_BY_RACK(
                 "sys.remove_server_tag_by_rack", RemoveServerTagByRackProcedure.class),
+        COMPACT("sys.compact", CompactProcedure.class),
+        LIST_COMPACTIONS("sys.list_compactions", ListCompactionsProcedure.class),
+        GET_COMPACTION("sys.get_compaction", GetCompactionProcedure.class),
+        CANCEL_COMPACTION("sys.cancel_compaction", CancelCompactionProcedure.class),
         REBALANCE("sys.rebalance", RebalanceProcedure.class),
         CANCEL_REBALANCE("sys.cancel_rebalance", CancelRebalanceProcedure.class),
         LIST_REBALANCE_PROGRESS("sys.list_rebalance", ListRebalanceProcessProcedure.class),

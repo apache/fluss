@@ -28,6 +28,8 @@ import org.apache.fluss.client.table.Table;
 import org.apache.fluss.client.table.scanner.batch.BatchScanner;
 import org.apache.fluss.client.table.writer.AppendWriter;
 import org.apache.fluss.client.utils.ClientRpcMessageUtils;
+import org.apache.fluss.cluster.compaction.CompactionInfo;
+import org.apache.fluss.cluster.compaction.CompactionType;
 import org.apache.fluss.cluster.rebalance.ServerTag;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
@@ -41,6 +43,8 @@ import org.apache.fluss.exception.LakeTableSnapshotNotExistException;
 import org.apache.fluss.exception.TableNotPartitionedException;
 import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.DatabaseDescriptor;
+import org.apache.fluss.metadata.PartitionSpec;
+import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
@@ -72,6 +76,7 @@ import org.apache.fluss.server.testutils.FlussClusterExtension;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.TableRegistration;
 import org.apache.fluss.shaded.guava32.com.google.common.collect.Lists;
+import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.utils.CloseableIterator;
 
 import org.assertj.core.api.ThrowableAssert;
@@ -1500,5 +1505,146 @@ public class FlussAuthorizationITCase {
                         "Principal FlussPrincipal{name='guest', type='User'} have no authorization"
                                 + " to operate DESCRIBE on resource Resource{type=TABLE,"
                                 + " name='test_db_1.test_pk_table_1'}");
+    }
+
+    @Test
+    void testCompactionAuthorizationUsesSubmittedScope() throws Exception {
+        TablePath path = DATA1_TABLE_PATH_PK;
+        String tableOperation = rootAdmin.compact(path, CompactionType.RECLAIM).get();
+        rootAdmin.cancelCompaction(tableOperation).get();
+        String databaseOperation =
+                rootAdmin.compact(path.getDatabaseName(), CompactionType.RECLAIM).get();
+        rootAdmin.cancelCompaction(databaseOperation).get();
+        String clusterOperation = rootAdmin.compact(CompactionType.RECLAIM).get();
+        rootAdmin.cancelCompaction(clusterOperation).get();
+        assertThatThrownBy(() -> guestAdmin.compact(path, CompactionType.RECLAIM).get())
+                .rootCause()
+                .isInstanceOf(AuthorizationException.class);
+        assertThatThrownBy(() -> guestAdmin.listCompactions(path).get())
+                .rootCause()
+                .isInstanceOf(AuthorizationException.class);
+        assertThatThrownBy(() -> guestAdmin.getCompaction(tableOperation).get())
+                .rootCause()
+                .isInstanceOf(AuthorizationException.class);
+        assertThatThrownBy(() -> guestAdmin.cancelCompaction(tableOperation).get())
+                .rootCause()
+                .isInstanceOf(AuthorizationException.class);
+        rootAdmin
+                .createAcls(
+                        Collections.singletonList(
+                                new AclBinding(
+                                        Resource.table(path),
+                                        new AccessControlEntry(
+                                                guestPrincipal,
+                                                "*",
+                                                OperationType.DESCRIBE,
+                                                PermissionType.ALLOW))))
+                .all()
+                .get();
+        assertThat(guestAdmin.listCompactions(path).get())
+                .extracting(CompactionInfo::operationId)
+                .contains(tableOperation)
+                .doesNotContain(databaseOperation, clusterOperation);
+        assertThat(guestAdmin.getCompaction(tableOperation).get().info().operationId())
+                .isEqualTo(tableOperation);
+        assertThatThrownBy(() -> guestAdmin.getCompaction(databaseOperation).get())
+                .rootCause()
+                .isInstanceOf(AuthorizationException.class);
+        assertThatThrownBy(() -> guestAdmin.getCompaction(clusterOperation).get())
+                .rootCause()
+                .isInstanceOf(AuthorizationException.class);
+        assertThatThrownBy(() -> guestAdmin.cancelCompaction(tableOperation).get())
+                .rootCause()
+                .isInstanceOf(AuthorizationException.class);
+        rootAdmin
+                .createAcls(
+                        Collections.singletonList(
+                                new AclBinding(
+                                        Resource.table(path),
+                                        new AccessControlEntry(
+                                                guestPrincipal,
+                                                "*",
+                                                OperationType.ALTER,
+                                                PermissionType.ALLOW))))
+                .all()
+                .get();
+        guestAdmin.cancelCompaction(tableOperation).get();
+        assertThatThrownBy(() -> guestAdmin.cancelCompaction(databaseOperation).get())
+                .rootCause()
+                .isInstanceOf(AuthorizationException.class);
+        assertThatThrownBy(() -> guestAdmin.cancelCompaction(clusterOperation).get())
+                .rootCause()
+                .isInstanceOf(AuthorizationException.class);
+        assertThatThrownBy(
+                        () ->
+                                guestAdmin
+                                        .compact(path.getDatabaseName(), CompactionType.RECLAIM)
+                                        .get())
+                .rootCause()
+                .isInstanceOf(AuthorizationException.class);
+        assertThatThrownBy(() -> guestAdmin.compact(CompactionType.RECLAIM).get())
+                .rootCause()
+                .isInstanceOf(AuthorizationException.class);
+        String permitted = guestAdmin.compact(path, CompactionType.RECLAIM).get();
+        guestAdmin.cancelCompaction(permitted).get();
+    }
+
+    @Test
+    void testPartitionCompactionUsesTablePermissions() throws Exception {
+        TablePath path =
+                TablePath.of(DATA1_TABLE_PATH_PK.getDatabaseName(), "compaction_partition_acl");
+        rootAdmin
+                .createTable(
+                        path,
+                        TableDescriptor.builder()
+                                .schema(
+                                        Schema.newBuilder()
+                                                .column("id", DataTypes.INT())
+                                                .column("pt", DataTypes.STRING())
+                                                .primaryKey("id", "pt")
+                                                .build())
+                                .partitionedBy("pt")
+                                .distributedBy(1, "id")
+                                .build(),
+                        false)
+                .get();
+        rootAdmin
+                .createPartition(
+                        path, new PartitionSpec(Collections.singletonMap("pt", "part_one")), false)
+                .get();
+        String partition = rootAdmin.listPartitionInfos(path).get().get(0).getPartitionName();
+        FLUSS_CLUSTER_EXTENSION.waitUntilTablePartitionReady(
+                rootAdmin.getTableInfo(path).get().getTableId(),
+                rootAdmin.listPartitionInfos(path).get().get(0).getPartitionId());
+        assertThatThrownBy(() -> guestAdmin.compact(path, partition, CompactionType.RECLAIM).get())
+                .rootCause()
+                .isInstanceOf(AuthorizationException.class);
+        rootAdmin
+                .createAcls(
+                        Arrays.asList(
+                                new AclBinding(
+                                        Resource.table(path),
+                                        new AccessControlEntry(
+                                                guestPrincipal,
+                                                "*",
+                                                OperationType.ALTER,
+                                                PermissionType.ALLOW)),
+                                new AclBinding(
+                                        Resource.table(path),
+                                        new AccessControlEntry(
+                                                guestPrincipal,
+                                                "*",
+                                                OperationType.DESCRIBE,
+                                                PermissionType.ALLOW))))
+                .all()
+                .get();
+        String operationId = guestAdmin.compact(path, partition, CompactionType.RECLAIM).get();
+        assertThat(guestAdmin.listCompactions(path, partition).get())
+                .extracting(CompactionInfo::operationId)
+                .contains(operationId);
+        assertThat(guestAdmin.getCompaction(operationId).get().info().partitionName())
+                .contains(partition);
+        guestAdmin.cancelCompaction(operationId).get();
+        guestAdmin.cancelCompaction(operationId).get();
     }
 }

@@ -59,6 +59,7 @@ import org.apache.fluss.rpc.util.PredicateMessageUtils;
 import org.apache.fluss.server.SequenceIDCounter;
 import org.apache.fluss.server.coordinator.CoordinatorContext;
 import org.apache.fluss.server.entity.NotifyLeaderAndIsrData;
+import org.apache.fluss.server.kv.KvCloseMode;
 import org.apache.fluss.server.kv.KvManager;
 import org.apache.fluss.server.kv.KvRecoverHelper;
 import org.apache.fluss.server.kv.KvStateLookupResult;
@@ -73,6 +74,7 @@ import org.apache.fluss.server.kv.scan.ScannerContext;
 import org.apache.fluss.server.kv.scan.ScannerManager;
 import org.apache.fluss.server.kv.snapshot.CompletedKvSnapshotCommitter;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshot;
+import org.apache.fluss.server.kv.snapshot.CompletedSnapshotHandle;
 import org.apache.fluss.server.kv.snapshot.KvFileHandleAndLocalPath;
 import org.apache.fluss.server.kv.snapshot.KvSnapshotDataDownloader;
 import org.apache.fluss.server.kv.snapshot.KvSnapshotDownloadSpec;
@@ -104,6 +106,7 @@ import org.apache.fluss.server.replica.delay.DelayedFetchLog;
 import org.apache.fluss.server.replica.delay.DelayedOperationManager;
 import org.apache.fluss.server.replica.delay.DelayedTableBucketKey;
 import org.apache.fluss.server.replica.delay.DelayedWrite;
+import org.apache.fluss.server.utils.CancellationToken;
 import org.apache.fluss.server.utils.FatalErrorHandler;
 import org.apache.fluss.server.zk.ZkSequenceIDCounter;
 import org.apache.fluss.server.zk.ZooKeeperClient;
@@ -122,6 +125,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import javax.annotation.Nullable;
+import javax.annotation.concurrent.GuardedBy;
 import javax.annotation.concurrent.ThreadSafe;
 
 import java.io.Closeable;
@@ -230,7 +234,21 @@ public final class Replica {
     // null if table without pk or haven't become leader
     private volatile @Nullable KvTablet kvTablet;
     private volatile @Nullable CloseableRegistry closeableRegistryForKv;
-    private @Nullable PeriodicSnapshotManager kvSnapshotManager;
+
+    @GuardedBy("leaderIsrUpdateLock")
+    @Nullable
+    private CancellationToken compactionCancellation;
+
+    @GuardedBy("leaderIsrUpdateLock")
+    @Nullable
+    private CompletableFuture<Void> compactionFlush;
+
+    @GuardedBy("leaderIsrUpdateLock")
+    private long compactionFlushOffset;
+
+    private volatile @Nullable PeriodicSnapshotManager kvSnapshotManager;
+    private volatile CompletableFuture<Void> kvCloseFuture =
+            CompletableFuture.completedFuture(null);
 
     /**
      * Server-wide {@link ScannerManager}. Active sessions for this bucket are closed in {@link
@@ -516,8 +534,15 @@ public final class Replica {
                             int requestLeaderEpoch = data.getLeaderEpoch();
                             if (requestLeaderEpoch > leaderEpoch) {
                                 boolean isNewLeader = !isLeader();
+                                int previousEpoch = leaderEpoch;
                                 leaderEpoch = requestLeaderEpoch;
-                                onBecomeNewLeader(recovery);
+                                try {
+                                    onBecomeNewLeader(recovery);
+                                } catch (RuntimeException e) {
+                                    leaderEpoch = previousEpoch;
+                                    leaderReplicaIdOpt.set(null);
+                                    throw e;
+                                }
                                 leaderReplicaIdOpt.set(localTabletServerId);
                                 // onBecomeNewLeader may recover a KV snapshot, so start the ISR lag
                                 // grace period after it completes.
@@ -614,6 +639,9 @@ public final class Replica {
                         throw new FencedLeaderEpochException(errorMessage);
                     }
 
+                    if (compactionCancellation != null) {
+                        compactionCancellation.cancel();
+                    }
                     leaderReplicaIdOpt.set(data.getLeader());
                     leaderEpoch = requestLeaderEpoch;
                     bucketEpoch = data.getBucketEpoch();
@@ -624,22 +652,36 @@ public final class Replica {
                 });
     }
 
-    /** Delete the replica including drop the kv and log. */
-    public void delete() {
-        // need to hold the lock to prevent appendLog, putKv from hitting I/O exceptions due
-        // to log/kv being deleted
-        inWriteLock(
-                leaderIsrUpdateLock,
+    /** Deletes local replica resources after all KV users have exited. */
+    public CompletableFuture<Void> delete() {
+        CompletableFuture<Void> kvClosed =
+                inWriteLock(
+                        leaderIsrUpdateLock,
+                        () -> {
+                            leaderReplicaIdOpt.set(null);
+                            return isKvTable() ? dropKv() : CompletableFuture.completedFuture(null);
+                        });
+        Runnable cleanup =
                 () -> {
-                    if (isKvTable()) {
-                        dropKv();
-                    }
-                    // drop log then
                     logManager.dropLog(tableBucket);
-                    // close the closeable registry
                     IOUtils.closeQuietly(schemaGetter::release);
                     IOUtils.closeQuietly(closeableRegistry);
-                });
+                };
+        if (isKvTable()) {
+            return kvClosed.thenRunAsync(cleanup, kvManager.getCleanupExecutor());
+        }
+        cleanup.run();
+        return kvClosed;
+    }
+
+    /** Returns completion of the latest KV retirement, including snapshots and native users. */
+    public CompletableFuture<Void> getKvCloseFuture() {
+        return kvCloseFuture;
+    }
+
+    /** Retires snapshot and KV resources during server shutdown. */
+    public CompletableFuture<Void> closeKvAsync(KvCloseMode mode) {
+        return inWriteLock(leaderIsrUpdateLock, () -> retireKv(false, mode));
     }
 
     public LogOffsetSnapshot fetchOffsetSnapshot(boolean fetchOnlyFromLeader) throws IOException {
@@ -772,6 +814,7 @@ public final class Replica {
     }
 
     private void createKv(KvRecovery recovery) {
+        kvManager.checkNotClosing(tableBucket);
         try {
             // create a closeable registry for the closable related to kv
             closeableRegistryForKv = new CloseableRegistry();
@@ -831,21 +874,49 @@ public final class Replica {
         }
     }
 
-    private void dropKv() {
-        // Release scanner leases first; otherwise resourceGuard.close() inside kvTablet.close()
-        // blocks waiting for them. Runs under leaderIsrUpdateLock(W), so no concurrent register.
-        scannerManager.closeScannersForBucket(tableBucket);
+    private CompletableFuture<Void> dropKv() {
+        return retireKv(true, KvCloseMode.DISCARD_UNPERSISTED_STATE);
+    }
 
-        if (closeableRegistry.unregisterCloseable(closeableRegistryForKv)) {
-            IOUtils.closeQuietly(closeableRegistryForKv);
+    private CompletableFuture<Void> retireKv(boolean delete, KvCloseMode mode) {
+        if (compactionCancellation != null) {
+            compactionCancellation.cancel();
         }
-        if (kvTablet != null) {
-            bucketMetricGroup.unregisterRocksDBStatistics();
-
-            checkNotNull(kvManager);
-            kvManager.dropKv(tableBucket);
-            kvTablet = null;
+        PeriodicSnapshotManager snapshots = kvSnapshotManager;
+        CloseableRegistry registry = closeableRegistryForKv;
+        KvTablet tablet = kvTablet;
+        kvSnapshotManager = null;
+        closeableRegistryForKv = null;
+        kvTablet = null;
+        if (snapshots != null) {
+            snapshots.requestClose();
         }
+        if (registry != null) {
+            closeableRegistry.unregisterCloseable(registry);
+        }
+        if (tablet == null && registry == null && !kvManager.getKv(tableBucket).isPresent()) {
+            // Shutdown waits for the retirement already chosen by the replica transition.
+            if (!delete || kvCloseFuture.isDone()) {
+                return kvCloseFuture;
+            }
+            return kvManager.dropKvAsync(tableBucket);
+        }
+        bucketMetricGroup.unregisterRocksDBStatistics();
+        Supplier<CompletableFuture<Void>> releaseResources =
+                () -> {
+                    CompletableFuture<Void> exited =
+                            snapshots == null
+                                    ? CompletableFuture.completedFuture(null)
+                                    : snapshots.closeAsync();
+                    scannerManager.closeScannersForBucket(tableBucket);
+                    return exited.thenRunAsync(
+                            () -> IOUtils.closeQuietly(registry), kvManager.getCleanupExecutor());
+                };
+        kvCloseFuture =
+                delete
+                        ? kvManager.dropKvAsync(tableBucket, releaseResources)
+                        : kvManager.closeKvAsync(tableBucket, mode, releaseResources);
+        return kvCloseFuture;
     }
 
     private void mayFlushKv(long newHighWatermark) {
@@ -856,6 +927,22 @@ public final class Replica {
     }
 
     private void onKvFlushComplete() {
+        CompletableFuture<Void> flushed =
+                inWriteLock(
+                        leaderIsrUpdateLock,
+                        () -> {
+                            if (compactionFlush != null
+                                    && kvTablet != null
+                                    && kvTablet.getFlushedLogOffset() >= compactionFlushOffset) {
+                                CompletableFuture<Void> result = compactionFlush;
+                                compactionFlush = null;
+                                return result;
+                            }
+                            return null;
+                        });
+        if (flushed != null) {
+            flushed.complete(null);
+        }
         boolean leaderHWIncremented =
                 inWriteLock(
                         leaderIsrUpdateLock,
@@ -1174,7 +1261,8 @@ public final class Replica {
     }
 
     private void startPeriodicKvSnapshot(@Nullable CompletedSnapshot completedSnapshot) {
-        checkNotNull(kvTablet);
+        final KvTablet snapshotTablet = checkNotNull(kvTablet);
+        final int snapshotLeaderEpoch = leaderEpoch;
         KvTabletSnapshotTarget kvTabletSnapshotTarget;
         try {
             // get the snapshot reporter to report the completed snapshot
@@ -1209,19 +1297,11 @@ public final class Replica {
                             zkClient.getCuratorClient(),
                             ZkData.BucketSnapshotSequenceIdZNode.path(tableBucket));
 
-            // todo: it's hack logic for snapshot target
-            // to get bucket/coordinator leader epoch.
-            // and it will happen when the snapshot target
-            // is doing snapshot(leader epoch = 0), and then leader switch to another(leader epoch =
-            // 1),
-            // and again switch to this(leader epoch = 2). The snapshot target will
-            // get the leader epoch = 2, and use the epoch 2 to submit snapshot
-            // which will cause older snapshot overwrite the newer snapshot
-
-            // refactor the snapshot logic in FLUSS-56282058, may should prepare the
-            // bucket/coordinator leader epoch, kv snapshot data in replica
-            // instead of a separate class
-            Supplier<Integer> bucketLeaderEpochSupplier = () -> leaderEpoch;
+            Supplier<Integer> bucketLeaderEpochSupplier =
+                    () -> {
+                        validateSnapshotBinding(snapshotTablet, snapshotLeaderEpoch);
+                        return snapshotLeaderEpoch;
+                    };
             Supplier<Integer> coordinatorEpochSupplier = () -> coordinatorEpoch;
 
             FsPath remoteKvDir = FlussPaths.remoteKvDir(remoteDataDir);
@@ -1231,7 +1311,11 @@ public final class Replica {
             kvTabletSnapshotTarget =
                     new KvTabletSnapshotTarget(
                             tableBucket,
-                            completedKvSnapshotCommitter,
+                            (snapshot, coordinator, leader) -> {
+                                validateSnapshotBinding(snapshotTablet, snapshotLeaderEpoch);
+                                completedKvSnapshotCommitter.commitKvSnapshot(
+                                        snapshot, coordinator, leader);
+                            },
                             snapshotContext.getZooKeeperClient(),
                             rocksIncrementalSnapshot,
                             remoteKvTabletDir,
@@ -1239,7 +1323,7 @@ public final class Replica {
                             snapshotContext.getAsyncOperationsThreadPool(),
                             closeableRegistryForKv,
                             snapshotIDCounter,
-                            kvTablet::getTabletState,
+                            snapshotTablet::getTabletState,
                             logTablet::updateMinRetainOffset,
                             bucketLeaderEpochSupplier,
                             coordinatorEpochSupplier,
@@ -1250,11 +1334,115 @@ public final class Replica {
                             tableBucket,
                             kvTabletSnapshotTarget,
                             snapshotContext,
-                            kvTablet.getGuardedExecutor());
+                            runnable ->
+                                    snapshotTablet
+                                            .getGuardedExecutor()
+                                            .execute(
+                                                    () -> {
+                                                        validateSnapshotBinding(
+                                                                snapshotTablet,
+                                                                snapshotLeaderEpoch);
+                                                        runnable.run();
+                                                    }));
             kvSnapshotManager.start();
             closeableRegistryForKv.registerCloseable(kvSnapshotManager);
         } catch (Exception e) {
             LOG.error("init kv periodic snapshot for {} failed.", tableBucket, e);
+        }
+    }
+
+    /** Binds cancellation to the original leader and KV until the returned registration closes. */
+    public AutoCloseable registerCompaction(
+            KvTablet expectedTablet, int expectedLeaderEpoch, CancellationToken cancellation) {
+        inWriteLock(
+                leaderIsrUpdateLock,
+                () -> {
+                    validateSnapshotBinding(expectedTablet, expectedLeaderEpoch);
+                    checkState(
+                            compactionCancellation == null, "A compaction is already registered.");
+                    compactionCancellation = cancellation;
+                });
+        return () -> {
+            CompletableFuture<Void> abandoned =
+                    inWriteLock(
+                            leaderIsrUpdateLock,
+                            () -> {
+                                if (compactionCancellation != cancellation) {
+                                    return null;
+                                }
+                                compactionCancellation = null;
+                                CompletableFuture<Void> result = compactionFlush;
+                                compactionFlush = null;
+                                return result;
+                            });
+            if (abandoned != null) {
+                abandoned.completeExceptionally(
+                        new IOException("Compaction exited before flush completed."));
+            }
+        };
+    }
+
+    /** Requests asynchronous flush of the accepted operation's committed exclusive offset. */
+    public CompletableFuture<Void> flushForCompaction(
+            KvTablet expectedTablet, int expectedLeaderEpoch, long exclusiveOffset) {
+        CompletableFuture<Void> result = new CompletableFuture<>();
+        try {
+            boolean flushed =
+                    inWriteLock(
+                            leaderIsrUpdateLock,
+                            () -> {
+                                validateSnapshotBinding(expectedTablet, expectedLeaderEpoch);
+                                checkState(
+                                        compactionCancellation != null,
+                                        "Compaction is not registered.");
+                                checkState(
+                                        compactionFlush == null,
+                                        "A compaction flush is already pending.");
+                                checkState(
+                                        exclusiveOffset <= getLogHighWatermark(),
+                                        "Offset is not committed.");
+                                if (expectedTablet.getFlushedLogOffset() >= exclusiveOffset) {
+                                    return true;
+                                }
+                                compactionFlushOffset = exclusiveOffset;
+                                compactionFlush = result;
+                                expectedTablet.requestFlush(exclusiveOffset, fatalErrorHandler);
+                                return false;
+                            });
+            if (flushed) {
+                result.complete(null);
+            }
+        } catch (Throwable failure) {
+            result.completeExceptionally(failure);
+        }
+        return result;
+    }
+
+    /** Snapshots the compacted KV instance using its original leader epoch. */
+    public CompletableFuture<CompletedSnapshotHandle> snapshotAfterCompaction(
+            KvTablet expectedTablet, int expectedLeaderEpoch) {
+        final PeriodicSnapshotManager manager;
+        try {
+            manager =
+                    inReadLock(
+                            leaderIsrUpdateLock,
+                            () -> {
+                                validateSnapshotBinding(expectedTablet, expectedLeaderEpoch);
+                                return checkNotNull(
+                                        kvSnapshotManager, "KV snapshot manager is unavailable.");
+                            });
+        } catch (Exception e) {
+            CompletableFuture<CompletedSnapshotHandle> failed = new CompletableFuture<>();
+            failed.completeExceptionally(e);
+            return failed;
+        }
+        return manager.triggerSnapshotAfterCompaction();
+    }
+
+    private void validateSnapshotBinding(KvTablet expectedTablet, int expectedLeaderEpoch) {
+        if (!isLeader() || kvTablet != expectedTablet || leaderEpoch != expectedLeaderEpoch) {
+            throw new NotLeaderOrFollowerException(
+                    "KV instance or leader epoch changed for snapshot of " + tableBucket);
         }
     }
 
@@ -2704,7 +2892,7 @@ public final class Replica {
         return schemaGetter;
     }
 
-    @VisibleForTesting
+    /** Returns the snapshot manager belonging to the current KV instance. */
     @Nullable
     public PeriodicSnapshotManager getKvSnapshotManager() {
         return kvSnapshotManager;

@@ -28,6 +28,9 @@ import org.apache.fluss.client.utils.ClientRpcMessageUtils;
 import org.apache.fluss.client.utils.ClientUtils;
 import org.apache.fluss.cluster.Cluster;
 import org.apache.fluss.cluster.ServerNode;
+import org.apache.fluss.cluster.compaction.CompactionInfo;
+import org.apache.fluss.cluster.compaction.CompactionProgress;
+import org.apache.fluss.cluster.compaction.CompactionType;
 import org.apache.fluss.cluster.rebalance.GoalType;
 import org.apache.fluss.cluster.rebalance.RebalanceProgress;
 import org.apache.fluss.cluster.rebalance.ServerTag;
@@ -64,7 +67,10 @@ import org.apache.fluss.rpc.messages.AddServerTagRequest;
 import org.apache.fluss.rpc.messages.AlterClusterConfigsRequest;
 import org.apache.fluss.rpc.messages.AlterDatabaseRequest;
 import org.apache.fluss.rpc.messages.AlterTableRequest;
+import org.apache.fluss.rpc.messages.CancelCompactionRequest;
 import org.apache.fluss.rpc.messages.CancelRebalanceRequest;
+import org.apache.fluss.rpc.messages.CompactRequest;
+import org.apache.fluss.rpc.messages.CompactResponse;
 import org.apache.fluss.rpc.messages.CreateAclsRequest;
 import org.apache.fluss.rpc.messages.CreateDatabaseRequest;
 import org.apache.fluss.rpc.messages.CreateTableFromLakeRequest;
@@ -79,6 +85,7 @@ import org.apache.fluss.rpc.messages.DropAclsRequest;
 import org.apache.fluss.rpc.messages.DropDatabaseRequest;
 import org.apache.fluss.rpc.messages.DropTableRequest;
 import org.apache.fluss.rpc.messages.GetClusterHealthRequest;
+import org.apache.fluss.rpc.messages.GetCompactionRequest;
 import org.apache.fluss.rpc.messages.GetDatabaseInfoRequest;
 import org.apache.fluss.rpc.messages.GetKvSnapshotMetadataRequest;
 import org.apache.fluss.rpc.messages.GetLakeSnapshotRequest;
@@ -89,6 +96,7 @@ import org.apache.fluss.rpc.messages.GetTableSchemaRequest;
 import org.apache.fluss.rpc.messages.GetTableStatsRequest;
 import org.apache.fluss.rpc.messages.GetTableStatsResponse;
 import org.apache.fluss.rpc.messages.ListAclsRequest;
+import org.apache.fluss.rpc.messages.ListCompactionsRequest;
 import org.apache.fluss.rpc.messages.ListDatabasesRequest;
 import org.apache.fluss.rpc.messages.ListDatabasesResponse;
 import org.apache.fluss.rpc.messages.ListKvSnapshotsRequest;
@@ -114,6 +122,7 @@ import org.apache.fluss.rpc.messages.RemoveServerTagRequest;
 import org.apache.fluss.rpc.messages.TableExistsRequest;
 import org.apache.fluss.rpc.messages.TableExistsResponse;
 import org.apache.fluss.rpc.protocol.ApiError;
+import org.apache.fluss.rpc.util.CommonRpcMessageUtils;
 import org.apache.fluss.security.acl.AclBinding;
 import org.apache.fluss.security.acl.AclBindingFilter;
 import org.apache.fluss.utils.ExceptionUtils;
@@ -133,6 +142,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.stream.Collectors;
 
 import static org.apache.fluss.client.utils.ClientRpcMessageUtils.makeAlterDatabaseRequest;
 import static org.apache.fluss.client.utils.ClientRpcMessageUtils.makeAlterTableRequest;
@@ -1204,5 +1214,101 @@ public class FlussAdmin implements Admin {
                     !isNullOrWhitespaceOnly(rack),
                     "rack element must not be null, empty, or whitespace-only");
         }
+    }
+
+    @Override
+    public CompletableFuture<String> compact(CompactionType type) {
+        CompactRequest request = new CompactRequest();
+        request.setType(checkNotNull(type, "type").name());
+        return gateway.compact(request).thenApply(CompactResponse::getOperationId);
+    }
+
+    @Override
+    public CompletableFuture<String> compact(String databaseName, CompactionType type) {
+        CompactRequest request = new CompactRequest();
+        request.setType(checkNotNull(type, "type").name());
+        request.setDatabaseName(checkNotNull(databaseName, "databaseName"));
+        return gateway.compact(request).thenApply(CompactResponse::getOperationId);
+    }
+
+    @Override
+    public CompletableFuture<String> compact(TablePath tablePath, CompactionType type) {
+        CompactRequest request = new CompactRequest();
+        request.setType(checkNotNull(type, "type").name());
+        request.setDatabaseName(tablePath.getDatabaseName()).setTableName(tablePath.getTableName());
+        return gateway.compact(request).thenApply(CompactResponse::getOperationId);
+    }
+
+    @Override
+    public CompletableFuture<String> compact(
+            TablePath tablePath, String partitionName, CompactionType type) {
+        CompactRequest request = new CompactRequest();
+        request.setType(checkNotNull(type, "type").name());
+        request.setDatabaseName(tablePath.getDatabaseName()).setTableName(tablePath.getTableName());
+        request.setPartitionName(checkNotNull(partitionName, "partitionName"));
+        return gateway.compact(request).thenApply(CompactResponse::getOperationId);
+    }
+
+    @Override
+    public CompletableFuture<List<CompactionInfo>> listCompactions() {
+        ListCompactionsRequest request = new ListCompactionsRequest();
+        return gateway.listCompactions(request)
+                .thenApply(
+                        response ->
+                                response.getCompactionsList().stream()
+                                        .map(CommonRpcMessageUtils::toCompactionInfo)
+                                        .collect(Collectors.toList()));
+    }
+
+    @Override
+    public CompletableFuture<List<CompactionInfo>> listCompactions(String databaseName) {
+        ListCompactionsRequest request = new ListCompactionsRequest();
+        request.setDatabaseName(checkNotNull(databaseName, "databaseName"));
+        return gateway.listCompactions(request)
+                .thenApply(
+                        response ->
+                                response.getCompactionsList().stream()
+                                        .map(CommonRpcMessageUtils::toCompactionInfo)
+                                        .collect(Collectors.toList()));
+    }
+
+    @Override
+    public CompletableFuture<List<CompactionInfo>> listCompactions(TablePath tablePath) {
+        ListCompactionsRequest request = new ListCompactionsRequest();
+        request.setDatabaseName(tablePath.getDatabaseName()).setTableName(tablePath.getTableName());
+        return gateway.listCompactions(request)
+                .thenApply(
+                        response ->
+                                response.getCompactionsList().stream()
+                                        .map(CommonRpcMessageUtils::toCompactionInfo)
+                                        .collect(Collectors.toList()));
+    }
+
+    @Override
+    public CompletableFuture<List<CompactionInfo>> listCompactions(
+            TablePath tablePath, String partitionName) {
+        ListCompactionsRequest request = new ListCompactionsRequest();
+        request.setDatabaseName(tablePath.getDatabaseName()).setTableName(tablePath.getTableName());
+        request.setPartitionName(checkNotNull(partitionName, "partitionName"));
+        return gateway.listCompactions(request)
+                .thenApply(
+                        response ->
+                                response.getCompactionsList().stream()
+                                        .map(CommonRpcMessageUtils::toCompactionInfo)
+                                        .collect(Collectors.toList()));
+    }
+
+    @Override
+    public CompletableFuture<CompactionProgress> getCompaction(String operationId) {
+        return gateway.getCompaction(new GetCompactionRequest().setOperationId(operationId))
+                .thenApply(
+                        response ->
+                                CommonRpcMessageUtils.toCompactionProgress(response.getProgress()));
+    }
+
+    @Override
+    public CompletableFuture<Void> cancelCompaction(String operationId) {
+        return gateway.cancelCompaction(new CancelCompactionRequest().setOperationId(operationId))
+                .thenApply(response -> null);
     }
 }

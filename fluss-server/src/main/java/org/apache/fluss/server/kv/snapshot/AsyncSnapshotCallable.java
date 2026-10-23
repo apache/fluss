@@ -29,6 +29,7 @@ import java.io.Closeable;
 import java.io.IOException;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CancellationException;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.FutureTask;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -70,6 +71,8 @@ public abstract class AsyncSnapshotCallable<T> implements Callable<T> {
      * taskCancelCloseableRegistry.
      */
     @Nonnull protected final CloseableRegistry snapshotCloseableRegistry;
+
+    private final CompletableFuture<Void> resourcesReleased = new CompletableFuture<>();
 
     protected AsyncSnapshotCallable() {
         this.snapshotCloseableRegistry = new CloseableRegistry();
@@ -141,6 +144,11 @@ public abstract class AsyncSnapshotCallable<T> implements Callable<T> {
             return result;
         }
 
+        /** Completes after the owner has released the checkpoint resources. */
+        public CompletableFuture<Void> getResourcesReleasedFuture() {
+            return resourcesReleased;
+        }
+
         @Override
         protected void done() {
             super.done();
@@ -167,7 +175,13 @@ public abstract class AsyncSnapshotCallable<T> implements Callable<T> {
     protected void logAsyncSnapshotComplete(long startTime) {}
 
     private void cleanup() {
-        cleanupProvidedResources();
+        try {
+            cleanupProvidedResources();
+            resourcesReleased.complete(null);
+        } catch (Throwable t) {
+            resourcesReleased.completeExceptionally(t);
+            throw t;
+        }
     }
 
     private void closeSnapshotIO() {

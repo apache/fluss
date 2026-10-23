@@ -20,6 +20,7 @@ package org.apache.fluss.server.utils;
 import org.apache.fluss.utils.SerializableObject;
 
 import java.io.IOException;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /* This file is based on source code of Apache Flink Project (https://flink.apache.org/), licensed by the Apache
@@ -49,6 +50,8 @@ public class ResourceGuard implements AutoCloseable {
 
     /** This flag indicated if it is still possible to acquire access to the resource. */
     private volatile boolean closed;
+
+    private final CompletableFuture<Void> closedFuture = new CompletableFuture<>();
 
     public ResourceGuard() {
         this.lock = new SerializableObject();
@@ -80,16 +83,34 @@ public class ResourceGuard implements AutoCloseable {
      */
     private void releaseResource() {
 
+        boolean released;
         synchronized (lock) {
             --leaseCount;
-
-            if (closed && leaseCount == 0) {
+            released = closed && leaseCount == 0;
+            if (released) {
                 lock.notifyAll();
             }
         }
+        if (released) {
+            closedFuture.complete(null);
+        }
+    }
+
+    /** Rejects new leases and completes when all existing resource users have exited. */
+    public CompletableFuture<Void> closeAsync() {
+        boolean released;
+        synchronized (lock) {
+            closed = true;
+            released = leaseCount == 0;
+        }
+        if (released) {
+            closedFuture.complete(null);
+        }
+        return closedFuture;
     }
 
     public void closeInterruptibly() throws InterruptedException {
+        closeAsync();
         synchronized (lock) {
             closed = true;
 
@@ -107,6 +128,7 @@ public class ResourceGuard implements AutoCloseable {
     @SuppressWarnings("WeakerAccess")
     public void closeUninterruptibly() {
 
+        closeAsync();
         boolean interrupted = false;
         synchronized (lock) {
             closed = true;

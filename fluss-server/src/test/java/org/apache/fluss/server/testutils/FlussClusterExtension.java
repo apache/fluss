@@ -769,52 +769,53 @@ public final class FlussClusterExtension
     }
 
     public void triggerAndWaitSnapshots(Collection<TableBucket> tableBuckets) {
-        Map<TableBucket, Long> snapshotMap = new HashMap<>();
+        Map<TableBucket, CompletableFuture<CompletedSnapshotHandle>> snapshots = new HashMap<>();
         for (TableBucket tableBucket : tableBuckets) {
-            Long snapshotId = triggerSnapshot(tableBucket);
-            if (snapshotId != null) {
-                snapshotMap.put(tableBucket, snapshotId);
-            }
+            snapshots.put(tableBucket, triggerSnapshot(tableBucket));
         }
-        // wait all snapshots finished
-        for (Map.Entry<TableBucket, Long> entry : snapshotMap.entrySet()) {
+        for (Map.Entry<TableBucket, CompletableFuture<CompletedSnapshotHandle>> entry :
+                snapshots.entrySet()) {
             waitUntilSnapshotFinished(entry.getKey(), entry.getValue());
         }
     }
 
     public CompletedSnapshot triggerAndWaitSnapshot(TableBucket tableBucket) {
-        Long snapshotId = triggerSnapshot(tableBucket);
-        if (snapshotId != null) {
-            return waitUntilSnapshotFinished(tableBucket, snapshotId);
+        CompletedSnapshot snapshot =
+                waitUntilSnapshotFinished(tableBucket, triggerSnapshot(tableBucket));
+        if (snapshot != null) {
+            return snapshot;
         } else {
             fail("No new snapshot triggered for table bucket " + tableBucket);
             return null;
         }
     }
 
-    private Long triggerSnapshot(TableBucket tableBucket) {
+    private CompletableFuture<CompletedSnapshotHandle> triggerSnapshot(TableBucket tableBucket) {
         for (TabletServer ts : tabletServers.values()) {
             ReplicaManager.HostedReplica replica = ts.getReplicaManager().getReplica(tableBucket);
             if (replica instanceof ReplicaManager.OnlineReplica) {
                 Replica r = ((ReplicaManager.OnlineReplica) replica).getReplica();
                 PeriodicSnapshotManager kvSnapshotManager = r.getKvSnapshotManager();
                 if (r.isLeader() && kvSnapshotManager != null) {
-                    long snapshotId = kvSnapshotManager.currentSnapshotId();
-                    // KvTablet#getGuardedExecutor runs the submitted task synchronously
-                    // on the calling thread inside the kv write lock, so initSnapshot()
-                    // has already completed by the time triggerSnapshot() returns. The
-                    // counter is either bumped (a new snapshot was scheduled) or left
-                    // unchanged (no new data since the last snapshot — legitimate no-op).
-                    kvSnapshotManager.triggerSnapshot();
-                    if (kvSnapshotManager.currentSnapshotId() > snapshotId) {
-                        return snapshotId;
-                    }
-                    return null;
+                    return kvSnapshotManager.triggerSnapshot();
                 }
             }
         }
         fail("No KV snapshot manager found for table bucket " + tableBucket);
-        return null;
+        return CompletableFuture.completedFuture(null);
+    }
+
+    @Nullable
+    private CompletedSnapshot waitUntilSnapshotFinished(
+            TableBucket tableBucket, CompletableFuture<CompletedSnapshotHandle> snapshot) {
+        waitUntil(
+                snapshot::isDone,
+                Duration.ofSeconds(30),
+                "Snapshot did not finish for table bucket " + tableBucket);
+        CompletedSnapshotHandle handle = snapshot.join();
+        return handle == null
+                ? null
+                : waitUntilSnapshotFinished(tableBucket, handle.getSnapshotId());
     }
 
     public CompletedSnapshot waitUntilSnapshotFinished(TableBucket tableBucket, long snapshotId) {

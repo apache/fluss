@@ -157,7 +157,8 @@ public class RocksDBKvBuilder {
                 columnFamilyOptions.level0StopWritesTrigger(),
                 columnFamilyOptions.maxWriteBufferNumber(),
                 columnFamilyOptions.writeBufferSize(),
-                flussL0SlowdownTrigger);
+                flussL0SlowdownTrigger,
+                columnFamilyOptions);
     }
 
     void prepareDirectories() throws IOException {

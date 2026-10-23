@@ -43,15 +43,23 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ThreadLocalRandom;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
@@ -71,6 +79,87 @@ class KvSnapshotDataUploaderTest {
     void afterEach() {
         if (uploaderThreadPool != null) {
             uploaderThreadPool.shutdownNow();
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void testFailureWaitsForSubmittedUpload(boolean rejectSubmission) throws Exception {
+        Path local = temporaryFolder.resolve("checkpoint.sst");
+        Files.write(local, new byte[] {1, 2, 3});
+        FsPath remote = FsPath.fromLocalFile(temporaryFolder.toFile());
+        SnapshotLocation location =
+                new SnapshotLocation(LocalFileSystem.getSharedInstance(), remote, remote, 1024);
+        CountDownLatch entered = new CountDownLatch(1);
+        CountDownLatch released = new CountDownLatch(1);
+        CountDownLatch rejected = new CountDownLatch(1);
+        AtomicInteger submissions = new AtomicInteger();
+        ExecutorService executor = mock(ExecutorService.class);
+        doAnswer(
+                        invocation -> {
+                            Runnable upload = invocation.getArgument(0);
+                            if (submissions.incrementAndGet() == 2 && rejectSubmission) {
+                                rejected.countDown();
+                                throw new RejectedExecutionException("second upload rejected");
+                            }
+                            uploaderThreadPool.execute(
+                                    () -> {
+                                        entered.countDown();
+                                        try {
+                                            released.await();
+                                            upload.run();
+                                        } catch (InterruptedException e) {
+                                            throw new RuntimeException(e);
+                                        }
+                                    });
+                            return null;
+                        })
+                .when(executor)
+                .execute(any(Runnable.class));
+        CompletableFuture<Void> exited = new CompletableFuture<>();
+        AtomicBoolean interrupted = new AtomicBoolean();
+        try (CloseableRegistry registry = new CloseableRegistry();
+                CloseableRegistry temporary = new CloseableRegistry()) {
+            Thread owner =
+                    new Thread(
+                            () -> {
+                                try {
+                                    new KvSnapshotDataUploader(executor)
+                                            .uploadFilesToSnapshotLocation(
+                                                    rejectSubmission
+                                                            ? Arrays.asList(local, local)
+                                                            : Collections.singletonList(local),
+                                                    location,
+                                                    SnapshotFileScope.SHARED,
+                                                    registry,
+                                                    temporary,
+                                                    new ThreadSafeSimpleCounter());
+                                    exited.complete(null);
+                                } catch (Exception e) {
+                                    interrupted.set(Thread.currentThread().isInterrupted());
+                                    exited.completeExceptionally(e);
+                                }
+                            });
+            owner.start();
+            try {
+                assertThat(entered.await(10, TimeUnit.SECONDS)).isTrue();
+                if (rejectSubmission) {
+                    assertThat(rejected.await(10, TimeUnit.SECONDS)).isTrue();
+                } else {
+                    owner.interrupt();
+                }
+                assertThatThrownBy(() -> exited.get(100, TimeUnit.MILLISECONDS))
+                        .isInstanceOf(TimeoutException.class);
+                assertThat(local).exists();
+            } finally {
+                released.countDown();
+                owner.join(10_000);
+            }
+            assertThat(owner.isAlive()).isFalse();
+            assertThat(exited).isCompletedExceptionally();
+            if (!rejectSubmission) {
+                assertThat(interrupted).isTrue();
+            }
         }
     }
 

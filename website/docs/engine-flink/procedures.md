@@ -158,6 +158,107 @@ CALL sys.list_acl(
 );
 ```
 
+## Manual Compaction Procedures
+
+Manual compaction operates on ordinary primary-key tables. The target scope can be a cluster, database, table, or partition; log tables are excluded. The target table IDs, partition IDs, and buckets are fixed when the operation is submitted. Only one unfinished operation is allowed per cluster.
+
+### compact
+
+Submit a compaction and return one row containing `operation_id`. The call waits for the submission response; it does not wait for compaction to finish.
+
+**Syntax:**
+
+```sql
+CALL [catalog_name.]sys.compact('type');
+CALL [catalog_name.]sys.compact('database', 'type');
+CALL [catalog_name.]sys.compact('database', 'table', 'type');
+CALL [catalog_name.]sys.compact('database', 'table', 'partition_name', 'type');
+```
+
+**Parameters:**
+
+- `type` (required): One of the exact enum names `OPTIMIZE`, `RECLAIM`, or `MIGRATE`. `OPTIMIZE` reorganizes SST files; `RECLAIM` processes obsolete versions, deletion markers, and TTL data without guaranteeing a number of reclaimed bytes; `MIGRATE` makes supported SST properties match the cluster configuration bound at submission.
+- `database`, `table`, `partition_name`: Specify the target scope by adding each level. Use the existing Fluss partition name, including the `$` separator for multiple partition keys. For example, the partition values `eu` and `20261021` form `eu$20261021`.
+
+All three types create and commit a new KV snapshot. A bucket counts as successful only after its completion record is published.
+
+**Examples:**
+
+```sql title="Flink SQL"
+USE fluss_catalog;
+
+-- Submit cluster, database, table, or partition compaction
+CALL sys.compact('MIGRATE');
+CALL sys.compact('my_database', 'RECLAIM');
+CALL sys.compact('my_database', 'my_table', 'OPTIMIZE');
+CALL sys.compact('my_database', 'partitioned_table', 'eu$20261021', 'MIGRATE');
+```
+
+### list_compactions
+
+List retained operation summaries in descending creation time. Use this procedure to rediscover an operation ID if the submission response was lost.
+
+**Syntax:**
+
+```sql
+CALL [catalog_name.]sys.list_compactions();
+CALL [catalog_name.]sys.list_compactions('database');
+CALL [catalog_name.]sys.list_compactions('database', 'table');
+CALL [catalog_name.]sys.list_compactions('database', 'table', 'partition_name');
+```
+
+**Returns:** `operation_id`, `compaction_type`, `compaction_status`, `database_name`, `table_name`, `partition_name`, and `create_time` (epoch milliseconds). Scope columns are `NULL` for levels omitted at submission.
+
+The filter includes operations with overlapping scopes: a table query includes that table's partition operations and operations submitted for its database or the cluster. This association does not change the operation's fixed target plan.
+
+**Example:**
+
+```sql title="Flink SQL"
+CALL sys.list_compactions('my_database', 'my_table');
+```
+
+### get_compaction
+
+Get the progress of one operation by ID. Missing or expired IDs return an error.
+
+**Example:**
+
+```sql title="Flink SQL"
+CALL sys.get_compaction('operation-id');
+```
+
+**Returns:** The same summary columns as `list_compactions`, followed by:
+
+| Column | Description |
+| --- | --- |
+| `total` | Fixed number of target buckets. |
+| `pending` | Buckets without a current execution or published success, including work awaiting rescheduling after recovery. |
+| `running` | Buckets with a current execution, including admission, observation, or success publication in progress. |
+| `succeeded` | Buckets whose new snapshot completion records have been published. |
+| `failed` | All remaining non-successful buckets when the operation fails. |
+| `cancelled` | Cancelled buckets. |
+| `last_progress_time` | Last progress time in epoch milliseconds, excluding heartbeats. |
+| `observed_time` | Observation time in epoch milliseconds. |
+| `persisted_time` | Progress persistence time in epoch milliseconds. |
+| `first_error` | First operation error, or `NULL`. |
+| `current_executions` | JSON array of current bucket executions, at most one per occupied tablet server. |
+
+Each current execution contains `server_id`, `table_id`, `partition_id`, `bucket_id`, `leader_epoch`, `phase`, `phase_start_time`, `snapshot_id`, and `reason`. Optional values are JSON `null`; phase times use epoch milliseconds. The array contains current executions rather than a history of completed buckets.
+
+Poll the same `operation_id` to follow progress. The counts satisfy `total = pending + running + succeeded + failed + cancelled`. The success ratio is `succeeded / total`; it measures completed buckets, not bytes processed or estimated remaining time. An operation succeeds when `compaction_status` is `SUCCEEDED`. Other states are `PENDING`, `RUNNING`, `FAILED`, and `CANCELLED`.
+
+### cancel_compaction
+
+Cancel one operation by ID and return a row containing `result = 'success'` after the cancellation response. Repeated cancellation of a retained operation is allowed. Missing or expired IDs return an error.
+
+**Example:**
+
+```sql title="Flink SQL"
+CALL sys.cancel_compaction('operation-id');
+```
+
+Cancellation does not roll back SST rewrites or committed snapshots. Use `get_compaction` to read the operation's status and counts; for an active operation, successful buckets remain successful, and remaining non-successful buckets count as cancelled.
+
 ## Cluster Configuration Procedures
 
 Fluss provides procedures to dynamically manage cluster configurations without requiring a server restart.

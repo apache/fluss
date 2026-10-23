@@ -34,6 +34,7 @@ import org.junit.jupiter.api.Test;
 
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.apache.fluss.record.TestData.DATA1_PHYSICAL_TABLE_PATH_PK;
@@ -101,6 +102,7 @@ class KvFlushBatchBoundaryTest extends ReplicaTestBase {
         try {
             appendBatches(replica);
             replica.makeFollower(state(TABLET_SERVER_ID + 1, 1));
+            replica.getKvCloseFuture().get(10, TimeUnit.SECONDS);
             replica.makeLeader(state(TABLET_SERVER_ID, 2));
             KvTablet tablet = replica.getKvTablet();
             tablet.requestFlush(
@@ -113,6 +115,7 @@ class KvFlushBatchBoundaryTest extends ReplicaTestBase {
             assertCommittedPrefix(replica);
             long hw = replica.getLogHighWatermark();
             replica.makeFollower(state(TABLET_SERVER_ID + 1, 3));
+            replica.getKvCloseFuture().get(10, TimeUnit.SECONDS);
             assertThat(replica.isLeader()).isFalse();
             replica.truncateTo(hw);
             assertThat(replica.getLocalLogEndOffset()).isEqualTo(hw);
@@ -138,7 +141,7 @@ class KvFlushBatchBoundaryTest extends ReplicaTestBase {
 
     private void deleteReplica(Replica replica) throws Exception {
         try {
-            replica.delete();
+            replica.delete().get(10, TimeUnit.SECONDS);
         } finally {
             replicaManager
                     .getServerMetricGroup()

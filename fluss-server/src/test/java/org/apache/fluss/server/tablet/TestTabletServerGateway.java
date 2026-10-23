@@ -24,6 +24,8 @@ import org.apache.fluss.rpc.gateway.TabletServerGateway;
 import org.apache.fluss.rpc.messages.ApiMessage;
 import org.apache.fluss.rpc.messages.ApiVersionsRequest;
 import org.apache.fluss.rpc.messages.ApiVersionsResponse;
+import org.apache.fluss.rpc.messages.CancelBucketCompactionRequest;
+import org.apache.fluss.rpc.messages.CancelBucketCompactionResponse;
 import org.apache.fluss.rpc.messages.CommitConsumerOffsetsRequest;
 import org.apache.fluss.rpc.messages.CommitConsumerOffsetsResponse;
 import org.apache.fluss.rpc.messages.DatabaseExistsRequest;
@@ -101,6 +103,8 @@ import org.apache.fluss.rpc.messages.PutKvRequest;
 import org.apache.fluss.rpc.messages.PutKvResponse;
 import org.apache.fluss.rpc.messages.ScanKvRequest;
 import org.apache.fluss.rpc.messages.ScanKvResponse;
+import org.apache.fluss.rpc.messages.StartBucketCompactionRequest;
+import org.apache.fluss.rpc.messages.StartBucketCompactionResponse;
 import org.apache.fluss.rpc.messages.StopReplicaRequest;
 import org.apache.fluss.rpc.messages.StopReplicaResponse;
 import org.apache.fluss.rpc.messages.TableExistsRequest;
@@ -533,5 +537,17 @@ public class TestTabletServerGateway implements TabletServerGateway {
     @Override
     public CompletableFuture<ScanKvResponse> scanKv(ScanKvRequest request) {
         return null;
+    }
+
+    @Override
+    public CompletableFuture<StartBucketCompactionResponse> startBucketCompaction(
+            StartBucketCompactionRequest request) {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public CompletableFuture<CancelBucketCompactionResponse> cancelBucketCompaction(
+            CancelBucketCompactionRequest request) {
+        throw new UnsupportedOperationException();
     }
 }

@@ -43,6 +43,8 @@ import org.apache.fluss.rpc.entity.ResultForBucket;
 import org.apache.fluss.rpc.entity.TableStatsResultForBucket;
 import org.apache.fluss.rpc.gateway.CoordinatorGateway;
 import org.apache.fluss.rpc.gateway.TabletServerGateway;
+import org.apache.fluss.rpc.messages.CancelBucketCompactionRequest;
+import org.apache.fluss.rpc.messages.CancelBucketCompactionResponse;
 import org.apache.fluss.rpc.messages.CommitConsumerOffsetsRequest;
 import org.apache.fluss.rpc.messages.CommitConsumerOffsetsResponse;
 import org.apache.fluss.rpc.messages.DeleteConsumerGroupsRequest;
@@ -89,6 +91,8 @@ import org.apache.fluss.rpc.messages.PutKvRequest;
 import org.apache.fluss.rpc.messages.PutKvResponse;
 import org.apache.fluss.rpc.messages.ScanKvRequest;
 import org.apache.fluss.rpc.messages.ScanKvResponse;
+import org.apache.fluss.rpc.messages.StartBucketCompactionRequest;
+import org.apache.fluss.rpc.messages.StartBucketCompactionResponse;
 import org.apache.fluss.rpc.messages.StopReplicaRequest;
 import org.apache.fluss.rpc.messages.StopReplicaResponse;
 import org.apache.fluss.rpc.messages.UpdateMetadataRequest;
@@ -125,6 +129,7 @@ import org.apache.fluss.server.metadata.TabletServerMetadataCache;
 import org.apache.fluss.server.metadata.TabletServerMetadataProvider;
 import org.apache.fluss.server.replica.Replica;
 import org.apache.fluss.server.replica.ReplicaManager;
+import org.apache.fluss.server.tablet.compaction.BucketCompactionRunner;
 import org.apache.fluss.server.utils.ServerRpcMessageUtils;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 
@@ -186,6 +191,7 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
 
     private final String serviceName;
     private final ReplicaManager replicaManager;
+    private final BucketCompactionRunner compactionRunner;
     private final TabletServerMetadataCache metadataCache;
     private final TabletServerMetadataProvider metadataFunctionProvider;
     private final ScannerManager scannerManager;
@@ -206,7 +212,8 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
             ExecutorService replicaStateChangeExecutor,
             ScannerManager scannerManager,
             CoordinatorGateway coordinatorGateway,
-            String interListenerName) {
+            String interListenerName,
+            BucketCompactionRunner compactionRunner) {
         super(
                 remoteFileSystem,
                 ServerType.TABLET_SERVER,
@@ -215,6 +222,7 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
                 authorizer,
                 dynamicConfigManager,
                 ioExecutor);
+        this.compactionRunner = compactionRunner;
         this.serviceName = "server-" + serverId;
         this.replicaManager = replicaManager;
         this.metadataCache = metadataCache;
@@ -1209,5 +1217,29 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
                                             Resource.table(tablePathOpt.get()));
                         })
                 .collect(Collectors.toSet());
+    }
+
+    @Override
+    public CompletableFuture<StartBucketCompactionResponse> startBucketCompaction(
+            StartBucketCompactionRequest request) {
+        return compactionRunner
+                .startBucketCompaction(request)
+                .thenApply(
+                        status -> {
+                            StartBucketCompactionResponse response =
+                                    new StartBucketCompactionResponse();
+                            response.setStatus().copyFrom(status);
+                            return response;
+                        });
+    }
+
+    @Override
+    public CompletableFuture<CancelBucketCompactionResponse> cancelBucketCompaction(
+            CancelBucketCompactionRequest request) {
+        return compactionRunner
+                .cancelBucketCompaction(
+                        request.getOperationId(),
+                        ServerRpcMessageUtils.toTableBucket(request.getTableBucket()))
+                .thenApply(ignored -> new CancelBucketCompactionResponse());
     }
 }

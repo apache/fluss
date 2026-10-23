@@ -17,6 +17,8 @@
 
 package org.apache.fluss.server.kv.rocksdb;
 
+import org.apache.fluss.cluster.compaction.CompactionType;
+import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.metrics.SimpleCounter;
@@ -25,29 +27,292 @@ import org.apache.fluss.row.BinaryString;
 import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.row.encode.CompactedKeyEncoder;
 import org.apache.fluss.server.kv.KvCloseMode;
+import org.apache.fluss.server.utils.CancellationToken;
+import org.apache.fluss.server.utils.ResourceGuard;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.types.RowType;
 
+import io.github.fluss_contrib.rocksdb.ColumnFamilyHandle;
 import io.github.fluss_contrib.rocksdb.ColumnFamilyOptions;
+import io.github.fluss_contrib.rocksdb.CompactRangeOptions;
+import io.github.fluss_contrib.rocksdb.CompactRangeOptions.BottommostLevelCompaction;
 import io.github.fluss_contrib.rocksdb.FlushOptions;
+import io.github.fluss_contrib.rocksdb.RocksDB;
 import io.github.fluss_contrib.rocksdb.RocksDBException;
+import io.github.fluss_contrib.rocksdb.TableProperties;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import java.io.File;
+import java.io.IOException;
 import java.nio.file.Path;
 import java.util.Arrays;
+import java.util.Collections;
+import java.util.Map;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.spy;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 /** Test for {@link org.apache.fluss.server.kv.rocksdb.RocksDBKv}. */
 class RocksDBKvTest {
+
+    @Test
+    void testMigrateMixedLayoutsAndSkipMatchingFiles(@TempDir Path tempDir) throws Exception {
+        for (boolean target : new boolean[] {true, false}) {
+            File path = tempDir.resolve(Boolean.toString(target)).toFile();
+            try (RocksDBKv original = buildLayoutKv(path, !target)) {
+                original.put(new byte[] {1}, new byte[] {10});
+                flush(original);
+                assertThat(original.inspectSstProperties().matches(!target)).isTrue();
+            }
+            try (RocksDBKv reopened = buildLayoutKv(path, target)) {
+                reopened.put(new byte[] {2}, new byte[] {20});
+                flush(reopened);
+                SstProperties mixed = reopened.inspectSstProperties();
+                assertThat(mixed.fileCount()).isEqualTo(2);
+                assertThat(mixed.matches(true)).isFalse();
+                assertThat(mixed.matches(false)).isFalse();
+                reopened.compact(CompactionType.MIGRATE, new CancellationToken());
+                assertThat(reopened.inspectSstProperties().matches(target)).isTrue();
+                assertThat(reopened.get(new byte[] {1})).containsExactly((byte) 10);
+                assertThat(reopened.get(new byte[] {2})).containsExactly((byte) 20);
+                AtomicInteger registrations = new AtomicInteger();
+                reopened.compact(CompactionType.MIGRATE, countingToken(registrations));
+                assertThat(registrations.get()).isZero();
+            }
+        }
+    }
+
+    @Test
+    void testMigrateEmptyDbSkipsCompaction(@TempDir Path tempDir) throws Exception {
+        try (RocksDBKv kv = buildLayoutKv(tempDir.toFile(), true)) {
+            AtomicInteger registrations = new AtomicInteger();
+            kv.compact(CompactionType.MIGRATE, countingToken(registrations));
+            assertThat(registrations.get()).isZero();
+            assertThat(kv.inspectSstProperties().fileCount()).isZero();
+            assertThat(kv.inspectSstProperties().matches(true)).isTrue();
+        }
+    }
+
+    @Test
+    void testMigratePropagatesPropertyReadFailure(@TempDir Path tempDir) throws Exception {
+        try (RocksDBKv kv = buildLayoutKv(tempDir.toFile(), true)) {
+            RocksDBKv failing = spy(kv);
+            doThrow(new IOException("property failure")).when(failing).inspectSstProperties();
+            assertThatThrownBy(
+                            () -> failing.compact(CompactionType.MIGRATE, new CancellationToken()))
+                    .isInstanceOf(IOException.class)
+                    .hasMessageContaining("property failure");
+        }
+    }
+
+    @Test
+    void testMigrateRejectsUnrecognizedProperties() {
+        TableProperties properties = mock(TableProperties.class);
+        when(properties.getUserCollectedProperties()).thenReturn(Collections.emptyMap());
+        assertThatThrownBy(() -> SstProperties.from(Collections.singletonMap("sst", properties)))
+                .isInstanceOf(IOException.class);
+        when(properties.getUserCollectedProperties())
+                .thenReturn(
+                        Collections.singletonMap(
+                                "rocksdb.block.based.table.index.type", "unsupported"));
+        assertThatThrownBy(() -> SstProperties.from(Collections.singletonMap("sst", properties)))
+                .isInstanceOf(IOException.class);
+    }
+
+    @Test
+    void testCancelBeforeNativeAndRegistrationRace(@TempDir Path tempDir) throws Exception {
+        try (RocksDBKv kv = buildLayoutKv(tempDir.toFile(), false)) {
+            kv.put(new byte[] {1}, new byte[] {2});
+            flush(kv);
+            CancellationToken cancelled = new CancellationToken();
+            cancelled.cancel();
+            assertThatThrownBy(() -> kv.compact(CompactionType.RECLAIM, cancelled))
+                    .isInstanceOf(IOException.class)
+                    .hasMessageContaining("cancel");
+            CancellationToken racing =
+                    new CancellationToken() {
+                        @Override
+                        public AutoCloseable register(Runnable callback) {
+                            cancel();
+                            return super.register(callback);
+                        }
+                    };
+            assertThatThrownBy(() -> kv.compact(CompactionType.RECLAIM, racing))
+                    .isInstanceOf(IOException.class)
+                    .hasMessageContaining("cancel");
+            kv.compact(CompactionType.RECLAIM, new CancellationToken());
+            assertThat(kv.get(new byte[] {1})).containsExactly((byte) 2);
+        }
+    }
+
+    @Test
+    void testNativeOptionsAndCancellationLifetime(@TempDir Path tempDir) throws Exception {
+        RocksDBKvBuilder.ensureRocksDBIsLoaded(tempDir.toString());
+        RocksDB db = mock(RocksDB.class);
+        ColumnFamilyHandle handle = mock(ColumnFamilyHandle.class);
+        try (RocksDBKv kv = wrapDb(tempDir, db, handle)) {
+            for (boolean cancelDuringCompaction : new boolean[] {true, false}) {
+                for (CompactionType type :
+                        new CompactionType[] {CompactionType.OPTIMIZE, CompactionType.RECLAIM}) {
+                    AtomicReference<CompactRangeOptions> captured = new AtomicReference<>();
+                    CancellationToken token =
+                            new CancellationToken() {
+                                @Override
+                                public AutoCloseable register(Runnable callback) {
+                                    return super.register(
+                                            () -> {
+                                                assertThat(captured.get().isOwningHandle())
+                                                        .isTrue();
+                                                callback.run();
+                                            });
+                                }
+                            };
+                    doAnswer(
+                                    invocation -> {
+                                        CompactRangeOptions options = invocation.getArgument(3);
+                                        captured.set(options);
+                                        assertThat(options.canceled()).isFalse();
+                                        assertThat(options.exclusiveManualCompaction()).isFalse();
+                                        assertThat(options.allowWriteStall()).isFalse();
+                                        assertThat(options.changeLevel()).isFalse();
+                                        assertThat(options.bottommostLevelCompaction())
+                                                .isEqualTo(
+                                                        type == CompactionType.OPTIMIZE
+                                                                ? BottommostLevelCompaction
+                                                                        .kIfHaveCompactionFilter
+                                                                : BottommostLevelCompaction
+                                                                        .kForceOptimized);
+                                        if (cancelDuringCompaction) {
+                                            token.cancel();
+                                            assertThat(options.canceled()).isTrue();
+                                        }
+                                        assertThat(options.isOwningHandle()).isTrue();
+                                        return null;
+                                    })
+                            .when(db)
+                            .compactRange(
+                                    eq(handle), isNull(), isNull(), any(CompactRangeOptions.class));
+                    if (cancelDuringCompaction) {
+                        assertThatThrownBy(() -> kv.compact(type, token))
+                                .isInstanceOf(IOException.class);
+                    } else {
+                        kv.compact(type, token);
+                    }
+                    assertThat(captured.get().isOwningHandle()).isFalse();
+                    token.cancel();
+                }
+            }
+        }
+    }
+
+    @Test
+    void testMatchingAndEmptySstsNeverCallNativeCompaction(@TempDir Path tempDir) throws Exception {
+        try (RocksDBKv real = buildLayoutKv(tempDir.resolve("real").toFile(), false)) {
+            real.put(new byte[] {1}, new byte[] {2});
+            flush(real);
+            Map<String, TableProperties> properties =
+                    real.db.getPropertiesOfAllTables(real.getDefaultColumnFamilyHandle());
+            RocksDB db = mock(RocksDB.class);
+            ColumnFamilyHandle handle = mock(ColumnFamilyHandle.class);
+            try (RocksDBKv kv = wrapDb(tempDir, db, handle)) {
+                when(db.getPropertiesOfAllTables(handle)).thenReturn(properties);
+                kv.compact(CompactionType.MIGRATE, new CancellationToken());
+                when(db.getPropertiesOfAllTables(handle)).thenReturn(Collections.emptyMap());
+                kv.compact(CompactionType.MIGRATE, new CancellationToken());
+                verify(db, never())
+                        .compactRange(
+                                eq(handle), isNull(), isNull(), any(CompactRangeOptions.class));
+                when(db.getPropertiesOfAllTables(handle))
+                        .thenThrow(new RocksDBException("property failure"));
+                assertThatThrownBy(kv::inspectSstProperties)
+                        .isInstanceOf(IOException.class)
+                        .hasCauseInstanceOf(RocksDBException.class);
+            }
+        }
+    }
+
+    @Test
+    void testMigrateFailsWhenRewrittenFilesStillDoNotMatch(@TempDir Path tempDir) throws Exception {
+        try (RocksDBKv real = buildLayoutKv(tempDir.resolve("partitioned").toFile(), true)) {
+            real.put(new byte[] {1}, new byte[] {2});
+            flush(real);
+            RocksDB db = mock(RocksDB.class);
+            ColumnFamilyHandle handle = mock(ColumnFamilyHandle.class);
+            when(db.getPropertiesOfAllTables(handle))
+                    .thenReturn(
+                            real.db.getPropertiesOfAllTables(real.getDefaultColumnFamilyHandle()));
+            try (RocksDBKv kv = wrapDb(tempDir, db, handle)) {
+                assertThatThrownBy(
+                                () -> kv.compact(CompactionType.MIGRATE, new CancellationToken()))
+                        .isInstanceOf(IOException.class)
+                        .hasMessageContaining("does not match");
+                verify(db)
+                        .compactRange(
+                                eq(handle), isNull(), isNull(), any(CompactRangeOptions.class));
+            }
+        }
+    }
+
+    private static RocksDBKv wrapDb(Path path, RocksDB db, ColumnFamilyHandle handle) {
+        RocksDBResourceContainer container =
+                new RocksDBResourceContainer(new Configuration(), path.toFile());
+        ColumnFamilyOptions options = container.getColumnOptions();
+        return new RocksDBKv(
+                container,
+                db,
+                new ResourceGuard(),
+                handle,
+                null,
+                options.level0SlowdownWritesTrigger(),
+                options.level0StopWritesTrigger(),
+                options.maxWriteBufferNumber(),
+                options.writeBufferSize(),
+                Integer.MAX_VALUE,
+                options);
+    }
+
+    private static CancellationToken countingToken(AtomicInteger registrations) {
+        return new CancellationToken() {
+            @Override
+            public AutoCloseable register(Runnable callback) {
+                registrations.incrementAndGet();
+                return super.register(callback);
+            }
+        };
+    }
+
+    private static RocksDBKv buildLayoutKv(File path, boolean partitioned) throws Exception {
+        Configuration config = new Configuration();
+        config.set(ConfigOptions.KV_PARTITIONED_INDEX_FILTERS, partitioned);
+        RocksDBResourceContainer container = new RocksDBResourceContainer(config, path);
+        ColumnFamilyOptions options = container.getColumnOptions().setDisableAutoCompactions(true);
+        RocksDBKv kv = new RocksDBKvBuilder(path, container, options).build();
+        config.set(ConfigOptions.KV_PARTITIONED_INDEX_FILTERS, !partitioned);
+        assertThat(kv.isPartitionedIndexEnabled()).isEqualTo(partitioned);
+        return kv;
+    }
+
+    private static void flush(RocksDBKv kv) throws Exception {
+        try (FlushOptions options = new FlushOptions().setWaitForFlush(true)) {
+            kv.db.flush(options);
+        }
+    }
 
     @Test
     void testRocksDbKv(@TempDir Path tempDir) throws Exception {

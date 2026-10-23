@@ -17,6 +17,10 @@
 
 package org.apache.fluss.rpc.util;
 
+import org.apache.fluss.cluster.compaction.CompactionInfo;
+import org.apache.fluss.cluster.compaction.CompactionProgress;
+import org.apache.fluss.cluster.compaction.CompactionStatus;
+import org.apache.fluss.cluster.compaction.CompactionType;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.ResolvedPartitionSpec;
 import org.apache.fluss.metadata.TableBucket;
@@ -29,11 +33,15 @@ import org.apache.fluss.rpc.entity.FetchLogResultForBucket;
 import org.apache.fluss.rpc.messages.LookupRequest;
 import org.apache.fluss.rpc.messages.PbAclFilter;
 import org.apache.fluss.rpc.messages.PbAclInfo;
+import org.apache.fluss.rpc.messages.PbCompactionExecution;
+import org.apache.fluss.rpc.messages.PbCompactionInfo;
+import org.apache.fluss.rpc.messages.PbCompactionProgress;
 import org.apache.fluss.rpc.messages.PbFetchLogRespForBucket;
 import org.apache.fluss.rpc.messages.PbKeyValue;
 import org.apache.fluss.rpc.messages.PbPartitionSpec;
 import org.apache.fluss.rpc.messages.PbRemoteLogFetchInfo;
 import org.apache.fluss.rpc.messages.PbRemoteLogSegment;
+import org.apache.fluss.rpc.messages.PbTableBucket;
 import org.apache.fluss.rpc.messages.ProduceLogRequest;
 import org.apache.fluss.rpc.messages.PutKvRequest;
 import org.apache.fluss.rpc.protocol.ApiError;
@@ -279,5 +287,97 @@ public class CommonRpcMessageUtils {
             partitionValues.add(pbKeyValue.getValue());
         }
         return new ResolvedPartitionSpec(partitionKeys, partitionValues);
+    }
+
+    /** Converts a wire compaction summary. */
+    public static CompactionInfo toCompactionInfo(PbCompactionInfo info) {
+        return new CompactionInfo(
+                info.getOperationId(),
+                CompactionType.valueOf(info.getType()),
+                CompactionStatus.valueOf(info.getStatus()),
+                info.getCreateTime(),
+                info.hasDatabaseName() ? info.getDatabaseName() : null,
+                info.hasTableName()
+                        ? TablePath.of(info.getDatabaseName(), info.getTableName())
+                        : null,
+                info.hasPartitionName() ? info.getPartitionName() : null);
+    }
+
+    /** Writes a compaction summary. */
+    public static void toCompactionInfo(CompactionInfo info, PbCompactionInfo target) {
+        target.setOperationId(info.operationId())
+                .setType(info.type().name())
+                .setStatus(info.status().name())
+                .setCreateTime(info.createTime());
+        info.databaseName().ifPresent(target::setDatabaseName);
+        info.tablePath().ifPresent(path -> target.setTableName(path.getTableName()));
+        info.partitionName().ifPresent(target::setPartitionName);
+    }
+
+    /** Converts wire compaction progress. */
+    public static CompactionProgress toCompactionProgress(PbCompactionProgress progress) {
+        List<CompactionProgress.Execution> executions = new ArrayList<>();
+        for (PbCompactionExecution execution : progress.getCurrentExecutionsList()) {
+            PbTableBucket bucket = execution.getTableBucket();
+            executions.add(
+                    new CompactionProgress.Execution(
+                            execution.getServerId(),
+                            new TableBucket(
+                                    bucket.getTableId(),
+                                    bucket.hasPartitionId() ? bucket.getPartitionId() : null,
+                                    bucket.getBucketId()),
+                            execution.getLeaderEpoch(),
+                            execution.getPhase(),
+                            execution.getPhaseStartTime(),
+                            execution.hasSnapshotId() ? execution.getSnapshotId() : null,
+                            execution.hasReason() ? execution.getReason() : null));
+        }
+        return new CompactionProgress(
+                toCompactionInfo(progress.getInfo()),
+                progress.getTotal(),
+                progress.getPending(),
+                progress.getRunning(),
+                progress.getSucceeded(),
+                progress.getFailed(),
+                progress.getCancelled(),
+                executions,
+                progress.hasFirstError() ? progress.getFirstError() : null,
+                progress.getLastProgressTime(),
+                progress.getObservedTime(),
+                progress.getPersistedTime());
+    }
+
+    /** Writes compaction progress. */
+    public static void toCompactionProgress(
+            CompactionProgress progress, PbCompactionProgress target) {
+        toCompactionInfo(progress.info(), target.setInfo());
+        target.setTotal(progress.total())
+                .setPending(progress.pending())
+                .setRunning(progress.running())
+                .setSucceeded(progress.succeeded())
+                .setFailed(progress.failed())
+                .setCancelled(progress.cancelled())
+                .setLastProgressTime(progress.lastProgressTime())
+                .setObservedTime(progress.observedTime())
+                .setPersistedTime(progress.persistedTime());
+        progress.firstError().ifPresent(target::setFirstError);
+        for (CompactionProgress.Execution execution : progress.currentExecutions()) {
+            PbCompactionExecution wire = target.addCurrentExecution();
+            wire.setServerId(execution.serverId())
+                    .setLeaderEpoch(execution.leaderEpoch())
+                    .setPhase(execution.phase())
+                    .setPhaseStartTime(execution.phaseStartTime());
+            toCompactionBucket(execution.bucket(), wire.setTableBucket());
+            execution.snapshotId().ifPresent(wire::setSnapshotId);
+            execution.reason().ifPresent(wire::setReason);
+        }
+    }
+
+    /** Writes a compaction bucket identity. */
+    public static void toCompactionBucket(TableBucket bucket, PbTableBucket target) {
+        target.setTableId(bucket.getTableId()).setBucketId(bucket.getBucket());
+        if (bucket.getPartitionId() != null) {
+            target.setPartitionId(bucket.getPartitionId());
+        }
     }
 }

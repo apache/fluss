@@ -32,6 +32,9 @@ import org.apache.fluss.client.metadata.KvSnapshots;
 import org.apache.fluss.client.metadata.LakeSnapshot;
 import org.apache.fluss.client.metadata.RemoteLogManifestInfo;
 import org.apache.fluss.cluster.ServerNode;
+import org.apache.fluss.cluster.compaction.CompactionInfo;
+import org.apache.fluss.cluster.compaction.CompactionProgress;
+import org.apache.fluss.cluster.compaction.CompactionType;
 import org.apache.fluss.cluster.rebalance.GoalType;
 import org.apache.fluss.cluster.rebalance.RebalanceProgress;
 import org.apache.fluss.cluster.rebalance.ServerTag;
@@ -369,6 +372,58 @@ public class TestAdminAdapter implements Admin {
     @Override
     public CompletableFuture<ActiveKvSnapshots> listKvSnapshots(
             long tableId, @Nullable Long partitionId) {
+        throw new UnsupportedOperationException("Not implemented in TestAdminAdapter");
+    }
+
+    @Override
+    public CompletableFuture<String> compact(CompactionType type) {
+        throw new UnsupportedOperationException("Not implemented in TestAdminAdapter");
+    }
+
+    @Override
+    public CompletableFuture<String> compact(String databaseName, CompactionType type) {
+        throw new UnsupportedOperationException("Not implemented in TestAdminAdapter");
+    }
+
+    @Override
+    public CompletableFuture<String> compact(TablePath tablePath, CompactionType type) {
+        throw new UnsupportedOperationException("Not implemented in TestAdminAdapter");
+    }
+
+    @Override
+    public CompletableFuture<String> compact(
+            TablePath tablePath, String partitionName, CompactionType type) {
+        throw new UnsupportedOperationException("Not implemented in TestAdminAdapter");
+    }
+
+    @Override
+    public CompletableFuture<List<CompactionInfo>> listCompactions() {
+        throw new UnsupportedOperationException("Not implemented in TestAdminAdapter");
+    }
+
+    @Override
+    public CompletableFuture<List<CompactionInfo>> listCompactions(String databaseName) {
+        throw new UnsupportedOperationException("Not implemented in TestAdminAdapter");
+    }
+
+    @Override
+    public CompletableFuture<List<CompactionInfo>> listCompactions(TablePath tablePath) {
+        throw new UnsupportedOperationException("Not implemented in TestAdminAdapter");
+    }
+
+    @Override
+    public CompletableFuture<List<CompactionInfo>> listCompactions(
+            TablePath tablePath, String partitionName) {
+        throw new UnsupportedOperationException("Not implemented in TestAdminAdapter");
+    }
+
+    @Override
+    public CompletableFuture<CompactionProgress> getCompaction(String operationId) {
+        throw new UnsupportedOperationException("Not implemented in TestAdminAdapter");
+    }
+
+    @Override
+    public CompletableFuture<Void> cancelCompaction(String operationId) {
         throw new UnsupportedOperationException("Not implemented in TestAdminAdapter");
     }
 }

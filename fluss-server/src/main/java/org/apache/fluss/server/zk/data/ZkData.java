@@ -40,6 +40,24 @@ import java.util.Map;
 /** The data and path stored in ZooKeeper nodes (znodes). */
 public final class ZkData {
 
+    /** Persistent active compaction pointer; empty data means no active task. */
+    public static final class CompactionActiveZNode {
+        public static String path() {
+            return "/compactions/active";
+        }
+    }
+
+    /** Bounded compaction task summaries. */
+    public static final class CompactionTasksZNode {
+        public static String path() {
+            return "/compactions/tasks";
+        }
+
+        public static String path(String operationId) {
+            return path() + "/" + operationId;
+        }
+    }
+
     // ------------------------------------------------------------------------------------------
     // ZNodes under "/metadata/"
     // ------------------------------------------------------------------------------------------

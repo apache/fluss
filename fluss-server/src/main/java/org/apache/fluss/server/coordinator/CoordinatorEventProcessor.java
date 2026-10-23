@@ -48,20 +48,33 @@ import org.apache.fluss.metadata.TableBucketReplica;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePartition;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.rpc.RpcClient;
 import org.apache.fluss.rpc.messages.AddServerTagByRackResponse;
 import org.apache.fluss.rpc.messages.AddServerTagResponse;
 import org.apache.fluss.rpc.messages.AdjustIsrResponse;
+import org.apache.fluss.rpc.messages.ApiMessage;
+import org.apache.fluss.rpc.messages.CancelCompactionRequest;
+import org.apache.fluss.rpc.messages.CancelCompactionResponse;
 import org.apache.fluss.rpc.messages.CancelRebalanceResponse;
 import org.apache.fluss.rpc.messages.CommitKvSnapshotResponse;
 import org.apache.fluss.rpc.messages.CommitLakeTableSnapshotResponse;
 import org.apache.fluss.rpc.messages.CommitRemoteLogManifestResponse;
+import org.apache.fluss.rpc.messages.CompactRequest;
+import org.apache.fluss.rpc.messages.CompactResponse;
 import org.apache.fluss.rpc.messages.ControlledShutdownResponse;
+import org.apache.fluss.rpc.messages.GetCompactionRequest;
+import org.apache.fluss.rpc.messages.GetCompactionResponse;
+import org.apache.fluss.rpc.messages.ListCompactionsRequest;
+import org.apache.fluss.rpc.messages.ListCompactionsResponse;
 import org.apache.fluss.rpc.messages.ListRebalanceProgressResponse;
 import org.apache.fluss.rpc.messages.PbCommitLakeTableSnapshotRespForTable;
 import org.apache.fluss.rpc.messages.RebalanceResponse;
 import org.apache.fluss.rpc.messages.RemoveServerTagByRackResponse;
 import org.apache.fluss.rpc.messages.RemoveServerTagResponse;
 import org.apache.fluss.rpc.protocol.ApiError;
+import org.apache.fluss.rpc.util.CommonRpcMessageUtils;
+import org.apache.fluss.server.coordinator.compaction.CompactionManager;
+import org.apache.fluss.server.coordinator.compaction.CompactionStore;
 import org.apache.fluss.server.coordinator.event.AccessContextEvent;
 import org.apache.fluss.server.coordinator.event.AddServerTagByRackEvent;
 import org.apache.fluss.server.coordinator.event.AddServerTagEvent;
@@ -70,6 +83,7 @@ import org.apache.fluss.server.coordinator.event.CancelRebalanceEvent;
 import org.apache.fluss.server.coordinator.event.CommitKvSnapshotEvent;
 import org.apache.fluss.server.coordinator.event.CommitLakeTableSnapshotEvent;
 import org.apache.fluss.server.coordinator.event.CommitRemoteLogManifestEvent;
+import org.apache.fluss.server.coordinator.event.CompactionEvent;
 import org.apache.fluss.server.coordinator.event.ControlledShutdownEvent;
 import org.apache.fluss.server.coordinator.event.CoordinatorEvent;
 import org.apache.fluss.server.coordinator.event.CoordinatorEventManager;
@@ -155,6 +169,7 @@ import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.ScheduledFuture;
+import java.util.function.Supplier;
 import java.util.stream.Collectors;
 
 import static org.apache.fluss.server.coordinator.statemachine.BucketState.OfflineBucket;
@@ -169,6 +184,7 @@ import static org.apache.fluss.server.coordinator.statemachine.ReplicaState.Repl
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeAdjustIsrResponse;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeListRebalanceProgressResponse;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeRebalanceResponse;
+import static org.apache.fluss.utils.Preconditions.checkState;
 import static org.apache.fluss.utils.concurrent.FutureUtils.completeFromCallable;
 
 /** An implementation for {@link EventProcessor}. */
@@ -203,6 +219,11 @@ public class CoordinatorEventProcessor implements EventProcessor {
     private final CompletedSnapshotStoreManager completedSnapshotStoreManager;
     private final LakeTableHelper lakeTableHelper;
     private ScheduledFuture<?> offlineLeaderRetryTask;
+    private final Object compactionCallbackLock = new Object();
+    private boolean compactionClosing;
+    private boolean compactionClosed;
+    private volatile CompactionManager compactionManager;
+    private final Set<CompletableFuture<ApiMessage>> compactionResponses = new HashSet<>();
 
     public CoordinatorEventProcessor(
             ZooKeeperClient zooKeeperClient,
@@ -344,6 +365,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
     }
 
     public void shutdown() {
+        closeCompactionManager();
         clearOfflineLeaderRetryTask();
         // close the event manager
         coordinatorEventManager.close();
@@ -679,6 +701,10 @@ public class CoordinatorEventProcessor implements EventProcessor {
 
     @Override
     public void process(CoordinatorEvent event) {
+        if (event instanceof CompactionEvent) {
+            processCompaction((CompactionEvent) event);
+            return;
+        }
         if (event instanceof CreateTableEvent) {
             processCreateTable((CreateTableEvent) event);
         } else if (event instanceof CreatePartitionEvent) {
@@ -2737,6 +2763,144 @@ public class CoordinatorEventProcessor implements EventProcessor {
         @Override
         public int hashCode() {
             return Objects.hash(replicas, addingReplicas, removingReplicas);
+        }
+    }
+
+    /** Starts compaction only for an initialized active Coordinator. */
+    public void startCompactionManager(RpcClient rpcClient, Supplier<Configuration> configuration)
+            throws Exception {
+        compactionManager =
+                new CompactionManager(
+                        coordinatorContext,
+                        new CompactionStore(
+                                zooKeeperClient,
+                                FlussConfigUtils.getDefaultRemoteDataDir(configuration.get())),
+                        zooKeeperClient,
+                        rpcClient,
+                        internalListenerName,
+                        configuration,
+                        this::postCompactionCallback,
+                        ioExecutor,
+                        scheduler);
+    }
+
+    private void postCompactionCallback(Runnable callback) {
+        putCompactionEvent(new CompactionEvent(callback));
+    }
+
+    /** Posts work only while this processor owns the compaction lifecycle. */
+    public boolean putCompactionEvent(CompactionEvent event) {
+        boolean accepted;
+        synchronized (compactionCallbackLock) {
+            accepted = event.callback() != null ? !compactionClosed : !compactionClosing;
+            if (accepted) {
+                if (event.response() != null) {
+                    compactionResponses.add(event.response());
+                    event.response()
+                            .whenComplete(
+                                    (value, error) -> {
+                                        synchronized (compactionCallbackLock) {
+                                            compactionResponses.remove(event.response());
+                                        }
+                                    });
+                }
+                coordinatorEventManager.put(event);
+            }
+        }
+        if (!accepted && event.response() != null) {
+            event.response()
+                    .completeExceptionally(
+                            new IllegalStateException("Compaction manager is not active"));
+        }
+        return accepted;
+    }
+
+    /**
+     * Drains manager cleanup from the owner thread before stopping the event queue or resources.
+     */
+    public synchronized void closeCompactionManager() {
+        List<CompletableFuture<ApiMessage>> pending;
+        synchronized (compactionCallbackLock) {
+            compactionClosing = true;
+            pending = new ArrayList<>(compactionResponses);
+            compactionResponses.clear();
+        }
+        pending.forEach(
+                response ->
+                        response.completeExceptionally(
+                                new IllegalStateException("Compaction manager is not active")));
+        if (compactionManager != null) {
+            compactionManager.closeAsync().join();
+            compactionManager = null;
+        }
+        synchronized (compactionCallbackLock) {
+            compactionClosed = true;
+        }
+    }
+
+    private void processCompaction(CompactionEvent event) {
+        if (event.callback() != null) {
+            event.callback().run();
+            return;
+        }
+        if (event.response().isDone()) {
+            return;
+        }
+        CompletableFuture<? extends ApiMessage> result;
+        try {
+            checkState(compactionManager != null, "Compaction manager is not active");
+            ApiMessage request = event.request();
+            if (request instanceof CompactRequest) {
+                result =
+                        compactionManager
+                                .compact((CompactRequest) request)
+                                .thenApply(id -> new CompactResponse().setOperationId(id));
+            } else if (request instanceof ListCompactionsRequest) {
+                result =
+                        compactionManager
+                                .listCompactions((ListCompactionsRequest) request)
+                                .thenApply(
+                                        infos -> {
+                                            ListCompactionsResponse response =
+                                                    new ListCompactionsResponse();
+                                            infos.forEach(
+                                                    info ->
+                                                            CommonRpcMessageUtils.toCompactionInfo(
+                                                                    info,
+                                                                    response.addCompaction()));
+                                            return response;
+                                        });
+            } else if (request instanceof GetCompactionRequest) {
+                result =
+                        compactionManager
+                                .getCompaction(((GetCompactionRequest) request).getOperationId())
+                                .thenApply(
+                                        progress -> {
+                                            GetCompactionResponse response =
+                                                    new GetCompactionResponse();
+                                            CommonRpcMessageUtils.toCompactionProgress(
+                                                    progress, response.setProgress());
+                                            return response;
+                                        });
+            } else if (request instanceof CancelCompactionRequest) {
+                result =
+                        compactionManager
+                                .cancelCompaction(
+                                        ((CancelCompactionRequest) request).getOperationId())
+                                .thenApply(ignored -> new CancelCompactionResponse());
+            } else {
+                throw new IllegalArgumentException("Unknown compaction request");
+            }
+            result.whenComplete(
+                    (response, error) -> {
+                        if (error == null) {
+                            event.response().complete(response);
+                        } else {
+                            event.response().completeExceptionally(error);
+                        }
+                    });
+        } catch (Throwable error) {
+            event.response().completeExceptionally(error);
         }
     }
 }

@@ -37,7 +37,6 @@ import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
-import java.util.stream.Collectors;
 
 /** Help class for uploading Kv snapshot files. */
 public class KvSnapshotDataUploader extends KvSnapshotDataTransfer {
@@ -64,23 +63,31 @@ public class KvSnapshotDataUploader extends KvSnapshotDataTransfer {
             Counter remoteKvCopyBytes)
             throws Exception {
 
-        List<CompletableFuture<KvFileHandleAndLocalPath>> futures =
-                createUploadFutures(
-                        files,
-                        snapshotLocation,
-                        snapshotFileScope,
-                        closeableRegistry,
-                        tmpResourcesRegistry,
-                        remoteKvCopyBytes);
-
+        List<CompletableFuture<KvFileHandleAndLocalPath>> futures = new ArrayList<>(files.size());
         List<KvFileHandleAndLocalPath> handles = new ArrayList<>(files.size());
-
         try {
+            for (Path file : files) {
+                futures.add(
+                        CompletableFuture.supplyAsync(
+                                CheckedSupplier.unchecked(
+                                        () ->
+                                                uploadLocalFileToSnapshotLocation(
+                                                        file,
+                                                        snapshotLocation,
+                                                        snapshotFileScope,
+                                                        closeableRegistry,
+                                                        tmpResourcesRegistry,
+                                                        remoteKvCopyBytes)),
+                                dataTransferThreadPool));
+            }
             FutureUtils.waitForAll(futures).get();
 
             for (CompletableFuture<KvFileHandleAndLocalPath> future : futures) {
                 handles.add(future.get());
             }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw e;
         } catch (ExecutionException e) {
             Throwable throwable = ExceptionUtils.stripExecutionException(e);
             throwable = ExceptionUtils.stripException(throwable, RuntimeException.class);
@@ -89,33 +96,15 @@ public class KvSnapshotDataUploader extends KvSnapshotDataTransfer {
             } else {
                 throw new FlussRuntimeException("Failed to upload data for kv file handles.", e);
             }
+        } finally {
+            // These futures are never cancelled: completion means the file user actually exited.
+            // Keep ownership of local checkpoint files even on interruption or partial submission.
+            CompletableFuture.allOf(futures.toArray(new CompletableFuture<?>[0]))
+                    .handle((ignored, failure) -> null)
+                    .join();
         }
 
         return handles;
-    }
-
-    private List<CompletableFuture<KvFileHandleAndLocalPath>> createUploadFutures(
-            List<Path> files,
-            SnapshotLocation snapshotLocation,
-            SnapshotFileScope snapshotFileScope,
-            CloseableRegistry closeableRegistry,
-            CloseableRegistry tmpResourcesRegistry,
-            Counter remoteKvCopyBytes) {
-        return files.stream()
-                .map(
-                        e ->
-                                CompletableFuture.supplyAsync(
-                                        CheckedSupplier.unchecked(
-                                                () ->
-                                                        uploadLocalFileToSnapshotLocation(
-                                                                e,
-                                                                snapshotLocation,
-                                                                snapshotFileScope,
-                                                                closeableRegistry,
-                                                                tmpResourcesRegistry,
-                                                                remoteKvCopyBytes)),
-                                        dataTransferThreadPool))
-                .collect(Collectors.toList());
     }
 
     private KvFileHandleAndLocalPath uploadLocalFileToSnapshotLocation(

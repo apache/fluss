@@ -18,6 +18,7 @@
 package org.apache.fluss.server.tablet;
 
 import org.apache.fluss.config.ConfigOptions;
+import org.apache.fluss.exception.DiskWriteLockedException;
 import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.exception.InvalidBucketRoutingException;
 import org.apache.fluss.exception.InvalidRequiredAcksException;
@@ -59,12 +60,14 @@ import org.apache.fluss.rpc.messages.ProduceLogResponse;
 import org.apache.fluss.rpc.messages.PutKvResponse;
 import org.apache.fluss.rpc.messages.ScanKvRequest;
 import org.apache.fluss.rpc.messages.ScanKvResponse;
+import org.apache.fluss.rpc.messages.StartBucketCompactionRequest;
 import org.apache.fluss.rpc.messages.StopReplicaRequest;
 import org.apache.fluss.rpc.protocol.Errors;
 import org.apache.fluss.server.entity.NotifyLeaderAndIsrData;
 import org.apache.fluss.server.entity.NotifyLeaderAndIsrResultForBucket;
 import org.apache.fluss.server.log.ListOffsetsParam;
 import org.apache.fluss.server.metadata.ServerInfo;
+import org.apache.fluss.server.storage.DiskUsageMonitor;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
 import org.apache.fluss.server.utils.ServerRpcMessageUtils;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
@@ -139,6 +142,41 @@ public class TabletServiceITCase {
     @RegisterExtension
     public static final FlussClusterExtension FLUSS_CLUSTER_EXTENSION =
             FlussClusterExtension.builder().setNumOfTabletServers(3).build();
+
+    @Test
+    void testCompactionRejectedByExistingDiskGuardBeforeSlotAdmission() throws Exception {
+        long tableId =
+                createTable(
+                        FLUSS_CLUSTER_EXTENSION, DATA1_TABLE_PATH_PK, DATA1_TABLE_DESCRIPTOR_PK);
+        TableBucket bucket = new TableBucket(tableId, 0);
+        FLUSS_CLUSTER_EXTENSION.waitUntilAllReplicaReady(bucket);
+        int leader = FLUSS_CLUSTER_EXTENSION.waitAndGetLeader(bucket);
+        DiskUsageMonitor monitor =
+                FLUSS_CLUSTER_EXTENSION
+                        .getTabletServerById(leader)
+                        .getReplicaManager()
+                        .getDiskUsageMonitor();
+        double limit = monitor.getWriteLimitRatio();
+        double recover = monitor.getWriteRecoverRatio();
+        TabletServerGateway gateway = FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(leader);
+        StartBucketCompactionRequest request =
+                new StartBucketCompactionRequest()
+                        .setOperationId("disk-guard")
+                        .setType("RECLAIM")
+                        .setCoordinatorEpoch(0)
+                        .setLeaderEpoch(0)
+                        .setDeadline(System.currentTimeMillis() + 60000);
+        request.setTableBucket().setTableId(tableId).setBucketId(0);
+        try {
+            monitor.updateWriteLimitConfig(0.85, 0.80);
+            monitor.update(0.90);
+            assertThatThrownBy(() -> gateway.startBucketCompaction(request).get())
+                    .hasRootCauseInstanceOf(DiskWriteLockedException.class);
+        } finally {
+            monitor.updateWriteLimitConfig(limit, recover);
+            monitor.update(0);
+        }
+    }
 
     @ParameterizedTest
     @ValueSource(bytes = {LOG_MAGIC_VALUE_V0, LOG_MAGIC_VALUE_V1})

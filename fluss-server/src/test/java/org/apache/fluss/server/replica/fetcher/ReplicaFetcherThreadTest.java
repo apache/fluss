@@ -752,7 +752,8 @@ public class ReplicaFetcherThreadTest {
                         TestingMetricGroups.TABLET_SERVER_METRICS,
                         localDiskManager,
                         null,
-                        manualClock);
+                        manualClock,
+                        ioExecutor);
         kvManager.startup();
         if (serverId == leaderServerId) {
             leaderKvManager = kvManager;

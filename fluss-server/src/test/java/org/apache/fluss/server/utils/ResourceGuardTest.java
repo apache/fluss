@@ -20,6 +20,10 @@ package org.apache.fluss.server.utils;
 import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -27,6 +31,52 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Tests for the {@link org.apache.fluss.server.utils.ResourceGuard}. */
 class ResourceGuardTest {
+
+    @Test
+    void testAsyncCloseWaitsForLastLease() throws Exception {
+        ResourceGuard guard = new ResourceGuard();
+        ResourceGuard.Lease first = guard.acquireResource();
+        ResourceGuard.Lease last = guard.acquireResource();
+        CompletableFuture<Void> closed = guard.closeAsync();
+        assertThat(closed).isNotDone();
+        assertThatThrownBy(guard::acquireResource).isInstanceOf(IOException.class);
+        first.close();
+        assertThat(closed).isNotDone();
+        last.close();
+        assertThat(closed).isCompleted();
+        assertThat(guard.closeAsync()).isSameAs(closed);
+    }
+
+    @Test
+    void testCloseCompletionRunsOutsideGuardLock() throws Exception {
+        ResourceGuard guard = new ResourceGuard();
+        ResourceGuard.Lease lease = guard.acquireResource();
+        ExecutorService executor = Executors.newSingleThreadExecutor();
+        try {
+            CompletableFuture<Void> callback =
+                    guard.closeAsync()
+                            .thenRun(
+                                    () -> {
+                                        try {
+                                            executor.submit(
+                                                            () ->
+                                                                    assertThatThrownBy(
+                                                                                    guard
+                                                                                            ::acquireResource)
+                                                                            .isInstanceOf(
+                                                                                    IOException
+                                                                                            .class))
+                                                    .get(5, TimeUnit.SECONDS);
+                                        } catch (Exception e) {
+                                            throw new RuntimeException(e);
+                                        }
+                                    });
+            lease.close();
+            callback.get(10, TimeUnit.SECONDS);
+        } finally {
+            executor.shutdownNow();
+        }
+    }
 
     @Test
     void testClose() {

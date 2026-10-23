@@ -60,7 +60,12 @@ final class TabletServerShutdownTest {
 
             assertThat(server.getShutdownEvents())
                     .containsExactly(
-                            "rpc-started", "rpc-completed", "replica-manager", "tablet-managers");
+                            "rpc-started",
+                            "rpc-completed",
+                            "replica-manager",
+                            "tablet-managers",
+                            "remote-log-manager",
+                            "log-manager");
             assertThat(server.getKvCloseMode()).isEqualTo(KvCloseMode.DISCARD_UNPERSISTED_STATE);
         } finally {
             server.completeRpcShutdown();
@@ -82,8 +87,44 @@ final class TabletServerShutdownTest {
                 .hasCauseInstanceOf(FlussRuntimeException.class);
         assertThat(server.getShutdownEvents())
                 .containsExactly(
-                        "rpc-started", "rpc-completed", "replica-manager", "tablet-managers");
+                        "rpc-started",
+                        "rpc-completed",
+                        "replica-manager",
+                        "tablet-managers",
+                        "remote-log-manager",
+                        "log-manager");
         assertThat(server.getKvCloseMode()).isEqualTo(KvCloseMode.DISCARD_UNPERSISTED_STATE);
+    }
+
+    @Test
+    void testClosesLogManagersWhenKvShutdownFails() throws Exception {
+        Configuration conf = new Configuration();
+        conf.set(ConfigOptions.TABLET_SERVER_ID, 0);
+        conf.setString(ConfigOptions.REMOTE_DATA_DIR, DEFAULT_REMOTE_DATA_DIR);
+        TestingTabletServer server = new TestingTabletServer(conf);
+        server.completeRpcShutdown();
+        server.failKvManagerShutdown = true;
+        server.failRemoteLogManagerShutdown = true;
+
+        assertThatThrownBy(() -> server.stopServices().get(10, TimeUnit.SECONDS))
+                .cause()
+                .hasMessage("Expected KV shutdown failure.")
+                .satisfies(
+                        failure ->
+                                assertThat(failure.getSuppressed())
+                                        .anySatisfy(
+                                                suppressed ->
+                                                        assertThat(suppressed)
+                                                                .hasMessage(
+                                                                        "Expected remote log shutdown failure.")));
+        assertThat(server.getShutdownEvents())
+                .containsExactly(
+                        "rpc-started",
+                        "rpc-completed",
+                        "replica-manager",
+                        "tablet-managers",
+                        "remote-log-manager",
+                        "log-manager");
     }
 
     private static final class TestingTabletServer extends TabletServer {
@@ -91,6 +132,8 @@ final class TabletServerShutdownTest {
         private final CountDownLatch rpcShutdownStarted = new CountDownLatch(1);
         private final List<String> shutdownEvents = new CopyOnWriteArrayList<>();
         private boolean failReplicaManagerShutdown;
+        private boolean failKvManagerShutdown;
+        private boolean failRemoteLogManagerShutdown;
         private KvCloseMode kvCloseMode;
 
         private TestingTabletServer(Configuration conf) {
@@ -117,6 +160,22 @@ final class TabletServerShutdownTest {
         void shutdownKvManager(KvCloseMode closeMode) {
             shutdownEvents.add("tablet-managers");
             kvCloseMode = closeMode;
+            if (failKvManagerShutdown) {
+                throw new FlussRuntimeException("Expected KV shutdown failure.");
+            }
+        }
+
+        @Override
+        void shutdownRemoteLogManager() {
+            shutdownEvents.add("remote-log-manager");
+            if (failRemoteLogManagerShutdown) {
+                throw new FlussRuntimeException("Expected remote log shutdown failure.");
+            }
+        }
+
+        @Override
+        void shutdownLogManager() {
+            shutdownEvents.add("log-manager");
         }
 
         private boolean awaitRpcShutdownStarted() throws InterruptedException {

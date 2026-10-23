@@ -19,13 +19,20 @@
 
 package org.apache.fluss.client.admin;
 
+import org.apache.fluss.cluster.compaction.CompactionInfo;
+import org.apache.fluss.cluster.compaction.CompactionProgress;
+import org.apache.fluss.cluster.compaction.CompactionType;
 import org.apache.fluss.config.AutoPartitionTimeUnit;
 import org.apache.fluss.config.ConfigOptions;
+import org.apache.fluss.exception.CompactionNotExistException;
 import org.apache.fluss.exception.TableNotPartitionedException;
 import org.apache.fluss.metadata.PartitionInfo;
+import org.apache.fluss.metadata.PartitionSpec;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.rpc.messages.CompactRequest;
+import org.apache.fluss.rpc.messages.ListCompactionsRequest;
 import org.apache.fluss.rpc.messages.ListPartitionInfosRequest;
 import org.apache.fluss.rpc.messages.ListPartitionInfosResponse;
 import org.apache.fluss.rpc.messages.PbTablePath;
@@ -176,5 +183,108 @@ class FlussAdmin2ITCase extends ClientToServerITCaseBase {
             request.setIncludeSystemPartitions(true);
         }
         return request;
+    }
+
+    @Test
+    void testCompactionScopesAndProgress() throws Exception {
+        TablePath path = TablePath.of("compaction_rpc", "partitioned");
+        TableDescriptor descriptor =
+                TableDescriptor.builder()
+                        .schema(
+                                Schema.newBuilder()
+                                        .column("id", DataTypes.INT())
+                                        .column("pt", DataTypes.STRING())
+                                        .primaryKey("id", "pt")
+                                        .build())
+                        .partitionedBy("pt")
+                        .distributedBy(1, "id")
+                        .build();
+        long tableId = createTable(path, descriptor, false);
+        admin.createPartition(
+                        path,
+                        new PartitionSpec(java.util.Collections.singletonMap("pt", "part_one")),
+                        false)
+                .get();
+        String partition = admin.listPartitionInfos(path).get().get(0).getPartitionName();
+        FLUSS_CLUSTER_EXTENSION.waitUntilTablePartitionReady(
+                tableId, admin.listPartitionInfos(path).get().get(0).getPartitionId());
+        for (int scope = 0; scope < 4; scope++) {
+            String operationId;
+            switch (scope) {
+                case 0:
+                    operationId = admin.compact(CompactionType.RECLAIM).get();
+                    break;
+                case 1:
+                    operationId =
+                            admin.compact(path.getDatabaseName(), CompactionType.RECLAIM).get();
+                    break;
+                case 2:
+                    operationId = admin.compact(path, CompactionType.RECLAIM).get();
+                    break;
+                default:
+                    operationId = admin.compact(path, partition, CompactionType.RECLAIM).get();
+            }
+            assertThat(operationId).isNotBlank();
+            assertThat(admin.listCompactions().get())
+                    .extracting(CompactionInfo::operationId)
+                    .contains(operationId);
+            assertThat(admin.listCompactions(path.getDatabaseName()).get())
+                    .extracting(CompactionInfo::operationId)
+                    .contains(operationId);
+            assertThat(admin.listCompactions(path).get())
+                    .extracting(CompactionInfo::operationId)
+                    .contains(operationId);
+            assertThat(admin.listCompactions(path, partition).get())
+                    .extracting(CompactionInfo::operationId)
+                    .contains(operationId);
+            CompactionProgress progress = admin.getCompaction(operationId).get();
+            assertThat(progress.info().operationId()).isEqualTo(operationId);
+            assertThat(progress.info().type()).isEqualTo(CompactionType.RECLAIM);
+            assertThat(progress.info().databaseName().isPresent()).isEqualTo(scope > 0);
+            assertThat(progress.info().tablePath().isPresent()).isEqualTo(scope > 1);
+            assertThat(progress.info().partitionName().isPresent()).isEqualTo(scope > 2);
+            assertThat(progress.total()).isPositive();
+            assertThat(progress.total())
+                    .isEqualTo(
+                            progress.pending()
+                                    + progress.running()
+                                    + progress.succeeded()
+                                    + progress.failed()
+                                    + progress.cancelled());
+            admin.cancelCompaction(operationId).get();
+            admin.cancelCompaction(operationId).get();
+            assertThat(admin.getCompaction(operationId).get().info().status())
+                    .isIn(
+                            org.apache.fluss.cluster.compaction.CompactionStatus.SUCCEEDED,
+                            org.apache.fluss.cluster.compaction.CompactionStatus.FAILED,
+                            org.apache.fluss.cluster.compaction.CompactionStatus.CANCELLED);
+        }
+    }
+
+    @Test
+    void testCompactionInvalidRequests() throws Exception {
+        assertThatThrownBy(() -> admin.getCompaction("missing-operation").get())
+                .rootCause()
+                .isInstanceOf(CompactionNotExistException.class);
+        assertThatThrownBy(() -> admin.cancelCompaction("missing-operation").get())
+                .rootCause()
+                .isInstanceOf(CompactionNotExistException.class);
+        assertThatThrownBy(
+                        () ->
+                                FLUSS_CLUSTER_EXTENSION
+                                        .newCoordinatorClient()
+                                        .compact(new CompactRequest().setType("UNKNOWN"))
+                                        .get())
+                .rootCause()
+                .hasMessageContaining("Unknown compaction type");
+        assertThatThrownBy(
+                        () ->
+                                FLUSS_CLUSTER_EXTENSION
+                                        .newCoordinatorClient()
+                                        .listCompactions(
+                                                new ListCompactionsRequest().setTableName("orphan"))
+                                        .get())
+                .rootCause()
+                .hasMessageContaining("database");
     }
 }

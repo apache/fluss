@@ -89,6 +89,7 @@ import org.apache.fluss.server.entity.PutKvDataForBucket;
 import org.apache.fluss.server.entity.StopReplicaData;
 import org.apache.fluss.server.entity.StopReplicaResultForBucket;
 import org.apache.fluss.server.entity.UserContext;
+import org.apache.fluss.server.kv.KvCloseMode;
 import org.apache.fluss.server.kv.KvManager;
 import org.apache.fluss.server.kv.KvSnapshotResource;
 import org.apache.fluss.server.kv.scan.ScannerManager;
@@ -128,8 +129,10 @@ import org.apache.fluss.server.zk.data.PartitionRegistration;
 import org.apache.fluss.server.zk.data.TableRegistration;
 import org.apache.fluss.server.zk.data.lake.LakeTableSnapshot;
 import org.apache.fluss.utils.ByteArraySlice;
+import org.apache.fluss.utils.ExceptionUtils;
 import org.apache.fluss.utils.FileUtils;
 import org.apache.fluss.utils.FlussPaths;
+import org.apache.fluss.utils.IOUtils;
 import org.apache.fluss.utils.clock.Clock;
 import org.apache.fluss.utils.concurrent.FutureUtils;
 import org.apache.fluss.utils.concurrent.Scheduler;
@@ -203,6 +206,9 @@ public class ReplicaManager implements ServerReconfigurable {
     private final Map<TableBucket, HostedReplica> allReplicas = new ConcurrentHashMap<>();
 
     private final TabletServerMetadataCache metadataCache;
+    private final Map<TableBucket, CompletableFuture<Void>> closingReplicas =
+            new ConcurrentHashMap<>();
+
     private final ExecutorService ioExecutor;
     private final ProjectionPushdownCache projectionsCache = new ProjectionPushdownCache();
     private final Lock replicaStateChangeLock = new ReentrantLock();
@@ -673,6 +679,11 @@ public class ReplicaManager implements ServerReconfigurable {
                 }
             }
         }
+    }
+
+    /** Rejects new disk-writing work while the existing disk guard is active. */
+    public void ensureWritable() {
+        localDiskManager.ensureWritable();
     }
 
     @VisibleForTesting
@@ -1276,7 +1287,49 @@ public class ReplicaManager implements ServerReconfigurable {
                         if (hostedReplica instanceof NoneReplica) {
                             if (data.isDeleteLocal()) {
                                 try {
-                                    sweepOrphanTabletDirs(tb, deletedTableIds, deletedPartitionIds);
+                                    checkReplicaNotClosing(tb);
+                                    if (kvManager.getKv(tb).isPresent()) {
+                                        CompletableFuture<Void> cleanup =
+                                                kvManager
+                                                        .dropKvAsync(tb)
+                                                        .thenRunAsync(
+                                                                () -> {
+                                                                    Map<Long, Path> tables =
+                                                                            new HashMap<>();
+                                                                    Map<Long, Path> partitions =
+                                                                            new HashMap<>();
+                                                                    sweepOrphanTabletDirs(
+                                                                            tb,
+                                                                            tables,
+                                                                            partitions,
+                                                                            true);
+                                                                    partitions.forEach(
+                                                                            (id, dir) ->
+                                                                                    dropEmptyTableOrPartitionDir(
+                                                                                            dir,
+                                                                                            id,
+                                                                                            "partition"));
+                                                                    tables.forEach(
+                                                                            (id, dir) ->
+                                                                                    dropEmptyTableOrPartitionDir(
+                                                                                            dir, id,
+                                                                                            "table"));
+                                                                },
+                                                                ioExecutor);
+                                        closingReplicas.put(tb, cleanup);
+                                        cleanup.whenCompleteAsync(
+                                                (ignored, failure) -> {
+                                                    if (failure == null) {
+                                                        closingReplicas.remove(tb, cleanup);
+                                                    } else {
+                                                        fatalErrorHandler.onFatalError(failure);
+                                                    }
+                                                },
+                                                ioExecutor);
+                                    } else {
+                                        sweepOrphanTabletDirs(
+                                                tb, deletedTableIds, deletedPartitionIds, false);
+                                    }
                                 } catch (Exception e) {
                                     LOG.error(
                                             "Failed to sweep orphan tablet directories for {}",
@@ -1477,7 +1530,18 @@ public class ReplicaManager implements ServerReconfigurable {
                 if (replica.isDataLakeEnabled()) {
                     updateWithLakeTableSnapshot(replica);
                 }
-                replica.makeLeader(data);
+                try {
+                    replica.makeLeader(data);
+                } finally {
+                    replica.getKvCloseFuture()
+                            .whenCompleteAsync(
+                                    (ignored, failure) -> {
+                                        if (failure != null) {
+                                            fatalErrorHandler.onFatalError(failure);
+                                        }
+                                    },
+                                    ioExecutor);
+                }
 
                 // start the remote log tiering tasks for leaders
                 remoteLogManager.startLogTiering(replica);
@@ -1548,8 +1612,15 @@ public class ReplicaManager implements ServerReconfigurable {
             try {
                 Replica replica = getReplicaOrException(data.getTableBucket());
                 if (replica.makeFollower(data)) {
+                    replica.getKvCloseFuture()
+                            .whenCompleteAsync(
+                                    (ignored, failure) -> {
+                                        if (failure != null) {
+                                            fatalErrorHandler.onFatalError(failure);
+                                        }
+                                    },
+                                    ioExecutor);
                     replicasBecomeFollower.add(replica);
-                    scannerManager.closeScannersForBucket(tb);
                 }
                 // stop the remote log tiering tasks for followers
                 remoteLogManager.stopLogTiering(replica);
@@ -2345,32 +2416,70 @@ public class ReplicaManager implements ServerReconfigurable {
         // First stop fetchers for this table bucket.
         replicaFetcherManager.removeFetcherForBuckets(Collections.singleton(tb));
 
-        scannerManager.closeScannersForBucket(tb);
+        if (!deleteLocal) {
+            scannerManager.closeScannersForBucket(tb);
+        }
 
         HostedReplica replica = getReplica(tb);
         if (replica instanceof OnlineReplica) {
             Replica replicaToDelete = ((OnlineReplica) replica).getReplica();
+            boolean deleteRemoteData = deleteRemote && replicaToDelete.isLeader();
+            boolean deferRemoteDeletion = deleteLocal && replicaToDelete.isKvTable();
             if (deleteLocal) {
                 if (allReplicas.remove(tb) != null) {
                     serverMetricGroup.removeTableBucketMetricGroup(
                             replicaToDelete.getPhysicalTablePath().getTablePath(), tb);
-                    replicaToDelete.delete();
-                    localDiskManager.recordReplicaDelete(
-                            replicaToDelete.getLogTablet().getDataDir(),
-                            replicaToDelete.isKvTable());
                     Path tabletParentDir = replicaToDelete.getTabletParentDir();
-                    if (tb.getPartitionId() != null) {
-                        deletedPartitionIds.put(tb.getPartitionId(), tabletParentDir);
-                        deletedTableIds.put(tb.getTableId(), tabletParentDir.getParent());
-                    } else {
-                        deletedTableIds.put(tb.getTableId(), tabletParentDir);
-                    }
+                    CompletableFuture<Void> cleanup =
+                            replicaToDelete
+                                    .delete()
+                                    .thenRunAsync(
+                                            () -> {
+                                                if (deferRemoteDeletion && deleteRemoteData) {
+                                                    remoteLogManager.stopReplica(
+                                                            replicaToDelete, true);
+                                                    kvManager.deleteRemoteKvSnapshot(
+                                                            replicaToDelete.getRemoteDataDir(),
+                                                            replicaToDelete.getPhysicalTablePath(),
+                                                            tb);
+                                                }
+                                                localDiskManager.recordReplicaDelete(
+                                                        replicaToDelete.getLogTablet().getDataDir(),
+                                                        replicaToDelete.isKvTable());
+                                                if (tb.getPartitionId() != null) {
+                                                    dropEmptyTableOrPartitionDir(
+                                                            tabletParentDir,
+                                                            tb.getPartitionId(),
+                                                            "partition");
+                                                    dropEmptyTableOrPartitionDir(
+                                                            tabletParentDir.getParent(),
+                                                            tb.getTableId(),
+                                                            "table");
+                                                } else {
+                                                    dropEmptyTableOrPartitionDir(
+                                                            tabletParentDir,
+                                                            tb.getTableId(),
+                                                            "table");
+                                                }
+                                            },
+                                            replicaToDelete.isKvTable()
+                                                    ? ioExecutor
+                                                    : Runnable::run);
+                    closingReplicas.put(tb, cleanup);
+                    cleanup.whenCompleteAsync(
+                            (ignored, failure) -> {
+                                if (failure == null) {
+                                    closingReplicas.remove(tb, cleanup);
+                                } else {
+                                    fatalErrorHandler.onFatalError(failure);
+                                }
+                            },
+                            ioExecutor);
                 }
             }
 
-            remoteLogManager.stopReplica(
-                    replicaToDelete, deleteRemote && replicaToDelete.isLeader());
-            if (deleteRemote && replicaToDelete.isLeader()) {
+            remoteLogManager.stopReplica(replicaToDelete, deleteRemoteData && !deferRemoteDeletion);
+            if (deleteRemoteData && !deferRemoteDeletion) {
                 kvManager.deleteRemoteKvSnapshot(
                         replicaToDelete.getRemoteDataDir(),
                         replicaToDelete.getPhysicalTablePath(),
@@ -2392,7 +2501,13 @@ public class ReplicaManager implements ServerReconfigurable {
      * NotifyLeaderAndIsr ever ran, so allReplicas is empty.
      */
     private void sweepOrphanTabletDirs(
-            TableBucket tb, Map<Long, Path> deletedTableIds, Map<Long, Path> deletedPartitionIds) {
+            TableBucket tb,
+            Map<Long, Path> deletedTableIds,
+            Map<Long, Path> deletedPartitionIds,
+            boolean kvAlreadyDropped) {
+        if (!kvAlreadyDropped) {
+            checkReplicaNotClosing(tb);
+        }
         Optional<LogTablet> orphanLog = logManager.getLog(tb);
         if (!orphanLog.isPresent()) {
             return;
@@ -2405,22 +2520,18 @@ public class ReplicaManager implements ServerReconfigurable {
 
         // Clean KV before log so that if KV cleanup fails, the log is still
         // present and a coordinator retry can re-enter this method.
-        boolean isKvTable = false;
-        if (kvManager.getKv(tb).isPresent()) {
-            kvManager.dropKv(tb);
+        checkState(!kvManager.getKv(tb).isPresent(), "Orphan KV must be retired before cleanup.");
+        boolean isKvTable = kvAlreadyDropped;
+        File kvTabletDir = FlussPaths.kvTabletDir(dataDir, physicalTablePath, tb);
+        if (kvTabletDir.exists()) {
             isKvTable = true;
-        } else {
-            File kvTabletDir = FlussPaths.kvTabletDir(dataDir, physicalTablePath, tb);
-            if (kvTabletDir.exists()) {
-                isKvTable = true;
-                try {
-                    FileUtils.deleteDirectory(kvTabletDir);
-                } catch (IOException e) {
-                    throw new KvStorageException(
-                            String.format(
-                                    "Failed to delete orphan KV tablet directory %s", kvTabletDir),
-                            e);
-                }
+            try {
+                FileUtils.deleteDirectory(kvTabletDir);
+            } catch (IOException e) {
+                throw new KvStorageException(
+                        String.format(
+                                "Failed to delete orphan KV tablet directory %s", kvTabletDir),
+                        e);
             }
         }
 
@@ -2502,10 +2613,28 @@ public class ReplicaManager implements ServerReconfigurable {
         }
     }
 
+    @VisibleForTesting
+    CompletableFuture<Void> getReplicaCleanupFuture(TableBucket bucket) {
+        return closingReplicas.getOrDefault(bucket, CompletableFuture.completedFuture(null));
+    }
+
+    private void checkReplicaNotClosing(TableBucket bucket) {
+        CompletableFuture<Void> closing = closingReplicas.get(bucket);
+        if (closing != null) {
+            if (closing.isDone() && !closing.isCompletedExceptionally()) {
+                closingReplicas.remove(bucket, closing);
+            } else {
+                throw new KvStorageException("Replica cleanup is pending or failed for " + bucket);
+            }
+        }
+        kvManager.checkNotClosing(bucket);
+    }
+
     protected Optional<Replica> maybeCreateReplica(NotifyLeaderAndIsrData data) {
         Optional<Replica> replicaOpt = Optional.empty();
         try {
             TableBucket tb = data.getTableBucket();
+            checkReplicaNotClosing(tb);
             HostedReplica hostedReplica = getReplica(tb);
             if (hostedReplica instanceof NoneReplica) {
                 PhysicalTablePath physicalTablePath = data.getPhysicalTablePath();
@@ -2703,15 +2832,41 @@ public class ReplicaManager implements ServerReconfigurable {
     public static final class OfflineReplica implements HostedReplica {}
 
     public void shutdown() throws InterruptedException {
-        // Close the resources for snapshot kv
-        kvSnapshotResource.close();
-        historicalPartitionManager.close();
-        replicaFetcherManager.shutdown();
-        delayedWriteManager.shutdown();
-        delayedFetchLogManager.shutdown();
-
-        // Checkpoint highWatermark.
-        checkpointHighWatermarks();
+        List<CompletableFuture<Void>> cleanups = new ArrayList<>(closingReplicas.values());
+        for (HostedReplica hosted : allReplicas.values()) {
+            if (hosted instanceof OnlineReplica) {
+                Replica replica = ((OnlineReplica) hosted).getReplica();
+                if (replica.isKvTable()) {
+                    try {
+                        cleanups.add(replica.closeKvAsync(KvCloseMode.DISCARD_UNPERSISTED_STATE));
+                    } catch (Exception e) {
+                        cleanups.add(FutureUtils.completedExceptionally(e));
+                    }
+                }
+            }
+        }
+        Exception exception = null;
+        try {
+            FutureUtils.completeAll(cleanups).join();
+        } catch (Exception e) {
+            exception = e;
+        }
+        try {
+            IOUtils.closeAll(
+                    kvSnapshotResource::close,
+                    historicalPartitionManager::close,
+                    replicaFetcherManager::shutdown,
+                    delayedWriteManager::shutdown,
+                    delayedFetchLogManager::shutdown,
+                    this::checkpointHighWatermarks);
+        } catch (Exception e) {
+            exception = ExceptionUtils.firstOrSuppressed(e, exception);
+        }
+        if (exception instanceof InterruptedException) {
+            throw (InterruptedException) exception;
+        } else if (exception != null) {
+            ExceptionUtils.rethrow(exception);
+        }
     }
 
     /** Validates whether a client API version can access this primary-key table. */
