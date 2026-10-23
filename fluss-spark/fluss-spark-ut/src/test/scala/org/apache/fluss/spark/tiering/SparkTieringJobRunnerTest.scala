@@ -69,7 +69,7 @@ class SparkTieringJobRunnerTest extends AnyFunSuite {
       (_, _) => lakeFactory)
   }
 
-  test("start is idempotent and stop wakes a long table polling interval") {
+  test("start is idempotent and stop releases resources") {
     val f = new Fixture
     val polled = new CountDownLatch(1)
     when(f.coordinator.heartbeatAndRequestTable()).thenAnswer {
@@ -142,7 +142,7 @@ class SparkTieringJobRunnerTest extends AnyFunSuite {
     }
   }
 
-  test("an empty split round still invokes the committer to recover lake state") {
+  test("an empty split round still checks for missing lake snapshots") {
     val f = new Fixture
     val tablePath = TablePath.of("db", "empty_table")
     val descriptor = TableDescriptor
@@ -186,7 +186,7 @@ class SparkTieringJobRunnerTest extends AnyFunSuite {
   }
 
   test("split generation reuses supplied partition metadata without querying it again") {
-    val f = new Fixture
+    val admin = mock(classOf[Admin])
     val tablePath = TablePath.of("db", "partitioned_table")
     val descriptor = TableDescriptor
       .builder()
@@ -202,9 +202,9 @@ class SparkTieringJobRunnerTest extends AnyFunSuite {
     val partitionInfos = Collections.singletonList(partition)
     val noSnapshot = new CompletableFuture[org.apache.fluss.client.metadata.LakeSnapshot]()
     noSnapshot.completeExceptionally(new LakeTableSnapshotNotExistException("no lake snapshot"))
-    when(f.admin.getLatestLakeSnapshot(tablePath)).thenReturn(noSnapshot)
+    when(admin.getLatestLakeSnapshot(tablePath)).thenReturn(noSnapshot)
     when(
-      f.admin.listOffsets(
+      admin.listOffsets(
         eqTo(tablePath),
         eqTo(partition.getPartitionName),
         eqTo(Collections.singletonList(Int.box(0))),
@@ -212,17 +212,17 @@ class SparkTieringJobRunnerTest extends AnyFunSuite {
       .thenReturn(new ListOffsetsResult(Collections
         .singletonMap(Int.box(0), CompletableFuture.completedFuture[java.lang.Long](5L))))
 
-    val generator = new TieringSplitGenerator(f.admin)
+    val generator = new TieringSplitGenerator(admin)
     val splits = generator.generateTableSplits(tableInfo, partitionInfos)
     assertThat(splits.size()).isEqualTo(1)
     assertThat(splits.get(0).getTableBucket.getPartitionId).isEqualTo(Long.box(2L))
     assertThat(splits.get(0).asTieringLogSplit().getStoppingOffset).isEqualTo(5L)
-    verify(f.admin, never()).listPartitionInfos(tablePath, true)
+    verify(admin, never()).listPartitionInfos(tablePath, true)
 
-    when(f.admin.listPartitionInfos(tablePath, true))
+    when(admin.listPartitionInfos(tablePath, true))
       .thenReturn(CompletableFuture.completedFuture(partitionInfos))
     assertThat(generator.generateTableSplits(tableInfo) == splits).isTrue()
-    verify(f.admin, times(1)).listPartitionInfos(tablePath, true)
+    verify(admin, times(1)).listPartitionInfos(tablePath, true)
   }
 
 }

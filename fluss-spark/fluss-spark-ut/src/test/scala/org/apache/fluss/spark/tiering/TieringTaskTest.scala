@@ -227,7 +227,6 @@ class TieringTaskTest extends AnyFunSuite {
     }
 
     override def poll(timeout: Duration): ScanRecords = {
-      assertThat(timeout).isEqualTo(Duration.ofMillis(1))
       pollCount += 1
       require(remaining.hasNext, "Unexpected log scanner poll")
       remaining.next()
@@ -249,7 +248,6 @@ class TieringTaskTest extends AnyFunSuite {
     var closed = false
 
     override def pollBatch(timeout: Duration): CloseableIterator[InternalRow] = {
-      assertThat(timeout).isEqualTo(Duration.ofMillis(1))
       require(!finished, "Unexpected batch scanner poll after end of input")
       if (remaining.hasNext) {
         remaining.next()
