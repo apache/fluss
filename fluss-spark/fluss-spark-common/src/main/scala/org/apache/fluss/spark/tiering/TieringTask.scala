@@ -17,13 +17,13 @@
 
 package org.apache.fluss.spark.tiering
 
-import org.apache.fluss.client.{Connection, ConnectionFactory}
 import org.apache.fluss.client.table.Table
 import org.apache.fluss.client.table.scanner.ScanRecord
 import org.apache.fluss.client.tiering.{TableBucketWriteResult, TieringLogSplit, TieringSnapshotSplit, TieringSplit, TieringWriterInitContext}
 import org.apache.fluss.config.Configuration
 import org.apache.fluss.lake.writer.LakeWriter
 import org.apache.fluss.spark.tiering.SparkTieringJobRunner.createLakeTieringFactory
+import org.apache.fluss.spark.utils.FlussConnectionCache
 import org.apache.fluss.utils.IOUtils.closeQuietly
 
 import org.apache.spark.internal.Logging
@@ -54,18 +54,20 @@ object TieringTask extends Logging {
       dataLakeFormat: String,
       lakeConfig: Configuration,
       pollTimeoutMs: Long,
+      partitionBucketCount: java.lang.Integer,
       ioTmpDirs: Array[String] = null): SerializedTaskResult = {
     val tablePath = split.getTablePath
     val tableBucket = split.getTableBucket
     val partitionName = Option(split.getPartitionName)
 
-    var connection: Connection = null
+    var lease: FlussConnectionCache.Lease = null
     var table: Table = null
-    var lakeWriter: LakeWriter[AnyRef] = null
 
     try {
-      connection = ConnectionFactory.createConnection(flussConfig)
-      table = connection.getTable(tablePath)
+      val (acquiredLease, acquiredTable) =
+        FlussConnectionCache.acquireWithTable(flussConfig, tablePath)
+      lease = acquiredLease
+      table = acquiredTable
 
       // Verify table ID hasn't changed (table not dropped/recreated)
       val currentTableId = table.getTableInfo.getTableId
@@ -78,18 +80,6 @@ object TieringTask extends Logging {
       // Initialize LakeTieringFactory on executor
       val lakeTieringFactory = createLakeTieringFactory(dataLakeFormat, lakeConfig)
 
-      val partitionBucketCount: java.lang.Integer = if (tableBucket.getPartitionId == null) {
-        null
-      } else {
-        val partitionInfo = connection.getAdmin
-          .listPartitionInfos(tablePath, true)
-          .get()
-          .asScala
-          .find(_.getPartitionId == tableBucket.getPartitionId.longValue())
-          .getOrElse(
-            throw new IllegalStateException(s"Partition for $tableBucket no longer exists"))
-        java.lang.Integer.valueOf(partitionInfo.getBucketCount)
-      }
       val writerInitContext =
         new TieringWriterInitContext(
           tablePath,
@@ -100,27 +90,27 @@ object TieringTask extends Logging {
           split.getTieringRoundTimestamp,
           partitionBucketCount,
           ioTmpDirs)
-      lakeWriter = lakeTieringFactory.createLakeWriter(writerInitContext)
+      val createWriter = () => lakeTieringFactory.createLakeWriter(writerInitContext)
 
       val result = if (split.isTieringLogSplit) {
-        processLogSplit(table, lakeWriter, split.asTieringLogSplit(), pollTimeoutMs)
+        processLogSplit(table, createWriter, split.asTieringLogSplit(), pollTimeoutMs)
       } else {
-        processSnapshotSplit(table, lakeWriter, split.asTieringSnapshotSplit(), pollTimeoutMs)
+        processSnapshotSplit(table, createWriter, split.asTieringSnapshotSplit(), pollTimeoutMs)
       }
       SerializedTaskResult.fromWriteResult(result, lakeTieringFactory.getWriteResultSerializer)
     } finally {
-      closeQuietly(lakeWriter, "LakeWriter")
       closeQuietly(table, "Table")
-      closeQuietly(connection, "Connection")
+      closeQuietly(lease, "Connection lease")
     }
   }
 
   private[tiering] def processLogSplit(
       table: Table,
-      lakeWriter: LakeWriter[AnyRef],
+      createWriter: () => LakeWriter[AnyRef],
       split: TieringLogSplit,
       pollTimeoutMs: Long): TableBucketWriteResult[AnyRef] = {
     val logScanner = table.newScan().createLogScanner()
+    var lakeWriter: LakeWriter[AnyRef] = null
     try {
       val tableBucket = split.getTableBucket
       if (tableBucket.getPartitionId != null) {
@@ -145,6 +135,9 @@ object TieringTask extends Logging {
           records.asScala.foreach {
             record =>
               if (record.logOffset() < stoppingOffset) {
+                if (lakeWriter == null) {
+                  lakeWriter = createWriter()
+                }
                 lakeWriter.write(record)
                 if (record.timestamp() > maxTimestamp) {
                   maxTimestamp = record.timestamp()
@@ -162,7 +155,7 @@ object TieringTask extends Logging {
         }
       }
 
-      val writeResult = lakeWriter.complete()
+      val writeResult = if (lakeWriter == null) null else lakeWriter.complete()
 
       logInfo(
         s"Finished tiering log split for bucket $tableBucket," +
@@ -177,19 +170,21 @@ object TieringTask extends Logging {
         maxTimestamp,
         split.getNumberOfSplits)
     } finally {
+      closeQuietly(lakeWriter, "LakeWriter")
       closeQuietly(logScanner, "LogScanner")
     }
   }
 
   private[tiering] def processSnapshotSplit(
       table: Table,
-      lakeWriter: LakeWriter[AnyRef],
+      createWriter: () => LakeWriter[AnyRef],
       split: TieringSnapshotSplit,
       pollTimeoutMs: Long): TableBucketWriteResult[AnyRef] = {
     val tableBucket = split.getTableBucket
     val batchScanner = table
       .newScan()
       .createBatchScanner(tableBucket, split.getSnapshotId)
+    var lakeWriter: LakeWriter[AnyRef] = null
 
     try {
       val pollTimeout = Duration.ofMillis(pollTimeoutMs)
@@ -200,6 +195,9 @@ object TieringTask extends Logging {
             checkInterrupted()
             val row = batch.next()
             // Snapshot rows represent inserts at the snapshot's log offset.
+            if (lakeWriter == null) {
+              lakeWriter = createWriter()
+            }
             lakeWriter.write(new ScanRecord(row))
           }
         } finally {
@@ -208,7 +206,7 @@ object TieringTask extends Logging {
         batch = batchScanner.pollBatch(pollTimeout)
       }
 
-      val writeResult = lakeWriter.complete()
+      val writeResult = if (lakeWriter == null) null else lakeWriter.complete()
 
       val logEndOffset = split.getLogOffsetOfSnapshot
 
@@ -226,6 +224,7 @@ object TieringTask extends Logging {
         split.getNumberOfSplits
       )
     } finally {
+      closeQuietly(lakeWriter, "LakeWriter")
       closeQuietly(batchScanner, "BatchScanner")
     }
   }

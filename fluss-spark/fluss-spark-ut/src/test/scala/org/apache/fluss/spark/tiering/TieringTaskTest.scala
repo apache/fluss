@@ -55,7 +55,7 @@ class TieringTaskTest extends AnyFunSuite {
     val writer = new TestingLakeWriter(writeResult)
     val split = new TieringLogSplit(TablePath.of("db", "table"), bucket, null, 2L, 4L, 3)
 
-    val result = TieringTask.processLogSplit(table, writer, split, 1L)
+    val result = TieringTask.processLogSplit(table, () => writer, split, 1L)
 
     assertThat[LogRecord](writer.records).containsExactly(first, second)
     assertThat(result.writeResult()).isSameAs(writeResult)
@@ -65,6 +65,7 @@ class TieringTaskTest extends AnyFunSuite {
     assertThat(scanner.subscription.contains((0, 2L))).isTrue()
     assertThat(scanner.pollCount).isEqualTo(1)
     assertThat(scanner.closed).isTrue()
+    assertThat(writer.closed).isTrue()
     assertThat(writer.completeCount).isEqualTo(1)
   }
 
@@ -80,7 +81,7 @@ class TieringTaskTest extends AnyFunSuite {
     val writer = new TestingLakeWriter(writeResult)
     val split = new TieringSnapshotSplit(TablePath.of("db", "table"), bucket, null, 7L, 17L, 3)
 
-    val result = TieringTask.processSnapshotSplit(table, writer, split, 1L)
+    val result = TieringTask.processSnapshotSplit(table, () => writer, split, 1L)
 
     assertThat[LogRecord](writer.records).hasSize(2)
     assertThat(writer.records.get(0).getRow).isSameAs(first)
@@ -93,6 +94,7 @@ class TieringTaskTest extends AnyFunSuite {
     assertThat(scan.snapshotRequest.contains((bucket, 7L))).isTrue()
     assertThat(batch.closed).isTrue()
     assertThat(scanner.closed).isTrue()
+    assertThat(writer.closed).isTrue()
     assertThat(writer.completeCount).isEqualTo(1)
   }
 
@@ -105,15 +107,16 @@ class TieringTaskTest extends AnyFunSuite {
       Collections.singletonMap[TableBucket, java.lang.Long](tableBucket, 5L))
     val scanner = new TestingLogScanner(Seq(progress))
     val table = new TestingTable(new TestingScan(logScanner = scanner))
-    val writer = new TestingLakeWriter()
 
-    val result = TieringTask.processLogSplit(table, writer, split, 1L)
+    val result = TieringTask.processLogSplit(
+      table,
+      () => throw new AssertionError("Empty split must not create a writer"),
+      split,
+      1L)
 
     assertThat(result.logEndOffset()).isEqualTo(5L)
     assertThat(result.writeResult()).isNull()
     assertThat(result.numberOfWriteResults()).isEqualTo(1)
-    assertThat[LogRecord](writer.records).isEmpty()
-    assertThat(writer.completeCount).isEqualTo(1)
     assertThat(scanner.pollCount).isEqualTo(1)
     assertThat(scanner.closed).isTrue()
   }
@@ -121,15 +124,41 @@ class TieringTaskTest extends AnyFunSuite {
   test("an empty log range finishes without polling") {
     val scanner = new TestingLogScanner(Seq.empty)
     val table = new TestingTable(new TestingScan(logScanner = scanner))
-    val writer = new TestingLakeWriter()
     val split =
       new TieringLogSplit(TablePath.of("db", "table"), new TableBucket(1L, 0), null, 5L, 5L, 1)
 
-    val result = TieringTask.processLogSplit(table, writer, split, 1L)
+    val result = TieringTask.processLogSplit(
+      table,
+      () => throw new AssertionError("Empty split must not create a writer"),
+      split,
+      1L)
 
     assertThat(result.logEndOffset()).isEqualTo(5L)
     assertThat(scanner.pollCount).isZero()
-    assertThat(writer.completeCount).isEqualTo(1)
+    assertThat(scanner.closed).isTrue()
+  }
+
+  test("empty snapshot preserves its offset without creating a writer") {
+    val scanner = new TestingBatchScanner(Seq.empty)
+    val table = new TestingTable(new TestingScan(batchScanner = scanner))
+    val split =
+      new TieringSnapshotSplit(
+        TablePath.of("db", "table"),
+        new TableBucket(1L, 0),
+        null,
+        7L,
+        17L,
+        3)
+
+    val result = TieringTask.processSnapshotSplit(
+      table,
+      () => throw new AssertionError("Empty split must not create a writer"),
+      split,
+      1L)
+
+    assertThat(result.writeResult()).isNull()
+    assertThat(result.logEndOffset()).isEqualTo(17L)
+    assertThat(result.numberOfWriteResults()).isEqualTo(3)
     assertThat(scanner.closed).isTrue()
   }
 
@@ -142,11 +171,13 @@ class TieringTaskTest extends AnyFunSuite {
     val split = new TieringSnapshotSplit(TablePath.of("db", "table"), bucket, null, 7L, 10L, 1)
 
     val failure =
-      intercept[IllegalStateException](TieringTask.processSnapshotSplit(table, writer, split, 1L))
+      intercept[IllegalStateException](
+        TieringTask.processSnapshotSplit(table, () => writer, split, 1L))
 
     assertThat(failure).hasMessage("write failed")
     assertThat(batch.closed).isTrue()
     assertThat(scanner.closed).isTrue()
+    assertThat(writer.closed).isTrue()
     assertThat(writer.completeCount).isZero()
   }
 
@@ -244,6 +275,7 @@ class TieringTaskTest extends AnyFunSuite {
     extends LakeWriter[AnyRef] {
     val records = new ArrayList[LogRecord]()
     var completeCount = 0
+    var closed = false
 
     override def write(record: LogRecord): Unit = {
       if (writeFailure != null) {
@@ -253,10 +285,11 @@ class TieringTaskTest extends AnyFunSuite {
     }
 
     override def complete(): AnyRef = {
+      require(!records.isEmpty, "Cannot complete an empty writer")
       completeCount += 1
       writeResult
     }
 
-    override def close(): Unit = {}
+    override def close(): Unit = { closed = true }
   }
 }

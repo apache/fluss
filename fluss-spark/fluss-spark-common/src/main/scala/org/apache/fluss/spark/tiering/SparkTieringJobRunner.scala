@@ -284,8 +284,39 @@ class SparkTieringJobRunner(
       val results = if (splits.isEmpty) {
         Seq.empty[TableBucketWriteResult[AnyRef]]
       } else {
+        val partitionBucketCounts = if (tableInfo.isPartitioned) {
+          admin
+            .listPartitionInfos(tablePath, true)
+            .get()
+            .asScala
+            .map(info => info.getPartitionId -> info.getBucketCount)
+            .toMap
+        } else {
+          Map.empty[Long, Int]
+        }
+        val splitsWithBucketCounts = splits.map {
+          split =>
+            val partitionId = split.getTableBucket.getPartitionId
+            val bucketCount: java.lang.Integer = if (partitionId == null) {
+              null
+            } else {
+              Int.box(
+                partitionBucketCounts.getOrElse(
+                  partitionId.longValue(),
+                  throw new IllegalStateException(
+                    s"Partition for ${split.getTableBucket} no longer exists")))
+            }
+            (split, bucketCount)
+        }
         SparkTieringJobRunner
-          .submit(sc, splits, flussConfig, dataLakeFormat, lakeConfig, pollTimeoutMs, ioTmpDirs)
+          .submit(
+            sc,
+            splitsWithBucketCounts,
+            flussConfig,
+            dataLakeFormat,
+            lakeConfig,
+            pollTimeoutMs,
+            ioTmpDirs)
           .collect()
           .toSeq
           .map(_.toWriteResult(lakeTieringFactory.getWriteResultSerializer))
@@ -346,20 +377,21 @@ object SparkTieringJobRunner {
 
   def submit(
       sparkContext: SparkContext,
-      splits: Seq[TieringSplit],
+      splits: Seq[(TieringSplit, java.lang.Integer)],
       flussConfig: Configuration,
       dataLakeFormat: String,
       lakeConfig: Configuration,
       pollTimeoutMs: Long,
       ioTmpDirs: Array[String] = null): RDD[SerializedTaskResult] = {
     sparkContext.parallelize(splits, splits.size).map {
-      split =>
+      case (split, partitionBucketCount) =>
         TieringTask.process(
           split,
           flussConfig,
           dataLakeFormat,
           lakeConfig,
           pollTimeoutMs,
+          partitionBucketCount,
           ioTmpDirs)
     }
   }
