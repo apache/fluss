@@ -20,7 +20,6 @@ package org.apache.fluss.server.tablet;
 import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
-import org.apache.fluss.config.TableConfig;
 import org.apache.fluss.exception.ConsumerGroupOwnerLoadingException;
 import org.apache.fluss.exception.ConsumerGroupOwnerNotAvailableException;
 import org.apache.fluss.exception.FlussRuntimeException;
@@ -73,6 +72,7 @@ import org.apache.fluss.server.entity.NotifyLeaderAndIsrResultForBucket;
 import org.apache.fluss.server.log.ListOffsetsParam;
 import org.apache.fluss.server.metadata.ServerInfo;
 import org.apache.fluss.server.metadata.SystemTables;
+import org.apache.fluss.server.tablet.consumer.group.ConsumerOffsetTableConfig;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
 import org.apache.fluss.server.utils.ServerRpcMessageUtils;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
@@ -186,14 +186,29 @@ public class TabletServiceITCase {
                         .get();
         assertThat(consumerOffsetsTable.remoteDataDir)
                 .isEqualTo(FLUSS_CLUSTER_EXTENSION.getRemoteDataDir());
-        TableConfig consumerOffsetsTableConfig =
-                new TableConfig(Configuration.fromMap(consumerOffsetsTable.properties));
-        assertThat(consumerOffsetsTableConfig.getLogTTLMs())
-                .isEqualTo(ConfigOptions.OFFSETS_RETENTION.defaultValue().toMillis());
-        assertThat(consumerOffsetsTableConfig.getKvTTL())
-                .contains(ConfigOptions.OFFSETS_RETENTION.defaultValue());
-        assertThat(consumerOffsetsTableConfig.getKvValueLayoutVersion())
-                .contains(KvValueLayout.TAGGED.version());
+        Configuration expectedProperties =
+                new Configuration()
+                        .set(ConfigOptions.TABLE_LOG_FORMAT, LogFormat.COMPACTED)
+                        .set(
+                                ConfigOptions.TABLE_LOG_TTL,
+                                ConsumerOffsetTableConfig.OFFSETS_TABLE_LOG_TTL)
+                        .set(
+                                ConfigOptions.TABLE_LOG_LOCAL_TTL,
+                                ConsumerOffsetTableConfig.OFFSETS_TABLE_LOCAL_LOG_TTL)
+                        .set(
+                                ConfigOptions.TABLE_KV_TTL,
+                                ConfigOptions.OFFSETS_RETENTION.defaultValue())
+                        .set(
+                                ConfigOptions.TABLE_REPLICATION_FACTOR,
+                                ConfigOptions.OFFSETS_TABLE_REPLICATION_FACTOR.defaultValue())
+                        .set(
+                                ConfigOptions.TABLE_KV_FORMAT_VERSION,
+                                ConfigOptions.CURRENT_KV_FORMAT_VERSION)
+                        .set(
+                                ConfigOptions.TABLE_KV_VALUE_LAYOUT_VERSION,
+                                KvValueLayout.TAGGED.version());
+        assertThat(consumerOffsetsTable.properties)
+                .containsExactlyInAnyOrderEntriesOf(expectedProperties.toMap());
     }
 
     @ParameterizedTest

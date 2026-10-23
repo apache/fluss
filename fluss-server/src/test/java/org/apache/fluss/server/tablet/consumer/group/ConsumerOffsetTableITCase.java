@@ -28,6 +28,7 @@ import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.TableDescriptor;
+import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.rpc.gateway.AdminGateway;
 import org.apache.fluss.rpc.gateway.TabletServerGateway;
 import org.apache.fluss.rpc.messages.FindConsumerGroupOwnerRequest;
@@ -107,10 +108,17 @@ class ConsumerOffsetTableITCase {
                 FLUSS_CLUSTER_EXTENSION.newCoordinatorClient(CLIENT_LISTENER);
         TableDescriptor tableDescriptor = newConsumerOffsetTableDescriptor();
 
-        assertSystemTableCreationRejected(externalGateway, tableDescriptor, false);
+        assertSystemTableCreationRejected(
+                externalGateway, SystemTables.CONSUMER_OFFSETS, tableDescriptor, false);
+        assertSystemTableCreationRejected(
+                externalGateway,
+                TablePath.of(SystemTables.SYSTEM_DATABASE, "unknown_table"),
+                tableDescriptor,
+                false);
 
         ensureConsumerOffsetTable("group-before-external-idempotent-create");
-        assertSystemTableCreationRejected(externalGateway, tableDescriptor, true);
+        assertSystemTableCreationRejected(
+                externalGateway, SystemTables.CONSUMER_OFFSETS, tableDescriptor, true);
     }
 
     private static void ensureConsumerOffsetTable(String groupId) throws Exception {
@@ -140,14 +148,15 @@ class ConsumerOffsetTableITCase {
     }
 
     private static void assertSystemTableCreationRejected(
-            AdminGateway gateway, TableDescriptor tableDescriptor, boolean ignoreIfExists) {
+            AdminGateway gateway,
+            TablePath tablePath,
+            TableDescriptor tableDescriptor,
+            boolean ignoreIfExists) {
         assertThatThrownBy(
                         () ->
                                 gateway.createTable(
                                                 newCreateTableRequest(
-                                                        SystemTables.CONSUMER_OFFSETS,
-                                                        tableDescriptor,
-                                                        ignoreIfExists))
+                                                        tablePath, tableDescriptor, ignoreIfExists))
                                         .get())
                 .cause()
                 .isInstanceOf(InvalidTableException.class)

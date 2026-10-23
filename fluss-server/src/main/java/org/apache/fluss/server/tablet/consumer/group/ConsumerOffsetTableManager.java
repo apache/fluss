@@ -27,7 +27,6 @@ import org.apache.fluss.metadata.DatabaseDescriptor;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePath;
-import org.apache.fluss.row.encode.KvValueLayout;
 import org.apache.fluss.rpc.gateway.CoordinatorGateway;
 import org.apache.fluss.rpc.messages.CreateDatabaseRequest;
 import org.apache.fluss.rpc.messages.CreateTableRequest;
@@ -267,14 +266,14 @@ public final class ConsumerOffsetTableManager {
                             .logFormat(LogFormat.COMPACTED)
                             .distributedBy(bucketCount, ConsumerOffsetSchema.getBucketKeyColumn())
                             .property(
-                                    ConfigOptions.TABLE_LOG_TTL, tableConfig.getOffsetsRetention())
-                            .property(ConfigOptions.TABLE_KV_TTL, tableConfig.getOffsetsRetention())
+                                    ConfigOptions.TABLE_LOG_TTL,
+                                    ConsumerOffsetTableConfig.OFFSETS_TABLE_LOG_TTL)
                             .property(
-                                    ConfigOptions.TABLE_KV_VALUE_LAYOUT_VERSION,
-                                    KvValueLayout.TAGGED.version())
-                            .build()
-                            .withBucketCount(bucketCount)
-                            .withReplicationFactor(replicationFactor);
+                                    ConfigOptions.TABLE_LOG_LOCAL_TTL,
+                                    ConsumerOffsetTableConfig.OFFSETS_TABLE_LOCAL_LOG_TTL)
+                            .property(ConfigOptions.TABLE_KV_TTL, tableConfig.getOffsetsRetention())
+                            .property(ConfigOptions.TABLE_REPLICATION_FACTOR, replicationFactor)
+                            .build();
 
             CreateTableRequest createTableRequest =
                     new CreateTableRequest()

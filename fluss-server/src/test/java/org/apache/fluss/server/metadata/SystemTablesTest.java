@@ -27,10 +27,14 @@ import static org.assertj.core.api.Assertions.assertThat;
 class SystemTablesTest {
 
     @Test
-    void testConsumerOffsetsIdentity() {
-        TablePath consumerOffsets = TablePath.of("sys", "consumer_offsets");
+    void testSystemTableClassification() {
+        TablePath consumerOffsets = TablePath.of(SystemTables.SYSTEM_DATABASE, "consumer_offsets");
         assertThat(SystemTables.CONSUMER_OFFSETS).isEqualTo(consumerOffsets);
         assertThat(SystemTables.isSystemTable(consumerOffsets)).isTrue();
+        assertThat(
+                        SystemTables.isSystemTable(
+                                TablePath.of(SystemTables.SYSTEM_DATABASE, "unknown_table")))
+                .isTrue();
         assertThat(SystemTables.isSystemTable(TablePath.of("fluss", "consumer_offsets"))).isFalse();
     }
 }

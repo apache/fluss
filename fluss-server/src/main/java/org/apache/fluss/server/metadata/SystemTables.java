@@ -20,9 +20,6 @@ package org.apache.fluss.server.metadata;
 import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.metadata.TablePath;
 
-import java.util.Collections;
-import java.util.Set;
-
 /** Identifiers of tables managed internally by Fluss. */
 @Internal
 public final class SystemTables {
@@ -34,12 +31,10 @@ public final class SystemTables {
     public static final TablePath CONSUMER_OFFSETS =
             TablePath.of(SYSTEM_DATABASE, "consumer_offsets");
 
-    private static final Set<TablePath> SYSTEM_TABLES = Collections.singleton(CONSUMER_OFFSETS);
-
     private SystemTables() {}
 
-    /** Returns whether the table is managed internally by Fluss. */
+    /** Returns whether the table belongs to the internal system database. */
     public static boolean isSystemTable(TablePath tablePath) {
-        return SYSTEM_TABLES.contains(tablePath);
+        return SYSTEM_DATABASE.equals(tablePath.getDatabaseName());
     }
 }

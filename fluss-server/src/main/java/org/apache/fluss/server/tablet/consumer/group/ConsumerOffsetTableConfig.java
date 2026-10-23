@@ -42,6 +42,12 @@ public final class ConsumerOffsetTableConfig {
      */
     public static final short OFFSET_COMMIT_REQUIRED_ACKS = -1;
 
+    /** Log retention for the consumer-offset system table. */
+    public static final Duration OFFSETS_TABLE_LOG_TTL = Duration.ofHours(6);
+
+    /** Local log retention for the consumer-offset system table. */
+    public static final Duration OFFSETS_TABLE_LOCAL_LOG_TTL = Duration.ofHours(6);
+
     private final MemorySize maxMetadataSize;
     private final Duration offsetsRetention;
     private final int offsetsTableNumBuckets;

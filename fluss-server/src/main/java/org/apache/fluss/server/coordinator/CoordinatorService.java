@@ -1030,7 +1030,10 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
             newDescriptor = newDescriptor.withProperties(newProperties);
         }
 
-        // override the datalake format if the table hasn't set it and the cluster configured
+        // Override the data lake format if the table hasn't set it and the cluster configured.
+        // System tables must not inherit the cluster data lake format. In particular, the
+        // consumer-offset table must retain standard Fluss KV bucketing so that GroupManager
+        // owner routing remains consistent with the bucket assignment of offset records.
         if (dataLakeFormat != null
                 && !SystemTables.isSystemTable(tablePath)
                 && !properties.containsKey(ConfigOptions.TABLE_DATALAKE_FORMAT.key())) {
