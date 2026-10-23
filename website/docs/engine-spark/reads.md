@@ -202,13 +202,9 @@ ORDER BY order_id;
 When a table has the configuration `table.datalake.enabled = 'true'`, its data exists in two layers:
 
 - **Fresh data** is retained in Fluss (real-time layer, sub-second freshness)
-- **Historical data** is tiered to the configured lake storage
+- **Historical data** is tiered to the lake storage (e.g., Paimon, Iceberg, Hudi)
 
 Fluss Spark connector supports **union read** that combines both layers to provide a complete, up-to-date view of the data. This allows Fluss to store only a small portion of the dataset in the cluster (reducing costs), while the lake serves as the source of complete historical data.
-
-Lake snapshot and union reads support **Paimon log and primary key tables** and **Iceberg log tables**. **Iceberg primary key lake snapshot and union reads are not supported**. This read limitation does not affect the ability to tier primary key data to Iceberg.
-
-Time-range reads use only data retained in Fluss, so they remain supported for both log and primary key tables tiered to Iceberg; they do not read the lake snapshot. See [Time-Range Batch Read](#time-range-batch-read).
 
 #### Union Read
 
@@ -219,7 +215,7 @@ To read the full dataset, simply query the table directly. The Spark connector a
 SELECT SUM(total_price) AS total_revenue FROM fluss_order_with_lake;
 ```
 
-For the supported lake formats and table types above, union read behaves as follows:
+The union read works for both **log tables** and **primary key tables**:
 
 - **Log tables**: Combines Fluss log data with lake historical data
 - **Primary key tables**: Combines lake snapshot data with recent KV log changes using sort-merge to provide the most up-to-date view
