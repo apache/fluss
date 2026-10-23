@@ -365,8 +365,7 @@ public static final FlussClusterExtension FLUSS_CLUSTER_EXTENSION =
 ## 9. Serialization & RPC
 
 **Protocol Buffers:** `fluss-rpc/src/main/proto/FlussApi.proto` uses proto2, with restrictions for future proto3 compatibility: DO NOT use the `default` keyword or `enum` type.
-**Regenerate Java:** `./mvnw clean install -DskipTests -pl fluss-protogen,fluss-rpc`
-**Regenerate Rust:** After modifying `FlussApi.proto`, run `fluss-rust/crates/fluss/regen.sh` and include the generated changes; the script requires `protoc` and Rust tooling.
+**Regenerate:** `./mvnw clean install -DskipTests -pl fluss-protogen,fluss-rpc`
 **Compatibility:** Preserve field numbers and meanings, handle absent optional fields, and check request/response versions and error mappings across clients and servers.
 
 ---
@@ -544,9 +543,7 @@ When reviewing a PR or diff against this repo:
 - Look for opportunities to simplify the code, scoped to the diff itself (not pre-existing code outside the change).
 - Flag comments that are obvious (restate what the code already says) or overly verbose.
 - In test code, look for potential flakiness — e.g. `Thread.sleep` used outside a retry/poll loop, or similar timing-dependent, non-deterministic patterns. Where applicable, suggest clock injection (e.g. a manually-advanced `Clock`/`ManualClock`) instead of relying on wall-clock time, or waiting for the actual condition in a loop with a timeout, for deterministic tests.
-- If a change introduces a new feature controlled by a config option/flag, check that the resolved state (enabled/disabled, and the effective value) is logged at INFO level when the feature initializes/activates.
-- Consider whether a change should be hidden behind a feature flag, especially if it's non-trivial (touches core paths, changes default behavior, or is hard to reason about in isolation). This is mandatory if the change is risky (correctness, performance, backward-compatibility, or data-safety risk) and no flag/kill-switch already exists.
-- For changes to configuration options, check if the corresponding documentation has been regenerated (this should be covered by tests but flagging it earlier speeds up development)
+- For configuration changes, check that related hand-written pages (e.g. `website/docs/engine-flink/options.md`) match the option names, defaults, and behavior.
 - Check hot-path allocations, blocking I/O, lock scope, and backpressure when touched by the change; substantiate performance claims with measurements or clearly state the evidence limit.
 - Make findings actionable: give a concrete trigger, impact, code location, and supporting evidence. State unverified assumptions and test gaps separately from confirmed bugs.
 
