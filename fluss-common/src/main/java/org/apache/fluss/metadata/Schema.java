@@ -306,12 +306,9 @@ public final class Schema implements Serializable {
         /**
          * Adopts all columns from the given list.
          *
-         * <p>This method directly uses the columns as-is, preserving their existing column IDs and
-         * all nested field IDs within their data types (e.g., field IDs in {@link RowType}, {@link
-         * ArrayType}, {@link MapType}). No field ID reassignment will occur.
-         *
-         * <p>This behavior is different from {@link #column(String, DataType)}, which automatically
-         * assigns new column IDs and reassigns all nested field IDs to ensure global uniqueness.
+         * <p>When all column IDs and nested field IDs are set, this method preserves them. When all
+         * IDs are unknown, this method assigns globally unique IDs in flatten order, as in {@link
+         * #column(String, DataType)}.
          *
          * <p>Use this method when:
          *
@@ -321,48 +318,45 @@ public final class Schema implements Serializable {
          *   <li>Reconstructing schema from serialized format
          * </ul>
          *
-         * <p>Note: All input columns must either have column IDs set or none of them should have
-         * column IDs. Mixed states are not allowed.
+         * <p>Note: IDs must either be set for all columns and nested fields or be unknown for all
+         * of them. Mixed states are not allowed, including nested fields in {@link RowType}, {@link
+         * ArrayType}, and {@link MapType}.
          *
          * @param inputColumns the list of columns to adopt
          * @return this builder for fluent API
-         * @throws IllegalStateException if columns have inconsistent column ID states (some set,
-         *     some not set)
+         * @throws IllegalStateException if column IDs or nested field IDs are inconsistently set
+         *     (some set, some not set)
          */
         public Builder fromColumns(List<Column> inputColumns) {
 
-            boolean nonSetColumnId =
-                    inputColumns.stream()
-                            .noneMatch(column -> column.columnId != Column.UNKNOWN_COLUMN_ID);
-            boolean allSetColumnId =
-                    inputColumns.stream()
-                            .allMatch(column -> column.columnId != Column.UNKNOWN_COLUMN_ID);
-            // REFINED CHECK:
-            // Only throw if we are adopting a full schema (allSetColumnId)
-            // AND the builder already has columns assigned.
-            // We use !columns.isEmpty() as the primary signal of a "dirty" builder.
-            if (allSetColumnId && !inputColumns.isEmpty() && !this.columns.isEmpty()) {
+            List<Integer> allFieldIds = collectAllFieldIds(inputColumns);
+            boolean allFieldIdsUnknown =
+                    allFieldIds.stream().allMatch(fieldId -> fieldId == Column.UNKNOWN_COLUMN_ID);
+            boolean allFieldIdsSet =
+                    allFieldIds.stream().noneMatch(fieldId -> fieldId == Column.UNKNOWN_COLUMN_ID);
+            // Adopting assigned field IDs requires an empty builder.
+            if (allFieldIdsSet && !inputColumns.isEmpty() && !this.columns.isEmpty()) {
                 throw new IllegalStateException(
                         "Schema.Builder#fromColumns (or fromSchema) should be the first API to be called on the builder when adopting columns with IDs.");
             }
 
             checkState(
-                    nonSetColumnId || allSetColumnId,
-                    "All columns must have columnId or none of them must have columnId.");
-            if (allSetColumnId) {
+                    allFieldIdsUnknown || allFieldIdsSet,
+                    "All field IDs (including nested fields) must be set or none of them must be set.");
+            if (allFieldIdsSet) {
                 columns.addAll(inputColumns);
-                List<Integer> allFieldIds = collectAllFieldIds(inputColumns);
                 highestFieldId =
                         new AtomicInteger(allFieldIds.stream().max(Integer::compareTo).orElse(-1));
             } else {
-                // if all columnId is not set, this maybe from old version schema. Just use its
-                // position as columnId.
+                // Assign IDs in flatten order, including nested fields.
                 for (Column column : inputColumns) {
                     int newColumnId = highestFieldId.incrementAndGet();
+                    DataType reassignDataType =
+                            ReassignFieldId.reassign(column.dataType, highestFieldId);
                     columns.add(
                             new Column(
                                     column.columnName,
-                                    column.dataType,
+                                    reassignDataType,
                                     column.comment,
                                     newColumnId,
                                     column.aggFunction));
