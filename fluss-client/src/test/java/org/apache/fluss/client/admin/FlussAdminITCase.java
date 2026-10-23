@@ -131,6 +131,7 @@ import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.apache.fluss.testutils.common.CommonTestUtils.waitUntil;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.entry;
 
 /**
  * Integration tests for {@link FlussAdmin}.
@@ -2348,6 +2349,11 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
         assertThat(zkClient.getServerTags().get().getServerTags())
                 .containsEntry(0, ServerTag.PERMANENT_OFFLINE)
                 .containsEntry(1, ServerTag.PERMANENT_OFFLINE);
+        // getServerNodes reports the same tags, and no tag for server 2
+        assertThat(serverTagsOf(admin.getServerNodes().get()))
+                .containsOnly(
+                        entry(0, ServerTag.PERMANENT_OFFLINE),
+                        entry(1, ServerTag.PERMANENT_OFFLINE));
 
         // 3.add different server tag for server 0,2. error will be thrown and tag for 2 will not be
         // added.
@@ -2367,6 +2373,7 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
         assertThat(serverTags)
                 .containsEntry(0, ServerTag.PERMANENT_OFFLINE)
                 .containsEntry(1, ServerTag.PERMANENT_OFFLINE);
+        assertThat(serverTagsOf(admin.getServerNodes().get())).isEqualTo(serverTags);
 
         // 4.remove server tag for server 100
         admin.removeServerTag(Collections.singletonList(100), ServerTag.PERMANENT_OFFLINE).get();
@@ -2384,6 +2391,7 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
 
         admin.removeServerTag(Arrays.asList(0, 1), ServerTag.PERMANENT_OFFLINE).get();
         assertThat(zkClient.getServerTags()).isNotPresent();
+        assertThat(serverTagsOf(admin.getServerNodes().get())).isEmpty();
 
         // restore after test, or else will influence other tests
         coordinatorContext.addLiveTabletServer(tmpServerInfo);
@@ -2402,6 +2410,17 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
                 .hasMessageContaining(
                         "Server tag PERMANENT_OFFLINE not exists for server 2, the current "
                                 + "server tag of this server is TEMPORARY_OFFLINE.");
+        assertThat(serverTagsOf(admin.getServerNodes().get()))
+                .containsOnly(entry(2, ServerTag.TEMPORARY_OFFLINE));
+        // clear server tag
+        admin.removeServerTag(Collections.singletonList(2), ServerTag.TEMPORARY_OFFLINE).get();
+    }
+
+    /** Returns the server tags of the tagged server nodes by server id. */
+    private static Map<Integer, ServerTag> serverTagsOf(List<ServerNode> serverNodes) {
+        return serverNodes.stream()
+                .filter(node -> node.serverTag() != null)
+                .collect(Collectors.toMap(ServerNode::id, ServerNode::serverTag));
     }
 
     @Test
