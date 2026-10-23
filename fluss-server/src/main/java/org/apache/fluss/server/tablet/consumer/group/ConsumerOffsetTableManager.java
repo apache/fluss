@@ -266,8 +266,7 @@ public final class ConsumerOffsetTableManager {
                             .logFormat(LogFormat.COMPACTED)
                             .distributedBy(bucketCount, ConsumerOffsetSchema.getBucketKeyColumn())
                             .property(
-                                    ConfigOptions.TABLE_LOG_TTL,
-                                    ConsumerOffsetTableConfig.OFFSETS_TABLE_LOG_TTL)
+                                    ConfigOptions.TABLE_LOG_TTL, tableConfig.getOffsetsRetention())
                             .property(
                                     ConfigOptions.TABLE_LOG_LOCAL_TTL,
                                     ConsumerOffsetTableConfig.OFFSETS_TABLE_LOCAL_LOG_TTL)

@@ -191,7 +191,7 @@ public class TabletServiceITCase {
                         .set(ConfigOptions.TABLE_LOG_FORMAT, LogFormat.COMPACTED)
                         .set(
                                 ConfigOptions.TABLE_LOG_TTL,
-                                ConsumerOffsetTableConfig.OFFSETS_TABLE_LOG_TTL)
+                                ConfigOptions.OFFSETS_RETENTION.defaultValue())
                         .set(
                                 ConfigOptions.TABLE_LOG_LOCAL_TTL,
                                 ConsumerOffsetTableConfig.OFFSETS_TABLE_LOCAL_LOG_TTL)
