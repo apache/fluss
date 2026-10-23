@@ -29,14 +29,16 @@ public class TableMetadata {
     /**
      * The already deleted tablePath. This tablePath will be used in UpdateMetadata request to
      * identify this tablePath already deleted, but there is an tableId residual in zookeeper. In
-     * this case, tabletServers need to clear the metadata of this tableId.
+     * this case, tabletServers need to clear the metadata of this tableId. This allows the deletion
+     * to be applied even when the table path has been reused by another table.
      */
     public static final TablePath DELETED_TABLE_PATH = TablePath.of("__UNKNOWN__", "__delete__");
 
     /**
      * The already deleted table id. This table id will be used in UpdateMetadata request to
      * identify this table already deleted, and tabletServers need to clear the metadata of this
-     * table.
+     * table. New coordinators should use {@link #DELETED_TABLE_PATH} and preserve the original
+     * table ID instead.
      */
     public static final Long DELETED_TABLE_ID = -2L;
 

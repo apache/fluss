@@ -21,25 +21,35 @@ import org.apache.fluss.exception.NetworkException;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
+import org.apache.fluss.metadata.TablePartition;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.rpc.messages.NotifyLeaderAndIsrRequest;
 import org.apache.fluss.rpc.messages.NotifyLeaderAndIsrResponse;
 import org.apache.fluss.rpc.messages.PbNotifyLeaderAndIsrReqForBucket;
+import org.apache.fluss.rpc.messages.UpdateMetadataRequest;
+import org.apache.fluss.rpc.messages.UpdateMetadataResponse;
 import org.apache.fluss.server.coordinator.event.AccessContextEvent;
 import org.apache.fluss.server.coordinator.event.EventManager;
+import org.apache.fluss.server.metadata.PartitionMetadata;
 import org.apache.fluss.server.zk.ZkEpoch;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.List;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BiConsumer;
 
 import static org.apache.fluss.record.TestData.DATA1_TABLE_DESCRIPTOR;
 import static org.apache.fluss.record.TestData.DEFAULT_REMOTE_DATA_DIR;
+import static org.apache.fluss.server.metadata.PartitionMetadata.DELETED_PARTITION_NAME;
+import static org.apache.fluss.server.metadata.TableMetadata.DELETED_TABLE_PATH;
+import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getUpdateMetadataRequestData;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** Test for the {@link CoordinatorRequestBatch}. */
@@ -190,6 +200,80 @@ class CoordinatorRequestBatchTest {
         assertThat(coordinatorContext.getPendingLeaderActivationBuckets()).isEmpty();
     }
 
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void testTableDeletionPreservesOriginalTableId(boolean tableInfoAvailable) {
+        long tableId = 100L;
+        TablePath tablePath = TablePath.of("db1", "deleted_table");
+
+        coordinatorContext.putTablePath(tableId, tablePath);
+        if (tableInfoAvailable) {
+            putTableInfo(tableId, tablePath);
+        }
+        coordinatorContext.queueTableDeletion(Collections.singleton(tableId));
+        coordinatorContext.setLiveTabletServers(
+                CoordinatorTestUtils.createServers(Collections.singletonList(0)));
+
+        AtomicReference<UpdateMetadataRequest> sentRequest = new AtomicReference<>();
+        CoordinatorRequestBatch batch = newBatchCapturingUpdateMetadataRequest(sentRequest);
+
+        batch.addUpdateMetadataRequestForTabletServers(
+                Collections.singleton(0), tableId, null, Collections.emptySet());
+        batch.sendUpdateMetadataRequest();
+
+        assertThat(sentRequest.get()).isNotNull();
+
+        TableInfo sentTableInfo =
+                getUpdateMetadataRequestData(sentRequest.get())
+                        .getTableMetadataList()
+                        .get(0)
+                        .getTableInfo();
+
+        assertThat(sentTableInfo.getTableId()).isEqualTo(tableId);
+        assertThat(sentTableInfo.getTablePath()).isEqualTo(DELETED_TABLE_PATH);
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void testPartitionDeletionPreservesOriginalPartitionId(boolean partitionNameAvailable) {
+        long tableId = 100L;
+        long partitionId = 200L;
+        String partitionName = "p1";
+        TablePath tablePath = TablePath.of("db1", "partitioned_table");
+
+        coordinatorContext.putTablePath(tableId, tablePath);
+        putTableInfo(tableId, tablePath);
+
+        if (partitionNameAvailable) {
+            coordinatorContext.putPartition(
+                    partitionId, PhysicalTablePath.of(tablePath, partitionName));
+        }
+
+        coordinatorContext.queuePartitionDeletion(
+                Collections.singleton(new TablePartition(tableId, partitionId)));
+        coordinatorContext.setLiveTabletServers(
+                CoordinatorTestUtils.createServers(Collections.singletonList(0)));
+
+        AtomicReference<UpdateMetadataRequest> sentRequest = new AtomicReference<>();
+        CoordinatorRequestBatch batch = newBatchCapturingUpdateMetadataRequest(sentRequest);
+
+        batch.addUpdateMetadataRequestForTabletServers(
+                Collections.singleton(0), tableId, partitionId, Collections.emptySet());
+        batch.sendUpdateMetadataRequest();
+
+        assertThat(sentRequest.get()).isNotNull();
+
+        List<PartitionMetadata> partitions =
+                getUpdateMetadataRequestData(sentRequest.get()).getPartitionMetadataList();
+
+        assertThat(partitions).hasSize(1);
+
+        PartitionMetadata deletion = partitions.get(0);
+        assertThat(deletion.getTableId()).isEqualTo(tableId);
+        assertThat(deletion.getPartitionId()).isEqualTo(partitionId);
+        assertThat(deletion.getPartitionName()).isEqualTo(DELETED_PARTITION_NAME);
+    }
+
     /** Registers table metadata so normal notifications carry the bucket layout epoch. */
     private void putTableInfo(long tableId, TablePath tablePath) {
         coordinatorContext.putTableInfo(
@@ -214,6 +298,24 @@ class CoordinatorRequestBatchTest {
                         null, new NetworkException("simulated send failure for test"));
             }
         };
+    }
+
+    private CoordinatorRequestBatch newBatchCapturingUpdateMetadataRequest(
+            AtomicReference<UpdateMetadataRequest> sentRequest) {
+        TestCoordinatorChannelManager channelManager =
+                new TestCoordinatorChannelManager() {
+                    @Override
+                    public void sendUpdateMetadataRequest(
+                            int receiveServerId,
+                            UpdateMetadataRequest request,
+                            BiConsumer<UpdateMetadataResponse, ? super Throwable>
+                                    responseConsumer) {
+                        sentRequest.set(request);
+                    }
+                };
+
+        return new CoordinatorRequestBatch(
+                channelManager, newSynchronousAccessContextEventManager(), coordinatorContext);
     }
 
     /**

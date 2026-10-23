@@ -21,6 +21,7 @@ import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableChange;
+import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.record.KvRecordBatch;
 import org.apache.fluss.record.MemoryLogRecords;
@@ -68,6 +69,7 @@ import java.util.UUID;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_INFO;
 import static org.apache.fluss.record.TestData.DATA_1_WITH_KEY_AND_VALUE;
 import static org.apache.fluss.server.metadata.BucketMetadata.NO_LEADER_ISR_STATE_EPOCH;
+import static org.apache.fluss.server.metadata.TableMetadata.DELETED_TABLE_PATH;
 import static org.apache.fluss.server.testutils.RpcMessageTestUtils.newPutKvRequest;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getUpdateMetadataRequestData;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeUpdateMetadataRequest;
@@ -351,6 +353,36 @@ class ServerRpcMessageUtilsTest {
                         .get(0);
         assertThat(decoded).isEqualTo(legacy);
         assertThat(decoded.getBucketEpoch()).isNull();
+    }
+
+    @Test
+    void testTableDeletionMetadataRoundTrip() {
+        long deletedTableId = 123L;
+        TableInfo deletion =
+                TableInfo.of(
+                        DELETED_TABLE_PATH,
+                        deletedTableId,
+                        0,
+                        DATA1_TABLE_INFO.toTableDescriptor(),
+                        "",
+                        -1L,
+                        -1L);
+
+        UpdateMetadataRequest request =
+                makeUpdateMetadataRequest(
+                        null,
+                        null,
+                        Collections.emptySet(),
+                        Collections.singletonList(
+                                new TableMetadata(deletion, Collections.emptyList())),
+                        Collections.emptyList());
+
+        TableInfo decoded =
+                getUpdateMetadataRequestData(request).getTableMetadataList().get(0).getTableInfo();
+
+        assertThat(decoded.getTableId()).isEqualTo(deletedTableId);
+        assertThat(decoded.getTablePath()).isEqualTo(DELETED_TABLE_PATH);
+        assertThat(decoded.getTablePath()).isNotSameAs(DELETED_TABLE_PATH);
     }
 
     private static void assertAuthoritativeWireMetadata(List<PbBucketMetadata> bucketMetadata) {
