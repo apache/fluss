@@ -24,6 +24,7 @@ import org.apache.fluss.client.write.RecordAccumulator.ReadyCheckResult;
 import org.apache.fluss.cluster.Cluster;
 import org.apache.fluss.exception.HistoricalPartitionThrottledException;
 import org.apache.fluss.exception.InvalidMetadataException;
+import org.apache.fluss.exception.InvalidPartitionException;
 import org.apache.fluss.exception.LeaderNotAvailableException;
 import org.apache.fluss.exception.OutOfOrderSequenceException;
 import org.apache.fluss.exception.PartitionNotExistException;
@@ -31,7 +32,9 @@ import org.apache.fluss.exception.RetriableException;
 import org.apache.fluss.exception.StorageBackpressureException;
 import org.apache.fluss.exception.UnknownTableOrBucketException;
 import org.apache.fluss.metadata.PhysicalTablePath;
+import org.apache.fluss.metadata.ResolvedPartitionSpec;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.rpc.gateway.TabletServerGateway;
 import org.apache.fluss.rpc.messages.PbProduceLogRespForBucket;
 import org.apache.fluss.rpc.messages.PbPutKvRespForBucket;
@@ -62,6 +65,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import static org.apache.fluss.client.utils.ClientRpcMessageUtils.makeProduceLogRequest;
 import static org.apache.fluss.client.utils.ClientRpcMessageUtils.makePutKvRequest;
 import static org.apache.fluss.utils.PartitionUtils.HISTORICAL_PARTITION_VALUE;
+import static org.apache.fluss.utils.PartitionUtils.validateAutoPartitionTime;
 import static org.apache.fluss.utils.Preconditions.checkArgument;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
@@ -847,26 +851,47 @@ public class Sender implements Runnable {
 
     /**
      * Rechecks unknown-leader partitions after a bulk metadata update reports {@link
-     * PartitionNotExistException}, and handles missing partitions for tables with historical
-     * partition support.
+     * PartitionNotExistException}, and handles targets that are known to be permanently invalid.
      */
     private void handlePartitionNotExistException(Set<PhysicalTablePath> unknownLeaderTables) {
         for (PhysicalTablePath targetPath : unknownLeaderTables) {
-            if (!accumulator.isHistoricalPartitionEnabled(targetPath.getTablePath())) {
+            if (targetPath.getPartitionName() == null) {
                 continue;
             }
             metadataUpdater.invalidPhysicalTableBucketAndPartitionMeta(
                     Collections.singleton(targetPath));
             try {
-                metadataUpdater.checkAndUpdatePartitionMetadata(targetPath);
+                metadataUpdater.updatePhysicalTableMetadata(Collections.singleton(targetPath));
             } catch (Exception e) {
                 Throwable t = ExceptionUtils.stripExecutionException(e);
                 if (t instanceof PartitionNotExistException) {
-                    handleMissingPartition(targetPath, t);
+                    if (accumulator.isHistoricalPartitionEnabled(targetPath.getTablePath())) {
+                        handleMissingPartition(targetPath, t);
+                    } else {
+                        // An invalid partition can never recover, so abort its batches. Other
+                        // missing partitions may be transient and must remain pending.
+                        abortIfInvalidAutoPartition(targetPath);
+                    }
                     continue;
                 }
                 throw e;
             }
+        }
+    }
+
+    private void abortIfInvalidAutoPartition(PhysicalTablePath targetPath) {
+        TableInfo tableInfo = accumulator.getTableInfo(targetPath);
+        List<String> partitionKeys = tableInfo.getPartitionKeys();
+        ResolvedPartitionSpec partition =
+                ResolvedPartitionSpec.fromPartitionName(
+                        partitionKeys, checkNotNull(targetPath.getPartitionName()));
+        try {
+            validateAutoPartitionTime(
+                    partition.toPartitionSpec(),
+                    partitionKeys,
+                    tableInfo.getTableConfig().getAutoPartitionStrategy());
+        } catch (InvalidPartitionException e) {
+            abortBatches(targetPath, e);
         }
     }
 
@@ -962,7 +987,7 @@ public class Sender implements Runnable {
         return matchedBatches;
     }
 
-    private void abortBatches(PhysicalTablePath targetPath, PartitionNotExistException exception) {
+    private void abortBatches(PhysicalTablePath targetPath, Exception exception) {
         List<ReadyWriteBatch> matchingInFlightBatches = getInFlightBatches(targetPath);
         // Make the batches terminal before detaching their in-flight bookkeeping.
         accumulator.abortBatches(targetPath, exception);
