@@ -98,8 +98,15 @@ class TieringSourceEnumeratorSchedulingTest {
                     .singleElement()
                     .satisfies(table -> assertThat(table.getTableId()).isEqualTo(2));
 
-            assertThat(fixture.requests).hasSize(6);
-            assertThat(fixture.claims()).hasSize(2);
+            fixture.addTable(3, false);
+            fixture.requestTable();
+            fixture.closeEnumerator();
+            assertThat(fixture.requests.get(7).getFailedTablesList())
+                    .singleElement()
+                    .satisfies(table -> assertThat(table.getTableId()).isEqualTo(3));
+
+            assertThat(fixture.requests).hasSize(8);
+            assertThat(fixture.claims()).hasSize(3);
             assertThat(fixture.requests)
                     .extracting(LakeTieringHeartbeatRequest::getTieringGroup)
                     .containsOnly(group);
