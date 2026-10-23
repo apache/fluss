@@ -32,7 +32,7 @@ use std::time::{Duration, Instant};
 
 /// A thin REST client bound to one gateway base URL.
 ///
-/// The gateway has no authentication yet, so every request is sent bare.
+/// The default client exercises anonymous trust; authenticated clients are explicit.
 pub struct Api {
     client: reqwest::Client,
     base: String,
@@ -43,6 +43,24 @@ impl Api {
     pub fn new(base_url: impl Into<String>) -> Self {
         Self {
             client: reqwest::Client::new(),
+            base: base_url.into(),
+        }
+    }
+
+    pub fn with_basic_auth(base_url: impl Into<String>, username: &str, password: &str) -> Self {
+        use base64::Engine;
+        let encoded =
+            base64::engine::general_purpose::STANDARD.encode(format!("{username}:{password}"));
+        let mut authorization =
+            reqwest::header::HeaderValue::from_str(&format!("Basic {encoded}")).unwrap();
+        authorization.set_sensitive(true);
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert(reqwest::header::AUTHORIZATION, authorization);
+        Self {
+            client: reqwest::Client::builder()
+                .default_headers(headers)
+                .build()
+                .unwrap(),
             base: base_url.into(),
         }
     }

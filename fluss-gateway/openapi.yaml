@@ -1,4 +1,16 @@
 components:
+  responses:
+    AuthenticationFailed:
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+      description: Authentication failed
+      headers:
+        WWW-Authenticate:
+          description: Challenge for the configured authentication scheme
+          schema:
+            type: string
   schemas:
     AlterTableBody:
       additionalProperties: false
@@ -1052,6 +1064,11 @@ components:
       required:
       - id
       type: object
+  securitySchemes:
+    basicAuth:
+      description: Optional username in trust mode. Missing or empty username uses an anonymous identity; passwords are not verified.
+      scheme: basic
+      type: http
 info:
   description: Stateless REST gateway for Apache Fluss
   license:
@@ -1083,6 +1100,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
           description: Wrong method for this route
+      security: []
       summary: Returns process liveness and uptime without a backend RPC.
       tags:
       - health
@@ -1119,6 +1137,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
           description: The gateway is starting or shutting down
+      security: []
       summary: Readiness for load balancers and readiness probes.
       tags:
       - health
@@ -1144,6 +1163,8 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
           description: This operation accepts no query parameters
+        '401':
+          $ref: '#/components/responses/AuthenticationFailed'
         '405':
           content:
             application/json:
@@ -1208,6 +1229,8 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
           description: Invalid page parameter or page token
+        '401':
+          $ref: '#/components/responses/AuthenticationFailed'
         '404':
           content:
             application/json:
@@ -1286,6 +1309,8 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
           description: Malformed body or invalid definition
+        '401':
+          $ref: '#/components/responses/AuthenticationFailed'
         '404':
           content:
             application/json:
@@ -1368,6 +1393,8 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
           description: Unsupported query parameter
+        '401':
+          $ref: '#/components/responses/AuthenticationFailed'
         '404':
           content:
             application/json:
@@ -1462,6 +1489,8 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
           description: Invalid page parameter or page token
+        '401':
+          $ref: '#/components/responses/AuthenticationFailed'
         '404':
           content:
             application/json:
@@ -1548,6 +1577,8 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
           description: Malformed body or invalid definition
+        '401':
+          $ref: '#/components/responses/AuthenticationFailed'
         '404':
           content:
             application/json:
@@ -1636,6 +1667,8 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
           description: Unsupported query parameter
+        '401':
+          $ref: '#/components/responses/AuthenticationFailed'
         '404':
           content:
             application/json:
@@ -1715,6 +1748,8 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
           description: Unsupported query parameter
+        '401':
+          $ref: '#/components/responses/AuthenticationFailed'
         '404':
           content:
             application/json:
@@ -1796,6 +1831,8 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
           description: Malformed body or invalid change
+        '401':
+          $ref: '#/components/responses/AuthenticationFailed'
         '404':
           content:
             application/json:
@@ -1896,6 +1933,8 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
           description: Invalid page parameter or page token
+        '401':
+          $ref: '#/components/responses/AuthenticationFailed'
         '404':
           content:
             application/json:
@@ -1986,6 +2025,8 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
           description: Malformed body, or a spec that does not match the partition keys
+        '401':
+          $ref: '#/components/responses/AuthenticationFailed'
         '404':
           content:
             application/json:
@@ -2080,6 +2121,8 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
           description: Unsupported query parameter, or a name that does not match the partition keys
+        '401':
+          $ref: '#/components/responses/AuthenticationFailed'
         '404':
           content:
             application/json:
@@ -2167,6 +2210,8 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
           description: Malformed request, or preflight rejected the whole batch
+        '401':
+          $ref: '#/components/responses/AuthenticationFailed'
         '404':
           content:
             application/json:
@@ -2236,6 +2281,8 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
           description: This operation accepts no query parameters
+        '401':
+          $ref: '#/components/responses/AuthenticationFailed'
         '405':
           content:
             application/json:
@@ -2263,6 +2310,8 @@ paths:
       summary: Serves the generated OpenAPI 3.1 document as JSON.
       tags:
       - metadata
-security: []
+security:
+- {}
+- basicAuth: []
 servers:
 - url: /

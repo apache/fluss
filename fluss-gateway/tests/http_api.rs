@@ -276,3 +276,73 @@ async fn draining_rejects_guarded_routes_but_keeps_health_answering() {
     assert_eq!(api.get("/ready").await.status(), 503);
     assert_eq!(api.get("/v1/openapi.json").await.status(), 503);
 }
+
+#[tokio::test]
+async fn each_keep_alive_request_authenticates_again_over_the_real_listener() {
+    use fluss_gateway::config::{GatewayConfig, Secret};
+    let mut config = GatewayConfig::default();
+    config.server.rest.bind_address = "127.0.0.1:0".parse().unwrap();
+    config.server.metrics.enabled = false;
+    config.security.authentication = fluss_gateway::config::AuthenticationMode::Password;
+    config.security.users = Some(Secret::new("alice:private-secret,bob:other-secret"));
+    let gateway = fluss_gateway::lifecycle::start(config).await.unwrap();
+    let client = reqwest::Client::builder()
+        .pool_max_idle_per_host(1)
+        .build()
+        .unwrap();
+    let url = format!("http://{}/v1/clusters", gateway.local_addr());
+    for (credentials, status) in [
+        (Some(("alice", "private-secret")), 200),
+        (Some(("bob", "wrong")), 401),
+        (None, 401),
+        (Some(("bob", "other-secret")), 200),
+    ] {
+        let mut request = client.get(&url);
+        if let Some((user, password)) = credentials {
+            request = request.basic_auth(user, Some(password));
+        }
+        let response = request.send().await.unwrap();
+        assert_eq!(response.status().as_u16(), status);
+        if status == 401 {
+            assert!(response.headers().contains_key("www-authenticate"));
+        }
+        let body = response.text().await.unwrap();
+        assert!(!body.contains("private-secret"));
+        assert!(!body.contains("other-secret"));
+    }
+    assert_eq!(
+        client
+            .get(format!("http://{}/health", gateway.local_addr()))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        200
+    );
+    gateway.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn trusted_header_checks_the_socket_peer_instead_of_forwarded_headers() {
+    use fluss_gateway::config::GatewayConfig;
+    for (allowed, status) in [("127.0.0.1", 200), ("192.0.2.1", 403)] {
+        let mut config = GatewayConfig::default();
+        config.server.rest.bind_address = "127.0.0.1:0".parse().unwrap();
+        config.server.metrics.enabled = false;
+        config.security.authentication = fluss_gateway::config::AuthenticationMode::TrustedHeader;
+        config.security.trusted_proxy_addresses = vec![allowed.parse().unwrap()];
+        let gateway = fluss_gateway::lifecycle::start(config).await.unwrap();
+        let response = reqwest::Client::new()
+            .get(format!("http://{}/v1/clusters", gateway.local_addr()))
+            .header("x-forwarded-user", "alice")
+            .header("x-forwarded-for", allowed)
+            .header("forwarded", format!("for={allowed};proto=https"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status().as_u16(), status);
+        assert!(!response.headers().contains_key("www-authenticate"));
+        response.bytes().await.unwrap();
+        gateway.shutdown().await.unwrap();
+    }
+}
