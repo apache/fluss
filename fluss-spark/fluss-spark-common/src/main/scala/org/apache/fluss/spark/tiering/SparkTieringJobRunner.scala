@@ -24,7 +24,7 @@ import org.apache.fluss.config.{ConfigOptions, Configuration}
 import org.apache.fluss.lake.committer.TieringStats
 import org.apache.fluss.lake.lakestorage.LakeStoragePluginSetUp
 import org.apache.fluss.lake.writer.{LakeTieringFactory, TieringTableValidator}
-import org.apache.fluss.metadata.TablePath
+import org.apache.fluss.metadata.{PartitionInfo, TablePath}
 import org.apache.fluss.utils.IOUtils.closeQuietly
 import org.apache.fluss.utils.Preconditions.checkState
 
@@ -34,7 +34,7 @@ import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.SparkSession
 
 import java.io.File
-import java.util.UUID
+import java.util.{Collections, UUID}
 import java.util.concurrent.{Executors, TimeUnit}
 import java.util.concurrent.atomic.{AtomicBoolean, AtomicInteger}
 import java.util.regex.Pattern
@@ -275,7 +275,12 @@ class SparkTieringJobRunner(
         case validator: TieringTableValidator => validator.validateTable(tableInfo)
         case _ =>
       }
-      val rawSplits = splitGenerator.generateTableSplits(tableInfo).asScala
+      val partitionInfos = if (tableInfo.isPartitioned) {
+        admin.listPartitionInfos(tablePath, true).get()
+      } else {
+        Collections.emptyList[PartitionInfo]()
+      }
+      val rawSplits = splitGenerator.generateTableSplits(tableInfo, partitionInfos).asScala
       val roundTimestamp = System.currentTimeMillis()
       val splits = rawSplits.zipWithIndex.map {
         case (split, index) => split.copy(rawSplits.size, index, roundTimestamp)
@@ -284,16 +289,8 @@ class SparkTieringJobRunner(
       val results = if (splits.isEmpty) {
         Seq.empty[TableBucketWriteResult[AnyRef]]
       } else {
-        val partitionBucketCounts = if (tableInfo.isPartitioned) {
-          admin
-            .listPartitionInfos(tablePath, true)
-            .get()
-            .asScala
-            .map(info => info.getPartitionId -> info.getBucketCount)
-            .toMap
-        } else {
-          Map.empty[Long, Int]
-        }
+        val partitionBucketCounts =
+          partitionInfos.asScala.map(info => info.getPartitionId -> info.getBucketCount).toMap
         val splitsWithBucketCounts = splits.map {
           split =>
             val partitionId = split.getTableBucket.getPartitionId

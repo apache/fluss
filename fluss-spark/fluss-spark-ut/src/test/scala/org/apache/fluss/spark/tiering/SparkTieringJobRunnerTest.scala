@@ -18,19 +18,19 @@
 package org.apache.fluss.spark.tiering
 
 import org.apache.fluss.client.Connection
-import org.apache.fluss.client.admin.Admin
+import org.apache.fluss.client.admin.{Admin, ListOffsetsResult, OffsetSpec}
 import org.apache.fluss.client.tiering.{FlussTableLakeSnapshotCommitter, TieringSplitGenerator}
 import org.apache.fluss.config.Configuration
 import org.apache.fluss.exception.LakeTableSnapshotNotExistException
 import org.apache.fluss.lake.committer.{CommitterInitContext, LakeCommitter}
 import org.apache.fluss.lake.writer.LakeTieringFactory
-import org.apache.fluss.metadata.{Schema, TableDescriptor, TableInfo, TablePath}
+import org.apache.fluss.metadata.{PartitionInfo, ResolvedPartitionSpec, Schema, TableDescriptor, TableInfo, TablePath}
 import org.apache.fluss.types.DataTypes
 
 import org.apache.spark.SparkContext
 import org.apache.spark.sql.SparkSession
 import org.assertj.core.api.Assertions.assertThat
-import org.mockito.ArgumentMatchers.{any, anyString}
+import org.mockito.ArgumentMatchers.{any, anyString, eq => eqTo}
 import org.mockito.Mockito.{doAnswer, doThrow, mock, never, times, verify, when}
 import org.scalatest.funsuite.AnyFunSuite
 
@@ -155,7 +155,7 @@ class SparkTieringJobRunnerTest extends AnyFunSuite {
     val noSnapshot = new CompletableFuture[org.apache.fluss.client.metadata.LakeSnapshot]()
     noSnapshot.completeExceptionally(new LakeTableSnapshotNotExistException("no lake snapshot"))
     when(f.admin.getLatestLakeSnapshot(tablePath)).thenReturn(noSnapshot)
-    when(f.generator.generateTableSplits(tableInfo))
+    when(f.generator.generateTableSplits(tableInfo, Collections.emptyList[PartitionInfo]()))
       .thenReturn(Collections.emptyList[org.apache.fluss.client.tiering.TieringSplit]())
     val lakeCommitter = mock(classOf[LakeCommitter[AnyRef, AnyRef]])
     when(f.lakeFactory.createLakeCommitter(any(classOf[CommitterInitContext])))
@@ -183,6 +183,46 @@ class SparkTieringJobRunnerTest extends AnyFunSuite {
     verify(lakeCommitter, org.mockito.Mockito.atLeastOnce()).getMissingLakeSnapshot(null)
     verify(lakeCommitter, org.mockito.Mockito.atLeastOnce()).close()
     verify(f.sc, never()).cancelJobGroup(anyString())
+  }
+
+  test("split generation reuses supplied partition metadata without querying it again") {
+    val f = new Fixture
+    val tablePath = TablePath.of("db", "partitioned_table")
+    val descriptor = TableDescriptor
+      .builder()
+      .schema(
+        Schema.newBuilder().column("id", DataTypes.INT()).column("dt", DataTypes.STRING()).build())
+      .distributedBy(2, "id")
+      .partitionedBy("dt")
+      .build()
+    val tableInfo = TableInfo.of(tablePath, 1L, 1, descriptor, "remote", 0L, 0L)
+    // The partition has one bucket even though the table default is two.
+    val partition =
+      new PartitionInfo(2L, ResolvedPartitionSpec.fromPartitionValue("dt", "2026-01-01"), null, 1)
+    val partitionInfos = Collections.singletonList(partition)
+    val noSnapshot = new CompletableFuture[org.apache.fluss.client.metadata.LakeSnapshot]()
+    noSnapshot.completeExceptionally(new LakeTableSnapshotNotExistException("no lake snapshot"))
+    when(f.admin.getLatestLakeSnapshot(tablePath)).thenReturn(noSnapshot)
+    when(
+      f.admin.listOffsets(
+        eqTo(tablePath),
+        eqTo(partition.getPartitionName),
+        eqTo(Collections.singletonList(Int.box(0))),
+        any(classOf[OffsetSpec.LatestSpec])))
+      .thenReturn(new ListOffsetsResult(Collections
+        .singletonMap(Int.box(0), CompletableFuture.completedFuture[java.lang.Long](5L))))
+
+    val generator = new TieringSplitGenerator(f.admin)
+    val splits = generator.generateTableSplits(tableInfo, partitionInfos)
+    assertThat(splits.size()).isEqualTo(1)
+    assertThat(splits.get(0).getTableBucket.getPartitionId).isEqualTo(Long.box(2L))
+    assertThat(splits.get(0).asTieringLogSplit().getStoppingOffset).isEqualTo(5L)
+    verify(f.admin, never()).listPartitionInfos(tablePath, true)
+
+    when(f.admin.listPartitionInfos(tablePath, true))
+      .thenReturn(CompletableFuture.completedFuture(partitionInfos))
+    assertThat(generator.generateTableSplits(tableInfo) == splits).isTrue()
+    verify(f.admin, times(1)).listPartitionInfos(tablePath, true)
   }
 
 }

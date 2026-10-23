@@ -59,6 +59,20 @@ public class TieringSplitGenerator {
     }
 
     public List<TieringSplit> generateTableSplits(TableInfo tableInfo) throws Exception {
+        List<PartitionInfo> partitionInfos =
+                tableInfo.isPartitioned()
+                        ? flussAdmin.listPartitionInfos(tableInfo.getTablePath(), true).get()
+                        : Collections.emptyList();
+        return generateTableSplits(tableInfo, partitionInfos);
+    }
+
+    /**
+     * Generates splits using the supplied partition metadata, including historical partitions.
+     * Callers can reuse this metadata to initialize writers for the same tiering round. For
+     * non-partitioned tables, pass an empty list.
+     */
+    public List<TieringSplit> generateTableSplits(
+            TableInfo tableInfo, List<PartitionInfo> partitionInfos) throws Exception {
         TablePath tablePath = tableInfo.getTablePath();
         final BucketOffsetsRetriever bucketOffsetsRetriever =
                 new BucketOffsetsRetrieverImpl(flussAdmin, tablePath);
@@ -86,8 +100,6 @@ public class TieringSplitGenerator {
         }
         // partitioned table
         if (tableInfo.isPartitioned()) {
-            List<PartitionInfo> partitionInfos =
-                    flussAdmin.listPartitionInfos(tableInfo.getTablePath(), true).get();
             Map<Long, String> partitionNameById =
                     partitionInfos.stream()
                             .collect(
