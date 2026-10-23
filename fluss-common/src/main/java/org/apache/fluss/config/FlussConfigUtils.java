@@ -273,6 +273,7 @@ public class FlussConfigUtils {
 
     public static void validateClientConfigs(Configuration conf) {
         validMinValue(conf, ConfigOptions.CLIENT_SCANNER_LOG_MAX_POLL_RECORDS, 1);
+        validMinValue(conf, ConfigOptions.CLIENT_LOOKUP_CONTINUATION_THREADS, 1);
         validMinDuration(conf, ConfigOptions.CLIENT_CONNECT_TIMEOUT, 1);
     }
 

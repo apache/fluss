@@ -39,12 +39,20 @@ import org.junit.jupiter.api.Test;
 
 import java.util.Collections;
 import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.IntStream;
 
 import static org.apache.fluss.row.TestInternalRowGenerator.createAllRowType;
 import static org.apache.fluss.testutils.DataTestUtils.row;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 /** Test for {@link CompactedKeyEncoder}. */
 class CompactedKeyEncoderTest {
@@ -62,6 +70,47 @@ class CompactedKeyEncoderTest {
         row = row(2, 5L, 6);
         bytes = encoder.encodeKey(row);
         assertThat(bytes).isEqualTo(new byte[] {2, 5, 6});
+    }
+
+    @Test
+    void testEncodeKeyCanBeCalledConcurrently() throws Exception {
+        CompactedKeyEncoder encoder =
+                new CompactedKeyEncoder(RowType.of(DataTypes.INT(), DataTypes.INT()));
+        CountDownLatch firstEncodeBlocked = new CountDownLatch(1);
+        CountDownLatch secondEncodeDone = new CountDownLatch(1);
+        InternalRow blockedRow = mock(InternalRow.class);
+        when(blockedRow.isNullAt(anyInt())).thenReturn(false);
+        when(blockedRow.getInt(anyInt()))
+                .thenAnswer(
+                        invocation -> {
+                            int position = invocation.getArgument(0);
+                            if (position == 0) {
+                                firstEncodeBlocked.countDown();
+                                assertThat(secondEncodeDone.await(10, TimeUnit.SECONDS)).isTrue();
+                            }
+                            return position + 1;
+                        });
+
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+        try {
+            Future<byte[]> first = executor.submit(() -> encoder.encodeKey(blockedRow));
+            assertThat(firstEncodeBlocked.await(10, TimeUnit.SECONDS)).isTrue();
+            Future<byte[]> second =
+                    executor.submit(
+                            () -> {
+                                try {
+                                    return encoder.encodeKey(row(3, 4));
+                                } finally {
+                                    secondEncodeDone.countDown();
+                                }
+                            });
+
+            assertThat(second.get(10, TimeUnit.SECONDS)).isEqualTo(new byte[] {3, 4});
+            assertThat(first.get(10, TimeUnit.SECONDS)).isEqualTo(new byte[] {1, 2});
+        } finally {
+            secondEncodeDone.countDown();
+            executor.shutdownNow();
+        }
     }
 
     @Test

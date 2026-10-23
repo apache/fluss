@@ -119,6 +119,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
+import java.util.function.Function;
 import java.util.stream.Collectors;
 
 import static org.apache.fluss.metadata.TablePath.DEFAULT_DATABASE_NAME;
@@ -196,6 +197,9 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
     /** Returns table information for a table id known by the concrete server role. */
     protected abstract TableInfo getTableInfo(long tableId);
 
+    /** Resolves index read permissions using the server's local table metadata. */
+    protected abstract TablePath getReadAuthorizationTablePath(TablePath tablePath);
+
     public void authorizeDatabase(OperationType operationType, String databaseName) {
         if (authorizer != null) {
             authorizer.authorize(currentSession(), operationType, Resource.database(databaseName));
@@ -204,8 +208,19 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
 
     public void authorizeTable(OperationType operationType, TablePath tablePath) {
         if (authorizer != null) {
-            authorizer.authorize(currentSession(), operationType, Resource.table(tablePath));
+            authorizer.authorize(
+                    currentSession(),
+                    operationType,
+                    Resource.table(getAuthorizationTablePath(operationType, tablePath)));
         }
+    }
+
+    protected TablePath getAuthorizationTablePath(
+            OperationType operationType, TablePath tablePath) {
+        if (operationType != OperationType.READ && operationType != OperationType.DESCRIBE) {
+            return tablePath;
+        }
+        return getReadAuthorizationTablePath(tablePath);
     }
 
     @Override
@@ -767,11 +782,18 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
             Session session,
             Authorizer authorizer,
             ServerMetadataCache metadataCache,
-            MetadataProvider metadataProvider) {
+            MetadataProvider metadataProvider,
+            Function<TablePath, TablePath> readAuthorizationTablePath) {
+        // The resolver must use the caller's metadata context: this method may already run on
+        // the coordinator event thread, where waiting for another context event would deadlock.
         List<TablePath> authorizedTables = new ArrayList<>();
         for (PbTablePath pbTablePath : request.getTablePathsList()) {
-            if (isTableMetadataAuthorized(
-                    session, authorizer, ServerRpcMessageUtils.toTablePath(pbTablePath))) {
+            if (authorizer == null
+                    || isTableMetadataAuthorized(
+                            session,
+                            authorizer,
+                            readAuthorizationTablePath.apply(
+                                    ServerRpcMessageUtils.toTablePath(pbTablePath)))) {
                 authorizedTables.add(ServerRpcMessageUtils.toTablePath(pbTablePath));
             }
         }

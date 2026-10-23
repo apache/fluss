@@ -18,6 +18,8 @@
 package org.apache.fluss.utils.json;
 
 import org.apache.fluss.metadata.AggFunctions;
+import org.apache.fluss.metadata.IndexType;
+import org.apache.fluss.metadata.IndexVisibility;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.types.DataTypes;
 
@@ -178,5 +180,85 @@ public class SchemaJsonSerdeTest extends JsonSerdeTestBase<Schema> {
                 "{\"version\":1,\"columns\":[{\"name\":\"a\",\"data_type\":{\"type\":\"BIGINT\"},\"comment\":\"a is first column\"},{\"name\":\"b\",\"data_type\":{\"type\":\"STRING\"},\"comment\":\"b is second column\"},{\"name\":\"c\",\"data_type\":{\"type\":\"TIMESTAMP_WITHOUT_TIME_ZONE\",\"precision\":6},\"comment\":\"c is third column\"}]}";
 
         return new String[] {oldSchemaJson1, oldSchemaJson2, oldSchemaJson2, oldSchemaJson3};
+    }
+
+    @Test
+    void testRoundTripWithIndexes() {
+        Schema original =
+                Schema.newBuilder()
+                        .column("order_id", DataTypes.BIGINT())
+                        .column("user_id", DataTypes.BIGINT())
+                        .column("region_id", DataTypes.INT())
+                        .primaryKey("order_id")
+                        .index("idx_user", "user_id")
+                        .index("idx_region", "region_id")
+                        .build();
+
+        byte[] bytes = JsonSerdeUtils.writeValueAsBytes(original, SchemaJsonSerde.INSTANCE);
+        Schema decoded = JsonSerdeUtils.readValue(bytes, SchemaJsonSerde.INSTANCE);
+
+        assertThat(decoded.getIndexes()).isEqualTo(original.getIndexes());
+    }
+
+    @Test
+    void testIndexJsonSerdePreservesVisibilityAndBucketCount() {
+        Schema schema =
+                Schema.newBuilder()
+                        .column("id", DataTypes.INT())
+                        .column("email", DataTypes.STRING())
+                        .primaryKey("id")
+                        .index(
+                                "idx_email",
+                                IndexType.SECONDARY,
+                                Collections.singletonList("email"),
+                                IndexVisibility.ASYNC,
+                                7)
+                        .build();
+
+        byte[] json = JsonSerdeUtils.writeValueAsBytes(schema, SchemaJsonSerde.INSTANCE);
+        Schema restored = JsonSerdeUtils.readValue(json, SchemaJsonSerde.INSTANCE);
+
+        Schema.Index index = restored.getIndexes().get(0);
+        assertThat(index.getIndexName()).isEqualTo("idx_email");
+        assertThat(index.getColumnNames()).containsExactly("email");
+        assertThat(index.getVisibility()).isEqualTo(IndexVisibility.ASYNC);
+        assertThat(index.getBucketCount()).hasValue(7);
+    }
+
+    @Test
+    void testLegacyIndexJsonDefaultsToSyncVisibilityAndNoBucketCount() {
+        String json =
+                "{"
+                        + "\"version\":1,"
+                        + "\"columns\":[{\"name\":\"id\",\"data_type\":{\"type\":\"INTEGER\"},\"id\":0},"
+                        + "{\"name\":\"email\",\"data_type\":{\"type\":\"STRING\"},\"id\":1}],"
+                        + "\"primary_key\":[\"id\"],"
+                        + "\"indexes\":[{\"name\":\"idx_email\",\"type\":\"SECONDARY\","
+                        + "\"columns\":[\"email\"]}],"
+                        + "\"highest_field_id\":1"
+                        + "}";
+
+        Schema restored =
+                JsonSerdeUtils.readValue(
+                        json.getBytes(StandardCharsets.UTF_8), SchemaJsonSerde.INSTANCE);
+
+        Schema.Index index = restored.getIndexes().get(0);
+        assertThat(index.getVisibility()).isEqualTo(IndexVisibility.SYNC);
+        assertThat(index.getBucketCount()).isEmpty();
+    }
+
+    @Test
+    void testDeserializeLegacyPayloadWithoutIndexesFieldYieldsEmptyList() {
+        // Serialize a schema with NO indexes — the resulting JSON should not contain the
+        // "indexes" field. Deserialize and confirm decoded.getIndexes() is empty.
+        Schema legacy =
+                Schema.newBuilder().column("id", DataTypes.BIGINT()).primaryKey("id").build();
+
+        byte[] bytes = JsonSerdeUtils.writeValueAsBytes(legacy, SchemaJsonSerde.INSTANCE);
+        String json = new String(bytes, StandardCharsets.UTF_8);
+        assertThat(json).doesNotContain("indexes");
+
+        Schema decoded = JsonSerdeUtils.readValue(bytes, SchemaJsonSerde.INSTANCE);
+        assertThat(decoded.getIndexes()).isEmpty();
     }
 }

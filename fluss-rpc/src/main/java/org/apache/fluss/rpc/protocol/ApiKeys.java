@@ -125,7 +125,8 @@ public enum ApiKeys {
     LIST_CONSUMER_GROUPS(1072, 0, 0, PUBLIC),
     DELETE_CONSUMER_GROUPS(1073, 0, 0, PUBLIC),
     CREATE_TABLE_FROM_LAKE(1074, 0, 0, PUBLIC),
-    DESCRIBE_CLUSTER(1075, 0, 0, PUBLIC);
+    DESCRIBE_CLUSTER(1075, 0, 0, PUBLIC),
+    PUT_INDEX(1076, 0, 0, PRIVATE);
 
     private static final Map<Integer, ApiKeys> ID_TO_TYPE =
             Arrays.stream(ApiKeys.values())

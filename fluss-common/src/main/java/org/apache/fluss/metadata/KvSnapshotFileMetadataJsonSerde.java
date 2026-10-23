@@ -57,6 +57,7 @@ public final class KvSnapshotFileMetadataJsonSerde
     private static final String SNAPSHOT_INCREMENTAL_SIZE = "snapshot_incremental_size";
     private static final String LOG_OFFSET = "log_offset";
     private static final String ROW_COUNT = "row_count";
+    private static final String INDEX_PUSHED_OFFSET = "index_pushed_offset";
     private static final String AUTO_INC_ID_RANGE = "auto_inc_id_range";
     private static final String AUTO_INC_COLUMN_ID = "column_id";
     private static final String AUTO_INC_ID_START = "start";
@@ -92,6 +93,9 @@ public final class KvSnapshotFileMetadataJsonSerde
         generator.writeNumberField(LOG_OFFSET, metadata.getLogOffset());
         if (metadata.getRowCount() != null) {
             generator.writeNumberField(ROW_COUNT, metadata.getRowCount());
+        }
+        if (metadata.getIndexPushedOffset() != null) {
+            generator.writeNumberField(INDEX_PUSHED_OFFSET, metadata.getIndexPushedOffset());
         }
         if (metadata.getAutoIncrementRanges() != null
                 && !metadata.getAutoIncrementRanges().isEmpty()) {
@@ -148,6 +152,7 @@ public final class KvSnapshotFileMetadataJsonSerde
                 snapshotHandle.get(SNAPSHOT_INCREMENTAL_SIZE).asLong(),
                 node.get(LOG_OFFSET).asLong(),
                 rowCount,
+                node.has(INDEX_PUSHED_OFFSET) ? node.get(INDEX_PUSHED_OFFSET).asLong() : null,
                 ranges);
     }
 

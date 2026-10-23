@@ -17,6 +17,7 @@
 
 package org.apache.fluss.server.kv;
 
+import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.row.encode.KvValueLayout;
 import org.apache.fluss.server.utils.RowTtlUtils;
 import org.apache.fluss.utils.clock.Clock;
@@ -40,9 +41,7 @@ public final class RowTtlCompactionFilterFactory {
     /** Creates a configured native compaction filter factory for row TTL cleanup. */
     public static FlussTtlCompactionFilter.FlussTtlCompactionFilterFactory create(
             KvValueLayout kvValueLayout, Duration ttl, Clock clock) {
-        long ttlMillis = RowTtlUtils.validateAndConvertTtlDurationToMillis(ttl);
-        checkNotNull(clock, "clock must not be null.");
-        return create(kvValueLayout, ttlMillis, clock::milliseconds);
+        return create(kvValueLayout, ttl, QUERY_TIME_AFTER_NUM_ENTRIES, clock);
     }
 
     /** Removes values using the default interval for refreshing the supplied current value. */
@@ -82,5 +81,13 @@ public final class RowTtlCompactionFilterFactory {
                         expirationDistance,
                         queryCurrentValueAfterNumEntries));
         return factory;
+    }
+
+    @VisibleForTesting
+    static FlussTtlCompactionFilter.FlussTtlCompactionFilterFactory create(
+            KvValueLayout kvValueLayout, Duration ttl, long queryTimeAfterNumEntries, Clock clock) {
+        long ttlMillis = RowTtlUtils.validateAndConvertTtlDurationToMillis(ttl);
+        checkNotNull(clock, "clock must not be null.");
+        return create(kvValueLayout, ttlMillis, queryTimeAfterNumEntries, clock::milliseconds);
     }
 }
