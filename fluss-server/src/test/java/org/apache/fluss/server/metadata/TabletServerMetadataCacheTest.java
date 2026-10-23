@@ -503,6 +503,84 @@ public class TabletServerMetadataCacheTest {
     }
 
     @Test
+    void testGetTableMetadataIgnoresStaleTableIdOfRecreatedTable() {
+        // Given: the cache still maps the path to a dropped table with two buckets, while ZK
+        // already holds a re-created table with a new id under the same path
+        TableInfo recreatedTableInfo =
+                TableInfo.of(
+                        DATA1_TABLE_PATH,
+                        DATA1_TABLE_ID + 1,
+                        0,
+                        DATA1_TABLE_DESCRIPTOR,
+                        DEFAULT_REMOTE_DATA_DIR,
+                        100L,
+                        100L);
+        serverMetadataCache =
+                new TabletServerMetadataCache(
+                        new TestingMetadataManager(Collections.singletonList(recreatedTableInfo)));
+        serverMetadataCache.updateTableMetadata(
+                new TableMetadata(DATA1_TABLE_INFO, initialBucketMetadata));
+
+        // Then: the new table info must not be served with the dropped table's buckets
+        assertThat(serverMetadataCache.getTableMetadata(DATA1_TABLE_PATH)).isEmpty();
+    }
+
+    @Test
+    void testGetPartitionMetadataIgnoresPartitionOfDroppedTable() {
+        // Given: the cache still holds a partition of a dropped partitioned table, while ZK
+        // already registers the partition name for a re-created table
+        long recreatedTableId = partitionTableId + 1;
+        long recreatedPartitionId = partitionId1 + 100;
+        TestingMetadataManager metadataManager =
+                new TestingMetadataManager(Collections.emptyList());
+        PhysicalTablePath partitionPath =
+                PhysicalTablePath.of(partitionedTablePath, partitionName1);
+        metadataManager.registerPartition(partitionPath, recreatedTableId, recreatedPartitionId);
+        serverMetadataCache = new TabletServerMetadataCache(metadataManager);
+        serverMetadataCache.updateTableMetadata(
+                new TableMetadata(partitionTableInfo, Collections.emptyList()));
+        serverMetadataCache.updatePartitionMetadata(
+                new PartitionMetadata(
+                        partitionTableId, partitionName1, partitionId1, initialBucketMetadata));
+
+        // Then: the dropped table's partition must not be served
+        assertThat(serverMetadataCache.getPartitionMetadata(partitionPath)).isEmpty();
+    }
+
+    @Test
+    void testGetPartitionMetadataIgnoresStalePartitionOfRecreatedTable() {
+        // Given: the cache already maps the path to the re-created table, but the partition name
+        // still maps to the dropped table's partition id
+        long recreatedTableId = partitionTableId + 1;
+        long recreatedPartitionId = partitionId1 + 100;
+        TableInfo recreatedTableInfo =
+                TableInfo.of(
+                        partitionedTablePath,
+                        recreatedTableId,
+                        0,
+                        DATA1_PARTITIONED_TABLE_DESCRIPTOR,
+                        DEFAULT_REMOTE_DATA_DIR,
+                        100L,
+                        100L);
+        TestingMetadataManager metadataManager =
+                new TestingMetadataManager(Collections.singletonList(recreatedTableInfo));
+        PhysicalTablePath partitionPath =
+                PhysicalTablePath.of(partitionedTablePath, partitionName1);
+        metadataManager.registerPartition(partitionPath, recreatedTableId, recreatedPartitionId);
+        serverMetadataCache = new TabletServerMetadataCache(metadataManager);
+        serverMetadataCache.updateTableMetadata(
+                new TableMetadata(partitionTableInfo, Collections.emptyList()));
+        serverMetadataCache.updatePartitionMetadata(
+                new PartitionMetadata(
+                        partitionTableId, partitionName1, partitionId1, initialBucketMetadata));
+        serverMetadataCache.updateTableMetadata(
+                new TableMetadata(recreatedTableInfo, Collections.emptyList()));
+
+        // Then: the new table id must not be served with the dropped table's partition id
+        assertThat(serverMetadataCache.getPartitionMetadata(partitionPath)).isEmpty();
+    }
+
+    @Test
     void testUpdateTableMetadataMergeWithExisting() {
         // Given: existing table metadata in cache
         TableMetadata existingMetadata = new TableMetadata(DATA1_TABLE_INFO, initialBucketMetadata);
@@ -673,6 +751,8 @@ public class TabletServerMetadataCacheTest {
     private static final class TestingMetadataManager extends MetadataManager {
 
         private final Map<TablePath, TableInfo> tableInfoMap = new HashMap<>();
+        // Partitions not registered here are treated as matching the ids held by the cache.
+        private final Map<PhysicalTablePath, long[]> partitionRegistrations = new HashMap<>();
 
         public TestingMetadataManager(List<TableInfo> tableInfos) {
             super(
@@ -689,6 +769,18 @@ public class TabletServerMetadataCacheTest {
                 throw new TableNotExistException("Table '" + tablePath + "' does not exist.");
             }
             return tableInfo;
+        }
+
+        void registerPartition(PhysicalTablePath partitionPath, long tableId, long partitionId) {
+            partitionRegistrations.put(partitionPath, new long[] {tableId, partitionId});
+        }
+
+        @Override
+        public boolean isPartitionRegistered(
+                PhysicalTablePath partitionPath, long tableId, long partitionId) {
+            long[] registration = partitionRegistrations.get(partitionPath);
+            return registration == null
+                    || (registration[0] == tableId && registration[1] == partitionId);
         }
     }
 }

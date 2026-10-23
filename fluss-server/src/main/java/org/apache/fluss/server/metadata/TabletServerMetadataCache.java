@@ -131,6 +131,9 @@ public class TabletServerMetadataCache implements ServerMetadataCache {
         // Try to get table info from ZK only if we have the table ID in cache
         try {
             TableInfo tableInfo = metadataManager.getTable(tablePath);
+            if (tableInfo.getTableId() != tableId) {
+                return Optional.empty();
+            }
             List<BucketMetadata> bucketMetadataList =
                     new ArrayList<>(snapshot.getBucketMetadataForTable(tableId).values());
             return Optional.of(new TableMetadata(tableInfo, bucketMetadataList));
@@ -170,6 +173,13 @@ public class TabletServerMetadataCache implements ServerMetadataCache {
         if (tableIdOpt.isPresent() && partitionIdOpt.isPresent()) {
             long tableId = tableIdOpt.getAsLong();
             long partitionId = partitionIdOpt.get();
+            try {
+                if (!metadataManager.isPartitionRegistered(partitionPath, tableId, partitionId)) {
+                    return Optional.empty();
+                }
+            } catch (Exception e) {
+                return Optional.empty();
+            }
             List<BucketMetadata> bucketMetadataList =
                     new ArrayList<>(snapshot.getBucketMetadataForPartition(partitionId).values());
             // prefer the explicit bucket count sent by the coordinator; the merged bucket
