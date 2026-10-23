@@ -147,6 +147,9 @@ class KafkaProduceAppendITCase {
             admin.createDatabase(DATABASE, DatabaseDescriptor.EMPTY, true).get();
             admin.createTable(path, descriptor(format), false).get();
             CLUSTER.waitUntilAllGatewayHasSameMetadata();
+            // Direct Produce requests require a ready leader before asserting exact offsets.
+            CLUSTER.waitUntilAllReplicaReady(
+                    new TableBucket(admin.getTableInfo(path).get().getTableId(), 0));
             try (KafkaProducer<byte[], byte[]> producer = producer("all", 0)) {
                 Node leader = producer.partitionsFor(path.toString()).get(0).leader();
                 try (Socket socket = new Socket(leader.host(), leader.port())) {
@@ -280,6 +283,9 @@ class KafkaProduceAppendITCase {
             admin.createDatabase(DATABASE, DatabaseDescriptor.EMPTY, true).get();
             admin.createTable(path, descriptor("binary"), false).get();
             CLUSTER.waitUntilAllGatewayHasSameMetadata();
+            // Raw socket requests have no producer retry to hide a not-yet-ready leader.
+            CLUSTER.waitUntilAllReplicaReady(
+                    new TableBucket(admin.getTableInfo(path).get().getTableId(), 0));
             try (KafkaProducer<byte[], byte[]> producer = producer("all", 0)) {
                 Node leader = producer.partitionsFor(path.toString()).get(0).leader();
                 try (Socket socket = new Socket(leader.host(), leader.port())) {
