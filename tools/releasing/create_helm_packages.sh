@@ -64,16 +64,18 @@ mkdir -p ${HELM_RELEASE_DIR}
 
 cd ${HELM_RELEASE_DIR}
 
-# create helm package tgz for fluss
-helm package ${FLUSS_DIR}/helm
-# create prov file for helm package
-helm gpg sign fluss-${RELEASE_VERSION}.tgz
+# Package both charts with the requested release version.
+for chart_name in fluss fluss-gateway; do
+    helm package "${FLUSS_DIR}/helm/${chart_name}" \
+        --version "${RELEASE_VERSION}" --app-version "${RELEASE_VERSION}"
+    chart_archive="${chart_name}-${RELEASE_VERSION}.tgz"
+    helm gpg sign "${chart_archive}"
 
-# create sha512 and asc files
-$SHASUM fluss-${RELEASE_VERSION}.tgz > fluss-${RELEASE_VERSION}.tgz.sha512
-$SHASUM fluss-${RELEASE_VERSION}.tgz.prov > fluss-${RELEASE_VERSION}.tgz.prov.sha512
-gpg --armor --detach-sig ${HELM_RELEASE_DIR}/fluss-$RELEASE_VERSION.tgz
-gpg --armor --detach-sig ${HELM_RELEASE_DIR}/fluss-$RELEASE_VERSION.tgz.prov
+    $SHASUM "${chart_archive}" > "${chart_archive}.sha512"
+    $SHASUM "${chart_archive}.prov" > "${chart_archive}.prov.sha512"
+    gpg --armor --detach-sig "${HELM_RELEASE_DIR}/${chart_archive}"
+    gpg --armor --detach-sig "${HELM_RELEASE_DIR}/${chart_archive}.prov"
+done
 
 # create index.yaml
 cd ..

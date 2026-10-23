@@ -1,0 +1,127 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements. See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership. The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License. You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+suite: gateway configuration
+templates:
+  - templates/configmap.yaml
+tests:
+  - it: connects to the server chart client listener by default
+    asserts:
+      - matchRegex:
+          path: data["gateway.yaml"]
+          pattern: 'gateway\.cluster\.default\.bootstrap\.servers: "coordinator-server-hs:9124"'
+      - matchRegex:
+          path: data["gateway.yaml"]
+          pattern: 'gateway\.cluster\.default\.connection\.security\.protocol: "plaintext"'
+
+  - it: replaces the default cluster with sorted named clusters
+    set:
+      clusters:
+        default: null
+        production:
+          bootstrapServers: production.example.com:9124
+        analytics:
+          bootstrapServers: analytics.example.com:9124
+    asserts:
+      - matchRegex:
+          path: data["gateway.yaml"]
+          pattern: 'gateway\.clusters: "analytics,production"'
+      - matchRegex:
+          path: data["gateway.yaml"]
+          pattern: 'gateway\.cluster\.analytics\.bootstrap\.servers: "analytics.example.com:9124"'
+      - notMatchRegex:
+          path: data["gateway.yaml"]
+          pattern: 'gateway\.cluster\.default\.'
+
+  - it: renders extra application settings as YAML scalars
+    set:
+      configurationOverrides:
+        gateway.rest.write.max-rows: 2500
+        gateway.rest.write.max-request-bytes: 4MiB
+        gateway.rest.write.rate-limit.enabled: true
+    asserts:
+      - matchRegex:
+          path: data["gateway.yaml"]
+          pattern: 'gateway\.rest\.write\.max-rows: 2500'
+      - matchRegex:
+          path: data["gateway.yaml"]
+          pattern: 'gateway\.rest\.write\.max-request-bytes: "4MiB"'
+      - matchRegex:
+          path: data["gateway.yaml"]
+          pattern: 'gateway\.rest\.write\.rate-limit\.enabled: true'
+
+  - it: disables the metrics exporter through configuration
+    set:
+      metrics.enabled: false
+    asserts:
+      - matchRegex:
+          path: data["gateway.yaml"]
+          pattern: 'gateway\.metrics\.enabled: false'
+
+  - it: keeps a longer drain budget in the generated file
+    set:
+      server.shutdownDrainTimeoutSeconds: 60
+      terminationGracePeriodSeconds: 75
+    asserts:
+      - matchRegex:
+          path: data["gateway.yaml"]
+          pattern: 'gateway\.shutdown\.drain-timeout: "60s"'
+
+  - it: rejects a shutdown grace period that cannot accommodate preStop and draining
+    set:
+      terminationGracePeriodSeconds: 35
+    asserts:
+      - failedTemplate:
+          errorMessage: terminationGracePeriodSeconds must exceed server.shutdownDrainTimeoutSeconds + 5
+
+  - it: rejects REST and metrics listeners sharing a port
+    set:
+      server.restPort: 9095
+    asserts:
+      - failedTemplate:
+          errorMessage: server.restPort and metrics.port must differ
+
+  - it: rejects overriding a listener through additional settings
+    set:
+      configurationOverrides:
+        gateway.rest.listen: "127.0.0.1:18080"
+    asserts:
+      - failedTemplate:
+          errorMessage: 'configurationOverrides must not override chart-managed option "gateway.rest.listen"'
+
+  - it: rejects backend credential values in the ConfigMap
+    set:
+      configurationOverrides:
+        gateway.cluster.default.connection.service.secret: value
+    asserts:
+      - failedTemplate:
+          errorMessage: 'configurationOverrides must not override chart-managed option "gateway.cluster.default.connection.service.secret"'
+
+  - it: rejects custom labels changing the Deployment selector
+    set:
+      podLabels:
+        app.kubernetes.io/name: another-name
+    asserts:
+      - failedTemplate:
+          errorMessage: 'podLabels must not override selector label "app.kubernetes.io/name"'
+
+  - it: rejects overriding the configuration checksum
+    set:
+      podAnnotations:
+        checksum/config: stale
+    asserts:
+      - failedTemplate:
+          errorMessage: podAnnotations must not override checksum/config

@@ -1,0 +1,128 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements. See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership. The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License. You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+suite: gateway backend authentication
+templates:
+  - templates/deployment.yaml
+  - templates/configmap.yaml
+tests:
+  - it: uses default Secret keys without copying credentials into configuration
+    set:
+      clusters:
+        default: null
+        warehouse:
+          bootstrapServers: warehouse.example.com:9124
+          securityProtocol: sasl
+          sasl:
+            existingSecret:
+              name: warehouse-account
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: FLUSS_GATEWAY__CLUSTER__WAREHOUSE__CONNECTION__SERVICE__ACCOUNT
+            valueFrom:
+              secretKeyRef:
+                name: warehouse-account
+                key: username
+        template: templates/deployment.yaml
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: FLUSS_GATEWAY__CLUSTER__WAREHOUSE__CONNECTION__SERVICE__SECRET
+            valueFrom:
+              secretKeyRef:
+                name: warehouse-account
+                key: password
+        template: templates/deployment.yaml
+      - matchRegex:
+          path: data["gateway.yaml"]
+          pattern: 'gateway\.cluster\.warehouse\.connection\.security\.protocol: "sasl"'
+        template: templates/configmap.yaml
+      - notMatchRegex:
+          path: data["gateway.yaml"]
+          pattern: 'service\.(account|secret)'
+        template: templates/configmap.yaml
+
+  - it: supports named clusters and custom Secret keys
+    set:
+      clusters:
+        default: null
+        prod_eu:
+          bootstrapServers: production.example.com:9124
+          securityProtocol: sasl
+          sasl:
+            existingSecret:
+              name: prod-account
+              usernameKey: account
+              passwordKey: credential
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: FLUSS_GATEWAY__CLUSTER__PROD_EU__CONNECTION__SERVICE__SECRET
+            valueFrom:
+              secretKeyRef:
+                name: prod-account
+                key: credential
+        template: templates/deployment.yaml
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: FLUSS_GATEWAY__CLUSTER__PROD_EU__CONNECTION__SERVICE__ACCOUNT
+            valueFrom:
+              secretKeyRef:
+                name: prod-account
+                key: account
+        template: templates/deployment.yaml
+
+  - it: fails when a SASL cluster has no Secret reference
+    set:
+      clusters.default.securityProtocol: sasl
+    asserts:
+      - failedTemplate:
+          errorMessage: 'cluster "default" sasl.existingSecret.name is required'
+        template: templates/deployment.yaml
+
+  - it: rejects consecutive underscores that cannot be encoded in Gateway environment variables
+    set:
+      clusters:
+        default: null
+        prod__eu:
+          bootstrapServers: production.example.com:9124
+          securityProtocol: sasl
+          sasl:
+            existingSecret:
+              name: prod-account
+    asserts:
+      - failedTemplate:
+          errorMessage: 'SASL cluster id "prod__eu" must not contain consecutive underscores or end in an underscore'
+        template: templates/deployment.yaml
+
+  - it: rejects a trailing underscore that merges with the environment delimiter
+    set:
+      clusters:
+        default: null
+        prod_:
+          bootstrapServers: production.example.com:9124
+          securityProtocol: sasl
+          sasl:
+            existingSecret:
+              name: prod-account
+    asserts:
+      - failedTemplate:
+          errorMessage: 'SASL cluster id "prod_" must not contain consecutive underscores or end in an underscore'
+        template: templates/deployment.yaml

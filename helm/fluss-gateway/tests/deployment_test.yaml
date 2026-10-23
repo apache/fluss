@@ -1,0 +1,90 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements. See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership. The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License. You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+suite: gateway deployment
+templates:
+  - templates/deployment.yaml
+tests:
+  - it: keeps custom container ports consistent with image environment overrides
+    set:
+      server.restPort: 18080
+      metrics.port: 19095
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].ports
+          value:
+            - {name: rest, containerPort: 18080}
+            - {name: metrics, containerPort: 19095}
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: FLUSS_GATEWAY__REST__LISTEN
+            value: "0.0.0.0:18080"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: FLUSS_GATEWAY__METRICS__EXPORTER__PROMETHEUS__LISTEN
+            value: "0.0.0.0:19095"
+
+  - it: uses an explicit image and existing registry Secret
+    set:
+      image.registry: registry.example.com
+      image.repository: apache/fluss-gateway
+      image.tag: test
+      image.pullSecrets: [registry, mirror]
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: registry.example.com/apache/fluss-gateway:test
+      - equal:
+          path: spec.template.spec.imagePullSecrets
+          value: [{name: registry}, {name: mirror}]
+
+  - it: preserves chart metadata with custom scheduling and pod metadata
+    set:
+      nodeSelector: {kubernetes.io/arch: arm64}
+      tolerations:
+        - {key: dedicated, operator: Equal, value: fluss, effect: NoSchedule}
+      podLabels: {team: data}
+      podAnnotations: {example.com/owner: data}
+    asserts:
+      - equal:
+          path: spec.template.spec.nodeSelector
+          value: {kubernetes.io/arch: arm64}
+      - equal:
+          path: spec.template.spec.tolerations
+          value:
+            - {key: dedicated, operator: Equal, value: fluss, effect: NoSchedule}
+      - equal:
+          path: spec.template.metadata.labels.team
+          value: data
+      - equal:
+          path: spec.template.metadata.annotations["example.com/owner"]
+          value: data
+      - equal:
+          path: spec.selector.matchLabels["app.kubernetes.io/instance"]
+          value: RELEASE-NAME
+      - matchRegex:
+          path: spec.template.metadata.annotations["checksum/config"]
+          pattern: '^[a-f0-9]{64}$'
+
+  - it: removes the metrics container port when metrics are disabled
+    set:
+      metrics.enabled: false
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].ports
+          value: [{name: rest, containerPort: 8080}]

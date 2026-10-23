@@ -1,0 +1,246 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$comment": "Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements. See the NOTICE file distributed with this work for additional information regarding copyright ownership. The ASF licenses this file to you under the Apache License, Version 2.0 (the \"License\"); you may not use this file except in compliance with the License. You may obtain a copy of the License at http://www.apache.org/licenses/LICENSE-2.0 . Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on an \"AS IS\" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the specific language governing permissions and limitations under the License.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "replicaCount": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "nameOverride": {
+      "type": "string"
+    },
+    "fullnameOverride": {
+      "type": "string"
+    },
+    "global": {
+      "type": "object"
+    },
+    "image": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "registry",
+        "repository",
+        "tag",
+        "pullPolicy",
+        "pullSecrets"
+      ],
+      "properties": {
+        "registry": {
+          "type": "string"
+        },
+        "repository": {
+          "type": "string",
+          "minLength": 1
+        },
+        "tag": {
+          "type": "string"
+        },
+        "pullPolicy": {
+          "enum": [
+            "Always",
+            "IfNotPresent",
+            "Never"
+          ]
+        },
+        "pullSecrets": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    "clusters": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": false,
+      "patternProperties": {
+        "^[a-z][a-z0-9_]{0,62}$": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "bootstrapServers"
+          ],
+          "properties": {
+            "bootstrapServers": {
+              "type": "string",
+              "pattern": "\\S"
+            },
+            "securityProtocol": {
+              "enum": [
+                "plaintext",
+                "sasl"
+              ]
+            },
+            "sasl": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "existingSecret": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "name": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "usernameKey": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "passwordKey": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "server": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "restPort",
+        "requestTimeout",
+        "shutdownDrainTimeoutSeconds"
+      ],
+      "properties": {
+        "restPort": {
+          "$ref": "#/definitions/containerPort"
+        },
+        "requestTimeout": {
+          "type": "string",
+          "pattern": "^[1-9][0-9]*\\s*(ms|s|m|h|d)$"
+        },
+        "shutdownDrainTimeoutSeconds": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "terminationGracePeriodSeconds": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "service": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "port",
+        "annotations"
+      ],
+      "properties": {
+        "type": {
+          "enum": [
+            "ClusterIP",
+            "NodePort",
+            "LoadBalancer"
+          ]
+        },
+        "port": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535
+        },
+        "annotations": {
+          "$ref": "#/definitions/stringMap"
+        }
+      }
+    },
+    "metrics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "enabled",
+        "port",
+        "service"
+      ],
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "port": {
+          "$ref": "#/definitions/containerPort"
+        },
+        "service": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "labels",
+            "annotations"
+          ],
+          "properties": {
+            "labels": {
+              "$ref": "#/definitions/stringMap"
+            },
+            "annotations": {
+              "$ref": "#/definitions/stringMap"
+            }
+          }
+        }
+      }
+    },
+    "configurationOverrides": {
+      "type": "object",
+      "propertyNames": {
+        "pattern": "^gateway\\."
+      },
+      "additionalProperties": {
+        "type": [
+          "string",
+          "number",
+          "boolean"
+        ]
+      }
+    },
+    "resources": {
+      "type": "object"
+    },
+    "podAnnotations": {
+      "$ref": "#/definitions/stringMap"
+    },
+    "podLabels": {
+      "$ref": "#/definitions/stringMap"
+    },
+    "nodeSelector": {
+      "$ref": "#/definitions/stringMap"
+    },
+    "tolerations": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "affinity": {
+      "type": "object"
+    },
+    "topologySpreadConstraints": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    }
+  },
+  "definitions": {
+    "containerPort": {
+      "type": "integer",
+      "minimum": 1024,
+      "maximum": 65535
+    },
+    "stringMap": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      }
+    }
+  }
+}
