@@ -12,6 +12,7 @@ Apache Fluss publishes the following JARs to Maven Central:
 
 | Artifact | Jar |
 |----------|-----|
+| Fluss connector for Spark 4.2.0 (Scala 2.13) | [fluss-spark-4.2_2.13-$FLUSS_VERSION$.jar]($FLUSS_MAVEN_REPO_URL$/org/apache/fluss/fluss-spark-4.2_2.13/$FLUSS_VERSION$/fluss-spark-4.2_2.13-$FLUSS_VERSION$.jar) |
 | Fluss connector for Spark 3.5 (Scala 2.12) | [fluss-spark-3.5_2.12-$FLUSS_VERSION$.jar]($FLUSS_MAVEN_REPO_URL$/org/apache/fluss/fluss-spark-3.5_2.12/$FLUSS_VERSION$/fluss-spark-3.5_2.12-$FLUSS_VERSION$.jar) |
 | Fluss connector for Spark 3.4 (Scala 2.12) | [fluss-spark-3.4_2.12-$FLUSS_VERSION$.jar]($FLUSS_MAVEN_REPO_URL$/org/apache/fluss/fluss-spark-3.4_2.12/$FLUSS_VERSION$/fluss-spark-3.4_2.12-$FLUSS_VERSION$.jar) |
 
@@ -31,8 +32,10 @@ Verify downloaded JARs using the [verification instructions](/downloads#verifyin
 ## Supported Spark Versions
 | Fluss Connector Versions | Supported Spark Versions |
 |--------------------------|--------------------------|
-| $FLUSS_VERSION_SHORT$    | 3.4, 3.5                 |
+| $FLUSS_VERSION_SHORT$    | 3.4, 3.5, 4.2.0          |
 
+
+Spark 4.2.0 uses the separate `org.apache.fluss:fluss-spark-4.2_2.13` connector, built with Scala 2.13.18 and requiring JDK 17. Use this JAR with the Spark 4.2.0 distribution. Spark 3.4/3.5 continue to use their Scala 2.12 connector JARs; the Spark 3.5 setup below remains applicable to those versions.
 
 ## Feature Support
 Fluss supports Apache Spark's SQL API and Spark Structured Streaming.
@@ -50,10 +53,12 @@ Fluss supports Apache Spark's SQL API and Spark Structured Streaming.
 | [SQL Show Partitions](ddl.md#show-partitions)        | ✔️    |                                             |
 | [SQL Add Partition](ddl.md#add-partition)             | ✔️    |                                             |
 | [SQL Drop Partition](ddl.md#drop-partition)          | ✔️    |                                             |
-| [SQL Select (Batch)](reads.md)                       | ✔️    | Log table and primary-key table; both support union read when lake-enabled |
+| [SQL Select (Batch)](reads.md)                       | ✔️    | Log and primary-key tables; lake snapshot and union reads support Paimon log/primary-key tables and Iceberg log tables |
 | [SQL Insert Into](writes.md)                         | ✔️    | Log table and primary-key table             |
 | [Structured Streaming Read](structured-streaming.md#streaming-read) | ✔️ | Log table and primary-key table             |
 | [Structured Streaming Write](structured-streaming.md#streaming-write) | ✔️ | Log table and primary-key table           |
+
+Iceberg primary-key lake snapshot and union reads are not supported. This limitation does not affect primary-key data tiering to Iceberg or time-range reads that use only data retained in Fluss. See [Lake-Enabled Tables](reads.md#lake-enabled-tables-union-read) for the read support boundary.
 
 
 ## Preparation when using Spark SQL

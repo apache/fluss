@@ -61,6 +61,16 @@ mvn clean install -DskipTests -T 1C
 - For local testing, it's recommend to use directory `${project}/build-target` in project.
 - For deploying distributed cluster, it's recommend to use binary file named `fluss-xxx-bin.tgz`, the file is in directory `${project}/fluss-dist/target`.
 
+## Building the Spark 4.2 connector
+
+Run Maven with JDK 17 and the `spark-4.2` profile to build the Spark 4.2.0 connector:
+
+```bash
+JAVA_HOME=/path/to/jdk-17 mvn clean install -Pspark-4.2 -pl fluss-spark/fluss-spark-4.2 -am -DskipTests
+```
+
+This profile selects Spark 4.2.0 and Scala 2.13.18 and produces `org.apache.fluss:fluss-spark-4.2_2.13` in `fluss-spark/fluss-spark-4.2/target/`. The default build continues to build the Spark 3.4/3.5 connectors with Scala 2.12.
+
 ## Building the Rust client (fluss-rust)
 
 The Rust client, language bindings, and examples live under `fluss-rust/` and build with Cargo. You need **Rust** (the toolchain pinned in `fluss-rust/rust-toolchain.toml`, currently 1.85+). The code generated from the canonical `fluss-rpc/src/main/proto/FlussApi.proto` is checked in, so **protoc** is only needed when the proto changes — run `fluss-rust/crates/fluss/regen.sh` and commit the result.

@@ -485,6 +485,15 @@
         </profile>
 
         <profile>
+            <id>spark-4.2</id>
+            <properties>
+                <scala.binary.version>2.13</scala.binary.version>
+                <scala.version>2.13.18</scala.version>
+                <spark.version>4.2.0</spark.version>
+            </properties>
+        </profile>
+
+        <profile>
             <id>scala-2.13</id>
             <properties>
                 <scala.binary.version>2.13</scala.binary.version>
@@ -670,6 +679,7 @@
                         <!-- Generated content -->
                         <exclude>**/target/**</exclude>
                         <exclude>build-target/**</exclude>
+                        <exclude>m2-*/**</exclude>
                         <exclude>**/scalastyle-output.xml</exclude>
                         <exclude>**/*.svg</exclude>
                         <exclude>**/dependency-reduced-pom.xml</exclude>

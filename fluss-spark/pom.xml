@@ -35,13 +35,27 @@
         <flink.version>1.20.3</flink.version>
     </properties>
 
-    <modules>
-        <module>fluss-spark-common</module>
-        <module>fluss-spark-ut</module>
-        <module>fluss-spark-3.5</module>
-        <module>fluss-spark-3.4</module>
-        <module>fluss-spark-tiering</module>
-    </modules>
+    <profiles>
+        <profile>
+            <id>spark-3</id>
+            <activation>
+                <activeByDefault>true</activeByDefault>
+            </activation>
+            <modules>
+                <module>fluss-spark-common</module>
+                <module>fluss-spark-ut</module>
+                <module>fluss-spark-3.5</module>
+                <module>fluss-spark-3.4</module>
+                <module>fluss-spark-tiering</module>
+            </modules>
+        </profile>
+        <profile>
+            <id>spark-4.2</id>
+            <modules>
+                <module>fluss-spark-4.2</module>
+            </modules>
+        </profile>
+    </profiles>
 
     <dependencies>
         <dependency>
