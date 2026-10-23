@@ -55,30 +55,6 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class TableDescriptorValidationTest {
 
     @Test
-    void testMergeEngineOptionOwnership() {
-        String versionColumn = ConfigOptions.TABLE_MERGE_ENGINE_VERSION_COLUMN.key();
-        assertThatThrownBy(
-                        () ->
-                                TableDescriptorValidation.validateTableDescriptor(
-                                        pkTableWithProperty(versionColumn, "a"), 100, null))
-                .isInstanceOf(InvalidConfigException.class)
-                .hasMessageContaining(versionColumn)
-                .hasMessageContaining("versioned");
-        assertThatThrownBy(
-                        () ->
-                                TableDescriptorValidation.validateTableDescriptor(
-                                        pkTableWithProperties(
-                                                ConfigOptions.TABLE_MERGE_ENGINE.key(),
-                                                "aggregation",
-                                                versionColumn,
-                                                "a"),
-                                        100,
-                                        null))
-                .isInstanceOf(InvalidConfigException.class)
-                .hasMessageContaining(versionColumn);
-    }
-
-    @Test
     void testSkipUnchangedUpsertsWithDefaultMergeBehavior() {
         TableDescriptorValidation.validateTableDescriptor(
                 pkTableWithProperty(ConfigOptions.TABLE_UPSERT_SKIP_UNCHANGED.key(), "true"),

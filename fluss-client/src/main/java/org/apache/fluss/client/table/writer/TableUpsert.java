@@ -127,8 +127,8 @@ public class TableUpsert implements Upsert {
 
     @Override
     public <T> TypedUpsertWriter<T> createTypedWriter(Class<T> pojoClass) {
-        // Typed writers support ordinary upserts, including NULL skipping.
-        if (mergeMode == MergeMode.OVERWRITE) {
+        // TypedUpsertWriterImpl doesn't support mergeMode yet
+        if (mergeMode != MergeMode.DEFAULT) {
             throw new UnsupportedOperationException(
                     String.format(
                             "TypedUpsertWriter does not support MergeMode %s yet. "

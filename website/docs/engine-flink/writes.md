@@ -140,7 +140,7 @@ Primary key columns cannot be updated. For partitioned primary-key tables this i
 `UPDATE` and `DELETE FROM` are not atomic. Each statement reads the table once and then writes matching rows independently: rows written after the read starts are not affected, concurrent writes to a matching row may be overwritten (`UPDATE` writes back the entire row), and a failed job leaves already-written rows modified. Avoid running these statements concurrently with other writers to the same keys.
 :::
 
-### Ignoring NULL Values
+## Ignoring NULL Values
 
 For primary key tables using the default merge engine, set the connector option `sink.ignore-nulls` to `true` to preserve existing values for incoming NULL target-column values. It defaults to `false`. It applies to both full-row and partial-column upserts, including INSERT and streaming UPDATE_AFTER records.
 

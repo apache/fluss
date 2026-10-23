@@ -80,6 +80,3 @@ SELECT * FROM T;
 | 3  | 3.0 | t3 |
 +----+-----+----+
 ```
-## Ignoring NULL Values in Upserts
-
-Clients can select NULL-skipping behavior for individual upsert writers without changing the table definition. See [Flink writes](../../engine-flink/writes.md#ignoring-null-values) for the connector option and semantics. Other writers continue to use their own merge mode.
