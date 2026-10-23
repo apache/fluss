@@ -357,7 +357,8 @@ public final class KvWriteProcessor {
                                 kvRecords, currentMerger, autoIncrementUpdater, stateAccessor);
                 previousValueLookup =
                         primaryKey -> {
-                            KvPreWriteBuffer.Key savedKey = KvPreWriteBuffer.Key.of(primaryKey);
+                            KvPreWriteBuffer.Key savedKey =
+                                    stateAccessor.encodeKey(primaryKey, null);
                             byte[] value = savedValues.get(savedKey);
                             return value == null ? null : valueDecoder.decodeValue(value);
                         };
