@@ -284,6 +284,7 @@ public class AutoPartitionManager implements AutoCloseable {
                     try {
                         metadataManager.dropPartition(
                                 tablePath,
+                                tableInfo.getTableId(),
                                 new ResolvedPartitionSpec(
                                         tableInfo.getPartitionKeys(),
                                         Collections.singletonList(HISTORICAL_PARTITION_VALUE)),
@@ -481,6 +482,7 @@ public class AutoPartitionManager implements AutoCloseable {
 
             dropPartitions(
                     tablePath,
+                    tableId,
                     tableInfo.getPartitionKeys(),
                     now,
                     tableInfo.getTableConfig().getAutoPartitionStrategy(),
@@ -607,6 +609,7 @@ public class AutoPartitionManager implements AutoCloseable {
 
     private void dropPartitions(
             TablePath tablePath,
+            long tableId,
             List<String> partitionKeys,
             Instant currentInstant,
             AutoPartitionStrategy autoPartitionStrategy,
@@ -650,12 +653,13 @@ public class AutoPartitionManager implements AutoCloseable {
             if (HISTORICAL_PARTITION_VALUE.equals(entry.getKey())) {
                 continue;
             }
-            dropPartitions(tablePath, partitionKeys, iterator, entry);
+            dropPartitions(tablePath, tableId, partitionKeys, iterator, entry);
         }
     }
 
     private void dropPartitions(
             TablePath tablePath,
+            long tableId,
             List<String> partitionKeys,
             Iterator<Map.Entry<String, Set<String>>> iterator,
             Map.Entry<String, Set<String>> entry) {
@@ -672,6 +676,7 @@ public class AutoPartitionManager implements AutoCloseable {
             try {
                 metadataManager.dropPartition(
                         tablePath,
+                        tableId,
                         ResolvedPartitionSpec.fromPartitionName(partitionKeys, partitionName),
                         false);
             } catch (PartitionNotExistException e) {

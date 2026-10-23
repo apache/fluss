@@ -107,15 +107,26 @@ public class FlinkLookupFunction extends LookupFunction {
         flussRowToFlinkRowConverter =
                 new FlussRowToFlinkRowConverter(FlinkConversions.toFlussRowType(outputRowType));
 
-        Lookup lookup = table.newLookup();
-        if (lookupNormalizer.getLookupType() == LookupType.PREFIX_LOOKUP) {
+        if (lookupNormalizer.getLookupType() == LookupType.SECONDARY_INDEX_LOOKUP) {
             int[] lookupKeyIndexes = lookupNormalizer.getLookupKeyIndexes();
             RowType lookupKeyRowType = FlinkUtils.projectRowType(flinkRowType, lookupKeyIndexes);
-            lookup = lookup.lookupBy(lookupKeyRowType.getFieldNames());
-        } else if (insertIfNotExists) {
-            lookup = lookup.enableInsertIfNotExists();
+            List<String> lookupColumns = lookupKeyRowType.getFieldNames();
+            String indexName =
+                    LookupNormalizer.findMatchingSecondaryIndexName(
+                            table.getTableInfo().getSchema(), lookupColumns);
+            lookuper = table.getSecondaryIndexLookuper(indexName);
+        } else {
+            Lookup lookup = table.newLookup();
+            if (lookupNormalizer.getLookupType() == LookupType.PREFIX_LOOKUP) {
+                int[] lookupKeyIndexes = lookupNormalizer.getLookupKeyIndexes();
+                RowType lookupKeyRowType =
+                        FlinkUtils.projectRowType(flinkRowType, lookupKeyIndexes);
+                lookup = lookup.lookupBy(lookupKeyRowType.getFieldNames());
+            } else if (insertIfNotExists) {
+                lookup = lookup.enableInsertIfNotExists();
+            }
+            lookuper = lookup.createLookuper();
         }
-        lookuper = lookup.createLookuper();
 
         LOG.info("end open.");
     }
@@ -137,6 +148,7 @@ public class FlinkLookupFunction extends LookupFunction {
         // the retry mechanism will be handled by the underlying LookupClient layer
         try {
             List<InternalRow> lookupRows = lookuper.lookup(flussKeyRow).get().getRowList();
+
             if (lookupRows.isEmpty()) {
                 return Collections.emptyList();
             }

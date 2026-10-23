@@ -246,6 +246,23 @@ public final class ZkData {
     }
 
     /**
+     * The znode for the partition tombstone of a partitioned source table. The znode stores the
+     * authoritative {@link org.apache.fluss.metadata.PartitionTombstone} blacklist (floor +
+     * explicit_set + version) that the Index Bucket apply path consults to drop entries whose
+     * source partition no longer exists. The znode path is:
+     *
+     * <p>/metadata/databases/[databaseName]/tables/[tableName]/partition_tombstone
+     */
+    public static final class PartitionTombstoneZNode {
+
+        public static String path(TablePath tablePath) {
+            return TableZNode.path(tablePath) + "/partition_tombstone";
+        }
+
+        private PartitionTombstoneZNode() {}
+    }
+
+    /**
      * The znode used to generate a sequence unique id for a table. The znode path is:
      *
      * <p>/metadata/table_seqid

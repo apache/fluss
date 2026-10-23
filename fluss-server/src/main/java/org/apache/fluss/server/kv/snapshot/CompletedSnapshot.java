@@ -79,6 +79,8 @@ public class CompletedSnapshot {
      */
     @Nullable private final Long rowCount;
 
+    @Nullable private final Long indexPushedOffset;
+
     /**
      * The auto-increment ID ranges of the snapshot, null for legacy tables that doesn't support or
      * doesn't have auto-increment columns.
@@ -101,12 +103,33 @@ public class CompletedSnapshot {
             long logOffset,
             @Nullable Long rowCount,
             @Nullable List<AutoIncIDRange> autoIncIDRanges) {
+        this(
+                tableBucket,
+                snapshotID,
+                snapshotLocation,
+                kvSnapshotHandle,
+                logOffset,
+                rowCount,
+                null,
+                autoIncIDRanges);
+    }
+
+    public CompletedSnapshot(
+            TableBucket tableBucket,
+            long snapshotID,
+            FsPath snapshotLocation,
+            KvSnapshotHandle kvSnapshotHandle,
+            long logOffset,
+            @Nullable Long rowCount,
+            @Nullable Long indexPushedOffset,
+            @Nullable List<AutoIncIDRange> autoIncIDRanges) {
         this.tableBucket = tableBucket;
         this.snapshotID = snapshotID;
         this.snapshotLocation = snapshotLocation;
         this.kvSnapshotHandle = kvSnapshotHandle;
         this.logOffset = logOffset;
         this.rowCount = rowCount;
+        this.indexPushedOffset = indexPushedOffset;
         this.autoIncIDRanges = autoIncIDRanges;
     }
 
@@ -116,7 +139,7 @@ public class CompletedSnapshot {
             long snapshotID,
             FsPath snapshotLocation,
             KvSnapshotHandle kvSnapshotHandle) {
-        this(tableBucket, snapshotID, snapshotLocation, kvSnapshotHandle, 0, null, null);
+        this(tableBucket, snapshotID, snapshotLocation, kvSnapshotHandle, 0, null, null, null);
     }
 
     public long getSnapshotID() {
@@ -135,9 +158,23 @@ public class CompletedSnapshot {
         return logOffset;
     }
 
+    /**
+     * Returns the lowest WAL offset that must be retained to recover all state represented by this
+     * completed snapshot. Data recovery starts from {@link #getLogOffset()}, but secondary index
+     * recovery may need to replay from an earlier index-pushed watermark.
+     */
+    public long getMinRetainLogOffset() {
+        return indexPushedOffset == null ? logOffset : Math.min(logOffset, indexPushedOffset);
+    }
+
     @Nullable
     public Long getRowCount() {
         return rowCount;
+    }
+
+    @Nullable
+    public Long getIndexPushedOffset() {
+        return indexPushedOffset;
     }
 
     @Nullable
@@ -272,6 +309,7 @@ public class CompletedSnapshot {
                 && Objects.equals(tableBucket, that.tableBucket)
                 && Objects.equals(kvSnapshotHandle, that.kvSnapshotHandle)
                 && Objects.equals(rowCount, that.rowCount)
+                && Objects.equals(indexPushedOffset, that.indexPushedOffset)
                 && Objects.equals(autoIncIDRanges, that.autoIncIDRanges)
                 && Objects.equals(snapshotLocation, that.snapshotLocation);
     }
@@ -284,6 +322,7 @@ public class CompletedSnapshot {
                 kvSnapshotHandle,
                 logOffset,
                 rowCount,
+                indexPushedOffset,
                 autoIncIDRanges,
                 snapshotLocation);
     }

@@ -21,6 +21,7 @@ import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.exception.UnknownServerException;
 import org.apache.fluss.metrics.MetricNames;
 import org.apache.fluss.metrics.groups.MetricGroup;
 import org.apache.fluss.rpc.RpcClient;
@@ -337,6 +338,10 @@ public class CoordinatorChannelManager {
                     "Can't not send {} to the tablet server {} as the server is offline.",
                     request.getClass().getSimpleName(),
                     targetServerId);
+            responseConsumer.accept(
+                    null,
+                    new UnknownServerException(
+                            "Tablet server " + targetServerId + " is unavailable."));
         } else {
             TabletServerGateway tabletServerGateway = optionalTabletServerGateway.get();
             requestFunction.apply(tabletServerGateway, request).whenComplete(responseConsumer);

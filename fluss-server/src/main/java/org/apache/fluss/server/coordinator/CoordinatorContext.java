@@ -816,7 +816,7 @@ public class CoordinatorContext {
 
         TablePath tablePath = tablePathById.remove(tableId);
         if (tablePath != null) {
-            tableIdByPath.remove(tablePath);
+            tableIdByPath.remove(tablePath, tableId);
         }
         tableInfoById.remove(tableId);
     }

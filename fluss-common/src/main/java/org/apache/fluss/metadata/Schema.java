@@ -27,6 +27,7 @@ import org.apache.fluss.types.MapType;
 import org.apache.fluss.types.ReassignFieldId;
 import org.apache.fluss.types.RowType;
 import org.apache.fluss.utils.EncodingUtils;
+import org.apache.fluss.utils.IndexTableUtils;
 import org.apache.fluss.utils.StringUtils;
 import org.apache.fluss.utils.json.JsonSerdeUtils;
 import org.apache.fluss.utils.json.SchemaJsonSerde;
@@ -43,6 +44,7 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
@@ -65,6 +67,7 @@ public final class Schema implements Serializable {
     private final List<Column> columns;
     private final @Nullable PrimaryKey primaryKey;
     private final List<String> autoIncrementColumnNames;
+    private final List<Index> indexes;
     private final RowType rowType;
 
     /**
@@ -77,11 +80,15 @@ public final class Schema implements Serializable {
             List<Column> columns,
             @Nullable PrimaryKey primaryKey,
             int highestFieldId,
-            List<String> autoIncrementColumnNames) {
+            List<String> autoIncrementColumnNames,
+            List<Index> indexes) {
         this.columns =
                 normalizeColumns(columns, primaryKey, autoIncrementColumnNames, highestFieldId);
         this.primaryKey = primaryKey;
         this.autoIncrementColumnNames = autoIncrementColumnNames;
+        this.indexes =
+                Collections.unmodifiableList(
+                        new ArrayList<>(checkNotNull(indexes, "indexes must not be null.")));
         // pre-create the row type as it is the most frequently used part of the schema
         this.rowType =
                 new RowType(
@@ -123,6 +130,10 @@ public final class Schema implements Serializable {
 
     public List<String> getAutoIncrementColumnNames() {
         return autoIncrementColumnNames;
+    }
+
+    public List<Index> getIndexes() {
+        return indexes;
     }
 
     public RowType getRowType() {
@@ -233,6 +244,8 @@ public final class Schema implements Serializable {
                 + primaryKey
                 + ", autoIncrementColumnNames="
                 + autoIncrementColumnNames
+                + ", indexes="
+                + indexes
                 + ", highestFieldId="
                 + highestFieldId
                 + '}';
@@ -250,12 +263,13 @@ public final class Schema implements Serializable {
         return Objects.equals(columns, schema.columns)
                 && Objects.equals(autoIncrementColumnNames, schema.autoIncrementColumnNames)
                 && Objects.equals(primaryKey, schema.primaryKey)
-                && highestFieldId == schema.highestFieldId;
+                && highestFieldId == schema.highestFieldId
+                && Objects.equals(indexes, schema.indexes);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(columns, primaryKey, autoIncrementColumnNames, highestFieldId);
+        return Objects.hash(columns, primaryKey, autoIncrementColumnNames, highestFieldId, indexes);
     }
 
     // --------------------------------------------------------------------------------------------
@@ -275,11 +289,13 @@ public final class Schema implements Serializable {
         private final List<Column> columns;
         private @Nullable PrimaryKey primaryKey;
         private final List<String> autoIncrementColumnNames;
+        private final List<Index> indexes;
         private AtomicInteger highestFieldId;
 
         private Builder() {
             columns = new ArrayList<>();
             autoIncrementColumnNames = new ArrayList<>();
+            indexes = new ArrayList<>();
             highestFieldId = new AtomicInteger(-1);
         }
 
@@ -287,7 +303,10 @@ public final class Schema implements Serializable {
         public Builder fromSchema(Schema schema) {
             // Check that the builder is empty before adopting from an existing schema
             checkState(
-                    columns.isEmpty() && autoIncrementColumnNames.isEmpty() && primaryKey == null,
+                    columns.isEmpty()
+                            && autoIncrementColumnNames.isEmpty()
+                            && primaryKey == null
+                            && indexes.isEmpty(),
                     "Schema.Builder#fromSchema should be the first API to be called on the builder.");
 
             // Adopt columns while preserving their original IDs
@@ -299,6 +318,7 @@ public final class Schema implements Serializable {
             // Copy the metadata members
             this.autoIncrementColumnNames.addAll(schema.getAutoIncrementColumnNames());
             schema.getPrimaryKey().ifPresent(pk -> this.primaryKey = pk);
+            this.indexes.addAll(schema.getIndexes());
 
             return this;
         }
@@ -442,6 +462,7 @@ public final class Schema implements Serializable {
         public Builder column(String columnName, DataType dataType) {
             checkNotNull(columnName, "Column name must not be null.");
             checkNotNull(dataType, "Data type must not be null.");
+            checkReservedSystemColumn(columnName);
             int id = highestFieldId.incrementAndGet();
             // Reassign field id especially for nested types.
             DataType reassignDataType = ReassignFieldId.reassign(dataType, highestFieldId);
@@ -467,12 +488,20 @@ public final class Schema implements Serializable {
             checkNotNull(columnName, "Column name must not be null.");
             checkNotNull(dataType, "Data type must not be null.");
             checkNotNull(aggFunction, "Aggregation function must not be null.");
+            checkReservedSystemColumn(columnName);
 
             int id = highestFieldId.incrementAndGet();
             // Reassign field id especially for nested types.
             DataType reassignDataType = ReassignFieldId.reassign(dataType, highestFieldId);
             columns.add(new Column(columnName, reassignDataType, null, id, aggFunction));
             return this;
+        }
+
+        private static void checkReservedSystemColumn(String columnName) {
+            checkArgument(
+                    !IndexTableUtils.RESERVED_INDEX_SYSTEM_COLUMNS.contains(columnName),
+                    "Column name '%s' is reserved for Index Table system use.",
+                    columnName);
         }
 
         /** Apply comment to the previous column. */
@@ -542,6 +571,56 @@ public final class Schema implements Serializable {
         }
 
         /**
+         * Declares a global secondary index for a set of given columns. Index names can only
+         * contain letters, digits, and underscores.
+         */
+        public Builder index(String indexName, String... columnNames) {
+            return index(indexName, IndexType.SECONDARY, Arrays.asList(columnNames));
+        }
+
+        /**
+         * Declares a global secondary index for a set of given columns. Index names can only
+         * contain letters, digits, and underscores.
+         */
+        public Builder index(String indexName, List<String> columnNames) {
+            return index(indexName, IndexType.SECONDARY, columnNames);
+        }
+
+        /**
+         * Declares an index of the given type for a set of given columns. Index names can only
+         * contain letters, digits, and underscores.
+         */
+        public Builder index(String indexName, IndexType indexType, String... columnNames) {
+            return index(indexName, indexType, Arrays.asList(columnNames));
+        }
+
+        /**
+         * Declares an index of the given type for a set of given columns. Index names can only
+         * contain letters, digits, and underscores.
+         */
+        public Builder index(String indexName, IndexType indexType, List<String> columnNames) {
+            return index(indexName, indexType, columnNames, IndexVisibility.SYNC, null);
+        }
+
+        /**
+         * Declares an index of the given type for a set of given columns. Index names can only
+         * contain letters, digits, and underscores.
+         */
+        public Builder index(
+                String indexName,
+                IndexType indexType,
+                List<String> columnNames,
+                IndexVisibility visibility,
+                @Nullable Integer bucketCount) {
+            checkArgument(
+                    indexes.stream().noneMatch(index -> index.getIndexName().equals(indexName)),
+                    "Duplicate index name '%s'.",
+                    indexName);
+            indexes.add(new Index(indexName, indexType, columnNames, visibility, bucketCount));
+            return this;
+        }
+
+        /**
          * Declares a column to be auto-incremented. With an auto-increment column in the table,
          * whenever a new row is inserted into the table, the new row will be assigned with the next
          * available value from the auto-increment sequence. A table can have at most one auto
@@ -567,7 +646,8 @@ public final class Schema implements Serializable {
 
         /** Returns an instance of an {@link Schema}. */
         public Schema build() {
-            return new Schema(columns, primaryKey, highestFieldId.get(), autoIncrementColumnNames);
+            return new Schema(
+                    columns, primaryKey, highestFieldId.get(), autoIncrementColumnNames, indexes);
         }
     }
 
@@ -733,6 +813,129 @@ public final class Schema implements Serializable {
         @Override
         public int hashCode() {
             return Objects.hash(super.hashCode(), columnNames);
+        }
+    }
+
+    /**
+     * Index in a schema.
+     *
+     * @since 0.10
+     */
+    @PublicEvolving
+    public static final class Index implements Serializable {
+
+        private static final long serialVersionUID = 1L;
+
+        static final Pattern INDEX_NAME_PATTERN = Pattern.compile("^[A-Za-z0-9_]+$");
+
+        private final String indexName;
+        private final IndexType indexType;
+        private final List<String> columnNames;
+        private final IndexVisibility visibility;
+        private final @Nullable Integer bucketCount;
+
+        public Index(String indexName, IndexType indexType, List<String> columnNames) {
+            this(indexName, indexType, columnNames, IndexVisibility.SYNC, null);
+        }
+
+        public Index(
+                String indexName,
+                IndexType indexType,
+                List<String> columnNames,
+                IndexVisibility visibility,
+                @Nullable Integer bucketCount) {
+            checkArgument(
+                    !StringUtils.isNullOrWhitespaceOnly(indexName),
+                    "Index name must not be null or empty.");
+            checkArgument(
+                    INDEX_NAME_PATTERN.matcher(indexName).matches(),
+                    "Index name '%s' may only contain letters, digits, and underscores.",
+                    indexName);
+            checkArgument(
+                    !indexName.contains("__"),
+                    "Index name '%s' cannot contain double underscores '__'.",
+                    indexName);
+            checkArgument(
+                    !indexName.startsWith("_"),
+                    "Index name '%s' cannot start with underscore '_'.",
+                    indexName);
+            checkNotNull(indexType, "Index type must not be null.");
+            checkArgument(
+                    columnNames != null && !columnNames.isEmpty(),
+                    "Index must reference at least one column.");
+            checkArgument(
+                    new HashSet<>(columnNames).size() == columnNames.size(),
+                    "Index '%s' contains duplicate columns.",
+                    indexName);
+            checkNotNull(visibility, "Index visibility must not be null.");
+            if (bucketCount != null) {
+                checkArgument(bucketCount > 0, "Index bucket count must be positive.");
+            }
+            this.indexName = indexName;
+            this.indexType = indexType;
+            this.columnNames = Collections.unmodifiableList(new ArrayList<>(columnNames));
+            this.visibility = visibility;
+            this.bucketCount = bucketCount;
+        }
+
+        public Index(String indexName, List<String> columnNames) {
+            this(indexName, IndexType.SECONDARY, columnNames);
+        }
+
+        public String getIndexName() {
+            return indexName;
+        }
+
+        public IndexType getIndexType() {
+            return indexType;
+        }
+
+        public List<String> getColumnNames() {
+            return columnNames;
+        }
+
+        public IndexVisibility getVisibility() {
+            return visibility;
+        }
+
+        public Optional<Integer> getBucketCount() {
+            return Optional.ofNullable(bucketCount);
+        }
+
+        @Override
+        public boolean equals(Object o) {
+            if (this == o) {
+                return true;
+            }
+            if (!(o instanceof Index)) {
+                return false;
+            }
+            Index other = (Index) o;
+            return indexName.equals(other.indexName)
+                    && indexType == other.indexType
+                    && columnNames.equals(other.columnNames)
+                    && visibility == other.visibility
+                    && Objects.equals(bucketCount, other.bucketCount);
+        }
+
+        @Override
+        public int hashCode() {
+            return Objects.hash(indexName, indexType, columnNames, visibility, bucketCount);
+        }
+
+        @Override
+        public String toString() {
+            return "Index{name="
+                    + indexName
+                    + ", type="
+                    + indexType
+                    + ", columns="
+                    + columnNames
+                    + ", visibility="
+                    + visibility
+                    + ", bucketCount="
+                    + bucketCount
+                    + "}";
         }
     }
 

@@ -152,6 +152,11 @@ public final class TableDescriptor implements Serializable {
         return schema;
     }
 
+    /** Returns {@code true} when this descriptor carries the main-table link of an Index Table. */
+    public boolean isIndexTable() {
+        return properties.containsKey(ConfigOptions.TABLE_INDEX_META_MAIN_TABLE_ID.key());
+    }
+
     /** Returns the bucket key of the table, empty if no bucket key is set. */
     public List<String> getBucketKeys() {
         return this.getTableDistribution()

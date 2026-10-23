@@ -149,6 +149,7 @@ public class KvTestUtils {
                 KvSnapshotHandle.create(Collections.emptyList(), Collections.emptyList(), 0),
                 0,
                 null,
+                null,
                 null);
     }
 

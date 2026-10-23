@@ -35,14 +35,24 @@ public class TabletState {
 
     private final long flushedLogOffset;
     @Nullable private final Long rowCount;
+    @Nullable private final Long indexPushedOffset;
     @Nullable private final List<AutoIncIDRange> autoIncIDRanges;
 
     public TabletState(
             long flushedLogOffset,
             @Nullable Long rowCount,
             @Nullable List<AutoIncIDRange> autoIncIDRanges) {
+        this(flushedLogOffset, rowCount, null, autoIncIDRanges);
+    }
+
+    public TabletState(
+            long flushedLogOffset,
+            @Nullable Long rowCount,
+            @Nullable Long indexPushedOffset,
+            @Nullable List<AutoIncIDRange> autoIncIDRanges) {
         this.flushedLogOffset = flushedLogOffset;
         this.rowCount = rowCount;
+        this.indexPushedOffset = indexPushedOffset;
         this.autoIncIDRanges = autoIncIDRanges;
     }
 
@@ -50,9 +60,25 @@ public class TabletState {
         return flushedLogOffset;
     }
 
+    /**
+     * Returns the lowest WAL offset that must be retained to recover all state represented by this
+     * tablet snapshot. Data recovery starts from {@link #getFlushedLogOffset()}, but secondary
+     * index recovery may need to replay from an earlier index-pushed watermark.
+     */
+    public long getMinRetainLogOffset() {
+        return indexPushedOffset == null
+                ? flushedLogOffset
+                : Math.min(flushedLogOffset, indexPushedOffset);
+    }
+
     @Nullable
     public Long getRowCount() {
         return rowCount;
+    }
+
+    @Nullable
+    public Long getIndexPushedOffset() {
+        return indexPushedOffset;
     }
 
     @Nullable
@@ -67,6 +93,8 @@ public class TabletState {
                 + flushedLogOffset
                 + ", rowCount="
                 + rowCount
+                + ", indexPushedOffset="
+                + indexPushedOffset
                 + ", autoIncIDRanges="
                 + autoIncIDRanges
                 + '}';
