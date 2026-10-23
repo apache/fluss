@@ -286,7 +286,7 @@
                 <!-- Include Spark 4 classes/data in report-aggregate and order it after its tests. -->
                 <dependency>
                     <groupId>org.apache.fluss</groupId>
-                    <artifactId>fluss-spark-4.2_${scala.binary.version}</artifactId>
+                    <artifactId>fluss-spark-4.2_2.13</artifactId>
                     <version>${project.version}</version>
                     <scope>compile</scope>
                 </dependency>

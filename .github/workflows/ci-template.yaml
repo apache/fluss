@@ -81,7 +81,7 @@ jobs:
           echo "MAVEN_TOOLCHAIN_ARGS=-t ${{ runner.temp }}/toolchains.xml -Dtoolchain.jdk.discover=false" >> "$GITHUB_ENV"
       - name: Build
         run: |
-          mvn -T 1C -B clean install -DskipTests $MAVEN_TOOLCHAIN_ARGS ${{ matrix.module == 'spark3-scala213' && '-Pscala-2.13' || '' }} ${{ inputs.maven-parameters }}
+          mvn -T 1C -B clean install -DskipTests $MAVEN_TOOLCHAIN_ARGS ${{ startsWith(matrix.module, 'spark3') && '-Pspark3.4,spark3.5' || '' }} ${{ matrix.module == 'spark3-scala213' && '-Pscala-2.13' || '' }} ${{ inputs.maven-parameters }}
       - name: Test
         timeout-minutes: 60
         run: |
