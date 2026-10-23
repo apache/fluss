@@ -94,7 +94,6 @@ public class SaslAuthenticationITCase {
         clientConfig.setString("client.security.sasl.mechanism", "FAKE");
         clientConfig.setString("client.security.sasl.jaas.config", jaasClientInfo);
         assertThatThrownBy(() -> testAuthentication(clientConfig))
-                .cause()
                 .isExactlyInstanceOf(AuthenticationException.class)
                 .hasMessage("Unable to find a matching SASL mechanism for FAKE");
     }
@@ -105,7 +104,7 @@ public class SaslAuthenticationITCase {
                 "org.apache.fluss.security.auth.sasl.jaas.FakeLoginModule required username=\"admin\" password=\"wrong-secret\";";
         Configuration clientConfig = new Configuration();
         clientConfig.setString("client.security.protocol", "sasl");
-        clientConfig.setString("client.security.sasl.mechanism", "FAKE");
+        clientConfig.setString("client.security.sasl.mechanism", "PLAIN");
         clientConfig.setString("client.security.sasl.jaas.config", jaasClientInfo);
         assertThatThrownBy(() -> testAuthentication(clientConfig))
                 .isExactlyInstanceOf(AuthenticationException.class)
@@ -115,16 +114,17 @@ public class SaslAuthenticationITCase {
 
     @Test
     void testClientMechanismNotMatchServer() {
-        String jaasClientInfo =
-                " org.apache.fluss.security.auth.sasl.jaas.DigestLoginModule required username=\"admin\" password=\"wrong-secret\";";
         Configuration clientConfig = new Configuration();
         clientConfig.setString("client.security.protocol", "sasl");
-        clientConfig.setString("client.security.sasl.mechanism", "DIGEST-MD5");
-        clientConfig.setString("client.security.sasl.jaas.config", jaasClientInfo);
-        assertThatThrownBy(() -> testAuthentication(clientConfig))
+        clientConfig.setString("client.security.sasl.mechanism", "PLAIN");
+        clientConfig.setString("client.security.sasl.jaas.config", CLIENT_JAAS_INFO);
+        Configuration serverConfig = getDefaultServerConfig();
+        serverConfig.setString("security.sasl.enabled.mechanisms", "FAKE");
+        assertThatThrownBy(() -> testAuthentication(clientConfig, serverConfig))
+                .cause()
                 .isExactlyInstanceOf(AuthenticationException.class)
                 .hasMessageContaining(
-                        "Only 'org.apache.fluss.security.auth.sasl.plain.PlainLoginModule' is supported in 'client.security.sasl.jaas.config'.");
+                        "SASL server enables [FAKE] while protocol of client is 'PLAIN'");
     }
 
     @Test
