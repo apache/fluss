@@ -18,6 +18,7 @@
 package org.apache.fluss.server.metadata;
 
 import org.apache.fluss.cluster.Endpoint;
+import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.cluster.TabletServerInfo;
 import org.apache.fluss.cluster.rebalance.ServerTag;
@@ -26,6 +27,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
@@ -97,5 +99,36 @@ public class CoordinatorMetadataCacheTest {
         assertThat(serverMetadataCache.getLiveServers())
                 .containsExactlyInAnyOrder(
                         new TabletServerInfo(1, "rack1"), new TabletServerInfo(2, "rack2"));
+    }
+
+    @Test
+    void testAliveTabletServersWithTags() {
+        assertThat(serverMetadataCache.getAllAliveTabletServersWithTags("INTERNAL")).isEmpty();
+
+        serverMetadataCache.updateMetadata(coordinatorServer, aliveTableServers, serverTagMap);
+
+        // only server 0 is reachable on the CLIENT listener
+        Map<Integer, ServerNode> clientServers =
+                serverMetadataCache.getAllAliveTabletServersWithTags("CLIENT");
+        assertThat(clientServers).containsOnlyKeys(0);
+        assertThat(clientServers.get(0).port()).isEqualTo(101);
+        assertThat(clientServers.get(0).rack()).isEqualTo("rack0");
+        assertThat(clientServers.get(0).serverTag()).isEqualTo(ServerTag.PERMANENT_OFFLINE);
+
+        Map<Integer, ServerNode> internalServers =
+                serverMetadataCache.getAllAliveTabletServersWithTags("INTERNAL");
+        assertThat(internalServers).containsOnlyKeys(0, 1, 2);
+        assertThat(internalServers.get(0).serverTag()).isEqualTo(ServerTag.PERMANENT_OFFLINE);
+        assertThat(internalServers.get(1).serverTag()).isEqualTo(ServerTag.TEMPORARY_OFFLINE);
+        assertThat(internalServers.get(2).serverTag()).isNull();
+        // the same servers as without tags
+        assertThat(internalServers)
+                .isEqualTo(serverMetadataCache.getAllAliveTabletServers("INTERNAL"));
+
+        // a removed tag is no longer reported
+        serverMetadataCache.updateMetadata(
+                coordinatorServer, aliveTableServers, Collections.emptyMap());
+        assertThat(serverMetadataCache.getAllAliveTabletServersWithTags("INTERNAL").values())
+                .allSatisfy(node -> assertThat(node.serverTag()).isNull());
     }
 }

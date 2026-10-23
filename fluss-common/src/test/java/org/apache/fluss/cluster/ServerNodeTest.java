@@ -17,6 +17,8 @@
 
 package org.apache.fluss.cluster;
 
+import org.apache.fluss.cluster.rebalance.ServerTag;
+
 import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -45,8 +47,30 @@ public class ServerNodeTest {
         assertThat(serverNode.hashCode()).isNotEqualTo(serverNode2.hashCode());
         assertThat(serverNode).isEqualTo(new ServerNode(0, "HOST1", 9023, ServerType.COORDINATOR));
 
-        assertThat(serverNode.toString()).isEqualTo("HOST1:9023 (id: cs-0, rack: null, tag: null)");
-        assertThat(serverNode2.toString())
-                .isEqualTo("HOST2:9123 (id: ts-1, rack: null, tag: null)");
+        assertThat(serverNode.toString()).isEqualTo("HOST1:9023 (id: cs-0, rack: null)");
+        assertThat(serverNode2.toString()).isEqualTo("HOST2:9123 (id: ts-1, rack: null)");
+    }
+
+    @Test
+    void testServerTagIsNotPartOfIdentity() {
+        ServerNode untagged = new ServerNode(1, "HOST", 9123, ServerType.TABLET_SERVER, "rack-0");
+        ServerNode tagged =
+                new ServerNode(
+                        1,
+                        "HOST",
+                        9123,
+                        ServerType.TABLET_SERVER,
+                        "rack-0",
+                        ServerTag.PERMANENT_OFFLINE);
+
+        assertThat(untagged.serverTag()).isNull();
+        assertThat(tagged.serverTag()).isEqualTo(ServerTag.PERMANENT_OFFLINE);
+        // the tag is maintenance state, a tagged and an untagged node are the same server
+        assertThat(tagged).isEqualTo(untagged);
+        assertThat(tagged.hashCode()).isEqualTo(untagged.hashCode());
+
+        assertThat(untagged.toString()).isEqualTo("HOST:9123 (id: ts-1, rack: rack-0)");
+        assertThat(tagged.toString())
+                .isEqualTo("HOST:9123 (id: ts-1, rack: rack-0, tag: PERMANENT_OFFLINE)");
     }
 }

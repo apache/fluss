@@ -516,7 +516,7 @@ CALL sys.remove_server_tag_by_rack('rack-0,rack-1', 'TEMPORARY_OFFLINE');
 
 ### list_server_tag
 
-List all server tags currently assigned to TabletServers in the cluster. This procedure is useful for inspecting the current tagging status of TabletServers before or after rebalance operations.
+List the server tags currently assigned to live TabletServers in the cluster. This procedure is useful for inspecting the current tagging status of TabletServers before or after rebalance operations.
 
 **Syntax:**
 
@@ -533,7 +533,10 @@ This procedure takes no parameters.
 - `rack` (STRING): The rack of the TabletServer.
 - `server_tag` (STRING): The tag assigned to the TabletServer (e.g., `PERMANENT_OFFLINE`, `TEMPORARY_OFFLINE`).
 
-Only TabletServers that have a tag assigned will be included in the result. If no TabletServers have tags, an empty result is returned.
+**Important Notes:**
+
+- Only live TabletServers that have a tag assigned are included in the result. If no TabletServer has a tag, an empty result is returned.
+- The tags are read from the Coordinator. Against a cluster older than Fluss 1.1, which cannot report server tags, the result is always empty.
 
 **Example:**
 

@@ -90,7 +90,14 @@ import java.util.concurrent.CompletableFuture;
 @PublicEvolving
 public interface Admin extends AutoCloseable {
 
-    /** Get the current server node information. asynchronously. */
+    /**
+     * Get the current server node information asynchronously: the coordinator server, followed by
+     * the alive tablet servers.
+     *
+     * <p>Each tablet server carries its {@link ServerTag} in {@link ServerNode#serverTag()}, or
+     * {@code null} if it has none. The tags are read from the coordinator. Against a cluster older
+     * than Fluss 1.1, which cannot report server tags, the server nodes are returned without tags.
+     */
     CompletableFuture<List<ServerNode>> getServerNodes();
 
     /**

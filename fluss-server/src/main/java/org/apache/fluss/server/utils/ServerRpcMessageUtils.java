@@ -222,6 +222,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -301,8 +302,9 @@ public class ServerRpcMessageUtils {
                 pbServerNode.hasRack() ? pbServerNode.getRack() : null);
     }
 
+
     public static DescribeClusterResponse buildDescribeClusterResponse(
-            @Nullable ServerNode coordinatorServer, Set<ServerNode> aliveTabletServers) {
+            @Nullable ServerNode coordinatorServer, Collection<ServerNode> aliveTabletServers) {
         DescribeClusterResponse describeClusterResponse = new DescribeClusterResponse();
 
         if (coordinatorServer != null) {
@@ -313,8 +315,10 @@ public class ServerRpcMessageUtils {
                     .setPort(coordinatorServer.port());
         }
 
+        List<ServerNode> sortedTabletServers = new ArrayList<>(aliveTabletServers);
+        sortedTabletServers.sort(Comparator.comparingInt(ServerNode::id));
         List<PbServerNode> pbServerNodeList = new ArrayList<>();
-        for (ServerNode serverNode : aliveTabletServers) {
+        for (ServerNode serverNode : sortedTabletServers) {
             PbServerNode pbServerNode =
                     new PbServerNode()
                             .setNodeId(serverNode.id())
