@@ -289,26 +289,10 @@ class SparkTieringJobRunner(
       val results = if (splits.isEmpty) {
         Seq.empty[TableBucketWriteResult[AnyRef]]
       } else {
-        val partitionBucketCounts =
-          partitionInfos.asScala.map(info => info.getPartitionId -> info.getBucketCount).toMap
-        val splitsWithBucketCounts = splits.map {
-          split =>
-            val partitionId = split.getTableBucket.getPartitionId
-            val bucketCount: java.lang.Integer = if (partitionId == null) {
-              null
-            } else {
-              Int.box(
-                partitionBucketCounts.getOrElse(
-                  partitionId.longValue(),
-                  throw new IllegalStateException(
-                    s"Partition for ${split.getTableBucket} no longer exists")))
-            }
-            (split, bucketCount)
-        }
         SparkTieringJobRunner
           .submit(
             sc,
-            splitsWithBucketCounts,
+            withPartitionBucketCounts(splits, partitionInfos),
             flussConfig,
             dataLakeFormat,
             lakeConfig,
@@ -350,6 +334,27 @@ class SparkTieringJobRunner(
           sc.clearJobGroup()
         }
       }
+    }
+  }
+
+  private def withPartitionBucketCounts(
+      splits: Seq[TieringSplit],
+      partitionInfos: java.util.List[PartitionInfo]): Seq[(TieringSplit, java.lang.Integer)] = {
+    val partitionBucketCounts =
+      partitionInfos.asScala.map(info => info.getPartitionId -> info.getBucketCount).toMap
+    splits.map {
+      split =>
+        val partitionId = split.getTableBucket.getPartitionId
+        val bucketCount: java.lang.Integer = if (partitionId == null) {
+          null
+        } else {
+          Int.box(
+            partitionBucketCounts.getOrElse(
+              partitionId.longValue(),
+              throw new IllegalStateException(
+                s"Partition for ${split.getTableBucket} no longer exists")))
+        }
+        (split, bucketCount)
     }
   }
 
