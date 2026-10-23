@@ -144,6 +144,7 @@ import static org.apache.fluss.client.utils.ClientRpcMessageUtils.makeListOffset
 import static org.apache.fluss.client.utils.ClientRpcMessageUtils.makePbPartitionSpec;
 import static org.apache.fluss.client.utils.ClientRpcMessageUtils.makeRegisterProducerOffsetsRequest;
 import static org.apache.fluss.client.utils.ClientRpcMessageUtils.toConfigEntries;
+import static org.apache.fluss.client.utils.MetadataUtils.fallbackIfUnsupported;
 import static org.apache.fluss.client.utils.MetadataUtils.sendDescribeClusterRequest;
 import static org.apache.fluss.client.utils.MetadataUtils.sendMetadataRequestAndRebuildCluster;
 import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.toAclBindings;
@@ -198,12 +199,29 @@ public class FlussAdmin implements Admin {
 
     @Override
     public CompletableFuture<List<ServerNode>> getServerNodes() {
+        // Only the coordinator knows the server tags. A coordinator older than Fluss 1.1 does not
+        // support the describe cluster request, so fall back to the metadata request, which returns
+        // the same server nodes without tags.
+        return fallbackIfUnsupported(
+                () -> sendDescribeClusterRequest(gateway), this::getServerNodesFromMetadata);
+    }
+
+    private CompletableFuture<List<ServerNode>> getServerNodesFromMetadata() {
         CompletableFuture<List<ServerNode>> future = new CompletableFuture<>();
         CompletableFuture.runAsync(
                 () -> {
                     try {
-                        List<ServerNode> serverNodeList =
-                                sendDescribeClusterRequest(readOnlyGateway);
+                        List<ServerNode> serverNodeList = new ArrayList<>();
+                        Cluster cluster =
+                                sendMetadataRequestAndRebuildCluster(
+                                        readOnlyGateway,
+                                        false,
+                                        metadataUpdater.getCluster(),
+                                        null,
+                                        null,
+                                        null);
+                        serverNodeList.add(cluster.getCoordinatorServer());
+                        serverNodeList.addAll(cluster.getAliveTabletServerList());
                         future.complete(serverNodeList);
                     } catch (Throwable t) {
                         future.completeExceptionally(t);

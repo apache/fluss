@@ -134,7 +134,6 @@ public class ServerNode {
             result = 31 * result + port;
             result = 31 * result + serverType.hashCode();
             result = 31 * result + ((rack == null) ? 0 : rack.hashCode());
-            result = 31 * result + ((serverTag == null) ? 0 : serverTag.hashCode());
             this.hash = result;
             return result;
         } else {
@@ -155,12 +154,12 @@ public class ServerNode {
                 && port == other.port
                 && Objects.equals(host, other.host)
                 && serverType == other.serverType
-                && Objects.equals(rack, other.rack)
-                && Objects.equals(serverTag, other.serverTag);
+                && Objects.equals(rack, other.rack);
     }
 
     @Override
     public String toString() {
-        return host + ":" + port + " (id: " + uid + ", rack: " + rack + ", tag: " + serverTag + ")";
+        String tag = serverTag == null ? "" : ", tag: " + serverTag;
+        return host + ":" + port + " (id: " + uid + ", rack: " + rack + tag + ")";
     }
 }

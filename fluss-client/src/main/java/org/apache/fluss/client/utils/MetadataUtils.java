@@ -17,18 +17,21 @@
 
 package org.apache.fluss.client.utils;
 
+import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.cluster.BucketLocation;
 import org.apache.fluss.cluster.Cluster;
 import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.cluster.rebalance.ServerTag;
 import org.apache.fluss.exception.StaleMetadataException;
+import org.apache.fluss.exception.UnsupportedVersionException;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableOrPartition;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.rpc.GatewayClientProxy;
 import org.apache.fluss.rpc.RpcClient;
+import org.apache.fluss.rpc.gateway.AdminGateway;
 import org.apache.fluss.rpc.gateway.AdminReadOnlyGateway;
 import org.apache.fluss.rpc.messages.DescribeClusterRequest;
 import org.apache.fluss.rpc.messages.DescribeClusterResponse;
@@ -39,6 +42,7 @@ import org.apache.fluss.rpc.messages.PbPartitionMetadata;
 import org.apache.fluss.rpc.messages.PbServerNode;
 import org.apache.fluss.rpc.messages.PbTableMetadata;
 import org.apache.fluss.rpc.messages.PbTablePath;
+import org.apache.fluss.utils.ExceptionUtils;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -52,9 +56,11 @@ import java.util.List;
 import java.util.Map;
 import java.util.Random;
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.function.Supplier;
 
 /** Utils for metadata for client. */
 public class MetadataUtils {
@@ -172,23 +178,100 @@ public class MetadataUtils {
         // time out here
     }
 
-    public static List<ServerNode> sendDescribeClusterRequest(AdminReadOnlyGateway gateway)
-            throws ExecutionException, InterruptedException, TimeoutException {
-        DescribeClusterRequest describeClusterRequest = new DescribeClusterRequest();
-        return gateway.describeCluster(describeClusterRequest)
-                .thenApply(
-                        response -> {
-                            List<ServerNode> serverNodes = new ArrayList<>();
-                            ServerNode coordinator = getCoordinatorServer(response);
-                            if (coordinator != null) {
-                                serverNodes.add(coordinator);
-                            }
-                            serverNodes.addAll(getAliveTabletServers(response));
-                            return serverNodes;
-                        })
-                .get(30, TimeUnit.SECONDS); // TODO currently, we don't have timeout logic in
-        // RpcClient, it will let the get() block forever. So we
-        // time out here
+    /**
+     * Sends a {@link DescribeClusterRequest} to the coordinator. The returned server nodes are the
+     * coordinator server, followed by the alive tablet servers with their {@link ServerTag}.
+     */
+    public static CompletableFuture<List<ServerNode>> sendDescribeClusterRequest(
+            AdminGateway gateway) {
+        return gateway.describeCluster(new DescribeClusterRequest())
+                .thenApply(MetadataUtils::toServerNodes);
+    }
+
+    /**
+     * Runs {@code request}, or {@code fallback} instead when the server does not support the
+     * request, for example because it runs an older Fluss version. Any other failure of {@code
+     * request} fails the returned future.
+     */
+    public static <T> CompletableFuture<T> fallbackIfUnsupported(
+            Supplier<CompletableFuture<T>> request, Supplier<CompletableFuture<T>> fallback) {
+        CompletableFuture<T> result = new CompletableFuture<>();
+        CompletableFuture<T> requestFuture;
+        try {
+            requestFuture = request.get();
+        } catch (Throwable t) {
+            requestFuture = new CompletableFuture<>();
+            requestFuture.completeExceptionally(t);
+        }
+        requestFuture.whenComplete(
+                (value, error) -> {
+                    if (error == null) {
+                        result.complete(value);
+                    } else if (!ExceptionUtils.findThrowable(
+                                    error, UnsupportedVersionException.class)
+                            .isPresent()) {
+                        result.completeExceptionally(
+                                ExceptionUtils.stripCompletionException(error));
+                    } else {
+                        LOG.info(
+                                "The server does not support the request, falling back: {}",
+                                error.getMessage());
+                        try {
+                            fallback.get()
+                                    .whenComplete(
+                                            (fallbackValue, fallbackError) -> {
+                                                if (fallbackError == null) {
+                                                    result.complete(fallbackValue);
+                                                } else {
+                                                    result.completeExceptionally(
+                                                            ExceptionUtils.stripCompletionException(
+                                                                    fallbackError));
+                                                }
+                                            });
+                        } catch (Throwable t) {
+                            result.completeExceptionally(t);
+                        }
+                    }
+                });
+        return result;
+    }
+
+    @VisibleForTesting
+    static List<ServerNode> toServerNodes(DescribeClusterResponse response) {
+        List<ServerNode> serverNodes = new ArrayList<>();
+        ServerNode coordinator = getCoordinatorServer(response);
+        if (coordinator != null) {
+            serverNodes.add(coordinator);
+        }
+        for (PbServerNode serverNode : response.getTabletServersList()) {
+            serverNodes.add(
+                    new ServerNode(
+                            serverNode.getNodeId(),
+                            serverNode.getHost(),
+                            serverNode.getPort(),
+                            ServerType.TABLET_SERVER,
+                            serverNode.hasRack() ? serverNode.getRack() : null,
+                            serverNode.hasServerTag()
+                                    ? toServerTag(serverNode.getServerTag())
+                                    : null));
+        }
+        return serverNodes;
+    }
+
+    /**
+     * Converts the server tag value of a response. A value this client does not know, written by a
+     * newer server, is reported as no tag instead of failing the whole request.
+     */
+    @Nullable
+    private static ServerTag toServerTag(int value) {
+        try {
+            return ServerTag.valueOf(value);
+        } catch (IllegalArgumentException e) {
+            LOG.warn(
+                    "Ignoring unknown server tag {}, it was probably added by a newer Fluss version.",
+                    value);
+            return null;
+        }
     }
 
     private static NewTableMetadata getTableMetadataToUpdate(
@@ -360,25 +443,6 @@ public class MetadataUtils {
                                             ServerType.TABLET_SERVER,
                                             serverNode.hasRack() ? serverNode.getRack() : null));
                         });
-        return aliveTabletServers;
-    }
-
-    public static List<ServerNode> getAliveTabletServers(DescribeClusterResponse response) {
-        List<ServerNode> aliveTabletServers = new ArrayList<>();
-        response.getTabletServersList()
-                .forEach(
-                        serverNode ->
-                                aliveTabletServers.add(
-                                        new ServerNode(
-                                                serverNode.getNodeId(),
-                                                serverNode.getHost(),
-                                                serverNode.getPort(),
-                                                ServerType.TABLET_SERVER,
-                                                serverNode.hasRack() ? serverNode.getRack() : null,
-                                                serverNode.hasServerTag()
-                                                        ? ServerTag.valueOf(
-                                                                serverNode.getServerTag())
-                                                        : null)));
         return aliveTabletServers;
     }
 

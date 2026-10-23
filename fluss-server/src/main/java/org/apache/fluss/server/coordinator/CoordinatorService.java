@@ -100,6 +100,8 @@ import org.apache.fluss.rpc.messages.CreateTableRequest;
 import org.apache.fluss.rpc.messages.CreateTableResponse;
 import org.apache.fluss.rpc.messages.DeleteProducerOffsetsRequest;
 import org.apache.fluss.rpc.messages.DeleteProducerOffsetsResponse;
+import org.apache.fluss.rpc.messages.DescribeClusterRequest;
+import org.apache.fluss.rpc.messages.DescribeClusterResponse;
 import org.apache.fluss.rpc.messages.DescribeTabletServersRequest;
 import org.apache.fluss.rpc.messages.DescribeTabletServersResponse;
 import org.apache.fluss.rpc.messages.DropAclsRequest;
@@ -190,7 +192,6 @@ import org.apache.fluss.server.kv.snapshot.CompletedSnapshot;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshotJsonSerde;
 import org.apache.fluss.server.metadata.CoordinatorMetadataCache;
 import org.apache.fluss.server.metadata.CoordinatorMetadataProvider;
-import org.apache.fluss.server.metadata.ServerMetadataCache;
 import org.apache.fluss.server.metadata.SystemTables;
 import org.apache.fluss.server.utils.ServerRpcMessageUtils;
 import org.apache.fluss.server.zk.ZooKeeperClient;
@@ -235,6 +236,7 @@ import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.toAclBindingFilter
 import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.toAclBindings;
 import static org.apache.fluss.server.coordinator.rebalance.goal.GoalUtils.getGoalByType;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.addTableOffsetsToResponse;
+import static org.apache.fluss.server.utils.ServerRpcMessageUtils.buildDescribeClusterResponse;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.fromTablePath;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getAcquireKvSnapshotLeaseData;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getAdjustIsrData;
@@ -368,11 +370,6 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         if (authorizer != null) {
             authorizeTableWithSession(currentSession(), operationType, tableId);
         }
-    }
-
-    @Override
-    protected ServerMetadataCache getServerMetadataCache() {
-        return metadataCache;
     }
 
     /**
@@ -1849,6 +1846,16 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                                 ServerTag.valueOf(request.getServerTag()),
                                 response));
         return response;
+    }
+
+    @Override
+    public CompletableFuture<DescribeClusterResponse> describeCluster(
+            DescribeClusterRequest request) {
+        String listenerName = currentListenerName();
+        return CompletableFuture.completedFuture(
+                buildDescribeClusterResponse(
+                        metadataCache.getCoordinatorServer(listenerName),
+                        metadataCache.getAllAliveTabletServersWithTags(listenerName).values()));
     }
 
     @Override

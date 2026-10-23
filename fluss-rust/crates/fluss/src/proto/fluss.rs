@@ -1307,7 +1307,7 @@ pub struct PbPhysicalTablePath {
 ///    * versions <= 0.6: host and port are used.
 ///    * versions >= 0.7: listeners is used to replace host and port.
 /// For MetadataResponse and UpdateMetadataRequest: Fluss versions >= 0.7: we add rack for each tabletServer
-/// For DescribeClusterResponse: Fluss version >= 1.0: we add server_tag for each tabletServer
+/// For DescribeClusterResponse: Fluss versions >= 1.1: we add server_tag for each tabletServer
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct PbServerNode {
     #[prost(int32, required, tag = "1")]

@@ -75,6 +75,31 @@ public class CoordinatorMetadataCache implements ServerMetadataCache {
         return serverNodes;
     }
 
+    /**
+     * Returns the alive tablet servers on the given listener by server id, each carrying its {@link
+     * ServerTag}, or no tag if it has none. The servers and their tags are read from the same
+     * metadata snapshot.
+     */
+    public Map<Integer, ServerNode> getAllAliveTabletServersWithTags(String listenerName) {
+        NodeMetadataSnapshot snapshot = metadataSnapshot;
+        Map<Integer, ServerNode> serverNodes = new HashMap<>();
+        for (Map.Entry<Integer, ServerInfo> entry : snapshot.aliveTabletServers.entrySet()) {
+            ServerNode node = entry.getValue().node(listenerName);
+            if (node != null) {
+                serverNodes.put(
+                        entry.getKey(),
+                        new ServerNode(
+                                node.id(),
+                                node.host(),
+                                node.port(),
+                                node.serverType(),
+                                node.rack(),
+                                snapshot.serverTags.get(entry.getKey())));
+            }
+        }
+        return serverNodes;
+    }
+
     @Override
     public @Nullable ServerNode getCoordinatorServer(String listenerName) {
         ServerInfo coordinatorServer = metadataSnapshot.coordinatorServer;
