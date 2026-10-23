@@ -97,5 +97,5 @@ jobs:
     uses: ./.github/workflows/ci-template.yaml
     with:
       java-version: "17"
-      maven-parameters: "-Pspark-4.2"
+      maven-parameters: "-Pspark4"
       modules: '["spark4","spark4-lake"]'
