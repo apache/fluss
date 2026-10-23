@@ -56,6 +56,7 @@ import java.util.Collections;
 import java.util.EnumSet;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
@@ -554,6 +555,19 @@ public class TableDescriptorValidation {
     private static void checkMergeEngine(
             Configuration tableConf, boolean hasPrimaryKey, Schema schema) {
         MergeEngineType mergeEngine = tableConf.get(ConfigOptions.TABLE_MERGE_ENGINE);
+        String engineName =
+                mergeEngine == null ? "default" : mergeEngine.name().toLowerCase(Locale.ROOT);
+        String engineOptionPrefix = ConfigOptions.TABLE_MERGE_ENGINE.key() + ".";
+        String selectedEnginePrefix = engineOptionPrefix + engineName + ".";
+        for (String key : tableConf.keySet()) {
+            if (key.startsWith(engineOptionPrefix)
+                    && (!hasPrimaryKey || !key.startsWith(selectedEnginePrefix))) {
+                throw new InvalidConfigException(
+                        String.format(
+                                "'%s' is only supported for primary key tables using the '%s' merge engine.",
+                                key, key.substring(engineOptionPrefix.length()).split("\\.")[0]));
+            }
+        }
         if (mergeEngine != MergeEngineType.AGGREGATION) {
             validateNoAggregationFunctions(schema);
         }

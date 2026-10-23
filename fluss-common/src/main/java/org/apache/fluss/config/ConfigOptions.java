@@ -2299,6 +2299,16 @@ public class ConfigOptions {
                                     + "It requires FULL changelog image mode and cannot be combined with row-level KV TTL or a merge engine. As with other tables without a merge engine, OVERWRITE writes are unsupported. "
                                     + "FULL changelog image mode already reads the previous value for every upsert. Comparing it with the complete candidate row adds comparison costs.");
 
+    public static final ConfigOption<Boolean> TABLE_MERGE_ENGINE_DEFAULT_IGNORE_NULLS =
+            key("table.merge-engine.default.ignore-nulls")
+                    .booleanType()
+                    .defaultValue(false)
+                    .withDescription(
+                            "Whether ordinary upserts using the default merge engine preserve existing column values "
+                                    + "when the incoming target-column value is NULL. Non-NULL values replace existing values. "
+                                    + "This option does not affect deletes or explicit OVERWRITE operations, including SQL UPDATE. "
+                                    + "It is only supported for primary key tables using the default merge engine.");
+
     public static final ConfigOption<String> TABLE_MERGE_ENGINE_VERSION_COLUMN =
             // we may need to introduce "del-column" in the future to support delete operation
             key("table.merge-engine.versioned.ver-column")

@@ -109,11 +109,12 @@ public class TableUpsert implements Upsert {
         if (mergeMode == MergeMode.OVERWRITE) {
             Optional<MergeEngineType> mergeEngineType =
                     tableInfo.getTableConfig().getMergeEngineType();
-            if (!mergeEngineType.isPresent()) {
+            if (!mergeEngineType.isPresent()
+                    && !tableInfo.getTableConfig().isDefaultMergeEngineIgnoreNulls()) {
                 throw new IllegalArgumentException(
                         String.format(
-                                "MergeMode %s is only supported for tables with a merge engine, "
-                                        + "but table %s does not have a merge engine configured.",
+                                "MergeMode %s requires a configured merge engine or "
+                                        + "'table.merge-engine.default.ignore-nulls' enabled, but table %s has neither.",
                                 mergeMode, tablePath));
             }
         }

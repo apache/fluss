@@ -209,18 +209,19 @@ public class FlinkTableSink
         FlinkSink.SinkWriterBuilder<? extends FlinkSinkWriter, RowData> flinkSinkWriterBuilder =
                 (primaryKeyIndexes.length > 0)
                         ? new FlinkSink.UpsertSinkWriterBuilder<>(
-                                tablePath,
-                                flussConfig,
-                                tableRowType,
-                                targetColumnIndexes,
-                                numBucket,
-                                bucketKeys,
-                                partitionKeys,
-                                lakeFormat,
-                                distributionMode,
-                                new RowDataSerializationSchema(false, sinkIgnoreDelete),
-                                enableUndoRecovery,
-                                producerId)
+                                        tablePath,
+                                        flussConfig,
+                                        tableRowType,
+                                        targetColumnIndexes,
+                                        numBucket,
+                                        bucketKeys,
+                                        partitionKeys,
+                                        lakeFormat,
+                                        distributionMode,
+                                        new RowDataSerializationSchema(false, sinkIgnoreDelete),
+                                        enableUndoRecovery,
+                                        producerId)
+                                .withSqlUpdate(appliedUpdates)
                         : new FlinkSink.AppendSinkWriterBuilder<>(
                                 tablePath,
                                 flussConfig,

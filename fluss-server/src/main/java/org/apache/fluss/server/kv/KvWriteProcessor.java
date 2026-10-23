@@ -140,7 +140,12 @@ public final class KvWriteProcessor {
         this.rowMerger = rowMerger;
         // Pre-create DefaultRowMerger for OVERWRITE mode to avoid creating new instances
         // on every putAsLeader call. Used for undo recovery scenarios.
-        this.overwriteRowMerger = new DefaultRowMerger(kvFormat, DeleteBehavior.ALLOW);
+        DeleteBehavior overwriteDeleteBehavior =
+                rowMerger instanceof DefaultRowMerger
+                                && ((DefaultRowMerger) rowMerger).isIgnoreNulls()
+                        ? rowMerger.deleteBehavior()
+                        : DeleteBehavior.ALLOW;
+        this.overwriteRowMerger = new DefaultRowMerger(kvFormat, overwriteDeleteBehavior);
         this.arrowCompressionInfo = arrowCompressionInfo;
         this.schemaGetter = schemaGetter;
         this.changelogImage = changelogImage;
@@ -271,7 +276,10 @@ public final class KvWriteProcessor {
 
     private WriteContext createWriteContext(
             KvRecordBatch kvRecords, @Nullable int[] targetColumns, MergeMode mergeMode) {
-        if (skipUnchangedUpsert && mergeMode == MergeMode.OVERWRITE) {
+        if (skipUnchangedUpsert
+                && mergeMode == MergeMode.OVERWRITE
+                && !(rowMerger instanceof DefaultRowMerger
+                        && ((DefaultRowMerger) rowMerger).isIgnoreNulls())) {
             throw new InvalidTableException(
                     "MergeMode.OVERWRITE cannot be used with table.upsert.skip-unchanged enabled.");
         }

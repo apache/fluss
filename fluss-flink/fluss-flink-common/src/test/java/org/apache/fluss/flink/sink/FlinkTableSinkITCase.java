@@ -553,6 +553,53 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
         assertResultsIgnoreOrder(rowIter, expectedRows, true);
     }
 
+    @ParameterizedTest
+    @MultiVersionTest
+    @ValueSource(booleans = {false, true})
+    void testIgnoreNullsUpsertsAndExplicitUpdate(boolean skipUnchanged) throws Exception {
+        disableSinkRequireOnConflict();
+        String tableName = "ignore_nulls_" + skipUnchanged;
+        tEnv.executeSql(
+                "CREATE TABLE "
+                        + tableName
+                        + " (id INT, name STRING, city STRING, PRIMARY KEY (id) NOT ENFORCED) WITH ("
+                        + "'table.merge-engine.default.ignore-nulls'='true',"
+                        + "'table.upsert.skip-unchanged'='"
+                        + skipUnchanged
+                        + "')");
+        env.setParallelism(1);
+        tEnv.fromChangelogStream(
+                        env.fromCollection(
+                                Arrays.asList(
+                                        Row.ofKind(RowKind.INSERT, 1, "Alice", "Hangzhou"),
+                                        Row.ofKind(RowKind.UPDATE_AFTER, 1, null, "Shanghai")),
+                                Types.ROW(Types.INT, Types.STRING, Types.STRING)))
+                .executeInsert(tableName)
+                .await();
+        assertResultsIgnoreOrder(
+                tBatchEnv.executeSql("SELECT * FROM " + tableName).collect(),
+                Collections.singletonList("+I[1, Alice, Shanghai]"),
+                true);
+        tBatchEnv
+                .executeSql("UPDATE " + tableName + " SET name = CAST(NULL AS STRING) WHERE id = 1")
+                .await();
+        assertResultsIgnoreOrder(
+                tBatchEnv.executeSql("SELECT * FROM " + tableName).collect(),
+                Collections.singletonList("+I[1, null, Shanghai]"),
+                true);
+        tEnv.executeSql("INSERT INTO " + tableName + " (id, city) VALUES (1, CAST(NULL AS STRING))")
+                .await();
+        assertResultsIgnoreOrder(
+                tBatchEnv.executeSql("SELECT * FROM " + tableName).collect(),
+                Collections.singletonList("+I[1, null, Shanghai]"),
+                true);
+        tBatchEnv.executeSql("DELETE FROM " + tableName + " WHERE id = 1").await();
+        try (CloseableIterator<Row> rows =
+                tBatchEnv.executeSql("SELECT * FROM " + tableName).collect()) {
+            assertThat(rows.hasNext()).isFalse();
+        }
+    }
+
     @Test
     @MultiVersionTest
     void testPartialUpsert() throws Exception {

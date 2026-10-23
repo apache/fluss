@@ -183,6 +183,11 @@ public class TableConfig {
         return config.getOptional(ConfigOptions.TABLE_MERGE_ENGINE_VERSION_COLUMN);
     }
 
+    /** Whether default merge engine upserts preserve existing values for incoming NULLs. */
+    public boolean isDefaultMergeEngineIgnoreNulls() {
+        return config.get(ConfigOptions.TABLE_MERGE_ENGINE_DEFAULT_IGNORE_NULLS);
+    }
+
     /** Gets the delete behavior of the table. */
     public Optional<DeleteBehavior> getDeleteBehavior() {
         return config.getOptional(ConfigOptions.TABLE_DELETE_BEHAVIOR);

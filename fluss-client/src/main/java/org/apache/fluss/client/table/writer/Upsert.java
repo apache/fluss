@@ -74,7 +74,8 @@ public interface Upsert {
      *         <li>For versioned merge engine: keeps the row with the highest version.
      *       </ul>
      *   <li>{@link MergeMode#OVERWRITE}: Data directly overwrites values, bypassing the merge
-     *       engine. This is useful for undo/recovery operations to restore exact historical values.
+     *       engine, including the default engine's ignore-nulls option. This is useful for explicit
+     *       assignments of NULL and undo/recovery operations to restore exact historical values.
      * </ul>
      *
      * <p>Example usage:

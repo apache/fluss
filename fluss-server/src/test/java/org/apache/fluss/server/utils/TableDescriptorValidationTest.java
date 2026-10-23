@@ -55,6 +55,56 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class TableDescriptorValidationTest {
 
     @Test
+    void testMergeEngineOptionOwnership() {
+        String ignoreNulls = "table.merge-engine.default.ignore-nulls";
+        for (String enabled : new String[] {"true", "false"}) {
+            TableDescriptorValidation.validateTableDescriptor(
+                    pkTableWithProperty(ignoreNulls, enabled), 100, null);
+            assertThatThrownBy(
+                            () ->
+                                    TableDescriptorValidation.validateTableDescriptor(
+                                            logTableWithProperty(ignoreNulls, enabled), 100, null))
+                    .isInstanceOf(InvalidConfigException.class)
+                    .hasMessageContaining(ignoreNulls);
+            for (MergeEngineType engine : MergeEngineType.values()) {
+                assertThatThrownBy(
+                                () ->
+                                        TableDescriptorValidation.validateTableDescriptor(
+                                                pkTableWithProperties(
+                                                        ignoreNulls,
+                                                        enabled,
+                                                        ConfigOptions.TABLE_MERGE_ENGINE.key(),
+                                                        engine.name()),
+                                                100,
+                                                null))
+                        .isInstanceOf(InvalidConfigException.class)
+                        .hasMessageContaining(ignoreNulls)
+                        .hasMessageContaining("only supported");
+            }
+        }
+        String versionColumn = ConfigOptions.TABLE_MERGE_ENGINE_VERSION_COLUMN.key();
+        assertThatThrownBy(
+                        () ->
+                                TableDescriptorValidation.validateTableDescriptor(
+                                        pkTableWithProperty(versionColumn, "a"), 100, null))
+                .isInstanceOf(InvalidConfigException.class)
+                .hasMessageContaining(versionColumn)
+                .hasMessageContaining("versioned");
+        assertThatThrownBy(
+                        () ->
+                                TableDescriptorValidation.validateTableDescriptor(
+                                        pkTableWithProperties(
+                                                ConfigOptions.TABLE_MERGE_ENGINE.key(),
+                                                "aggregation",
+                                                versionColumn,
+                                                "a"),
+                                        100,
+                                        null))
+                .isInstanceOf(InvalidConfigException.class)
+                .hasMessageContaining(versionColumn);
+    }
+
+    @Test
     void testSkipUnchangedUpsertsWithDefaultMergeBehavior() {
         TableDescriptorValidation.validateTableDescriptor(
                 pkTableWithProperty(ConfigOptions.TABLE_UPSERT_SKIP_UNCHANGED.key(), "true"),
