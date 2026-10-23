@@ -43,7 +43,7 @@ import java.util.concurrent.CompletableFuture;
 public class UpsertSinkWriter<InputT> extends FlinkSinkWriter<InputT> {
 
     private transient UpsertWriter upsertWriter;
-    private final boolean sqlUpdate;
+    private final boolean ignoreNulls;
 
     /**
      * Optional context for reporting offsets to the upstream UndoRecoveryOperator.
@@ -86,7 +86,7 @@ public class UpsertSinkWriter<InputT> extends FlinkSinkWriter<InputT> {
                 false);
     }
 
-    /** Creates a sink writer that can retain explicit SQL UPDATE assignment semantics. */
+    /** Creates a sink writer with optional request-scoped NULL skipping. */
     public UpsertSinkWriter(
             TablePath tablePath,
             Configuration flussConfig,
@@ -95,7 +95,7 @@ public class UpsertSinkWriter<InputT> extends FlinkSinkWriter<InputT> {
             MailboxExecutor mailboxExecutor,
             FlussSerializationSchema<InputT> flussSerializationSchema,
             @Nullable ProducerOffsetReporter offsetReporter,
-            boolean sqlUpdate) {
+            boolean ignoreNulls) {
         super(
                 tablePath,
                 flussConfig,
@@ -104,15 +104,15 @@ public class UpsertSinkWriter<InputT> extends FlinkSinkWriter<InputT> {
                 mailboxExecutor,
                 flussSerializationSchema);
         this.offsetReporter = offsetReporter;
-        this.sqlUpdate = sqlUpdate;
+        this.ignoreNulls = ignoreNulls;
     }
 
     @Override
     public void initialize(SinkWriterMetricGroup metricGroup) {
         super.initialize(metricGroup);
         Upsert upsert = table.newUpsert();
-        if (sqlUpdate && table.getTableInfo().getTableConfig().isDefaultMergeEngineIgnoreNulls()) {
-            upsert = upsert.mergeMode(MergeMode.OVERWRITE);
+        if (ignoreNulls) {
+            upsert = upsert.mergeMode(MergeMode.IGNORE_NULLS);
         }
         if (targetColumnIndexes != null) {
             upsert = upsert.partialUpdate(targetColumnIndexes);

@@ -105,16 +105,20 @@ public class TableUpsert implements Upsert {
 
     @Override
     public UpsertWriter createWriter() {
+        if (mergeMode == MergeMode.IGNORE_NULLS
+                && tableInfo.getTableConfig().getMergeEngineType().isPresent()) {
+            throw new IllegalArgumentException(
+                    "MergeMode.IGNORE_NULLS is only supported for the default merge engine.");
+        }
         // Check that OVERWRITE mode is only used with tables that have a merge engine
         if (mergeMode == MergeMode.OVERWRITE) {
             Optional<MergeEngineType> mergeEngineType =
                     tableInfo.getTableConfig().getMergeEngineType();
-            if (!mergeEngineType.isPresent()
-                    && !tableInfo.getTableConfig().isDefaultMergeEngineIgnoreNulls()) {
+            if (!mergeEngineType.isPresent()) {
                 throw new IllegalArgumentException(
                         String.format(
-                                "MergeMode %s requires a configured merge engine or "
-                                        + "'table.merge-engine.default.ignore-nulls' enabled, but table %s has neither.",
+                                "MergeMode %s is only supported for tables with a merge engine, "
+                                        + "but table %s does not have a merge engine configured.",
                                 mergeMode, tablePath));
             }
         }
@@ -123,8 +127,8 @@ public class TableUpsert implements Upsert {
 
     @Override
     public <T> TypedUpsertWriter<T> createTypedWriter(Class<T> pojoClass) {
-        // TypedUpsertWriterImpl doesn't support mergeMode yet
-        if (mergeMode != MergeMode.DEFAULT) {
+        // Typed writers support ordinary upserts, including NULL skipping.
+        if (mergeMode == MergeMode.OVERWRITE) {
             throw new UnsupportedOperationException(
                     String.format(
                             "TypedUpsertWriter does not support MergeMode %s yet. "

@@ -91,11 +91,6 @@ public class DefaultRowMerger implements RowMerger {
         return new PartialUpdateRowMerger(partialUpdater, deleteBehavior, ignoreNulls, fullRow);
     }
 
-    /** Whether ordinary upserts preserve old values for incoming NULLs. */
-    public boolean isIgnoreNulls() {
-        return ignoreNulls;
-    }
-
     /** A merger that partially updates specified columns with the new row. */
     private static class PartialUpdateRowMerger implements RowMerger {
 

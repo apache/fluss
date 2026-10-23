@@ -105,8 +105,7 @@ public interface RowMerger {
                             "Unsupported merge engine type: " + mergeEngineType.get());
             }
         } else {
-            return new DefaultRowMerger(
-                    kvFormat, deleteBehavior, tableConf.isDefaultMergeEngineIgnoreNulls());
+            return new DefaultRowMerger(kvFormat, deleteBehavior);
         }
     }
 }

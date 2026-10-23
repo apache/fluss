@@ -359,6 +359,28 @@ abstract class FlinkTableFactoryTest {
     }
 
     @Test
+    void testIgnoreNullsRequiresDefaultEnginePrimaryKeyTable() {
+        ResolvedSchema schema = createBasicSchema();
+        Map<String, String> properties = getBasicOptionsWithBucketKey();
+        properties.put(FlinkConnectorOptions.SINK_IGNORE_NULLS.key(), "true");
+        createTableSink(schema, properties).copy();
+        ResolvedSchema logSchema =
+                new ResolvedSchema(schema.getColumns(), Collections.emptyList(), null);
+        assertThatThrownBy(() -> createTableSink(logSchema, properties))
+                .isInstanceOf(ValidationException.class)
+                .hasMessageContaining("only supported for default-engine primary key tables");
+        for (String engine : new String[] {"first_row", "versioned", "aggregation"}) {
+            properties.put(ConfigOptions.TABLE_MERGE_ENGINE.key(), engine);
+            assertThatThrownBy(() -> createTableSink(schema, properties))
+                    .isInstanceOf(ValidationException.class)
+                    .hasMessageContaining("only supported for default-engine primary key tables");
+            properties.put(FlinkConnectorOptions.SINK_IGNORE_NULLS.key(), "false");
+            createTableSink(schema, properties);
+            properties.put(FlinkConnectorOptions.SINK_IGNORE_NULLS.key(), "true");
+        }
+    }
+
+    @Test
     void testSinkDistributionModeForMergeEngine() {
         ResolvedSchema schema = createBasicSchema();
 

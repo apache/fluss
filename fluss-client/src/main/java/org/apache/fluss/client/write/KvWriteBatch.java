@@ -89,25 +89,10 @@ public class KvWriteBatch extends WriteBatch {
 
     @Override
     boolean tryAppendRecord(WriteRecord writeRecord, WriteCallback callback) throws Exception {
-        // currently, we throw exception directly when the target columns of the write record is
-        // not the same as the current target columns in the batch.
-        // this should be quite fast as they should be the same objects.
-        if (!Arrays.equals(targetColumns, writeRecord.getTargetColumns())) {
-            throw new IllegalStateException(
-                    String.format(
-                            "target columns %s of the write record to append are not the same as the current target columns %s in the batch.",
-                            Arrays.toString(writeRecord.getTargetColumns()),
-                            Arrays.toString(targetColumns)));
-        }
-
-        // Validate mergeMode consistency - records with different mergeMode cannot be batched
-        // together
-        if (writeRecord.getMergeMode() != this.mergeMode) {
-            throw new IllegalStateException(
-                    String.format(
-                            "Cannot mix records with different mergeMode in the same batch. "
-                                    + "Batch mergeMode: %s, Record mergeMode: %s",
-                            this.mergeMode, writeRecord.getMergeMode()));
+        // Each request carries one target-column set and merge mode.
+        if (!Arrays.equals(targetColumns, writeRecord.getTargetColumns())
+                || writeRecord.getMergeMode() != this.mergeMode) {
+            return false;
         }
 
         byte[] key = writeRecord.getKey();

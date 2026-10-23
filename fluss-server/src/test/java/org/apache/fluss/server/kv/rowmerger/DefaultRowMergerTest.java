@@ -17,14 +17,10 @@
 
 package org.apache.fluss.server.kv.rowmerger;
 
-import org.apache.fluss.config.Configuration;
-import org.apache.fluss.config.TableConfig;
 import org.apache.fluss.metadata.DeleteBehavior;
 import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.Schema;
-import org.apache.fluss.metadata.SchemaInfo;
 import org.apache.fluss.record.BinaryValue;
-import org.apache.fluss.record.TestingSchemaGetter;
 import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.types.DataTypes;
 
@@ -168,10 +164,7 @@ class DefaultRowMergerTest {
     }
 
     private RowMerger ignoreNullsMerger(KvFormat format, Schema schema) {
-        Configuration conf = new Configuration();
-        conf.setString("table.merge-engine.default.ignore-nulls", "true");
-        return RowMerger.create(
-                new TableConfig(conf), format, new TestingSchemaGetter(new SchemaInfo(schema, 2)));
+        return new DefaultRowMerger(format, null, true);
     }
 
     private BinaryValue value(KvFormat format, Schema schema, Object... fields) {

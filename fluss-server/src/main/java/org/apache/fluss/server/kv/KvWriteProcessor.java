@@ -102,6 +102,7 @@ public final class KvWriteProcessor {
     // Pre-created DefaultRowMerger for OVERWRITE mode (undo recovery scenarios)
     // This avoids creating a new instance on every putAsLeader call
     private final RowMerger overwriteRowMerger;
+    @Nullable private final RowMerger ignoreNullsRowMerger;
     private final ArrowCompressionInfo arrowCompressionInfo;
     private final SchemaGetter schemaGetter;
     // the changelog image mode for this tablet
@@ -140,12 +141,11 @@ public final class KvWriteProcessor {
         this.rowMerger = rowMerger;
         // Pre-create DefaultRowMerger for OVERWRITE mode to avoid creating new instances
         // on every putAsLeader call. Used for undo recovery scenarios.
-        DeleteBehavior overwriteDeleteBehavior =
+        this.overwriteRowMerger = new DefaultRowMerger(kvFormat, DeleteBehavior.ALLOW);
+        this.ignoreNullsRowMerger =
                 rowMerger instanceof DefaultRowMerger
-                                && ((DefaultRowMerger) rowMerger).isIgnoreNulls()
-                        ? rowMerger.deleteBehavior()
-                        : DeleteBehavior.ALLOW;
-        this.overwriteRowMerger = new DefaultRowMerger(kvFormat, overwriteDeleteBehavior);
+                        ? new DefaultRowMerger(kvFormat, rowMerger.deleteBehavior(), true)
+                        : null;
         this.arrowCompressionInfo = arrowCompressionInfo;
         this.schemaGetter = schemaGetter;
         this.changelogImage = changelogImage;
@@ -276,10 +276,11 @@ public final class KvWriteProcessor {
 
     private WriteContext createWriteContext(
             KvRecordBatch kvRecords, @Nullable int[] targetColumns, MergeMode mergeMode) {
-        if (skipUnchangedUpsert
-                && mergeMode == MergeMode.OVERWRITE
-                && !(rowMerger instanceof DefaultRowMerger
-                        && ((DefaultRowMerger) rowMerger).isIgnoreNulls())) {
+        if (mergeMode == MergeMode.IGNORE_NULLS && ignoreNullsRowMerger == null) {
+            throw new InvalidTableException(
+                    "MergeMode.IGNORE_NULLS is only supported for the default merge engine.");
+        }
+        if (skipUnchangedUpsert && mergeMode == MergeMode.OVERWRITE) {
             throw new InvalidTableException(
                     "MergeMode.OVERWRITE cannot be used with table.upsert.skip-unchanged enabled.");
         }
@@ -293,13 +294,16 @@ public final class KvWriteProcessor {
                 autoIncrementManager.getUpdaterForSchema(kvFormat, latestSchemaId);
         autoIncrementUpdater.validateTargetColumns(targetColumns);
 
-        // OVERWRITE bypasses the configured merge engine for undo recovery.
+        RowMerger requestMerger;
+        if (mergeMode == MergeMode.OVERWRITE) {
+            requestMerger = overwriteRowMerger;
+        } else if (mergeMode == MergeMode.IGNORE_NULLS) {
+            requestMerger = ignoreNullsRowMerger;
+        } else {
+            requestMerger = rowMerger;
+        }
         RowMerger configuredRowMerger =
-                (mergeMode == MergeMode.OVERWRITE)
-                        ? overwriteRowMerger.configureTargetColumns(
-                                targetColumns, latestSchemaId, latestSchema)
-                        : rowMerger.configureTargetColumns(
-                                targetColumns, latestSchemaId, latestSchema);
+                requestMerger.configureTargetColumns(targetColumns, latestSchemaId, latestSchema);
         return new WriteContext(
                 latestSchema, latestSchemaId, autoIncrementUpdater, configuredRowMerger);
     }
