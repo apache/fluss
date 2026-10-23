@@ -17,8 +17,11 @@
 
 package org.apache.fluss.client.utils;
 
+import org.apache.fluss.client.admin.AlterConsumerGroupOffsetsResult;
+import org.apache.fluss.client.admin.OffsetMetadata;
 import org.apache.fluss.client.write.KvWriteBatch;
 import org.apache.fluss.client.write.ReadyWriteBatch;
+import org.apache.fluss.exception.ConsumerGroupIdNotFoundException;
 import org.apache.fluss.memory.MemorySegment;
 import org.apache.fluss.memory.PreAllocatedPagedOutputView;
 import org.apache.fluss.metadata.BucketInfo;
@@ -29,13 +32,27 @@ import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableChange;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.rpc.messages.AlterTableRequest;
+import org.apache.fluss.rpc.messages.CommitConsumerOffsetsRequest;
+import org.apache.fluss.rpc.messages.CommitConsumerOffsetsResponse;
+import org.apache.fluss.rpc.messages.DeleteConsumerGroupsResponse;
+import org.apache.fluss.rpc.messages.DeleteConsumerOffsetsRequest;
+import org.apache.fluss.rpc.messages.DeleteConsumerOffsetsResponse;
 import org.apache.fluss.rpc.messages.DescribeBucketsResponse;
+import org.apache.fluss.rpc.messages.GetConsumerOffsetsRequest;
+import org.apache.fluss.rpc.messages.GetConsumerOffsetsResponse;
 import org.apache.fluss.rpc.messages.ListPartitionInfosResponse;
 import org.apache.fluss.rpc.messages.PbBucketInfo;
+import org.apache.fluss.rpc.messages.PbCommitConsumerOffsetsRequestBucket;
+import org.apache.fluss.rpc.messages.PbCommitConsumerOffsetsRequestTable;
+import org.apache.fluss.rpc.messages.PbDeleteConsumerOffsetsRequestBucket;
+import org.apache.fluss.rpc.messages.PbDeleteConsumerOffsetsRequestTable;
+import org.apache.fluss.rpc.messages.PbGetConsumerOffsetsRequestBucket;
+import org.apache.fluss.rpc.messages.PbGetConsumerOffsetsRequestTable;
 import org.apache.fluss.rpc.messages.PbKeyValue;
 import org.apache.fluss.rpc.messages.PbPartitionInfo;
 import org.apache.fluss.rpc.messages.PbPartitionSpec;
 import org.apache.fluss.rpc.messages.PutKvRequest;
+import org.apache.fluss.rpc.protocol.Errors;
 import org.apache.fluss.rpc.protocol.MergeMode;
 
 import org.junit.jupiter.api.Test;
@@ -44,7 +61,11 @@ import javax.annotation.Nullable;
 
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 
 import static org.apache.fluss.record.TestData.DATA1_TABLE_ID_PK;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_INFO_PK;
@@ -55,13 +76,212 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 /**
  * Tests for {@link ClientRpcMessageUtils}.
  *
- * <p>Focuses on MergeMode consistency validation in makePutKvRequest.
+ * <p>Focuses on MergeMode consistency validation in makePutKvRequest and consumer-offset RPC
+ * conversions.
  */
 class ClientRpcMessageUtilsTest {
 
     private static final long TABLE_ID = DATA1_TABLE_ID_PK;
     private static final int ACKS = 1;
     private static final int TIMEOUT_MS = 30000;
+
+    @Test
+    void testMakeGetConsumerOffsetsRequestWithAllOffsets() {
+        GetConsumerOffsetsRequest request =
+                ClientRpcMessageUtils.makeGetConsumerOffsetsRequest("group-1", null);
+        assertThat(request.getGroupId()).isEqualTo("group-1");
+        assertThat(request.isAllOffsets()).isTrue();
+        assertThat(request.getTablesCount()).isZero();
+
+        request =
+                ClientRpcMessageUtils.makeGetConsumerOffsetsRequest(
+                        "group-1", Collections.emptySet());
+        assertThat(request.isAllOffsets()).isTrue();
+    }
+
+    @Test
+    void testMakeGetConsumerOffsetsRequestGroupsBucketsByTable() {
+        GetConsumerOffsetsRequest request =
+                ClientRpcMessageUtils.makeGetConsumerOffsetsRequest(
+                        "group-1",
+                        new HashSet<>(
+                                Arrays.asList(
+                                        new TableBucket(1L, null, 0),
+                                        new TableBucket(1L, 2L, 3),
+                                        new TableBucket(2L, null, 1))));
+        assertThat(request.getGroupId()).isEqualTo("group-1");
+        assertThat(request.isAllOffsets()).isFalse();
+        assertThat(request.getTablesCount()).isEqualTo(2);
+
+        Set<TableBucket> decoded = new HashSet<>();
+        for (PbGetConsumerOffsetsRequestTable table : request.getTablesList()) {
+            for (PbGetConsumerOffsetsRequestBucket bucket : table.getBucketsList()) {
+                decoded.add(
+                        new TableBucket(
+                                table.getTableId(),
+                                bucket.hasPartitionId() ? bucket.getPartitionId() : null,
+                                bucket.getBucketId()));
+            }
+        }
+        assertThat(decoded)
+                .containsExactlyInAnyOrder(
+                        new TableBucket(1L, null, 0),
+                        new TableBucket(1L, 2L, 3),
+                        new TableBucket(2L, null, 1));
+    }
+
+    @Test
+    void testMakeCommitConsumerOffsetsRequest() {
+        Map<TableBucket, OffsetMetadata> offsets = new HashMap<>();
+        offsets.put(new TableBucket(1L, null, 0), new OffsetMetadata(10L, "checkpoint"));
+        offsets.put(new TableBucket(2L, 5L, 1), new OffsetMetadata(20L, ""));
+
+        CommitConsumerOffsetsRequest request =
+                ClientRpcMessageUtils.makeCommitConsumerOffsetsRequest("group-1", offsets);
+        assertThat(request.getGroupId()).isEqualTo("group-1");
+        assertThat(request.getTablesCount()).isEqualTo(2);
+
+        Map<TableBucket, OffsetMetadata> decoded = new HashMap<>();
+        for (PbCommitConsumerOffsetsRequestTable table : request.getTablesList()) {
+            for (PbCommitConsumerOffsetsRequestBucket bucket : table.getBucketsList()) {
+                decoded.put(
+                        new TableBucket(
+                                table.getTableId(),
+                                bucket.hasPartitionId() ? bucket.getPartitionId() : null,
+                                bucket.getBucketId()),
+                        new OffsetMetadata(bucket.getOffset(), bucket.getMetadata()));
+            }
+        }
+        assertThat(decoded).isEqualTo(offsets);
+    }
+
+    @Test
+    void testMakeDeleteConsumerOffsetsRequest() {
+        DeleteConsumerOffsetsRequest request =
+                ClientRpcMessageUtils.makeDeleteConsumerOffsetsRequest(
+                        "group-1",
+                        new HashSet<>(
+                                Arrays.asList(
+                                        new TableBucket(1L, null, 0), new TableBucket(1L, 2L, 3))));
+        assertThat(request.getGroupId()).isEqualTo("group-1");
+        assertThat(request.getTablesCount()).isEqualTo(1);
+
+        Set<TableBucket> decoded = new HashSet<>();
+        for (PbDeleteConsumerOffsetsRequestTable table : request.getTablesList()) {
+            for (PbDeleteConsumerOffsetsRequestBucket bucket : table.getBucketsList()) {
+                decoded.add(
+                        new TableBucket(
+                                table.getTableId(),
+                                bucket.hasPartitionId() ? bucket.getPartitionId() : null,
+                                bucket.getBucketId()));
+            }
+        }
+        assertThat(decoded)
+                .containsExactlyInAnyOrder(
+                        new TableBucket(1L, null, 0), new TableBucket(1L, 2L, 3));
+    }
+
+    @Test
+    void testToConsumerOffsetsDecodesCommittedOffsets() {
+        GetConsumerOffsetsResponse response = new GetConsumerOffsetsResponse();
+        response.addTable()
+                .setTableId(1L)
+                .addBucket()
+                .setBucketId(0)
+                .setOffset(42L)
+                .setMetadata("checkpoint");
+        response.addTable()
+                .setTableId(2L)
+                .addBucket()
+                .setPartitionId(5L)
+                .setBucketId(1)
+                .setOffset(7L);
+
+        Map<TableBucket, OffsetMetadata> offsets =
+                ClientRpcMessageUtils.toConsumerOffsets(response);
+        assertThat(offsets)
+                .containsEntry(new TableBucket(1L, null, 0), new OffsetMetadata(42L, "checkpoint"))
+                .containsEntry(new TableBucket(2L, 5L, 1), new OffsetMetadata(7L, ""));
+        assertThatThrownBy(() -> offsets.put(new TableBucket(9L, null, 9), new OffsetMetadata(1L)))
+                .isInstanceOf(UnsupportedOperationException.class);
+    }
+
+    @Test
+    void testToConsumerOffsetsThrowsOnError() {
+        GetConsumerOffsetsResponse response = new GetConsumerOffsetsResponse();
+        response.addTable()
+                .setTableId(1L)
+                .addBucket()
+                .setBucketId(0)
+                .setErrorCode(Errors.CONSUMER_GROUP_ID_NOT_FOUND.code())
+                .setErrorMessage("group not found");
+
+        assertThatThrownBy(() -> ClientRpcMessageUtils.toConsumerOffsets(response))
+                .isInstanceOf(ConsumerGroupIdNotFoundException.class)
+                .hasMessageContaining("group not found");
+    }
+
+    @Test
+    void testToDeleteConsumerOffsetsErrors() {
+        DeleteConsumerOffsetsResponse response = new DeleteConsumerOffsetsResponse();
+        response.addTable().setTableId(1L).addBucket().setBucketId(0);
+        response.addTable()
+                .setTableId(1L)
+                .addBucket()
+                .setPartitionId(2L)
+                .setBucketId(3)
+                .setErrorCode(Errors.CONSUMER_GROUP_ID_NOT_FOUND.code());
+
+        Map<TableBucket, Errors> errors =
+                ClientRpcMessageUtils.toDeleteConsumerOffsetsErrors(response);
+        assertThat(errors)
+                .containsEntry(new TableBucket(1L, null, 0), Errors.NONE)
+                .containsEntry(new TableBucket(1L, 2L, 3), Errors.CONSUMER_GROUP_ID_NOT_FOUND);
+    }
+
+    @Test
+    void testToDeleteConsumerGroupsErrors() {
+        DeleteConsumerGroupsResponse response = new DeleteConsumerGroupsResponse();
+        response.addGroup().setGroupId("group-1");
+        response.addGroup()
+                .setGroupId("group-2")
+                .setErrorCode(Errors.CONSUMER_GROUP_ID_NOT_FOUND.code());
+
+        Map<String, Errors> errors = ClientRpcMessageUtils.toDeleteConsumerGroupsErrors(response);
+        assertThat(errors)
+                .containsEntry("group-1", Errors.NONE)
+                .containsEntry("group-2", Errors.CONSUMER_GROUP_ID_NOT_FOUND);
+    }
+
+    @Test
+    void testToAlterConsumerOffsetsOutcomes() {
+        Map<TableBucket, OffsetMetadata> requested = new HashMap<>();
+        requested.put(new TableBucket(1L, null, 0), new OffsetMetadata(10L, "checkpoint"));
+
+        CommitConsumerOffsetsResponse response = new CommitConsumerOffsetsResponse();
+        response.addTable().setTableId(1L).addBucket().setBucketId(0);
+        response.addTable()
+                .setTableId(1L)
+                .addBucket()
+                .setBucketId(1)
+                .setErrorCode(Errors.CONSUMER_GROUP_ID_NOT_FOUND.code())
+                .setErrorMessage("group not found");
+
+        Map<TableBucket, AlterConsumerGroupOffsetsResult.BucketOutcome> outcomes =
+                ClientRpcMessageUtils.toAlterConsumerOffsetsOutcomes(response, requested);
+        AlterConsumerGroupOffsetsResult.BucketOutcome success =
+                outcomes.get(new TableBucket(1L, null, 0));
+        assertThat(success.isSuccess()).isTrue();
+        assertThat(success.newOffset()).isEqualTo(10L);
+        assertThat(success.errorCode()).isEqualTo("NONE");
+
+        AlterConsumerGroupOffsetsResult.BucketOutcome failure =
+                outcomes.get(new TableBucket(1L, null, 1));
+        assertThat(failure.isSuccess()).isFalse();
+        assertThat(failure.newOffset()).isEqualTo(-1L);
+        assertThat(failure.errorCode()).isEqualTo("CONSUMER_GROUP_ID_NOT_FOUND");
+        assertThat(failure.errorMessage()).isEqualTo("group not found");
+    }
 
     @Test
     void testMakePutKvRequestWithConsistentMergeMode() throws Exception {
