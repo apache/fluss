@@ -19,24 +19,21 @@ package org.apache.fluss.kafka.transcode;
 
 import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.annotation.VisibleForTesting;
-import org.apache.fluss.config.KafkaValueConversionType;
 import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.kafka.backend.produce.KafkaProduceCommand.Record;
+import org.apache.fluss.kafka.format.KafkaFieldDecoder;
+import org.apache.fluss.kafka.format.KafkaFormatFactoryRegistry;
 import org.apache.fluss.memory.LazyMemorySegmentPool;
-import org.apache.fluss.memory.MemorySegment;
 import org.apache.fluss.metadata.KafkaTableSchema;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.record.ChangeType;
-import org.apache.fluss.row.BinaryString;
 import org.apache.fluss.row.arrow.ArrowWriter;
 import org.apache.fluss.row.arrow.ArrowWriterPool;
 import org.apache.fluss.server.kv.wal.ArrowWalBuilder;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.BufferAllocator;
 
-import javax.annotation.Nullable;
 import javax.annotation.concurrent.ThreadSafe;
 
-import java.nio.ByteBuffer;
 import java.util.List;
 
 import static org.apache.fluss.utils.Preconditions.checkArgument;
@@ -58,6 +55,7 @@ import static org.apache.fluss.utils.Preconditions.checkNotNull;
 @Internal
 @ThreadSafe
 public final class ArrowKafkaRecordTranscoder implements KafkaRecordTranscoder {
+    private final KafkaFormatFactoryRegistry formats = new KafkaFormatFactoryRegistry();
     private final KafkaCompiledWritePlanCache writePlanCache = new KafkaCompiledWritePlanCache();
 
     // Shared across server components; the caller closes it after all conversions finish.
@@ -92,6 +90,8 @@ public final class ArrowKafkaRecordTranscoder implements KafkaRecordTranscoder {
                                 new KafkaTopicWritePlan(
                                         KafkaTableSchema.resolve(tableInfo.toTableDescriptor())));
         KafkaTableSchema schema = plan.topicSchema();
+        KafkaFieldDecoder valueDecoder =
+                formats.createDecoder(schema.valueConversionType(), schema.valueProjection());
         KafkaRowAssembler assembler = plan.rowAssembler();
         ArrowWriter writer = null;
         long epoch = 0;
@@ -112,9 +112,7 @@ public final class ArrowKafkaRecordTranscoder implements KafkaRecordTranscoder {
                 builder.append(
                         ChangeType.APPEND_ONLY,
                         assembler.assemble(
-                                new Object[] {decode(schema.valueConversionType(), record.value())},
-                                record,
-                                partitionId));
+                                valueDecoder.decode(record.value()), record, partitionId));
             }
             EncodedRecords result = new EncodedRecords(builder.build(), builder);
             ownershipTransferred = true;
@@ -145,34 +143,5 @@ public final class ArrowKafkaRecordTranscoder implements KafkaRecordTranscoder {
     @VisibleForTesting
     ArrowWriterPool writerPool() {
         return writerPool;
-    }
-
-    @VisibleForTesting
-    static @Nullable Object decode(KafkaValueConversionType format, @Nullable ByteBuffer bytes) {
-        switch (format) {
-            case BINARY:
-                return KafkaRowAssembler.copyBytes(bytes);
-            case STRING:
-                if (bytes == null) {
-                    return null;
-                }
-                // Borrow the raw UTF-8 bytes until the synchronous Arrow append consumes them.
-                if (bytes.isDirect()) {
-                    return BinaryString.fromAddress(
-                            new MemorySegment[] {MemorySegment.wrapOffHeapMemory(bytes)},
-                            bytes.position(),
-                            bytes.remaining());
-                } else if (bytes.hasArray()) {
-                    return BinaryString.fromBytes(
-                            bytes.array(),
-                            bytes.arrayOffset() + bytes.position(),
-                            bytes.remaining());
-                } else {
-                    return BinaryString.fromBytes(KafkaRowAssembler.copyBytes(bytes));
-                }
-            default:
-                throw new KafkaRecordEncodingException(
-                        "Unsupported Kafka value conversion type: " + format);
-        }
     }
 }

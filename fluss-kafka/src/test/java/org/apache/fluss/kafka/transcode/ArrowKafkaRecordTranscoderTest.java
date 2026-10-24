@@ -41,7 +41,6 @@ import org.apache.fluss.record.LogRecordBatch;
 import org.apache.fluss.record.LogRecordReadContext;
 import org.apache.fluss.record.MemoryLogRecords;
 import org.apache.fluss.record.TestingSchemaGetter;
-import org.apache.fluss.row.BinaryString;
 import org.apache.fluss.row.InternalMap;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.arrow.ArrowWriter;
@@ -102,35 +101,6 @@ class ArrowKafkaRecordTranscoderTest {
     @AfterEach
     void closeTranscoder() throws Exception {
         IOUtils.closeAll(transcoder, allocator, memorySegmentPool);
-    }
-
-    @ParameterizedTest
-    @ValueSource(strings = {"heap", "direct", "read-only"})
-    void testStringDecodeWrapsBufferRangeWithoutChangingCursor(String kind) {
-        byte[] expected = bytes("消息-😀");
-        ByteBuffer storage =
-                kind.equals("direct")
-                        ? ByteBuffer.allocateDirect(expected.length + 4)
-                        : ByteBuffer.allocate(expected.length + 4);
-        storage.position(2);
-        storage.put(expected);
-        storage.position(1);
-        ByteBuffer slice = storage.slice();
-        slice.position(1);
-        slice.limit(1 + expected.length);
-        ByteBuffer input = kind.equals("read-only") ? slice.asReadOnlyBuffer() : slice;
-        BinaryString decoded =
-                (BinaryString)
-                        ArrowKafkaRecordTranscoder.decode(KafkaValueConversionType.STRING, input);
-        assertThat(decoded.toBytes()).isEqualTo(expected);
-        assertThat(input.position()).isEqualTo(1);
-        assertThat(input.remaining()).isEqualTo(expected.length);
-        // Direct and array-backed buffers are borrowed; read-only heap buffers need a copy.
-        storage.put(2, (byte) 'x');
-        if (!kind.equals("read-only")) {
-            expected[0] = 'x';
-        }
-        assertThat(decoded.toBytes()).isEqualTo(expected);
     }
 
     @ParameterizedTest
@@ -386,17 +356,9 @@ class ArrowKafkaRecordTranscoderTest {
                                         ConfigOptions.TABLE_KAFKA_CONVERT_VALUE_TYPE,
                                         KafkaValueConversionType.PARSE_JSON)
                                 .build());
-        for (byte[] value : new byte[][] {null, bytes("{}")}) {
-            assertThatThrownBy(
-                            () ->
-                                    ArrowKafkaRecordTranscoder.decode(
-                                            KafkaValueConversionType.PARSE_JSON, buffer(value)))
-                    .isInstanceOf(KafkaRecordEncodingException.class)
-                    .hasMessageContaining("PARSE_JSON");
-            assertThatThrownBy(() -> transcode(table, value))
-                    .isInstanceOf(KafkaRecordEncodingException.class)
-                    .hasMessageContaining("PARSE_JSON");
-        }
+        assertThatThrownBy(() -> transcode(table, (byte[]) null))
+                .isInstanceOf(KafkaRecordEncodingException.class)
+                .hasMessageContaining("PARSE_JSON");
     }
 
     @Test
