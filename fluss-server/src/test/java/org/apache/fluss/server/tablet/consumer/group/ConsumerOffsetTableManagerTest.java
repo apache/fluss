@@ -156,7 +156,9 @@ class ConsumerOffsetTableManagerTest {
     void testCreateTableThroughCoordinator() throws Exception {
         when(zkClient.databaseExists(TABLE_PATH.getDatabaseName())).thenReturn(false);
 
-        assertThat(tableManager.ensureTableAsync().get()).isEqualTo(BUCKET_COUNT);
+        assertThat(tableManager.ensureTableAsync())
+                .succeedsWithin(Duration.ofSeconds(10))
+                .isEqualTo(newTableInfo());
 
         verify(zkClient, times(1)).tableExist(TABLE_PATH);
         verify(metadataManager).getTable(TABLE_PATH);
@@ -197,7 +199,9 @@ class ConsumerOffsetTableManagerTest {
                 .isInstanceOf(ConsumerGroupOwnerNotAvailableException.class)
                 .hasRootCauseMessage("creation failed");
 
-        assertThat(tableManager.ensureTableAsync().get()).isEqualTo(BUCKET_COUNT);
+        assertThat(tableManager.ensureTableAsync())
+                .succeedsWithin(Duration.ofSeconds(10))
+                .isEqualTo(newTableInfo());
 
         verify(coordinatorGateway, times(2)).createTable(any(CreateTableRequest.class));
         verify(metadataManager, times(1)).getTable(TABLE_PATH);
@@ -207,7 +211,9 @@ class ConsumerOffsetTableManagerTest {
     void testExistingTableDoesNotCallCoordinator() throws Exception {
         when(zkClient.tableExist(TABLE_PATH)).thenReturn(true);
 
-        assertThat(tableManager.ensureTableAsync().get()).isEqualTo(BUCKET_COUNT);
+        assertThat(tableManager.ensureTableAsync())
+                .succeedsWithin(Duration.ofSeconds(10))
+                .isEqualTo(newTableInfo());
 
         verify(coordinatorGateway, never()).createDatabase(any(CreateDatabaseRequest.class));
         verify(coordinatorGateway, never()).createTable(any(CreateTableRequest.class));
@@ -222,6 +228,6 @@ class ConsumerOffsetTableManagerTest {
                         .build()
                         .withBucketCount(BUCKET_COUNT)
                         .withReplicationFactor(1);
-        return TableInfo.of(TABLE_PATH, 1L, 1, descriptor, "/tmp/fluss", 1L, 1L);
+        return TableInfo.of(TABLE_PATH, 42L, 7, descriptor, "/tmp/fluss", 1L, 1L);
     }
 }
