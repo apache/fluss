@@ -53,12 +53,7 @@ object FlussLakeUtils extends Logging {
       tableProperties: util.Map[String, String],
       tablePath: TablePath): LakeSource[LakeSplit] = {
     val tableConfig = Configuration.fromMap(tableProperties)
-    // TODO: Support reading custom Paimon lake table paths in Spark.
-    // See https://github.com/apache/fluss/issues/3832.
-    if (LakeTableUtil.resolveLakeTablePath(tablePath, tableConfig) != tablePath) {
-      throw new UnsupportedOperationException(
-        "Custom lake table path is not supported for Spark lake reads yet.")
-    }
+    val lakeTablePath = LakeTableUtil.resolveLakeTablePath(tablePath, tableConfig)
     val datalakeFormat = tableConfig.get(ConfigOptions.TABLE_DATALAKE_FORMAT)
     val dataLakePrefix = "table.datalake." + datalakeFormat + "."
 
@@ -73,7 +68,7 @@ object FlussLakeUtils extends Logging {
     val lakeStoragePlugin =
       LakeStoragePluginSetUp.fromDataLakeFormat(datalakeFormat.toString, null)
     val lakeStorage = lakeStoragePlugin.createLakeStorage(lakeConfig)
-    lakeStorage.createLakeSource(tablePath).asInstanceOf[LakeSource[LakeSplit]]
+    lakeStorage.createLakeSource(lakeTablePath).asInstanceOf[LakeSource[LakeSplit]]
   }
 
   def lakeProjection(projection: Array[Int]): Array[Array[Int]] = {
