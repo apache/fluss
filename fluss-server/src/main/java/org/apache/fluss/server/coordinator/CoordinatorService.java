@@ -249,6 +249,7 @@ import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toDatabaseChan
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toTableBucketOffsets;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toTablePath;
 import static org.apache.fluss.server.utils.TableAssignmentUtils.generateAssignment;
+import static org.apache.fluss.server.utils.TableDescriptorValidation.validateIcebergBucketKeys;
 import static org.apache.fluss.utils.PartitionUtils.HISTORICAL_PARTITION_VALUE;
 import static org.apache.fluss.utils.PartitionUtils.validateAutoPartitionTime;
 import static org.apache.fluss.utils.PartitionUtils.validatePartitionSpec;
@@ -597,6 +598,9 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         // validate table descriptor before creating table in lake or fluss metadata,
         // to avoid orphaned lake tables when validation fails
         metadataManager.validateTableDescriptor(tablePath, tableDescriptor);
+
+        // Currently, only Iceberg tables with a single bucket key are supported.
+        validateIcebergBucketKeys(tableDescriptor);
 
         // the distribution and bucket count must be set now
         //noinspection OptionalGetWithoutIsPresent

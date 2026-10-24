@@ -121,6 +121,7 @@ import static org.apache.fluss.config.ConfigOptions.TABLE_DATALAKE_ENABLED;
 import static org.apache.fluss.config.ConfigOptions.TABLE_DATALAKE_FORMAT;
 import static org.apache.fluss.config.ConfigOptions.TABLE_KV_FORMAT_VERSION;
 import static org.apache.fluss.config.ConfigOptions.TABLE_KV_VALUE_LAYOUT_VERSION;
+import static org.apache.fluss.metadata.DataLakeFormat.ICEBERG;
 import static org.apache.fluss.metadata.DataLakeFormat.PAIMON;
 import static org.apache.fluss.record.TestData.DATA1_PARTITIONED_TABLE_DESCRIPTOR;
 import static org.apache.fluss.record.TestData.DATA1_SCHEMA;
@@ -990,6 +991,30 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
                 .isInstanceOf(InvalidConfigException.class)
                 .hasMessageContaining(
                         "Currently, Primary Key Table supports ARROW or COMPACTED log format when kv format is COMPACTED.");
+    }
+
+    @Test
+    void testCreateTableWithUnsupportedIcebergBucketKeys() throws Exception {
+        TablePath tablePath =
+                TablePath.of(DEFAULT_TABLE_PATH.getDatabaseName(), "invalid_iceberg_bucket");
+        TableDescriptor descriptor =
+                TableDescriptor.builder()
+                        .schema(
+                                Schema.newBuilder()
+                                        .column("a", DataTypes.INT())
+                                        .column("b", DataTypes.INT())
+                                        .build())
+                        .distributedBy(4, "a", "b")
+                        .property(TABLE_DATALAKE_FORMAT, ICEBERG)
+                        .property(TABLE_DATALAKE_ENABLED, false)
+                        .build();
+
+        assertThatThrownBy(() -> admin.createTable(tablePath, descriptor, false).get())
+                .cause()
+                .isInstanceOf(InvalidTableException.class)
+                .hasMessageContaining("Only one bucket key is supported for Iceberg");
+
+        assertThat(admin.tableExists(tablePath).get()).isFalse();
     }
 
     @Test
