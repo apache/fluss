@@ -23,7 +23,7 @@ import java.util.concurrent.CompletableFuture;
 
 /** Narrow backend used by the Kafka Produce API. */
 @Internal
-public interface KafkaProduceBackend {
+public interface KafkaProduceBackend extends AutoCloseable {
     /**
      * Consumes Kafka records synchronously and writes them through the native Fluss write path.
      *
@@ -40,4 +40,8 @@ public interface KafkaProduceBackend {
      * represents completion of the write, not permission to continue reading the input payloads.
      */
     CompletableFuture<KafkaProduceResult> write(KafkaProduceCommand command);
+
+    /** Releases backend resources after request processing stops. */
+    @Override
+    default void close() throws Exception {}
 }

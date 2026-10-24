@@ -110,6 +110,11 @@ public class TabletServerMetadataCache implements ServerMetadataCache {
         return serverMetadataSnapshot.getAliveTabletServerInfos();
     }
 
+    /** Returns the table ID from the in-memory metadata snapshot without accessing ZooKeeper. */
+    public OptionalLong getTableId(TablePath tablePath) {
+        return serverMetadataSnapshot.getTableId(tablePath);
+    }
+
     public Optional<TablePath> getTablePath(long tableId) {
         return serverMetadataSnapshot.getTablePath(tableId);
     }

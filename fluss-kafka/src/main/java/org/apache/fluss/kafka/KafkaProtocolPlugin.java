@@ -19,13 +19,17 @@ package org.apache.fluss.kafka;
 
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.kafka.mapping.KafkaTopicMapper;
 import org.apache.fluss.rpc.RpcGatewayService;
 import org.apache.fluss.rpc.netty.server.RequestChannel;
 import org.apache.fluss.rpc.netty.server.RequestHandler;
 import org.apache.fluss.rpc.protocol.NetworkProtocolPlugin;
+import org.apache.fluss.server.tablet.TabletService;
 import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelHandler;
 
 import java.util.List;
+
+import static org.apache.fluss.utils.Preconditions.checkArgument;
 
 /** The Kafka protocol plugin. */
 public class KafkaProtocolPlugin implements NetworkProtocolPlugin {
@@ -60,6 +64,10 @@ public class KafkaProtocolPlugin implements NetworkProtocolPlugin {
 
     @Override
     public RequestHandler<?> createRequestHandler(RpcGatewayService service) {
-        return new KafkaRequestHandler(conf, service);
+        checkArgument(
+                service instanceof TabletService,
+                "Kafka protocol endpoints only supports TabletServer, but the service is %s",
+                service.getClass().getSimpleName());
+        return new KafkaRequestHandler(new KafkaTopicMapper(conf), (TabletService) service);
     }
 }

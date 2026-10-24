@@ -243,6 +243,16 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
                         ioExecutor);
     }
 
+    /** Returns the local replica manager used by protocol plugins. */
+    public ReplicaManager getReplicaManager() {
+        return replicaManager;
+    }
+
+    /** Returns the shared TabletServer metadata cache. */
+    public TabletServerMetadataCache getMetadataCache() {
+        return metadataCache;
+    }
+
     @Override
     public String name() {
         return serviceName;

@@ -618,6 +618,17 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
         return tabletDir;
     }
 
+    // TODO: Move ownership and cleanup of these shared resources to TabletServer.
+    /** Returns the shared Arrow allocator; callers must not close it. */
+    public BufferAllocator getArrowBufferAllocator() {
+        return arrowBufferAllocator;
+    }
+
+    /** Returns the shared memory segment pool; callers must not close it. */
+    public LazyMemorySegmentPool getMemorySegmentPool() {
+        return memorySegmentPool;
+    }
+
     public Optional<KvTablet> getKv(TableBucket tableBucket) {
         return Optional.ofNullable(currentKvs.get(tableBucket));
     }

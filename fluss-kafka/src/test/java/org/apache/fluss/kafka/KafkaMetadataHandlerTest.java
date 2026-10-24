@@ -23,6 +23,9 @@ import org.apache.fluss.config.KafkaValueConversionType;
 import org.apache.fluss.exception.DatabaseNotExistException;
 import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.exception.TableNotExistException;
+import org.apache.fluss.kafka.backend.metadata.GatewayKafkaMetadataBackend;
+import org.apache.fluss.kafka.backend.produce.KafkaProduceResult;
+import org.apache.fluss.kafka.mapping.KafkaTopicMapper;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableDescriptor;
@@ -747,7 +750,14 @@ public class KafkaMetadataHandlerTest {
             MetadataRequest requestBody,
             short version,
             Configuration config) {
-        KafkaRequestHandler handler = new KafkaRequestHandler(config, service);
+        KafkaTopicMapper mapper = new KafkaTopicMapper(config);
+        KafkaRequestHandler handler =
+                new KafkaRequestHandler(
+                        mapper,
+                        new GatewayKafkaMetadataBackend(service, mapper),
+                        command ->
+                                CompletableFuture.completedFuture(
+                                        new KafkaProduceResult(Collections.emptyList())));
         ByteBuf requestBuffer = ByteBufAllocator.DEFAULT.buffer();
         KafkaRequest request;
         try {

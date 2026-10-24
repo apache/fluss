@@ -19,6 +19,7 @@ package org.apache.fluss.kafka;
 
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.rpc.TestingTabletGatewayService;
 import org.apache.fluss.rpc.netty.server.RequestChannel;
 import org.apache.fluss.shaded.netty4.io.netty.channel.embedded.EmbeddedChannel;
 import org.apache.fluss.shaded.netty4.io.netty.channel.socket.SocketChannel;
@@ -29,12 +30,12 @@ import org.junit.jupiter.api.Test;
 import java.time.Duration;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
-/** Tests disabling the Kafka listener's idle timeout. */
+/** Tests listener configuration and required TabletService support. */
 class KafkaProtocolPluginTest {
-
     @Test
     void testZeroDisablesNettyIdleTimeout() throws Exception {
         Configuration conf = new Configuration();
@@ -58,5 +59,13 @@ class KafkaProtocolPluginTest {
         } finally {
             channel.finishAndReleaseAll();
         }
+    }
+
+    @Test
+    void testRejectsNonTabletService() {
+        KafkaProtocolPlugin plugin = new KafkaProtocolPlugin();
+        plugin.setup(new Configuration());
+        assertThatThrownBy(() -> plugin.createRequestHandler(new TestingTabletGatewayService()))
+                .isInstanceOf(IllegalArgumentException.class);
     }
 }

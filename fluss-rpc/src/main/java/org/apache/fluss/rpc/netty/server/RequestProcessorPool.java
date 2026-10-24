@@ -21,6 +21,7 @@ import org.apache.fluss.metrics.MetricNames;
 import org.apache.fluss.rpc.RpcGatewayService;
 import org.apache.fluss.rpc.protocol.NetworkProtocolPlugin;
 import org.apache.fluss.rpc.protocol.RequestType;
+import org.apache.fluss.utils.IOUtils;
 import org.apache.fluss.utils.concurrent.ExecutorThreadFactory;
 import org.apache.fluss.utils.concurrent.FutureUtils;
 
@@ -34,6 +35,8 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
+import static org.apache.fluss.utils.Preconditions.checkState;
+
 /** A worker thread pool that contains a fixed number of threads to process incoming requests. */
 final class RequestProcessorPool {
     private static final Logger LOG = LoggerFactory.getLogger(RequestProcessorPool.class);
@@ -42,8 +45,10 @@ final class RequestProcessorPool {
 
     private final RequestChannel[] requestChannels;
     private final RequestProcessor[] processors;
+    private final RequestHandler<?>[] requestHandlers;
 
     private ExecutorService workerPool;
+    private CompletableFuture<Void> closeFuture;
 
     public RequestProcessorPool(
             int numProcessors,
@@ -54,7 +59,7 @@ final class RequestProcessorPool {
         this.processors = new RequestProcessor[numProcessors];
         this.requestChannels = new RequestChannel[numProcessors];
 
-        RequestHandler<?>[] requestHandlers = initializeRequestHandlers(protocols, service);
+        this.requestHandlers = initializeRequestHandlers(protocols, service);
         for (int i = 0; i < numProcessors; i++) {
             RequestChannel requestChannel = new RequestChannel(totalQueueCapacity / numProcessors);
             requestChannels[i] = requestChannel;
@@ -84,6 +89,7 @@ final class RequestProcessorPool {
     }
 
     public synchronized void start() {
+        checkState(closeFuture == null, "Request processor pool has already been closed.");
         this.workerPool =
                 Executors.newFixedThreadPool(
                         processors.length, new ExecutorThreadFactory("fluss-netty-server-worker"));
@@ -93,25 +99,32 @@ final class RequestProcessorPool {
     }
 
     public synchronized CompletableFuture<Void> closeAsync() {
-        if (workerPool == null) {
-            // the processor poll is not started yet.
-            return CompletableFuture.completedFuture(null);
+        if (closeFuture != null) {
+            return closeFuture;
         }
         LOG.info("Shutting down Fluss request processor pool.");
         List<CompletableFuture<Void>> shutdownFutures = new ArrayList<>();
-        for (RequestProcessor processor : processors) {
-            if (processor != null) {
+        if (workerPool != null) {
+            for (RequestProcessor processor : processors) {
                 processor.initiateShutdown();
                 shutdownFutures.add(processor.getShutdownFuture());
             }
         }
-        return FutureUtils.runAfterwards(
-                FutureUtils.completeAll(shutdownFutures),
-                () -> {
-                    if (workerPool != null) {
-                        workerPool.shutdown();
-                    }
-                });
+        closeFuture =
+                FutureUtils.runAfterwards(
+                        FutureUtils.completeAll(shutdownFutures),
+                        () -> {
+                            try {
+                                // Handlers are shared by all processors and must be closed only
+                                // once.
+                                IOUtils.closeAll(requestHandlers);
+                            } finally {
+                                if (workerPool != null) {
+                                    workerPool.shutdown();
+                                }
+                            }
+                        });
+        return closeFuture;
         // service and requestChannel shutdown is handled outside.
     }
 

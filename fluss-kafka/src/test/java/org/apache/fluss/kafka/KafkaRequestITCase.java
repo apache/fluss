@@ -22,7 +22,6 @@ import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.metrics.groups.MetricGroup;
 import org.apache.fluss.metrics.util.NOPMetricsGroup;
-import org.apache.fluss.rpc.TestingTabletGatewayService;
 import org.apache.fluss.rpc.netty.server.NettyServer;
 import org.apache.fluss.rpc.netty.server.RequestsMetrics;
 
@@ -56,7 +55,7 @@ import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** Integration test for Kafka request handling. */
-public class KafkaRequestITCase {
+public class KafkaRequestITCase extends KafkaServerTestBase {
     private Configuration conf;
     private NettyServer nettyServer;
     private NetworkClient client;
@@ -118,7 +117,7 @@ public class KafkaRequestITCase {
                         Arrays.asList(
                                 new Endpoint("localhost", 0, "INTERNAL"),
                                 new Endpoint("localhost", 0, "KAFKA")),
-                        new TestingTabletGatewayService(),
+                        createTabletService(),
                         metricGroup,
                         RequestsMetrics.createCoordinatorServerRequestMetrics(metricGroup));
         server.start();
