@@ -25,6 +25,7 @@ import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.exception.InvalidServerTypeException;
 import org.apache.fluss.exception.NetworkException;
 import org.apache.fluss.exception.RetriableAuthenticationException;
+import org.apache.fluss.exception.TimeoutException;
 import org.apache.fluss.exception.UnsupportedVersionException;
 import org.apache.fluss.rpc.messages.AlterTableRequest;
 import org.apache.fluss.rpc.messages.ApiMessage;
@@ -52,6 +53,7 @@ import org.apache.fluss.utils.ExponentialBackoff;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import javax.annotation.Nullable;
 import javax.annotation.concurrent.GuardedBy;
 import javax.annotation.concurrent.ThreadSafe;
 
@@ -63,6 +65,8 @@ import java.util.ArrayDeque;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.function.BiConsumer;
 
@@ -85,6 +89,7 @@ final class ServerConnection {
     private final CompletableFuture<Void> closeFuture = new CompletableFuture<>();
     private final ConnectionMetrics connectionMetrics;
     private final ClientAuthenticator authenticator;
+    private final long requestTimeoutMs;
     private final ExponentialBackoff backoff;
     private final Object lock = new Object();
 
@@ -114,11 +119,13 @@ final class ServerConnection {
             ServerNode node,
             ClientMetricGroup clientMetricGroup,
             ClientAuthenticator authenticator,
+            long requestTimeoutMs,
             BiConsumer<ServerConnection, Throwable> closeCallback) {
         this.node = node;
         this.state = ConnectionState.CONNECTING;
         this.connectionMetrics = clientMetricGroup.createConnectionMetricGroup(node.uid());
         this.authenticator = authenticator;
+        this.requestTimeoutMs = requestTimeoutMs;
         this.backoff = new ExponentialBackoff(100L, 2, 5000L, 0.2);
         whenClose(closeCallback);
 
@@ -174,7 +181,7 @@ final class ServerConnection {
             }
             // notify all the inflight requests
             for (int requestId : inflightRequests.keySet()) {
-                InflightRequest request = inflightRequests.remove(requestId);
+                InflightRequest request = removeInflightRequest(requestId, 0);
                 if (request != null) {
                     request.responseFuture.completeExceptionally(requestCause);
                 }
@@ -229,22 +236,21 @@ final class ServerConnection {
 
         @Override
         public void onRequestResult(int requestId, ApiMessage response) {
-            InflightRequest request = inflightRequests.remove(requestId);
-            if (request != null && !request.responseFuture.isDone()) {
-                connectionMetrics.updateMetricsAfterGetResponse(
-                        ApiKeys.forId(request.apiKey),
-                        request.requestStartTime,
-                        response.totalSize());
-                request.responseFuture.complete(response);
+            // Only the path that removes a request updates its completion metrics.
+            InflightRequest request = removeInflightRequest(requestId, response.totalSize());
+            if (request == null) {
+                releaseDroppedResponse(response);
+                return;
+            }
+            if (!request.responseFuture.complete(response)) {
+                releaseDroppedResponse(response);
             }
         }
 
         @Override
         public void onRequestFailure(int requestId, Throwable cause) {
-            InflightRequest request = inflightRequests.remove(requestId);
-            if (request != null && !request.responseFuture.isDone()) {
-                connectionMetrics.updateMetricsAfterGetResponse(
-                        ApiKeys.forId(request.apiKey), request.requestStartTime, 0);
+            InflightRequest request = removeInflightRequest(requestId, 0);
+            if (request != null) {
                 request.responseFuture.completeExceptionally(cause);
             }
         }
@@ -346,6 +352,7 @@ final class ServerConnection {
                         }
                     }
                 }
+                // This path removes an unaccounted request without updating completion metrics.
                 inflightRequests.remove(inflight.requestId);
                 if (t instanceof Error) {
                     responseFuture.completeExceptionally(t);
@@ -360,26 +367,101 @@ final class ServerConnection {
                 return responseFuture;
             }
 
+            try {
+                inflight.timeoutTask =
+                        channel.eventLoop()
+                                .schedule(
+                                        new RequestTimeoutTask(inflight),
+                                        requestTimeoutMs,
+                                        TimeUnit.MILLISECONDS);
+            } catch (RejectedExecutionException t) {
+                // Fail retryably if the closing event loop cannot schedule the deadline.
+                LOG.debug("Failed to schedule request timeout for node {}.", node, t);
+                byteBuf.release();
+                InflightRequest removed = removeInflightRequest(inflight, 0);
+                if (removed != null) {
+                    removed.responseFuture.completeExceptionally(
+                            new NetworkException(
+                                    new DisconnectException(
+                                            "Cannot schedule the request timeout for node "
+                                                    + node
+                                                    + " because the connection is closing.")));
+                }
+                return inflight.responseFuture;
+            }
+            inflight.responseFuture.whenComplete(
+                    (ignored, throwable) -> {
+                        cancelRequestTimeout(inflight);
+                        removeInflightRequest(inflight, 0);
+                    });
+
             channel.writeAndFlush(byteBuf)
                     .addListener(
                             (ChannelFutureListener)
                                     future -> {
                                         if (!future.isSuccess()) {
-                                            connectionMetrics.updateMetricsAfterGetResponse(
-                                                    apiKey, inflight.requestStartTime, 0);
-                                            Throwable cause = future.cause();
-                                            if (cause instanceof IOException) {
-                                                // when server close the channel, the cause will be
-                                                // IOException, if the cause is IOException, we wrap
-                                                // it as retryable NetworkException to retry to
-                                                // connect
-                                                cause = new NetworkException(cause);
+                                            InflightRequest removed =
+                                                    removeInflightRequest(inflight, 0);
+                                            if (removed != null) {
+                                                Throwable cause = future.cause();
+                                                if (cause instanceof IOException) {
+                                                    // when server close the channel, the cause will
+                                                    // be IOException, if the cause is IOException,
+                                                    // we wrap it as retryable NetworkException to
+                                                    // retry to connect
+                                                    cause = new NetworkException(cause);
+                                                }
+                                                removed.responseFuture.completeExceptionally(cause);
                                             }
-                                            inflight.responseFuture.completeExceptionally(cause);
-                                            inflightRequests.remove(inflight.requestId);
                                         }
                                     });
             return inflight.responseFuture;
+        }
+    }
+
+    /** Removes an inflight request and records its completion metrics only if removal succeeds. */
+    @Nullable
+    private InflightRequest removeInflightRequest(int requestId, int responseSize) {
+        return updateMetricsAfterRemoval(inflightRequests.remove(requestId), responseSize);
+    }
+
+    /** Removes the request only if the entry still refers to the same instance. */
+    @Nullable
+    private InflightRequest removeInflightRequest(InflightRequest request, int responseSize) {
+        InflightRequest removed =
+                inflightRequests.remove(request.requestId, request) ? request : null;
+        return updateMetricsAfterRemoval(removed, responseSize);
+    }
+
+    /** Records completion metrics only for the request removed by the winning path. */
+    @Nullable
+    private InflightRequest updateMetricsAfterRemoval(
+            InflightRequest removedRequest, int responseSize) {
+        if (removedRequest != null) {
+            cancelRequestTimeout(removedRequest);
+            connectionMetrics.updateMetricsAfterGetResponse(
+                    ApiKeys.forId(removedRequest.apiKey),
+                    removedRequest.requestStartTime,
+                    responseSize);
+        }
+        return removedRequest;
+    }
+
+    /** Cancels the deadline of the given request if it has been armed. */
+    private static void cancelRequestTimeout(InflightRequest request) {
+        ScheduledFuture<?> timeoutTask = request.timeoutTask;
+        if (timeoutTask != null) {
+            timeoutTask.cancel(false);
+        }
+    }
+
+    /**
+     * Releases dropped lazy-response buffers. The handler releases eager responses; the consumer
+     * owns delivered lazy responses.
+     */
+    private static void releaseDroppedResponse(ApiMessage response) {
+        if (response.isLazilyParsed()) {
+            response.getParsedByteBuf().release();
         }
     }
 
@@ -623,6 +705,9 @@ final class ServerConnection {
         final long requestStartTime;
         final CompletableFuture<ApiMessage> responseFuture;
 
+        /** Armed before writing the request and cancelled on completion. */
+        private volatile ScheduledFuture<?> timeoutTask;
+
         InflightRequest(
                 short apiKey,
                 short apiVersion,
@@ -639,6 +724,31 @@ final class ServerConnection {
 
         ByteBuf toByteBuf(ByteBufAllocator allocator) {
             return MessageCodec.encodeRequest(allocator, apiKey, apiVersion, requestId, request);
+        }
+    }
+
+    /**
+     * Runs deadlines on the connection's event loop. Blocking callbacks can delay connections
+     * sharing that loop. Only the removal winner may time out the request.
+     */
+    private final class RequestTimeoutTask implements Runnable {
+
+        private final InflightRequest inflightRequest;
+
+        private RequestTimeoutTask(InflightRequest inflightRequest) {
+            this.inflightRequest = inflightRequest;
+        }
+
+        @Override
+        public void run() {
+            InflightRequest removed = removeInflightRequest(inflightRequest, 0);
+            if (removed != null) {
+                removed.responseFuture.completeExceptionally(
+                        new TimeoutException(
+                                String.format(
+                                        "Timed out waiting for response from node %s after %d ms.",
+                                        node, requestTimeoutMs)));
+            }
         }
     }
 

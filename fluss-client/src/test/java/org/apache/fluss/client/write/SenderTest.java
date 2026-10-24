@@ -21,7 +21,9 @@ import org.apache.fluss.client.metadata.TestingMetadataUpdater;
 import org.apache.fluss.client.metrics.TestingWriterMetricGroup;
 import org.apache.fluss.cluster.BucketLocation;
 import org.apache.fluss.cluster.Cluster;
+import org.apache.fluss.cluster.Endpoint;
 import org.apache.fluss.cluster.ServerNode;
+import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.config.AutoPartitionTimeUnit;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
@@ -45,10 +47,14 @@ import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TableOrPartition;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.metrics.groups.MetricGroup;
+import org.apache.fluss.metrics.util.NOPMetricsGroup;
 import org.apache.fluss.record.MemoryLogRecords;
 import org.apache.fluss.row.BinaryRow;
 import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.row.encode.CompactedKeyEncoder;
+import org.apache.fluss.rpc.RpcClient;
+import org.apache.fluss.rpc.TestingTabletGatewayService;
 import org.apache.fluss.rpc.entity.ProduceLogResultForBucket;
 import org.apache.fluss.rpc.entity.PutKvResultForBucket;
 import org.apache.fluss.rpc.messages.ApiMessage;
@@ -56,12 +62,17 @@ import org.apache.fluss.rpc.messages.ProduceLogRequest;
 import org.apache.fluss.rpc.messages.ProduceLogResponse;
 import org.apache.fluss.rpc.messages.PutKvRequest;
 import org.apache.fluss.rpc.messages.PutKvResponse;
+import org.apache.fluss.rpc.metrics.TestingClientMetricGroup;
+import org.apache.fluss.rpc.netty.server.NettyServer;
+import org.apache.fluss.rpc.netty.server.RequestsMetrics;
+import org.apache.fluss.rpc.protocol.ApiKeys;
 import org.apache.fluss.rpc.protocol.Errors;
 import org.apache.fluss.server.entity.ProduceLogDataForBucket;
 import org.apache.fluss.server.entity.PutKvDataForBucket;
 import org.apache.fluss.server.tablet.TestTabletServerGateway;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.utils.ExponentialBackoff;
+import org.apache.fluss.utils.NetUtils;
 import org.apache.fluss.utils.clock.Clock;
 import org.apache.fluss.utils.clock.ManualClock;
 import org.apache.fluss.utils.clock.SystemClock;
@@ -87,6 +98,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
@@ -724,6 +736,31 @@ final class SenderTest {
         }
         assertThat(accumulator.hasUnDrained()).isFalse();
         assertThat(accumulator.hasIncomplete()).isFalse();
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void testWriteRetriesAfterActualRpcDeadline(boolean idempotenceEnabled) throws Exception {
+        // Use a real RPC deadline to verify that writers recognize it as retryable.
+        Throwable deadlineFailure = actualRpcDeadlineFailure();
+
+        sender = setupWithIdempotenceState(createIdempotenceManager(idempotenceEnabled));
+        CompletableFuture<Exception> writeFuture = new CompletableFuture<>();
+        appendToAccumulator(tb1, row(1, "a"), (tb, leo, e) -> writeFuture.complete(e));
+        sender.runOnce();
+        assertThat(sender.numOfInFlightBatches(tb1)).isOne();
+
+        failRequest(tb1, 0, deadlineFailure);
+
+        assertThat(writeFuture).isNotDone();
+        sender.runOnce();
+        assertThat(sender.numOfInFlightBatches(tb1)).isOne();
+
+        finishRequest(tb1, 0, createProduceLogResponse(tb1, 0L, 1L));
+        sender.runOnce();
+        assertThat(writeFuture.get(30, TimeUnit.SECONDS)).isNull();
+        assertThat(deadlineFailure).isInstanceOf(TimeoutException.class);
+        assertThat(Errors.forException(deadlineFailure)).isEqualTo(Errors.REQUEST_TIME_OUT);
     }
 
     @Test
@@ -2410,6 +2447,56 @@ final class SenderTest {
                         metadataUpdater.newTabletServerClientForNode(
                                 metadataUpdater.leaderFor(DATA1_TABLE_PATH, referenceBucket));
         gateway.failRequest(index, throwable);
+    }
+
+    /**
+     * Returns the failure from a real {@link RpcClient} deadline against a non-responding server.
+     */
+    private static Throwable actualRpcDeadlineFailure() throws Exception {
+        TestingTabletGatewayService neverRespondingGateway =
+                new TestingTabletGatewayService() {
+                    @Override
+                    public CompletableFuture<ProduceLogResponse> produceLog(
+                            ProduceLogRequest request) {
+                        return new CompletableFuture<>();
+                    }
+                };
+        MetricGroup serverMetricGroup = NOPMetricsGroup.newInstance();
+        try (NetUtils.Port availablePort = NetUtils.getAvailablePort()) {
+            ServerNode node =
+                    new ServerNode(
+                            0, "localhost", availablePort.getPort(), ServerType.TABLET_SERVER);
+            NettyServer server =
+                    new NettyServer(
+                            new Configuration(),
+                            Collections.singletonList(
+                                    new Endpoint(node.host(), node.port(), "CLIENT")),
+                            neverRespondingGateway,
+                            serverMetricGroup,
+                            RequestsMetrics.createCoordinatorServerRequestMetrics(
+                                    serverMetricGroup));
+            server.start();
+            try {
+                Configuration clientConf = new Configuration();
+                clientConf.set(ConfigOptions.CLIENT_REQUEST_TIMEOUT, Duration.ofMillis(1000));
+                try (RpcClient rpcClient =
+                        RpcClient.create(clientConf, TestingClientMetricGroup.newInstance())) {
+                    ProduceLogRequest request =
+                            new ProduceLogRequest().setTableId(1L).setAcks(1).setTimeoutMs(10_000);
+                    request.addBucketsReq().setBucketId(0).setRecords(new byte[0]);
+                    try {
+                        rpcClient
+                                .sendRequest(node, ApiKeys.PRODUCE_LOG, request)
+                                .get(30, TimeUnit.SECONDS);
+                        throw new IllegalStateException("Expected the RPC deadline to expire.");
+                    } catch (ExecutionException e) {
+                        return e.getCause();
+                    }
+                }
+            } finally {
+                server.close();
+            }
+        }
     }
 
     private void finishIdempotentProduceLogRequest(
