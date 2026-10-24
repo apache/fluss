@@ -48,6 +48,13 @@ Restart the Fluss process to apply changes.
 
 The following sections list the supported reporters currently.
 
+Fluss built-in histogram percentiles describe at most the most recent sample cap within the past five minutes.
+The histogram `count` is cumulative since registration. When the sample window is empty, Prometheus
+continues exporting `_count` but omits quantiles. InfluxDB writes `count` and `windowCount: 0`
+without distribution fields; queries of distribution fields should use `windowCount > 0` to exclude
+older points. JMX exposes `WindowCount`; its numeric `Max` and `Min` attributes should only be
+interpreted when `WindowCount > 0`.
+
 ### JMX
 
 Type: pull

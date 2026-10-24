@@ -374,6 +374,9 @@ public abstract class AbstractPrometheusReporter implements MetricReporter {
                             labelValues,
                             histogram.getCount()));
             final HistogramStatistics statistics = histogram.getStatistics();
+            if (statistics.size() == 0) {
+                return;
+            }
             for (final Double quantile : QUANTILES) {
                 samples.add(
                         new MetricFamilySamples.Sample(
