@@ -45,6 +45,9 @@ public class RebalanceTask {
     /** The rebalance status for the overall rebalance. */
     private final RebalanceStatus rebalanceStatus;
 
+    /** Whether cancellation has been requested and unfinished tasks should only be drained. */
+    private final boolean cancelRequested;
+
     /** A mapping from tableBucket to RebalancePlanForBuckets of none-partitioned table. */
     private final Map<Long, List<RebalancePlanForBucket>> planForBuckets;
 
@@ -56,8 +59,17 @@ public class RebalanceTask {
             String rebalanceId,
             RebalanceStatus rebalanceStatus,
             Map<TableBucket, RebalancePlanForBucket> bucketPlan) {
+        this(rebalanceId, rebalanceStatus, bucketPlan, false);
+    }
+
+    public RebalanceTask(
+            String rebalanceId,
+            RebalanceStatus rebalanceStatus,
+            Map<TableBucket, RebalancePlanForBucket> bucketPlan,
+            boolean cancelRequested) {
         this.rebalanceId = rebalanceId;
         this.rebalanceStatus = rebalanceStatus;
+        this.cancelRequested = cancelRequested;
         this.planForBuckets = new HashMap<>();
         this.planForBucketsOfPartitionedTable = new HashMap<>();
 
@@ -84,6 +96,10 @@ public class RebalanceTask {
 
     public RebalanceStatus getRebalanceStatus() {
         return rebalanceStatus;
+    }
+
+    public boolean isCancelRequested() {
+        return cancelRequested;
     }
 
     public Map<Long, List<RebalancePlanForBucket>> getPlanForBuckets() {
@@ -121,6 +137,8 @@ public class RebalanceTask {
                 + rebalanceId
                 + ", rebalanceStatus="
                 + rebalanceStatus
+                + ", cancelRequested="
+                + cancelRequested
                 + ", planForBuckets="
                 + planForBuckets
                 + ", planForBucketsOfPartitionedTable="
@@ -138,7 +156,8 @@ public class RebalanceTask {
         }
 
         RebalanceTask that = (RebalanceTask) o;
-        return rebalanceStatus == that.rebalanceStatus
+        return cancelRequested == that.cancelRequested
+                && rebalanceStatus == that.rebalanceStatus
                 && Objects.equals(rebalanceId, that.rebalanceId)
                 && Objects.equals(planForBuckets, that.planForBuckets)
                 && Objects.equals(
@@ -148,6 +167,10 @@ public class RebalanceTask {
     @Override
     public int hashCode() {
         return Objects.hash(
-                rebalanceId, rebalanceStatus, planForBuckets, planForBucketsOfPartitionedTable);
+                rebalanceId,
+                rebalanceStatus,
+                cancelRequested,
+                planForBuckets,
+                planForBucketsOfPartitionedTable);
     }
 }
