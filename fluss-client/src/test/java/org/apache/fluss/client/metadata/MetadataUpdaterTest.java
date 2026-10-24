@@ -21,6 +21,7 @@ import org.apache.fluss.client.utils.MetadataUtils;
 import org.apache.fluss.cluster.Cluster;
 import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.cluster.ServerType;
+import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.StaleMetadataException;
 import org.apache.fluss.metadata.TableOrPartition;
@@ -39,12 +40,19 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.concurrent.CompletableFuture;
 
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.buildMetadataResponse;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 /** UT Test for update metadata of {@link MetadataUpdater}. */
 public class MetadataUpdaterTest {
@@ -76,6 +84,69 @@ public class MetadataUpdaterTest {
                                         rpcClient, CS_NODE, gateway2, 3))
                 .isInstanceOf(StaleMetadataException.class)
                 .hasMessageContaining("The metadata is stale.");
+    }
+
+    @Test
+    void testRetryDisconnectsOnlyFailedBootstrapEndpoint() throws Exception {
+        ServerNode failedNode = new ServerNode(-1, "bootstrap-a", 9001, ServerType.UNKNOWN);
+        ServerNode otherNode = new ServerNode(-1, "bootstrap-b", 9002, ServerType.UNKNOWN);
+
+        // Bootstrap endpoints share a UID despite having different addresses.
+        assertThat(failedNode.uid()).isEqualTo(otherNode.uid());
+
+        RpcClient rpcClient = mock(RpcClient.class);
+        AdminReadOnlyGateway gateway = new TestingAdminReadOnlyGateway(1);
+
+        // The first attempt fails and the next attempt succeeds.
+        Cluster cluster =
+                MetadataUpdater.tryToInitializeClusterWithRetries(
+                        rpcClient, failedNode, gateway, 1);
+
+        assertThat(cluster).isNotNull();
+
+        // Only the failed endpoint should be disconnected.
+        verify(rpcClient).disconnect(failedNode);
+        verify(rpcClient, never()).disconnect(otherNode);
+        verify(rpcClient, never()).disconnect(failedNode.uid());
+    }
+
+    @Test
+    void testInitializeClusterDisconnectsOnlyFailedBootstrapEndpoint() {
+        Configuration configuration = new Configuration();
+        configuration.set(
+                ConfigOptions.BOOTSTRAP_SERVERS,
+                Arrays.asList("localhost:19001", "localhost:19002"));
+
+        ServerNode failedNode = new ServerNode(-1, "localhost", 19001, ServerType.UNKNOWN);
+        ServerNode healthyNode = new ServerNode(-1, "localhost", 19002, ServerType.UNKNOWN);
+
+        assertThat(failedNode.uid()).isEqualTo(healthyNode.uid());
+
+        RpcClient rpcClient = mock(RpcClient.class);
+
+        // The first bootstrap endpoint fails.
+        when(rpcClient.sendRequest(eq(failedNode), any(), any()))
+                .thenThrow(new StaleMetadataException("Bootstrap endpoint unavailable"));
+
+        // The second bootstrap endpoint returns valid cluster metadata.
+        when(rpcClient.sendRequest(eq(healthyNode), any(), any()))
+                .thenAnswer(
+                        invocation ->
+                                CompletableFuture.completedFuture(
+                                        buildMetadataResponse(
+                                                CS_NODE,
+                                                Collections.singleton(TS_NODE),
+                                                Collections.emptyList(),
+                                                Collections.emptyList())));
+
+        MetadataUpdater updater = new MetadataUpdater(configuration, rpcClient);
+
+        assertThat(updater.getCluster().getCoordinatorServer()).isEqualTo(CS_NODE);
+
+        verify(rpcClient).sendRequest(eq(healthyNode), any(), any());
+        verify(rpcClient).disconnect(failedNode);
+        verify(rpcClient, never()).disconnect(healthyNode);
+        verify(rpcClient, never()).disconnect(failedNode.uid());
     }
 
     @ParameterizedTest
