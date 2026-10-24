@@ -45,12 +45,35 @@ Google Cloud Storage support is not included in the default Fluss distribution. 
 
 ## Configurations setup
 
-To enable Google Cloud Storage as remote storage, add the required configuration to Fluss' `server.yaml`. The Fluss plugin accepts both `gs.` and `fs.gs.` prefixes; entries are forwarded to the underlying `gcs-connector` with the `fs.gs.` prefix.
+To enable Google Cloud Storage as remote storage, add the required configuration to Fluss' `server.yaml`. The Fluss plugin accepts both `gs.` and `fs.gs.` prefixes; entries are forwarded to the underlying `gcs-connector` with the `fs.gs.` prefix. Choose one authentication method below.
 
-### Service account key file
+### Application Default Credentials
+
+Recommended on GCE and GKE. When running in an environment with [Application Default Credentials](https://cloud.google.com/docs/authentication/application-default-credentials) available (for example via Workload Identity), the plugin can pick up credentials automatically. When `fs.gs.auth.type` is omitted, this method is used only if `fs.gs.auth.service.account.json.keyfile` is not set. Set `fs.gs.auth.type` to `APPLICATION_DEFAULT` to select it even when a key file is present.
+
+The credentials must be a service account: the GCE or GKE metadata server, or `GOOGLE_APPLICATION_CREDENTIALS` pointing at a service account key. User credentials, such as those from `gcloud auth application-default login`, are rejected. They keep the scopes granted at login, so the read-only Cloud Storage scope would not apply to the token sent to clients.
 
 ```yaml
 # The dir used as remote storage of Fluss, using the gs:// URI scheme
+remote.data.dir: gs://my-fluss-bucket/path
+# Defer to the GCE/GKE metadata server or ADC for credentials
+fs.gs.auth.type: APPLICATION_DEFAULT
+```
+
+### Compute Engine
+
+Read credentials from the GCE instance metadata server.
+
+```yaml
+remote.data.dir: gs://my-fluss-bucket/path
+fs.gs.auth.type: COMPUTE_ENGINE
+```
+
+### Service account key file
+
+When `fs.gs.auth.type` is omitted, this key file is still used if the path below is set. The bundled GCS connector does not read `fs.gs.auth.type` and follows the same rule.
+
+```yaml
 remote.data.dir: gs://my-fluss-bucket/path
 # Use a service account JSON key file for authentication
 fs.gs.auth.type: SERVICE_ACCOUNT_JSON_KEYFILE
@@ -58,14 +81,4 @@ fs.gs.auth.type: SERVICE_ACCOUNT_JSON_KEYFILE
 fs.gs.auth.service.account.json.keyfile: /etc/fluss/secrets/gcs-sa.json
 ```
 
-### Application Default Credentials
-
-When running on GCE, GKE, or any environment with [Application Default Credentials](https://cloud.google.com/docs/authentication/application-default-credentials) available (for example via Workload Identity), the plugin can pick up credentials automatically:
-
-```yaml
-remote.data.dir: gs://my-fluss-bucket/path
-# Defer to the GCE/GKE metadata server or ADC for credentials
-fs.gs.auth.type: APPLICATION_DEFAULT
-```
-
-Other valid values for `fs.gs.auth.type` include `COMPUTE_ENGINE`, `USER_CREDENTIALS`, `ACCESS_TOKEN_PROVIDER`, and `UNAUTHENTICATED`. See the [GCS Hadoop connector documentation](https://github.com/GoogleCloudDataproc/hadoop-connectors/blob/master/gcs/CONFIGURATION.md) for the full list of `fs.gs.*` options.
+Other valid values for `fs.gs.auth.type` include `USER_CREDENTIALS`, `ACCESS_TOKEN_PROVIDER`, and `UNAUTHENTICATED`. See the [GCS Hadoop connector documentation](https://github.com/GoogleCloudDataproc/hadoop-connectors/blob/master/gcs/CONFIGURATION.md) for the full list of `fs.gs.*` options.
