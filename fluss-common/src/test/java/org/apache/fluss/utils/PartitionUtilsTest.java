@@ -365,6 +365,95 @@ class PartitionUtilsTest {
     }
 
     @Test
+    void testValidateAutoPartitionTimeWithQuarterFormat() {
+        Configuration quarterConf = new Configuration();
+        quarterConf.setString(ConfigOptions.TABLE_AUTO_PARTITION_TIME_FORMAT, "yyyyQ");
+        AutoPartitionStrategy quarterStrategy = AutoPartitionStrategy.from(quarterConf);
+
+        for (String partitionTime : Arrays.asList("20241", "20244")) {
+            assertThatNoException()
+                    .isThrownBy(
+                            () ->
+                                    validateAutoPartitionTime(
+                                            new PartitionSpec(
+                                                    Collections.singletonMap("dt", partitionTime)),
+                                            Collections.singletonList("dt"),
+                                            quarterStrategy));
+        }
+        for (String partitionTime : Arrays.asList("20240", "20245", "2024", "202441")) {
+            assertThatThrownBy(
+                            () ->
+                                    validateAutoPartitionTime(
+                                            new PartitionSpec(
+                                                    Collections.singletonMap("dt", partitionTime)),
+                                            Collections.singletonList("dt"),
+                                            quarterStrategy))
+                    .isInstanceOf(InvalidPartitionException.class)
+                    .hasMessageContaining(partitionTime);
+        }
+
+        // the default quarter format is also "yyyyQ"
+        Configuration defaultQuarterConf = new Configuration();
+        defaultQuarterConf.set(
+                ConfigOptions.TABLE_AUTO_PARTITION_TIME_UNIT, AutoPartitionTimeUnit.QUARTER);
+        defaultQuarterConf.setString(ConfigOptions.TABLE_AUTO_PARTITION_TIMEZONE, "UTC");
+        AutoPartitionStrategy defaultQuarterStrategy =
+                AutoPartitionStrategy.from(defaultQuarterConf);
+        Instant now = Instant.parse("2024-11-11T00:00:00Z");
+        assertThat(isPastAutoPartition("20243", defaultQuarterStrategy, now)).isTrue();
+        assertThat(isPastAutoPartition("20244", defaultQuarterStrategy, now)).isFalse();
+        assertThat(isPastAutoPartition("20251", defaultQuarterStrategy, now)).isFalse();
+    }
+
+    @Test
+    void testValidateAutoPartitionTimeRejectsNonExistentDates() {
+        Configuration dayConf = new Configuration();
+        dayConf.setString(ConfigOptions.TABLE_AUTO_PARTITION_TIME_FORMAT, "yyyyMMdd");
+        AutoPartitionStrategy dayStrategy = AutoPartitionStrategy.from(dayConf);
+        Configuration hourConf = new Configuration();
+        hourConf.setString(ConfigOptions.TABLE_AUTO_PARTITION_TIME_FORMAT, "yyyyMMddHH");
+        AutoPartitionStrategy hourStrategy = AutoPartitionStrategy.from(hourConf);
+
+        assertThatNoException()
+                .isThrownBy(
+                        () ->
+                                validateAutoPartitionTime(
+                                        new PartitionSpec(
+                                                Collections.singletonMap("dt", "20240229")),
+                                        Collections.singletonList("dt"),
+                                        dayStrategy));
+        for (String partitionTime : Arrays.asList("20240230", "20230229", "20240431")) {
+            assertThatThrownBy(
+                            () ->
+                                    validateAutoPartitionTime(
+                                            new PartitionSpec(
+                                                    Collections.singletonMap("dt", partitionTime)),
+                                            Collections.singletonList("dt"),
+                                            dayStrategy))
+                    .isInstanceOf(InvalidPartitionException.class)
+                    .hasMessageContaining(partitionTime);
+        }
+
+        assertThatNoException()
+                .isThrownBy(
+                        () ->
+                                validateAutoPartitionTime(
+                                        new PartitionSpec(
+                                                Collections.singletonMap("dt", "2024010123")),
+                                        Collections.singletonList("dt"),
+                                        hourStrategy));
+        assertThatThrownBy(
+                        () ->
+                                validateAutoPartitionTime(
+                                        new PartitionSpec(
+                                                Collections.singletonMap("dt", "2024010124")),
+                                        Collections.singletonList("dt"),
+                                        hourStrategy))
+                .isInstanceOf(InvalidPartitionException.class)
+                .hasMessageContaining("2024010124");
+    }
+
+    @Test
     void testValidateAutoPartitionTimeRetentionBoundaryWithConfiguredDayFormat() {
         Configuration dashedDayConf = new Configuration();
         dashedDayConf.setBoolean(ConfigOptions.TABLE_AUTO_PARTITION_ENABLED, true);
