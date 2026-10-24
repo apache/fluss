@@ -106,7 +106,7 @@ class KafkaProduceConcurrencyITCase {
                 }
                 try (Socket socket = connect()) {
                     // Send every request before reading responses. The first conversion is
-                    // much larger, and later requests mix aliases, nulls and a conversion failure.
+                    // much larger, and later requests mix aliases, nulls and a corrupt batch.
                     for (int round = 0; round < 8; round++) {
                         List<TopicProduceData> topics = new ArrayList<>();
                         Map<TopicPartition, Long> offsets = new HashMap<>();
@@ -130,18 +130,26 @@ class KafkaProduceConcurrencyITCase {
                                                     : table + ":" + partition + ":" + round + ":"
                                                             + record;
                                     byte[] bytes =
-                                            invalid
-                                                    ? new byte[] {(byte) 0xC3, (byte) 0x28}
-                                                    : value == null
-                                                            ? null
-                                                            : value.getBytes(
-                                                                    StandardCharsets.UTF_8);
+                                            value == null
+                                                    ? null
+                                                    : value.getBytes(StandardCharsets.UTF_8);
                                     records[record] = new SimpleRecord(123L, null, bytes);
                                     if (!invalid) {
                                         values.add(value);
                                     }
                                 }
-                                partitions.add(partition(partition, records));
+                                MemoryRecords batch =
+                                        MemoryRecords.withRecords(Compression.NONE, records);
+                                if (invalid) {
+                                    // STRING accepts arbitrary bytes; corrupt the checksum instead.
+                                    ByteBuffer bytes = batch.buffer();
+                                    int last = batch.sizeInBytes() - 1;
+                                    bytes.put(last, (byte) (bytes.get(last) ^ 1));
+                                }
+                                partitions.add(
+                                        new PartitionProduceData()
+                                                .setIndex(partition)
+                                                .setRecords(batch));
                             }
                             topics.add(
                                     new TopicProduceData()
@@ -171,7 +179,7 @@ class KafkaProduceConcurrencyITCase {
                                                 assertThat(partition.errorCode())
                                                         .isEqualTo(
                                                                 offset < 0
-                                                                        ? Errors.INVALID_RECORD
+                                                                        ? Errors.CORRUPT_MESSAGE
                                                                                 .code()
                                                                         : Errors.NONE.code());
                                                 assertThat(partition.baseOffset())

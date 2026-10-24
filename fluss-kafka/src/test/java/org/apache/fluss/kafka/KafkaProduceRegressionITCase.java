@@ -305,7 +305,10 @@ class KafkaProduceRegressionITCase {
                     assertThat(send(producer, full, "full").offset()).isZero();
                     assertThat(send(producer, alias, "alias").offset()).isEqualTo(1L);
                     setTableEnabled(admin, path, false);
-                    assertRejectedNames(path, Errors.UNKNOWN_TOPIC_OR_PARTITION);
+                    assertRejectedNames(
+                            path,
+                            Errors.UNKNOWN_TOPIC_OR_PARTITION,
+                            Errors.UNKNOWN_TOPIC_OR_PARTITION);
                     setTableEnabled(admin, path, true);
                     assertThat(topicId(full)).isEqualTo(fullId);
                     assertThat(topicId(alias)).isEqualTo(aliasId);
@@ -342,7 +345,9 @@ class KafkaProduceRegressionITCase {
                     assertThat(send(producer, full, "property").offset()).isEqualTo(3L);
                     assertValues(connection, path, "full", "alias", "enabled", "property");
                     admin.dropTable(path, false).get();
-                    assertRejectedNames(path, Errors.UNKNOWN_TOPIC_OR_PARTITION);
+                    // Metadata propagates the native lookup failure without rediscovery.
+                    assertRejectedNames(
+                            path, Errors.UNKNOWN_SERVER_ERROR, Errors.UNKNOWN_TOPIC_OR_PARTITION);
                     createTable(admin, path, 3);
                     assertThat(topicId(full)).isNotEqualTo(fullId).isNotEqualTo(Uuid.ZERO_UUID);
                     assertThat(topicId(alias)).isNotEqualTo(aliasId).isNotEqualTo(Uuid.ZERO_UUID);
@@ -442,7 +447,8 @@ class KafkaProduceRegressionITCase {
                                 false)
                         .get();
                 CLUSTER.waitUntilTableReady(admin.getTableInfo(path).get().getTableId());
-                assertRejectedNames(path, Errors.UNKNOWN_TOPIC_OR_PARTITION);
+                assertRejectedNames(
+                        path, Errors.UNKNOWN_TOPIC_OR_PARTITION, Errors.UNKNOWN_TOPIC_OR_PARTITION);
                 setTableEnabled(admin, path, true);
                 try (KafkaProducer<byte[], byte[]> producer = producer("all", true)) {
                     assertThat(send(producer, path.getTableName(), "accepted").offset()).isZero();
@@ -478,7 +484,7 @@ class KafkaProduceRegressionITCase {
                 assertThatThrownBy(() -> admin.createTable(path, descriptor, false).get())
                         .hasCauseInstanceOf(InvalidTableException.class)
                         .rootCause()
-                        .hasMessageContaining("Kafka requires nullable fields");
+                        .hasMessageContaining("_kafka_key must be BYTES");
             } finally {
                 admin.dropTable(path, true).get();
             }
@@ -608,7 +614,8 @@ class KafkaProduceRegressionITCase {
         return waitForTopic(topic).data().topics().find(topic).topicId();
     }
 
-    private static void assertRejectedNames(TablePath path, Errors error) throws Exception {
+    private static void assertRejectedNames(
+            TablePath path, Errors metadataError, Errors produceError) throws Exception {
         retry(
                 Duration.ofMinutes(1),
                 () -> {
@@ -618,7 +625,7 @@ class KafkaProduceRegressionITCase {
                                 MetadataResponse response =
                                         (MetadataResponse)
                                                 sendRequest(socket, metadataRequest(topic));
-                                assertThat(response.errors()).containsEntry(topic, error);
+                                assertThat(response.errors()).containsEntry(topic, metadataError);
                             }
                         }
                     }
@@ -629,7 +636,7 @@ class KafkaProduceRegressionITCase {
                     ProduceResponse response =
                             (ProduceResponse)
                                     sendRequest(socket, produceRequest(topic, "rejected"));
-                    assertThat(response.errorCounts()).containsEntry(error, 1);
+                    assertThat(response.errorCounts()).containsEntry(produceError, 1);
                 }
             }
         }
