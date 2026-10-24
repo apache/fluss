@@ -102,6 +102,15 @@ When enabled, the Coordinator creates and retains an internal `__historical__` s
 - **Reads:** Primary-key point lookups continue to resolve rows after the original Fluss partition
   no longer exists. Historical reads currently support only primary-key point lookups.
 
+For primary-key tables with historical partition access enabled and
+`table.datalake.auto-compaction=false` (the default), Fluss defaults
+`write.sequence-number-init-mode` to `snapshot` when creating the Paimon table. This uses the
+snapshot's maximum sequence number to avoid repeated file-metadata scans during write-only
+writer initialization (requires Paimon 2.0 or later). Explicit
+`paimon.write.sequence-number-init-mode` settings take precedence; set it to `scan` in
+`CREATE TABLE` or `ALTER TABLE ... SET` to disable this optimization.
+Existing Paimon tables are not changed automatically.
+
 For primary-key tables, `table.datalake.historical-partition.lookup-mode` selects how historical
 partition lookups read Paimon when `table.datalake.historical-partition.enabled` is `true`.
 `SST`, the default, creates and caches local lookup files. `SCAN` applies primary-key filters while
