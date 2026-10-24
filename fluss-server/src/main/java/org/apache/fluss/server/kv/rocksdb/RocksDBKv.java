@@ -36,6 +36,7 @@ import io.github.fluss_contrib.rocksdb.RocksDB;
 import io.github.fluss_contrib.rocksdb.RocksDBException;
 import io.github.fluss_contrib.rocksdb.RocksIterator;
 import io.github.fluss_contrib.rocksdb.Slice;
+import io.github.fluss_contrib.rocksdb.Snapshot;
 import io.github.fluss_contrib.rocksdb.Statistics;
 import io.github.fluss_contrib.rocksdb.WriteOptions;
 import org.slf4j.Logger;
@@ -208,6 +209,85 @@ public class RocksDBKv implements AutoCloseable {
             return db.multiGetAsList(keys);
         } catch (RocksDBException e) {
             throw new IOException("Fail to get keys.", e);
+        }
+    }
+
+    /**
+     * Fixes a multi-get read view. The caller must serialize creation with tablet mutations and
+     * close, and close the returned lookup after use.
+     */
+    public MultiGetLookup openMultiGet() throws IOException {
+        ResourceGuard.Lease lease = rocksDBResourceGuard.acquireResource();
+        Snapshot snapshot = null;
+        ReadOptions readOptions = null;
+        try {
+            snapshot = db.getSnapshot();
+            readOptions = new ReadOptions();
+            readOptions.setSnapshot(snapshot);
+            return new MultiGetLookup(db, snapshot, readOptions, lease);
+        } catch (Throwable t) {
+            try {
+                closeMultiGet(db, snapshot, readOptions, lease);
+            } catch (Throwable closeFailure) {
+                t.addSuppressed(closeFailure);
+            }
+            throw t;
+        }
+    }
+
+    /** A single-owner multi-get view with a lease on its RocksDB instance. */
+    public static class MultiGetLookup implements AutoCloseable {
+        private final RocksDB db;
+        private final Snapshot snapshot;
+        private final ReadOptions readOptions;
+        private final ResourceGuard.Lease lease;
+        private boolean closed;
+
+        private MultiGetLookup(
+                RocksDB db, Snapshot snapshot, ReadOptions readOptions, ResourceGuard.Lease lease) {
+            this.db = db;
+            this.snapshot = snapshot;
+            this.readOptions = readOptions;
+            this.lease = lease;
+        }
+
+        /** Reads keys in input order from the view fixed when this lookup was opened. */
+        public List<byte[]> read(List<byte[]> keys) throws IOException {
+            if (closed) {
+                throw new IOException("Multi-get lookup is closed.");
+            }
+            try {
+                return db.multiGetAsList(readOptions, keys);
+            } catch (RocksDBException e) {
+                throw new IOException("Fail to get keys.", e);
+            }
+        }
+
+        @Override
+        public void close() {
+            if (!closed) {
+                closed = true;
+                closeMultiGet(db, snapshot, readOptions, lease);
+            }
+        }
+    }
+
+    private static void closeMultiGet(
+            RocksDB db,
+            @Nullable Snapshot snapshot,
+            @Nullable ReadOptions readOptions,
+            ResourceGuard.Lease lease) {
+        try {
+            IOUtils.closeQuietly(readOptions);
+            if (snapshot != null) {
+                try {
+                    db.releaseSnapshot(snapshot);
+                } finally {
+                    snapshot.close();
+                }
+            }
+        } finally {
+            lease.close();
         }
     }
 

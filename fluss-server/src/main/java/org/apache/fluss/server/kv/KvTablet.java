@@ -127,6 +127,11 @@ public final class KvTablet {
     private static final int MAX_FLUSH_RETRY_BACKOFF_SHIFT =
             64 - Long.numberOfLeadingZeros(MAX_FLUSH_RETRY_DELAY_MS / MIN_FLUSH_RETRY_DELAY_MS);
 
+    // Keep small reads under the lock to avoid fixed snapshot and lease overhead. The 16-key
+    // threshold favors shorter writer lock waits for larger batches, accepting snapshot overhead
+    // even when there are no concurrent writes.
+    private static final int MIN_KEYS_FOR_SNAPSHOT_LOOKUP = 16;
+
     private static final long ROW_COUNT_DISABLED = -1;
 
     // Retain recent historical KV state within this WAL offset distance of lake progress.
@@ -1211,12 +1216,31 @@ public final class KvTablet {
     }
 
     public List<ByteArraySlice> multiGet(List<byte[]> keys) throws IOException {
-        return inReadLock(
-                kvLock,
-                () -> {
-                    rocksDBKv.checkIfRocksDBClosed();
-                    return toValueBodySlices(rocksDBKv.multiGet(keys));
-                });
+        List<byte[]> values;
+        if (keys.size() < MIN_KEYS_FOR_SNAPSHOT_LOOKUP) {
+            values =
+                    inReadLock(
+                            kvLock,
+                            () -> {
+                                if (isClosed) {
+                                    throw new IOException("KV tablet is closing: " + tableBucket);
+                                }
+                                return rocksDBKv.multiGet(keys);
+                            });
+        } else {
+            try (RocksDBKv.MultiGetLookup lookup =
+                    inReadLock(
+                            kvLock,
+                            () -> {
+                                if (isClosed) {
+                                    throw new IOException("KV tablet is closing: " + tableBucket);
+                                }
+                                return rocksDBKv.openMultiGet();
+                            })) {
+                values = lookup.read(keys);
+            }
+        }
+        return toValueBodySlices(values);
     }
 
     /**
