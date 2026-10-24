@@ -8,12 +8,12 @@ import TabItem from '@theme/TabItem';
 
 # Deploying Lakestream
 
-This guide covers how to deploy a Lakestream foundation with Fluss, a Flink tiering service, and lakehouse storage. For the relationship between Streamhouse, Lakestream, and Fluss, see [Streamhouse and Lakestream](../concepts/streamhouse-and-lakestream.mdx).
+This guide covers how to deploy a Lakestream foundation with Fluss, a Flink or Spark tiering service, and lakehouse storage. For the relationship between Streamhouse, Lakestream, and Fluss, see [Streamhouse and Lakestream](../concepts/streamhouse-and-lakestream.mdx).
 
 ## Prerequisites
 
 1. A running Fluss cluster (see [Deploying Distributed Cluster](deploying-distributed-cluster.md))
-2. A running Flink cluster (for the Tiering Service)
+2. A Flink cluster or a Spark runtime for the Tiering Service
 3. Access to a data lake storage system (S3, HDFS, OSS, etc.)
 
 ## Cluster Configuration
@@ -34,7 +34,7 @@ Fluss follows a simple convention for these keys:
 - Only configure options for the format selected by `datalake.format`.
 
 :::note
-The [Tiering Service](../streaming-lakehouse/tiering-service.md) is an independent Flink job and needs the same `datalake.*` options passed as job arguments (see [Starting the Tiering Service](#starting-the-tiering-service)).
+The [Tiering Service](../streaming-lakehouse/tiering-service.md) is an independent Flink job or Spark application and needs the same lake format, catalog, and storage settings passed as `datalake.*` application arguments (see [Starting the Tiering Service](#starting-the-tiering-service)).
 :::
 
 <Tabs groupId="datalake-format">
@@ -161,13 +161,15 @@ Lance support is built into the Fluss distribution. Cloud storage credentials ar
 
 ## Starting the Tiering Service
 
-The Tiering Service is a Flink job that continuously tiers data from Fluss to the data lake. For architecture details, see [Tiering Service](../streaming-lakehouse/tiering-service.md).
+Choose Flink or Spark to continuously tier data from Fluss to the data lake. Both use the cluster and table configuration described in this guide. For execution models, configuration defaults, scaling, and recovery, see [Tiering Service](../streaming-lakehouse/tiering-service.md).
 
-### Prerequisites
+### Flink
+
+#### Prerequisites
 
 1. Download [fluss-flink-tiering-$FLUSS_VERSION$.jar](https://repo1.maven.org/maven2/org/apache/fluss/fluss-flink-tiering/$FLUSS_VERSION$/fluss-flink-tiering-$FLUSS_VERSION$.jar)
 
-### Flink JARs
+#### Flink JARs
 
 Add the following to `${FLINK_HOME}/lib`:
 
@@ -206,9 +208,9 @@ Add the following to `${FLINK_HOME}/lib`:
 </TabItem>
 </Tabs>
 
-If using S3, OSS, or HDFS as Fluss's [remote storage](../maintenance/tiered-storage/remote-storage.md), also add the corresponding [Fluss filesystem JAR](/downloads#filesystem-jars).
+If using S3, OSS, or HDFS as Fluss's [remote storage](../maintenance/tiered-storage/remote-storage.md), also add the corresponding [Fluss filesystem JAR](../maintenance/tiered-storage/filesystems/overview.md).
 
-### Start the Service
+#### Start the Service
 
 <Tabs groupId="datalake-format">
 <TabItem value="paimon" label="Paimon" default>
@@ -268,9 +270,50 @@ ${FLINK_HOME}/bin/flink run /path/to/fluss-flink-tiering-$FLUSS_VERSION$.jar \
 - For complete examples with S3 configuration, see the [Lakehouse Quickstart](../quickstart/lakehouse.md)
 :::
 
+### Spark
+
+#### Prerequisites and JARs
+
+The example below uses Spark 3.5 with Scala 2.12 and Java 11. Use a Fluss build containing the Spark tiering service, and match the application's Scala binary version to your Spark distribution.
+
+For Paimon tiering, prepare:
+
+| JAR | Purpose |
+|-----|---------|
+| `fluss-spark-tiering_2.12-$FLUSS_VERSION$.jar` | Application JAR, produced under `fluss-spark/fluss-spark-tiering/target/` when building Fluss |
+| `fluss-lake-paimon-$FLUSS_VERSION$.jar` | Fluss lake connector, using the same Fluss version as the application |
+| `paimon-bundle-$PAIMON_VERSION$.jar` | Paimon runtime, matching the version used by the Fluss lake connector |
+
+The application JAR includes the Fluss client and common Spark integration code. Supply the lake connector and its runtime dependencies with `--jars` so they are available to both the driver and executors. Installing plugins only on the Fluss servers does not make them available to Spark.
+
+Also provide any filesystem, catalog, and authentication dependencies required by your environment. For example, Paimon on S3 needs the matching `paimon-s3` JAR. Accessing Fluss remote storage may additionally require the corresponding [Fluss filesystem JAR](../maintenance/tiered-storage/filesystems/overview.md). The driver and executors must be able to reach the Fluss cluster, lake catalog, and storage.
+
+#### Start the Spark Application
+
+For a local Paimon example, use the same warehouse path as the Fluss cluster:
+
+```shell
+${SPARK_HOME}/bin/spark-submit \
+    --master 'local[2]' \
+    --class org.apache.fluss.spark.tiering.SparkLakeTiering \
+    --jars /path/to/fluss-lake-paimon-$FLUSS_VERSION$.jar,/path/to/paimon-bundle-$PAIMON_VERSION$.jar \
+    /path/to/fluss-spark-tiering_2.12-$FLUSS_VERSION$.jar \
+    --fluss.bootstrap.servers localhost:9123 \
+    --datalake.format paimon \
+    --datalake.paimon.metastore filesystem \
+    --datalake.paimon.warehouse /tmp/paimon \
+    --fluss.tiering.poll.table.interval '30 s' \
+    --fluss.tiering.heartbeat.interval '10 s' \
+    --lake.tiering.auto-expire-snapshot true
+```
+
+Replace the JAR paths with your local files. This example runs two task threads in one local Spark process. For a distributed deployment, select your cluster manager with `--master` and `--deploy-mode`, allocate executor resources, and use a shared warehouse such as HDFS or object storage accessible from all Fluss servers and Spark processes. Configure the same warehouse on the Fluss cluster and the tiering application; a machine-local `/tmp/paimon` directory is only suitable for a single-machine setup.
+
+Put Spark runtime options before the application JAR and Fluss, lake, and tiering arguments after it. In particular, Spark service options use `--fluss.tiering.*`, not bare `--tiering.*`. See [Spark Options](../streaming-lakehouse/tiering-service.md#spark-options) for all four service options and their defaults.
+
 ## Enabling Lakehouse for Tables
 
-Create tables with lakehouse storage enabled:
+Create tables with lakehouse storage enabled. The table settings are the same for either tiering engine. The following example uses Flink SQL; for Spark SQL, set these properties in `TBLPROPERTIES` as shown in [Lake-Enabled Tables](../engine-spark/reads.md#lake-enabled-tables-union-read).
 
 ```sql title="Flink SQL"
 CREATE TABLE my_table (
@@ -284,8 +327,8 @@ CREATE TABLE my_table (
 
 ## Verification
 
-1. Check the Tiering Service job is running in Flink Web UI
-2. After the freshness interval, query the table:
+1. Check the tiering job or application in the Flink or Spark Web UI. For Spark, also check driver logs for table assignments and round failures.
+2. After a tiering round commits, query a table containing data. The freshness setting is a scheduling target; a backlog or limited resources can delay completion.
 
 ```sql title="Flink SQL"
 -- Union Read (real-time + historical)
