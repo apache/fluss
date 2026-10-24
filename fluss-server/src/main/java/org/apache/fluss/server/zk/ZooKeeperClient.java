@@ -1263,11 +1263,11 @@ public class ZooKeeperClient implements AutoCloseable {
             // ignore
         }
         try {
+            // Do not create the parents here. The table node must already exist, otherwise a
+            // partition registered after the table or its database was dropped would resurrect
+            // them as empty nodes.
             String metadataPartitionParentPath = PartitionsZNode.path(tablePath);
-            zkClient.create()
-                    .creatingParentsIfNeeded()
-                    .withMode(CreateMode.PERSISTENT)
-                    .forPath(metadataPartitionParentPath);
+            zkClient.create().withMode(CreateMode.PERSISTENT).forPath(metadataPartitionParentPath);
         } catch (KeeperException.NodeExistsException e) {
             // ignore
         }
