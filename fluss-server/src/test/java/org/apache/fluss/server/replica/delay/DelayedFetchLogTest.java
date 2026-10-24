@@ -32,6 +32,7 @@ import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
 import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
@@ -47,6 +48,40 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 /** Test for {@link DelayedFetchLog}. */
 public class DelayedFetchLogTest extends ReplicaTestBase {
+
+    @Test
+    void testRefetchRespectsBucketOrderWithSmallBudget() throws Exception {
+        TableBucket first = new TableBucket(DATA1_TABLE_ID, 0);
+        TableBucket second = new TableBucket(DATA1_TABLE_ID, 1);
+        makeLogTableAsLeader(first.getBucket());
+        makeLogTableAsLeader(second.getBucket());
+
+        Map<TableBucket, FetchReqInfo> fetches = new LinkedHashMap<>();
+        fetches.put(first, new FetchReqInfo(first.getTableId(), 0L, Integer.MAX_VALUE));
+        fetches.put(second, new FetchReqInfo(second.getTableId(), 0L, Integer.MAX_VALUE));
+        CompletableFuture<Map<TableBucket, FetchLogResultForBucket>> response =
+                new CompletableFuture<>();
+        replicaManager.fetchLogRecords(
+                new FetchParams(-1, 1, 1, Duration.ofMinutes(3).toMillis()),
+                fetches,
+                null,
+                response::complete);
+        DelayedOperationManager<DelayedFetchLog> delayedFetchLogManager =
+                replicaManager.getDelayedFetchLogManager();
+        assertThat(delayedFetchLogManager.numDelayed()).isEqualTo(1);
+
+        replicaManager
+                .getReplicaOrException(first)
+                .appendRecordsToLeader(genMemoryLogRecordsByObject(DATA1), 1);
+        replicaManager
+                .getReplicaOrException(second)
+                .appendRecordsToLeader(genMemoryLogRecordsByObject(DATA1), 1);
+        assertThat(delayedFetchLogManager.checkAndComplete(new DelayedTableBucketKey(first)))
+                .isEqualTo(1);
+
+        assertThat(response.get().get(first).recordsOrEmpty().sizeInBytes()).isPositive();
+        assertThat(response.get().get(second).recordsOrEmpty().sizeInBytes()).isZero();
+    }
 
     @Test
     void testCompleteDelayedFetchLog() throws Exception {
